@@ -159,6 +159,6 @@ require (
 	nhooyr.io/websocket v1.8.17 // indirect
 )
 
-go 1.24.0
+go 1.25
 
-toolchain go1.24.3
+toolchain go1.25.6
