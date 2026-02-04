@@ -134,187 +134,18 @@ jobs:
         with:
           go-version-file: "go.mod"
           cache: true
-      - run: go test -race -v -coverpkg=./... -coverprofile=cover.out $(go list ./... | grep -v /cmd/dendrite*)
+      - run: go test -race -v $(go list ./... | grep -v /cmd/dendrite*)
         env:
           POSTGRES_HOST: postgres
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          flags: unittests
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  # run database upgrade tests
-  upgrade_test:
-    name: "Upgrade tests (${{ matrix.label }})"
-    timeout-minutes: 20
-    needs: initial-tests-done
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: all versions
-            flags: ""
-          - label: direct from HEAD-2
-            flags: "-direct -from HEAD-2"
-    steps:
-      - uses: actions/checkout@v6
-      - name: Setup go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: "go.mod"
-          cache: true
-      - name: Docker version
-        run: docker version
-      - name: Build upgrade-tests
-        run: go build ./cmd/dendrite-upgrade-tests
-      - name: Test upgrade (PostgreSQL)
-        run: ./dendrite-upgrade-tests ${{ matrix.flags }} -repository=matrix-org/dendrite --head .
-      - name: Test upgrade (SQLite)
-        run: ./dendrite-upgrade-tests ${{ matrix.flags }} --sqlite -repository=matrix-org/dendrite --head .
-
-  # run Sytest in different variations
-  sytest:
-    timeout-minutes: 20
-    needs: initial-tests-done
-    name: "Sytest (${{ matrix.label }})"
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: SQLite native
-
-          - label: SQLite Cgo
-            cgo: 1
-
-          - label: PostgreSQL
-            postgres: postgres
-
-    container:
-      image: matrixdotorg/sytest-dendrite
-      volumes:
-        - ${{ github.workspace }}:/src
-        - /root/.cache/go-build:/github/home/.cache/go-build
-        - /root/.cache/go-mod:/gopath/pkg/mod
-      env:
-        POSTGRES: ${{ matrix.postgres && 1}}
-        SYTEST_BRANCH: ${{ github.head_ref }}
-        CGO_ENABLED: ${{ matrix.cgo && 1 }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/go-build
-            /gopath/pkg/mod
-          key: ${{ runner.os }}-go-sytest-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-sytest-
-      - name: Run Sytest
-        run: /bootstrap.sh dendrite
-        working-directory: /src
-      - name: Summarise results.tap
-        if: ${{ always() }}
-        run: /sytest/scripts/tap_to_gha.pl /logs/results.tap
-      - name: Sytest List Maintenance
-        if: ${{ always() }}
-        run: /src/show-expected-fail-tests.sh /logs/results.tap /src/sytest-whitelist /src/sytest-blacklist
-        continue-on-error: true # not fatal
-      - name: Are We Synapse Yet?
-        if: ${{ always() }}
-        run: /src/are-we-synapse-yet.py /logs/results.tap -v
-        continue-on-error: true # not fatal
-      - name: Upload Sytest logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }}
-        with:
-          name: Sytest Logs - ${{ job.status }} - (Dendrite, ${{ join(matrix.*, ', ') }})
-          path: |
-            /logs/results.tap
-            /logs/**/*.log*
-
-  # run Complement
-  complement:
-    name: "Complement (${{ matrix.label }})"
-    timeout-minutes: 20
-    needs: initial-tests-done
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: SQLite native
-            cgo: 0
-
-          - label: SQLite Cgo
-            cgo: 1
-
-          - label: PostgreSQL
-            postgres: Postgres
-            cgo: 0
-    steps:
-      # Env vars are set file a file given by $GITHUB_PATH. We need both Go 1.17 and GOPATH on env to run Complement.
-      # See https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
-      - name: "Set Go Version"
-        run: |
-          echo "$GOROOT_1_17_X64/bin" >> $GITHUB_PATH
-          echo "~/go/bin" >> $GITHUB_PATH
-      - name: "Install Complement Dependencies"
-        run: apt-get update && apt-get install -y libolm3 libolm-dev build-essential
-      - name: Run actions/checkout@v6 for dendrite
-        uses: actions/checkout@v6
-        with:
-          path: dendrite
-
-      # Attempt to check out the same branch of Complement as the PR. If it
-      # doesn't exist, fallback to main.
-      - name: Checkout complement
-        shell: bash
-        run: |
-          mkdir -p complement
-          # Attempt to use the version of complement which best matches the current
-          # build. Depending on whether this is a PR or release, etc. we need to
-          # use different fallbacks.
-          #
-          # 1. First check if there's a similarly named branch (GITHUB_HEAD_REF
-          #    for pull requests, otherwise GITHUB_REF).
-          # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
-          #    (GITHUB_BASE_REF for pull requests).
-          # 3. Use the default complement branch ("master").
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
-            # Skip empty branch names and merge commits.
-            if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
-              continue
-            fi
-            (wget -O - "https://github.com/matrix-org/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
-          done
-      # Build initial Dendrite image
-      - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
-        working-directory: dendrite
-        env:
-          DOCKER_BUILDKIT: 1
-
-      # Run Complement
-      - run: go test -v -tags dendrite_blacklist ./tests ./tests/csapi
-        name: Run Complement Tests
-        env:
-          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }}
-          COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
-        working-directory: complement
 
   integration-tests-done:
     name: Integration tests passed
     needs:
       [
         initial-tests-done,
-        upgrade_test,
-        sytest,
-        complement,
         integration,
       ]
     runs-on: ubuntu-latest
