@@ -1,4 +1,5 @@
 # Config file for golangci-lint
+version: "2"
 
 # options for analysis running
 run:
@@ -32,7 +33,7 @@ run:
 output:
   # colored-line-number|line-number|json|tab|checkstyle|code-climate, default is "colored-line-number"
   formats:
-    - format: colored-line-number
+    colored-line-number: {}
 
   # print lines of code with issue, default is true
   print-issued-lines: true
@@ -138,8 +139,6 @@ linters:
   enable:
     - errcheck
     - gocyclo
-    - goimports # Does everything gofmt does
-    - gosimple
     - govet
     - ineffassign
     - misspell # Check code comments, whereas misspell in CI checks *.md files
@@ -147,24 +146,10 @@ linters:
     - staticcheck
     - unparam
     - unused
-  enable-all: false
-  disable:
-    - bodyclose
-    - depguard
-    - dupl
-    - gochecknoglobals
-    - gochecknoinits
-    - gocritic
-    - gofmt
-    - gosec # Should turn back on soon
-    - lll
-    - prealloc # Should turn back on soon
-    - stylecheck
-    - typecheck # Should turn back on soon
-    - unconvert # Should turn back on soon
-    - goconst # Slightly annoying, as it reports "issues" in SQL statements
-  disable-all: false
-  fast: false
+
+formatters:
+  enable:
+    - goimports # Does everything gofmt does
 
 issues:
   # which files to skip: they will be analyzed, but issues from them
