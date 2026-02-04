@@ -814,7 +814,7 @@ func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.Query
 			return fmt.Errorf("QueryNotifications: parsing 'from': %w", err)
 		}
 	}
-	var filter tables.NotificationFilter = tables.AllNotifications
+	var filter = tables.AllNotifications
 	if req.Only == "highlight" {
 		filter = tables.HighlightNotifications
 	}

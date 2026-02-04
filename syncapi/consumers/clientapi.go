@@ -15,7 +15,6 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
@@ -80,11 +79,11 @@ func (s *OutputClientDataConsumer) Start() error {
 			return
 		}
 		if !s.cfg.Fulltext.Enabled {
-			logrus.Warn("Fulltext indexing is disabled")
+			log.Warn("Fulltext indexing is disabled")
 			return
 		}
 		ctx := context.Background()
-		logrus.Infof("Starting to index events")
+		log.Infof("Starting to index events")
 		var offset int
 		start := time.Now()
 		count := 0
@@ -92,13 +91,13 @@ func (s *OutputClientDataConsumer) Start() error {
 		for {
 			evs, err := s.db.ReIndex(ctx, 1000, id)
 			if err != nil {
-				logrus.WithError(err).Errorf("unable to get events to index")
+				log.WithError(err).Errorf("unable to get events to index")
 				return
 			}
 			if len(evs) == 0 {
 				break
 			}
-			logrus.Debugf("Indexing %d events", len(evs))
+			log.Debugf("Indexing %d events", len(evs))
 			elements := make([]fulltext.IndexElement, 0, len(evs))
 
 			for streamPos, ev := range evs {
@@ -127,13 +126,13 @@ func (s *OutputClientDataConsumer) Start() error {
 				elements = append(elements, e)
 			}
 			if err = s.fts.Index(elements...); err != nil {
-				logrus.WithError(err).Error("unable to index events")
+				log.WithError(err).Error("unable to index events")
 				continue
 			}
 			offset += len(evs)
 			count += len(elements)
 		}
-		logrus.Infof("Indexed %d events in %v", count, time.Since(start))
+		log.Infof("Indexed %d events in %v", count, time.Since(start))
 	})
 	if err != nil {
 		return err
@@ -179,7 +178,7 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 
 	if output.IgnoredUsers != nil {
 		if err := s.db.UpdateIgnoresForUser(ctx, userID, output.IgnoredUsers); err != nil {
-			log.WithError(err).WithFields(logrus.Fields{
+			log.WithError(err).WithFields(log.Fields{
 				"user_id": userID,
 			}).Errorf("Failed to update ignored users")
 			sentry.CaptureException(err)

@@ -4,8 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-//go:build !wasm
-// +build !wasm
+//go:build pinecone && !wasm
+// +build pinecone,!wasm
 
 package main
 

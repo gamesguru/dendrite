@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install libolm
-        run: apt-get update && apt-get install -y libolm-dev libolm3
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Install Go
         uses: actions/setup-go@v6
         with:
@@ -67,8 +67,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v6
-      - name: Install libolm
-        run: apt-get update && apt-get install -y libolm-dev libolm3
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Setup go
         uses: actions/setup-go@v6
         with:
@@ -76,7 +76,7 @@ jobs:
           cache: true
       - run: go test -v ./...
         env:
-          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_HOST: postgres
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
@@ -149,8 +149,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v6
-      - name: Install libolm
-        run: apt-get update && apt-get install -y libolm-dev libolm3
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Setup go
         uses: actions/setup-go@v6
         with:
@@ -158,7 +158,7 @@ jobs:
           cache: true
       - run: go test -race -v -coverpkg=./... -coverprofile=cover.out $(go list ./... | grep -v /cmd/dendrite*)
         env:
-          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_HOST: postgres
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
@@ -287,7 +287,7 @@ jobs:
           echo "$GOROOT_1_17_X64/bin" >> $GITHUB_PATH
           echo "~/go/bin" >> $GITHUB_PATH
       - name: "Install Complement Dependencies"
-        run: apt-get update && apt-get install -y libolm3 libolm-dev
+        run: apt-get update && apt-get install -y libolm3 libolm-dev build-essential
       - name: Run actions/checkout@v6 for dendrite
         uses: actions/checkout@v6
         with:

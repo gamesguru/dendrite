@@ -144,11 +144,11 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 func (s *stateSnapshotStatements) BulkSelectStateForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, stateSnapshotNID types.StateSnapshotNID, domain string,
 ) ([]types.EventNID, error) {
-	return nil, tables.OptimisationNotSupportedError
+	return nil, tables.ErrOptimisationNotSupported
 }
 
 func (s *stateSnapshotStatements) BulkSelectMembershipForHistoryVisibility(ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string) (map[string]*types.HeaderedEvent, error) {
-	return nil, tables.OptimisationNotSupportedError
+	return nil, tables.ErrOptimisationNotSupported
 }
 
 func (s *stateSnapshotStatements) selectStateBlockNIDsForRoomNID(

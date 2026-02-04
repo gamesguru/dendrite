@@ -21,7 +21,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/codeclysm/extract"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
@@ -220,7 +220,7 @@ func buildDendrite(httpClient *http.Client, dockerClient *client.Client, tmpDir 
 	}
 
 	log.Printf("%s: Building version %s\n", branchOrTagName, branchOrTagName)
-	res, err := dockerClient.ImageBuild(context.Background(), tarball, types.ImageBuildOptions{
+	res, err := dockerClient.ImageBuild(context.Background(), tarball, build.ImageBuildOptions{
 		Tags: []string{"dendrite-upgrade"},
 		BuildArgs: map[string]*string{
 			"BINARY": &binary,
@@ -494,7 +494,7 @@ func testCreateAccount(dockerClient *client.Client, version *semver.Version, con
 	createUser := strings.ToLower("createaccountuser-" + branchName)
 	log.Printf("%s: Creating account %s with create-account\n", branchName, createUser)
 
-	respID, err := dockerClient.ContainerExecCreate(context.Background(), containerID, types.ExecConfig{
+	respID, err := dockerClient.ContainerExecCreate(context.Background(), containerID, container.ExecOptions{
 		AttachStderr: true,
 		AttachStdout: true,
 		Cmd: []string{
@@ -507,7 +507,7 @@ func testCreateAccount(dockerClient *client.Client, version *semver.Version, con
 		return fmt.Errorf("failed to ContainerExecCreate: %w", err)
 	}
 
-	response, err := dockerClient.ContainerExecAttach(context.Background(), respID.ID, types.ExecStartCheck{})
+	response, err := dockerClient.ContainerExecAttach(context.Background(), respID.ID, container.ExecStartOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to attach to container: %w", err)
 	}

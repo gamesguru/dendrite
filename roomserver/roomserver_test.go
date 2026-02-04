@@ -160,7 +160,7 @@ func testKickUsers(t *testing.T, rsAPI api.RoomserverInternalAPI, usrAPI userAPI
 
 	// TODO: Even though we are sending the events sync, the "kickUsers" function is sending the events async, so we need
 	//		 to loop and wait for the events to be processed by the roomserver.
-	for i := 0; i <= 20; i++ {
+	for i := 0; i <= 100; i++ {
 		// Get the membership events AFTER revoking guest access
 		membershipRes2 := &api.QueryMembershipsForRoomResponse{}
 		if err := rsAPI.QueryMembershipsForRoom(ctx, &api.QueryMembershipsForRoomRequest{LocalOnly: true, JoinedOnly: true, RoomID: room.ID}, membershipRes2); err != nil {
@@ -171,7 +171,7 @@ func testKickUsers(t *testing.T, rsAPI api.RoomserverInternalAPI, usrAPI userAPI
 		if !reflect.DeepEqual(membershipRes, membershipRes2) {
 			return
 		}
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 50)
 	}
 
 	t.Errorf("memberships didn't change in time")

@@ -1,3 +1,5 @@
+//go:build pinecone
+
 // Copyright 2024 New Vector Ltd.
 // Copyright 2022 The Matrix.org Foundation C.I.C.
 //

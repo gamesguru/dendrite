@@ -19,9 +19,7 @@ import (
 	"github.com/yggdrasil-network/yggquic"
 
 	"github.com/yggdrasil-network/yggdrasil-go/src/config"
-	"github.com/yggdrasil-network/yggdrasil-go/src/core"
 	yggdrasilcore "github.com/yggdrasil-network/yggdrasil-go/src/core"
-	"github.com/yggdrasil-network/yggdrasil-go/src/multicast"
 	yggdrasilmulticast "github.com/yggdrasil-network/yggdrasil-go/src/multicast"
 
 	gologme "github.com/gologme/log"
@@ -67,12 +65,12 @@ func Setup(sk ed25519.PrivateKey, instanceName, storageDirectory, peerURI, liste
 				})
 			}
 		}
-		if n.core, err = core.New(cfg.Certificate, n.log, options...); err != nil {
+		if n.core, err = yggdrasilcore.New(cfg.Certificate, n.log, options...); err != nil {
 			panic(err)
 		}
 		n.core.SetLogger(n.log)
 
-		if n.YggdrasilTransport, err = yggquic.New(n.core, *cfg.Certificate, nil); err != nil {
+		if n.YggdrasilTransport, err = yggquic.New(n.core, nil); err != nil {
 			panic(err)
 		}
 	}
@@ -80,8 +78,8 @@ func Setup(sk ed25519.PrivateKey, instanceName, storageDirectory, peerURI, liste
 	// Setup the multicast module.
 	{
 		var err error
-		options := []multicast.SetupOption{
-			multicast.MulticastInterface{
+		options := []yggdrasilmulticast.SetupOption{
+			yggdrasilmulticast.MulticastInterface{
 				Regex:    regexp.MustCompile(".*"),
 				Beacon:   true,
 				Listen:   true,
@@ -89,7 +87,7 @@ func Setup(sk ed25519.PrivateKey, instanceName, storageDirectory, peerURI, liste
 				Priority: 0,
 			},
 		}
-		if n.multicast, err = multicast.New(n.core, n.log, options...); err != nil {
+		if n.multicast, err = yggdrasilmulticast.New(n.core, n.log, options...); err != nil {
 			panic(err)
 		}
 	}

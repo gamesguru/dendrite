@@ -19,7 +19,6 @@ import (
 	"github.com/element-hq/dendrite/clientapi/httputil"
 	"github.com/element-hq/dendrite/clientapi/threepid"
 	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
 	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
 	"github.com/element-hq/dendrite/roomserver/types"
 	"github.com/element-hq/dendrite/setup/config"
@@ -120,7 +119,7 @@ func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, devic
 		false,
 	); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
-		if err.Error() == api.InputWasRejected {
+		if err.Error() == roomserverAPI.InputWasRejected {
 			return util.JSONResponse{
 				Code: http.StatusForbidden,
 				JSON: spec.Forbidden("the event was rejected"),
@@ -367,7 +366,7 @@ func sendInvite(
 			JSON: spec.InternalServerError{},
 		}, err
 	}
-	err = rsAPI.PerformInvite(ctx, &api.PerformInviteRequest{
+	err = rsAPI.PerformInvite(ctx, &roomserverAPI.PerformInviteRequest{
 		InviteInput: roomserverAPI.InviteInput{
 			RoomID:     *validRoomID,
 			Inviter:    *inviter,

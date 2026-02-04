@@ -21,6 +21,8 @@ linters:
     paths:
       - bin
       - docs
+      - cmd/dendrite-demo-pinecone
+      - build/dendritejs-pinecone
     rules:
       # Exclude some linters from running on test files
       - path: _test\.go
@@ -31,6 +33,14 @@ linters:
       - linters:
           - staticcheck
         text: "SA9003:"
+      # Exclude style suggestions (QF = quickfix suggestions)
+      - linters:
+          - staticcheck
+        text: "QF"
+      # Exclude ST1008 (error should be returned as last argument) - would break API
+      - linters:
+          - staticcheck
+        text: "ST1008:"
   settings:
     errcheck:
       check-type-assertions: false
