@@ -47,9 +47,12 @@ func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, 
 
 func TestOutputRoomEventsTable(t *testing.T) {
 	ctx := context.Background()
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create test data inside the callback to avoid data races
+		// (event methods like EventID() cache on first access)
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+
 		tab, db, close := newOutputRoomEventsTable(t, dbType)
 		defer close()
 		events := room.Events()
@@ -108,23 +111,25 @@ func TestOutputRoomEventsTable(t *testing.T) {
 
 func TestReindex(t *testing.T) {
 	ctx := context.Background()
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-
-	room.CreateAndInsert(t, alice, spec.MRoomName, map[string]interface{}{
-		"name": "my new room name",
-	}, test.WithStateKey(""))
-
-	room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]interface{}{
-		"topic": "my new room topic",
-	}, test.WithStateKey(""))
-
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{
-		"msgbody": "my room message",
-		"type":    "m.text",
-	})
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create test data inside the callback to avoid data races
+		// (event methods like EventID() cache on first access)
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+
+		room.CreateAndInsert(t, alice, spec.MRoomName, map[string]interface{}{
+			"name": "my new room name",
+		}, test.WithStateKey(""))
+
+		room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]interface{}{
+			"topic": "my new room topic",
+		}, test.WithStateKey(""))
+
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{
+			"msgbody": "my room message",
+			"type":    "m.text",
+		})
 		tab, db, close := newOutputRoomEventsTable(t, dbType)
 		defer close()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {

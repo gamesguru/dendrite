@@ -555,8 +555,8 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		select {
-		// Pretty generous timeout duration...
-		case <-time.After(time.Millisecond * 1000): // wait for the AS to process the events
+		// Generous timeout for slow CI environments with race detector
+		case <-time.After(time.Millisecond * 5000): // wait for the AS to process the events
 			t.Errorf("Timed out waiting for join event")
 		case <-evChan:
 		}

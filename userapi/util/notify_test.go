@@ -39,14 +39,14 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Create a test room, just used to provide events
-	room := test.NewRoom(t, alice)
-	dummyEvent := room.Events()[len(room.Events())-1]
-
 	appID := util.RandomString(8)
 	pushKey := util.RandomString(8)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create a test room inside the callback to avoid data races
+		// (EventID() caches on first access)
+		room := test.NewRoom(t, alice)
+		dummyEvent := room.Events()[len(room.Events())-1]
 		receivedRequest := make(chan bool, 1)
 		// create a test server which responds to our /notify call
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

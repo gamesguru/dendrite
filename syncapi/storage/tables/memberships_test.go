@@ -42,37 +42,35 @@ func newMembershipsTable(t *testing.T, dbType test.DBType) (tables.Memberships, 
 }
 
 func TestMembershipsTable(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create test data inside the callback to avoid data races
+		// (event methods like EventID() cache on first access)
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
 
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-
-	// Create users
-	var userEvents []*rstypes.HeaderedEvent
-	users := []string{alice.ID}
-	for _, x := range room.CurrentState() {
-		if x.StateKeyEquals(alice.ID) {
-			if _, err := x.Membership(); err == nil {
-				userEvents = append(userEvents, x)
-				break
+		// Create users
+		var userEvents []*rstypes.HeaderedEvent
+		for _, x := range room.CurrentState() {
+			if x.StateKeyEquals(alice.ID) {
+				if _, err := x.Membership(); err == nil {
+					userEvents = append(userEvents, x)
+					break
+				}
 			}
 		}
-	}
 
-	if len(userEvents) == 0 {
-		t.Fatalf("didn't find creator membership event")
-	}
+		if len(userEvents) == 0 {
+			t.Fatalf("didn't find creator membership event")
+		}
 
-	for i := 0; i < 10; i++ {
-		u := test.NewUser(t)
-		users = append(users, u.ID)
+		for i := 0; i < 10; i++ {
+			u := test.NewUser(t)
 
-		ev := room.CreateAndInsert(t, u, spec.MRoomMember, map[string]interface{}{
-			"membership": "join",
-		}, test.WithStateKey(u.ID))
-		userEvents = append(userEvents, ev)
-	}
-
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+			ev := room.CreateAndInsert(t, u, spec.MRoomMember, map[string]interface{}{
+				"membership": "join",
+			}, test.WithStateKey(u.ID))
+			userEvents = append(userEvents, ev)
+		}
 		table, _, close := newMembershipsTable(t, dbType)
 		defer close()
 

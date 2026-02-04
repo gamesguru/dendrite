@@ -1,8 +1,5 @@
 .*.swp
 
-# Hidden files
-.*
-
 # Allow GitHub config
 !.github
 
