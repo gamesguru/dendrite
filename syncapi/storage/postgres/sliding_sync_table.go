@@ -109,6 +109,16 @@ const selectLatestRoomConfigSQL = `
 	LIMIT 1
 `
 
+// selectLatestRoomConfigsBatchSQL retrieves the most recent room configs for multiple rooms
+// Uses DISTINCT ON to get only the latest config per room (PostgreSQL-specific)
+const selectLatestRoomConfigsBatchSQL = `
+	SELECT DISTINCT ON (rc.room_id) rc.connection_position, rc.room_id, rc.timeline_limit, rc.required_state_id
+	FROM syncapi_sliding_sync_connection_room_configs rc
+	INNER JOIN syncapi_sliding_sync_connection_positions cp USING (connection_position)
+	WHERE cp.connection_key = $1 AND rc.room_id = ANY($2)
+	ORDER BY rc.room_id, rc.connection_position DESC
+`
+
 // selectRoomConfigsByPositionSQL retrieves all room configs for a specific position
 // Used to load previous room configs for copy-forward during sync
 const selectRoomConfigsByPositionSQL = `
@@ -192,6 +202,7 @@ type slidingSyncStatements struct {
 	upsertRoomConfigStmt                  *sql.Stmt
 	selectRoomConfigStmt                  *sql.Stmt
 	selectLatestRoomConfigStmt            *sql.Stmt
+	selectLatestRoomConfigsBatchStmt      *sql.Stmt
 	selectRoomConfigsByPositionStmt       *sql.Stmt
 	upsertConnectionStreamStmt            *sql.Stmt
 	selectConnectionStreamStmt            *sql.Stmt
@@ -220,6 +231,7 @@ func NewPostgresSlidingSyncTable(db *sql.DB) (tables.SlidingSync, error) {
 		{&s.upsertRoomConfigStmt, upsertRoomConfigSQL},
 		{&s.selectRoomConfigStmt, selectRoomConfigSQL},
 		{&s.selectLatestRoomConfigStmt, selectLatestRoomConfigSQL},
+		{&s.selectLatestRoomConfigsBatchStmt, selectLatestRoomConfigsBatchSQL},
 		{&s.selectRoomConfigsByPositionStmt, selectRoomConfigsByPositionSQL},
 		{&s.upsertConnectionStreamStmt, upsertConnectionStreamSQL},
 		{&s.selectConnectionStreamStmt, selectConnectionStreamSQL},
@@ -400,6 +412,35 @@ func (s *slidingSyncStatements) SelectLatestRoomConfig(
 		return nil, nil
 	}
 	return &config, err
+}
+
+// SelectLatestRoomConfigsBatch retrieves the most recent room configs for multiple rooms
+// This is a batch version to avoid N+1 queries when processing room subscriptions
+func (s *slidingSyncStatements) SelectLatestRoomConfigsBatch(
+	ctx context.Context, txn *sql.Tx, connectionKey int64, roomIDs []string,
+) (map[string]*tables.SlidingSyncRoomConfig, error) {
+	if len(roomIDs) == 0 {
+		return make(map[string]*tables.SlidingSyncRoomConfig), nil
+	}
+
+	stmt := sqlutil.TxStmt(txn, s.selectLatestRoomConfigsBatchStmt)
+	rows, err := stmt.QueryContext(ctx, connectionKey, roomIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]*tables.SlidingSyncRoomConfig, len(roomIDs))
+	for rows.Next() {
+		var config tables.SlidingSyncRoomConfig
+		if err := rows.Scan(
+			&config.ConnectionPosition, &config.RoomID, &config.TimelineLimit, &config.RequiredStateID,
+		); err != nil {
+			return nil, err
+		}
+		result[config.RoomID] = &config
+	}
+	return result, rows.Err()
 }
 
 // SelectRoomConfigsByPosition retrieves all room configs for a specific position
