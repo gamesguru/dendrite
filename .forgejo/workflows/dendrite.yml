@@ -13,8 +13,6 @@ on:
       - "**.go"
       - "go.sum" # or dependency updates
       - ".forgejo/workflows/**"
-  release:
-    types: [published]
   workflow_dispatch:
 
 concurrency:
@@ -158,26 +156,3 @@ jobs:
           fi
           echo "All integration tests passed!"
 
-  # Build release binaries using xgo for cross-compilation
-  release-build:
-    name: "Build release binaries"
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [integration-tests-done]
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build with xgo
-        uses: https://github.com/crazy-max/ghaction-xgo@v3
-        with:
-          xgo_version: latest
-          go_version: file:go.mod
-          dest: dist
-          prefix: dendrite
-          targets: linux/amd64,linux/arm64,linux/arm-7,darwin/amd64,darwin/arm64,windows/amd64
-          pkg: ./cmd/dendrite
-          ldflags: -s -w
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: dendrite-${{ github.ref_name }}-binaries
-          path: dist/*

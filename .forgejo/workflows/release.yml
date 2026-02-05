@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: Build release binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Build with xgo
+        uses: https://github.com/crazy-max/ghaction-xgo@v3
+        with:
+          xgo_version: latest
+          go_version: file:go.mod
+          dest: dist
+          prefix: dendrite
+          targets: linux/amd64,linux/arm64,linux/arm-7,darwin/amd64,darwin/arm64,windows/amd64
+          pkg: ./cmd/dendrite
+          ldflags: -s -w -X main.version=${{ github.ref_name }}
+
+      - name: Create archives
+        run: |
+          cd dist
+          for file in dendrite-*; do
+            if [[ "$file" == *.exe ]]; then
+              zip "${file%.exe}.zip" "$file"
+              rm "$file"
+            else
+              tar -czvf "${file}.tar.gz" "$file"
+              rm "$file"
+            fi
+          done
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: binaries
+          path: dist/*
+
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: build
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache curl jq git
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: binaries
+          path: dist
+
+      - name: Generate changelog
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git-sv rn -t "${{ github.ref_name }}" -o release-notes.md
+          cat release-notes.md
+
+      - name: Create release
+        env:
+          ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+
+          # Create release via API
+          RELEASE_RESPONSE=$(curl -sf -X POST \
+            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
+            -H "Authorization: token $ISSUE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$TAG" \
+              --arg body "$(cat release-notes.md)" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
+
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          echo "Created release with ID: $RELEASE_ID"
+
+          # Upload assets
+          for file in dist/*; do
+            filename=$(basename "$file")
+            echo "Uploading $filename..."
+            curl -sf -X POST \
+              "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}" \
+              -H "Authorization: token $ISSUE_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file"
+          done
+
+          echo "Release created: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
