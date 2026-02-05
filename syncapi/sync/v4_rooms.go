@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -168,12 +169,6 @@ func (rp *RequestPool) ApplyRoomFilters(
 		return rooms, nil
 	}
 
-	// Spaces filtering is not yet implemented (MSC4186)
-	// Return error early if client tries to use it
-	if len(filter.Spaces) > 0 {
-		return nil, fmt.Errorf("spaces filtering is not yet implemented")
-	}
-
 	// PERFORMANCE: Create a single snapshot for all filter operations
 	// This avoids N+1 snapshots when filtering many rooms
 	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
@@ -182,11 +177,28 @@ func (rp *RequestPool) ApplyRoomFilters(
 	}
 	defer func() { _ = snapshot.Rollback() }()
 
+	// Build set of space children if spaces filter is specified (MSC4186)
+	// A room matches if it's a direct child of any of the specified spaces
+	var spaceChildren map[string]bool
+	if len(filter.Spaces) > 0 {
+		spaceChildren = make(map[string]bool)
+		for _, spaceRoomID := range filter.Spaces {
+			children := rp.getSpaceChildrenWithSnapshot(ctx, snapshot, spaceRoomID)
+			for _, childID := range children {
+				spaceChildren[childID] = true
+			}
+		}
+		logrus.WithFields(logrus.Fields{
+			"spaces":      filter.Spaces,
+			"child_count": len(spaceChildren),
+		}).Debug("[V4_SYNC] Built space children set for filtering")
+	}
+
 	filtered := make([]RoomWithBumpStamp, 0, len(rooms))
 
 	for _, room := range rooms {
 		// Apply all filter criteria using the shared snapshot
-		if !rp.roomMatchesFilter(ctx, snapshot, room, filter, userID) {
+		if !rp.roomMatchesFilterWithSpaces(ctx, snapshot, room, filter, userID, spaceChildren) {
 			continue
 		}
 		filtered = append(filtered, room)
@@ -195,17 +207,22 @@ func (rp *RequestPool) ApplyRoomFilters(
 	return filtered, nil
 }
 
-// roomMatchesFilter checks if a room matches all filter criteria
+// roomMatchesFilterWithSpaces checks if a room matches all filter criteria including spaces
 // PERFORMANCE: Accepts a snapshot parameter to avoid creating multiple database connections
-func (rp *RequestPool) roomMatchesFilter(
+// spaceChildren is the pre-computed set of child room IDs for spaces filtering (nil if no spaces filter)
+func (rp *RequestPool) roomMatchesFilterWithSpaces(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
 	room RoomWithBumpStamp,
 	filter *types.SlidingRoomFilter,
 	userID string,
+	spaceChildren map[string]bool,
 ) bool {
-	// Phase 2: Basic implementation
-	// Phase 7: Add optimised queries using sliding_sync_joined_rooms table
+	// Spaces filtering (MSC4186)
+	// If spaces filter is set, room must be a child of one of the specified spaces
+	if spaceChildren != nil && !spaceChildren[room.RoomID] {
+		return false
+	}
 
 	// Filter by DM status
 	if filter.IsDM != nil {
@@ -368,6 +385,41 @@ func (rp *RequestPool) getRoomTypeWithSnapshot(ctx context.Context, snapshot sto
 	}
 
 	return content.Type
+}
+
+// getSpaceChildrenWithSnapshot returns the list of child room IDs for a space
+// Uses m.space.child state events where the state_key is the child room ID
+func (rp *RequestPool) getSpaceChildrenWithSnapshot(ctx context.Context, snapshot storage.DatabaseTransaction, spaceRoomID string) []string {
+	// Query all m.space.child state events for this space
+	// The state_key for each event is the child room ID
+	spaceChildTypes := []string{"m.space.child"}
+	stateFilter := &synctypes.StateFilter{
+		Types: &spaceChildTypes,
+	}
+
+	events, err := snapshot.GetStateEventsForRoom(ctx, spaceRoomID, stateFilter)
+	if err != nil {
+		logrus.WithError(err).WithField("space_id", spaceRoomID).Warn("[V4_SYNC] Failed to get space children")
+		return nil
+	}
+
+	children := make([]string, 0, len(events))
+	for _, event := range events {
+		// The state_key is the child room ID
+		stateKey := event.StateKey()
+		if stateKey != nil && *stateKey != "" {
+			// Check if the event content indicates the child is valid
+			// An empty content or missing "via" means the child was removed
+			var content struct {
+				Via []string `json:"via"`
+			}
+			if err := json.Unmarshal(event.Content(), &content); err == nil && len(content.Via) > 0 {
+				children = append(children, *stateKey)
+			}
+		}
+	}
+
+	return children
 }
 
 func (rp *RequestPool) getRoomTags(ctx context.Context, roomID string, userID string) map[string]interface{} {
