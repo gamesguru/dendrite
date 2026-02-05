@@ -49,7 +49,7 @@ require (
 	golang.org/x/term v0.39.0
 	gopkg.in/yaml.v2 v2.4.0
 	gotest.tools/v3 v3.5.2
-	maunium.net/go/mautrix v0.15.1
+	maunium.net/go/mautrix v0.26.2
 	modernc.org/sqlite v1.44.3
 )
 
