@@ -29,6 +29,7 @@ docker run --rm --entrypoint="/usr/bin/generate-keys" \
 
 # Windows equivalent: docker run --rm --entrypoint="/usr/bin/generate-keys" -v %cd%/config:/mnt ghcr.io/element-hq/dendrite-monolith:latest -private-key /mnt/matrix_key.pem
 ```
+
 (**NOTE**: This only needs to be executed **once**, as you otherwise overwrite the key)
 
 ### Generate a config

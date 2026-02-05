@@ -143,7 +143,7 @@ func (r *Peeker) performPeekRoomByID(
 	// XXX: would be nicer to call this with NIDs
 	// XXX: we should probably factor out history_visibility checks into a common utility method somewhere
 	// which handles the default value etc.
-	var worldReadable = false
+	worldReadable := false
 	if ev, _ := r.DB.GetStateEvent(ctx, roomID, "m.room.history_visibility", ""); ev != nil {
 		content := map[string]string{}
 		if err = json.Unmarshal(ev.Content(), &content); err != nil {

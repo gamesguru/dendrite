@@ -57,7 +57,7 @@ type userRoomKeysStatements struct {
 	selectUserRoomKeyStmt              *sql.Stmt
 	selectUserRoomPublicKeyStmt        *sql.Stmt
 	selectAllUserRoomPublicKeysForUser *sql.Stmt
-	//selectUserNIDsStmt           *sql.Stmt //prepared at runtime
+	// selectUserNIDsStmt           *sql.Stmt //prepared at runtime
 }
 
 func CreateUserRoomKeysTable(db *sql.DB) error {
@@ -120,7 +120,6 @@ func (s *userRoomKeysStatements) SelectUserRoomPublicKey(
 }
 
 func (s *userRoomKeysStatements) BulkSelectUserNIDs(ctx context.Context, txn *sql.Tx, senderKeys map[types.RoomNID][]ed25519.PublicKey) (map[string]types.UserRoomKeyPair, error) {
-
 	roomNIDs := make([]any, 0, len(senderKeys))
 	var senders []any
 	for roomNID := range senderKeys {

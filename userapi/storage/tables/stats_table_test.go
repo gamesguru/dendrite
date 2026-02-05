@@ -129,7 +129,6 @@ func mustUserUpdateRegistered(
 
 // These tests must run sequentially, as they build up on each other
 func Test_UserStatistics(t *testing.T) {
-
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, accDB, devDB, statsDB, close := mustMakeDBs(t, dbType)
@@ -317,5 +316,4 @@ func Test_UserStatistics(t *testing.T) {
 			}
 		})
 	})
-
 }

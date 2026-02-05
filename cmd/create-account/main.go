@@ -160,7 +160,6 @@ func sharedSecretRegister(sharedSecret, serverURL, localpart, password string, a
 	registerReq, err := http.NewRequest(http.MethodPost, registerURL, bytes.NewBuffer(js))
 	if err != nil {
 		return "", fmt.Errorf("unable to create http request: %w", err)
-
 	}
 	regResp, err := cl.Do(registerReq)
 	if err != nil {

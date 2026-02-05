@@ -72,7 +72,6 @@ func (s *sendEventTestRoomserverAPI) QueryLatestEventsAndState(ctx context.Conte
 		s.t.Logf("room event/state queried for %s", req.RoomID)
 		return fmt.Errorf("unknown room")
 	}
-
 }
 
 func (s *sendEventTestRoomserverAPI) QuerySenderIDForUser(

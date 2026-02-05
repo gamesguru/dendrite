@@ -42,14 +42,12 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-var (
-	// Prometheus metrics
-	amtRegUsers = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "dendrite_clientapi_reg_users_total",
-			Help: "Total number of registered users",
-		},
-	)
+// Prometheus metrics
+var amtRegUsers = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "dendrite_clientapi_reg_users_total",
+		Help: "Total number of registered users",
+	},
 )
 
 const sessionIDLength = 24
@@ -186,9 +184,7 @@ func (d *sessionsDict) getDeviceToDelete(sessionID string) (string, bool) {
 	return deviceID, ok
 }
 
-var (
-	sessions = newSessionsDict()
-)
+var sessions = newSessionsDict()
 
 // registerRequest represents the submitted registration request.
 // It can be broken down into 2 sections: the auth dictionary and registration parameters.
@@ -292,7 +288,6 @@ func validateRecaptcha(
 			"remoteip": {ip},
 		},
 	)
-
 	if err != nil {
 		return err
 	}
@@ -327,8 +322,7 @@ func UserIDIsWithinApplicationServiceNamespace(
 	userID string,
 	appservice *config.ApplicationService,
 ) bool {
-
-	var local, domain, err = gomatrixserverlib.SplitID('@', userID)
+	local, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		// Not a valid userID
 		return false
@@ -606,14 +600,13 @@ func handleGuestRegistration(
 		ServerName:       string(res.Account.ServerName),
 		UserID:           res.Account.UserID,
 	})
-
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.Unknown("Failed to generate access token"),
 		}
 	}
-	//we don't allow guests to specify their own device_id
+	// we don't allow guests to specify their own device_id
 	var devRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(req.Context(), &userapi.PerformDeviceCreationRequest{
 		Localpart:         res.Account.Localpart,

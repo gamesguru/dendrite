@@ -18,8 +18,7 @@ import (
 
 const KeyID = "ed25519:dendrite-demo-yggdrasil"
 
-type YggdrasilKeys struct {
-}
+type YggdrasilKeys struct{}
 
 func (f *YggdrasilKeys) KeyRing() *gomatrixserverlib.KeyRing {
 	return &gomatrixserverlib.KeyRing{

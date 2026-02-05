@@ -503,7 +503,6 @@ func GetEventReports(
 	backwards bool,
 	userID, roomID string,
 ) util.JSONResponse {
-
 	eventReports, count, err := rsAPI.QueryAdminEventReports(req.Context(), from, limit, backwards, userID, roomID)
 	if err != nil {
 		logrus.WithError(err).Error("failed to query event reports")

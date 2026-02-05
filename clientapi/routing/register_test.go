@@ -36,23 +36,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var (
-	// Registration Flows that the server allows.
-	allowedFlows = []authtypes.Flow{
-		{
-			Stages: []authtypes.LoginType{
-				authtypes.LoginType("stage1"),
-				authtypes.LoginType("stage2"),
-			},
+// Registration Flows that the server allows.
+var allowedFlows = []authtypes.Flow{
+	{
+		Stages: []authtypes.LoginType{
+			authtypes.LoginType("stage1"),
+			authtypes.LoginType("stage2"),
 		},
-		{
-			Stages: []authtypes.LoginType{
-				authtypes.LoginType("stage1"),
-				authtypes.LoginType("stage3"),
-			},
+	},
+	{
+		Stages: []authtypes.LoginType{
+			authtypes.LoginType("stage1"),
+			authtypes.LoginType("stage3"),
 		},
-	}
-)
+	},
+}
 
 // Should return true as we're completing all the stages of a single flow in
 // order.

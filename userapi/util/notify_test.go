@@ -130,5 +130,4 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 		case <-receivedRequest:
 		}
 	})
-
 }

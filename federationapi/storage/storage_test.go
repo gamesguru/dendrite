@@ -34,7 +34,7 @@ func mustCreateFederationDatabase(t *testing.T, dbType test.DBType) (storage.Dat
 }
 
 func TestExpireEDUs(t *testing.T) {
-	var expireEDUTypes = map[string]time.Duration{
+	expireEDUTypes := map[string]time.Duration{
 		spec.MReceipt: 0,
 	}
 

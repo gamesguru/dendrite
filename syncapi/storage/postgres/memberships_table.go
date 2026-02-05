@@ -154,9 +154,7 @@ func (s *membershipsStatements) SelectMemberships(
 		return
 	}
 	defer internal.CloseAndLogIfError(ctx, rows, "SelectMemberships: failed to close rows")
-	var (
-		eventID string
-	)
+	var eventID string
 	for rows.Next() {
 		if err = rows.Scan(&eventID); err != nil {
 			return

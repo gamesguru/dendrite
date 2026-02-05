@@ -75,7 +75,6 @@ func checkSyslogHookParams(params map[string]interface{}) {
 	if _, ok2 := proto.(string); !ok2 {
 		logrus.Fatalf("Parameter \"protocol\" for logging hook of type \"syslog\" should be a string")
 	}
-
 }
 
 func setupStdLogHook(level logrus.Level) {

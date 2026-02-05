@@ -196,7 +196,6 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 
 		return discoveredRooms, inaccessible, &newWalker, nil
 	}
-
 }
 
 // authorised returns true iff the user is joined this room or the room is world_readable

@@ -97,7 +97,6 @@ func TestGetAuthChainSingle(t *testing.T) {
 		"d": {"b", "c"},
 		"e": {"a", "d"},
 	})
-
 	if err != nil {
 		t.Fatalf("Failed to add events to db: %v", err)
 	}
@@ -130,7 +129,6 @@ func TestGetAuthChainMultiple(t *testing.T) {
 		"e": {"a", "d"},
 		"f": {"a", "b", "c"},
 	})
-
 	if err != nil {
 		t.Fatalf("Failed to add events to db: %v", err)
 	}

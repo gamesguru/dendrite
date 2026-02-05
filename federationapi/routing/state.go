@@ -60,10 +60,11 @@ func GetStateIDs(
 	stateEventIDs := getIDsFromEvent(stateEvents)
 	authEventIDs := getIDsFromEvent(authEvents)
 
-	return util.JSONResponse{Code: http.StatusOK, JSON: fclient.RespStateIDs{
-		StateEventIDs: stateEventIDs,
-		AuthEventIDs:  authEventIDs,
-	},
+	return util.JSONResponse{
+		Code: http.StatusOK, JSON: fclient.RespStateIDs{
+			StateEventIDs: stateEventIDs,
+			AuthEventIDs:  authEventIDs,
+		},
 	}
 }
 

@@ -62,9 +62,9 @@ you will be able to delegate from `example.com` to `matrix.example.com` so that 
 
 Delegation can be performed in one of two ways:
 
-* **Well-known delegation (preferred)**: A well-known text file is served over HTTPS on the domain
+- **Well-known delegation (preferred)**: A well-known text file is served over HTTPS on the domain
   name that you want to use, pointing to your server on `matrix.example.com` port 8448;
-* **DNS SRV delegation (not recommended)**: See the SRV delegation section below for details.
+- **DNS SRV delegation (not recommended)**: See the SRV delegation section below for details.
 
 If you are using a reverse proxy to forward `/_matrix` to Dendrite, your well-known or delegation
 must refer to the hostname and port that the reverse proxy is listening on instead.
@@ -80,7 +80,7 @@ and contain the following JSON document:
 
 ```json
 {
-    "m.server": "matrix.example.com:8448"
+  "m.server": "matrix.example.com:8448"
 }
 ```
 
@@ -108,7 +108,7 @@ file.
 ```yaml
 global:
 ...
-   well_known_server_name: "example.com:443"
+well_known_server_name: "example.com:443"
 ```
 
 ## DNS SRV delegation

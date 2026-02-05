@@ -106,6 +106,5 @@ func TestDefaultRules(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, string(got), string(tc.inputBytes))
 		})
-
 	}
 }

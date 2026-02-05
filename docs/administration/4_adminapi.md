@@ -50,7 +50,7 @@ the room IDs of all affected rooms.
 
 ## POST `/_dendrite/admin/resetPassword/{userID}`
 
-Reset the password of a local user. 
+Reset the password of a local user.
 
 **If `logout_devices` is set to `true`, all `access_tokens` will be invalidated, resulting
 in the potential loss of encrypted messages**
@@ -59,8 +59,8 @@ Request body format:
 
 ```json
 {
-    "password": "new_password_here",
-    "logout_devices": false
+  "password": "new_password_here",
+  "logout_devices": false
 }
 ```
 
@@ -83,23 +83,21 @@ Returns a list of all rooms which have zero (locally) joined members. Response f
 
 ```json
 {
-    "empty_rooms": [
-        "!roomid1:server_name",
-        "!roomid2:server_name"
-    ]
+  "empty_rooms": ["!roomid1:server_name", "!roomid2:server_name"]
 }
 ```
 
 ## POST `/_synapse/admin/v1/send_server_notice`
 
 Request body format:
+
 ```json
 {
-    "user_id": "@target_user:server_name",
-    "content": {
-       "msgtype": "m.text",
-       "body": "This is my message"
-    }
+  "user_id": "@target_user:server_name",
+  "content": {
+    "msgtype": "m.text",
+    "body": "This is my message"
+  }
 }
 ```
 
@@ -108,7 +106,7 @@ If successfully sent, the API will return the following response:
 
 ```json
 {
-     "event_id": "<event_id>"
+  "event_id": "<event_id>"
 }
 ```
 
@@ -119,5 +117,5 @@ guidance on configuring and using this endpoint.
 
 ## GET `/_matrix/client/v3/admin/whois/{userId}`
 
-From the [Matrix Spec](https://spec.matrix.org/v1.3/client-server-api/#get_matrixclientv3adminwhoisuserid). 
+From the [Matrix Spec](https://spec.matrix.org/v1.3/client-server-api/#get_matrixclientv3adminwhoisuserid).
 Gets information about a particular user. `userId` is the full user ID (e.g. `@alice:domain.com`)

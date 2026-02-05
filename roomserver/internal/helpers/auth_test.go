@@ -124,5 +124,4 @@ func TestEventMap(t *testing.T) {
 			t.Fatalf("eventMap lookup(%v): want event to be %v, got %v", testCase.inputEventNID, testCase.wantEvent, gotEvent)
 		}
 	}
-
 }

@@ -9,7 +9,6 @@ import (
 )
 
 func Test_parseContextParams(t *testing.T) {
-
 	noParamsReq, _ := http.NewRequest("GET", "https://localhost:8800/_matrix/client/r0/rooms/!hyi4UaxS9mUXpSG9:localhost:8800/context/%24um_T82QqAXN8PayGiBW7j9WExpqTIQ7-JRq-Q6xpIf8?access_token=5dMB0z4tiulyBvCaIKgyjuWG71ybDiYIwNJVJ2UmxRI", nil)
 	limit2Req, _ := http.NewRequest("GET", "https://localhost:8800/_matrix/client/r0/rooms/!hyi4UaxS9mUXpSG9:localhost:8800/context/%24um_T82QqAXN8PayGiBW7j9WExpqTIQ7-JRq-Q6xpIf8?access_token=5dMB0z4tiulyBvCaIKgyjuWG71ybDiYIwNJVJ2UmxRI&limit=2", nil)
 	limit10000Req, _ := http.NewRequest("GET", "https://localhost:8800/_matrix/client/r0/rooms/!hyi4UaxS9mUXpSG9:localhost:8800/context/%24um_T82QqAXN8PayGiBW7j9WExpqTIQ7-JRq-Q6xpIf8?access_token=5dMB0z4tiulyBvCaIKgyjuWG71ybDiYIwNJVJ2UmxRI&limit=10000", nil)

@@ -11,7 +11,6 @@ import (
 )
 
 func TestConnectionManager(t *testing.T) {
-
 	t.Run("component defined connection string", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 			conStr, close := test.PrepareDBConnectionString(t, dbType)

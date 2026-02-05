@@ -42,8 +42,8 @@ string" format.
 
 Example supported connection strings take the format:
 
-* `postgresql://user:pass@hostname/database?options=...`
-* `postgres://user:pass@hostname/database?options=...`
+- `postgresql://user:pass@hostname/database?options=...`
+- `postgres://user:pass@hostname/database?options=...`
 
 If you need to disable SSL/TLS on the database connection, you may need to append `?sslmode=disable` to the end of the connection string.
 
@@ -83,5 +83,5 @@ instead in order to use SQLite.
 
 Connection strings for SQLite databases take the following forms:
 
-* Current working directory path: `file:dendrite_component.db`
-* Full specified path: `file:///path/to/dendrite_component.db`
+- Current working directory path: `file:dendrite_component.db`
+- Full specified path: `file:///path/to/dendrite_component.db`

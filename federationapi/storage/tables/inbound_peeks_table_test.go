@@ -144,6 +144,5 @@ func TestInboundPeeksTable(t *testing.T) {
 		if len(inboundPeeks) > 0 {
 			t.Fatal("got inbound peeks which should be deleted")
 		}
-
 	})
 }

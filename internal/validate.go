@@ -121,7 +121,7 @@ func userIDIsWithinApplicationServiceNamespace(
 	userID string,
 	appservice *config.ApplicationService,
 ) bool {
-	var localpart, domain, err = gomatrixserverlib.SplitID('@', userID)
+	localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		// Not a valid userID
 		return false

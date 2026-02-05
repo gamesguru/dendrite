@@ -189,8 +189,7 @@ type PerformLeaveRequest struct {
 	ServerNames types.ServerNames `json:"server_names"`
 }
 
-type PerformLeaveResponse struct {
-}
+type PerformLeaveResponse struct{}
 
 type PerformInviteRequest struct {
 	RoomVersion     gomatrixserverlib.RoomVersion           `json:"room_version"`
@@ -214,25 +213,21 @@ type QueryJoinedHostServerNamesInRoomResponse struct {
 	ServerNames []spec.ServerName `json:"server_names"`
 }
 
-type PerformBroadcastEDURequest struct {
-}
+type PerformBroadcastEDURequest struct{}
 
-type PerformBroadcastEDUResponse struct {
-}
+type PerformBroadcastEDUResponse struct{}
 
 type PerformWakeupServersRequest struct {
 	ServerNames []spec.ServerName `json:"server_names"`
 }
 
-type PerformWakeupServersResponse struct {
-}
+type PerformWakeupServersResponse struct{}
 
 type InputPublicKeysRequest struct {
 	Keys map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult `json:"keys"`
 }
 
-type InputPublicKeysResponse struct {
-}
+type InputPublicKeysResponse struct{}
 
 type P2PQueryRelayServersRequest struct {
 	Server spec.ServerName
@@ -247,13 +242,11 @@ type P2PAddRelayServersRequest struct {
 	RelayServers []spec.ServerName
 }
 
-type P2PAddRelayServersResponse struct {
-}
+type P2PAddRelayServersResponse struct{}
 
 type P2PRemoveRelayServersRequest struct {
 	Server       spec.ServerName
 	RelayServers []spec.ServerName
 }
 
-type P2PRemoveRelayServersResponse struct {
-}
+type P2PRemoveRelayServersResponse struct{}

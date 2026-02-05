@@ -136,7 +136,6 @@ func Test_evaluatePushRules(t *testing.T) {
 					t.Fatalf("expected to notify but didn't")
 				}
 			})
-
 		}
 	})
 }
@@ -174,7 +173,6 @@ func TestLocalRoomMembers(t *testing.T) {
 		expectedLocalMember := &localMembership{UserID: alice.ID, Localpart: alice.Localpart, Domain: "test", MemberContent: gomatrixserverlib.MemberContent{Membership: spec.Join}}
 		assert.Equal(t, expectedLocalMember, members[0])
 	})
-
 }
 
 func TestMessageStats(t *testing.T) {

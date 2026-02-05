@@ -74,7 +74,7 @@ type roomStatements struct {
 	selectLatestEventNIDsStmt          *sql.Stmt
 	selectLatestEventNIDsForUpdateStmt *sql.Stmt
 	updateLatestEventNIDsStmt          *sql.Stmt
-	//selectRoomVersionForRoomNIDStmt    *sql.Stmt
+	// selectRoomVersionForRoomNIDStmt    *sql.Stmt
 	selectRoomInfoStmt *sql.Stmt
 }
 

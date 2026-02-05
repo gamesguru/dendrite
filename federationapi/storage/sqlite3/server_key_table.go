@@ -117,7 +117,6 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 			return nil
 		},
 	)
-
 	if err != nil {
 		return nil, err
 	}

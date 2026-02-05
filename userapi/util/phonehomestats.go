@@ -41,7 +41,6 @@ type timestampToRUUsage struct {
 }
 
 func StartPhoneHomeCollector(startTime time.Time, cfg *config.Dendrite, statsDB storage.Statistics) {
-
 	p := phoneHomeStats{
 		startTime:  startTime,
 		serverName: cfg.Global.ServerName,

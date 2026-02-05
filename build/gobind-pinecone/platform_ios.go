@@ -20,8 +20,7 @@ void Log(const char *text) {
 import "C"
 import "unsafe"
 
-type BindLogger struct {
-}
+type BindLogger struct{}
 
 func (nsl BindLogger) Write(p []byte) (n int, err error) {
 	p = append(p, 0)

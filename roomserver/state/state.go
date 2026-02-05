@@ -802,8 +802,7 @@ func (v *StateResolution) calculateAndStoreStateAfterManyEvents(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.calculateAndStoreStateAfterManyEvents")
 	defer trace.EndRegion()
 
-	state, algorithm, conflictLength, err :=
-		v.calculateStateAfterManyEvents(ctx, v.roomInfo.RoomVersion, prevStates)
+	state, algorithm, conflictLength, err := v.calculateStateAfterManyEvents(ctx, v.roomInfo.RoomVersion, prevStates)
 	metrics.algorithm = algorithm
 	if err != nil {
 		return metrics.stop(0, fmt.Errorf("v.calculateStateAfterManyEvents: %w", err))

@@ -36,7 +36,6 @@ func ParseFlags(monolith bool) *config.Dendrite {
 	}
 
 	cfg, err := config.Load(*configPath)
-
 	if err != nil {
 		logrus.Fatalf("Invalid config file: %s", err)
 	}

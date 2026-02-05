@@ -29,8 +29,10 @@ import (
 // logrus is using a global variable when we're using `logrus.AddHook`
 // this unfortunately results in us adding the same hook multiple times.
 // This map ensures we only ever add one level hook.
-var stdLevelLogAdded = make(map[logrus.Level]bool)
-var levelLogAddedMu = &sync.Mutex{}
+var (
+	stdLevelLogAdded = make(map[logrus.Level]bool)
+	levelLogAddedMu  = &sync.Mutex{}
+)
 
 type utcFormatter struct {
 	logrus.Formatter

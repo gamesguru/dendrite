@@ -1,6 +1,5 @@
 # Dendrite
 
-
 Dendrite is a second-generation Matrix homeserver written in Go.
 This repository has been forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in 2026-02.
 
@@ -13,7 +12,8 @@ It intends to provide an **efficient** and **reliable** alternative to [Synapse]
 If you have further questions, please take a look at [our FAQ](docs/FAQ.md) or join us in:
 
 Dendrite does not currently support the following MSCs, which impacts the ability to use Element X with Dendrite servers:
- - [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861): Next-gen auth OIDC
+
+- [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861): Next-gen auth OIDC
 
 ## Copyright & License
 

@@ -118,6 +118,5 @@ func TestUserRoomKeysTable(t *testing.T) {
 			return nil
 		})
 		assert.NoError(t, err)
-
 	})
 }

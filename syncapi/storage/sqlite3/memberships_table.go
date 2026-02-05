@@ -71,7 +71,7 @@ type membershipsStatements struct {
 	db                        *sql.DB
 	upsertMembershipStmt      *sql.Stmt
 	selectMembershipCountStmt *sql.Stmt
-	//selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
+	// selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
 	selectMembershipForUserStmt *sql.Stmt
 	selectMembersStmt           *sql.Stmt
 	purgeMembershipsStmt        *sql.Stmt

@@ -11,7 +11,7 @@ permalink: /installation/manual/configuration
 A YAML configuration file is used to configure Dendrite. A sample configuration file is
 present in the top level of the Dendrite repository:
 
-* [`dendrite-sample.yaml`](https://github.com/element-hq/dendrite/blob/main/dendrite-sample.yaml)
+- [`dendrite-sample.yaml`](https://github.com/element-hq/dendrite/blob/main/dendrite-sample.yaml)
 
 You will need to duplicate the sample, calling it `dendrite.yaml` for example, and then
 tailor it to your installation. At a minimum, you will need to populate the following

@@ -49,8 +49,10 @@ func init() {
 	fmt.Printf("[%s] dendrite.js starting...\n", GitCommit)
 }
 
-const publicPeer = "wss://pinecone.matrix.org/public"
-const keyNameEd25519 = "_go_ed25519_key"
+const (
+	publicPeer     = "wss://pinecone.matrix.org/public"
+	keyNameEd25519 = "_go_ed25519_key"
+)
 
 func readKeyFromLocalStorage() (key ed25519.PrivateKey, err error) {
 	localforage := js.Global().Get("localforage")
@@ -202,7 +204,7 @@ func startup() {
 		FederationAPI: fedSenderAPI,
 		RoomserverAPI: rsAPI,
 		UserAPI:       userAPI,
-		//ServerKeyAPI:        serverKeyAPI,
+		// ServerKeyAPI:        serverKeyAPI,
 		ExtPublicRoomsProvider: rooms.NewPineconeRoomProvider(pRouter, pSessions, fedSenderAPI, federation),
 	}
 	monolith.AddAllPublicRoutes(processCtx, cfg, routers, cm, &natsInstance, caches, caching.EnableMetrics)

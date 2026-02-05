@@ -1010,7 +1010,7 @@ func TestTurnserver(t *testing.T) {
 	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 	rsAPI.SetFederationAPI(nil, nil)
 	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-	//rsAPI.SetUserAPI(userAPI)
+	// rsAPI.SetUserAPI(userAPI)
 	// We mostly need the rsAPI/userAPI for this test, so nil for other APIs etc.
 	AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
 
@@ -1230,7 +1230,6 @@ func Test3PID(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-
 				if tc.setTrustedServer {
 					cfg.Global.TrustedIDServers = []string{identityServerBase}
 				}
@@ -2168,7 +2167,6 @@ func TestGetMembership(t *testing.T) {
 		wantOK           bool
 		wantMemberCount  int
 	}{
-
 		{
 			name: "/joined_members - Bob never joined",
 			user: bob,
@@ -2224,7 +2222,6 @@ func TestGetMembership(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -2287,7 +2284,6 @@ func TestCreateRoomInvite(t *testing.T) {
 	bob := test.NewUser(t)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)

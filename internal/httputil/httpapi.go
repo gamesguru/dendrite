@@ -192,7 +192,6 @@ func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse
 		defer trace.EndTask()
 		req = req.WithContext(ctx)
 		h.ServeHTTP(nextWriter, req)
-
 	}
 
 	return http.HandlerFunc(withSpan)

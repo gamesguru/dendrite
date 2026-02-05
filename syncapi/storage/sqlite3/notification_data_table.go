@@ -41,7 +41,7 @@ type notificationDataStatements struct {
 	upsertRoomUnreadCounts *sql.Stmt
 	selectMaxID            *sql.Stmt
 	purgeNotificationData  *sql.Stmt
-	//selectUserUnreadCountsForRooms *sql.Stmt
+	// selectUserUnreadCountsForRooms *sql.Stmt
 }
 
 const notificationDataSchema = `

@@ -149,7 +149,6 @@ func (s *notificationsStatements) UpdateRead(ctx context.Context, txn *sql.Tx, l
 
 func (s *notificationsStatements) Select(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error) {
 	rows, err := sqlutil.TxStmt(txn, s.selectStmt).QueryContext(ctx, localpart, serverName, fromID, uint32(filter), limit)
-
 	if err != nil {
 		return nil, 0, err
 	}

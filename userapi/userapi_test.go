@@ -612,7 +612,6 @@ func TestDevices(t *testing.T) {
 				if len(queryDevicesRes.Devices) != tc.wantDevices {
 					t.Fatalf("expected %d devices, got %d", tc.wantDevices, len(queryDevicesRes.Devices))
 				}
-
 			})
 		}
 	})

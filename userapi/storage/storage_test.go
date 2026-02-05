@@ -668,8 +668,10 @@ func TestKeyChangesUpperLimit(t *testing.T) {
 	})
 }
 
-var dbLock sync.Mutex
-var deviceArray = []string{"AAA", "another_device"}
+var (
+	dbLock      sync.Mutex
+	deviceArray = []string{"AAA", "another_device"}
+)
 
 // The purpose of this test is to make sure that the storage layer is generating sequential stream IDs per user,
 // and that they are returned correctly when querying for device keys.
@@ -741,7 +743,6 @@ func TestDeviceKeysStreamIDGeneration(t *testing.T) {
 		defer dbLock.Unlock()
 		// Querying for device keys returns the latest stream IDs
 		msgs, err = db.DeviceKeysForUser(ctx, alice, deviceArray, false)
-
 		if err != nil {
 			t.Fatalf("DeviceKeysForUser returned error: %s", err)
 		}

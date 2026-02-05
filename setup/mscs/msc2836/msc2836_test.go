@@ -30,11 +30,9 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-var (
-	client = &http.Client{
-		Timeout: 10 * time.Second,
-	}
-)
+var client = &http.Client{
+	Timeout: 10 * time.Second,
+}
 
 // Basic sanity check of MSC2836 logic. Injects a thread that looks like:
 //

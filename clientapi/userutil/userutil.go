@@ -24,7 +24,6 @@ func ParseUsernameParam(usernameParam string, cfg *config.Global) (string, spec.
 
 	if strings.HasPrefix(usernameParam, "@") {
 		lp, domain, err := gomatrixserverlib.SplitID('@', usernameParam)
-
 		if err != nil {
 			return "", "", errors.New("invalid username")
 		}

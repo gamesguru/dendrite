@@ -120,7 +120,6 @@ func UpdateDeviceByID(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	deviceID string,
 ) util.JSONResponse {
-
 	defer req.Body.Close() // nolint: errcheck
 
 	payload := deviceUpdateJSON{}

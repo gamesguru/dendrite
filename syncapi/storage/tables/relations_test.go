@@ -59,9 +59,11 @@ func compareRelationsToExpected(t *testing.T, tab tables.Relations, r types.Rang
 	}
 }
 
-const roomID = "!roomid:server"
-const childType = "m.room.something"
-const relType = "m.reaction"
+const (
+	roomID    = "!roomid:server"
+	childType = "m.room.something"
+	relType   = "m.reaction"
+)
 
 func TestRelationsTable(t *testing.T) {
 	ctx := context.Background()

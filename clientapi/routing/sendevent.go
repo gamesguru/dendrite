@@ -36,9 +36,7 @@ type sendEventResponse struct {
 	EventID string `json:"event_id"`
 }
 
-var (
-	userRoomSendMutexes sync.Map // (roomID+userID) -> mutex. mutexes to ensure correct ordering of sendEvents
-)
+var userRoomSendMutexes sync.Map // (roomID+userID) -> mutex. mutexes to ensure correct ordering of sendEvents
 
 var sendEventDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{

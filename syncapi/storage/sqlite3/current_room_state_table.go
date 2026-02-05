@@ -109,11 +109,11 @@ type currentRoomStateStatements struct {
 	selectRoomIDsWithMembershipStmt    *sql.Stmt
 	selectRoomIDsWithAnyMembershipStmt *sql.Stmt
 	selectJoinedUsersStmt              *sql.Stmt
-	//selectJoinedUsersInRoomStmt      *sql.Stmt - prepared at runtime due to variadic
+	// selectJoinedUsersInRoomStmt      *sql.Stmt - prepared at runtime due to variadic
 	selectStateEventStmt *sql.Stmt
-	//selectSharedUsersSQL             *sql.Stmt - prepared at runtime due to variadic
+	// selectSharedUsersSQL             *sql.Stmt - prepared at runtime due to variadic
 	selectMembershipCountStmt *sql.Stmt
-	//selectRoomHeroes          *sql.Stmt - prepared at runtime due to variadic
+	// selectRoomHeroes          *sql.Stmt - prepared at runtime due to variadic
 }
 
 func NewSqliteCurrentRoomStateTable(db *sql.DB, streamID *StreamIDStatements) (tables.CurrentRoomState, error) {
@@ -454,7 +454,6 @@ func (s *currentRoomStateStatements) SelectStateEvent(
 func (s *currentRoomStateStatements) SelectSharedUsers(
 	ctx context.Context, txn *sql.Tx, userID string, otherUserIDs []string,
 ) ([]string, error) {
-
 	params := make([]interface{}, len(otherUserIDs)+1)
 	params[0] = userID
 	for k, v := range otherUserIDs {

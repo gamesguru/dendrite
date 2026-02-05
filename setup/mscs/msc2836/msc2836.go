@@ -508,7 +508,6 @@ func (rc *reqCtx) MSC2836EventRelationships(eventID string, srv spec.ServerName,
 	mscRes.ParsedEvents = res.Events.UntrustedEvents(ver)
 	mscRes.ParsedAuthChain = res.AuthChain.UntrustedEvents(ver)
 	return mscRes, nil
-
 }
 
 // authorisedToSeeEvent checks that the user or server is allowed to see this event. Returns true if allowed to

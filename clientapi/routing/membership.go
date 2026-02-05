@@ -93,8 +93,8 @@ func SendBan(
 
 func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, device *userapi.Device,
 	roomID, membership, reason string, cfg *config.ClientAPI, targetUserID string, evTime time.Time,
-	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI) util.JSONResponse {
-
+	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
+) util.JSONResponse {
 	event, err := buildMembershipEvent(
 		ctx, targetUserID, reason, profileAPI, device, membership,
 		roomID, false, cfg, evTime, rsAPI, asAPI,
@@ -519,7 +519,6 @@ func loadProfile(
 }
 
 func extractRequestData(req *http.Request) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
-
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		resErr = reqErr
 		return
@@ -546,7 +545,6 @@ func checkAndProcessThreepid(
 	roomID string,
 	evTime time.Time,
 ) (inviteStored bool, errRes *util.JSONResponse) {
-
 	inviteStored, err := threepid.CheckAndProcessInvite(
 		req.Context(), device, body, cfg, rsAPI, profileAPI,
 		roomID, evTime,

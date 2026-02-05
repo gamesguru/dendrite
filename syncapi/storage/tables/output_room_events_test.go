@@ -149,7 +149,8 @@ func TestReindex(t *testing.T) {
 		events, err := tab.ReIndex(ctx, nil, 10, 0, []string{
 			spec.MRoomName,
 			spec.MRoomTopic,
-			"m.room.message"})
+			"m.room.message",
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

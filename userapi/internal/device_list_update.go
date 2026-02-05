@@ -33,16 +33,14 @@ import (
 	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-var (
-	deviceListUpdateCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "dendrite",
-			Subsystem: "keyserver",
-			Name:      "device_list_update",
-			Help:      "Number of times we have attempted to update device lists from this server",
-		},
-		[]string{"server"},
-	)
+var deviceListUpdateCount = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "dendrite",
+		Subsystem: "keyserver",
+		Name:      "device_list_update",
+		Help:      "Number of times we have attempted to update device lists from this server",
+	},
+	[]string{"server"},
 )
 
 const requestTimeout = time.Second * 30
@@ -147,6 +145,7 @@ var deviceListUpdaterBackpressure = prometheus.NewGaugeVec(
 	},
 	[]string{"worker_id"},
 )
+
 var deviceListUpdaterServersRetrying = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Namespace: "dendrite",

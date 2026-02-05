@@ -101,9 +101,7 @@ func TestDefaultACLsWithWhitelist(t *testing.T) {
 	}
 }
 
-var (
-	content1 = `{"allow":["*"],"allow_ip_literals":false,"deny":["hello.world", "*.hello.world"]}`
-)
+var content1 = `{"allow":["*"],"allow_ip_literals":false,"deny":["hello.world", "*.hello.world"]}`
 
 type dummyACLDB struct{}
 

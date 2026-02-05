@@ -174,8 +174,8 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 // fetchAndStoreMissingEvents does a best-effort fetch and store of missing events specified in stateIDs. Returns no error as it is just
 // best effort.
 func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gomatrixserverlib.RoomVersion,
-	backfillRequester *backfillRequester, stateIDs []string, virtualHost spec.ServerName) {
-
+	backfillRequester *backfillRequester, stateIDs []string, virtualHost spec.ServerName,
+) {
 	servers := backfillRequester.servers
 
 	// work out which are missing
@@ -377,8 +377,8 @@ func (b *backfillRequester) calculateNewStateIDs(targetEvent, prevEvent gomatrix
 }
 
 func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatrixserverlib.RoomVersion,
-	event gomatrixserverlib.PDU, eventIDs []string) (map[string]gomatrixserverlib.PDU, error) {
-
+	event gomatrixserverlib.PDU, eventIDs []string,
+) (map[string]gomatrixserverlib.PDU, error) {
 	// try to fetch the events from the database first
 	events, err := b.ProvideEvents(roomVer, eventIDs)
 	if err != nil {
@@ -512,8 +512,8 @@ FindSuccessor:
 // Backfill performs a backfill request to the given server.
 // https://matrix.org/docs/spec/server_server/latest#get-matrix-federation-v1-backfill-roomid
 func (b *backfillRequester) Backfill(ctx context.Context, origin, server spec.ServerName, roomID string,
-	limit int, fromEventIDs []string) (gomatrixserverlib.Transaction, error) {
-
+	limit int, fromEventIDs []string,
+) (gomatrixserverlib.Transaction, error) {
 	tx, err := b.fsAPI.Backfill(ctx, origin, server, roomID, limit, fromEventIDs)
 	return tx, err
 }
@@ -549,8 +549,8 @@ func (b *backfillRequester) ProvideEvents(roomVer gomatrixserverlib.RoomVersion,
 // pull all events and then filter by that table.
 func joinEventsFromHistoryVisibility(
 	ctx context.Context, db storage.RoomDatabase, querier api.QuerySenderIDAPI, roomInfo *types.RoomInfo, stateEntries []types.StateEntry,
-	thisServer spec.ServerName) ([]types.Event, gomatrixserverlib.HistoryVisibility, error) {
-
+	thisServer spec.ServerName,
+) ([]types.Event, gomatrixserverlib.HistoryVisibility, error) {
 	var eventNIDs []types.EventNID
 	for _, entry := range stateEntries {
 		// Filter the events to retrieve to only keep the membership events

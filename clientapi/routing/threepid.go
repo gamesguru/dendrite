@@ -49,7 +49,6 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 		ThreePID: body.Email,
 		Medium:   "email",
 	}, res)
-
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("threePIDAPI.QueryLocalpartForThreePID failed")
 		return util.JSONResponse{

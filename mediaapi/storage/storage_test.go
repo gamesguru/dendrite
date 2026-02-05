@@ -23,6 +23,7 @@ func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, fun
 	}
 	return db, close
 }
+
 func TestMediaRepository(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateDatabase(t, dbType)
@@ -137,7 +138,6 @@ func TestThumbnailsStorage(t *testing.T) {
 
 				if !metaDataMatches() {
 					t.Fatalf("expected metadata %+v, got %+v", thumbnails[i].MediaMetadata, gotMediadatas[i].MediaMetadata)
-
 				}
 			}
 		})

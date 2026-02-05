@@ -51,19 +51,19 @@ add any tests to `sytest-whitelist`.
 
 When debugging, the following Docker `run` options may also be useful:
 
-* `-v /path/to/sytest/:/sytest/`: Use your local SyTest repository at
+- `-v /path/to/sytest/:/sytest/`: Use your local SyTest repository at
   `/path/to/sytest` instead of pulling from GitHub. This is useful when you want
   to speed things up or make modifications to SyTest.
-* `-v "/path/to/gopath/:/gopath"`: Use your local `GOPATH` so you don't need to
+- `-v "/path/to/gopath/:/gopath"`: Use your local `GOPATH` so you don't need to
   re-download packages on every run.
-* `--entrypoint bash`: Prevent the container from automatically starting the
-  tests.  When used, you need to manually run `/bootstrap.sh dendrite` inside
+- `--entrypoint bash`: Prevent the container from automatically starting the
+  tests. When used, you need to manually run `/bootstrap.sh dendrite` inside
   the container to start them.
-* `-e "DENDRITE_TRACE_HTTP=1"`: Adds HTTP tracing to server logs.
-* `-e "DENDRITE_TRACE_INTERNAL=1"`: Adds roomserver internal API tracing to
+- `-e "DENDRITE_TRACE_HTTP=1"`: Adds HTTP tracing to server logs.
+- `-e "DENDRITE_TRACE_INTERNAL=1"`: Adds roomserver internal API tracing to
   server logs.
-* `-e "COVER=1"`: Run Sytest with an instrumented binary, producing a Go coverage file per server.
-* `-e "RACE_DETECTION=1"`: Build the binaries with the `-race` flag (Note: This will significantly slow down test runs)
+- `-e "COVER=1"`: Run Sytest with an instrumented binary, producing a Go coverage file per server.
+- `-e "RACE_DETECTION=1"`: Build the binaries with the `-race` flag (Note: This will significantly slow down test runs)
 
 The docker command also supports a single positional argument for the test file to
 run, so you can run a single `.pl` file rather than the whole test suite. For example:

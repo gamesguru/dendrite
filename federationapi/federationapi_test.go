@@ -148,6 +148,7 @@ func (f *fedClient) MakeJoin(ctx context.Context, origin, s spec.ServerName, roo
 	}
 	return
 }
+
 func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
 	f.fedClientMutex.Lock()
 	defer f.fedClientMutex.Unlock()
@@ -488,6 +489,5 @@ func TestNotaryServer(t *testing.T) {
 				tc.validateFunc(t, resp)
 			})
 		}
-
 	})
 }

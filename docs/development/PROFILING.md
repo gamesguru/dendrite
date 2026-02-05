@@ -78,10 +78,10 @@ go tool pprof -http=localhost:23456 http://localhost:65432/debug/pprof/heap
 
 You can then visit `http://localhost:23456` in your web browser to see a visual representation of the profile. The "Sample" menu lets you select between four different memory profiles:
 
-* `inuse_space`: Shows how much actual heap memory is allocated per function (this is generally the most useful profile when diagnosing high memory usage)
-* `inuse_objects`: Shows how many heap objects are allocated per function
-* `alloc_space`: Shows how much memory has been allocated per function (although that memory may have since been deallocated)
-* `alloc_objects`: Shows how many allocations have been made per function (although that memory may have since been deallocated)
+- `inuse_space`: Shows how much actual heap memory is allocated per function (this is generally the most useful profile when diagnosing high memory usage)
+- `inuse_objects`: Shows how many heap objects are allocated per function
+- `alloc_space`: Shows how much memory has been allocated per function (although that memory may have since been deallocated)
+- `alloc_objects`: Shows how many allocations have been made per function (although that memory may have since been deallocated)
 
 Also in the "View" menu, you can select "Flame Graph" to see a proportional interactive graph of the memory usage.
 

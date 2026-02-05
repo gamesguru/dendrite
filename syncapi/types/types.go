@@ -23,12 +23,10 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 )
 
-var (
-	// This error is returned when parsing sync tokens if the token is invalid. Callers can use this
-	// error to detect whether to 400 or 401 the client. It is recommended to 401 them to force a
-	// logout.
-	ErrMalformedSyncToken = errors.New("malformed sync token")
-)
+// This error is returned when parsing sync tokens if the token is invalid. Callers can use this
+// error to detect whether to 400 or 401 the client. It is recommended to 401 them to force a
+// logout.
+var ErrMalformedSyncToken = errors.New("malformed sync token")
 
 type StateDelta struct {
 	RoomID      string

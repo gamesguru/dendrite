@@ -99,7 +99,7 @@ func lookupMapPath(path []string, m map[string]interface{}) (interface{}, error)
 // condition.
 func parseRoomMemberCountCondition(s string) (func(int) bool, error) {
 	var b int
-	var cmp = func(a int) bool { return a == b }
+	cmp := func(a int) bool { return a == b }
 	switch {
 	case strings.HasPrefix(s, "<="):
 		cmp = func(a int) bool { return a <= b }

@@ -14,7 +14,7 @@ func TestNotify(t *testing.T) {
 		Rejected: []string{"testing"},
 	}
 
-	var i = 0
+	i := 0
 
 	svr := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// /notify only accepts POST requests

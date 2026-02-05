@@ -185,7 +185,6 @@ func (d *Database) DeleteExpiredEDUs(ctx context.Context) error {
 
 		return d.FederationQueueEDUs.DeleteExpiredEDUs(ctx, txn, expiredBefore)
 	})
-
 	if err != nil {
 		return err
 	}

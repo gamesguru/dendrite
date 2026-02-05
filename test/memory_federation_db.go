@@ -20,8 +20,10 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-var nidMutex sync.Mutex
-var nid = int64(0)
+var (
+	nidMutex sync.Mutex
+	nid      = int64(0)
+)
 
 type InMemoryFederationDatabase struct {
 	dbMutex            sync.Mutex

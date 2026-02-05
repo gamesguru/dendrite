@@ -17,8 +17,6 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-var ()
-
 type stateTestRoomserverAPI struct {
 	rsapi.RoomserverInternalAPI
 	t           *testing.T

@@ -297,7 +297,6 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 ) ([]api.Device, error) {
 	devices := []api.Device{}
 	rows, err := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt).QueryContext(ctx, localpart, serverName, exceptDeviceID)
-
 	if err != nil {
 		return devices, err
 	}

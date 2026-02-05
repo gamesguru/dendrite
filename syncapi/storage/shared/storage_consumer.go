@@ -446,7 +446,6 @@ func (d *Database) fetchMissingStateEvents(
 	// events that we received from outside the main event stream.
 	// These should be in the room state table.
 	stateEvents, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, missing)
-
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +456,7 @@ func (d *Database) fetchMissingStateEvents(
 		// this error again when we work out what it is and fix it, otherwise we
 		// just end up returning lots of 500s to the client and that breaks
 		// pretty much everything, rather than just sending what we have.
-		//return nil, fmt.Errorf("failed to map all event IDs to events: (got %d, wanted %d)", len(stateEvents), len(missing))
+		// return nil, fmt.Errorf("failed to map all event IDs to events: (got %d, wanted %d)", len(stateEvents), len(missing))
 	}
 	events = append(events, stateEvents...)
 	return events, nil
@@ -547,6 +546,7 @@ func (d *Database) SelectContextEvent(ctx context.Context, roomID, eventID strin
 func (d *Database) SelectContextBeforeEvent(ctx context.Context, id int, roomID string, filter *synctypes.RoomEventFilter) ([]*rstypes.HeaderedEvent, error) {
 	return d.OutputEvents.SelectContextBeforeEvent(ctx, nil, id, roomID, filter)
 }
+
 func (d *Database) SelectContextAfterEvent(ctx context.Context, id int, roomID string, filter *synctypes.RoomEventFilter) (int, []*rstypes.HeaderedEvent, error) {
 	return d.OutputEvents.SelectContextAfterEvent(ctx, nil, id, roomID, filter)
 }

@@ -44,8 +44,8 @@ const selectQueueJSONSQL = "" +
 type relayQueueJSONStatements struct {
 	db             *sql.DB
 	insertJSONStmt *sql.Stmt
-	//deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
-	//selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
 }
 
 func NewSQLiteRelayQueueJSONTable(db *sql.DB) (s *relayQueueJSONStatements, err error) {

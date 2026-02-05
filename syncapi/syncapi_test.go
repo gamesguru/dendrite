@@ -71,6 +71,7 @@ func (s *syncRoomserverAPI) QuerySharedUsers(ctx context.Context, req *rsapi.Que
 	res.UserIDsToCount = make(map[string]int)
 	return nil
 }
+
 func (s *syncRoomserverAPI) QueryBulkStateContent(ctx context.Context, req *rsapi.QueryBulkStateContentRequest, res *rsapi.QueryBulkStateContentResponse) error {
 	return nil
 }
@@ -512,7 +513,6 @@ func testSyncAPIUpdatePresenceImmediately(t *testing.T, dbType test.DBType) {
 	if gjson.ParseBytes(res.Presence.Events[0].Content).Get("presence").Str != "online" {
 		t.Errorf("content: not online,  got %v", res.Presence.Events[0].Content)
 	}
-
 }
 
 // This is mainly what Sytest is doing in "test_history_visibility"
@@ -874,7 +874,6 @@ func TestGetMembership(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -1081,7 +1080,6 @@ func TestContext(t *testing.T) {
 }
 
 func testContext(t *testing.T, dbType test.DBType) {
-
 	tests := []struct {
 		name             string
 		roomID           string
@@ -1425,6 +1423,7 @@ func searchRequest(t *testing.T, router *mux.Router, accessToken, searchTerm str
 	assert.NoError(t, err)
 	return body
 }
+
 func syncUntil(t *testing.T,
 	routers httputil.Routers, accessToken string,
 	skip bool,

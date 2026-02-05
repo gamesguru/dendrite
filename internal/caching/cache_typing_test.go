@@ -45,7 +45,7 @@ func testAddTypingUser(t *testing.T, tCache *EDUCache) { // nolint: unparam
 		{"user2", "room1", nil},
 		{"user3", "room1", nil},
 		{"user4", "room1", nil},
-		//typing state with past expireTime should not take effect or removed.
+		// typing state with past expireTime should not take effect or removed.
 		{"user1", "room2", &present},
 	}
 

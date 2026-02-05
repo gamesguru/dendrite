@@ -29,9 +29,11 @@ import (
 // Usage: ./resolve-state --roomversion=version snapshot [snapshot ...]
 //   e.g. ./resolve-state --roomversion=5 1254 1235 1282
 
-var roomVersion = flag.String("roomversion", "5", "the room version to parse events as")
-var filterType = flag.String("filtertype", "", "the event types to filter on")
-var difference = flag.Bool("difference", false, "whether to calculate the difference between snapshots")
+var (
+	roomVersion = flag.String("roomversion", "5", "the room version to parse events as")
+	filterType  = flag.String("filtertype", "", "the event types to filter on")
+	difference  = flag.Bool("difference", false, "whether to calculate the difference between snapshots")
+)
 
 // dummyQuerier implements QuerySenderIDAPI. Does **NOT** do any "magic" for pseudoID rooms
 // to avoid having to "start" a full roomserver API.

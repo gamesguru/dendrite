@@ -121,7 +121,7 @@ type outputRoomEventsStatements struct {
 	selectContextBeforeEventStmt *sql.Stmt
 	selectContextAfterEventStmt  *sql.Stmt
 	purgeEventsStmt              *sql.Stmt
-	//selectSearchStmt             *sql.Stmt - prepared at runtime
+	// selectSearchStmt             *sql.Stmt - prepared at runtime
 }
 
 func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Events, error) {
@@ -514,6 +514,7 @@ func rowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {
 	}
 	return result, rows.Err()
 }
+
 func (s *outputRoomEventsStatements) SelectContextEvent(
 	ctx context.Context, txn *sql.Tx, roomID, eventID string,
 ) (id int, evt rstypes.HeaderedEvent, err error) {

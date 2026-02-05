@@ -36,8 +36,8 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 		return nil, fmt.Errorf("sqlutil.Open: %w", err)
 	}
 
-	//db.Exec("PRAGMA journal_mode=WAL;")
-	//db.Exec("PRAGMA read_uncommitted = true;")
+	// db.Exec("PRAGMA journal_mode=WAL;")
+	// db.Exec("PRAGMA read_uncommitted = true;")
 
 	// FIXME: We are leaking connections somewhere. Setting this to 2 will eventually
 	// cause the roomserver to be unresponsive to new events because something will

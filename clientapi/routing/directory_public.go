@@ -101,7 +101,6 @@ func GetPostPublicRooms(
 func publicRooms(
 	ctx context.Context, request PublicRoomReq, rsAPI roomserverAPI.ClientRoomserverAPI, extRoomsProvider api.ExtraPublicRoomsProvider,
 ) (*fclient.RespPublicRooms, error) {
-
 	response := fclient.RespPublicRooms{
 		Chunk: []fclient.PublicRoom{},
 	}

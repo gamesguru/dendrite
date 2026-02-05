@@ -45,7 +45,6 @@ func (d dummyDB) MaxStreamPositionForPresence(ctx context.Context) (types.Stream
 type dummyConsumer struct{}
 
 func (d dummyConsumer) EmitPresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool) {
-
 }
 
 func TestRequestPool_updatePresence(t *testing.T) {

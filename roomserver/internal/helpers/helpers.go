@@ -165,7 +165,6 @@ func IsInvitePending(
 func GetMembershipsAtState(
 	ctx context.Context, db storage.RoomDatabase, roomInfo *types.RoomInfo, stateEntries []types.StateEntry, joinedOnly bool,
 ) ([]types.Event, error) {
-
 	var eventNIDs types.EventNIDs
 	for _, entry := range stateEntries {
 		// Filter the events to retrieve to only keep the membership events
@@ -466,8 +465,7 @@ func QueryLatestEventsAndState(
 	response.RoomVersion = roomInfo.RoomVersion
 
 	var currentStateSnapshotNID types.StateSnapshotNID
-	response.LatestEvents, currentStateSnapshotNID, response.Depth, err =
-		db.LatestEventIDs(ctx, roomInfo.RoomNID)
+	response.LatestEvents, currentStateSnapshotNID, response.Depth, err = db.LatestEventIDs(ctx, roomInfo.RoomNID)
 	if err != nil {
 		return err
 	}

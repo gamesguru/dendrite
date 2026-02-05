@@ -22,11 +22,15 @@ import (
 
 type DBType int
 
-var DBTypeSQLite DBType = 1
-var DBTypePostgres DBType = 2
+var (
+	DBTypeSQLite   DBType = 1
+	DBTypePostgres DBType = 2
+)
 
-var Quiet = false
-var Required = os.Getenv("DENDRITE_TEST_SKIP_NODB") == ""
+var (
+	Quiet    = false
+	Required = os.Getenv("DENDRITE_TEST_SKIP_NODB") == ""
+)
 
 func fatalError(t *testing.T, format string, args ...interface{}) {
 	if Required {

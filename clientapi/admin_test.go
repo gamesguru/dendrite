@@ -835,7 +835,6 @@ func TestPurgeRoom(t *testing.T) {
 				}
 			})
 		}
-
 	})
 }
 
@@ -1018,7 +1017,6 @@ func TestAdminEvacuateUser(t *testing.T) {
 				if !reflect.DeepEqual(affected, tc.wantAffectedRooms) {
 					t.Fatalf("expected affected %#v, but got %#v", tc.wantAffectedRooms, affected)
 				}
-
 			})
 		}
 		// Wait for the FS API to have consumed every message

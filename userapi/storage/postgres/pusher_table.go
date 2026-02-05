@@ -102,7 +102,6 @@ func (s *pushersStatements) SelectPushers(
 ) ([]api.Pusher, error) {
 	pushers := []api.Pusher{}
 	rows, err := sqlutil.TxStmt(txn, s.selectPushersStmt).QueryContext(ctx, localpart, serverName)
-
 	if err != nil {
 		return pushers, err
 	}

@@ -447,9 +447,7 @@ func (a *UserInternalAPI) PerformDeviceUpdate(ctx context.Context, req *api.Perf
 	return nil
 }
 
-var (
-	ErrIsRemoteServer = errors.New("cannot query profile of remote users")
-)
+var ErrIsRemoteServer = errors.New("cannot query profile of remote users")
 
 func (a *UserInternalAPI) QueryProfile(ctx context.Context, userID string) (*authtypes.Profile, error) {
 	local, domain, err := gomatrixserverlib.SplitID('@', userID)
@@ -814,7 +812,7 @@ func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.Query
 			return fmt.Errorf("QueryNotifications: parsing 'from': %w", err)
 		}
 	}
-	var filter = tables.AllNotifications
+	filter := tables.AllNotifications
 	if req.Only == "highlight" {
 		filter = tables.HighlightNotifications
 	}

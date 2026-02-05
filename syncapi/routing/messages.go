@@ -531,9 +531,11 @@ type eventsByDepth []*rstypes.HeaderedEvent
 func (e eventsByDepth) Len() int {
 	return len(e)
 }
+
 func (e eventsByDepth) Swap(i, j int) {
 	e[i], e[j] = e[j], e[i]
 }
+
 func (e eventsByDepth) Less(i, j int) bool {
 	return e[i].Depth() < e[j].Depth()
 }

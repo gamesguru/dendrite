@@ -316,8 +316,8 @@ func compileNamespaceRegexes(namespaces []ApplicationServiceNamespace) (err erro
 // checkErrors checks for any configuration errors amongst the loaded
 // application services according to the application service spec.
 func checkErrors(config *AppServiceAPI, derived *Derived) (err error) {
-	var idMap = make(map[string]bool)
-	var tokenMap = make(map[string]bool)
+	idMap := make(map[string]bool)
+	tokenMap := make(map[string]bool)
 
 	// Compile regexp object for checking groupIDs
 	groupIDRegexp := regexp.MustCompile(`\+.*:.*`)

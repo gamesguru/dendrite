@@ -246,7 +246,6 @@ func moveLocalAliases(ctx context.Context,
 	roomID, newRoomID string, senderID spec.SenderID,
 	URSAPI api.RoomserverInternalAPI,
 ) (err error) {
-
 	aliasReq := api.GetAliasesForRoomIDRequest{RoomID: roomID}
 	aliasRes := api.GetAliasesForRoomIDResponse{}
 	if err = URSAPI.GetAliasesForRoomID(ctx, &aliasReq, &aliasRes); err != nil {
@@ -390,8 +389,8 @@ func (r *Upgrader) userIsAuthorized(ctx context.Context, senderID spec.SenderID,
 // nolint:gocyclo
 func (r *Upgrader) generateInitialEvents(
 	ctx context.Context, oldRoom *api.QueryLatestEventsAndStateResponse, senderID spec.SenderID, _ string, newVersion gomatrixserverlib.RoomVersion,
-	creators []string) ([]gomatrixserverlib.FledglingEvent, error) {
-
+	creators []string,
+) ([]gomatrixserverlib.FledglingEvent, error) {
 	state := make(map[gomatrixserverlib.StateKeyTuple]*types.HeaderedEvent, len(oldRoom.StateEvents))
 	for _, event := range oldRoom.StateEvents {
 		if event.StateKey() == nil {
@@ -533,8 +532,8 @@ func (r *Upgrader) generateInitialEvents(
 
 func (r *Upgrader) sendInitialEvents(
 	ctx context.Context, evTime time.Time, senderID spec.SenderID, userDomain spec.ServerName, newRoomID string,
-	newVersion gomatrixserverlib.RoomVersion, newCreateEvent gomatrixserverlib.PDU, eventsToMake []gomatrixserverlib.FledglingEvent) error {
-
+	newVersion gomatrixserverlib.RoomVersion, newCreateEvent gomatrixserverlib.PDU, eventsToMake []gomatrixserverlib.FledglingEvent,
+) error {
 	var err error
 	var builtEvents []*types.HeaderedEvent
 	builtEvents = append(builtEvents, &types.HeaderedEvent{PDU: newCreateEvent})

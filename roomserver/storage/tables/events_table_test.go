@@ -150,7 +150,6 @@ func Test_EventsTable(t *testing.T) {
 }
 
 func TestRoomsWithACL(t *testing.T) {
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		eventStateKeys, closeEventStateKeys := mustCreateEventTypesTable(t, dbType)
 		defer closeEventStateKeys()

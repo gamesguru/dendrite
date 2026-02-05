@@ -131,5 +131,4 @@ func testCurrentState(t *testing.T, ctx context.Context, txn *sql.Tx, tab tables
 			t.Fatalf("expected %d state events, got %d", expectCount, gotCount)
 		}
 	})
-
 }

@@ -41,7 +41,7 @@ func NewMatrixKey(matrixKeyPath string) (err error) {
 }
 
 func SaveMatrixKey(matrixKeyPath string, data ed25519.PrivateKey) error {
-	keyOut, err := os.OpenFile(matrixKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	keyOut, err := os.OpenFile(matrixKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func writeCertificate(tlsCertPath string, derBytes []byte) error {
 }
 
 func writePrivateKey(tlsKeyPath string, priv *rsa.PrivateKey) error {
-	keyOut, err := os.OpenFile(tlsKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	keyOut, err := os.OpenFile(tlsKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

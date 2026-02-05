@@ -14,23 +14,27 @@ possible to get started.
 
 We are a small team maintaining a large project. As a result, we cannot merge every feature, even if it
 is bug-free and useful, because we then commit to maintaining it indefinitely. We will always accept:
- - bug fixes
- - security fixes (please responsibly disclose via security@matrix.org *before* creating pull requests)
+
+- bug fixes
+- security fixes (please responsibly disclose via security@matrix.org _before_ creating pull requests)
 
 We will accept the following with caveats:
- - documentation fixes, provided they do not add additional instructions which can end up going out-of-date,
-   e.g example configs, shell commands.
- - performance fixes, provided they do not add significantly more maintenance burden.
- - additional functionality on existing features, provided the functionality is small and maintainable.
- - additional functionality that, in its absence, would impact the ecosystem e.g spam and abuse mitigations
- - test-only changes, provided they help improve coverage or test tricky code.
+
+- documentation fixes, provided they do not add additional instructions which can end up going out-of-date,
+  e.g example configs, shell commands.
+- performance fixes, provided they do not add significantly more maintenance burden.
+- additional functionality on existing features, provided the functionality is small and maintainable.
+- additional functionality that, in its absence, would impact the ecosystem e.g spam and abuse mitigations
+- test-only changes, provided they help improve coverage or test tricky code.
 
 The following items are at risk of not being accepted:
- - Configuration or CLI changes, particularly ones which increase the overall configuration surface.
+
+- Configuration or CLI changes, particularly ones which increase the overall configuration surface.
 
 The following items are unlikely to be accepted into a main Dendrite release for now:
- - New MSC implementations.
- - New features which are not in the specification.
+
+- New MSC implementations.
+- New features which are not in the specification.
 
 ## Sign off
 
@@ -91,16 +95,16 @@ submitting your contribution.
 
 ## Comments
 
-Please make sure that the comments adequately explain *why* your code does what it
+Please make sure that the comments adequately explain _why_ your code does what it
 does. If there are statements that are not obvious, please comment what they do.
 
 We also have some special tags which we use for searchability. These are:
 
-* `// TODO:` for places where a future review, rewrite or refactor is likely required;
-* `// FIXME:` for places where we know there is an outstanding bug that needs a fix;
-* `// NOTSPEC:` for places where the behaviour specifically does not match what the
+- `// TODO:` for places where a future review, rewrite or refactor is likely required;
+- `// FIXME:` for places where we know there is an outstanding bug that needs a fix;
+- `// NOTSPEC:` for places where the behaviour specifically does not match what the
   [Matrix Specification](https://spec.matrix.org/) prescribes, along with a description
-  of *why* that is the case.
+  of _why_ that is the case.
 
 ## Linting
 

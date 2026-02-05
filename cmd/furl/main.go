@@ -17,9 +17,11 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-var requestFrom = flag.String("from", "", "the server name that the request should originate from")
-var requestKey = flag.String("key", "matrix_key.pem", "the private key to use when signing the request")
-var requestPost = flag.Bool("post", false, "send a POST request instead of GET (pipe input into stdin or type followed by Ctrl-D)")
+var (
+	requestFrom = flag.String("from", "", "the server name that the request should originate from")
+	requestKey  = flag.String("key", "matrix_key.pem", "the private key to use when signing the request")
+	requestPost = flag.Bool("post", false, "send a POST request instead of GET (pipe input into stdin or type followed by Ctrl-D)")
+)
 
 func main() {
 	flag.Parse()

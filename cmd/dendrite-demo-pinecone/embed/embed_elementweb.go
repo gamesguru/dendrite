@@ -21,8 +21,10 @@ import (
 // From within the Element Web directory:
 // go run github.com/mjibson/esc -o /path/to/dendrite/internal/embed/fs_elementweb.go -private -pkg embed .
 
-var cssFile = regexp.MustCompile("\\.css$")
-var jsFile = regexp.MustCompile("\\.js$")
+var (
+	cssFile = regexp.MustCompile("\\.css$")
+	jsFile  = regexp.MustCompile("\\.js$")
+)
 
 type mimeFixingHandler struct {
 	fs http.Handler

@@ -29,7 +29,6 @@ func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, fun
 }
 
 func TestIsInvitePendingWithoutNID(t *testing.T) {
-
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
 	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))

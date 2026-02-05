@@ -49,7 +49,6 @@ func RequestTurnServer(req *http.Request, device *api.Device, cfg *config.Client
 		resp.Username = fmt.Sprintf("%d:%s", expiry, device.UserID)
 		mac := hmac.New(sha1.New, []byte(turnConfig.SharedSecret))
 		_, err := mac.Write([]byte(resp.Username))
-
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("mac.Write failed")
 			return util.JSONResponse{

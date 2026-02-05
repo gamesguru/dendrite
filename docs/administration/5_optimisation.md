@@ -86,10 +86,10 @@ place on your DNS resolver. This may also speed up outbound federation.
 Consider enabling the DNS cache by modifying the `global` section of your configuration file:
 
 ```yaml
-  dns_cache:
-    enabled: true
-    cache_size: 4096
-    cache_lifetime: 600s
+dns_cache:
+  enabled: true
+  cache_size: 4096
+  cache_lifetime: 600s
 ```
 
 ## Time synchronisation

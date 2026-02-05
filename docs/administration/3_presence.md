@@ -17,9 +17,9 @@ over federation. It is disabled by default for this reason.
 
 Dendrite has two options for controlling presence:
 
-* **Enable inbound presence**: Dendrite will handle presence updates for remote users
+- **Enable inbound presence**: Dendrite will handle presence updates for remote users
   and distribute them to local users on your homeserver;
-* **Enable outbound presence**: Dendrite will generate presence notifications for your
+- **Enable outbound presence**: Dendrite will generate presence notifications for your
   local users and distribute them to remote users over the federation.
 
 This means that you can configure only one or other direction if you prefer, i.e. to

@@ -25,8 +25,10 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-const defaultSyncTimeout = time.Duration(0)
-const DefaultTimelineLimit = 20
+const (
+	defaultSyncTimeout   = time.Duration(0)
+	DefaultTimelineLimit = 20
+)
 
 func newSyncRequest(req *http.Request, device userapi.Device, syncDB storage.Database) (*types.SyncRequest, error) {
 	timeout := getTimeout(req.URL.Query().Get("timeout"))

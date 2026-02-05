@@ -74,5 +74,4 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 		c.processContext.ComponentFinished()
 	}()
 	return db, writer, nil
-
 }

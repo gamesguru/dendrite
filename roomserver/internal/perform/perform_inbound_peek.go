@@ -50,8 +50,7 @@ func (r *InboundPeeker) PerformInboundPeek(
 	var stateEvents []gomatrixserverlib.PDU
 
 	var currentStateSnapshotNID types.StateSnapshotNID
-	latestEventRefs, currentStateSnapshotNID, _, err :=
-		r.DB.LatestEventIDs(ctx, info.RoomNID)
+	latestEventRefs, currentStateSnapshotNID, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
 	if err != nil {
 		return err
 	}

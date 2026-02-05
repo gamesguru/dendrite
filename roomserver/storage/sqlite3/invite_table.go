@@ -30,6 +30,7 @@ const inviteSchema = `
 	CREATE INDEX IF NOT EXISTS roomserver_invites_active_idx ON roomserver_invites (target_nid, room_nid)
 		WHERE NOT retired;
 `
+
 const insertInviteEventSQL = "" +
 	"INSERT INTO roomserver_invites (invite_event_id, room_nid, target_nid," +
 	" sender_nid, invite_event_json) VALUES ($1, $2, $3, $4, $5)" +

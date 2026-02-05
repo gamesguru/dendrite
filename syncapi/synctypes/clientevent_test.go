@@ -26,8 +26,10 @@ func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
 	return spec.NewUserID(string(senderID), true)
 }
 
-const testSenderID = "testSenderID"
-const testUserID = "@test:localhost"
+const (
+	testSenderID = "testSenderID"
+	testUserID   = "@test:localhost"
+)
 
 type EventFieldsToVerify struct {
 	EventID        string

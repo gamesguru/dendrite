@@ -220,8 +220,7 @@ type InputAccountDataRequest struct {
 }
 
 // InputAccountDataResponse is the response for InputAccountData
-type InputAccountDataResponse struct {
-}
+type InputAccountDataResponse struct{}
 
 type PerformDeviceUpdateRequest struct {
 	RequestingUserID string
@@ -242,8 +241,7 @@ type PerformDeviceDeletionRequest struct {
 	ExceptDeviceID string
 }
 
-type PerformDeviceDeletionResponse struct {
-}
+type PerformDeviceDeletionResponse struct{}
 
 // QueryDeviceInfosRequest is the request to QueryDeviceInfos
 type QueryDeviceInfosRequest struct {
@@ -350,8 +348,7 @@ type PerformLastSeenUpdateRequest struct {
 }
 
 // PerformLastSeenUpdateResponse is the response for PerformLastSeenUpdate.
-type PerformLastSeenUpdateResponse struct {
-}
+type PerformLastSeenUpdateResponse struct{}
 
 // PerformDeviceCreationRequest is the request for PerformDeviceCreation
 type PerformDeviceCreationRequest struct {

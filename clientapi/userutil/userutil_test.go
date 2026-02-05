@@ -30,7 +30,6 @@ func TestGoodUserID(t *testing.T) {
 	}
 
 	lp, _, err := ParseUsernameParam(goodUserID, cfg)
-
 	if err != nil {
 		t.Error("User ID Parsing failed for ", goodUserID, " with error: ", err.Error())
 	}
@@ -49,7 +48,6 @@ func TestWithLocalpartOnly(t *testing.T) {
 	}
 
 	lp, _, err := ParseUsernameParam(localpart, cfg)
-
 	if err != nil {
 		t.Error("User ID Parsing failed for ", localpart, " with error: ", err.Error())
 	}

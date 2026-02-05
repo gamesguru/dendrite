@@ -131,7 +131,7 @@ func SetupAndServeHTTP(
 		},
 	}
 
-	//Redirect for Landing Page
+	// Redirect for Landing Page
 	externalRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, httputil.PublicStaticPath, http.StatusFound)
 	})

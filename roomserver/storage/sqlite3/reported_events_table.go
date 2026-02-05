@@ -132,7 +132,6 @@ func (r *reportedEventsStatements) SelectReportedEvents(
 	reportingUserID types.EventStateKeyNID,
 	roomNID types.RoomNID,
 ) ([]api.QueryAdminEventReportsResponse, int64, error) {
-
 	var stmt *sql.Stmt
 	if backwards {
 		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsDescStmt)

@@ -35,9 +35,7 @@ import (
 	"codefloe.com/pat-s/dendrite/userapi/storage"
 )
 
-var (
-	ctx = context.Background()
-)
+var ctx = context.Background()
 
 type mockKeyChangeProducer struct {
 	events []api.DeviceMessage
@@ -117,8 +115,7 @@ func (d *mockDeviceListUpdaterDatabase) DeviceKeysJSON(ctx context.Context, keys
 	return nil
 }
 
-type mockDeviceListUpdaterAPI struct {
-}
+type mockDeviceListUpdaterAPI struct{}
 
 func (d *mockDeviceListUpdaterAPI) PerformUploadDeviceKeys(ctx context.Context, req *api.PerformUploadDeviceKeysRequest, res *api.PerformUploadDeviceKeysResponse) {
 }
@@ -246,7 +243,6 @@ func TestUpdateNoPrevID(t *testing.T) {
 		UserID:            remoteUserID,
 	}
 	err := updater.Update(ctx, event)
-
 	if err != nil {
 		t.Fatalf("Update returned an error: %s", err)
 	}
@@ -275,7 +271,6 @@ func TestUpdateNoPrevID(t *testing.T) {
 	if !reflect.DeepEqual(db.storedKeys, []api.DeviceMessage{want}) {
 		t.Errorf("DB didn't store correct event, got %v want %v", db.storedKeys, want)
 	}
-
 }
 
 // Test that if we make N calls to ManualUpdate for the same user, we only do it once, assuming the

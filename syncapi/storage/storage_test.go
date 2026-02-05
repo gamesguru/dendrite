@@ -336,7 +336,6 @@ func TestStreamToTopologicalPosition(t *testing.T) {
 				}
 			})
 		}
-
 	})
 }
 
@@ -791,7 +790,6 @@ func pointer[t any](s t) *t {
 }
 
 func TestRoomSummary(t *testing.T) {
-
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
 	charlie := test.NewUser(t)
@@ -941,7 +939,6 @@ func TestRoomSummary(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-
 				r := test.NewRoom(t, alice)
 
 				if tc.additionalEvents != nil {

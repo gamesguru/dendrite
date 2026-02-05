@@ -46,7 +46,6 @@ func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
 ) (newPos types.StreamPosition, hasNew bool, err error) {
-
 	// Track users who we didn't track before but now do by virtue of sharing a room with them, or not.
 	newlyJoinedRooms := joinedRooms(res, userID)
 	newlyLeftRooms := leftRooms(res)

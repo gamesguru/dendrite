@@ -142,7 +142,7 @@ func WriteTempFile(
 func moveFile(src types.Path, dst types.Path) error {
 	dstDir := filepath.Dir(string(dst))
 
-	err := os.MkdirAll(dstDir, 0770)
+	err := os.MkdirAll(dstDir, 0o770)
 	if err != nil {
 		return fmt.Errorf("failed to make directory: %w", err)
 	}
@@ -168,7 +168,7 @@ func createTempFileWriter(absBasePath config.Path) (*bufio.Writer, *os.File, typ
 // createTempDir creates a tmp/<random string> directory within baseDirectory and returns its path
 func createTempDir(baseDirectory config.Path) (types.Path, error) {
 	baseTmpDir := filepath.Join(string(baseDirectory), "tmp")
-	if err := os.MkdirAll(baseTmpDir, 0770); err != nil {
+	if err := os.MkdirAll(baseTmpDir, 0o770); err != nil {
 		return "", fmt.Errorf("failed to create base temp dir: %w", err)
 	}
 	tmpDir, err := os.MkdirTemp(baseTmpDir, "")

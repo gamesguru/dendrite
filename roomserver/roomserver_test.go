@@ -71,7 +71,6 @@ func TestUsers(t *testing.T) {
 			testKickUsers(t, rsAPI, usrAPI)
 		})
 	})
-
 }
 
 func testSharedUsers(t *testing.T, rsAPI api.RoomserverInternalAPI) {
@@ -348,7 +347,7 @@ func TestPurgeRoom(t *testing.T) {
 		}
 
 		// wait for all consumers to process the purge event
-		var sum = 1
+		sum := 1
 		timeout := time.Second * 5
 		deadline, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
@@ -788,7 +787,6 @@ func TestUpgrade(t *testing.T) {
 	}
 
 	validate := func(t *testing.T, oldRoomID, newRoomID string, rsAPI api.RoomserverInternalAPI) {
-
 		oldRoomState := &api.QueryCurrentStateResponse{}
 		if err := rsAPI.QueryCurrentState(ctx, &api.QueryCurrentStateRequest{
 			RoomID:      oldRoomID,
@@ -1237,7 +1235,6 @@ func TestNewServerACLs(t *testing.T) {
 // Validate that changing the AckPolicy/AckWait of room consumers
 // results in their recreation
 func TestRoomConsumerRecreation(t *testing.T) {
-
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 

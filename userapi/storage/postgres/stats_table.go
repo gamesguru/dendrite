@@ -281,7 +281,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 
 	var userType string
 	var count int64
-	var result = make(map[string]int64)
+	result := make(map[string]int64)
 	for rows.Next() {
 		if err = rows.Scan(&userType, &count); err != nil {
 			return nil, err
@@ -332,7 +332,7 @@ func (s *statsStatements) r30Users(ctx context.Context, txn *sql.Tx) (map[string
 
 	var platform string
 	var count int64
-	var result = make(map[string]int64)
+	result := make(map[string]int64)
 	for rows.Next() {
 		if err = rows.Scan(&platform, &count); err != nil {
 			return nil, err
@@ -370,7 +370,7 @@ func (s *statsStatements) r30UsersV2(ctx context.Context, txn *sql.Tx) (map[stri
 
 	var platform string
 	var count int64
-	var result = map[string]int64{
+	result := map[string]int64{
 		"ios":      0,
 		"android":  0,
 		"web":      0,

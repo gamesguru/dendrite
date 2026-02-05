@@ -72,7 +72,7 @@ func NewFederationInternalAPI(
 			defer addDirectFetcher()
 		}
 
-		var b64e = base64.StdEncoding.WithPadding(base64.NoPadding)
+		b64e := base64.StdEncoding.WithPadding(base64.NoPadding)
 		for _, ps := range cfg.KeyPerspectives {
 			perspective := &gomatrixserverlib.PerspectiveKeyFetcher{
 				PerspectiveServerName: ps.ServerName,

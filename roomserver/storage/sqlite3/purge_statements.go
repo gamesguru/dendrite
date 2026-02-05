@@ -91,7 +91,6 @@ func PreparePurgeStatements(db *sql.DB, stateSnapshot *stateSnapshotStatements) 
 func (s *purgeStatements) PurgeRoom(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, roomID string,
 ) error {
-
 	// purge by roomID
 	purgeByRoomID := []*sql.Stmt{
 		s.purgeRoomAliasesStmt,

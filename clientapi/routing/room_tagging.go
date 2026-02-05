@@ -27,7 +27,6 @@ func GetTags(
 	roomID string,
 	syncProducer *producers.SyncAPIProducer,
 ) util.JSONResponse {
-
 	if device.UserID != userID {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
@@ -62,7 +61,6 @@ func PutTag(
 	tag string,
 	syncProducer *producers.SyncAPIProducer,
 ) util.JSONResponse {
-
 	if device.UserID != userID {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
@@ -115,7 +113,6 @@ func DeleteTag(
 	tag string,
 	syncProducer *producers.SyncAPIProducer,
 ) util.JSONResponse {
-
 	if device.UserID != userID {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,

@@ -46,8 +46,8 @@ const selectJSONSQL = "" +
 type queueJSONStatements struct {
 	db             *sql.DB
 	insertJSONStmt *sql.Stmt
-	//deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
-	//selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
 }
 
 func NewSQLiteQueueJSONTable(db *sql.DB) (s *queueJSONStatements, err error) {

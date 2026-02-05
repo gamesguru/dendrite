@@ -132,5 +132,4 @@ func TestPresence(t *testing.T) {
 			t.Errorf("expected less presences, but they are the same/more as requested: %d >= %d", len(presencesForUsers), len(getUsers))
 		}
 	})
-
 }

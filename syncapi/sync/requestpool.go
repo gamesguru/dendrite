@@ -221,7 +221,6 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		context.Background(), userID, presenceToSet, newPresence.ClientFields.StatusMsg,
 		spec.AsTimestamp(time.Now()), true,
 	)
-
 }
 
 func (rp *RequestPool) updateLastSeen(req *http.Request, device *userapi.Device) {

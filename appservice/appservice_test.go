@@ -48,7 +48,6 @@ var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerS
 }
 
 func TestAppserviceInternalAPI(t *testing.T) {
-
 	// Set expected results
 	existingProtocol := "irc"
 	wantLocationResponse := []api.ASLocationResponse{{Protocol: existingProtocol, Fields: []byte("{}")}}
@@ -167,7 +166,6 @@ func TestAppserviceInternalAPI(t *testing.T) {
 }
 
 func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
-
 	// Set expected results
 	existingProtocol := "irc"
 	wantLocationResponse := []api.ASLocationResponse{{Protocol: existingProtocol, Fields: []byte("{}")}}
@@ -261,7 +259,6 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 		testUserIDExists(t, asAPI, "@as-testing:test", true)
 		testUserIDExists(t, asAPI, "@as1-testing:test", false)
 	})
-
 }
 
 func testUserIDExists(t *testing.T, asAPI api.AppServiceInternalAPI, userID string, wantExists bool) {
@@ -336,7 +333,6 @@ func testProtocol(t *testing.T, asAPI api.AppServiceInternalAPI, proto string, w
 
 // Tests that the roomserver consumer only receives one invite
 func TestRoomserverConsumerOneInvite(t *testing.T) {
-
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
 	room := test.NewRoom(t, alice)

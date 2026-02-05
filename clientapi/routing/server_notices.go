@@ -377,7 +377,6 @@ func getSenderDevice(
 		AccessToken:        token,
 		NoDeviceListUpdate: true,
 	}, &devRes)
-
 	if err != nil {
 		return nil, err
 	}

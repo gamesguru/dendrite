@@ -138,9 +138,9 @@ type eventStatements struct {
 	bulkSelectEventIDStmt                         *sql.Stmt
 	selectEventRejectedStmt                       *sql.Stmt
 	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
-	//bulkSelectEventNIDStmt               *sql.Stmt
-	//bulkSelectUnsentEventNIDStmt         *sql.Stmt
-	//selectRoomNIDsForEventNIDsStmt       *sql.Stmt
+	// bulkSelectEventNIDStmt               *sql.Stmt
+	// bulkSelectUnsentEventNIDStmt         *sql.Stmt
+	// selectRoomNIDsForEventNIDsStmt       *sql.Stmt
 }
 
 func CreateEventsTable(db *sql.DB) error {

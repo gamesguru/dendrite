@@ -502,10 +502,9 @@ func (d *Database) GetMembership(ctx context.Context, roomNID types.RoomNID, req
 		return 0, false, false, fmt.Errorf("d.assignStateKeyNID: %w", err)
 	}
 
-	senderMembershipEventNID, senderMembership, isRoomforgotten, err :=
-		d.MembershipTable.SelectMembershipFromRoomAndTarget(
-			ctx, nil, roomNID, requestSenderUserNID,
-		)
+	senderMembershipEventNID, senderMembership, isRoomforgotten, err := d.MembershipTable.SelectMembershipFromRoomAndTarget(
+		ctx, nil, roomNID, requestSenderUserNID,
+	)
 	if err == sql.ErrNoRows {
 		// The user has never been a member of that room
 		return 0, false, false, nil
@@ -1688,7 +1687,6 @@ func (d *Database) GetKnownUsers(ctx context.Context, userID, searchString strin
 }
 
 func (d *Database) RoomsWithACLs(ctx context.Context) ([]string, error) {
-
 	eventTypeNID, err := d.GetOrCreateEventTypeNID(ctx, "m.room.server_acl")
 	if err != nil {
 		return nil, err
@@ -1768,7 +1766,6 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 }
 
 func (d *Database) UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error {
-
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		published, err := d.PublishedTable.SelectPublishedFromRoomID(ctx, txn, oldRoomID)
 		if err != nil {
@@ -2128,7 +2125,6 @@ func (d *Database) QueryAdminEventReports(ctx context.Context, from uint64, limi
 }
 
 func (d *Database) QueryAdminEventReport(ctx context.Context, reportID uint64) (api.QueryAdminEventReportResponse, error) {
-
 	report, err := d.ReportedEventsTable.SelectReportedEvent(ctx, nil, reportID)
 	if err != nil {
 		return api.QueryAdminEventReportResponse{}, err

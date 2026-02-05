@@ -454,13 +454,13 @@ func (oq *destinationQueue) nextTransaction(
 	case nil:
 		// Clean up the transaction in the database.
 		if pduReceipts != nil {
-			//logrus.Infof("Cleaning PDUs %q", pduReceipt.String())
+			// logrus.Infof("Cleaning PDUs %q", pduReceipt.String())
 			if err = oq.db.CleanPDUs(oq.process.Context(), oq.destination, pduReceipts); err != nil {
 				logrus.WithError(err).Errorf("Failed to clean PDUs for server %q", t.Destination)
 			}
 		}
 		if eduReceipts != nil {
-			//logrus.Infof("Cleaning EDUs %q", eduReceipt.String())
+			// logrus.Infof("Cleaning EDUs %q", eduReceipt.String())
 			if err = oq.db.CleanEDUs(oq.process.Context(), oq.destination, eduReceipts); err != nil {
 				logrus.WithError(err).Errorf("Failed to clean EDUs for server %q", t.Destination)
 			}

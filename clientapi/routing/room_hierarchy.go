@@ -131,7 +131,6 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 	}
 
 	discoveredRooms, _, nextWalker, err := rsAPI.QueryNextRoomHierarchyPage(req.Context(), walker, limit)
-
 	if err != nil {
 		switch err.(type) {
 		case roomserverAPI.ErrRoomUnknownOrNotAllowed:
@@ -162,7 +161,6 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 			NextBatch: nextBatch,
 		},
 	}
-
 }
 
 // Success response for /_matrix/client/v1/rooms/{roomID}/hierarchy
