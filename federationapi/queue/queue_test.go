@@ -110,6 +110,8 @@ func testSetup(failuresUntilBlacklist uint32, failuresUntilAssumedOffline uint32
 	}
 
 	stats := statistics.NewStatistics(db, failuresUntilBlacklist, failuresUntilAssumedOffline, false)
+	// Use a very short backoff for tests (2^0 = 1 second base)
+	stats.MinBackoffExponent = 0
 	signingInfo := []*fclient.SigningIdentity{
 		{
 			KeyID:      "ed21019:auto",
@@ -423,8 +425,11 @@ func TestSendPDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	err := queues.SendEvent(ev, "localhost", []spec.ServerName{destination})
 	assert.NoError(t, err)
 
+	// With a prior external failure, only failuresUntilBlacklist-1 transactions are needed
+	// to reach the blacklist threshold
+	expectedTxCount := failuresUntilBlacklist - 1
 	check := func(log poll.LogT) poll.Result {
-		if fc.txCount.Load() == failuresUntilBlacklist {
+		if fc.txCount.Load() >= expectedTxCount {
 			data, dbErr := db.GetPendingPDUs(pc.Context(), destination, 100)
 			assert.NoError(t, dbErr)
 			if len(data) == 1 {
@@ -457,8 +462,11 @@ func TestSendEDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	err := queues.SendEDU(ev, "localhost", []spec.ServerName{destination})
 	assert.NoError(t, err)
 
+	// With a prior external failure, only failuresUntilBlacklist-1 transactions are needed
+	// to reach the blacklist threshold
+	expectedTxCount := failuresUntilBlacklist - 1
 	check := func(log poll.LogT) poll.Result {
-		if fc.txCount.Load() == failuresUntilBlacklist {
+		if fc.txCount.Load() >= expectedTxCount {
 			data, dbErr := db.GetPendingEDUs(pc.Context(), destination, 100)
 			assert.NoError(t, dbErr)
 			if len(data) == 1 {

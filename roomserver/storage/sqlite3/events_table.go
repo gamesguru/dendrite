@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/depth"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
@@ -637,7 +638,9 @@ func (s *eventStatements) SelectMaxEventDepth(ctx context.Context, txn *sql.Tx, 
 	if err != nil {
 		return 0, fmt.Errorf("sqlutil.TxStmt.QueryRowContext: %w", err)
 	}
-	return result, nil
+	// Clamp the depth to prevent overflow beyond the canonical JSON integer limit.
+	// This handles rooms where events have depth = MAX_SAFE_INTEGER (2^53-1).
+	return depth.Clamp(result), nil
 }
 
 func (s *eventStatements) SelectRoomNIDsForEventNIDs(

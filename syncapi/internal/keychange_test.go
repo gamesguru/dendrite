@@ -212,6 +212,7 @@ func leaveResponseWithRooms(syncResponse *types.Response, userID string, roomIDs
 
 // tests that joining a room which results in sharing a new user includes that user in `changed`
 func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@bill:localhost"
 	newlyJoinedRoom := "!TestKeyChangeCatchupOnJoinShareNewUser:bar"
 	syncResponse := types.NewResponse()
@@ -235,6 +236,7 @@ func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
 
 // tests that leaving a room which results in sharing no rooms with a user includes that user in `left`
 func TestKeyChangeCatchupOnLeaveShareLeftUser(t *testing.T) {
+	t.Parallel()
 	removeUser := "@bill:localhost"
 	newlyLeftRoom := "!TestKeyChangeCatchupOnLeaveShareLeftUser:bar"
 	syncResponse := types.NewResponse()
@@ -258,6 +260,7 @@ func TestKeyChangeCatchupOnLeaveShareLeftUser(t *testing.T) {
 
 // tests that joining a room which doesn't result in sharing a new user results in no changes.
 func TestKeyChangeCatchupOnJoinShareNoNewUsers(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob:localhost"
 	newlyJoinedRoom := "!TestKeyChangeCatchupOnJoinShareNoNewUsers:bar"
 	syncResponse := types.NewResponse()
@@ -280,6 +283,7 @@ func TestKeyChangeCatchupOnJoinShareNoNewUsers(t *testing.T) {
 
 // tests that leaving a room which doesn't result in sharing no rooms with a user results in no changes.
 func TestKeyChangeCatchupOnLeaveShareNoUsers(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob:localhost"
 	newlyLeftRoom := "!TestKeyChangeCatchupOnLeaveShareNoUsers:bar"
 	syncResponse := types.NewResponse()
@@ -302,6 +306,7 @@ func TestKeyChangeCatchupOnLeaveShareNoUsers(t *testing.T) {
 
 // tests that not joining any rooms (but having messages in the response) do not result in changes.
 func TestKeyChangeCatchupNoNewJoinsButMessages(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob1:localhost"
 	roomID := "!TestKeyChangeCatchupNoNewJoinsButMessages:bar"
 	syncResponse := types.NewResponse()
@@ -365,6 +370,7 @@ func TestKeyChangeCatchupNoNewJoinsButMessages(t *testing.T) {
 
 // tests that joining/leaving multiple rooms can result in both `changed` and `left` and they are not duplicated.
 func TestKeyChangeCatchupChangeAndLeft(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@berta:localhost"
 	newShareUser2 := "@bobby:localhost"
 	newlyLeftUser := "@charlie:localhost"
@@ -405,6 +411,7 @@ func TestKeyChangeCatchupChangeAndLeft(t *testing.T) {
 //
 // Ergo, we put them in `left` as it is simpler.
 func TestKeyChangeCatchupChangeAndLeftSameRoom(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@berta:localhost"
 	newShareUser2 := "@bobby:localhost"
 	roomID := "!join:bar"

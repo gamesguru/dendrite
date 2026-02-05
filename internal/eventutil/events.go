@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"codefloe.com/pat-s/dendrite/internal/depth"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
@@ -129,7 +130,9 @@ func addPrevEventsToEvent(
 		return ErrRoomNoExists{}
 	}
 
-	builder.Depth = queryRes.Depth
+	// Clamp the depth to prevent overflow beyond the canonical JSON integer limit.
+	// This handles rooms where events have depth = MAX_SAFE_INTEGER (2^53-1).
+	builder.Depth = depth.Clamp(queryRes.Depth)
 
 	authEvents, _ := gomatrixserverlib.NewAuthEvents(nil)
 

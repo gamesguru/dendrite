@@ -49,19 +49,29 @@ func (r *Joiner) PerformJoin(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
 ) (roomID string, joinedVia spec.ServerName, err error) {
+	// MSC3706: Trace join timing for diagnostics
+	joinStartTime := time.Now()
 	logger := logrus.WithContext(ctx).WithFields(logrus.Fields{
 		"room_id": req.RoomIDOrAlias,
 		"user_id": req.UserID,
 		"servers": req.ServerNames,
+		"trace":   "join_timing",
 	})
-	logger.Info("User requested to room join")
+	logger.Debug("Roomserver join request started")
 	roomID, joinedVia, err = r.performJoin(context.Background(), req)
 	if err != nil {
-		logger.WithError(err).Error("Failed to join room")
+		logger.WithFields(logrus.Fields{
+			"duration_ms": time.Since(joinStartTime).Milliseconds(),
+			"result":      "error",
+		}).WithError(err).Error("Roomserver join failed")
 		sentry.CaptureException(err)
 		return "", "", err
 	}
-	logger.Info("User joined room successfully")
+	logger.WithFields(logrus.Fields{
+		"duration_ms": time.Since(joinStartTime).Milliseconds(),
+		"joined_via":  joinedVia,
+		"result":      "success",
+	}).Debug("Roomserver join completed successfully")
 
 	return roomID, joinedVia, nil
 }
@@ -93,7 +103,7 @@ func (r *Joiner) performJoinRoomByAlias(
 	// Get the domain part of the room alias.
 	_, domain, err := gomatrixserverlib.SplitID('#', req.RoomIDOrAlias)
 	if err != nil {
-		return "", "", fmt.Errorf("alias %q is not in the correct format", req.RoomIDOrAlias)
+		return "", "", rsAPI.ErrInvalidID{Err: fmt.Errorf("alias %q is not in the correct format", req.RoomIDOrAlias)}
 	}
 	req.ServerNames = append(req.ServerNames, domain)
 
@@ -131,7 +141,7 @@ func (r *Joiner) performJoinRoomByAlias(
 
 	// If the room ID is empty then we failed to look up the alias.
 	if roomID == "" {
-		return "", "", fmt.Errorf("alias %q not found", req.RoomIDOrAlias)
+		return "", "", spec.NotFound(fmt.Sprintf("alias %q not found", req.RoomIDOrAlias))
 	}
 
 	// If we do, then pluck out the room ID and continue the join.
@@ -145,6 +155,14 @@ func (r *Joiner) performJoinRoomByID(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
 ) (string, spec.ServerName, error) {
+	// MSC3706: Trace join timing for diagnostics
+	decisionStartTime := time.Now()
+	traceLogger := logrus.WithContext(ctx).WithFields(logrus.Fields{
+		"room_id": req.RoomIDOrAlias,
+		"user_id": req.UserID,
+		"trace":   "join_timing",
+	})
+
 	// The original client request ?server_name=... may include this HS so filter that out so we
 	// don't attempt to make_join with ourselves
 	for i := 0; i < len(req.ServerNames); i++ {
@@ -237,6 +255,24 @@ func (r *Joiner) performJoinRoomByID(
 		}
 	}
 
+	// MSC3706: Force federated join if room is in partial state and user is not already joined.
+	// This ensures authorization happens with complete state on the remote server.
+	if info != nil && !forceFederatedJoin && len(req.ServerNames) > 0 {
+		isPartialState, partialStateErr := r.DB.IsRoomPartialState(ctx, info.RoomNID)
+		if partialStateErr == nil && isPartialState {
+			// Check if the user is already joined - if so, they can proceed with local operations
+			membershipRes := &rsAPI.QueryMembershipForUserResponse{}
+			_ = r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, membershipRes)
+			if !membershipRes.IsInRoom {
+				logrus.WithFields(logrus.Fields{
+					"room_id": req.RoomIDOrAlias,
+					"user_id": req.UserID,
+				}).Info("Forcing federated join due to partial state room")
+				forceFederatedJoin = true
+			}
+		}
+	}
+
 	// If a guest is trying to join a room, check that the room has a m.room.guest_access event
 	if req.IsGuest {
 		var guestAccessEvent *types.HeaderedEvent
@@ -259,6 +295,12 @@ func (r *Joiner) performJoinRoomByID(
 	// If we should do a forced federated join then do that.
 	var joinedVia spec.ServerName
 	if forceFederatedJoin {
+		traceLogger.WithFields(logrus.Fields{
+			"decision_ms":    time.Since(decisionStartTime).Milliseconds(),
+			"federated":      true,
+			"server_in_room": serverInRoom,
+			"server_count":   len(req.ServerNames),
+		}).Debug("Join decision: federated join")
 		joinedVia, err = r.performFederatedJoinRoomByID(ctx, req)
 		return req.RoomIDOrAlias, joinedVia, err
 	}
@@ -322,6 +364,14 @@ func (r *Joiner) performJoinRoomByID(
 	}
 	req.Content["membership"] = spec.Join
 	if authorisedVia, aerr := r.populateAuthorisedViaUserForRestrictedJoin(ctx, req, senderID); aerr != nil {
+		// Check if this is a M_FORBIDDEN error (user not in allowed spaces/rooms).
+		// These should return HTTP 403 so appservice bridges can retry with an invite.
+		var matrixErr spec.MatrixError
+		if errors.As(aerr, &matrixErr) && matrixErr.ErrCode == spec.ErrorForbidden {
+			return "", "", rsAPI.ErrNotAllowed{Err: aerr}
+		}
+		// All other errors (database errors, InternalServerError, M_UNABLE_TO_AUTHORISE_JOIN, etc.)
+		// are returned as-is and will become HTTP 500
 		return "", "", aerr
 	} else if authorisedVia != "" {
 		req.Content["join_authorised_via_users_server"] = authorisedVia
@@ -338,6 +388,10 @@ func (r *Joiner) performJoinRoomByID(
 		// a member of the room. This is best-effort (as in we won't
 		// fail if we can't find the existing membership) because there
 		// is really no harm in just sending another membership event.
+		traceLogger.WithFields(logrus.Fields{
+			"decision_ms": time.Since(decisionStartTime).Milliseconds(),
+			"federated":   false,
+		}).Debug("Join decision: local join")
 		membershipRes := &rsAPI.QueryMembershipForUserResponse{}
 		_ = r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, membershipRes)
 

@@ -91,6 +91,10 @@ func (s *syncRoomserverAPI) QueryMembershipAtEvent(
 	return map[string]*rstypes.HeaderedEvent{}, nil
 }
 
+func (s *syncRoomserverAPI) GetPartialStateRoomIDs(ctx context.Context) ([]string, error) {
+	return []string{}, nil
+}
+
 type syncUserAPI struct {
 	userapi.SyncUserAPI
 	accounts []userapi.Device

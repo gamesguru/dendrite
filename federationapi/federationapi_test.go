@@ -67,6 +67,11 @@ func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.Us
 	return f.queryRoomsForUser(ctx, userID, desiredMembership)
 }
 
+// GetAllPartialStateRooms is called by PartialStateWorker
+func (f *fedRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
+	return []types.RoomNID{}, nil
+}
+
 // TODO: This struct isn't generic, only works for TestFederationAPIJoinThenKeyUpdate
 type fedClient struct {
 	fedClientMutex sync.Mutex
@@ -161,6 +166,11 @@ func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, eve
 		}
 	}
 	return
+}
+
+func (f *fedClient) SendJoinPartialState(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
+	// Delegate to SendJoin - partial state join uses the same response format
+	return f.SendJoin(ctx, origin, s, event)
 }
 
 func (f *fedClient) SendTransaction(ctx context.Context, t gomatrixserverlib.Transaction) (res fclient.RespSend, err error) {

@@ -1,6 +1,7 @@
 package tables
 
 import (
+	"encoding/json"
 	"testing"
 
 	"codefloe.com/pat-s/dendrite/roomserver/types"
@@ -14,14 +15,18 @@ func TestExtractContentValue(t *testing.T) {
 	room := test.NewRoom(t, alice)
 
 	tests := []struct {
-		name  string
-		event *types.HeaderedEvent
-		want  string
+		name      string
+		event     *types.HeaderedEvent
+		want      string
+		wantJSON  bool // if true, want is a key in the JSON response
+		wantValue string
 	}{
 		{
-			name:  "returns creator ID for create events",
-			event: room.Events()[0],
-			want:  alice.ID,
+			name:      "returns full JSON for create events (for room_type extraction)",
+			event:     room.Events()[0],
+			wantJSON:  true,
+			want:      "creator",
+			wantValue: alice.ID,
 		},
 		{
 			name:  "returns the alias for canonical alias events",
@@ -70,7 +75,16 @@ func TestExtractContentValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, ExtractContentValue(tt.event), "ExtractContentValue(%v)", tt.event)
+			result := ExtractContentValue(tt.event)
+			if tt.wantJSON {
+				// For JSON responses, verify the specific key exists with expected value
+				var parsed map[string]interface{}
+				err := json.Unmarshal([]byte(result), &parsed)
+				assert.NoError(t, err, "Expected valid JSON")
+				assert.Equal(t, tt.wantValue, parsed[tt.want], "JSON key %q should have expected value", tt.want)
+			} else {
+				assert.Equalf(t, tt.want, result, "ExtractContentValue(%v)", tt.event)
+			}
 		})
 	}
 }

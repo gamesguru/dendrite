@@ -18,6 +18,7 @@ import (
 )
 
 func TestLoadConfigRelative(t *testing.T) {
+	t.Parallel()
 	cfg, err := loadConfig("/my/config/dir", []byte(testConfig),
 		mockReadFile{
 			"/my/config/dir/matrix_key.pem": testKey,
@@ -194,6 +195,7 @@ func (m mockReadFile) readFile(path string) ([]byte, error) {
 }
 
 func TestReadKey(t *testing.T) {
+	t.Parallel()
 	keyID, _, err := readKeyPEM("path/to/key", []byte(testKey), true)
 	if err != nil {
 		t.Error("failed to load private key:", err)
@@ -245,6 +247,7 @@ ANAf5kxmMsM0zlN2hkxl0H6o7wKlBSw3RI3cjfilXiMWRPJrzlc4
 `
 
 func TestUnmarshalDataUnit(t *testing.T) {
+	t.Parallel()
 	target := struct {
 		Got DataUnit `yaml:"value"`
 	}{}
@@ -264,6 +267,7 @@ func TestUnmarshalDataUnit(t *testing.T) {
 }
 
 func Test_SigningIdentityFor(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		virtualHosts []*VirtualHost
@@ -296,7 +300,9 @@ func Test_SigningIdentityFor(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := &Global{
 				VirtualHosts: tt.virtualHosts,
 				SigningIdentity: fclient.SigningIdentity{

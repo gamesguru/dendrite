@@ -36,6 +36,10 @@ type Statistics struct {
 	FailuresUntilAssumedOffline uint32
 
 	enableRelays bool
+
+	// MinBackoffExponent controls the minimum backoff exponent (default: 8 = 256 seconds).
+	// Can be set to a lower value for tests.
+	MinBackoffExponent uint32
 }
 
 func NewStatistics(
@@ -51,6 +55,7 @@ func NewStatistics(
 		backoffTimers:               make(map[spec.ServerName]*time.Timer),
 		servers:                     make(map[spec.ServerName]*ServerStatistics),
 		enableRelays:                enableRelays,
+		MinBackoffExponent:          minBackoffExponent,
 	}
 }
 
@@ -78,7 +83,35 @@ func (s *Statistics) ForServer(serverName spec.ServerName) *ServerStatistics {
 			server.blacklisted.Store(blacklisted)
 		}
 
-		// Don't bother hitting the database 2 additional times
+		// Load persisted retry state from database (survives restarts)
+		failureCount, retryUntil, exists, err := s.DB.GetServerRetryState(context.Background(), serverName)
+		if err != nil {
+			logrus.WithError(err).Errorf("Failed to get retry state for %q", serverName)
+		} else if exists {
+			server.backoffCount.Store(failureCount)
+			// If the backoff hasn't expired yet, restore it
+			if time.Now().Before(retryUntil) {
+				server.backoffUntil.Store(retryUntil)
+				server.backoffStarted.Store(true)
+				// Set up a timer to clear the backoff when it expires
+				s.backoffMutex.Lock()
+				s.backoffTimers[serverName] = time.AfterFunc(time.Until(retryUntil), server.backoffFinished)
+				s.backoffMutex.Unlock()
+				logrus.WithFields(logrus.Fields{
+					"server_name":   serverName,
+					"failure_count": failureCount,
+					"retry_until":   retryUntil,
+				}).Debug("Restored persisted retry state")
+			} else {
+				// Backoff has expired, but keep the failure count for next failure calculation
+				logrus.WithFields(logrus.Fields{
+					"server_name":   serverName,
+					"failure_count": failureCount,
+				}).Debug("Restored expired retry state (backoff count only)")
+			}
+		}
+
+		// Don't bother hitting the database for relays
 		// if we don't want to use relays.
 		if !s.enableRelays {
 			return server
@@ -134,12 +167,38 @@ const (
 	minJitterMultiplier = 0.8
 )
 
+// Backoff exponent bounds for federation retries.
+// These define the minimum and maximum backoff intervals:
+// - minBackoffExponent=8: First failure starts at 2^8 = 256 seconds (~4.3 minutes)
+// - maxBackoffExponent=19: Maximum backoff is 2^19 = 524288 seconds (~6.1 days)
+// This matches Synapse's approach of aggressive backoff for dead servers.
+const (
+	minBackoffExponent = 8  // 2^8 = 256 seconds (~4.3 minutes)
+	maxBackoffExponent = 19 // 2^19 = 524288 seconds (~6.1 days)
+)
+
 // duration returns how long the next backoff interval should be.
+// Uses exponential backoff starting at 2^MinBackoffExponent seconds and capping at
+// 2^maxBackoffExponent seconds, with jitter to avoid thundering herd.
 func (s *ServerStatistics) duration(count uint32) time.Duration {
 	// Add some jitter to minimise the chance of having multiple backoffs
 	// ending at the same time.
 	jitter := rand.Float64()*(maxJitterMultiplier-minJitterMultiplier) + minJitterMultiplier
-	duration := time.Millisecond * time.Duration(math.Exp2(float64(count))*jitter*1000)
+
+	// Use configurable minimum backoff exponent (set in NewStatistics, defaults to minBackoffExponent)
+	minExp := s.statistics.MinBackoffExponent
+
+	// Apply offset so first failure (count=1) starts at 2^minExp
+	// and cap at maxBackoffExponent to avoid extremely long backoffs
+	exponent := float64(count) + float64(minExp) - 1
+	if exponent < 0 {
+		exponent = 0
+	}
+	if exponent > float64(maxBackoffExponent) {
+		exponent = float64(maxBackoffExponent)
+	}
+
+	duration := time.Millisecond * time.Duration(math.Exp2(exponent)*jitter*1000)
 	return duration
 }
 
@@ -166,6 +225,9 @@ func (s *ServerStatistics) AssignBackoffNotifier(notifier func()) {
 // `relay` specifies whether the success was to the actual destination
 // or one of their relay servers.
 func (s *ServerStatistics) Success(method SendMethod) {
+	// Check if we were backing off before clearing - we'll notify if so
+	wasBackingOff := s.backoffStarted.Load()
+
 	s.cancel()
 	s.backoffCount.Store(0)
 	// NOTE : Sending to the final destination vs. a relay server has
@@ -178,7 +240,26 @@ func (s *ServerStatistics) Success(method SendMethod) {
 			}
 		}
 
+		// Clear the persisted retry state since we've succeeded
+		if s.statistics.DB != nil {
+			if err := s.statistics.DB.ClearServerRetryState(context.Background(), s.serverName); err != nil {
+				logrus.WithError(err).Errorf("Failed to clear retry state for %q", s.serverName)
+			}
+		}
+
 		s.removeAssumedOffline()
+
+		// If we were backing off, notify that the server is back up
+		// This wakes up the destination queue to process pending messages
+		if wasBackingOff {
+			s.notifierMutex.Lock()
+			notifier := s.backoffNotifier
+			s.notifierMutex.Unlock()
+			if notifier != nil {
+				logrus.WithField("server_name", s.serverName).Info("Server recovered, notifying destination queue")
+				notifier()
+			}
+		}
 	}
 }
 
@@ -214,6 +295,10 @@ func (s *ServerStatistics) Failure() (time.Time, bool) {
 				if err := s.statistics.DB.AddServerToBlacklist(s.serverName); err != nil {
 					logrus.WithError(err).Errorf("Failed to add %q to blacklist", s.serverName)
 				}
+				// Clear retry state when blacklisting (it's now in the blacklist table)
+				if err := s.statistics.DB.ClearServerRetryState(context.Background(), s.serverName); err != nil {
+					logrus.WithError(err).Errorf("Failed to clear retry state for blacklisted %q", s.serverName)
+				}
 			}
 			s.ClearBackoff()
 			return time.Time{}, true
@@ -225,12 +310,25 @@ func (s *ServerStatistics) Failure() (time.Time, bool) {
 		until := time.Now().Add(s.duration(count))
 		s.backoffUntil.Store(until)
 
+		// Persist the retry state to database so it survives restarts
+		if s.statistics.DB != nil {
+			if err := s.statistics.DB.SetServerRetryState(context.Background(), s.serverName, count, until); err != nil {
+				logrus.WithError(err).Errorf("Failed to persist retry state for %q", s.serverName)
+			}
+		}
+
 		s.statistics.backoffMutex.Lock()
 		s.statistics.backoffTimers[s.serverName] = time.AfterFunc(time.Until(until), s.backoffFinished)
 		s.statistics.backoffMutex.Unlock()
 	}
 
-	return s.backoffUntil.Load().(time.Time), false
+	// Handle race condition: another goroutine may have called Failure() concurrently
+	// and reached here before the first goroutine set backoffUntil
+	until := s.backoffUntil.Load()
+	if until == nil {
+		return time.Time{}, false
+	}
+	return until.(time.Time), false
 }
 
 // MarkServerAlive removes the assumed offline and blacklisted statuses from this server.
@@ -300,6 +398,13 @@ func (s *ServerStatistics) removeBlacklist() bool {
 	}
 	s.cancel()
 	s.backoffCount.Store(0)
+
+	// Clear the persisted retry state since the server is now considered alive
+	if s.statistics.DB != nil {
+		if err := s.statistics.DB.ClearServerRetryState(context.Background(), s.serverName); err != nil {
+			logrus.WithError(err).Errorf("Failed to clear retry state for %q", s.serverName)
+		}
+	}
 
 	return wasBlacklisted
 }
