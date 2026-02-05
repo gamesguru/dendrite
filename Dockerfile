@@ -22,18 +22,20 @@ RUN --mount=target=. \
     CGO_ENABLED=$([ "$TARGETARCH" = "$USERARCH" ] && echo "1" || echo "0") \
     go build -v -trimpath -o /out/ ./cmd/...
 
-
 #
 # Builds the Dendrite image containing all required binaries
 #
-FROM alpine:latest
-RUN apk --update --no-cache add curl
+FROM alpine:3.23
+
+# Install runtime dependencies
+RUN apk --update --no-cache add ca-certificates curl tzdata \
+    && addgroup -g 1000 dendrite \
+    && adduser -u 1000 -G dendrite -h /etc/dendrite -D dendrite
+
 LABEL org.opencontainers.image.title="Dendrite"
 LABEL org.opencontainers.image.description="Next-generation Matrix homeserver written in Go"
-LABEL org.opencontainers.image.source="https://github.com/element-hq/dendrite"
+LABEL org.opencontainers.image.source="https://codefloe.com/pat-s/dendrite"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only OR LicenseRef-Element-Commercial"
-LABEL org.opencontainers.image.documentation="https://element-hq.github.io/dendrite/"
-LABEL org.opencontainers.image.vendor="New Vector Ltd."
 
 COPY --from=build /out/create-account /usr/bin/create-account
 COPY --from=build /out/generate-config /usr/bin/generate-config
@@ -42,6 +44,12 @@ COPY --from=build /out/dendrite /usr/bin/dendrite
 
 VOLUME /etc/dendrite
 WORKDIR /etc/dendrite
+
+# Run as non-root user
+USER dendrite
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -fSs http://localhost:8008/_matrix/client/versions || exit 1
 
 ENTRYPOINT ["/usr/bin/dendrite"]
 EXPOSE 8008 8448
