@@ -1,10 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>codefloe/renovate-config"],
+  "extends": [
+    "local>codefloe/renovate-config"
+  ],
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["\\.forgejo/workflows/.*\\.ya?ml$"],
+      "managerFilePatterns": [
+        "/\\.forgejo/workflows/.*\\.ya?ml$/"
+      ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
       ]
