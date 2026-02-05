@@ -15,16 +15,50 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Install Docker
+        run: |
+          # Add Docker's official GPG key
+          apt-get update
+          apt-get install -y ca-certificates curl zip
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          # Add the repository to Apt sources
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+          docker --version
+
       - name: Build with xgo
-        uses: https://github.com/crazy-max/ghaction-xgo@v3
-        with:
-          xgo_version: latest
-          go_version: file:go.mod
-          dest: dist
-          prefix: dendrite
-          targets: linux/amd64,linux/arm64,linux/arm-7,darwin/amd64,darwin/arm64,windows/amd64
-          pkg: ./cmd/dendrite
-          ldflags: -s -w -X main.version=${{ github.ref_name }}
+        run: |
+          # Create container with xgo environment variables
+          CONTAINER_ID=$(docker create \
+            -e PACK=./cmd/dendrite \
+            -e OUT=dendrite \
+            -e FLAG_V=true \
+            -e FLAG_LDFLAGS="-s -w -X main.version=${{ github.ref_name }}" \
+            -e FLAG_TRIMPATH=true \
+            -e FLAG_BUILDMODE=default \
+            -e TARGETS="linux/amd64 linux/arm64 linux/arm-7 darwin/amd64 darwin/arm64 windows/amd64" \
+            -e GO111MODULE=on \
+            ghcr.io/crazy-max/xgo:1.25 .)
+
+          # Copy source into container
+          docker cp . "$CONTAINER_ID:/source"
+
+          # Start the container and wait for completion
+          docker start -a "$CONTAINER_ID" || true
+
+          # Copy built binaries out
+          mkdir -p dist
+          docker cp "$CONTAINER_ID:/build/." dist/ || echo "No binaries in /build"
+
+          # Show what was built
+          echo "Contents of dist:"
+          ls -la dist/ || echo "dist is empty"
+
+          # Cleanup
+          docker rm "$CONTAINER_ID"
 
       - name: Create archives
         run: |
@@ -41,7 +75,7 @@ jobs:
           ls -la
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: forgejo/upload-artifact@v4
         with:
           name: binaries
           path: dist/*
@@ -54,7 +88,7 @@ jobs:
     container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
     steps:
       - name: Install dependencies
-        run: apk add --no-cache curl jq git
+        run: apk add --no-cache curl jq git nodejs
 
       - uses: actions/checkout@v6
         with:
@@ -62,7 +96,7 @@ jobs:
           fetch-tags: true
 
       - name: Download binaries
-        uses: actions/download-artifact@v6
+        uses: forgejo/download-artifact@v4
         with:
           name: binaries
           path: dist
