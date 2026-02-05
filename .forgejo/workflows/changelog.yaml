@@ -10,7 +10,12 @@ jobs:
   changelog:
     name: Update changelog issue
     runs-on: ubuntu-latest
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
     steps:
+      - name: Install dependencies
+        run: apk add --no-cache curl jq nodejs
+        
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -19,13 +24,7 @@ jobs:
       - name: Generate and post changelog
         env:
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-          # renovate: datasource=github-releases depName=thegeeklab/git-sv
-          GIT_SV_VERSION: "2.0.9"
         run: |
-          # Install git-sv
-          curl -sL "https://github.com/thegeeklab/git-sv/releases/download/v${GIT_SV_VERSION}/git-sv-${GIT_SV_VERSION}-linux-amd64" -o /usr/local/bin/git-sv
-          chmod +x /usr/local/bin/git-sv
-
           # Generate release notes
           git-sv rn -o changelog.md
 
@@ -37,8 +36,8 @@ jobs:
           echo "ISSUE_NUMBER: '$ISSUE_NUMBER'"
 
           # Build JSON payload
-          JSON_DATA=$(jq -Rs --arg title 'Changelog for upcoming version' --arg body "$(cat changelog.md)" \
-            '{title: $title, body: $body}' <<< "")
+          JSON_DATA=$(jq -n --arg title 'Changelog for upcoming version' --arg body "$(cat changelog.md)" \
+            '{title: $title, body: $body}')
 
           # Create or update issue
           if [ -z "$ISSUE_NUMBER" ]; then
