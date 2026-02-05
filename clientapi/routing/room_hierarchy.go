@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"sync"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/google/uuid"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"

@@ -15,12 +15,12 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/consumers"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/roomserver/version"
+	"codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/consumers"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/roomserver/version"
 )
 
 // PerformLeaveRequest implements api.FederationInternalAPI

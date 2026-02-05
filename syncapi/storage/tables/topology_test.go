@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/sqlite3"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/test"
 	"github.com/stretchr/testify/assert"
 )
 

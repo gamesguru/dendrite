@@ -9,12 +9,12 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type DatabaseTransaction struct {

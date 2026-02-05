@@ -14,20 +14,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal/hooks"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	roomserver "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/mscs/msc2836"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/internal/hooks"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/mscs/msc2836"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var (

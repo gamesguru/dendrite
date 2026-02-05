@@ -14,14 +14,14 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/userapi/producers"
-	"github.com/element-hq/dendrite/userapi/util"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/userapi/producers"
+	"codefloe.com/pat-s/dendrite/userapi/util"
 )
 
 // OutputReceiptEventConsumer consumes events that originated in the clientAPI.

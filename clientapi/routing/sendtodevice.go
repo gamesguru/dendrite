@@ -11,10 +11,10 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/element-hq/dendrite/internal/transactions"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	"codefloe.com/pat-s/dendrite/internal/transactions"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

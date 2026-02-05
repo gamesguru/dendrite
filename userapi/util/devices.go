@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 )

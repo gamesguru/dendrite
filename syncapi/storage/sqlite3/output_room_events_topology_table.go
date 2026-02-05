@@ -9,11 +9,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 const outputRoomEventsTopologySchema = `

@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/federationapi/storage/tables"
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/federationapi/types"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

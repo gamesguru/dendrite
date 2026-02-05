@@ -7,20 +7,20 @@
 package clientapi
 
 import (
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/element-hq/dendrite/clientapi/routing"
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/internal/transactions"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
+	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
+	"codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	"codefloe.com/pat-s/dendrite/clientapi/routing"
+	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/internal/transactions"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the ClientAPI component.

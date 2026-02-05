@@ -13,8 +13,8 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

@@ -9,12 +9,12 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/threepid"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	userdb "github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/clientapi/threepid"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	userdb "codefloe.com/pat-s/dendrite/userapi/storage"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 

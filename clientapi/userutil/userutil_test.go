@@ -8,7 +8,7 @@ package userutil
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

@@ -9,28 +9,28 @@ package federationapi
 import (
 	"time"
 
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/consumers"
-	"github.com/element-hq/dendrite/federationapi/internal"
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/internal/caching"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/consumers"
+	"codefloe.com/pat-s/dendrite/federationapi/internal"
+	"codefloe.com/pat-s/dendrite/federationapi/producers"
+	"codefloe.com/pat-s/dendrite/federationapi/queue"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/dendrite/federationapi/storage"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 
 	"github.com/matrix-org/gomatrixserverlib"
 
-	"github.com/element-hq/dendrite/federationapi/routing"
+	"codefloe.com/pat-s/dendrite/federationapi/routing"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.

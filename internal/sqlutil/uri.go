@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // ParseFileURI returns the filepath in the given file: URI. Specifically, this will handle

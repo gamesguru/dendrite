@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/nats-io/nats.go"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 )
 
 func MustPublishMsgs(t *testing.T, jsctx nats.JetStreamContext, msgs ...*nats.Msg) {

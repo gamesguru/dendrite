@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // AppServiceInternalAPI is used to query user and room alias data from application

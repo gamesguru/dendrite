@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

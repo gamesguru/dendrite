@@ -8,9 +8,9 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 )
 
 type JetStreamPublisher interface {

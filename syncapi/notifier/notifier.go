@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 )

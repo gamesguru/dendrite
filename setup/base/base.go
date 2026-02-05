@@ -28,15 +28,15 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"github.com/gorilla/mux"
 	"github.com/kardianos/minwinsvc"
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
 )
 
 //go:embed static/*.gotmpl

@@ -8,7 +8,7 @@ package auth
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

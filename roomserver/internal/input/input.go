@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
@@ -26,16 +26,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	fedapi "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/acls"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/query"
-	"github.com/element-hq/dendrite/roomserver/producers"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
+	fedapi "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/roomserver/acls"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/dendrite/roomserver/producers"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/setup/process"
 )
 
 // Inputer is responsible for consuming from the roomserver input

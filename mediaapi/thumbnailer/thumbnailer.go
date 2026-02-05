@@ -16,9 +16,9 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/mediaapi/storage"
+	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 type thumbnailFitness struct {

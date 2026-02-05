@@ -3,10 +3,10 @@ package streams
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

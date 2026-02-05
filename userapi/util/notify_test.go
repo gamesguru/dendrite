@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
-	userUtil "github.com/element-hq/dendrite/userapi/util"
+	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
+	userUtil "codefloe.com/pat-s/dendrite/userapi/util"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {

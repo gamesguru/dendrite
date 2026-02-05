@@ -18,9 +18,9 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 )
 
 var (

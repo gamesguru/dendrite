@@ -8,9 +8,9 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"

@@ -17,7 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	lSyslog "github.com/sirupsen/logrus/hooks/syslog"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // SetupHookLogging configures the logging hooks defined in the configuration.

@@ -4,8 +4,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"

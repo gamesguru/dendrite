@@ -10,8 +10,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	natsclient "github.com/nats-io/nats.go"

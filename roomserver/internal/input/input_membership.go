@@ -12,12 +12,12 @@ import (
 
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/storage/shared"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 // updateMembership updates the current membership and the invites for each

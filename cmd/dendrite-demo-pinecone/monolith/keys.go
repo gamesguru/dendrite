@@ -12,8 +12,8 @@ import (
 	"crypto/ed25519"
 	"os"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 func GetOrCreateKey(keyfile string, oldKeyfile string) (ed25519.PrivateKey, ed25519.PublicKey) {

@@ -15,11 +15,11 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
 const userDailyVisitsSchema = `

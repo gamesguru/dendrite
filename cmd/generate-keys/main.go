@@ -12,7 +12,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 const usage = `Usage: %s

@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/httputil"
-	relayInternal "github.com/element-hq/dendrite/relayapi/internal"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	relayInternal "codefloe.com/pat-s/dendrite/relayapi/internal"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/getsentry/sentry-go"
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"

@@ -12,12 +12,12 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/internal"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/internal"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

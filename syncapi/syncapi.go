@@ -9,26 +9,26 @@ package syncapi
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/internal/fulltext"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/caching"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 
-	"github.com/element-hq/dendrite/syncapi/consumers"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/producers"
-	"github.com/element-hq/dendrite/syncapi/routing"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/sync"
+	"codefloe.com/pat-s/dendrite/syncapi/consumers"
+	"codefloe.com/pat-s/dendrite/syncapi/notifier"
+	"codefloe.com/pat-s/dendrite/syncapi/producers"
+	"codefloe.com/pat-s/dendrite/syncapi/routing"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/syncapi/streams"
+	"codefloe.com/pat-s/dendrite/syncapi/sync"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the SyncAPI

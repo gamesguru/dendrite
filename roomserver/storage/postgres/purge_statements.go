@@ -10,8 +10,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 const purgeEventJSONSQL = "" +

@@ -11,10 +11,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/shared"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/shared"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/sqlite3/deltas"
 )
 
 // SyncServerDatasource represents a sync server datasource which manages

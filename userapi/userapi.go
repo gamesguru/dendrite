@@ -9,23 +9,23 @@ package userapi
 import (
 	"time"
 
-	fedsenderapi "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/consumers"
-	"github.com/element-hq/dendrite/userapi/internal"
-	"github.com/element-hq/dendrite/userapi/producers"
-	"github.com/element-hq/dendrite/userapi/storage"
-	"github.com/element-hq/dendrite/userapi/util"
+	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/consumers"
+	"codefloe.com/pat-s/dendrite/userapi/internal"
+	"codefloe.com/pat-s/dendrite/userapi/producers"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/userapi/util"
 )
 
 // NewInternalAPI returns a concrete implementation of the internal API. Callers

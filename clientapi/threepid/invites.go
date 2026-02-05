@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	api2 "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/producers"
+	api2 "codefloe.com/pat-s/dendrite/appservice/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/userapi/producers"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -25,12 +25,12 @@ import (
 	"github.com/nats-io/nats.go"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/internal"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/internal"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 )
 
 const (
@@ -168,7 +168,7 @@ func TestQueryProfile(t *testing.T) {
 
 // TestPasswordlessLoginFails ensures that a passwordless account cannot
 // be logged into using an arbitrary password (effectively a regression test
-// for https://github.com/element-hq/dendrite/issues/2780).
+// for https://codefloe.com/pat-s/dendrite/issues/2780).
 func TestPasswordlessLoginFails(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

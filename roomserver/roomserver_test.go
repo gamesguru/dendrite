@@ -7,35 +7,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/acls"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/userapi"
+	"codefloe.com/pat-s/dendrite/roomserver/acls"
+	"codefloe.com/pat-s/dendrite/roomserver/state"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/userapi"
 
-	userAPI "github.com/element-hq/dendrite/userapi/api"
+	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 
 	"github.com/matrix-org/gomatrixserverlib"
 
-	"github.com/element-hq/dendrite/federationapi"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/syncapi"
+	"codefloe.com/pat-s/dendrite/federationapi"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/syncapi"
 
-	"github.com/element-hq/dendrite/roomserver"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/roomserver"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test/testrig"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -1017,7 +1017,7 @@ func TestUpgrade(t *testing.T) {
 			validateFunc: validate,
 		},
 		{
-			name:        "custom state is not taken to the new room", // https://github.com/element-hq/dendrite/issues/2912
+			name:        "custom state is not taken to the new room", // https://codefloe.com/pat-s/dendrite/issues/2912
 			upgradeUser: charlie.ID,
 			roomFunc: func(rsAPI api.RoomserverInternalAPI) string {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV6))

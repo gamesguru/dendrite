@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/userapi/storage/shared"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/dendrite/userapi/storage/shared"
+	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3/deltas"
 )
 
 // NewUserDatabase creates a new accounts and profiles database

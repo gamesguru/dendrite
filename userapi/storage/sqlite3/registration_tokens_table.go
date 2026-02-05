@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/api"
-	internal "github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/clientapi/api"
+	internal "codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
 	"golang.org/x/exp/constraints"
 )
 

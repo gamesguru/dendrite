@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

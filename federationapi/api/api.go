@@ -10,8 +10,8 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/federationapi/types"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/federationapi/types"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 // FederationInternalAPI is used to query information from the federation sender.

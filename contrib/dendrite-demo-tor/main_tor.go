@@ -18,9 +18,9 @@ import (
 	"text/template"
 
 	"github.com/cretz/bine/tor"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/eyedeekay/onramp"
 	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/gorilla/mux"
@@ -28,8 +28,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	basepkg "github.com/element-hq/dendrite/setup/base"
-	"github.com/element-hq/dendrite/setup/config"
+	basepkg "codefloe.com/pat-s/dendrite/setup/base"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 func start() (*tor.Tor, error) {

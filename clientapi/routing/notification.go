@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"

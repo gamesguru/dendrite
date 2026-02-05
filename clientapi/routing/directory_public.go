@@ -19,10 +19,10 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 var (

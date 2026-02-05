@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 const streamIDTableSchema = `

@@ -20,20 +20,20 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/element-hq/dendrite/setup/base"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/setup/base"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/auth"
-	clientutil "github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/transactions"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
+	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
+	"codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth"
+	clientutil "codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/transactions"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 )
 
 type WellKnownClientHomeserver struct {

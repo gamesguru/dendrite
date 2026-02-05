@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/element-hq/dendrite/relayapi/api"
+	"codefloe.com/pat-s/dendrite/relayapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"

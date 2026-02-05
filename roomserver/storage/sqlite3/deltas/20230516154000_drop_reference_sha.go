@@ -11,7 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal"
 	"github.com/lib/pq"
 	"github.com/matrix-org/util"
 )

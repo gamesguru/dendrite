@@ -13,10 +13,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/sqlite3"
 )
 
 // NewSyncServerDatasource opens a database connection.

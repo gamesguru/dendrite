@@ -10,9 +10,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 )

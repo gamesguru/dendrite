@@ -8,7 +8,7 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/util"
 )
 

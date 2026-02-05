@@ -15,7 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal"
 )
 
 const createDBMigrationsSQL = "" +

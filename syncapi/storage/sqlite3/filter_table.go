@@ -12,9 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"github.com/matrix-org/gomatrixserverlib"
 )
 

@@ -12,9 +12,9 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/federationapi/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

@@ -12,11 +12,11 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 func NewPostgresNotificationDataTable(db *sql.DB) (tables.NotificationData, error) {

@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

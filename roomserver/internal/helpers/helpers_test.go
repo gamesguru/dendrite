@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, func()) {

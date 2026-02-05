@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

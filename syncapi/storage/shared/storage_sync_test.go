@@ -3,7 +3,7 @@ package shared
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 )
 
 func Test_isStatefilterEmpty(t *testing.T) {

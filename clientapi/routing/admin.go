@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -20,12 +20,12 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/exp/constraints"
 
-	clientapi "github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/internal/httputil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var validRegistrationTokenRegex = regexp.MustCompile("^[[:ascii:][:digit:]_]*$")

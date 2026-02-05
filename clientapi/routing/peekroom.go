@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/userapi/api"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"

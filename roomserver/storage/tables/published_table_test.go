@@ -8,12 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 func mustCreatePublishedTable(t *testing.T, dbType test.DBType) (tab tables.Published, close func()) {

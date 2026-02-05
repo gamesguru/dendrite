@@ -13,20 +13,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	rsAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type Leaver struct {

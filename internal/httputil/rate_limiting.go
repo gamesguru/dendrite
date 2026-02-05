@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 )

@@ -12,11 +12,11 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/federationapi/storage/shared"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/shared"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

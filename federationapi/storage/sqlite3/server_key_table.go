@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

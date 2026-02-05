@@ -11,11 +11,11 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/userutil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/clientapi/userutil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	log "github.com/sirupsen/logrus"

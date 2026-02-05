@@ -11,8 +11,8 @@ import (
 	"html/template"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/util"
 )
 

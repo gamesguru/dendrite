@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres"
-	"github.com/element-hq/dendrite/federationapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/federationapi/storage/tables"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3"
+	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/test"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 )

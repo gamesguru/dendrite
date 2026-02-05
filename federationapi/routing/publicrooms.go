@@ -11,8 +11,8 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 )
 
 type PublicRoomReq struct {

@@ -17,11 +17,11 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userAPI "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/producers"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

@@ -14,19 +14,19 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 // Database is a temporary struct until we have made syncserver.go the same for both pq/sqlite

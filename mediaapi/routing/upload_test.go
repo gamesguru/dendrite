@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/fileutils"
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/mediaapi/fileutils"
+	"codefloe.com/pat-s/dendrite/mediaapi/storage"
+	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 )

@@ -8,7 +8,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v2"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

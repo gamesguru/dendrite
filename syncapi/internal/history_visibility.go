@@ -18,9 +18,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
 )
 
 func init() {

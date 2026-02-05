@@ -9,10 +9,10 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	asAPI "github.com/element-hq/dendrite/appservice/api"
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	asAPI "codefloe.com/pat-s/dendrite/appservice/api"
+	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // ErrInvalidID is an error returned if the userID is invalid

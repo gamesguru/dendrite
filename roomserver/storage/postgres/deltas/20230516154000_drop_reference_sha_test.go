@@ -3,9 +3,9 @@ package deltas
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test/testrig"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 )

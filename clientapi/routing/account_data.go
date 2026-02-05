@@ -12,11 +12,11 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"github.com/matrix-org/util"

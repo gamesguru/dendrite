@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 )

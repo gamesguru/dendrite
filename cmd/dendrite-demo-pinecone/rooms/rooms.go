@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/cmd/dendrite-demo-pinecone/defaults"
-	"github.com/element-hq/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-pinecone/defaults"
+	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"

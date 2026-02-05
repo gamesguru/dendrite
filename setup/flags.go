@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/sirupsen/logrus"
 )
 

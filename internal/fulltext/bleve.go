@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/blevesearch/bleve/v2"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	// side effect imports to allow all possible languages
@@ -41,7 +41,7 @@ import (
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/tr"
 	"github.com/blevesearch/bleve/v2/mapping"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // Search contains all existing bleve.Index

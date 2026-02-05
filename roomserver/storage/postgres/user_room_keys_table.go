@@ -12,10 +12,10 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )

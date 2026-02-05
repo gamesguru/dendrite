@@ -23,9 +23,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/internal"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth"
+	"codefloe.com/pat-s/dendrite/internal"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

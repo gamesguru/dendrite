@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 )
 
 func TestCollect(t *testing.T) {

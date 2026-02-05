@@ -13,25 +13,25 @@ import (
 	"errors"
 	"fmt"
 
-	// "github.com/element-hq/dendrite/roomserver/internal"
-	"github.com/element-hq/dendrite/setup/config"
+	// "codefloe.com/pat-s/dendrite/roomserver/internal"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/roomserver/acls"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/roomserver/acls"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/dendrite/roomserver/state"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 type Queryer struct {

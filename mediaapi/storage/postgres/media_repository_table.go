@@ -12,9 +12,9 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/storage/tables"
-	"github.com/element-hq/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/mediaapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

@@ -12,10 +12,10 @@ import (
 	"database/sql"
 
 	// Import the postgres database driver.
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/syncapi/storage/shared"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/dendrite/syncapi/storage/shared"
 	_ "github.com/lib/pq"
 )
 
