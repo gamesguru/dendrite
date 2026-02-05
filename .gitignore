@@ -79,3 +79,4 @@ go.work*
 # helm chart
 helm/dendrite/charts/
 vendor/
+.dendrite-dev/
