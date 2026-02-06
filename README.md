@@ -1,7 +1,7 @@
 # Dendrite
 
-Dendrite is a second-generation Matrix homeserver written in Go.
-This repository has been forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in 2026-02.
+Dendrite is a second-generation Matrix homeserver written in Go.  
+**This repository has been forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in 2026-02.**
 
 It intends to provide an **efficient** and **reliable** alternative to [Synapse](https://github.com/matrix-org/synapse):
 
@@ -9,16 +9,30 @@ It intends to provide an **efficient** and **reliable** alternative to [Synapse]
 - Reliable: Implements the Matrix specification as written, using the
   [same](https://github.com/matrix-org/sytest) test [suites](https://github.com/matrix-org/complement) as Synapse.
 
-If you have further questions, please take a look at [our FAQ](docs/FAQ.md) or join us in:
-
-Dendrite does not currently support the following MSCs, which impacts the ability to use Element X with Dendrite servers:
+Dendrite is currently lacking support for the following MSCs:
 
 - [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861): Next-gen auth OIDC
 
+## Installation
+
+### Container Images
+
+Container images are available on
+
+- [Docker Hub](https://hub.docker.com/r/pats22/dendrite)
+- [CodeFloe Container Registry](https://codefloe.com/pat-s/dendrite)
+
+The first public release of this fork was v0.15.3.
+Please check [element-hq/dendrite](https://github.com/element-hq/dendrite) for older versions
+
+### Binaries
+
+Binaries are attached to their respective [releases](https://codefloe.com/pat-s/dendrite/releases).
+
 ## Copyright & License
 
-Copyright 2017 OpenMarket Ltd
-Copyright 2017 Vector Creations Ltd
+Copyright 2017 OpenMarket Ltd  
+Copyright 2017 Vector Creations Ltd  
 Copyright 2017-2025 New Vector Ltd
 
 This software is dual-licensed by New Vector Ltd (Element). It can be used either:
