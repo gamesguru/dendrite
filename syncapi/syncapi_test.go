@@ -15,7 +15,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
@@ -1406,7 +1405,7 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 	}
 }
 
-func searchRequest(t *testing.T, router *mux.Router, accessToken, searchTerm string, roomList []string) []byte {
+func searchRequest(t *testing.T, router *httputil.Router, accessToken, searchTerm string, roomList []string) []byte {
 	t.Helper()
 	w := httptest.NewRecorder()
 	rq := test.NewRequest(t, "POST", "/_matrix/client/v3/search", test.WithQueryParams(map[string]string{

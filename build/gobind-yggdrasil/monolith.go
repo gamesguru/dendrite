@@ -31,7 +31,6 @@ import (
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/userapi"
 	"github.com/getsentry/sentry-go"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
@@ -241,13 +240,13 @@ func (m *DendriteMonolith) Start() {
 	}
 	monolith.AddAllPublicRoutes(processCtx, cfg, routers, cm, &natsInstance, caches, caching.EnableMetrics)
 
-	httpRouter := mux.NewRouter()
+	httpRouter := httputil.NewRouter("")
 	httpRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(routers.Client)
 	httpRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	httpRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(routers.DendriteAdmin)
 	httpRouter.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 
-	yggRouter := mux.NewRouter()
+	yggRouter := httputil.NewRouter("")
 	yggRouter.PathPrefix(httputil.PublicFederationPathPrefix).Handler(routers.Federation)
 	yggRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 

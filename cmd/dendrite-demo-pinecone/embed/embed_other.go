@@ -8,7 +8,7 @@
 
 package embed
 
-import "github.com/gorilla/mux"
+import "codefloe.com/pat-s/dendrite/internal/httputil"
 
-func Embed(_ *mux.Router, _ int, _ string) {
+func Embed(_ *httputil.Router, _ int, _ string) {
 }

@@ -22,7 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/relayapi"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -77,8 +76,7 @@ func createGetRelayTxnHTTPRequest(serverName spec.ServerName, userID string) *ht
 	req.SetContent(content)
 	req.Sign(origin, gomatrixserverlib.KeyID(keyID), sk)
 	httpreq, _ := req.HTTPRequest()
-	vars := map[string]string{"userID": userID}
-	httpreq = mux.SetURLVars(httpreq, vars)
+	httpreq.SetPathValue("userID", userID)
 	return httpreq
 }
 
@@ -97,8 +95,8 @@ func createSendRelayTxnHTTPRequest(serverName spec.ServerName, txnID string, use
 	req.SetContent(content)
 	req.Sign(origin, gomatrixserverlib.KeyID(keyID), sk)
 	httpreq, _ := req.HTTPRequest()
-	vars := map[string]string{"userID": userID, "txnID": txnID}
-	httpreq = mux.SetURLVars(httpreq, vars)
+	httpreq.SetPathValue("userID", userID)
+	httpreq.SetPathValue("txnID", txnID)
 	return httpreq
 }
 

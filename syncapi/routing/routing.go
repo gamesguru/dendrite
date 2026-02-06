@@ -9,7 +9,6 @@ package routing
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
@@ -29,7 +28,7 @@ import (
 // applied:
 // nolint: gocyclo
 func Setup(
-	csMux *mux.Router, srp *sync.RequestPool, syncDB storage.Database,
+	csMux *httputil.Router, srp *sync.RequestPool, syncDB storage.Database,
 	userAPI userapi.SyncUserAPI,
 	rsAPI api.SyncRoomserverAPI,
 	cfg *config.SyncAPI,
@@ -64,7 +63,7 @@ func Setup(
 		if r := rateLimits.Limit(req, device); r != nil {
 			return *r
 		}
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
@@ -73,7 +72,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomID}/event/{eventID}",
 		httputil.MakeAuthAPI("rooms_get_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -83,7 +82,7 @@ func Setup(
 
 	v3mux.Handle("/user/{userId}/filter",
 		httputil.MakeAuthAPI("put_filter", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -93,7 +92,7 @@ func Setup(
 
 	v3mux.Handle("/user/{userId}/filter/{filterId}",
 		httputil.MakeAuthAPI("get_filter", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -107,7 +106,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomId}/context/{eventId}",
 		httputil.MakeAuthAPI("context", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -123,7 +122,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}",
 		httputil.MakeAuthAPI("relations", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -137,7 +136,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}/{relType}",
 		httputil.MakeAuthAPI("relation_type", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -151,7 +150,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}/{relType}/{eventType}",
 		httputil.MakeAuthAPI("relation_type_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -188,7 +187,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomID}/members",
 		httputil.MakeAuthAPI("rooms_members", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}

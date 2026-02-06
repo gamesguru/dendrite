@@ -16,7 +16,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
@@ -392,7 +391,7 @@ func newReq(t *testing.T, jsonBody map[string]interface{}) *msc2836.EventRelatio
 	return r
 }
 
-func runServer(t *testing.T, router *mux.Router) func() {
+func runServer(t *testing.T, router *httputil.Router) func() {
 	t.Helper()
 	externalServ := &http.Server{
 		Addr:         string("127.0.0.1:8009"),
@@ -555,7 +554,7 @@ func (r *testRoomserverAPI) QueryMembershipForUser(ctx context.Context, req *roo
 	return nil
 }
 
-func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserver.RoomserverInternalAPI, events []*types.HeaderedEvent) *mux.Router {
+func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserver.RoomserverInternalAPI, events []*types.HeaderedEvent) *httputil.Router {
 	t.Helper()
 	cfg := &config.Dendrite{}
 	cfg.Defaults(config.DefaultOpts{

@@ -43,7 +43,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi"
 	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
@@ -68,8 +67,8 @@ type P2PMonolith struct {
 
 	dendrite           setup.Monolith
 	port               int
-	httpMux            *mux.Router
-	pineconeMux        *mux.Router
+	httpMux            *httputil.Router
+	pineconeMux        *httputil.Router
 	httpServer         *http.Server
 	listener           net.Listener
 	httpListenAddr     string
@@ -247,7 +246,7 @@ func (p *P2PMonolith) Addr() string {
 }
 
 func (p *P2PMonolith) setupHttpServers(userProvider *users.PineconeUserProvider, routers httputil.Routers, enableWebsockets bool) {
-	p.httpMux = mux.NewRouter().SkipClean(true).UseEncodedPath()
+	p.httpMux = httputil.NewRouter("")
 	p.httpMux.PathPrefix(httputil.PublicClientPathPrefix).Handler(routers.Client)
 	p.httpMux.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	p.httpMux.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(routers.DendriteAdmin)
@@ -273,17 +272,17 @@ func (p *P2PMonolith) setupHttpServers(userProvider *users.PineconeUserProvider,
 			); err != nil {
 				logrus.WithError(err).Error("Failed to connect WebSocket peer to Pinecone switch")
 			}
-		})
+		}).Methods(http.MethodGet)
 	}
 
-	p.httpMux.HandleFunc("/pinecone", p.Router.ManholeHandler)
+	p.httpMux.HandleFunc("/pinecone", p.Router.ManholeHandler).Methods(http.MethodGet)
 
 	if enableWebsockets {
 		embed.Embed(p.httpMux, p.port, "Pinecone Demo")
 	}
 
-	p.pineconeMux = mux.NewRouter().SkipClean(true).UseEncodedPath()
-	p.pineconeMux.PathPrefix(users.PublicURL).HandlerFunc(userProvider.FederatedUserProfiles)
+	p.pineconeMux = httputil.NewRouter("")
+	p.pineconeMux.PathPrefix(users.PublicURL).Handler(http.HandlerFunc(userProvider.FederatedUserProfiles))
 	p.pineconeMux.PathPrefix(httputil.PublicFederationPathPrefix).Handler(routers.Federation)
 	p.pineconeMux.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 

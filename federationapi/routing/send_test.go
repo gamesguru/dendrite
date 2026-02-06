@@ -21,7 +21,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -45,9 +44,7 @@ func TestHandleSend(t *testing.T) {
 		routers := httputil.NewRouters()
 		defer close()
 
-		fedMux := mux.NewRouter().SkipClean(true).PathPrefix(httputil.PublicFederationPathPrefix).Subrouter().UseEncodedPath()
 		natsInstance := jetstream.NATSInstance{}
-		routers.Federation = fedMux
 		cfg.FederationAPI.Matrix.SigningIdentity.ServerName = testOrigin
 		cfg.FederationAPI.Matrix.Metrics.Enabled = false
 		fedapi := fedAPI.NewInternalAPI(processCtx, cfg, cm, &natsInstance, nil, nil, nil, nil, true)
@@ -56,12 +53,11 @@ func TestHandleSend(t *testing.T) {
 
 		routing.Setup(routers, cfg, nil, fedapi, keyRing, nil, nil, &cfg.MSCs, nil, caching.DisableMetrics)
 
-		handler := fedMux.Get(routing.SendRouteName).GetHandler().ServeHTTP
 		_, sk, _ := ed25519.GenerateKey(nil)
 		keyID := signing.KeyID
 		pk := sk.Public().(ed25519.PublicKey)
 		serverName := spec.ServerName(hex.EncodeToString(pk))
-		req := fclient.NewFederationRequest("PUT", serverName, testOrigin, "/send/1234")
+		req := fclient.NewFederationRequest("PUT", serverName, testOrigin, "/_matrix/federation/v1/send/1234")
 		content := sendContent{}
 		err := req.SetContent(content)
 		if err != nil {
@@ -72,10 +68,8 @@ func TestHandleSend(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
 		}
-		vars := map[string]string{"txnID": "1234"}
 		w := httptest.NewRecorder()
-		httpReq = mux.SetURLVars(httpReq, vars)
-		handler(w, httpReq)
+		routers.Federation.ServeHTTP(w, httpReq)
 
 		res := w.Result()
 		assert.Equal(t, 200, res.StatusCode)

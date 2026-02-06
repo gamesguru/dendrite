@@ -30,7 +30,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"github.com/gorilla/mux"
 	"github.com/kardianos/minwinsvc"
 
 	"github.com/sirupsen/logrus"
@@ -96,7 +95,7 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
 	routers.DendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-	})
+	}).Methods(http.MethodGet)
 	routers.DendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
 			w.WriteHeader(503)
@@ -108,7 +107,7 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 			return
 		}
 		w.WriteHeader(200)
-	})
+	}).Methods(http.MethodGet)
 }
 
 // SetupAndServeHTTP sets up the HTTP server to serve client & federation APIs
@@ -120,7 +119,7 @@ func SetupAndServeHTTP(
 	externalHTTPAddr config.ServerAddress,
 	certFile, keyFile *string,
 ) {
-	externalRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	externalRouter := httputil.NewRouter("")
 
 	externalServ := &http.Server{
 		Addr:         externalHTTPAddr.Address,
@@ -134,10 +133,10 @@ func SetupAndServeHTTP(
 	// Redirect for Landing Page
 	externalRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, httputil.PublicStaticPath, http.StatusFound)
-	})
+	}).Methods(http.MethodGet)
 
 	if cfg.Global.Metrics.Enabled {
-		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth))
+		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth)).Methods(http.MethodGet)
 	}
 
 	ConfigureAdminEndpoints(processContext, routers)
@@ -153,7 +152,7 @@ func SetupAndServeHTTP(
 
 	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(landingPage.Bytes())
-	})
+	}).Methods(http.MethodGet)
 
 	// We only need the files beneath the static/client/login folder.
 	sub, err := fs.Sub(loginFallback, "static/client/login")
@@ -189,9 +188,6 @@ func SetupAndServeHTTP(
 	externalRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
 	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
-
-	externalRouter.NotFoundHandler = httputil.NotFoundCORSHandler
-	externalRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
 
 	if externalHTTPAddr.Enabled() {
 		go func() {

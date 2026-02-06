@@ -15,7 +15,6 @@ import (
 	relayInternal "codefloe.com/pat-s/dendrite/relayapi/internal"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/getsentry/sentry-go"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -28,7 +27,7 @@ import (
 // path unescape twice (once from the router, once from MakeRelayAPI). We need to have this enabled
 // so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz]
 func Setup(
-	fedMux *mux.Router,
+	fedMux *httputil.Router,
 	cfg *config.FederationAPI,
 	relayAPI *relayInternal.RelayInternalAPI,
 	keys gomatrixserverlib.JSONVerifier,
@@ -114,7 +113,7 @@ func MakeRelayAPI(
 				panic(r)
 			}
 		}()
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
 		}

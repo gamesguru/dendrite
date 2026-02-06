@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/gorilla/mux"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"github.com/tidwall/sjson"
 )
 
@@ -38,12 +38,12 @@ func (h mimeFixingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.fs.ServeHTTP(w, r)
 }
 
-func Embed(rootMux *mux.Router, listenPort int, serverName string) {
+func Embed(rootMux *httputil.Router, listenPort int, serverName string) {
 	url := fmt.Sprintf("http://localhost:%d", listenPort)
 	embeddedFS := _escFS(false)
 	embeddedServ := mimeFixingHandler{http.FileServer(embeddedFS)}
 
-	rootMux.NotFoundHandler = embeddedServ
+	rootMux.SetNotFoundHandler(embeddedServ)
 	rootMux.HandleFunc("/config.json", func(w http.ResponseWriter, _ *http.Request) {
 		configFile, err := embeddedFS.Open("/config.sample.json")
 		if err != nil {

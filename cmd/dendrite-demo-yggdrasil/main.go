@@ -43,7 +43,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/mscs"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/userapi"
-	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 )
 
@@ -235,14 +234,14 @@ func main() {
 		logrus.WithError(err).Fatalf("Failed to enable MSCs")
 	}
 
-	httpRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	httpRouter := httputil.NewRouter("")
 	httpRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(routers.Client)
 	httpRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	httpRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(routers.DendriteAdmin)
 	httpRouter.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 	embed.Embed(httpRouter, *instancePort, "Yggdrasil Demo")
 
-	yggRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	yggRouter := httputil.NewRouter("")
 	yggRouter.PathPrefix(httputil.PublicFederationPathPrefix).Handler(routers.Federation)
 	yggRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 

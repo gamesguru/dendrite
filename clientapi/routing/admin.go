@@ -12,7 +12,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -175,7 +174,7 @@ func AdminListRegistrationTokens(req *http.Request, cfg *config.ClientAPI, userA
 }
 
 func AdminGetRegistrationToken(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -194,7 +193,7 @@ func AdminGetRegistrationToken(req *http.Request, cfg *config.ClientAPI, userAPI
 }
 
 func AdminDeleteRegistrationToken(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -213,7 +212,7 @@ func AdminDeleteRegistrationToken(req *http.Request, cfg *config.ClientAPI, user
 }
 
 func AdminUpdateRegistrationToken(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -266,7 +265,7 @@ func AdminUpdateRegistrationToken(req *http.Request, cfg *config.ClientAPI, user
 }
 
 func AdminEvacuateRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -292,7 +291,7 @@ func AdminEvacuateRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAP
 }
 
 func AdminEvacuateUser(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -312,7 +311,7 @@ func AdminEvacuateUser(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAP
 }
 
 func AdminPurgeRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -334,7 +333,7 @@ func AdminResetPassword(req *http.Request, cfg *config.ClientAPI, device *userap
 			JSON: spec.Unknown("Missing request body"),
 		}
 	}
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -423,7 +422,7 @@ func AdminReindex(req *http.Request, cfg *config.ClientAPI, device *userapi.Devi
 }
 
 func AdminMarkAsStale(req *http.Request, cfg *config.ClientAPI, keyAPI userapi.ClientKeyAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -457,7 +456,7 @@ func AdminMarkAsStale(req *http.Request, cfg *config.ClientAPI, keyAPI userapi.C
 }
 
 func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}

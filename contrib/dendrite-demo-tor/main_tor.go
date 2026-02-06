@@ -20,7 +20,6 @@ import (
 	"github.com/cretz/bine/tor"
 	"github.com/eyedeekay/onramp"
 	sentryhttp "github.com/getsentry/sentry-go/http"
-	"github.com/gorilla/mux"
 	"github.com/kardianos/minwinsvc"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -110,7 +109,7 @@ func SetupAndServeHTTPS(
 	}
 	externalHTTPSAddr = https
 
-	externalRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	externalRouter := httputil.NewRouter("")
 
 	externalServ := &http.Server{
 		Addr:         externalHTTPSAddr.Address,
@@ -124,10 +123,10 @@ func SetupAndServeHTTPS(
 	// Redirect for Landing Page
 	externalRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, httputil.PublicStaticPath, http.StatusFound)
-	})
+	}).Methods(http.MethodGet)
 
 	if cfg.Global.Metrics.Enabled {
-		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth))
+		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth)).Methods(http.MethodGet)
 	}
 
 	basepkg.ConfigureAdminEndpoints(processContext, routers)
@@ -143,7 +142,7 @@ func SetupAndServeHTTPS(
 
 	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(landingPage.Bytes())
-	})
+	}).Methods(http.MethodGet)
 
 	var clientHandler http.Handler
 	clientHandler = routers.Client
@@ -172,8 +171,8 @@ func SetupAndServeHTTPS(
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
 	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
 
-	externalRouter.NotFoundHandler = httputil.NotFoundCORSHandler
-	externalRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	externalRouter.SetNotFoundHandler(httputil.NotFoundCORSHandler)
+	externalRouter.SetMethodNotAllowedHandler(httputil.NotAllowedHandler)
 
 	if externalHTTPSAddr.Enabled() {
 		go func() {

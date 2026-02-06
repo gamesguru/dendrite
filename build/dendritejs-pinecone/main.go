@@ -29,7 +29,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"github.com/matrix-org/gomatrixserverlib"
@@ -209,7 +208,7 @@ func startup() {
 	}
 	monolith.AddAllPublicRoutes(processCtx, cfg, routers, cm, &natsInstance, caches, caching.EnableMetrics)
 
-	httpRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	httpRouter := httputil.NewRouter("")
 	httpRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(routers.Client)
 	httpRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 

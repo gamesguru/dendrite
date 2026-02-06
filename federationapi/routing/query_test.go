@@ -23,7 +23,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -46,9 +45,7 @@ func TestHandleQueryDirectory(t *testing.T) {
 		routers := httputil.NewRouters()
 		defer close()
 
-		fedMux := mux.NewRouter().SkipClean(true).PathPrefix(httputil.PublicFederationPathPrefix).Subrouter().UseEncodedPath()
 		natsInstance := jetstream.NATSInstance{}
-		routers.Federation = fedMux
 		cfg.FederationAPI.Matrix.SigningIdentity.ServerName = testOrigin
 		cfg.FederationAPI.Matrix.Metrics.Enabled = false
 		fedClient := fakeFedClient{}
@@ -59,12 +56,11 @@ func TestHandleQueryDirectory(t *testing.T) {
 
 		routing.Setup(routers, cfg, nil, fedapi, keyRing, &fedClient, &userapi, &cfg.MSCs, nil, caching.DisableMetrics)
 
-		handler := fedMux.Get(routing.QueryDirectoryRouteName).GetHandler().ServeHTTP
 		_, sk, _ := ed25519.GenerateKey(nil)
 		keyID := signing.KeyID
 		pk := sk.Public().(ed25519.PublicKey)
 		serverName := spec.ServerName(hex.EncodeToString(pk))
-		req := fclient.NewFederationRequest("GET", serverName, testOrigin, "/query/directory?room_alias="+url.QueryEscape("#room:server"))
+		req := fclient.NewFederationRequest("GET", serverName, testOrigin, "/_matrix/federation/v1/query/directory?room_alias="+url.QueryEscape("#room:server"))
 		type queryContent struct{}
 		content := queryContent{}
 		err := req.SetContent(content)
@@ -76,10 +72,8 @@ func TestHandleQueryDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
 		}
-		// vars := map[string]string{"room_alias": "#room:server"}
 		w := httptest.NewRecorder()
-		// httpReq = mux.SetURLVars(httpReq, vars)
-		handler(w, httpReq)
+		routers.Federation.ServeHTTP(w, httpReq)
 
 		res := w.Result()
 		data, _ := io.ReadAll(res.Body)

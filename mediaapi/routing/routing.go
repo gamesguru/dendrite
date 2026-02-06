@@ -17,7 +17,6 @@ import (
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -208,7 +207,7 @@ func makeDownloadAPI(
 			}
 		}
 
-		vars, _ := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, _ := httputil.URLDecodeMapValues(httputil.Vars(req))
 		serverName := spec.ServerName(vars["serverName"])
 
 		// For the purposes of loop avoidance, we will return a 404 if allow_remote is set to

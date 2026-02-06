@@ -22,7 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/getsentry/sentry-go"
-	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -81,7 +80,7 @@ func Setup(
 	})
 
 	notaryKeys := httputil.MakeExternalAPI("notarykeys", func(req *http.Request) util.JSONResponse {
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
@@ -684,7 +683,7 @@ func MakeFedAPI(
 			}
 		}()
 		go wakeup.Wakeup(req.Context(), fedReq.Origin())
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
 		}
