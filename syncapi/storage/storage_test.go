@@ -961,16 +961,16 @@ func TestRoomSummary(t *testing.T) {
 }
 
 func TestRecentEvents(t *testing.T) {
-	alice := test.NewUser(t)
-	room1 := test.NewRoom(t, alice)
-	room2 := test.NewRoom(t, alice)
-	roomIDs := []string{room1.ID, room2.ID}
-	rooms := map[string]*test.Room{
-		room1.ID: room1,
-		room2.ID: room2,
-	}
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room1 := test.NewRoom(t, alice)
+		room2 := test.NewRoom(t, alice)
+		roomIDs := []string{room1.ID, room2.ID}
+		rooms := map[string]*test.Room{
+			room1.ID: room1,
+			room2.ID: room2,
+		}
+
 		filter := synctypes.DefaultRoomEventFilter()
 		db, close := MustCreateDatabase(t, dbType)
 		t.Cleanup(close)
@@ -1024,12 +1024,13 @@ func (f *FakeQuerier) QueryUserIDForSender(ctx context.Context, roomID spec.Room
 }
 
 func TestRedaction(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-
-	redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hi"})
-	redactionEvent := room.CreateEvent(t, alice, spec.MRoomRedaction, map[string]string{"redacts": redactedEvent.EventID()})
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+
+		redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hi"})
+		redactionEvent := room.CreateEvent(t, alice, spec.MRoomRedaction, map[string]string{"redacts": redactedEvent.EventID()})
+
 		db, close := MustCreateDatabase(t, dbType)
 		t.Cleanup(close)
 		MustWriteEvents(t, db, room.Events())
