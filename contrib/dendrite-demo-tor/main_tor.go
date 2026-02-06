@@ -18,8 +18,8 @@ import (
 	"text/template"
 
 	"github.com/cretz/bine/tor"
-	"github.com/go-i2p/onramp"
 	sentryhttp "github.com/getsentry/sentry-go/http"
+	"github.com/go-i2p/onramp"
 	"github.com/kardianos/minwinsvc"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
