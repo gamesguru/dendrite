@@ -4,6 +4,19 @@
     "local>codefloe/renovate-config"
   ],
   "automergeType": "pr",
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go dependencies",
+      "schedule": ["every 2 weeks on monday"]
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchPackageNames": ["golang"],
+      "groupName": "go dependencies",
+      "schedule": ["every 2 weeks on monday"]
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
