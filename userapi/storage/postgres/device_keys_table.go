@@ -11,8 +11,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
@@ -132,7 +130,7 @@ func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn
 func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID string, streamIDs []int64) (int, error) {
 	// nullable if there are no results
 	var count sql.NullInt32
-	err := s.countStreamIDsForUserStmt.QueryRowContext(ctx, userID, pq.Int64Array(streamIDs)).Scan(&count)
+	err := s.countStreamIDsForUserStmt.QueryRowContext(ctx, userID, streamIDs).Scan(&count)
 	if err != nil {
 		return 0, err
 	}

@@ -15,7 +15,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 )
 
 // Schema for tracking rooms with partial state from MSC3706 faster joins.
@@ -121,7 +120,7 @@ func (s *partialStateStatements) InsertPartialStateRoom(
 	// Insert the servers
 	if len(serversInRoom) > 0 {
 		stmt = sqlutil.TxStmt(txn, s.insertPartialStateRoomServersStmt)
-		_, err = stmt.ExecContext(ctx, roomNID, pq.Array(serversInRoom))
+		_, err = stmt.ExecContext(ctx, roomNID, serversInRoom)
 		if err != nil {
 			return err
 		}

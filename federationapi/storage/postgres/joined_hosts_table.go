@@ -14,7 +14,6 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
@@ -108,7 +107,7 @@ func (s *joinedHostsStatements) DeleteJoinedHosts(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJoinedHostsStmt)
-	_, err := stmt.ExecContext(ctx, pq.StringArray(eventIDs))
+	_, err := stmt.ExecContext(ctx, eventIDs)
 	return err
 }
 
@@ -161,7 +160,7 @@ func (s *joinedHostsStatements) SelectJoinedHostsForRooms(
 	if excludingBlacklisted {
 		stmt = s.selectJoinedHostsForRoomsExcludingBlacklistedStmt
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(roomIDs))
+	rows, err := stmt.QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, err
 	}

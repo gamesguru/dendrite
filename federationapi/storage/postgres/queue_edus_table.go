@@ -10,8 +10,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -134,7 +132,7 @@ func (s *queueEDUsStatements) DeleteQueueEDUs(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueueEDUStmt)
-	_, err := stmt.ExecContext(ctx, serverName, pq.Int64Array(jsonNIDs))
+	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
 

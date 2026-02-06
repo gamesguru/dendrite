@@ -26,7 +26,7 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer) (*sql.DB, error) 
 		}
 		dsn = sqliteDSNExtension(dsn)
 	case dbProperties.ConnectionString.IsPostgres():
-		driverName = "postgres"
+		driverName = "pgx"
 		dsn = string(dbProperties.ConnectionString)
 	default:
 		return nil, fmt.Errorf("invalid database connection string %q", dbProperties.ConnectionString)
@@ -53,7 +53,7 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer) (*sql.DB, error) 
 			}
 
 			switch driverName {
-			case "postgres":
+			case "pgx":
 				// Perform a quick sanity check if possible that we aren't trying to use more database
 				// connections than PostgreSQL is willing to give us.
 				var max, reserved int

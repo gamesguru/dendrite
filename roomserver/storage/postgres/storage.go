@@ -14,7 +14,7 @@ import (
 	"fmt"
 
 	// Import the postgres database driver.
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"

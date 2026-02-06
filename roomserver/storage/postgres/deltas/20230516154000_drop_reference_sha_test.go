@@ -6,7 +6,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -45,9 +44,9 @@ INSERT INTO roomserver_events (event_nid, room_nid) VALUES (1, 1)
 	stmt, err := db.PrepareContext(ctx.Context(), `INSERT INTO roomserver_previous_events (previous_event_id, event_nids, previous_reference_sha256) VALUES ($1, $2, $3)`)
 	assert.Nil(t, err)
 	assert.NotNil(t, stmt)
-	_, err = stmt.ExecContext(ctx.Context(), "1", pq.Array([]int64{1, 2}), "a")
+	_, err = stmt.ExecContext(ctx.Context(), "1", []int64{1, 2}, "a")
 	assert.Nil(t, err)
-	_, err = stmt.ExecContext(ctx.Context(), "1", pq.Array([]int64{1, 2, 3}), "b")
+	_, err = stmt.ExecContext(ctx.Context(), "1", []int64{1, 2, 3}, "b")
 	assert.Nil(t, err)
 	// execute the migration
 	txn, err := db.Begin()

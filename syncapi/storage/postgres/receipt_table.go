@@ -11,8 +11,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres/deltas"
@@ -148,7 +146,7 @@ func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, room
 
 func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error) {
 	var lastPos types.StreamPosition
-	rows, err := sqlutil.TxStmt(txn, r.selectRoomReceipts).QueryContext(ctx, pq.Array(roomIDs), streamPos)
+	rows, err := sqlutil.TxStmt(txn, r.selectRoomReceipts).QueryContext(ctx, roomIDs, streamPos)
 	if err != nil {
 		return 0, nil, fmt.Errorf("unable to query room receipts: %w", err)
 	}
@@ -218,7 +216,7 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 
 	// Step 1: Get latest receipts for ALL users in these rooms
 	// Note: Private receipt filtering happens in v4_extensions.go, not here
-	latestRows, err := sqlutil.TxStmt(txn, s.selectLatestUserReceipts).QueryContext(ctx, pq.Array(roomIDs))
+	latestRows, err := sqlutil.TxStmt(txn, s.selectLatestUserReceipts).QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query latest receipts: %w", err)
 	}

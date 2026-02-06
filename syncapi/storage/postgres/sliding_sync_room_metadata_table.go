@@ -13,7 +13,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
-	"github.com/lib/pq"
 )
 
 // SQL statements for rooms to recalculate
@@ -244,7 +243,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRooms(
 		return make(map[string]*tables.SlidingSyncJoinedRoom), nil
 	}
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedRoomsStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Array(roomIDs))
+	rows, err := stmt.QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +311,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRoomsByFilters(
 
 	if len(notRoomTypes) > 0 {
 		query += ` AND (room_type IS NULL OR room_type != ALL($` + string(rune('0'+argNum)) + `))`
-		args = append(args, pq.Array(notRoomTypes))
+		args = append(args, notRoomTypes)
 		argNum++
 	}
 
@@ -424,7 +423,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectMembershipSnapshotsForUser(
 		rows, err = stmt.QueryContext(ctx, userID)
 	} else {
 		stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotsForUserWithMembershipsStmt)
-		rows, err = stmt.QueryContext(ctx, userID, pq.Array(memberships))
+		rows, err = stmt.QueryContext(ctx, userID, memberships)
 	}
 	if err != nil {
 		return nil, err

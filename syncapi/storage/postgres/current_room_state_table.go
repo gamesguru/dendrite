@@ -20,7 +20,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
@@ -200,7 +199,7 @@ func (s *currentRoomStateStatements) SelectJoinedUsers(
 func (s *currentRoomStateStatements) SelectJoinedUsersInRoom(
 	ctx context.Context, txn *sql.Tx, roomIDs []string,
 ) (map[string][]string, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectJoinedUsersInRoomStmt).QueryContext(ctx, pq.StringArray(roomIDs))
+	rows, err := sqlutil.TxStmt(txn, s.selectJoinedUsersInRoomStmt).QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -312,12 +311,12 @@ func (s *currentRoomStateStatements) SelectCurrentState(
 		}
 	}
 	rows, err := stmt.QueryContext(ctx, roomID,
-		pq.StringArray(senders),
-		pq.StringArray(notSenders),
-		pq.StringArray(filterConvertTypeWildcardToSQL(stateFilter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(stateFilter.NotTypes)),
+		senders,
+		notSenders,
+		filterConvertTypeWildcardToSQL(stateFilter.Types),
+		filterConvertTypeWildcardToSQL(stateFilter.NotTypes),
 		stateFilter.ContainsURL,
-		pq.StringArray(excludeEventIDs),
+		excludeEventIDs,
 	)
 	if err != nil {
 		return nil, err
@@ -382,7 +381,7 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) ([]types.StreamEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventsWithEventIDsStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +459,7 @@ func (s *currentRoomStateStatements) SelectSharedUsers(
 	ctx context.Context, txn *sql.Tx, userID string, otherUserIDs []string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectSharedUsersStmt)
-	rows, err := stmt.QueryContext(ctx, userID, pq.Array(otherUserIDs))
+	rows, err := stmt.QueryContext(ctx, userID, otherUserIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +478,7 @@ func (s *currentRoomStateStatements) SelectSharedUsers(
 
 func (s *currentRoomStateStatements) SelectRoomHeroes(ctx context.Context, txn *sql.Tx, roomID, excludeUserID string, memberships []string) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomHeroesStmt)
-	rows, err := stmt.QueryContext(ctx, roomID, pq.StringArray(memberships), excludeUserID)
+	rows, err := stmt.QueryContext(ctx, roomID, memberships, excludeUserID)
 	if err != nil {
 		return nil, err
 	}

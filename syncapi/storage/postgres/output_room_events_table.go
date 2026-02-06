@@ -22,7 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 )
 
@@ -297,17 +296,17 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 		stmt := sqlutil.TxStmt(txn, s.selectStateInRangeFilteredStmt)
 		senders, notSenders := getSendersStateFilterFilter(stateFilter)
 		rows, err = stmt.QueryContext(
-			ctx, r.Low(), r.High(), pq.StringArray(roomIDs),
-			pq.StringArray(senders),
-			pq.StringArray(notSenders),
-			pq.StringArray(filterConvertTypeWildcardToSQL(stateFilter.Types)),
-			pq.StringArray(filterConvertTypeWildcardToSQL(stateFilter.NotTypes)),
+			ctx, r.Low(), r.High(), roomIDs,
+			senders,
+			notSenders,
+			filterConvertTypeWildcardToSQL(stateFilter.Types),
+			filterConvertTypeWildcardToSQL(stateFilter.NotTypes),
 			stateFilter.ContainsURL,
 		)
 	} else {
 		stmt := sqlutil.TxStmt(txn, s.selectStateInRangeStmt)
 		rows, err = stmt.QueryContext(
-			ctx, r.Low(), r.High(), pq.StringArray(roomIDs),
+			ctx, r.Low(), r.High(), roomIDs,
 		)
 	}
 
@@ -331,8 +330,8 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 			streamPos         types.StreamPosition
 			eventBytes        []byte
 			excludeFromSync   bool
-			addIDs            pq.StringArray
-			delIDs            pq.StringArray
+			addIDs            sqlutil.StringArray
+			delIDs            sqlutil.StringArray
 			historyVisibility gomatrixserverlib.HistoryVisibility
 		)
 		if err := rows.Scan(&eventID, &streamPos, &eventBytes, &excludeFromSync, &addIDs, &delIDs, &historyVisibility); err != nil {
@@ -419,8 +418,8 @@ func (s *outputRoomEventsStatements) InsertEvent(
 		event.Type(),
 		event.UserID.String(),
 		containsURL,
-		pq.StringArray(addState),
-		pq.StringArray(removeState),
+		addState,
+		removeState,
 		sessionID,
 		txnID,
 		excludeFromSync,
@@ -446,11 +445,11 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 	senders, notSenders := getSendersRoomEventFilter(eventFilter)
 
 	rows, err := stmt.QueryContext(
-		ctx, pq.StringArray(roomIDs), ra.Low(), ra.High(),
-		pq.StringArray(senders),
-		pq.StringArray(notSenders),
-		pq.StringArray(filterConvertTypeWildcardToSQL(eventFilter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(eventFilter.NotTypes)),
+		ctx, roomIDs, ra.Low(), ra.High(),
+		senders,
+		notSenders,
+		filterConvertTypeWildcardToSQL(eventFilter.Types),
+		filterConvertTypeWildcardToSQL(eventFilter.NotTypes),
 		eventFilter.Limit+1,
 	)
 	if err != nil {
@@ -537,7 +536,7 @@ func (s *outputRoomEventsStatements) SelectRoomsWithEventsSince(
 	roomIDs []string, since types.StreamPosition,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithEventsSinceStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(roomIDs), since)
+	rows, err := stmt.QueryContext(ctx, roomIDs, since)
 	if err != nil {
 		return nil, err
 	}
@@ -566,16 +565,16 @@ func (s *outputRoomEventsStatements) SelectEvents(
 	)
 	if filter == nil {
 		stmt = sqlutil.TxStmt(txn, s.selectEventsStmt)
-		rows, err = stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+		rows, err = stmt.QueryContext(ctx, eventIDs)
 	} else {
 		senders, notSenders := getSendersRoomEventFilter(filter)
 		stmt = sqlutil.TxStmt(txn, s.selectEventsWitFilterStmt)
 		rows, err = stmt.QueryContext(ctx,
-			pq.StringArray(eventIDs),
-			pq.StringArray(senders),
-			pq.StringArray(notSenders),
-			pq.StringArray(filterConvertTypeWildcardToSQL(filter.Types)),
-			pq.StringArray(filterConvertTypeWildcardToSQL(filter.NotTypes)),
+			eventIDs,
+			senders,
+			notSenders,
+			filterConvertTypeWildcardToSQL(filter.Types),
+			filterConvertTypeWildcardToSQL(filter.NotTypes),
 			filter.ContainsURL,
 			filter.Limit,
 		)
@@ -634,10 +633,10 @@ func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 	senders, notSenders := getSendersRoomEventFilter(filter)
 	rows, err := sqlutil.TxStmt(txn, s.selectContextBeforeEventStmt).QueryContext(
 		ctx, roomID, id, filter.Limit,
-		pq.StringArray(senders),
-		pq.StringArray(notSenders),
-		pq.StringArray(filterConvertTypeWildcardToSQL(filter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(filter.NotTypes)),
+		senders,
+		notSenders,
+		filterConvertTypeWildcardToSQL(filter.Types),
+		filterConvertTypeWildcardToSQL(filter.NotTypes),
 	)
 	if err != nil {
 		return
@@ -669,10 +668,10 @@ func (s *outputRoomEventsStatements) SelectContextAfterEvent(
 	senders, notSenders := getSendersRoomEventFilter(filter)
 	rows, err := sqlutil.TxStmt(txn, s.selectContextAfterEventStmt).QueryContext(
 		ctx, roomID, id, filter.Limit,
-		pq.StringArray(senders),
-		pq.StringArray(notSenders),
-		pq.StringArray(filterConvertTypeWildcardToSQL(filter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(filter.NotTypes)),
+		senders,
+		notSenders,
+		filterConvertTypeWildcardToSQL(filter.Types),
+		filterConvertTypeWildcardToSQL(filter.NotTypes),
 	)
 	if err != nil {
 		return
@@ -745,7 +744,7 @@ func (s *outputRoomEventsStatements) PurgeEvents(
 }
 
 func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, limit, afterID int64, types []string) (map[int64]rstypes.HeaderedEvent, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectSearchStmt).QueryContext(ctx, afterID, pq.StringArray(types), limit)
+	rows, err := sqlutil.TxStmt(txn, s.selectSearchStmt).QueryContext(ctx, afterID, types, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -791,7 +790,7 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.selectMaxStreamPositionsForRoomsStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(roomIDs), pq.StringArray(BumpEventTypes))
+	rows, err := stmt.QueryContext(ctx, roomIDs, BumpEventTypes)
 	if err != nil {
 		return nil, err
 	}

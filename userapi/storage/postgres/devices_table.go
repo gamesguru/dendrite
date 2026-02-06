@@ -18,7 +18,6 @@ import (
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
@@ -193,7 +192,7 @@ func (s *devicesStatements) DeleteDevices(
 	devices []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDevicesStmt)
-	_, err := stmt.ExecContext(ctx, localpart, serverName, pq.Array(devices))
+	_, err := stmt.ExecContext(ctx, localpart, serverName, devices)
 	return err
 }
 
@@ -263,7 +262,7 @@ func (s *devicesStatements) SelectDeviceByID(
 }
 
 func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error) {
-	rows, err := s.selectDevicesByIDStmt.QueryContext(ctx, pq.StringArray(deviceIDs))
+	rows, err := s.selectDevicesByIDStmt.QueryContext(ctx, deviceIDs)
 	if err != nil {
 		return nil, err
 	}

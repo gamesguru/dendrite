@@ -16,7 +16,7 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/shared"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // SyncServerDatasource represents a sync server datasource which manages

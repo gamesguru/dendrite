@@ -9,10 +9,11 @@ package postgres
 
 import (
 	// Import the postgres database driver.
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/mediaapi/storage/shared"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	_ "github.com/lib/pq"
 )
 
 // NewDatabase opens a postgres database.

@@ -19,7 +19,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 )
 
 const eventsSchema = `
@@ -246,7 +245,7 @@ func (s *eventStatements) BulkSelectSnapshotsFromEventIDs(
 ) (map[types.StateSnapshotNID][]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectSnapshotsForEventIDsStmt)
 
-	rows, err := stmt.QueryContext(ctx, pq.Array(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +277,7 @@ func (s *eventStatements) BulkSelectStateEventByID(
 	} else {
 		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDStmt)
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +325,7 @@ func (s *eventStatements) BulkSelectStateEventByNID(
 	sort.Sort(tuples)
 	eventTypeNIDArray, eventStateKeyNIDArray := tuples.TypesAndStateKeysAsArrays()
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateEventByNIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), pq.Int64Array(eventTypeNIDArray), pq.Int64Array(eventStateKeyNIDArray))
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), eventTypeNIDArray, eventStateKeyNIDArray)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +359,7 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) ([]types.StateAtEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateAtEventByIDStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +515,7 @@ func (s *eventStatements) bulkSelectEventNID(ctx context.Context, txn *sql.Tx, e
 	} else {
 		stmt = sqlutil.TxStmt(txn, s.bulkSelectEventNIDStmt)
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +569,7 @@ func (s *eventStatements) SelectRoomNIDsForEventNIDs(
 	return result, rows.Err()
 }
 
-func eventNIDsAsArray(eventNIDs []types.EventNID) pq.Int64Array {
+func eventNIDsAsArray(eventNIDs []types.EventNID) []int64 {
 	nids := make([]int64, len(eventNIDs))
 	for i := range eventNIDs {
 		nids[i] = int64(eventNIDs[i])

@@ -19,7 +19,7 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	// Import the postgres database driver.
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // NewDatabase creates a new accounts and profiles database

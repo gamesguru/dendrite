@@ -11,8 +11,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 )
@@ -145,7 +145,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 			var snapshot stateBlockData
 			var eventsarray []sql.NullInt64
 			var nulStateBlockNID sql.NullInt64
-			if err = snapshotrows.Scan(&snapshot.StateSnapshotNID, &snapshot.RoomNID, &nulStateBlockNID, pq.Array(&eventsarray)); err != nil {
+			if err = snapshotrows.Scan(&snapshot.StateSnapshotNID, &snapshot.RoomNID, &nulStateBlockNID, &eventsarray); err != nil {
 				return fmt.Errorf("rows.Scan: %w", err)
 			}
 			if nulStateBlockNID.Valid {
@@ -190,7 +190,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 		newsnapshots := map[stateSnapshotData]types.StateBlockNIDs{}
 
 		for _, snapshot := range snapshots {
-			var eventsarray pq.Int64Array
+			var eventsarray sqlutil.Int64Array
 			for _, e := range snapshot.EventNIDs {
 				eventsarray = append(eventsarray, int64(e))
 			}
@@ -209,7 +209,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 			newsnapshots[index] = append(newsnapshots[index], blocknid)
 		}
 		for snapshotdata, newblocks := range newsnapshots {
-			var newblocksarray pq.Int64Array
+			var newblocksarray sqlutil.Int64Array
 			for _, b := range newblocks {
 				newblocksarray = append(newblocksarray, int64(b))
 			}

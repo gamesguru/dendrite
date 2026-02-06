@@ -11,8 +11,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
@@ -107,7 +105,7 @@ func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 	ctx context.Context, txn *sql.Tx, userIDs []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteStaleDeviceListsStmt)
-	_, err := stmt.ExecContext(ctx, pq.Array(userIDs))
+	_, err := stmt.ExecContext(ctx, userIDs)
 	return err
 }
 

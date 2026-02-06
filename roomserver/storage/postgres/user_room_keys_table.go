@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
@@ -129,7 +128,7 @@ func (s *userRoomKeysStatements) BulkSelectUserNIDs(ctx context.Context, txn *sq
 			senders = append(senders, key)
 		}
 	}
-	rows, err := stmt.QueryContext(ctx, pq.Array(roomNIDs), pq.Array(senders))
+	rows, err := stmt.QueryContext(ctx, roomNIDs, senders)
 	if err != nil {
 		return nil, err
 	}

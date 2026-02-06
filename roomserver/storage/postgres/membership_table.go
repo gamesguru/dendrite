@@ -12,8 +12,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
@@ -220,7 +218,7 @@ func (s *membershipStatements) SelectJoinedUsers(
 	result := make([]types.EventStateKeyNID, 0, len(targetUserNIDs))
 
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt)
-	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, pq.Array(targetUserNIDs))
+	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, targetUserNIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -371,9 +369,9 @@ func (s *membershipStatements) SelectJoinedUsersSetForRooms(
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsStmt)
 	if len(userNIDs) > 0 {
 		stmt = sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsAndUserStmt)
-		rows, err = stmt.QueryContext(ctx, localOnly, pq.Array(roomNIDs), pq.Array(userNIDs))
+		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs, userNIDs)
 	} else {
-		rows, err = stmt.QueryContext(ctx, localOnly, pq.Array(roomNIDs))
+		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs)
 	}
 
 	if err != nil {

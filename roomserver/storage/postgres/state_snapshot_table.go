@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
@@ -148,14 +147,14 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 		nids[i] = int64(stateNIDs[i])
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateBlockNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Int64Array(nids))
+	rows, err := stmt.QueryContext(ctx, nids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close() // nolint: errcheck
 	results := make([]types.StateBlockNIDList, len(stateNIDs))
 	i := 0
-	var stateBlockNIDs pq.Int64Array
+	var stateBlockNIDs sqlutil.Int64Array
 	for ; rows.Next(); i++ {
 		result := &results[i]
 		if err = rows.Scan(&result.StateSnapshotNID, &stateBlockNIDs); err != nil {
@@ -199,7 +198,7 @@ func (s *stateSnapshotStatements) BulkSelectMembershipForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulktSelectMembershipForHistoryVisibilityStmt)
-	rows, err := stmt.QueryContext(ctx, userNID, pq.Array(eventIDs), roomInfo.RoomNID)
+	rows, err := stmt.QueryContext(ctx, userNID, eventIDs, roomInfo.RoomNID)
 	if err != nil {
 		return nil, err
 	}

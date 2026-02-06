@@ -11,7 +11,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
@@ -239,7 +238,7 @@ func (s *statsStatements) startTimers() {
 func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUserByAccountTypeStmt)
 	err = stmt.QueryRowContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
@@ -252,7 +251,7 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUserByAccountTypeStmt)
 	err = stmt.QueryRowContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
@@ -266,7 +265,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 	registeredAfter := time.Now().AddDate(0, 0, -30)
 
 	rows, err := stmt.QueryContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),

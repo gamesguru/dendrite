@@ -12,7 +12,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
@@ -103,7 +102,7 @@ func (s *relayQueueStatements) DeleteQueueEntries(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueueEntriesStmt)
-	_, err := stmt.ExecContext(ctx, serverName, pq.Int64Array(jsonNIDs))
+	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
 

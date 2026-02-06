@@ -15,7 +15,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 )
 
 const eventStateKeysSchema = `
@@ -107,7 +106,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 ) (map[string]types.EventStateKeyNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyNIDStmt)
 	rows, err := stmt.QueryContext(
-		ctx, pq.StringArray(eventStateKeys),
+		ctx, eventStateKeys,
 	)
 	if err != nil {
 		return nil, err
@@ -129,7 +128,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	ctx context.Context, txn *sql.Tx, eventStateKeyNIDs []types.EventStateKeyNID,
 ) (map[types.EventStateKeyNID]string, error) {
-	nIDs := make(pq.Int64Array, len(eventStateKeyNIDs))
+	nIDs := make([]int64, len(eventStateKeyNIDs))
 	for i := range eventStateKeyNIDs {
 		nIDs[i] = int64(eventStateKeyNIDs[i])
 	}

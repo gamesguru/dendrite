@@ -107,7 +107,7 @@ type Derived struct {
 // A Path on the filesystem.
 type Path string
 
-// A DataSource for opening a postgresql database using lib/pq.
+// A DataSource for opening a postgresql database using pgx.
 type DataSource string
 
 func (d DataSource) IsSQLite() bool {

@@ -17,7 +17,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type DBType int
@@ -57,7 +58,7 @@ func createLocalDB(t *testing.T, dbName string) {
 }
 
 func createRemoteDB(t *testing.T, dbName, user, connStr string) {
-	db, err := sql.Open("postgres", connStr+" dbname=postgres")
+	db, err := sql.Open("pgx", connStr+" dbname=postgres")
 	if err != nil {
 		fatalError(t, "failed to open postgres conn with connstr=%s : %s", connStr, err)
 	}
@@ -66,13 +67,13 @@ func createRemoteDB(t *testing.T, dbName, user, connStr string) {
 	}
 	_, err = db.Exec(fmt.Sprintf(`CREATE DATABASE %s;`, dbName))
 	if err != nil {
-		pqErr, ok := err.(*pq.Error)
+		pgErr, ok := err.(*pgconn.PgError)
 		if !ok {
 			t.Fatalf("failed to CREATE DATABASE: %s", err)
 		}
 		// we ignore duplicate database error as we expect this
-		if pqErr.Code != "42P04" {
-			t.Fatalf("failed to CREATE DATABASE with code=%s msg=%s", pqErr.Code, pqErr.Message)
+		if pgErr.Code != "42P04" {
+			t.Fatalf("failed to CREATE DATABASE with code=%s msg=%s", pgErr.Code, pgErr.Message)
 		}
 	}
 	_, err = db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, dbName, user))
@@ -147,7 +148,7 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 
 	return connStr, func() {
 		// Drop all tables on the database to get a fresh instance
-		db, err := sql.Open("postgres", connStr)
+		db, err := sql.Open("pgx", connStr)
 		if err != nil {
 			t.Fatalf("failed to connect to postgres db '%s': %s", connStr, err)
 		}

@@ -10,8 +10,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lib/pq"
-
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -75,7 +73,7 @@ func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context,
 func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 	ctx context.Context, txn *sql.Tx, userID string, roomIDs []string,
 ) (map[string]*eventutil.NotificationData, error) {
-	rows, err := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms).QueryContext(ctx, userID, pq.Array(roomIDs))
+	rows, err := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms).QueryContext(ctx, userID, roomIDs)
 	if err != nil {
 		return nil, err
 	}

@@ -13,7 +13,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
@@ -80,7 +79,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 		nameAndKeyIDs = append(nameAndKeyIDs, nameAndKeyID(request))
 	}
 	stmt := s.bulkSelectServerKeysStmt
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(nameAndKeyIDs))
+	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs)
 	if err != nil {
 		return nil, err
 	}

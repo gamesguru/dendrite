@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/lib/pq"
 )
 
 var oneTimeKeysSchema = `
@@ -87,7 +86,7 @@ func NewPostgresOneTimeKeysTable(db *sql.DB) (tables.OneTimeKeys, error) {
 }
 
 func (s *oneTimeKeysStatements) SelectOneTimeKeys(ctx context.Context, userID, deviceID string, keyIDsWithAlgorithms []string) (map[string]json.RawMessage, error) {
-	rows, err := s.selectKeysStmt.QueryContext(ctx, userID, deviceID, pq.Array(keyIDsWithAlgorithms))
+	rows, err := s.selectKeysStmt.QueryContext(ctx, userID, deviceID, keyIDsWithAlgorithms)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 )
 
 const eventTypesSchema = `
@@ -128,7 +127,7 @@ func (s *eventTypeStatements) BulkSelectEventTypeNID(
 	ctx context.Context, txn *sql.Tx, eventTypes []string,
 ) (map[string]types.EventTypeNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventTypeNIDStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventTypes))
+	rows, err := stmt.QueryContext(ctx, eventTypes)
 	if err != nil {
 		return nil, err
 	}

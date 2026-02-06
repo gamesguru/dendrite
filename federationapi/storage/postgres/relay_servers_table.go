@@ -12,7 +12,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
@@ -112,7 +111,7 @@ func (s *relayServersStatements) DeleteRelayServers(
 	relayServers []spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRelayServersStmt)
-	_, err := stmt.ExecContext(ctx, serverName, pq.Array(relayServers))
+	_, err := stmt.ExecContext(ctx, serverName, relayServers)
 	return err
 }
 

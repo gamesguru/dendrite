@@ -17,7 +17,6 @@ import (
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/lib/pq"
 )
 
 const inviteEventsSchema = `
@@ -186,7 +185,7 @@ func (s *inviteEventsStatements) SelectRoomsWithInvitesSince(
 	targetUserID string, roomIDs []string, since types.StreamPosition,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithInvitesSinceStmt)
-	rows, err := stmt.QueryContext(ctx, targetUserID, pq.StringArray(roomIDs), since)
+	rows, err := stmt.QueryContext(ctx, targetUserID, roomIDs, since)
 	if err != nil {
 		return nil, err
 	}

@@ -43,11 +43,11 @@ const selectReportedEventsDescSQL = `
 WITH countReports AS (
     SELECT count(*) as report_count
     FROM roomserver_reported_events
-    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 )
 SELECT report_count, id, room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts
 FROM roomserver_reported_events, countReports
-WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 ORDER BY received_ts DESC
 OFFSET $3
 LIMIT $4
@@ -57,11 +57,11 @@ const selectReportedEventsAscSQL = `
 WITH countReports AS (
     SELECT count(*) as report_count
     FROM roomserver_reported_events
-    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 )
 SELECT report_count, id, room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts
 FROM roomserver_reported_events, countReports
-WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 ORDER BY received_ts ASC
 OFFSET $3
 LIMIT $4
@@ -140,13 +140,15 @@ func (r *reportedEventsStatements) SelectReportedEvents(
 		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsAscStmt)
 	}
 
-	var qryRoomNID *types.RoomNID
+	var qryRoomNID *int64
 	if roomNID > 0 {
-		qryRoomNID = &roomNID
+		v := int64(roomNID)
+		qryRoomNID = &v
 	}
-	var qryReportingUser *types.EventStateKeyNID
+	var qryReportingUser *int64
 	if reportingUserID > 0 {
-		qryReportingUser = &reportingUserID
+		v := int64(reportingUserID)
+		qryReportingUser = &v
 	}
 
 	rows, err := stmt.QueryContext(ctx,

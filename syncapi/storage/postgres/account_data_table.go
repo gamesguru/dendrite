@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/lib/pq"
 )
 
 const accountDataSchema = `
@@ -96,8 +95,8 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 
 	rows, err := sqlutil.TxStmt(txn, s.selectAccountDataInRangeStmt).QueryContext(
 		ctx, userID, r.Low(), r.High(),
-		pq.StringArray(filterConvertTypeWildcardToSQL(accountDataEventFilter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(accountDataEventFilter.NotTypes)),
+		filterConvertTypeWildcardToSQL(accountDataEventFilter.Types),
+		filterConvertTypeWildcardToSQL(accountDataEventFilter.NotTypes),
 		accountDataEventFilter.Limit,
 	)
 	if err != nil {

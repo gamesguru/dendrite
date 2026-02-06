@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/util"
 )
 
@@ -105,7 +104,7 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	results := make([][]types.EventNID, len(stateBlockNIDs))
 	i := 0
 	var stateBlockNID types.StateBlockNID
-	var result pq.Int64Array
+	var result sqlutil.Int64Array
 	for ; rows.Next(); i++ {
 		if err = rows.Scan(&stateBlockNID, &result); err != nil {
 			return nil, err
@@ -125,10 +124,10 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	return results, err
 }
 
-func stateBlockNIDsAsArray(stateBlockNIDs []types.StateBlockNID) pq.Int64Array {
+func stateBlockNIDsAsArray(stateBlockNIDs []types.StateBlockNID) []int64 {
 	nids := make([]int64, len(stateBlockNIDs))
 	for i := range stateBlockNIDs {
 		nids[i] = int64(stateBlockNIDs[i])
 	}
-	return pq.Int64Array(nids)
+	return nids
 }

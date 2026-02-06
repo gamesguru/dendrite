@@ -14,7 +14,6 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
@@ -125,7 +124,7 @@ func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn
 		for i := range keyIDs {
 			keyIDstr[i] = string(keyIDs[i])
 		}
-		rows, err = txn.Stmt(s.selectNotaryKeyResponsesWithKeyIDsStmt).QueryContext(ctx, string(serverName), pq.StringArray(keyIDstr))
+		rows, err = txn.Stmt(s.selectNotaryKeyResponsesWithKeyIDsStmt).QueryContext(ctx, string(serverName), keyIDstr)
 	}
 	if err != nil {
 		return nil, err

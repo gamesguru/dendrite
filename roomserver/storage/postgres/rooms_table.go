@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib"
 )
 
@@ -140,7 +139,7 @@ func (s *roomStatements) InsertRoomNID(
 
 func (s *roomStatements) SelectRoomInfo(ctx context.Context, txn *sql.Tx, roomID string) (*types.RoomInfo, error) {
 	var info types.RoomInfo
-	var latestNIDs pq.Int64Array
+	var latestNIDs sqlutil.Int64Array
 	var stateSnapshotNID types.StateSnapshotNID
 	stmt := sqlutil.TxStmt(txn, s.selectRoomInfoStmt)
 	err := stmt.QueryRowContext(ctx, roomID).Scan(
@@ -175,7 +174,7 @@ func (s *roomStatements) SelectRoomNIDForUpdate(
 func (s *roomStatements) SelectLatestEventNIDs(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
 ) ([]types.EventNID, types.StateSnapshotNID, error) {
-	var nids pq.Int64Array
+	var nids sqlutil.Int64Array
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsStmt)
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&nids, &stateSnapshotNID)
@@ -192,7 +191,7 @@ func (s *roomStatements) SelectLatestEventNIDs(
 func (s *roomStatements) SelectLatestEventsNIDsForUpdate(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
 ) ([]types.EventNID, types.EventNID, types.StateSnapshotNID, error) {
-	var nids pq.Int64Array
+	var nids sqlutil.Int64Array
 	var lastEventSentNID int64
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsForUpdateStmt)
@@ -248,7 +247,7 @@ func (s *roomStatements) SelectRoomVersionsForRoomNIDs(
 }
 
 func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roomNIDs []types.RoomNID) ([]string, error) {
-	var array pq.Int64Array
+	var array sqlutil.Int64Array
 	for _, nid := range roomNIDs {
 		array = append(array, int64(nid))
 	}
@@ -270,12 +269,8 @@ func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roo
 }
 
 func (s *roomStatements) BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, roomIDs []string) ([]types.RoomNID, error) {
-	var array pq.StringArray
-	for _, roomID := range roomIDs {
-		array = append(array, roomID)
-	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectRoomNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, array)
+	rows, err := stmt.QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +286,7 @@ func (s *roomStatements) BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, ro
 	return roomNIDs, rows.Err()
 }
 
-func roomNIDsAsArray(roomNIDs []types.RoomNID) pq.Int64Array {
+func roomNIDsAsArray(roomNIDs []types.RoomNID) []int64 {
 	nids := make([]int64, len(roomNIDs))
 	for i := range roomNIDs {
 		nids[i] = int64(roomNIDs[i])

@@ -11,7 +11,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/internal"
@@ -122,7 +121,7 @@ func (p *presenceStatements) GetPresenceForUsers(
 ) ([]*types.PresenceInternal, error) {
 	result := make([]*types.PresenceInternal, 0, len(userIDs))
 	stmt := sqlutil.TxStmt(txn, p.selectPresenceForUsersStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Array(userIDs))
+	rows, err := stmt.QueryContext(ctx, userIDs)
 	if err != nil {
 		return nil, err
 	}

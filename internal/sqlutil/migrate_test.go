@@ -88,7 +88,7 @@ func Test_migrations_Up(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				driverName := sqlutil.SQLITE_DRIVER_NAME
 				if dbType == test.DBTypePostgres {
-					driverName = "postgres"
+					driverName = "pgx"
 				}
 				db, err := sql.Open(driverName, conStr)
 				if err != nil {
@@ -117,7 +117,7 @@ func Test_insertMigration(t *testing.T) {
 		defer close()
 		driverName := sqlutil.SQLITE_DRIVER_NAME
 		if dbType == test.DBTypePostgres {
-			driverName = "postgres"
+			driverName = "pgx"
 		}
 
 		db, err := sql.Open(driverName, conStr)

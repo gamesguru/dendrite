@@ -12,7 +12,6 @@ import (
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
 )
 
 const queueJSONSchema = `
@@ -79,7 +78,7 @@ func (s *queueJSONStatements) DeleteQueueJSON(
 	ctx context.Context, txn *sql.Tx, nids []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJSONStmt)
-	_, err := stmt.ExecContext(ctx, pq.Int64Array(nids))
+	_, err := stmt.ExecContext(ctx, nids)
 	return err
 }
 
@@ -88,7 +87,7 @@ func (s *queueJSONStatements) SelectQueueJSON(
 ) (map[int64][]byte, error) {
 	blobs := map[int64][]byte{}
 	stmt := sqlutil.TxStmt(txn, s.selectJSONStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Int64Array(jsonNIDs))
+	rows, err := stmt.QueryContext(ctx, jsonNIDs)
 	if err != nil {
 		return nil, err
 	}

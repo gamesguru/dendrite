@@ -12,7 +12,7 @@ import (
 	"fmt"
 
 	"codefloe.com/pat-s/dendrite/internal"
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/util"
 )
 
@@ -61,13 +61,13 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("failed to query duplicate event ids")
 		}
 		defer internal.CloseAndLogIfError(ctx, dupeNIDsRows, "failed to close rows")
-		var dupeNIDs []int64
+		var dupeNIDs sqlutil.Int64Array
 		for dupeNIDsRows.Next() {
-			var nids pq.Int64Array
-			if err = dupeNIDsRows.Scan(&nids); err != nil {
+			var nidsArr sqlutil.Int64Array
+			if err = dupeNIDsRows.Scan(&nidsArr); err != nil {
 				return err
 			}
-			dupeNIDs = append(dupeNIDs, nids...)
+			dupeNIDs = append(dupeNIDs, nidsArr...)
 		}
 
 		if dupeNIDsRows.Err() != nil {
@@ -77,7 +77,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 		dupeNIDs = dupeNIDs[:util.SortAndUnique(nids(dupeNIDs))]
 		// now that we have all NIDs, check which room they belong to
 		var roomCount int
-		err = tx.QueryRowContext(ctx, `SELECT count(distinct room_nid) FROM roomserver_events WHERE event_nid = ANY($1)`, pq.Array(dupeNIDs)).Scan(&roomCount)
+		err = tx.QueryRowContext(ctx, `SELECT count(distinct room_nid) FROM roomserver_events WHERE event_nid = ANY($1)`, dupeNIDs).Scan(&roomCount)
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 		}
 
 		// insert combined values
-		_, err = tx.ExecContext(ctx, "INSERT INTO roomserver_previous_events (previous_event_id, event_nids) VALUES ($1, $2)", dupeID, pq.Array(dupeNIDs))
+		_, err = tx.ExecContext(ctx, "INSERT INTO roomserver_previous_events (previous_event_id, event_nids) VALUES ($1, $2)", dupeID, dupeNIDs)
 		if err != nil {
 			return fmt.Errorf("unable to insert new event NIDs: %w", err)
 		}
