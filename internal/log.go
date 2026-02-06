@@ -18,9 +18,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/DeRuina/timberjack"
 	"github.com/matrix-org/util"
-
-	"github.com/matrix-org/dugong"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
@@ -49,6 +48,25 @@ func (f utcFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 type logLevelHook struct {
 	level logrus.Level
 	logrus.Hook
+}
+
+// writerHook is a logrus hook that writes formatted log entries to an io.Writer.
+type writerHook struct {
+	writer    io.Writer
+	formatter logrus.Formatter
+}
+
+func (h *writerHook) Fire(entry *logrus.Entry) error {
+	data, err := h.formatter.Format(entry)
+	if err != nil {
+		return err
+	}
+	_, err = h.writer.Write(data)
+	return err
+}
+
+func (h *writerHook) Levels() []logrus.Level {
+	return logrus.AllLevels
 }
 
 // Levels returns all the levels supported by this hook.
@@ -131,11 +149,19 @@ func setupFileHook(hook config.LogrusHook, level logrus.Level) {
 		logrus.Fatalf("Couldn't create directory %s: %q", path.Dir(fullPath), err)
 	}
 
+	// Create timberjack logger with daily rotation and gzip compression
+	writer := &timberjack.Logger{
+		Filename:    fullPath,
+		MaxBackups:  7,                 // keep 7 days of backups
+		Compression: "gzip",            // compress rotated files
+		RotateAt:    []string{"00:00"}, // rotate daily at midnight
+	}
+
 	logrus.AddHook(&logLevelHook{
 		level,
-		dugong.NewFSHook(
-			fullPath,
-			&utcFormatter{
+		&writerHook{
+			writer: writer,
+			formatter: &utcFormatter{
 				&logrus.TextFormatter{
 					TimestampFormat:  "2006-01-02T15:04:05.000000000Z07:00",
 					DisableColors:    true,
@@ -144,8 +170,7 @@ func setupFileHook(hook config.LogrusHook, level logrus.Level) {
 					QuoteEmptyFields: true,
 				},
 			},
-			&dugong.DailyRotationSchedule{GZip: true},
-		),
+		},
 	})
 }
 
