@@ -24,8 +24,8 @@
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.forgejo/workflows/.*\\.ya?ml$/"
+      "fileMatch": [
+        "^\\.forgejo/workflows/.*\\.ya?ml$"
       ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
