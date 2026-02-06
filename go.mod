@@ -16,7 +16,6 @@ require (
 	github.com/gologme/log v1.3.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/kardianos/minwinsvc v1.0.2
@@ -84,6 +83,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/pprof v0.0.0-20260202012954-cb029daf43ef // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/go-set/v3 v3.0.1 // indirect
 	github.com/hjson/hjson-go/v4 v4.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
