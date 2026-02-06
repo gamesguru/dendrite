@@ -139,7 +139,7 @@ func TestUserRoomKeys(t *testing.T) {
 		defer close()
 
 		// create a room NID so we can query the room
-		_, err = db.RoomsTable.InsertRoomNID(ctx, nil, roomID.String(), gomatrixserverlib.RoomVersionV10)
+		_, err := db.RoomsTable.InsertRoomNID(ctx, nil, roomID.String(), gomatrixserverlib.RoomVersionV10)
 		assert.NoError(t, err)
 		doesNotExist, err := spec.NewRoomID("!doesnotexist:localhost")
 		assert.NoError(t, err)
