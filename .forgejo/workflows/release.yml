@@ -36,7 +36,7 @@ jobs:
             -e PACK=./cmd/dendrite \
             -e OUT=dendrite \
             -e FLAG_V=true \
-            -e FLAG_LDFLAGS="-s -w -X main.version=${{ github.ref_name }}" \
+            -e FLAG_LDFLAGS="-s -w -X codefloe.com/pat-s/dendrite/internal.version=${{ github.ref_name }}" \
             -e FLAG_TRIMPATH=true \
             -e FLAG_BUILDMODE=default \
             -e TARGETS="linux/amd64 linux/arm64 linux/arm-7 darwin/amd64 darwin/arm64 windows/amd64" \
