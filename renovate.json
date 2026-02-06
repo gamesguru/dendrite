@@ -3,6 +3,7 @@
   "extends": [
     "local>codefloe/renovate-config"
   ],
+  "automergeType": "pr",
   "customManagers": [
     {
       "customType": "regex",
