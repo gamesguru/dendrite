@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Install Node.js
         run: apk add --no-cache nodejs
-        
+
       - uses: actions/checkout@v6
 
       - name: Set up QEMU
