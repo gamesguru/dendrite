@@ -23,7 +23,8 @@ import (
 	// Imported for webp codec
 	_ "golang.org/x/image/webp"
 
-	"github.com/nfnt/resize"
+	xdraw "golang.org/x/image/draw"
+
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/mediaapi/storage"
@@ -232,18 +233,18 @@ func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *lo
 		inAR := float64(img.Bounds().Dx()) / float64(img.Bounds().Dy())
 		outAR := float64(w) / float64(h)
 
-		var scaleW, scaleH uint
+		var scaleW, scaleH int
 		if inAR > outAR {
 			// input has shorter AR than requested output so use requested height and calculate width to match input AR
-			scaleW = uint(float64(h) * inAR)
-			scaleH = uint(h)
+			scaleW = int(float64(h) * inAR)
+			scaleH = h
 		} else {
 			// input has taller AR than requested output so use requested width and calculate height to match input AR
-			scaleW = uint(w)
-			scaleH = uint(float64(w) / inAR)
+			scaleW = w
+			scaleH = int(float64(w) / inAR)
 		}
 
-		scaled := resize.Resize(scaleW, scaleH, img, resize.Lanczos3)
+		scaled := scaleImage(img, scaleW, scaleH)
 
 		xoff := (scaled.Bounds().Dx() - w) / 2
 		yoff := (scaled.Bounds().Dy() - h) / 2
@@ -253,7 +254,7 @@ func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *lo
 		draw.Draw(target, tr, scaled, image.Pt(xoff, yoff), draw.Src)
 		out = target
 	} else {
-		out = resize.Thumbnail(uint(w), uint(h), img, resize.Lanczos3)
+		out = thumbnailImage(img, w, h)
 	}
 
 	if err = writeFile(out, string(dst)); err != nil {
@@ -262,4 +263,32 @@ func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *lo
 	}
 
 	return out.Bounds().Max.X, out.Bounds().Max.Y, nil
+}
+
+// scaleImage scales an image to the exact dimensions specified
+func scaleImage(img image.Image, w, h int) image.Image {
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), xdraw.Over, nil)
+	return dst
+}
+
+// thumbnailImage scales an image to fit within maxW x maxH while preserving aspect ratio
+func thumbnailImage(img image.Image, maxW, maxH int) image.Image {
+	srcW := img.Bounds().Dx()
+	srcH := img.Bounds().Dy()
+
+	// Calculate scale factor to fit within maxW x maxH
+	scaleW := float64(maxW) / float64(srcW)
+	scaleH := float64(maxH) / float64(srcH)
+	scale := scaleW
+	if scaleH < scaleW {
+		scale = scaleH
+	}
+
+	newW := int(float64(srcW) * scale)
+	newH := int(float64(srcH) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), xdraw.Over, nil)
+	return dst
 }
