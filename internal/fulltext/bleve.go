@@ -85,13 +85,16 @@ func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, 
 	if err != nil {
 		return nil, err
 	}
-	go func() {
+	if processCtx != nil {
+		// Register the component before starting the goroutine to avoid
+		// a race between ComponentStarted() and WaitForComponentsToFinish().
 		processCtx.ComponentStarted()
-		// Wait for the processContext to be done, indicating that Dendrite is shutting down.
-		<-processCtx.WaitForShutdown()
-		_ = fts.Close()
-		processCtx.ComponentFinished()
-	}()
+		go func() {
+			<-processCtx.WaitForShutdown()
+			_ = fts.Close()
+			processCtx.ComponentFinished()
+		}()
+	}
 	return fts, nil
 }
 

@@ -1452,14 +1452,25 @@ func (rp *RequestPool) processRoomList(
 		}).Debug("[V4_SYNC] List change detection")
 
 		if listChanged {
-			op := GenerateSyncOperation(windowedRooms, rangeSpec)
-			ops = append(ops, op)
+			// Generate optimal operations for this list update
+			// maxOps=5 means we'll fall back to SYNC if more than 5 INSERT/DELETE operations needed
+			const maxOps = 5
+			opsForList := GenerateListOperations(previousRoomIDs, roomIDs, rangeSpec, maxOps)
+			ops = append(ops, opsForList...)
 
-			logrus.WithFields(logrus.Fields{
-				"list_name":    listName,
-				"op_type":      op.Op,
-				"num_room_ids": len(op.RoomIDs),
-			}).Info("[V4_SYNC] Generated list operation (list changed)")
+			// Log the generated operations
+			for _, listOp := range opsForList {
+				numRoomIDs := 0
+				if listOp.RoomIDs != nil {
+					numRoomIDs = len(listOp.RoomIDs)
+				}
+				logrus.WithFields(logrus.Fields{
+					"list_name":    listName,
+					"op_type":      listOp.Op,
+					"num_room_ids": numRoomIDs,
+					"index":        listOp.Index,
+				}).Info("[V4_SYNC] Generated list operation")
+			}
 
 			// Phase 10: Store the current room IDs for this list in database (JSON encoded)
 			roomIDsJSON, err := json.Marshal(roomIDs)

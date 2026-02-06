@@ -62,16 +62,15 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 		return nil, nil, err
 	}
 	c.existingConnections.Store(dbProperties.ConnectionString, &con{db: db, writer: writer})
-	go func() {
-		if c.processContext == nil {
-			return
-		}
-		// If we have a ProcessContext, start a component and wait for
-		// Dendrite to shut down to cleanly close the database connection.
+	if c.processContext != nil {
+		// Register the component before starting the goroutine to avoid
+		// a race between ComponentStarted() and WaitForComponentsToFinish().
 		c.processContext.ComponentStarted()
-		<-c.processContext.WaitForShutdown()
-		_ = db.Close()
-		c.processContext.ComponentFinished()
-	}()
+		go func() {
+			<-c.processContext.WaitForShutdown()
+			_ = db.Close()
+			c.processContext.ComponentFinished()
+		}()
+	}
 	return db, writer, nil
 }
