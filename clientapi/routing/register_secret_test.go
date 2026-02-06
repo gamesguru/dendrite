@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/patrickmn/go-cache"
+	"github.com/jellydator/ttlcache/v3"
 )
 
 func TestSharedSecretRegister(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSharedSecretRegister(t *testing.T) {
 	r := NewSharedSecretRegistration(sharedSecret)
 
 	// force the nonce to be known
-	r.nonces.Set(req.Nonce, true, cache.DefaultExpiration)
+	r.nonces.Set(req.Nonce, true, ttlcache.DefaultTTL)
 
 	valid, err := r.IsValidMacLogin(req.Nonce, req.User, req.Password, req.Admin, req.MacBytes)
 	if err != nil {

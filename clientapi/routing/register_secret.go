@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"codefloe.com/pat-s/dendrite/internal"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
-	cache "github.com/patrickmn/go-cache"
 )
 
 type SharedSecretRegistrationRequest struct {
@@ -40,26 +40,29 @@ func NewSharedSecretRegistrationRequest(reader io.ReadCloser) (*SharedSecretRegi
 
 type SharedSecretRegistration struct {
 	sharedSecret string
-	nonces       *cache.Cache
+	nonces       *ttlcache.Cache[string, bool]
 }
 
 func NewSharedSecretRegistration(sharedSecret string) *SharedSecretRegistration {
+	cache := ttlcache.New[string, bool](
+		ttlcache.WithTTL[string, bool](5 * time.Minute),
+	)
+	go cache.Start() // starts automatic cleanup
 	return &SharedSecretRegistration{
 		sharedSecret: sharedSecret,
-		// nonces live for 5mins, purge every 10mins
-		nonces: cache.New(5*time.Minute, 10*time.Minute),
+		nonces:       cache,
 	}
 }
 
 func (r *SharedSecretRegistration) GenerateNonce() string {
 	nonce := util.RandomString(16)
-	r.nonces.Set(nonce, true, cache.DefaultExpiration)
+	r.nonces.Set(nonce, true, ttlcache.DefaultTTL)
 	return nonce
 }
 
 func (r *SharedSecretRegistration) validNonce(nonce string) bool {
-	_, exists := r.nonces.Get(nonce)
-	return exists
+	item := r.nonces.Get(nonce)
+	return item != nil
 }
 
 func (r *SharedSecretRegistration) IsValidMacLogin(

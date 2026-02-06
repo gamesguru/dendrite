@@ -30,9 +30,9 @@ import (
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi"
 	"codefloe.com/pat-s/dendrite/userapi/api"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
-	"github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -644,7 +644,7 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		r := NewSharedSecretRegistration(sharedSecret)
 
 		// force the nonce to be known
-		r.nonces.Set(req.Nonce, true, cache.DefaultExpiration)
+		r.nonces.Set(req.Nonce, true, ttlcache.DefaultTTL)
 
 		_, err = r.IsValidMacLogin(req.Nonce, req.User, req.Password, req.Admin, req.MacBytes)
 		assert.NoError(t, err)
