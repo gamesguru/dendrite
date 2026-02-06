@@ -55,7 +55,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 			JetStream:       true,
 			StoreDir:        string(cfg.StoragePath),
 			NoSystemAccount: true,
-			MaxPayload:      16 * 1024 * 1024,
+			MaxPayload:      8 * 1024 * 1024,
 			NoSigs:          true,
 			NoLog:           cfg.NoLog,
 			SyncAlways:      true,
