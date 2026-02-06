@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
