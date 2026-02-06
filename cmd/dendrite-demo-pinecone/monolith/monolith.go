@@ -43,7 +43,7 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi"
 	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
@@ -253,20 +253,17 @@ func (p *P2PMonolith) setupHttpServers(userProvider *users.PineconeUserProvider,
 	p.httpMux.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 
 	if enableWebsockets {
-		wsUpgrader := websocket.Upgrader{
-			CheckOrigin: func(_ *http.Request) bool {
-				return true
-			},
-		}
 		p.httpMux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			c, err := wsUpgrader.Upgrade(w, r, nil)
+			c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+				InsecureSkipVerify: true,
+			})
 			if err != nil {
 				logrus.WithError(err).Error("Failed to upgrade WebSocket connection")
 				return
 			}
-			conn := conn.WrapWebSocketConn(c)
+			wsConn := conn.WrapWebSocketConn(r.Context(), c)
 			if _, err = p.Router.Connect(
-				conn,
+				wsConn,
 				pineconeRouter.ConnectionZone("websocket"),
 				pineconeRouter.ConnectionPeerType(pineconeRouter.PeerTypeRemote),
 			); err != nil {
