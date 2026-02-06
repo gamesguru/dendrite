@@ -5,7 +5,6 @@ permalink: /administration/presence
 nav_order: 3
 ---
 
-# Enabling presence
 
 Dendrite supports presence, which allows you to send your online/offline status
 to other users, and to receive their statuses automatically. They will be displayed

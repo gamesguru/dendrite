@@ -5,7 +5,6 @@ nav_order: 2
 permalink: /development/sytest
 ---
 
-# SyTest
 
 Dendrite uses [SyTest](https://github.com/matrix-org/sytest) for its
 integration testing. When creating a new PR, add the test IDs (see below) that
@@ -68,7 +67,7 @@ When debugging, the following Docker `run` options may also be useful:
 The docker command also supports a single positional argument for the test file to
 run, so you can run a single `.pl` file rather than the whole test suite. For example:
 
-```
+```bash
 docker run --rm --name sytest -v "/Users/kegan/github/sytest:/sytest"
 -v "/Users/kegan/github/dendrite:/src" -v "/Users/kegan/logs:/logs"
 -v "/Users/kegan/go/:/gopath" -e "POSTGRES=1" -e "DENDRITE_TRACE_HTTP=1"

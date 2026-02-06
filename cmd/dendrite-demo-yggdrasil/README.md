@@ -4,7 +4,7 @@ This is the Dendrite Yggdrasil demo! It's easy to get started - all you need is 
 
 To run the homeserver, start at the root of the Dendrite repository and run:
 
-```
+```bash
 go run ./cmd/dendrite-demo-yggdrasil
 ```
 

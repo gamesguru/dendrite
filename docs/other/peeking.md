@@ -1,8 +1,9 @@
 ---
+title: Peeking
 nav_exclude: true
 ---
 
-## Peeking
+## Overview
 
 Local peeking is implemented as per [MSC2753](https://github.com/matrix-org/matrix-doc/pull/2753).
 

@@ -1,4 +1,4 @@
-## Relay Server Architecture
+# Relay Server Architecture
 
 Relay Servers function similar to the way physical mail drop boxes do.
 A node can have many associated relay servers. Matrix events can be sent to them instead of to the destination node, and the destination node will eventually retrieve them from the relay server.
@@ -10,9 +10,9 @@ Transactions include a list of PDUs, (which contain, among other things, lists o
 There is no additional information sent along with the transaction other than what is typically added to them during Matrix federation today.
 In the future this will probably need to change in order to handle more complex room state resolution during p2p usage.
 
-### Design
+## Design
 
-```
+```text
                      0                            +--------------------+
  +----------------------------------------+       |     P2P Node A     |
  |             Relay Server               |       |     +--------+     |
@@ -49,16 +49,16 @@ In the future this will probably need to change in order to handle more complex 
 For now, it is important that we don’t design out a hybrid approach of having both sender-side and recipient-side relay servers.
 Both approaches make sense and determining which makes for a better experience depends on the use case.
 
-#### Sender-Side Relay Servers
+### Sender-Side Relay Servers
 
 If we are running around truly ad-hoc, and I don't know when or where you will be able to pick up messages, then having a sender designated server makes sense to give things the best chance at making their way to the destination.
 But in order to achieve this, you are either relying on p2p presence broadcasts for the relay to know when to try forwarding (which means you are in a pretty small network), or the relay just keeps on periodically attempting to forward to the destination which will lead to a lot of extra traffic on the network.
 
-#### Recipient-Side Relay Servers
+### Recipient-Side Relay Servers
 
 If we have agreed to some static relay server before going off and doing other things, or if we are talking about more global p2p federation, then having a recipient designated relay server can cut down on redundant traffic since it will sit there idle until the recipient pulls events from it.
 
-### API
+## API
 
 Relay servers make use of 2 new matrix federation endpoints.
 These are:
@@ -66,27 +66,27 @@ These are:
 - PUT /\_matrix/federation/v1/send_relay/{txnID}/{userID}
 - GET /\_matrix/federation/v1/relay_txn/{userID}
 
-#### Send_Relay
+### Send_Relay
 
 The `send_relay` endpoint is used to send events to a relay server that are destined for some other node. Servers can send events to this endpoint if they wish for the relay server to store & forward events for them when they go offline.
 
-##### Request
+#### Request
 
-###### Request Parameters
+#### Request Parameters
 
 | Name   | Type   | Description                                         |
 | ------ | ------ | --------------------------------------------------- |
 | txnID  | string | **Required:** The transaction ID.                   |
 | userID | string | **Required:** The destination for this transaciton. |
 
-###### Request Body
+#### Request Body
 
 | Name | Type  | Description                            |
 | ---- | ----- | -------------------------------------- |
 | pdus | [PDU] | **Required:** List of pdus. Max 50.    |
 | edus | [EDU] | List of edus. May be omitted. Max 100. |
 
-##### Responses
+#### Responses
 
 | Code | Reason                                          |
 | ---- | ----------------------------------------------- |
@@ -96,27 +96,27 @@ The `send_relay` endpoint is used to send events to a relay server that are dest
 | 400  | Too many pdus or edus.                          |
 | 500  | Server failed processing transaction.           |
 
-#### Relay_Txn
+### Relay_Txn
 
 The `relay_txn` endpoint is used to get events from a relay server that are destined for you. Servers can send events to this endpoint if they wish for the relay server to store & forward events for them when they go offline.
 
-##### Request
+#### Request
 
 **This needs to be changed to prevent nodes from obtaining transactions not destined for them. Possibly by adding a signature field to the request.**
 
-###### Request Parameters
+#### Request Parameters
 
 | Name   | Type   | Description                                                    |
 | ------ | ------ | -------------------------------------------------------------- |
 | userID | string | **Required:** The user ID that events are being requested for. |
 
-###### Request Body
+#### Request Body
 
 | Name     | Type  | Description                                                                                                                   |
 | -------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
 | entry_id | int64 | **Required:** The id of the previous transaction received from the relay. Provided in the previous response to this endpoint. |
 
-##### Responses
+#### Responses
 
 | Code | Reason                                          |
 | ---- | ----------------------------------------------- |
@@ -126,7 +126,7 @@ The `relay_txn` endpoint is used to get events from a relay server that are dest
 | 400  | Invalid previous entry. Must be >= 0            |
 | 500  | Server failed processing transaction.           |
 
-###### 200 Response Body
+#### 200 Response Body
 
 | Name           | Type        | Description                                                              |
 | -------------- | ----------- | ------------------------------------------------------------------------ |

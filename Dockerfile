@@ -16,11 +16,10 @@ ARG TARGETARCH
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    USERARCH=`go env GOARCH` \
-    GOARCH="$TARGETARCH" \
-    GOOS="linux" \
-    CGO_ENABLED=$([ "$TARGETARCH" = "$USERARCH" ] && echo "1" || echo "0") \
-    go build -v -trimpath -o /out/ ./cmd/...
+    sh -c 'USERARCH=$(go env GOARCH); \
+    if [ "$TARGETARCH" = "$USERARCH" ]; then CGO=1; else CGO=0; fi; \
+    GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED="$CGO" \
+    go build -v -trimpath -o /out/ ./cmd/...'
 
 #
 # Builds the Dendrite image containing all required binaries

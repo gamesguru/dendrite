@@ -6,6 +6,4 @@ nav_order: 3
 permalink: /helm
 ---
 
-# Helm
-
 This section contains documentation how to use [Helm](https://helm.sh/) to install Dendrite on a [Kubernetes](https://kubernetes.io/) cluster.

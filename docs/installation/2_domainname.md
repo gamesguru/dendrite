@@ -5,7 +5,6 @@ nav_order: 2
 permalink: /installation/domainname
 ---
 
-# Setting up the domain
 
 Every Matrix server deployment requires a server name which uniquely identifies it. For
 example, if you are using the server name `example.com`, then your users will have usernames
@@ -43,7 +42,7 @@ Although the finer details of [configuring Caddy](https://caddyserver.com/docs/)
 here, in general, you must reverse proxy all `/_matrix` paths to your Dendrite server. For example,
 with Caddy:
 
-```
+```text
 reverse_proxy /_matrix/* localhost:8008
 ```
 
@@ -86,17 +85,17 @@ and contain the following JSON document:
 
 For example, this can be done with the following Caddy config:
 
-```
+```text
 handle /.well-known/matrix/server {
-	header Content-Type application/json
-	header Access-Control-Allow-Origin *
-	respond `{"m.server": "matrix.example.com:8448"}`
+    header Content-Type application/json
+    header Access-Control-Allow-Origin *
+    respond `{"m.server": "matrix.example.com:8448"}`
 }
 
 handle /.well-known/matrix/client {
-	header Content-Type application/json
-	header Access-Control-Allow-Origin *
-	respond `{"m.homeserver": {"base_url": "https://matrix.example.com:8448"}}`
+    header Content-Type application/json
+    header Access-Control-Allow-Origin *
+    respond `{"m.homeserver": {"base_url": "https://matrix.example.com:8448"}}`
 }
 ```
 

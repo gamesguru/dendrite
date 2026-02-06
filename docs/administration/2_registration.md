@@ -5,7 +5,6 @@ permalink: /administration/registration
 nav_order: 2
 ---
 
-# Enabling registration
 
 Enabling registration allows users to register their own user accounts on your
 Dendrite server using their Matrix client. They will be able to choose their own

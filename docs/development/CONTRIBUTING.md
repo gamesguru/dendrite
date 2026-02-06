@@ -5,7 +5,6 @@ nav_order: 1
 permalink: /development/contributing
 ---
 
-# Contributing to Dendrite
 
 Everyone is welcome to contribute to Dendrite! We aim to make it as easy as
 possible to get started.
@@ -16,7 +15,7 @@ We are a small team maintaining a large project. As a result, we cannot merge ev
 is bug-free and useful, because we then commit to maintaining it indefinitely. We will always accept:
 
 - bug fixes
-- security fixes (please responsibly disclose via security@matrix.org _before_ creating pull requests)
+- security fixes (please responsibly disclose via <security@matrix.org> _before_ creating pull requests)
 
 We will accept the following with caveats:
 
@@ -42,9 +41,10 @@ We ask that everybody who contributes to this project signs off their contributi
 
 We follow a simple 'inbound=outbound' model for contributions: the act of submitting an 'inbound' contribution means that the contributor agrees to license their contribution under the same terms as the project's overall 'outbound' license - in our case, this is Apache Software License v2 (see [LICENSE](../..//LICENSE)).
 
-In order to have a concrete record that your contribution is intentional and you agree to license it under the same terms as the project's license, we've adopted the same lightweight approach used by the [Linux Kernel](https://www.kernel.org/doc/html/latest/process/submitting-patches.html), [Docker](https://github.com/docker/docker/blob/master/CONTRIBUTING.md), and many other projects: the [Developer Certificate of Origin](https://developercertificate.org/) (DCO). This is a simple declaration that you wrote the contribution or otherwise have the right to contribute it to Matrix:
+In order to have a concrete record that your contribution is intentional and you agree to license it under the same terms as the project's license, we've adopted the same lightweight approach used by the [Linux Kernel](https://www.kernel.org/doc/html/latest/process/submitting-patches.html), [Docker](https://github.com/docker/docker/blob/master/CONTRIBUTING.md), and many other projects: the [Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+This is a simple declaration that you wrote the contribution or otherwise have the right to contribute it to Matrix:
 
-```
+```text
 Developer Certificate of Origin
 Version 1.1
 Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
@@ -76,7 +76,7 @@ By making a contribution to this project, I certify that:
 
 If you agree to this for your contribution, then all that's needed is to include the line in your commit or pull request comment:
 
-```
+```text
 Signed-off-by: Your Name <your@email.example.org>
 ```
 

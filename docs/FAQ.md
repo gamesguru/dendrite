@@ -4,7 +4,6 @@ nav_order: 1
 permalink: /faq
 ---
 
-# FAQ
 
 ## Why does Dendrite exist?
 
@@ -70,7 +69,7 @@ Yes
 
 Yes, to enable them [msc2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) would need to be added to mscs configuration in order to support Threading. Other MSCs are not currently supported.
 
-```
+```yaml
 mscs:
   mscs:
     - msc2836

@@ -33,7 +33,7 @@ The logic for working out _which_ events is not based entirely on Synapse code, 
 room state. In order to know which events to return, the server needs to calculate room state at various points in the history of
 the room. For example, imagine a room with the following 15 events (letters are state events (updated via `'`), numbers are timeline events):
 
-```
+```text
 index     0  1  2  3  4  5  6  7  8   9  10  11  12  13    14     15   (1-based indexing as StreamPosition(0) represents no event)
 timeline    [A, B, C, D, 1, 2, 3, D', 4, D'', 5, B', D''', D'''', 6]
 ```
@@ -42,14 +42,14 @@ The current state of this room is: `[A, B', C, D'''']`.
 
 If this room was requested with `?since=14&limit=5` then 1 timeline event would be returned, the most recent one:
 
-```
+```text
     15
    [ 6 ]
 ```
 
 If this room was requested with `?since=9&limit=5` then 5 timeline events would be returned, the most recent ones:
 
-```
+```text
     11 12  13    14     15
    [5, B', D''', D'''', 6]
 ```

@@ -1,4 +1,5 @@
 ---
+title: Bug report
 name: Bug report
 about: Create a report to help us improve
 ---
@@ -13,7 +14,7 @@ disclosing in private by email to security@matrix.org instead. For more details,
 see: https://www.matrix.org/security-disclosure-policy/
 -->
 
-### Background information
+## Background information
 
 <!-- Please include versions of all software when known e.g database versions, docker versions, client versions -->
 

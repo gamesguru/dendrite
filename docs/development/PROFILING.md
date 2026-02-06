@@ -5,7 +5,6 @@ nav_order: 4
 permalink: /development/profiling
 ---
 
-# Profiling Dendrite
 
 If you are running into problems with Dendrite using excessive resources (e.g. CPU or RAM) then you can use the profiler to work out what is happening.
 
@@ -15,13 +14,13 @@ Dendrite contains an embedded profiler called `pprof`, which is a part of the st
 
 To enable the profiler, start Dendrite with the `PPROFLISTEN` environment variable. This variable specifies which address and port to listen on, e.g.
 
-```
+```bash
 PPROFLISTEN=localhost:65432 ./bin/dendrite ...
 ```
 
 If pprof has been enabled successfully, a log line at startup will show that pprof is listening:
 
-```
+```text
 WARN[2020-12-03T13:32:33.669405000Z] [/Users/neilalexander/Desktop/dendrite/internal/log.go:87] SetupPprof
   Starting pprof on localhost:65432
 ```
@@ -32,7 +31,7 @@ All examples from this point forward assume `PPROFLISTEN=localhost:65432` but yo
 
 To examine where CPU time is going, you can call the `profile` endpoint:
 
-```
+```text
 http://localhost:65432/debug/pprof/profile?seconds=30
 ```
 
@@ -42,7 +41,7 @@ The profile will run for the specified number of `seconds` and then will produce
 
 If you have Go installed and want to explore the profile, you can invoke `go tool pprof` to start the profile directly. The `-http=` parameter will instruct `go tool pprof` to start a web server providing a view of the captured profile:
 
-```
+```bash
 go tool pprof -http=localhost:23456 http://localhost:65432/debug/pprof/profile?seconds=30
 ```
 
@@ -52,7 +51,7 @@ You can then visit `http://localhost:23456` in your web browser to see a visual 
 
 If you don't have the Go tools installed but just want to capture the profile to send to someone else, you can instead use `curl` to download the profiler results:
 
-```
+```bash
 curl -O http://localhost:65432/debug/pprof/profile?seconds=30
 ```
 
@@ -62,7 +61,7 @@ This will block for the specified number of seconds, capturing information about
 
 To examine where memory usage is going, you can call the `heap` endpoint:
 
-```
+```text
 http://localhost:65432/debug/pprof/heap
 ```
 
@@ -72,7 +71,7 @@ The profile will return almost instantly.
 
 If you have Go installed and want to explore the profile, you can invoke `go tool pprof` to start the profile directly. The `-http=` parameter will instruct `go tool pprof` to start a web server providing a view of the captured profile:
 
-```
+```bash
 go tool pprof -http=localhost:23456 http://localhost:65432/debug/pprof/heap
 ```
 
@@ -89,7 +88,7 @@ Also in the "View" menu, you can select "Flame Graph" to see a proportional inte
 
 If you don't have the Go tools installed but just want to capture the profile to send to someone else, you can instead use `curl` to download the profiler results:
 
-```
+```bash
 curl -O http://localhost:65432/debug/pprof/heap
 ```
 

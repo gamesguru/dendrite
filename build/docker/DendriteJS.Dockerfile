@@ -28,15 +28,15 @@ RUN tar xvfz p2p.tar.gz
 
 # Install deps for element-web, symlink in libp2p repo and build that too
 WORKDIR /build/element-web-matthew-p2p
-RUN yarn install
-RUN ln -s /build/go-http-js-libp2p-master /build/element-web-matthew-p2p/node_modules/go-http-js-libp2p
-RUN (cd node_modules/go-http-js-libp2p && yarn install)
+RUN yarn install && \
+    ln -s /build/go-http-js-libp2p-master /build/element-web-matthew-p2p/node_modules/go-http-js-libp2p && \
+    (cd node_modules/go-http-js-libp2p && yarn install)
 COPY --from=gobuild /build/dendrite-main/main.wasm ./src/vector/dendrite.wasm
 # build it all
 RUN yarn build:p2p
 
 SHELL ["/bin/bash", "-c"]
-RUN echo $'\ 
+RUN echo $'\
     { \n\
     "default_server_config": { \n\
     "m.homeserver": { \n\
@@ -106,6 +106,6 @@ RUN echo $'\
     root   /usr/share/nginx/html; \n\
     index  index.html index.htm; \n\
     } \n\
-    }' > /etc/nginx/conf.d/default.conf
-RUN sed -i 's/}/    application\/wasm  wasm;\n}/g' /etc/nginx/mime.types
+    }' > /etc/nginx/conf.d/default.conf && \
+    sed -i 's/}/    application\/wasm  wasm;\n}/g' /etc/nginx/mime.types
 COPY --from=jsbuild /build/element-web-matthew-p2p/webapp /usr/share/nginx/html

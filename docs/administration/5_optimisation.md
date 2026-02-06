@@ -6,7 +6,6 @@ nav_order: 5
 permalink: /administration/optimisation
 ---
 
-# Optimise your installation
 
 Now that you have Dendrite running, the following tweaks will improve the reliability
 and performance of your installation.
@@ -52,7 +51,7 @@ limits which are quite low.
 We currently recommend setting the file descriptor limit to 65535 to avoid such
 issues. Dendrite will log immediately after startup if the file descriptor limit is too low:
 
-```
+```text
 level=warning msg="IMPORTANT: Process file descriptor limit is currently 1024, it is recommended to raise the limit for Dendrite to at least 65535 to avoid issues"
 ```
 

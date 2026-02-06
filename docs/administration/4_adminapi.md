@@ -5,8 +5,6 @@ nav_order: 4
 permalink: /administration/adminapi
 ---
 
-# Supported admin APIs
-
 Dendrite supports, at present, a very small number of endpoints that allow
 admin users to perform administrative functions. Please note that there is no
 API stability guarantee on these endpoints at present — they may change shape
@@ -16,7 +14,7 @@ More endpoints will be added in the future.
 
 Endpoints may be used directly through curl:
 
-```
+```bash
 curl --header "Authorization: Bearer <access_token>" -X <POST|GET|PUT> <Endpoint URI> -d '<Request Body Contents>'
 ```
 
@@ -27,7 +25,7 @@ The user must be an administrator in the `userapi_accounts` table in order to us
 
 Existing user accounts can be set to administrative accounts by changing `account_type` to `3` in `userapi_accounts`
 
-```
+```sql
 UPDATE userapi_accounts SET account_type = 3 WHERE localpart = '$localpart';
 ```
 

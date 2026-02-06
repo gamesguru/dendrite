@@ -5,7 +5,6 @@ permalink: /administration/createusers
 nav_order: 1
 ---
 
-# Creating user accounts
 
 User accounts can be created on a Dendrite instance in a number of ways.
 

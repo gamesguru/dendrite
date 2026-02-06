@@ -42,7 +42,7 @@ go tool covdata func -i="$(find -name 'covmeta*' -type f -exec dirname {} \; | u
 
 which will produce an output like:
 
-```
+```text
 ...
 github.com/matrix-org/util/json.go:132:   MakeJSONAPI         70.0%
 github.com/matrix-org/util/json.go:151:   respond             84.6%

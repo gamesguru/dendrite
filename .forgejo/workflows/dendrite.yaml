@@ -5,14 +5,14 @@ on:
     branches:
       - main
     paths:
-      - "**.go" # only execute on changes to go files
-      - "go.sum" # or dependency updates
-      - ".forgejo/workflows/**" # or workflow changes
+      - '**.go' # only execute on changes to go files
+      - 'go.sum' # or dependency updates
+      - '.forgejo/workflows/**' # or workflow changes
   pull_request:
     paths:
-      - "**.go"
-      - "go.sum" # or dependency updates
-      - ".forgejo/workflows/**"
+      - '**.go'
+      - 'go.sum' # or dependency updates
+      - '.forgejo/workflows/**'
   workflow_dispatch:
 
 concurrency:
@@ -32,7 +32,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: "go.mod"
+          go-version-file: 'go.mod'
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         env:
@@ -78,7 +78,7 @@ jobs:
       - name: Setup go
         uses: actions/setup-go@v6
         with:
-          go-version-file: "go.mod"
+          go-version-file: 'go.mod'
           cache: true
       - name: Run tests
         run: go test -race -v ${{ matrix.packages }}

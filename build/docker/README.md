@@ -11,7 +11,7 @@ They can be found on Docker Hub:
 The `Dockerfile` is a multistage file which can build Dendrite. From the root of the Dendrite
 repository, run:
 
-```
+```bash
 docker build -t ghcr.io/element-hq/dendrite-monolith:latest .
 ```
 
@@ -33,7 +33,7 @@ runtime config should come from. The mounted folder must contain:
 
 To generate keys:
 
-```
+```bash
 docker run --rm --entrypoint="" \
   -v $(pwd):/mnt \
   ghcr.io/element-hq/dendrite-monolith:latest \
@@ -51,7 +51,7 @@ Create your config based on the [`dendrite-sample.yaml`](https://github.com/matr
 
 Then start the deployment:
 
-```
+```bash
 docker-compose -f docker-compose.yml up
 ```
 

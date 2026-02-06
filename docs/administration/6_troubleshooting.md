@@ -5,7 +5,6 @@ nav_order: 6
 permalink: /administration/troubleshooting
 ---
 
-# Troubleshooting
 
 If your Dendrite installation is acting strangely, there are a few things you should
 check before seeking help.
@@ -69,7 +68,7 @@ no lower than 65535 for Dendrite.
 Dendrite will check at startup if there are a sufficient number of available descriptors.
 If there aren't, you will see a log lines like this:
 
-```
+```text
 level=warning msg="IMPORTANT: Process file descriptor limit is currently 65535, it is recommended to raise the limit for Dendrite to at least 65535 to avoid issues"
 ```
 

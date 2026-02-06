@@ -2,7 +2,7 @@ name: Security Scan
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # Every Monday at 6am UTC
+    - cron: '0 6 * * 1' # Every Monday at 6am UTC
   workflow_dispatch:
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
 
       - name: Run Trivy scan
         env:
-          TRIVY_DISABLE_VEX_NOTICE: "true"
+          TRIVY_DISABLE_VEX_NOTICE: 'true'
         run: trivy fs --format json --skip-dirs vendor,node_modules . > scan.json
 
       - name: Update or create vulnerability dashboard issue

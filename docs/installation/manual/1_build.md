@@ -7,7 +7,6 @@ nav_order: 1
 permalink: /installation/manual/build
 ---
 
-# Build all Dendrite commands
 
 Dendrite has numerous utility commands in addition to the actual server binaries.
 Build them all from the root of the source repo with:
@@ -18,7 +17,7 @@ go build -o bin/ ./cmd/...
 
 The resulting binaries will be placed in the `bin` subfolder.
 
-# Installing Dendrite
+## Installing Dendrite
 
 You can install the Dendrite binary into `$GOPATH/bin` by using `go install`:
 

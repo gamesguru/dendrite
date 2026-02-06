@@ -7,7 +7,6 @@ grand_parent: Installation
 permalink: /installation/manual/database
 ---
 
-# Preparing database storage
 
 Dendrite uses SQL databases to store data. Depending on the database engine being used, you
 may need to perform some manual steps outlined below.

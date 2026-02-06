@@ -67,14 +67,14 @@ global:
 
   # The server name to delegate server-server communications to, with optional port
   # e.g. localhost:443
-  well_known_server_name: ""
+  well_known_server_name: ''
 
   # The base URL to delegate client-server communications to e.g. https://localhost
-  well_known_client_name: ""
+  well_known_client_name: ''
 
   # The server name to delegate sliding sync communications to, with optional port.
   # Requires `well_known_client_name` to also be configured.
-  well_known_sliding_sync_proxy: ""
+  well_known_sliding_sync_proxy: ''
 
   # Lists of domains that the server will trust as identity servers to verify third
   # party identifiers such as phone numbers and email addresses.
@@ -105,12 +105,12 @@ global:
     enabled: false
     # The local part, display name and avatar URL (as a mxc:// URL) for the user that
     # will send the server notices. These are visible to all users on the deployment.
-    local_part: "_server"
-    display_name: "Server Alerts"
-    avatar_url: ""
+    local_part: '_server'
+    display_name: 'Server Alerts'
+    avatar_url: ''
     # The room name to be used when sending server notices. This room name will
     # appear in user clients.
-    room_name: "Server Alerts"
+    room_name: 'Server Alerts'
 
   # Configuration for NATS JetStream
   jetstream:
@@ -145,7 +145,7 @@ global:
   dns_cache:
     enabled: false
     cache_size: 256
-    cache_lifetime: "5m" # 5 minutes; https://pkg.go.dev/time@master#ParseDuration
+    cache_lifetime: '5m' # 5 minutes; https://pkg.go.dev/time@master#ParseDuration
 
 # Configuration for the Appservice API.
 app_service_api:
@@ -177,7 +177,7 @@ client_api:
 
   # If set, allows registration by anyone who knows the shared secret, regardless
   # of whether registration is otherwise disabled.
-  registration_shared_secret: ""
+  registration_shared_secret: ''
 
   # Whether to require reCAPTCHA for registration. If you have enabled registration
   # then this is HIGHLY RECOMMENDED to reduce the risk of your homeserver being used
@@ -185,9 +185,9 @@ client_api:
   enable_registration_captcha: false
 
   # Settings for ReCAPTCHA.
-  recaptcha_public_key: ""
-  recaptcha_private_key: ""
-  recaptcha_bypass_secret: ""
+  recaptcha_public_key: ''
+  recaptcha_private_key: ''
+  recaptcha_bypass_secret: ''
 
   # To use hcaptcha.com instead of ReCAPTCHA, set the following parameters, otherwise just keep them empty.
   # recaptcha_siteverify_api: "https://hcaptcha.com/siteverify"
@@ -197,11 +197,11 @@ client_api:
 
   # TURN server information that this homeserver should send to clients.
   turn:
-    turn_user_lifetime: "5m"
+    turn_user_lifetime: '5m'
     turn_uris:
     #  - turn:turn.server.org?transport=udp
     #  - turn:turn.server.org?transport=tcp
-    turn_shared_secret: ""
+    turn_shared_secret: ''
     # If your TURN server requires static credentials, then you will need to enter
     # them here instead of supplying a shared secret. Note that these credentials
     # will be visible to clients!
@@ -260,17 +260,17 @@ federation_api:
   #
   # The deny list is checked before the allow list.
   deny_networks:
-    - "127.0.0.1/8"
-    - "10.0.0.0/8"
-    - "172.16.0.0/12"
-    - "192.168.0.0/16"
-    - "100.64.0.0/10"
-    - "169.254.0.0/16"
-    - "::1/128"
-    - "fe80::/64"
-    - "fc00::/7"
+    - '127.0.0.1/8'
+    - '10.0.0.0/8'
+    - '172.16.0.0/12'
+    - '192.168.0.0/16'
+    - '100.64.0.0/10'
+    - '169.254.0.0/16'
+    - '::1/128'
+    - 'fe80::/64'
+    - 'fc00::/7'
   allow_networks:
-    - "0.0.0.0/0" # "Everything". The deny list will help limit this.
+    - '0.0.0.0/0' # "Everything". The deny list will help limit this.
 
 # Configuration for the Media API.
 media_api:
@@ -279,7 +279,7 @@ media_api:
 
   # The maximum allowed file size (in bytes) for media uploads to this homeserver
   # (0 = unlimited). If using a reverse proxy, ensure it allows requests at least
-  #this large (e.g. the client_max_body_size setting in nginx).
+  # this large (e.g. the client_max_body_size setting in nginx).
   max_file_size_bytes: 10485760
 
   # Whether to dynamically generate thumbnails if needed.
@@ -318,12 +318,12 @@ sync_api:
     enabled: false
 
     # The path where the search index will be created in.
-    index_path: "./searchindex"
+    index_path: './searchindex'
 
     # The language most likely to be used on the server - used when indexing, to
     # ensure the returned results match expectations. A full list of possible languages
     # can be found at https://github.com/blevesearch/bleve/tree/master/analysis/lang
-    language: "en"
+    language: 'en'
 
 # Configuration for the User API.
 user_api:
@@ -359,7 +359,7 @@ user_api:
 tracing:
   enabled: false
   jaeger:
-    serviceName: ""
+    serviceName: ''
     disabled: false
     rpc_metrics: false
     tags: []

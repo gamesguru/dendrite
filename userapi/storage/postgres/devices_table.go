@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS userapi_devices (
 	ip TEXT,
 	-- User agent of this device
 	user_agent TEXT
-                                          
+
     -- TODO: device keys, device display names, token restrictions (if 3rd-party OAuth app)
 );
 

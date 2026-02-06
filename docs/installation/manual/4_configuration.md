@@ -6,7 +6,6 @@ nav_order: 4
 permalink: /installation/manual/configuration
 ---
 
-# Configuring Dendrite
 
 A YAML configuration file is used to configure Dendrite. A sample configuration file is
 present in the top level of the Dendrite repository:
@@ -105,7 +104,7 @@ Dendrite supports full-text indexing using [Bleve](https://github.com/blevesearc
 
 Depending on the language most likely to be used on the server, it might make sense to change the `language` used when indexing,
 to ensure the returned results match the expectations. A full list of possible languages
-can be found [here](https://github.com/element-hq/dendrite/blob/5b73592f5a4dddf64184fcbe33f4c1835c656480/internal/fulltext/bleve.go#L25-L46).
+can be found in the [supported languages list](https://github.com/element-hq/dendrite/blob/5b73592f5a4dddf64184fcbe33f4c1835c656480/internal/fulltext/bleve.go#L25-L46).
 
 ```yaml
 sync_api:

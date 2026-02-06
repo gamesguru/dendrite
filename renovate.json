@@ -1,45 +1,28 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "local>codefloe/renovate-config"
-  ],
+  "extends": ["local>codefloe/renovate-config"],
   "automergeType": "pr",
   "packageRules": [
     {
-      "matchManagers": [
-        "gomod"
-      ],
+      "matchManagers": ["gomod"],
       "groupName": "go dependencies",
-      "schedule": [
-        "every 2 weeks on monday"
-      ]
+      "schedule": ["every 2 weeks on monday"]
     },
     {
-      "matchManagers": [
-        "dockerfile",
-        "docker-compose"
-      ],
-      "matchPackageNames": [
-        "golang"
-      ],
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchPackageNames": ["golang"],
       "groupName": "go dependencies",
-      "schedule": [
-        "every 2 weeks on monday"
-      ]
+      "schedule": ["every 2 weeks on monday"]
     },
     {
-      "matchPackageNames": [
-        "forgejo/upload-artifact"
-      ],
+      "matchPackageNames": ["forgejo/upload-artifact"],
       "enabled": false
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/^\\.forgejo/workflows/.*\\.ya?ml$/"
-      ],
+      "managerFilePatterns": ["/^\\.forgejo/workflows/.*\\.ya?ml$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
       ]

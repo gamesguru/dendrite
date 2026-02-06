@@ -4,13 +4,13 @@ This is the Dendrite Pinecone demo! It's easy to get started.
 
 To run the homeserver, start at the root of the Dendrite repository and run:
 
-```
+```bash
 go run ./cmd/dendrite-demo-pinecone
 ```
 
 To connect to the static Pinecone peer used by the mobile demos run:
 
-```
+```bash
 go run ./cmd/dendrite-demo-pinecone -peer wss://pinecone.matrix.org/public
 ```
 
@@ -35,19 +35,19 @@ Then you can send messages between the two nodes and watch as the relay is used 
 
 Relay Server:
 
-```
+```bash
 go run cmd/dendrite-demo-pinecone/main.go -dir relay/ -listen "[::]:49000"
 ```
 
 Node 1:
 
-```
+```bash
 go run cmd/dendrite-demo-pinecone/main.go -dir node-1/ -peer "[::]:49000" -port 8007
 ```
 
 Node 2:
 
-```
+```bash
 go run cmd/dendrite-demo-pinecone/main.go -dir node-2/ -peer "[::]:49000" -port 8009
 ```
 
@@ -56,7 +56,7 @@ go run cmd/dendrite-demo-pinecone/main.go -dir node-2/ -peer "[::]:49000" -port 
 At the moment, the database must be manually configured.
 For both `Node 1` and `Node 2` add the following entries to their respective `relay_server` table in the federationapi database:
 
-```
+```text
 server_name: {node_1_public_key}, relay_server_name: {relay_public_key}
 server_name: {node_2_public_key}, relay_server_name: {relay_public_key}
 ```

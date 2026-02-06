@@ -6,7 +6,6 @@ nav_order: 5
 permalink: /installation/manual/start
 ---
 
-# Starting Dendrite
 
 Once you have completed all preparation and installation steps,
 you can start your Dendrite deployment by executing the `dendrite` binary:

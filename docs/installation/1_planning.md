@@ -5,7 +5,6 @@ nav_order: 1
 permalink: /installation/planning
 ---
 
-# Planning your installation
 
 ## Database
 

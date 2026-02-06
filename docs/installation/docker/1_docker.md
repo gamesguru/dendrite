@@ -7,7 +7,6 @@ nav_order: 1
 permalink: /installation/docker/install
 ---
 
-# Installing Dendrite using Docker Compose
 
 Dendrite provides an [example](https://github.com/element-hq/dendrite/blob/main/build/docker/docker-compose.yml)
 Docker compose file, which needs some preparation to start successfully.

@@ -7,7 +7,6 @@ nav_order: 1
 permalink: /installation/helm/install
 ---
 
-# Installing Dendrite using Helm
 
 To install Dendrite using the Helm chart, you first have to add the repository using the following commands:
 
@@ -17,7 +16,7 @@ helm repo update
 ```
 
 Next you'll need to create a `values.yaml` file and configure it to your liking. All possible values can be found
-[here](https://github.com/element-hq/dendrite/blob/main/helm/dendrite/values.yaml), but at least you need to configure
+in the [values.yaml reference](https://github.com/element-hq/dendrite/blob/main/helm/dendrite/values.yaml), but at least you need to configure
 a `server_name`, otherwise the chart will complain about it:
 
 ```yaml

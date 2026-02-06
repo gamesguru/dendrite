@@ -11,7 +11,7 @@ import os
 # The main complexity is grouping tests sensibly into features like 'Registration'
 # and 'Federation'. Then it just checks the ones which are passing and calculates
 # percentages for each group. Produces results like:
-# 
+#
 # Client-Server APIs: 29% (196/666 tests)
 # -------------------
 #   Registration             :  62% (20/32 tests)
@@ -28,7 +28,7 @@ import os
 #    ✓ POST /register can create a user
 #    ✓ POST /register downcases capitals in usernames
 #    ...
-# 
+#
 # You can also tack `-v` on to see exactly which tests each category falls under.
 
 test_mappings = {
@@ -171,7 +171,7 @@ def print_stats(header_name, gid_to_tests, gid_to_name, verbose):
             if passing:
                 group_passing += 1
             test_names_and_marks.append(f"{'✅' if passing else '❌'} {name}")
-            
+
         total_tests += group_total
         total_passing += group_passing
         pct = "{0:.0f}%".format(group_passing/group_total * 100)
@@ -182,7 +182,7 @@ def print_stats(header_name, gid_to_tests, gid_to_name, verbose):
     # avoid errors when trying to divide by 0
     if total_tests == 0:
         return
-    
+
     pct = "{0:.0f}%".format(total_passing/total_tests * 100)
     print("%s: %s (%d/%d tests)" % (header_name, pct, total_passing, total_tests))
     print("-" * (len(header_name)+1))

@@ -16,4 +16,3 @@ tar -xzf master.tar.gz
 # Run the tests!
 cd complement-master
 COMPLEMENT_BASE_IMAGE=complement-dendrite:latest go test -v -count=1 ./tests ./tests/csapi
-

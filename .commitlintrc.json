@@ -1,0 +1,11 @@
+{
+  "extends": ["@commitlint/config-conventional"],
+  "rules": {
+    "type-enum": [
+      2,
+      "always",
+      ["feat", "fix", "chore", "enh", "docs", "style", "refactor", "test", "perf", "ci", "WIP"]
+    ],
+    "type-case": [0, "always", "lower-case"]
+  }
+}

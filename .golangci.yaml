@@ -1,0 +1,216 @@
+version: '2'
+run:
+  build-tags:
+    - test
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - depguard
+    - dogsled
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - forbidigo
+    - forcetypeassert
+    - gochecknoinits
+    - gocritic
+    - godot
+    - goheader
+    - gomoddirectives
+    - gomodguard
+    - goprintffuncname
+    - govet
+    - importas
+    - ineffassign
+    - makezero
+    - misspell
+    - mnd
+    - nolintlint
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+    - wastedassign
+    - whitespace
+    - zerologlint
+  settings:
+    depguard:
+      rules:
+        agent:
+          list-mode: lax
+          files:
+            - '**/agent/**/*.go'
+            - '**/agent/*.go'
+            - '**/cmd/agent/**/*.go'
+            - '**/cmd/agent/*.go'
+            - '!**/cli/admin/agent/*.go'
+            - '!**/cli/admin/agent/**/*.go'
+            - '!**/cli/org/agent/*.go'
+            - '!**/cli/org/agent/**/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd/server
+            - pkg: codeberg.org/crowci/crow/v5/server
+            - pkg: codeberg.org/crowci/crow/v5/web
+        cli:
+          list-mode: lax
+          files:
+            - '**/cli/**/*.go'
+            - '**/cli/*.go'
+            - '**/cmd/cli/**/*.go'
+            - '**/cmd/cli/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/agent
+            - pkg: codeberg.org/crowci/crow/v5/server
+            - pkg: codeberg.org/crowci/crow/v5/cmd/agent
+            - pkg: codeberg.org/crowci/crow/v5/cmd/server
+            - pkg: codeberg.org/crowci/crow/v5/web
+        crow-go:
+          list-mode: lax
+          files:
+            - '**/crow-go/crow/**/*.go'
+            - '**/crow-go/crow/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/agent
+            - pkg: codeberg.org/crowci/crow/v5/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd
+            - pkg: codeberg.org/crowci/crow/v5/pipeline
+            - pkg: codeberg.org/crowci/crow/v5/server
+            - pkg: codeberg.org/crowci/crow/v5/shared
+            - pkg: codeberg.org/crowci/crow/v5/web
+        pipeline:
+          list-mode: lax
+          files:
+            - '**/pipeline/**/*.go'
+            - '**/pipeline/*.go'
+            - '!**/cli/pipeline/*.go'
+            - '!**/cli/pipeline/**/*.go'
+            - '!**/server/pipeline/*.go'
+            - '!**/server/pipeline/**/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/agent
+            - pkg: codeberg.org/crowci/crow/v5/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd
+            - pkg: codeberg.org/crowci/crow/v5/server
+            - pkg: codeberg.org/crowci/crow/v5/web
+        server:
+          list-mode: lax
+          files:
+            - '**/server/**/*.go'
+            - '**/server/*.go'
+            - '**/cmd/server/**/*.go'
+            - '**/cmd/server/*.go'
+            - '**/web/**/*.go'
+            - '**/web/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/agent
+            - pkg: codeberg.org/crowci/crow/v5/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd/agent
+            - pkg: codeberg.org/crowci/crow/v5/cmd/cli
+            - pkg: codeberg.org/crowci/crow/v5/crow-go/crow
+        shared:
+          list-mode: lax
+          files:
+            - '**/shared/**/*.go'
+            - '**/shared/*.go'
+            - '!**/pipeline/shared/*.go'
+            - '!**/pipeline/shared/**/*.go'
+          deny:
+            - pkg: codeberg.org/crowci/crow/v5/agent
+            - pkg: codeberg.org/crowci/crow/v5/cli
+            - pkg: codeberg.org/crowci/crow/v5/cmd
+            - pkg: codeberg.org/crowci/crow/v5/pipeline
+            - pkg: codeberg.org/crowci/crow/v5/server
+            - pkg: codeberg.org/crowci/crow/v5/web
+    errorlint:
+      errorf-multi: true
+    forbidigo:
+      forbid:
+        - pattern: context\.WithCancel$
+        - pattern: ^print.*$
+        - pattern: panic
+        - pattern: ^log.Fatal().*$
+    godot:
+      scope: toplevel
+      exclude:
+        - '^\s*cSpell:'
+        - '^\s*TODO:'
+      capital: true
+      period: true
+    misspell:
+      locale: US
+    mnd:
+      ignored-numbers:
+        - '0o600'
+        - '0o660'
+        - '0o644'
+        - '0o755'
+        - '0o700'
+      ignored-functions:
+        - make
+        - time.*
+        - strings.Split
+        - callerName
+        - random.GetRandomBytes
+    revive:
+      rules:
+        - name: var-naming
+          arguments:
+            - []
+            - []
+            - - skipPackageNameChecks: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - mnd
+        path: fixtures|cmd/agent/flags.go|cmd/server/flags.go|pipeline/backend/kubernetes/flags.go|_test.go
+      # Multi-forge migration: deprecated User fields (ForgeID, ForgeRemoteID, AccessToken, RefreshToken, Expiry)
+      # are still used for backward compatibility during the transition to the UserForge table.
+      # TODO: Remove this exclusion after migration is complete and deprecated fields are removed.
+      - linters:
+          - staticcheck
+        text: 'SA1019:.*is deprecated.*Use.*UserForge'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(codeberg.org/crowci/crow)
+      custom-order: true
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+    gofumpt:
+      extra-rules: false
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

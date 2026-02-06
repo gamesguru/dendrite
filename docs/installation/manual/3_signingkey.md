@@ -6,7 +6,6 @@ nav_order: 3
 permalink: /installation/manual/signingkeys
 ---
 
-# Generating signing keys
 
 All Matrix homeservers require a signing private key, which will be used to authenticate
 federation requests and events.
@@ -48,7 +47,7 @@ format and configure them as `old_private_keys` in your config.
 
 Dendrite stores the server signing key in the PEM format with the following structure.
 
-```
+```text
 -----BEGIN MATRIX PRIVATE KEY-----
 Key-ID: ed25519:<Key ID>
 
@@ -62,7 +61,7 @@ If you have signing keys from a previous Synapse installation, you should ideall
 as `old_private_keys` in your Dendrite config file. Synapse stores signing keys in the following
 format:
 
-```
+```text
 ed25519 <Key ID> <Base64 Encoded Key Data>
 ```
 
@@ -71,7 +70,7 @@ exactly without modifying it. **It is important to include the trailing equals s
 Encoded Key Data** if it is not already present in the original key, as the key data needs to be
 padded to exactly 32 bytes:
 
-```
+```text
 -----BEGIN MATRIX PRIVATE KEY-----
 Key-ID: ed25519:<Key ID>
 
