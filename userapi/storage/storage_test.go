@@ -418,11 +418,10 @@ func Test_Profile(t *testing.T) {
 }
 
 func Test_Pusher(t *testing.T) {
-	alice := test.NewUser(t)
-	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
-	assert.NoError(t, err)
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+		assert.NoError(t, err)
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
 
@@ -455,7 +454,7 @@ func Test_Pusher(t *testing.T) {
 		// remove single pusher
 		err = db.RemovePusher(ctx, appID, pushKeys[0], aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unable to remove pusher")
-		gotPushers, err := db.GetPushers(ctx, aliceLocalpart, aliceDomain)
+		gotPushers, err = db.GetPushers(ctx, aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unable to get pushers")
 		assert.Equal(t, 1, len(gotPushers))
 
