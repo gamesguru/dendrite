@@ -9,14 +9,13 @@ require (
 	github.com/cretz/bine v0.2.0
 	github.com/dgraph-io/ristretto v0.2.0
 	github.com/eyedeekay/goSam v0.32.54
-	github.com/eyedeekay/onramp v0.33.8
 	github.com/getsentry/sentry-go v0.42.0
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-i2p/onramp v0.33.92
 	github.com/gologme/log v1.3.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.7.4
+	github.com/jackc/pgx/v5 v5.8.0
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/kardianos/minwinsvc v1.0.2
 	github.com/matrix-org/dugong v0.0.0-20210921133753-66e6b1c67e2e
@@ -36,7 +35,7 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	github.com/uber/jaeger-lib v2.4.1+incompatible
-	github.com/yggdrasil-network/yggdrasil-go v0.5.13-0.20251124092915-ae405adf7c4c
+	github.com/yggdrasil-network/yggdrasil-go v0.5.13-RC.1
 	github.com/yggdrasil-network/yggquic v0.0.0-20251128173046-40cea64eaa96
 	golang.org/x/crypto v0.47.0
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96
@@ -80,10 +79,12 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eyedeekay/i2pkeys v0.33.9 // indirect
-	github.com/eyedeekay/sam3 v0.33.8 // indirect
+	github.com/go-i2p/i2pkeys v0.33.10-0.20241113193422-e10de5e60708 // indirect
+	github.com/go-i2p/sam3 v0.33.9 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/pprof v0.0.0-20260202012954-cb029daf43ef // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/go-set/v3 v3.0.1 // indirect
 	github.com/hjson/hjson-go/v4 v4.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -110,7 +111,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/quic-go/quic-go v0.57.1 // indirect
+	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
@@ -138,6 +139,6 @@ require (
 
 go 1.25
 
-toolchain go1.25.6
+toolchain go1.25.7
 
-replace github.com/matrix-org/gomatrixserverlib => github.com/jackmaninov/gomatrixserverlib v0.0.0-20251212030803-43f2ab9620cb
+replace github.com/matrix-org/gomatrixserverlib => github.com/jackmaninov/gomatrixserverlib v0.0.0-20251103190139-eb14008fe6d1
