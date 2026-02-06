@@ -12,9 +12,9 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrix-org/pinecone/types"
-	"go.uber.org/atomic"
 )
 
 type Conduit struct {

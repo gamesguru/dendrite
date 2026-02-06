@@ -40,7 +40,6 @@ require (
 	github.com/uber/jaeger-lib v2.4.1+incompatible
 	github.com/yggdrasil-network/yggdrasil-go v0.5.13-0.20251124092915-ae405adf7c4c
 	github.com/yggdrasil-network/yggquic v0.0.0-20251128173046-40cea64eaa96
-	go.uber.org/atomic v1.11.0
 	golang.org/x/crypto v0.47.0
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96
 	golang.org/x/image v0.35.0
@@ -121,6 +120,7 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
 	go.mau.fi/util v0.9.5 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/mod v0.32.0 // indirect
