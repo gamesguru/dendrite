@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrix-org/util"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/mediaapi/fileutils"
 	"codefloe.com/pat-s/dendrite/mediaapi/storage"
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/util"
-	log "github.com/sirupsen/logrus"
 )
 
 func Test_uploadRequest_doUpload(t *testing.T) {

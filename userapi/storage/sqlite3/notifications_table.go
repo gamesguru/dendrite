@@ -12,13 +12,13 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type notificationsStatements struct {
@@ -95,7 +95,9 @@ func NewSQLiteNotificationTable(db *sql.DB) (tables.NotificationTable, error) {
 }
 
 func (s *notificationsStatements) Clean(ctx context.Context, txn *sql.Tx) error {
-	_, err := sqlutil.TxStmt(txn, s.cleanNotificationsStmt).ExecContext(
+	cleanNotificationsStmt := sqlutil.TxStmt(txn, s.cleanNotificationsStmt)
+	defer cleanNotificationsStmt.Close()
+	_, err := cleanNotificationsStmt.ExecContext(
 		ctx,
 		time.Now().AddDate(0, 0, -1).UnixNano()/int64(time.Millisecond), // keep non-highlights for a day
 		time.Now().AddDate(0, -1, 0).UnixNano()/int64(time.Millisecond), // keep highlights for a month
@@ -115,13 +117,17 @@ func (s *notificationsStatements) Insert(ctx context.Context, txn *sql.Tx, local
 	if err != nil {
 		return err
 	}
-	_, err = sqlutil.TxStmt(txn, s.insertStmt).ExecContext(ctx, localpart, serverName, roomID, eventID, pos, tsMS, highlight, string(bs))
+	insertStmt := sqlutil.TxStmt(txn, s.insertStmt)
+	defer insertStmt.Close()
+	_, err = insertStmt.ExecContext(ctx, localpart, serverName, roomID, eventID, pos, tsMS, highlight, string(bs))
 	return err
 }
 
 // DeleteUpTo deletes all previous notifications, up to and including the event.
 func (s *notificationsStatements) DeleteUpTo(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, _ error) {
-	res, err := sqlutil.TxStmt(txn, s.deleteUpToStmt).ExecContext(ctx, localpart, serverName, roomID, pos)
+	deleteUpToStmt := sqlutil.TxStmt(txn, s.deleteUpToStmt)
+	defer deleteUpToStmt.Close()
+	res, err := deleteUpToStmt.ExecContext(ctx, localpart, serverName, roomID, pos)
 	if err != nil {
 		return false, err
 	}
@@ -135,7 +141,9 @@ func (s *notificationsStatements) DeleteUpTo(ctx context.Context, txn *sql.Tx, l
 
 // UpdateRead updates the "read" value for an event.
 func (s *notificationsStatements) UpdateRead(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, pos uint64, v bool) (affected bool, _ error) {
-	res, err := sqlutil.TxStmt(txn, s.updateReadStmt).ExecContext(ctx, v, localpart, serverName, roomID, pos)
+	updateReadStmt := sqlutil.TxStmt(txn, s.updateReadStmt)
+	defer updateReadStmt.Close()
+	res, err := updateReadStmt.ExecContext(ctx, v, localpart, serverName, roomID, pos)
 	if err != nil {
 		return false, err
 	}
@@ -148,7 +156,9 @@ func (s *notificationsStatements) UpdateRead(ctx context.Context, txn *sql.Tx, l
 }
 
 func (s *notificationsStatements) Select(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectStmt).QueryContext(ctx, localpart, serverName, fromID, uint32(filter), limit)
+	selectStmt := sqlutil.TxStmt(txn, s.selectStmt)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, localpart, serverName, fromID, uint32(filter), limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, 0, err
 	}
@@ -190,11 +200,11 @@ func (s *notificationsStatements) Select(ctx context.Context, txn *sql.Tx, local
 }
 
 func (s *notificationsStatements) SelectCount(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, filter tables.NotificationFilter) (count int64, err error) {
-	err = sqlutil.TxStmt(txn, s.selectCountStmt).QueryRowContext(ctx, localpart, serverName, uint32(filter)).Scan(&count)
+	err = sqlutil.TxStmt(txn, s.selectCountStmt).QueryRowContext(ctx, localpart, serverName, uint32(filter)).Scan(&count) //nolint:sqlclosecheck
 	return
 }
 
 func (s *notificationsStatements) SelectRoomCounts(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string) (total int64, highlight int64, err error) {
-	err = sqlutil.TxStmt(txn, s.selectRoomCountsStmt).QueryRowContext(ctx, localpart, serverName, roomID).Scan(&total, &highlight)
+	err = sqlutil.TxStmt(txn, s.selectRoomCountsStmt).QueryRowContext(ctx, localpart, serverName, roomID).Scan(&total, &highlight) //nolint:sqlclosecheck
 	return
 }

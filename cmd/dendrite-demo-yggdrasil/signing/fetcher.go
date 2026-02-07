@@ -46,7 +46,7 @@ func (f *YggdrasilKeys) FetchKeys(
 				Key: hexkey,
 			},
 			ExpiredTS:    gomatrixserverlib.PublicKeyNotExpired,
-			ValidUntilTS: spec.AsTimestamp(time.Now().Add(24 * time.Hour * 365)),
+			ValidUntilTS: spec.AsTimestamp(time.Now().Add(24 * time.Hour * 365)), //nolint:mnd
 		}
 	}
 	return res, nil

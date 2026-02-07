@@ -12,9 +12,10 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const serverSigningKeysSchema = `
@@ -82,7 +83,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 		nameAndKeyIDs = append(nameAndKeyIDs, nameAndKeyID(request))
 	}
 	results := make(map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult, len(requests))
-	iKeyIDs := make([]interface{}, len(nameAndKeyIDs))
+	iKeyIDs := make([]any, len(nameAndKeyIDs))
 	for i, v := range nameAndKeyIDs {
 		iKeyIDs[i] = v
 	}
@@ -98,7 +99,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 			var vk gomatrixserverlib.VerifyKey
 			for rows.Next() {
 				if err := rows.Scan(&serverName, &keyID, &validUntilTS, &expiredTS, &key); err != nil {
-					return fmt.Errorf("bulkSelectServerKeys: %v", err)
+					return fmt.Errorf("bulkSelectServerKeys: %w", err)
 				}
 				r := gomatrixserverlib.PublicKeyLookupRequest{
 					ServerName: spec.ServerName(serverName),
@@ -106,7 +107,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 				}
 				err := vk.Key.Decode(key)
 				if err != nil {
-					return fmt.Errorf("bulkSelectServerKeys: %v", err)
+					return fmt.Errorf("bulkSelectServerKeys: %w", err)
 				}
 				results[r] = gomatrixserverlib.PublicKeyLookupResult{
 					VerifyKey:    vk,
@@ -129,6 +130,7 @@ func (s *serverSigningKeyStatements) UpsertServerKeys(
 	key gomatrixserverlib.PublicKeyLookupResult,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertServerKeysStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		string(request.ServerName),

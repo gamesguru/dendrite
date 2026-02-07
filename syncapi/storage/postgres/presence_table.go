@@ -105,9 +105,11 @@ func (p *presenceStatements) UpsertPresence(
 ) (pos types.StreamPosition, err error) {
 	if fromSync {
 		stmt := sqlutil.TxStmt(txn, p.upsertPresenceFromSyncStmt)
+		defer stmt.Close()
 		err = stmt.QueryRowContext(ctx, userID, presence, lastActiveTS).Scan(&pos)
 	} else {
 		stmt := sqlutil.TxStmt(txn, p.upsertPresenceStmt)
+		defer stmt.Close()
 		err = stmt.QueryRowContext(ctx, userID, presence, statusMsg, lastActiveTS).Scan(&pos)
 	}
 	return
@@ -121,7 +123,8 @@ func (p *presenceStatements) GetPresenceForUsers(
 ) ([]*types.PresenceInternal, error) {
 	result := make([]*types.PresenceInternal, 0, len(userIDs))
 	stmt := sqlutil.TxStmt(txn, p.selectPresenceForUsersStmt)
-	rows, err := stmt.QueryContext(ctx, userIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +143,12 @@ func (p *presenceStatements) GetPresenceForUsers(
 
 func (p *presenceStatements) GetMaxPresenceID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, p.selectMaxPresenceStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&pos)
 	return
 }
 
-// GetPresenceAfter returns the changes presences after a given stream id
+// GetPresenceAfter returns the changes presences after a given stream id.
 func (p *presenceStatements) GetPresenceAfter(
 	ctx context.Context, txn *sql.Tx,
 	after types.StreamPosition,
@@ -152,8 +156,9 @@ func (p *presenceStatements) GetPresenceAfter(
 ) (presences map[string]*types.PresenceInternal, err error) {
 	presences = make(map[string]*types.PresenceInternal)
 	stmt := sqlutil.TxStmt(txn, p.selectPresenceAfterStmt)
+	defer stmt.Close()
 	afterTS := spec.AsTimestamp(time.Now().Add(time.Minute * -5))
-	rows, err := stmt.QueryContext(ctx, after, afterTS, filter.Limit)
+	rows, err := stmt.QueryContext(ctx, after, afterTS, filter.Limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

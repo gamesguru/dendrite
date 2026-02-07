@@ -27,7 +27,7 @@ import (
 )
 
 // OutgoingQueues is a collection of queues for sending transactions to other
-// matrix servers
+// matrix servers.
 type OutgoingQueues struct {
 	db          storage.Database
 	process     *process.ProcessContext
@@ -40,7 +40,7 @@ type OutgoingQueues struct {
 	queues      map[spec.ServerName]*destinationQueue
 }
 
-func init() {
+func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		destinationQueueTotal, destinationQueueRunning,
 		destinationQueueBackingOff,
@@ -71,7 +71,7 @@ var destinationQueueBackingOff = prometheus.NewGauge(
 	},
 )
 
-// NewOutgoingQueues makes a new OutgoingQueues
+// NewOutgoingQueues makes a new OutgoingQueues.
 func NewOutgoingQueues(
 	db storage.Database,
 	process *process.ProcessContext,
@@ -111,9 +111,9 @@ func NewOutgoingQueues(
 		} else {
 			log.WithError(err).Error("Failed to get EDU server names for destination queue hydration")
 		}
-		offset, step := time.Second*5, time.Second
-		if max := len(serverNames); max > 120 {
-			step = (time.Second * 120) / time.Duration(max)
+		offset, step := time.Second*5, time.Second //nolint:mnd
+		if max := len(serverNames); max > 120 {    //nolint:mnd
+			step = (time.Second * 120) / time.Duration(max) //nolint:mnd
 		}
 		for serverName := range serverNames {
 			if queue := queues.getQueue(serverName); queue != nil {
@@ -171,7 +171,7 @@ func (oqs *OutgoingQueues) clearQueue(oq *destinationQueue) {
 	destinationQueueTotal.Dec()
 }
 
-// SendEvent sends an event to the destinations
+// SendEvent sends an event to the destinations.
 func (oqs *OutgoingQueues) SendEvent(
 	ev *types.HeaderedEvent, origin spec.ServerName,
 	destinations []spec.ServerName,

@@ -9,10 +9,11 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type openIDTokenResponse struct {
@@ -23,7 +24,7 @@ type openIDTokenResponse struct {
 }
 
 // CreateOpenIDToken creates a new OpenID Connect (OIDC) token that a Matrix user
-// can supply to an OpenID Relying Party to verify their identity
+// can supply to an OpenID Relying Party to verify their identity.
 func CreateOpenIDToken(
 	req *http.Request,
 	userAPI api.ClientUserAPI,
@@ -59,7 +60,7 @@ func CreateOpenIDToken(
 			AccessToken:      response.Token.Token,
 			TokenType:        "Bearer",
 			MatrixServerName: string(device.UserDomain()),
-			ExpiresIn:        response.Token.ExpiresAtMS / 1000, // convert ms to s
+			ExpiresIn:        response.Token.ExpiresAtMS / 1000, //nolint:mnd // convert ms to s
 		},
 	}
 }

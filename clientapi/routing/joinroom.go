@@ -8,17 +8,19 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/matrix-org/gomatrix"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 func JoinRoomByIDOrAlias(
@@ -30,7 +32,7 @@ func JoinRoomByIDOrAlias(
 ) util.JSONResponse {
 	// MSC3706: Trace join timing for diagnostics
 	joinStartTime := time.Now()
-	logger := util.GetLogger(req.Context()).WithFields(map[string]interface{}{
+	logger := util.GetLogger(req.Context()).WithFields(map[string]any{
 		"room_id_or_alias": roomIDOrAlias,
 		"user_id":          device.UserID,
 		"trace":            "join_timing",
@@ -42,7 +44,7 @@ func JoinRoomByIDOrAlias(
 		RoomIDOrAlias: roomIDOrAlias,
 		UserID:        device.UserID,
 		IsGuest:       device.AccountType == api.AccountTypeGuest,
-		Content:       map[string]interface{}{},
+		Content:       map[string]any{},
 	}
 
 	// Check to see if any ?via= or ?server_name= query parameters
@@ -73,11 +75,11 @@ func JoinRoomByIDOrAlias(
 	// Request our profile content to populate the request content with.
 	profile, err := profileAPI.QueryProfile(req.Context(), device.UserID)
 
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		joinReq.Content["displayname"] = profile.DisplayName
 		joinReq.Content["avatar_url"] = profile.AvatarURL
-	case appserviceAPI.ErrProfileNotExists:
+	case errors.Is(err, appserviceAPI.ErrProfileNotExists):
 		util.GetLogger(req.Context()).Error("Unable to query user profile, no profile found.")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -88,13 +90,17 @@ func JoinRoomByIDOrAlias(
 
 	// Ask the roomserver to perform the join.
 	done := make(chan util.JSONResponse, 1)
-	go func() {
+	go func() { //nolint:contextcheck
 		defer close(done)
 		roomID, _, err := rsAPI.PerformJoin(req.Context(), &joinReq)
 		var response util.JSONResponse
 
-		switch e := err.(type) {
-		case nil: // success case
+		var errInvalidID roomserverAPI.ErrInvalidID
+		var errNotAllowed roomserverAPI.ErrNotAllowed
+		var errHTTP *gomatrix.HTTPError
+		var errRoomNoExists eventutil.ErrRoomNoExists
+		switch {
+		case err == nil: // success case
 			response = util.JSONResponse{
 				Code: http.StatusOK,
 				// TODO: Put the response struct somewhere internal.
@@ -102,29 +108,29 @@ func JoinRoomByIDOrAlias(
 					RoomID string `json:"room_id"`
 				}{roomID},
 			}
-		case roomserverAPI.ErrInvalidID:
+		case errors.As(err, &errInvalidID):
 			response = util.JSONResponse{
 				Code: http.StatusBadRequest,
-				JSON: spec.InvalidParam(e.Error()),
+				JSON: spec.InvalidParam(errInvalidID.Error()),
 			}
-		case roomserverAPI.ErrNotAllowed:
-			jsonErr := spec.Forbidden(e.Error())
+		case errors.As(err, &errNotAllowed):
+			jsonErr := spec.Forbidden(errNotAllowed.Error())
 			if device.AccountType == api.AccountTypeGuest {
-				jsonErr = spec.GuestAccessForbidden(e.Error())
+				jsonErr = spec.GuestAccessForbidden(errNotAllowed.Error())
 			}
 			response = util.JSONResponse{
 				Code: http.StatusForbidden,
 				JSON: jsonErr,
 			}
-		case *gomatrix.HTTPError: // this ensures we proxy responses over federation to the client
+		case errors.As(err, &errHTTP): // this ensures we proxy responses over federation to the client
 			response = util.JSONResponse{
-				Code: e.Code,
-				JSON: json.RawMessage(e.Message),
+				Code: errHTTP.Code,
+				JSON: json.RawMessage(errHTTP.Message),
 			}
-		case eventutil.ErrRoomNoExists:
+		case errors.As(err, &errRoomNoExists):
 			response = util.JSONResponse{
 				Code: http.StatusNotFound,
-				JSON: spec.NotFound(e.Error()),
+				JSON: spec.NotFound(errRoomNoExists.Error()),
 			}
 		default:
 			// Check if this is already a Matrix error and preserve its error code
@@ -145,7 +151,7 @@ func JoinRoomByIDOrAlias(
 	timer := time.NewTimer(time.Second * 20)
 	select {
 	case <-timer.C:
-		logger.WithFields(map[string]interface{}{
+		logger.WithFields(map[string]any{
 			"duration_ms": time.Since(joinStartTime).Milliseconds(),
 			"result":      "timeout_202",
 		}).Debug("Join request timeout - returning 202 (join continues in background)")
@@ -158,7 +164,7 @@ func JoinRoomByIDOrAlias(
 		if !timer.Stop() {
 			<-timer.C
 		}
-		logger.WithFields(map[string]interface{}{
+		logger.WithFields(map[string]any{
 			"duration_ms": time.Since(joinStartTime).Milliseconds(),
 			"result_code": result.Code,
 		}).Debug("Join request completed")

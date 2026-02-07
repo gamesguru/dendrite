@@ -10,28 +10,27 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/tidwall/gjson"
-
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // Database is a temporary struct until we have made syncserver.go the same for both pq/sqlite
-// For now this contains the shared functions
+// For now this contains the shared functions.
 type Database struct {
 	DB                      *sql.DB
 	Writer                  sqlutil.Writer
@@ -60,7 +59,7 @@ func (d *Database) NewDatabaseSnapshot(ctx context.Context) (*DatabaseTransactio
 		// Set the isolation level so that we see a snapshot of the database.
 		// In PostgreSQL repeatable read transactions will see a snapshot taken
 		// at the first query, and since the transaction is read-only it can't
-		// run into any serialisation errors.
+		// run into any serialization errors.
 		// https://www.postgresql.org/docs/9.5/static/transaction-iso.html#XACT-REPEATABLE-READ
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
@@ -180,7 +179,7 @@ func (d *Database) DeletePeek(
 		sp, err = d.Peeks.DeletePeek(ctx, txn, roomID, userID, deviceID)
 		return err
 	})
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		sp = 0
 		err = nil
 	}
@@ -197,7 +196,7 @@ func (d *Database) DeletePeeks(
 		sp, err = d.Peeks.DeletePeeks(ctx, txn, roomID, userID)
 		return err
 	})
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		sp = 0
 		err = nil
 	}
@@ -209,7 +208,7 @@ func (d *Database) DeletePeeks(
 // room ID means the data isn't specific to any room)
 // If no data with the given type, user ID and room ID exists in the database,
 // creates a new row, else update the existing one
-// Returns an error if there was an issue with the upsert
+// Returns an error if there was an issue with the upsert.
 func (d *Database) UpsertAccountData(
 	ctx context.Context, userID, roomID, dataType string,
 ) (sp types.StreamPosition, err error) {
@@ -526,7 +525,7 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 	return membership, prevMembership
 }
 
-// StoreReceipt stores user receipts
+// StoreReceipt stores user receipts.
 func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, timestamp)
@@ -632,9 +631,9 @@ func (d *Database) SelectMemberships(
 	return d.Memberships.SelectMemberships(ctx, nil, roomID, pos, membership, notMembership)
 }
 
-// Sliding Sync methods implementation
+// Sliding Sync methods implementation.
 
-// ===== Phase 10: New Sliding Sync Methods with Delta Tracking =====
+// ===== Phase 10: New Sliding Sync Methods with Delta Tracking =====.
 
 func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, connID string) (connectionKey int64, err error) {
 	// Retry loop to handle race condition where two workers try to create the same connection
@@ -710,7 +709,7 @@ func (d *Database) ValidateConnectionPosition(ctx context.Context, connectionPos
 func (d *Database) GetConnectionStreams(ctx context.Context, connectionKey int64) (map[string]map[string]*types.SlidingSyncStreamState, error) {
 	var streams map[string]map[string]*types.SlidingSyncStreamState
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		tableStreams, err := d.SlidingSync.SelectAllLatestConnectionStreams(ctx, txn, connectionKey)
+		tableStreams, err := d.SlidingSync.SelectAllLatestConnectionStreams(ctx, txn, connectionKey) //nolint:staticcheck // SA1019: intentional use of deprecated function
 		if err != nil {
 			return err
 		}
@@ -737,7 +736,7 @@ func (d *Database) GetConnectionStreams(ctx context.Context, connectionKey int64
 // GetConnectionStreamsByPosition retrieves connection streams for a specific position
 // This is used for incremental syncs to get the state as it was at that exact position,
 // avoiding old state from previous sessions bleeding in (unlike GetConnectionStreams which
-// returns "latest across all positions")
+// returns "latest across all positions").
 func (d *Database) GetConnectionStreamsByPosition(ctx context.Context, connectionPosition int64) (map[string]map[string]*types.SlidingSyncStreamState, error) {
 	var streams map[string]map[string]*types.SlidingSyncStreamState
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -766,7 +765,7 @@ func (d *Database) GetConnectionStreamsByPosition(ctx context.Context, connectio
 }
 
 // DeleteOtherConnectionPositions removes all positions for a connection except the specified one
-// This is called when a client uses a position token, to clean up old state (like Synapse does)
+// This is called when a client uses a position token, to clean up old state (like Synapse does).
 func (d *Database) DeleteOtherConnectionPositions(ctx context.Context, connectionKey int64, keepPosition int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.SlidingSync.DeleteOtherConnectionPositions(ctx, txn, connectionKey, keepPosition)
@@ -842,7 +841,7 @@ func (d *Database) GetLatestRoomConfig(ctx context.Context, connectionKey int64,
 }
 
 // GetLatestRoomConfigsBatch retrieves the most recent room configs for multiple rooms on a connection
-// This is a batch version of GetLatestRoomConfig to avoid N+1 queries
+// This is a batch version of GetLatestRoomConfig to avoid N+1 queries.
 func (d *Database) GetLatestRoomConfigsBatch(ctx context.Context, connectionKey int64, roomIDs []string) (map[string]*types.SlidingSyncRoomConfig, error) {
 	var configs map[string]*types.SlidingSyncRoomConfig
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -865,7 +864,7 @@ func (d *Database) GetLatestRoomConfigsBatch(ctx context.Context, connectionKey 
 }
 
 // GetRoomConfigsByPosition retrieves all room configs for a specific position
-// Used to load previous room configs for copy-forward during sync
+// Used to load previous room configs for copy-forward during sync.
 func (d *Database) GetRoomConfigsByPosition(ctx context.Context, connectionPosition int64) (map[string]*types.SlidingSyncRoomConfig, error) {
 	var configs map[string]*types.SlidingSyncRoomConfig
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -910,7 +909,7 @@ func (d *Database) UpdateConnectionList(ctx context.Context, connectionKey int64
 	})
 }
 
-// GetSlidingSyncRoomMetadata returns the interface for room metadata operations
+// GetSlidingSyncRoomMetadata returns the interface for room metadata operations.
 func (d *Database) GetSlidingSyncRoomMetadata() tables.SlidingSyncRoomMetadata {
 	return d.SlidingSyncRoomMetadata
 }

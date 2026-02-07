@@ -26,7 +26,8 @@ import (
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
 // applied:
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func Setup(
 	csMux *httputil.Router, srp *sync.RequestPool, syncDB storage.Database,
 	userAPI userapi.SyncUserAPI,
@@ -167,7 +168,7 @@ func Setup(
 			if !cfg.Fulltext.Enabled {
 				return util.JSONResponse{
 					Code: http.StatusNotImplemented,
-					JSON: spec.Unrecognized("Search has been disabled by the server administrator."), //nolint:misspell // external library uses US spelling
+					JSON: spec.Unrecognized("Search has been disabled by the server administrator."),
 				}
 			}
 			var nextBatch *string

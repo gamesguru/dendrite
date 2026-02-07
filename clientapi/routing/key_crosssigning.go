@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth"
@@ -19,8 +21,6 @@ import (
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 type crossSigningRequest struct {
@@ -51,7 +51,7 @@ func UploadCrossSigningDeviceKeys(
 	keyserverAPI.QueryKeys(req.Context(), &api.QueryKeysRequest{
 		UserID:        device.UserID,
 		UserToDevices: map[string][]string{device.UserID: {device.ID}},
-		Timeout:       time.Second * 10,
+		Timeout:       time.Second * 10, //nolint:mnd
 	}, &keyResp)
 
 	if keyResp.Error != nil {

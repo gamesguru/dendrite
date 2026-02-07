@@ -58,7 +58,7 @@ func (r *Joiner) PerformJoin(
 		"trace":   "join_timing",
 	})
 	logger.Debug("Roomserver join request started")
-	roomID, joinedVia, err = r.performJoin(context.Background(), req)
+	roomID, joinedVia, err = r.performJoin(context.Background(), req) //nolint:contextcheck
 	if err != nil {
 		logger.WithFields(logrus.Fields{
 			"duration_ms": time.Since(joinStartTime).Milliseconds(),
@@ -150,7 +150,8 @@ func (r *Joiner) performJoinRoomByAlias(
 }
 
 // TODO: Break this function up a bit & move to GMSL
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func (r *Joiner) performJoinRoomByID(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
@@ -243,9 +244,9 @@ func (r *Joiner) performJoinRoomByID(
 				memberEvent := gjson.Parse(string(inviteEvent.JSON()))
 				// only set unsigned if we've got a content.membership, which we _should_
 				if memberEvent.Get("content.membership").Exists() {
-					req.Unsigned = map[string]interface{}{
+					req.Unsigned = map[string]any{
 						"prev_sender": memberEvent.Get("sender").Str,
-						"prev_content": map[string]interface{}{
+						"prev_content": map[string]any{
 							"is_direct":  memberEvent.Get("content.is_direct").Bool(),
 							"membership": memberEvent.Get("content.membership").Str,
 						},
@@ -360,7 +361,7 @@ func (r *Joiner) performJoinRoomByID(
 	// event. We'll always overwrite the "membership" key, but the rest,
 	// like "display_name" or "avatar_url", will be kept if supplied.
 	if req.Content == nil {
-		req.Content = map[string]interface{}{}
+		req.Content = map[string]any{}
 	}
 	req.Content["membership"] = spec.Join
 	if authorisedVia, aerr := r.populateAuthorisedViaUserForRestrictedJoin(ctx, req, senderID); aerr != nil {
@@ -370,19 +371,19 @@ func (r *Joiner) performJoinRoomByID(
 		if errors.As(aerr, &matrixErr) && matrixErr.ErrCode == spec.ErrorForbidden {
 			return "", "", rsAPI.ErrNotAllowed{Err: aerr}
 		}
-		// All other errors (database errors, InternalServerError, M_UNABLE_TO_AUTHORISE_JOIN, etc.)
+		// All other errors (database errors, InternalServerError, M_UNABLE_TO_AUTHORIZE_JOIN, etc.)
 		// are returned as-is and will become HTTP 500
 		return "", "", aerr
 	} else if authorisedVia != "" {
-		req.Content["join_authorised_via_users_server"] = authorisedVia
+		req.Content["join_authorised_via_users_server"] = authorisedVia //nolint:misspell // Matrix spec uses British spelling
 	}
 	if err = proto.SetContent(req.Content); err != nil {
 		return "", "", fmt.Errorf("eb.SetContent: %w", err)
 	}
 	event, err := eventutil.QueryAndBuildEvent(ctx, &proto, &identity, time.Now(), r.RSAPI, &buildRes)
 
-	switch err.(type) {
-	case nil:
+	switch {
+	case err == nil:
 		// The room join is local. Send the new join event into the
 		// roomserver. First of all check that the user isn't already
 		// a member of the room. This is best-effort (as in we won't
@@ -413,8 +414,7 @@ func (r *Joiner) performJoinRoomByID(
 				return "", "", rsAPI.ErrNotAllowed{Err: err}
 			}
 		}
-
-	case eventutil.ErrRoomNoExists:
+	case errors.As(err, new(eventutil.ErrRoomNoExists)):
 		// The room doesn't exist locally. If the room ID looks like it should
 		// be ours then this probably means that we've nuked our database at
 		// some point.
@@ -430,10 +430,9 @@ func (r *Joiner) performJoinRoomByID(
 		// Perform a federated room join.
 		joinedVia, err = r.performFederatedJoinRoomByID(ctx, req)
 		return req.RoomIDOrAlias, joinedVia, err
-
 	default:
 		// Something else went wrong.
-		return "", "", fmt.Errorf("error joining local room: %q", err)
+		return "", "", fmt.Errorf("error joining local room: %w", err)
 	}
 
 	// By this point, if req.RoomIDOrAlias contained an alias, then

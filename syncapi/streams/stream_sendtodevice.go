@@ -41,7 +41,7 @@ func (p *SendToDeviceStreamProvider) IncrementalSync(
 	from, to types.StreamPosition,
 ) types.StreamPosition {
 	// See if we have any new tasks to do for the send-to-device messaging.
-	lastPos, events, err := snapshot.SendToDeviceUpdatesForSync(req.Context, req.Device.UserID, req.Device.ID, from, to)
+	lastPos, events, err := snapshot.SendToDeviceUpdatesForSync(req.Context, req.Device.UserID, req.Device.ID, from, to) //nolint:contextcheck
 	if err != nil {
 		req.Log.WithError(err).Error("p.DB.SendToDeviceUpdatesForSync failed")
 		return from

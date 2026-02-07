@@ -91,7 +91,7 @@ func (p *ReceiptStreamProvider) IncrementalSync(
 			Type: spec.MReceipt,
 		}
 		// Structure: eventID -> receiptType -> userID -> {ts}
-		// This allows m.read and m.read.private to be serialised separately
+		// This allows m.read and m.read.private to be serialized separately
 		content := make(map[string]map[string]map[string]ReceiptTS)
 		for _, receipt := range receipts {
 			eventContent, ok := content[receipt.EventID]

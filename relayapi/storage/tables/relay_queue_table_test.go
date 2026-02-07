@@ -13,15 +13,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 type RelayQueueDatabase struct {

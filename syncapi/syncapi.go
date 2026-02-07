@@ -9,19 +9,16 @@ package syncapi
 import (
 	"context"
 
-	"codefloe.com/pat-s/dendrite/internal/fulltext"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
-
+	"codefloe.com/pat-s/dendrite/internal/fulltext"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/syncapi/consumers"
 	"codefloe.com/pat-s/dendrite/syncapi/internal"
 	"codefloe.com/pat-s/dendrite/syncapi/notifier"
@@ -30,6 +27,7 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/sync"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the SyncAPI

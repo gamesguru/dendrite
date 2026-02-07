@@ -97,7 +97,7 @@ type SyncTokenType string
 
 const (
 	// SyncTokenTypeStream represents a position in the server's whole
-	// stream of events
+	// stream of events.
 	SyncTokenTypeStream SyncTokenType = "s"
 	// SyncTokenTypeTopology represents a position in a room's topology.
 	SyncTokenTypeTopology SyncTokenType = "t"
@@ -397,10 +397,10 @@ func (r *Response) HasUpdates() bool {
 		len(r.DeviceLists.Left) > 0)
 }
 
-// NewResponse creates an empty response with initialised maps.
+// NewResponse creates an empty response with initialized maps.
 func NewResponse() *Response {
 	res := Response{}
-	// Pre-initialise the maps. Synapse will return {} even if there are no rooms under a specific section,
+	// Pre-initialize the maps. Synapse will return {} even if there are no rooms under a specific section,
 	// so let's do the same thing. Bonus: this means we can't get dreaded 'assignment to entry in nil map' errors.
 	res.Rooms = &RoomsResponse{
 		Join:   map[string]*JoinResponse{},
@@ -494,7 +494,6 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 		if joinedEmpty && invitedEmpty && len(jr.Summary.Heroes) == 0 {
 			a.Summary = nil
 		}
-
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
@@ -505,7 +504,7 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(a)
 }
 
-// NewJoinResponse creates an empty response with initialised arrays.
+// NewJoinResponse creates an empty response with initialized arrays.
 func NewJoinResponse() *JoinResponse {
 	return &JoinResponse{
 		Summary:             &Summary{},
@@ -524,7 +523,7 @@ type InviteResponse struct {
 	} `json:"invite_state"`
 }
 
-// NewInviteResponse creates an empty response with initialised arrays.
+// NewInviteResponse creates an empty response with initialized arrays.
 func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent, eventFormat synctypes.ClientEventFormat) (*InviteResponse, error) {
 	res := InviteResponse{}
 	res.InviteState.Events = []json.RawMessage{}
@@ -561,7 +560,7 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 		return nil, err
 	}
 
-	// Ensure unsigned field is empty so it isn't marshalled into the final JSON
+	// Ensure unsigned field is empty so it isn't marshaled into the final JSON
 	inviteEvent.Unsigned = nil
 
 	if ev, err := json.Marshal(*inviteEvent); err == nil {
@@ -589,7 +588,7 @@ func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(a)
 }
 
-// NewLeaveResponse creates an empty response with initialised arrays.
+// NewLeaveResponse creates an empty response with initialized arrays.
 func NewLeaveResponse() *LeaveResponse {
 	res := LeaveResponse{
 		State:    &ClientEvents{},
@@ -616,7 +615,7 @@ type Peek struct {
 	Deleted bool
 }
 
-// OutputReceiptEvent is an entry in the receipt output kafka log
+// OutputReceiptEvent is an entry in the receipt output kafka log.
 type OutputReceiptEvent struct {
 	UserID    string         `json:"user_id"`
 	RoomID    string         `json:"room_id"`
@@ -635,7 +634,7 @@ type OutputSendToDeviceEvent struct {
 }
 
 type IgnoredUsers struct {
-	List map[string]interface{} `json:"ignored_users"`
+	List map[string]any `json:"ignored_users"`
 }
 
 type RelationEntry struct {

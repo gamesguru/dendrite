@@ -2,19 +2,19 @@ package jetstream
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	natsclient "github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
-
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	natsclient "github.com/nats-io/nats.go"
 )
 
 type NATSInstance struct {
@@ -55,7 +55,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 			JetStream:       true,
 			StoreDir:        string(cfg.StoragePath),
 			NoSystemAccount: true,
-			MaxPayload:      8 * 1024 * 1024,
+			MaxPayload:      8 * 1024 * 1024, //nolint:mnd
 			NoSigs:          true,
 			NoLog:           cfg.NoLog,
 			SyncAlways:      true,
@@ -74,7 +74,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 			s.WaitForShutdown()
 			process.ComponentFinished()
 		}()
-		if !s.ReadyForConnections(time.Second * 60) {
+		if !s.ReadyForConnections(time.Second * 60) { //nolint:mnd
 			logrus.Fatalln("NATS did not start in time, shutting down")
 			process.ShutdownDendrite()
 			s.Shutdown()
@@ -92,7 +92,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 	return s.js, s.nc
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsclient.Conn) (natsclient.JetStreamContext, *natsclient.Conn) {
 	jsOpts := []natsclient.JSOpt{}
 	if cfg.JetStreamDomain != "" {
@@ -105,7 +105,7 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 			natsclient.Name("Dendrite"),
 			natsclient.MaxReconnects(-1), // Try forever
 			natsclient.ReconnectJitter(time.Second, time.Second),
-			natsclient.ReconnectWait(time.Second * 10),
+			natsclient.ReconnectWait(time.Second * 10), //nolint:mnd
 			natsclient.ReconnectHandler(func(c *natsclient.Conn) {
 				js, jerr := c.JetStream(jsOpts...)
 				if jerr != nil {
@@ -143,7 +143,7 @@ func checkAndConfigureStreams(process *process.ProcessContext, cfg *config.JetSt
 	for _, stream := range streams { // streams are defined in streams.go
 		name := cfg.Prefixed(stream.Name)
 		info, err := js.StreamInfo(name)
-		if err != nil && err != natsclient.ErrStreamNotFound {
+		if err != nil && !errors.Is(err, natsclient.ErrStreamNotFound) {
 			logrus.WithError(err).Fatal("Unable to get stream info")
 		}
 		subjects := stream.Subjects

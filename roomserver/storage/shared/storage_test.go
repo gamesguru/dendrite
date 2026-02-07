@@ -6,18 +6,18 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	ed255192 "golang.org/x/crypto/ed25519"
 
+	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
 )
@@ -98,7 +98,7 @@ func Test_GetLeftUsers(t *testing.T) {
 
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateRoomserverDatabase(t, dbType)
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
 		defer close()
 
 		// Create dummy entries
@@ -118,7 +118,7 @@ func Test_GetLeftUsers(t *testing.T) {
 
 		// Now try to get the left users, this should be Bob and Charlie, since they have a "leave" membership
 		expectedUserIDs := []string{bob.ID, charlie.ID}
-		leftUsers, err := db.GetLeftUsers(context.Background(), []string{alice.ID, bob.ID, charlie.ID})
+		leftUsers, err := db.GetLeftUsers(context.Background(), []string{alice.ID, bob.ID, charlie.ID}) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.ElementsMatch(t, expectedUserIDs, leftUsers)
 	})
@@ -135,7 +135,7 @@ func TestUserRoomKeys(t *testing.T) {
 	assert.NoError(t, err)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateRoomserverDatabase(t, dbType)
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
 		defer close()
 
 		// create a room NID so we can query the room
@@ -160,30 +160,34 @@ func TestUserRoomKeys(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, gotKey, key)
 
-		gotKey, err = db.SelectUserRoomPrivateKey(context.Background(), *userID, *roomID)
+		gotKey, err = db.SelectUserRoomPrivateKey(context.Background(), *userID, *roomID) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.Equal(t, key, gotKey)
-		pubKey, err := db.SelectUserRoomPublicKey(context.Background(), *userID, *roomID)
+		pubKey, err := db.SelectUserRoomPublicKey(context.Background(), *userID, *roomID) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.Equal(t, key.Public(), pubKey)
 
 		// Key doesn't exist, we shouldn't get anything back
-		gotKey, err = db.SelectUserRoomPrivateKey(context.Background(), *userID, *doesNotExist)
+		gotKey, err = db.SelectUserRoomPrivateKey(context.Background(), *userID, *doesNotExist) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.Nil(t, gotKey)
-		pubKey, err = db.SelectUserRoomPublicKey(context.Background(), *userID, *doesNotExist)
+		pubKey, err = db.SelectUserRoomPublicKey(context.Background(), *userID, *doesNotExist) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.Nil(t, pubKey)
 
+		pubKeyForQuery, ok := key.Public().(ed25519.PublicKey)
+		assert.True(t, ok, "key.Public() should be ed25519.PublicKey")
 		queryUserIDs := map[spec.RoomID][]ed25519.PublicKey{
-			*roomID: {key.Public().(ed25519.PublicKey)},
+			*roomID: {pubKeyForQuery},
 		}
 
 		userIDs, err := db.SelectUserIDsForPublicKeys(ctx, queryUserIDs)
 		assert.NoError(t, err)
+		pubKeyForWant, ok := key.Public().(ed25519.PublicKey)
+		assert.True(t, ok, "key.Public() should be ed25519.PublicKey")
 		wantKeys := map[spec.RoomID]map[string]string{
 			*roomID: {
-				spec.Base64Bytes(key.Public().(ed25519.PublicKey)).Encode(): userID.String(),
+				spec.Base64Bytes(pubKeyForWant).Encode(): userID.String(),
 			},
 		}
 		assert.Equal(t, wantKeys, userIDs)
@@ -192,16 +196,16 @@ func TestUserRoomKeys(t *testing.T) {
 		var gotPublicKey, key4 ed255192.PublicKey
 		key4, _, err = ed25519.GenerateKey(nil)
 		assert.NoError(t, err)
-		gotPublicKey, err = db.InsertUserRoomPublicKey(context.Background(), *userID, *doesNotExist, key4)
+		gotPublicKey, err = db.InsertUserRoomPublicKey(context.Background(), *userID, *doesNotExist, key4) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.Equal(t, key4, gotPublicKey)
 
 		// test invalid room
 		reallyDoesNotExist, err := spec.NewRoomID("!reallydoesnotexist:localhost")
 		assert.NoError(t, err)
-		_, err = db.InsertUserRoomPublicKey(context.Background(), *userID, *reallyDoesNotExist, key4)
+		_, err = db.InsertUserRoomPublicKey(context.Background(), *userID, *reallyDoesNotExist, key4) //nolint:contextcheck
 		assert.Error(t, err)
-		_, err = db.InsertUserRoomPrivatePublicKey(context.Background(), *userID, *reallyDoesNotExist, key)
+		_, err = db.InsertUserRoomPrivatePublicKey(context.Background(), *userID, *reallyDoesNotExist, key) //nolint:contextcheck
 		assert.Error(t, err)
 	})
 }
@@ -215,7 +219,7 @@ func TestAssignRoomNID(t *testing.T) {
 	assert.NoError(t, err)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateRoomserverDatabase(t, dbType)
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
 		defer close()
 
 		nid, err := db.AssignRoomNID(ctx, *roomID, room.Version)

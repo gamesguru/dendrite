@@ -3,6 +3,7 @@ package shared
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/matrix-org/gomatrixserverlib"
@@ -24,7 +25,7 @@ func rollback(txn *sql.Tx) {
 	if txn == nil {
 		return
 	}
-	txn.Rollback() // nolint: errcheck
+	txn.Rollback() //nolint:errcheck
 }
 
 func NewRoomUpdater(ctx context.Context, d *Database, txn *sql.Tx, roomInfo *types.RoomInfo) (*RoomUpdater, error) {
@@ -67,7 +68,7 @@ func (u *RoomUpdater) RoomExists() bool {
 	return u.roomExists
 }
 
-// Implements sqlutil.Transaction
+// Implements sqlutil.Transaction.
 func (u *RoomUpdater) Commit() error {
 	if u.txn == nil { // SQLite mode probably
 		return nil
@@ -75,7 +76,7 @@ func (u *RoomUpdater) Commit() error {
 	return u.txn.Commit()
 }
 
-// Implements sqlutil.Transaction
+// Implements sqlutil.Transaction.
 func (u *RoomUpdater) Rollback() error {
 	if u.txn == nil { // SQLite mode probably
 		return nil
@@ -83,22 +84,22 @@ func (u *RoomUpdater) Rollback() error {
 	return u.txn.Rollback()
 }
 
-// RoomVersion implements types.RoomRecentEventsUpdater
+// RoomVersion implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) RoomVersion() (version gomatrixserverlib.RoomVersion) {
 	return u.roomInfo.RoomVersion
 }
 
-// LatestEvents implements types.RoomRecentEventsUpdater
+// LatestEvents implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) LatestEvents() []types.StateAtEventAndReference {
 	return u.latestEvents
 }
 
-// LastEventIDSent implements types.RoomRecentEventsUpdater
+// LastEventIDSent implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) LastEventIDSent() string {
 	return u.lastEventIDSent
 }
 
-// CurrentStateSnapshotNID implements types.RoomRecentEventsUpdater
+// CurrentStateSnapshotNID implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) CurrentStateSnapshotNID() types.StateSnapshotNID {
 	return u.currentStateSnapshotNID
 }
@@ -189,19 +190,19 @@ func (u *RoomUpdater) EventsFromIDs(ctx context.Context, roomInfo *types.RoomInf
 	return u.d.eventsFromIDs(ctx, u.txn, u.roomInfo, eventIDs, NoFilter)
 }
 
-// IsReferenced implements types.RoomRecentEventsUpdater
+// IsReferenced implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) IsReferenced(eventID string) (bool, error) {
 	err := u.d.PrevEventsTable.SelectPreviousEventExists(u.ctx, u.txn, eventID)
 	if err == nil {
 		return true, nil
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return false, fmt.Errorf("u.d.PrevEventsTable.SelectPreviousEventExists: %w", err)
 }
 
-// SetLatestEvents implements types.RoomRecentEventsUpdater
+// SetLatestEvents implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) SetLatestEvents(
 	roomNID types.RoomNID, latest []types.StateAtEventAndReference, lastEventNIDSent types.EventNID,
 	currentStateSnapshotNID types.StateSnapshotNID,
@@ -234,12 +235,12 @@ func (u *RoomUpdater) SetLatestEvents(
 	})
 }
 
-// HasEventBeenSent implements types.RoomRecentEventsUpdater
+// HasEventBeenSent implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) HasEventBeenSent(eventNID types.EventNID) (bool, error) {
 	return u.d.EventsTable.SelectEventSentToOutput(u.ctx, u.txn, eventNID)
 }
 
-// MarkEventAsSent implements types.RoomRecentEventsUpdater
+// MarkEventAsSent implements types.RoomRecentEventsUpdater.
 func (u *RoomUpdater) MarkEventAsSent(eventNID types.EventNID) error {
 	return u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
 		return u.d.EventsTable.UpdateEventSentToOutput(u.ctx, txn, eventNID)

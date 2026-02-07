@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
@@ -14,8 +17,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, *sql.DB, func()) {
@@ -53,14 +54,14 @@ func TestOutputRoomEventsTable(t *testing.T) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
 
-		tab, db, close := newOutputRoomEventsTable(t, dbType)
+		tab, db, close := newOutputRoomEventsTable(t, dbType) //nolint:contextcheck
 		defer close()
 		events := room.Events()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for _, ev := range events {
 				_, err := tab.InsertEvent(ctx, txn, ev, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 				if err != nil {
-					return fmt.Errorf("failed to InsertEvent: %s", err)
+					return fmt.Errorf("failed to InsertEvent: %w", err)
 				}
 			}
 			// order = 2,0,3,1
@@ -69,7 +70,7 @@ func TestOutputRoomEventsTable(t *testing.T) {
 			}
 			gotEvents, err := tab.SelectEvents(ctx, txn, wantEventIDs, nil, true)
 			if err != nil {
-				return fmt.Errorf("failed to SelectEvents: %s", err)
+				return fmt.Errorf("failed to SelectEvents: %w", err)
 			}
 			gotEventIDs := make([]string, len(gotEvents))
 			for i := range gotEvents {
@@ -80,18 +81,18 @@ func TestOutputRoomEventsTable(t *testing.T) {
 			}
 
 			// Test that contains_url is correctly populated
-			urlEv := room.CreateEvent(t, alice, "m.text", map[string]interface{}{
+			urlEv := room.CreateEvent(t, alice, "m.text", map[string]any{
 				"body": "test.txt",
 				"url":  "mxc://test.txt",
 			})
 			if _, err = tab.InsertEvent(ctx, txn, urlEv, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared); err != nil {
-				return fmt.Errorf("failed to InsertEvent: %s", err)
+				return fmt.Errorf("failed to InsertEvent: %w", err)
 			}
 			wantEventID := []string{urlEv.EventID()}
 			t := true
 			gotEvents, err = tab.SelectEvents(ctx, txn, wantEventID, &synctypes.RoomEventFilter{Limit: 1, ContainsURL: &t}, true)
 			if err != nil {
-				return fmt.Errorf("failed to SelectEvents: %s", err)
+				return fmt.Errorf("failed to SelectEvents: %w", err)
 			}
 			gotEventIDs = make([]string, len(gotEvents))
 			for i := range gotEvents {
@@ -118,25 +119,25 @@ func TestReindex(t *testing.T) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
 
-		room.CreateAndInsert(t, alice, spec.MRoomName, map[string]interface{}{
+		room.CreateAndInsert(t, alice, spec.MRoomName, map[string]any{
 			"name": "my new room name",
 		}, test.WithStateKey(""))
 
-		room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]interface{}{
+		room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{
 			"topic": "my new room topic",
 		}, test.WithStateKey(""))
 
-		room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{
 			"msgbody": "my room message",
 			"type":    "m.text",
 		})
-		tab, db, close := newOutputRoomEventsTable(t, dbType)
+		tab, db, close := newOutputRoomEventsTable(t, dbType) //nolint:contextcheck
 		defer close()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for _, ev := range room.Events() {
 				_, err := tab.InsertEvent(ctx, txn, ev, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 				if err != nil {
-					return fmt.Errorf("failed to InsertEvent: %s", err)
+					return fmt.Errorf("failed to InsertEvent: %w", err)
 				}
 			}
 

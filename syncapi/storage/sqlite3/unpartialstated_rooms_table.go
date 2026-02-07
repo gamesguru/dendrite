@@ -83,6 +83,7 @@ func (s *unPartialStatedRoomsStatements) InsertUnPartialStatedRoom(
 		return
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertUnPartialStatedRoomStmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, pos, roomID, userID)
 	return
 }
@@ -91,7 +92,9 @@ func (s *unPartialStatedRoomsStatements) SelectUnPartialStatedRoomsInRange(
 	ctx context.Context, txn *sql.Tx, userID string, r types.Range,
 ) ([]string, types.StreamPosition, error) {
 	var lastPos types.StreamPosition
-	rows, err := sqlutil.TxStmt(txn, s.selectUnPartialStatedRoomsInRange).QueryContext(ctx, userID, r.Low(), r.High())
+	selectUnPartialStatedRoomsInRange := sqlutil.TxStmt(txn, s.selectUnPartialStatedRoomsInRange)
+	defer selectUnPartialStatedRoomsInRange.Close()
+	rows, err := selectUnPartialStatedRoomsInRange.QueryContext(ctx, userID, r.Low(), r.High()) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, 0, fmt.Errorf("unable to query un-partial-stated rooms: %w", err)
 	}
@@ -117,6 +120,7 @@ func (s *unPartialStatedRoomsStatements) SelectMaxUnPartialStatedRoomID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxUnPartialStatedRoomIDStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -127,6 +131,8 @@ func (s *unPartialStatedRoomsStatements) SelectMaxUnPartialStatedRoomID(
 func (s *unPartialStatedRoomsStatements) PurgeUnPartialStatedRooms(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeUnPartialStatedRoomsStmt).ExecContext(ctx, roomID)
+	purgeUnPartialStatedRoomsStmt := sqlutil.TxStmt(txn, s.purgeUnPartialStatedRoomsStmt)
+	defer purgeUnPartialStatedRoomsStmt.Close()
+	_, err := purgeUnPartialStatedRoomsStmt.ExecContext(ctx, roomID)
 	return err
 }

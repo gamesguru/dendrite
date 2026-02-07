@@ -11,9 +11,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/sirupsen/logrus"
 )
 
 var (

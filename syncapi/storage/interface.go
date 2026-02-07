@@ -41,7 +41,7 @@ type DatabaseTransaction interface {
 	GetStateDeltas(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
 	RoomIDsWithMembership(ctx context.Context, userID string, membership string) ([]string, error)
 	// KickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
-	// Per MSC4186/Synapse behaviour, kicked rooms should be included in the sliding sync room list.
+	// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
 	KickedRoomIDs(ctx context.Context, userID string) ([]string, error)
 	MembershipCount(ctx context.Context, roomID, membership string, pos types.StreamPosition) (int, error)
 	GetRoomSummary(ctx context.Context, roomID, userID string) (summary *types.Summary, err error)
@@ -244,9 +244,10 @@ type SlidingSync interface {
 	ValidateConnectionPosition(ctx context.Context, connectionPosition int64, expectedConnectionKey int64) error
 
 	// ===== Stream Management (Delta Tracking) =====
-	// GetConnectionStreams retrieves all stream states for a connection (latest across all positions)
-	// Returns map[roomID]map[stream]*StreamState
-	// DEPRECATED: Use GetConnectionStreamsByPosition for incremental syncs to avoid old state bleeding in
+	// GetConnectionStreams retrieves all stream states for a connection (latest across all positions).
+	// Returns map[roomID]map[stream]*StreamState.
+	//
+	// Deprecated: Use GetConnectionStreamsByPosition for incremental syncs to avoid old state bleeding in.
 	GetConnectionStreams(ctx context.Context, connectionKey int64) (map[string]map[string]*types.SlidingSyncStreamState, error)
 	// GetConnectionStreamsByPosition retrieves stream states for a specific position
 	// This is used for incremental syncs to get the state as it was at that exact position

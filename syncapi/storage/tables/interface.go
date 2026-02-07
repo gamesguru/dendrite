@@ -114,7 +114,7 @@ type CurrentRoomState interface {
 	// SelectRoomIDsWithMembership returns the list of room IDs which have the given user in the given membership state.
 	SelectRoomIDsWithMembership(ctx context.Context, txn *sql.Tx, userID string, membership string) ([]string, error)
 	// SelectKickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
-	// This is used by sliding sync to include kicked rooms in the room list (per MSC4186/Synapse behaviour).
+	// This is used by sliding sync to include kicked rooms in the room list (per MSC4186/Synapse behavior).
 	SelectKickedRoomIDs(ctx context.Context, txn *sql.Tx, userID string) ([]string, error)
 	// SelectRoomIDsWithAnyMembership returns a map of all memberships for the given user.
 	SelectRoomIDsWithAnyMembership(ctx context.Context, txn *sql.Tx, userID string) (map[string]string, error)

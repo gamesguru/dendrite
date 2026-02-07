@@ -10,11 +10,12 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/relayapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/relayapi/api"
 )
 
 // GetTransactionFromRelay implements GET /_matrix/federation/v1/relay_txn/{userID}

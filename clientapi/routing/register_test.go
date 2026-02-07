@@ -19,6 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/caching"
@@ -30,10 +35,6 @@ import (
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/jellydator/ttlcache/v3"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
 )
 
 // Registration Flows that the server allows.
@@ -161,7 +162,7 @@ func TestEmptyCompletedFlows(t *testing.T) {
 }
 
 // This method tests validation of the provided Application Service token and
-// username that they're registering
+// username that they're registering.
 func TestValidationOfApplicationServices(t *testing.T) {
 	// Set up application service namespaces
 	regex := "@_appservice_.*"
@@ -432,11 +433,10 @@ func Test_register(t *testing.T) {
 						// Respond with valid JSON or no JSON at all to test happy/error cases
 						switch response {
 						case "success":
-							json.NewEncoder(w).Encode(recaptchaResponse{Success: true})
+							_ = json.NewEncoder(w).Encode(recaptchaResponse{Success: true})
 						case "notvalid":
-							json.NewEncoder(w).Encode(recaptchaResponse{Success: false})
+							_ = json.NewEncoder(w).Encode(recaptchaResponse{Success: false})
 						default:
-
 						}
 					}))
 					defer srv.Close()

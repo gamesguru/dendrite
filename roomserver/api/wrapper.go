@@ -9,16 +9,18 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 // SendEvents to the roomserver The events are written with KindNew.
@@ -201,7 +203,7 @@ func IsServerBannedFromRoom(ctx context.Context, rsAPI FederationRoomserverAPI, 
 
 // PopulatePublicRooms extracts PublicRoom information for all the provided room IDs. The IDs are not checked to see if they are visible in the
 // published room directory.
-// due to lots of switches
+// Due to lots of switches.
 func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]fclient.PublicRoom, error) {
 	avatarTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.avatar", StateKey: ""}
 	nameTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.name", StateKey: ""}
@@ -271,7 +273,7 @@ func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVe
 	createContent := map[string]any{}
 	if len(createContentJSON) > 0 {
 		if err := json.Unmarshal(createContentJSON, &createContent); err != nil {
-			return nil, fmt.Errorf("invalid create content: %s", err)
+			return nil, fmt.Errorf("invalid create content: %w", err)
 		}
 	}
 	// TODO: Maybe, at some point, GMSL should return the events to create, so we can define the version
@@ -310,7 +312,7 @@ func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVe
 			}
 			_, err := spec.NewUserID(add, true)
 			if err != nil {
-				return nil, fmt.Errorf("invalid additional creator: '%s': %s", add, err)
+				return nil, fmt.Errorf("invalid additional creator: '%s': %w", add, err)
 			}
 			finalAdditionalCreators = append(finalAdditionalCreators, add)
 			creatorsSet[add] = struct{}{}
@@ -366,8 +368,8 @@ func GeneratePDU(
 		return queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("gomatrixserverlib.Allowed failed")
-		validationErr, ok := err.(*gomatrixserverlib.EventValidationError)
-		if ok {
+		var validationErr *gomatrixserverlib.EventValidationError
+		if errors.As(err, &validationErr) {
 			return nil, &util.JSONResponse{
 				Code: validationErr.Code,
 				JSON: spec.Forbidden(err.Error()),

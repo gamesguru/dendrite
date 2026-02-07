@@ -66,14 +66,16 @@ const purgeNotificationDataSQL = "" +
 	"DELETE FROM syncapi_notification_data WHERE room_id = $1"
 
 func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID, roomID string, notificationCount, highlightCount int) (pos types.StreamPosition, err error) {
-	err = sqlutil.TxStmt(txn, r.upsertRoomUnreadCounts).QueryRowContext(ctx, userID, roomID, notificationCount, highlightCount).Scan(&pos)
+	err = sqlutil.TxStmt(txn, r.upsertRoomUnreadCounts).QueryRowContext(ctx, userID, roomID, notificationCount, highlightCount).Scan(&pos) //nolint:sqlclosecheck
 	return
 }
 
 func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 	ctx context.Context, txn *sql.Tx, userID string, roomIDs []string,
 ) (map[string]*eventutil.NotificationData, error) {
-	rows, err := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms).QueryContext(ctx, userID, roomIDs)
+	selectStmt := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, userID, roomIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -98,13 +100,17 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 
 func (r *notificationDataStatements) SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error) {
 	var id int64
-	err := sqlutil.TxStmt(txn, r.selectMaxID).QueryRowContext(ctx).Scan(&id)
+	selectStmt := sqlutil.TxStmt(txn, r.selectMaxID)
+	defer selectStmt.Close()
+	err := selectStmt.QueryRowContext(ctx).Scan(&id)
 	return id, err
 }
 
 func (s *notificationDataStatements) PurgeNotificationData(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeNotificationData).ExecContext(ctx, roomID)
+	purgeNotificationData := sqlutil.TxStmt(txn, s.purgeNotificationData)
+	defer purgeNotificationData.Close()
+	_, err := purgeNotificationData.ExecContext(ctx, roomID)
 	return err
 }

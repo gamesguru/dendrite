@@ -13,15 +13,16 @@ import (
 	"fmt"
 	"sort"
 
-	fs "codefloe.com/pat-s/dendrite/federationapi/api"
-	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
+
+	fs "codefloe.com/pat-s/dendrite/federationapi/api"
+	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // Traverse the room hierarchy using the provided walker up to the provided limit,
@@ -39,15 +40,15 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 	*roomserver.RoomHierarchyWalker,
 	error,
 ) {
-	if authorised, _, _ := authorised(ctx, querier, walker.Caller, walker.RootRoomID, nil); !authorised {
+	if authorised, _, _ := authorised(ctx, querier, walker.Caller, walker.RootRoomID, nil); !authorised { //nolint:misspell
 		return nil, []string{walker.RootRoomID.String()}, nil, roomserver.ErrRoomUnknownOrNotAllowed{Err: fmt.Errorf("room is unknown/forbidden")}
 	}
 
 	discoveredRooms := []fclient.RoomHierarchyRoom{}
 
 	// Copy unvisited and processed to avoid modifying original walker (which is typically in cache)
-	unvisited := make([]roomserver.RoomHierarchyWalkerQueuedRoom, len(walker.Unvisited))
-	copy(unvisited, walker.Unvisited)
+	unvisited := make([]roomserver.RoomHierarchyWalkerQueuedRoom, 0, len(walker.Unvisited))
+	unvisited = append(unvisited, walker.Unvisited...)
 	processed := walker.Processed.Copy()
 	inaccessible := []string{}
 
@@ -92,12 +93,12 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 		// Collect rooms/events to send back (either locally or fetched via federation)
 		var discoveredChildEvents []fclient.RoomHierarchyStrippedEvent
 
-		// If we know about this room and the caller is authorised (joined/world_readable) then pull
+		// If we know about this room and the caller is authorized (joined/world_readable) then pull
 		// events locally
 		roomExists := roomExists(ctx, querier, queuedRoom.RoomID)
 		if !roomExists {
 			// attempt to query this room over federation, as either we've never heard of it before
-			// or we've left it and hence are not authorised (but info may be exposed regardless)
+			// or we've left it and hence are not authorized (but info may be exposed regardless)
 			fedRes := federatedRoomInfo(ctx, querier, walker.Caller, walker.SuggestedOnly, queuedRoom.RoomID, queuedRoom.Vias)
 			if fedRes != nil {
 				discoveredChildEvents = fedRes.Room.ChildrenState
@@ -108,7 +109,7 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 				spaceType := spec.MSpace
 				roomType = &spaceType
 			}
-		} else if authorised, isJoinedOrInvited, allowedRoomIDs := authorised(ctx, querier, walker.Caller, queuedRoom.RoomID, queuedRoom.ParentRoomID); authorised {
+		} else if authorised, isJoinedOrInvited, allowedRoomIDs := authorised(ctx, querier, walker.Caller, queuedRoom.RoomID, queuedRoom.ParentRoomID); authorised { //nolint:misspell
 			// Get all `m.space.child` state events for this room
 			events, err := childReferences(ctx, querier, walker.SuggestedOnly, queuedRoom.RoomID)
 			if err != nil {
@@ -149,11 +150,11 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 			if !isJoinedOrInvited {
 				continue
 			}
-		} else if !authorised {
+		} else if !authorised { //nolint:misspell
 			inaccessible = append(inaccessible, queuedRoom.RoomID.String())
 			continue
 		} else {
-			// room exists but user is not authorised
+			// room exists but user is not authorized
 			continue
 		}
 
@@ -226,8 +227,8 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 	}
 }
 
-// authorised returns true iff the user is joined this room or the room is world_readable
-func authorised(ctx context.Context, querier *Queryer, caller types.DeviceOrServerName, roomID spec.RoomID, parentRoomID *spec.RoomID) (authed, isJoinedOrInvited bool, resultAllowedRoomIDs []string) {
+// authorized returns true iff the user is joined this room or the room is world_readable. //nolint:misspell,godot.
+func authorised(ctx context.Context, querier *Queryer, caller types.DeviceOrServerName, roomID spec.RoomID, parentRoomID *spec.RoomID) (authed, isJoinedOrInvited bool, resultAllowedRoomIDs []string) { //nolint:misspell
 	if clientCaller := caller.Device(); clientCaller != nil {
 		return authorisedUser(ctx, querier, clientCaller, roomID, parentRoomID)
 	}
@@ -238,7 +239,7 @@ func authorised(ctx context.Context, querier *Queryer, caller types.DeviceOrServ
 	return false, false, resultAllowedRoomIDs
 }
 
-// authorisedServer returns true iff the server is joined this room or the room is world_readable, public, or knockable
+// authorisedServer returns true iff the server is joined this room or the room is world_readable, public, or knockable.
 func authorisedServer(ctx context.Context, querier *Queryer, roomID spec.RoomID, callerServerName spec.ServerName) (bool, []string) {
 	// Check history visibility / join rules first
 	hisVisTuple := gomatrixserverlib.StateKeyTuple{
@@ -372,11 +373,12 @@ func authorisedUser(ctx context.Context, querier *Queryer, clientCaller *userapi
 	if parentRoomID != nil && joinRuleEv != nil {
 		var allowed bool
 		rule, ruleErr := joinRuleEv.JoinRule()
-		if ruleErr != nil {
+		switch {
+		case ruleErr != nil:
 			util.GetLogger(ctx).WithError(ruleErr).WithField("parent_room_id", parentRoomID).Warn("failed to get join rule")
-		} else if rule == spec.Public || rule == spec.Knock {
+		case rule == spec.Public || rule == spec.Knock:
 			allowed = true
-		} else if rule == spec.Restricted {
+		case rule == spec.Restricted:
 			allowedRoomIDs := restrictedJoinRuleAllowedRooms(ctx, joinRuleEv)
 			// check parent is in the allowed set
 			for _, a := range allowedRoomIDs {
@@ -412,7 +414,7 @@ func authorisedUser(ctx context.Context, querier *Queryer, clientCaller *userapi
 	return false, false, resultAllowedRoomIDs
 }
 
-// helper function to fetch a state event
+// helper function to fetch a state event.
 func stateEvent(ctx context.Context, querier *Queryer, roomID spec.RoomID, evType, stateKey string) *types.HeaderedEvent {
 	var queryRes roomserver.QueryCurrentStateResponse
 	tuple := gomatrixserverlib.StateKeyTuple{
@@ -429,7 +431,7 @@ func stateEvent(ctx context.Context, querier *Queryer, roomID spec.RoomID, evTyp
 	return queryRes.StateEvents[tuple]
 }
 
-// returns true if the current server is participating in the provided room
+// returns true if the current server is participating in the provided room.
 func roomExists(ctx context.Context, querier *Queryer, roomID spec.RoomID) bool {
 	var queryRes roomserver.QueryServerJoinedToRoomResponse
 	err := querier.QueryServerJoinedToRoom(ctx, &roomserver.QueryServerJoinedToRoomRequest{
@@ -470,7 +472,7 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		if serverName == string(querier.Cfg.Global.ServerName) {
 			continue
 		}
-		res, err := querier.FSAPI.RoomHierarchies(innerCtx, querier.Cfg.Global.ServerName, spec.ServerName(serverName), roomIDStr, suggestedOnly)
+		res, err := querier.FSAPI.RoomHierarchies(innerCtx, querier.Cfg.Global.ServerName, spec.ServerName(serverName), roomIDStr, suggestedOnly) //nolint:contextcheck
 		if err != nil {
 			util.GetLogger(ctx).WithError(err).Warnf("failed to call RoomHierarchies on server %s", serverName)
 			continue
@@ -503,7 +505,7 @@ func childReferences(ctx context.Context, querier *Queryer, suggestedOnly bool, 
 		StateKey:  "",
 	}
 	var res roomserver.QueryCurrentStateResponse
-	err := querier.QueryCurrentState(context.Background(), &roomserver.QueryCurrentStateRequest{
+	err := querier.QueryCurrentState(context.Background(), &roomserver.QueryCurrentStateRequest{ //nolint:contextcheck
 		RoomID:         roomID.String(),
 		AllowWildcards: true,
 		StateTuples: []gomatrixserverlib.StateKeyTuple{
@@ -558,7 +560,7 @@ func childReferences(ctx context.Context, querier *Queryer, suggestedOnly bool, 
 	return el, nil
 }
 
-// fetch public room information for provided room
+// fetch public room information for provided room.
 func publicRoomsChunk(ctx context.Context, querier *Queryer, roomID spec.RoomID) *fclient.PublicRoom {
 	pubRooms, err := roomserver.PopulatePublicRooms(ctx, []string{roomID.String()}, querier)
 	if err != nil {

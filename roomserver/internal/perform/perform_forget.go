@@ -17,7 +17,7 @@ type Forgetter struct {
 	DB storage.Database
 }
 
-// PerformForget implements api.RoomServerQueryAPI
+// PerformForget implements api.RoomServerQueryAPI.
 func (f *Forgetter) PerformForget(
 	ctx context.Context,
 	request *api.PerformForgetRequest,

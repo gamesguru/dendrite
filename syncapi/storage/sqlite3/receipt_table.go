@@ -12,12 +12,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const receiptsSchema = `
@@ -101,7 +102,7 @@ func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Re
 	}.Prepare(db)
 }
 
-// UpsertReceipt creates new user receipts
+// UpsertReceipt creates new user receipts.
 func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	// Always generate a new ID - the CASE expression in SQL will decide whether to use it
 	pos, err = r.streamIDStatements.nextReceiptID(ctx, txn)
@@ -109,15 +110,16 @@ func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, room
 		return
 	}
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, pos, roomId, receiptType, userId, eventId, timestamp)
 	return
 }
 
-// SelectRoomReceiptsAfter select all receipts for a given room after a specific timestamp
+// SelectRoomReceiptsAfter select all receipts for a given room after a specific timestamp.
 func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error) {
 	selectSQL := strings.Replace(selectRoomReceipts, "($2)", sqlutil.QueryVariadicOffset(len(roomIDs), 1), 1)
 	var lastPos types.StreamPosition
-	params := make([]interface{}, len(roomIDs)+1)
+	params := make([]any, len(roomIDs)+1)
 	params[0] = streamPos
 	for k, v := range roomIDs {
 		params[k+1] = v
@@ -127,7 +129,9 @@ func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sq
 		return 0, nil, fmt.Errorf("unable to prepare statement: %w", err)
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "SelectRoomReceiptsAfter: prep.close() failed")
-	rows, err := sqlutil.TxStmt(txn, prep).QueryContext(ctx, params...)
+	selectStmt := sqlutil.TxStmt(txn, prep)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return 0, nil, fmt.Errorf("unable to query room receipts: %w", err)
 	}
@@ -153,6 +157,7 @@ func (s *receiptStatements) SelectMaxReceiptID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxReceiptID)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -163,7 +168,9 @@ func (s *receiptStatements) SelectMaxReceiptID(
 func (s *receiptStatements) PurgeReceipts(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeReceiptsStmt).ExecContext(ctx, roomID)
+	purgeReceiptsStmt := sqlutil.TxStmt(txn, s.purgeReceiptsStmt)
+	defer purgeReceiptsStmt.Close()
+	_, err := purgeReceiptsStmt.ExecContext(ctx, roomID)
 	return err
 }
 

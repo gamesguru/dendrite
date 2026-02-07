@@ -95,6 +95,7 @@ func (s *peekStatements) InsertPeek(
 ) (streamPos types.StreamPosition, err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	stmt := sqlutil.TxStmt(txn, s.insertPeekStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, userID, deviceID, nowMilli).Scan(&streamPos)
 	return
 }
@@ -103,6 +104,7 @@ func (s *peekStatements) DeletePeek(
 	ctx context.Context, txn *sql.Tx, roomID, userID, deviceID string,
 ) (streamPos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, s.deletePeekStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, userID, deviceID).Scan(&streamPos)
 	return
 }
@@ -111,6 +113,7 @@ func (s *peekStatements) DeletePeeks(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) (streamPos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, s.deletePeeksStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, userID).Scan(&streamPos)
 	return
 }
@@ -118,7 +121,9 @@ func (s *peekStatements) DeletePeeks(
 func (s *peekStatements) SelectPeeksInRange(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, r types.Range,
 ) (peeks []types.Peek, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectPeeksInRangeStmt).QueryContext(ctx, userID, deviceID, r.Low(), r.High())
+	selectPeeksInRangeStmt := sqlutil.TxStmt(txn, s.selectPeeksInRangeStmt)
+	defer selectPeeksInRangeStmt.Close()
+	rows, err := selectPeeksInRangeStmt.QueryContext(ctx, userID, deviceID, r.Low(), r.High()) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return
 	}
@@ -140,7 +145,9 @@ func (s *peekStatements) SelectPeeksInRange(
 func (s *peekStatements) SelectPeekingDevices(
 	ctx context.Context, txn *sql.Tx,
 ) (peekingDevices map[string][]types.PeekingDevice, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectPeekingDevicesStmt).QueryContext(ctx)
+	selectPeekingDevicesStmt := sqlutil.TxStmt(txn, s.selectPeekingDevicesStmt)
+	defer selectPeekingDevicesStmt.Close()
+	rows, err := selectPeekingDevicesStmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +171,7 @@ func (s *peekStatements) SelectMaxPeekID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxPeekIDStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -174,6 +182,8 @@ func (s *peekStatements) SelectMaxPeekID(
 func (s *peekStatements) PurgePeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgePeeksStmt).ExecContext(ctx, roomID)
+	purgePeeksStmt := sqlutil.TxStmt(txn, s.purgePeeksStmt)
+	defer purgePeeksStmt.Close()
+	_, err := purgePeeksStmt.ExecContext(ctx, roomID)
 	return err
 }

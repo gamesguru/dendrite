@@ -10,12 +10,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type Unpeeker struct {

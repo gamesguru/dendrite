@@ -8,9 +8,10 @@ package userutil
 import (
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 var (
@@ -72,7 +73,7 @@ func TestIncorrectDomain(t *testing.T) {
 	}
 }
 
-// TestBadUserID checks that ParseUsernameParam fails for invalid user ID
+// TestBadUserID checks that ParseUsernameParam fails for invalid user ID.
 func TestBadUserID(t *testing.T) {
 	cfg := &config.Global{
 		SigningIdentity: fclient.SigningIdentity{

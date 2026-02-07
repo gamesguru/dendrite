@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
@@ -15,7 +17,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 func mustPresenceTable(t *testing.T, dbType test.DBType) (tables.Presence, func()) {

@@ -72,7 +72,7 @@ func NewOutputClientDataConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputClientDataConsumer) Start() error {
 	_, err := s.nats.Subscribe(s.topicReIndex, func(msg *nats.Msg) {
 		if err := msg.Ack(); err != nil {
@@ -89,7 +89,7 @@ func (s *OutputClientDataConsumer) Start() error {
 		count := 0
 		var id int64 = 0
 		for {
-			evs, err := s.db.ReIndex(ctx, 1000, id)
+			evs, err := s.db.ReIndex(ctx, 1000, id) //nolint:mnd
 			if err != nil {
 				log.WithError(err).Errorf("unable to get events to index")
 				return
@@ -163,7 +163,7 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 		"room_id": output.RoomID,
 	}).Debug("Received data from client API server")
 
-	streamPos, err := s.db.UpsertAccountData(
+	streamPos, err := s.db.UpsertAccountData( //nolint:contextcheck
 		s.ctx, userID, output.RoomID, output.Type,
 	)
 	if err != nil {

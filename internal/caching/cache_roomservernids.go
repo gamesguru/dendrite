@@ -26,7 +26,7 @@ func (c Caches) GetRoomServerRoomID(roomNID types.RoomNID) (string, bool) {
 	return c.RoomServerRoomIDs.Get(roomNID)
 }
 
-// StoreRoomServerRoomID stores roomNID -> roomID and roomID -> roomNID
+// StoreRoomServerRoomID stores roomNID -> roomID and roomID -> roomNID.
 func (c Caches) StoreRoomServerRoomID(roomNID types.RoomNID, roomID string) {
 	c.RoomServerRoomNIDs.Set(roomID, roomNID)
 	c.RoomServerRoomIDs.Set(roomNID, roomID)

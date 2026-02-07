@@ -9,10 +9,7 @@ package federationapi
 import (
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
@@ -21,16 +18,17 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi/internal"
 	"codefloe.com/pat-s/dendrite/federationapi/producers"
 	"codefloe.com/pat-s/dendrite/federationapi/queue"
+	"codefloe.com/pat-s/dendrite/federationapi/routing"
 	"codefloe.com/pat-s/dendrite/federationapi/statistics"
 	"codefloe.com/pat-s/dendrite/federationapi/storage"
 	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-
-	"github.com/matrix-org/gomatrixserverlib"
-
-	"codefloe.com/pat-s/dendrite/federationapi/routing"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.

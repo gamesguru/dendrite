@@ -10,16 +10,17 @@ import (
 	"net/http"
 	"time"
 
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type openIDUserInfoResponse struct {
 	Sub string `json:"sub"`
 }
 
-// GetOpenIDUserInfo implements GET /_matrix/federation/v1/openid/userinfo
+// GetOpenIDUserInfo implements GET /_matrix/federation/v1/openid/userinfo.
 func GetOpenIDUserInfo(
 	httpReq *http.Request,
 	userAPI userapi.FederationUserAPI,
@@ -42,7 +43,7 @@ func GetOpenIDUserInfo(
 		util.GetLogger(httpReq.Context()).WithError(err).Error("userAPI.QueryOpenIDToken failed")
 	}
 
-	var res interface{} = openIDUserInfoResponse{Sub: openIDTokenAttrResponse.Sub}
+	var res any = openIDUserInfoResponse{Sub: openIDTokenAttrResponse.Sub}
 	code := http.StatusOK
 	nowMS := time.Now().UnixNano() / int64(time.Millisecond)
 	if openIDTokenAttrResponse.Sub == "" || nowMS > openIDTokenAttrResponse.ExpiresAtMS {

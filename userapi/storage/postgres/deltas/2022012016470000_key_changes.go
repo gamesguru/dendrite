@@ -23,7 +23,7 @@ func UpRefactorKeyChanges(ctx context.Context, tx *sql.Tx) error {
 		var maxOffset int64
 		_ = tx.QueryRowContext(ctx, `SELECT coalesce(MAX(log_offset), 0) AS offset FROM keyserver_key_changes`).Scan(&maxOffset)
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`CREATE SEQUENCE IF NOT EXISTS keyserver_key_changes_seq START %d`, maxOffset)); err != nil {
-			return fmt.Errorf("failed to CREATE SEQUENCE for key changes, starting at %d: %s", maxOffset, err)
+			return fmt.Errorf("failed to CREATE SEQUENCE for key changes, starting at %d: %w", maxOffset, err)
 		}
 	}
 

@@ -12,6 +12,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+	_ "golang.org/x/mobile/bind"
+
 	"codefloe.com/pat-s/dendrite/appservice"
 	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/signing"
 	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/yggconn"
@@ -30,12 +36,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/userapi"
-	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
-
-	_ "golang.org/x/mobile/bind"
 )
 
 type DendriteMonolith struct {
@@ -115,7 +115,11 @@ func (m *DendriteMonolith) Start() {
 		}
 	}
 
-	pk = sk.Public().(ed25519.PublicKey)
+	var ok bool
+	pk, ok = sk.Public().(ed25519.PublicKey)
+	if !ok {
+		panic("unexpected key type")
+	}
 
 	var err error
 	m.listener, err = net.Listen("tcp", "localhost:65432")
@@ -200,7 +204,7 @@ func (m *DendriteMonolith) Start() {
 	defer func() {
 		processCtx.ShutdownDendrite()
 		processCtx.WaitForShutdown()
-	}() // nolint: errcheck
+	}()
 
 	federation := ygg.CreateFederationClient(cfg)
 
@@ -254,9 +258,9 @@ func (m *DendriteMonolith) Start() {
 	m.httpServer = &http.Server{
 		Addr:         ":0",
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		ReadTimeout:  10 * time.Second, //nolint:mnd
+		WriteTimeout: 10 * time.Second, //nolint:mnd
+		IdleTimeout:  30 * time.Second, //nolint:mnd
 		BaseContext: func(_ net.Listener) context.Context {
 			return context.Background()
 		},

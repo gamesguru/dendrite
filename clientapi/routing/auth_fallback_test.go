@@ -47,10 +47,8 @@ func Test_AuthFallback(t *testing.T) {
 						if rec.Body.String() != "Recaptcha login is disabled on this Homeserver" {
 							t.Fatalf("unexpected response body: %s", rec.Body.String())
 						}
-					} else {
-						if !strings.Contains(rec.Body.String(), cfg.ClientAPI.RecaptchaSitekeyClass) {
-							t.Fatalf("body does not contain %s: %s", cfg.ClientAPI.RecaptchaSitekeyClass, rec.Body.String())
-						}
+					} else if !strings.Contains(rec.Body.String(), cfg.ClientAPI.RecaptchaSitekeyClass) {
+						t.Fatalf("body does not contain %s: %s", cfg.ClientAPI.RecaptchaSitekeyClass, rec.Body.String())
 					}
 
 					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +58,7 @@ func Test_AuthFallback(t *testing.T) {
 						}
 						_, _ = w.Write([]byte(`{"success":true}`))
 					}))
-					defer srv.Close() // nolint: errcheck
+					defer srv.Close()
 
 					cfg.ClientAPI.RecaptchaSiteVerifyAPI = srv.URL
 

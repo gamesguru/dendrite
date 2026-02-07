@@ -3,18 +3,21 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
 
-	"codefloe.com/pat-s/dendrite/internal/pushrules"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/internal/pushrules"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-func errorResponse(ctx context.Context, err error, msg string, args ...interface{}) util.JSONResponse {
-	if eerr, ok := err.(spec.MatrixError); ok {
+func errorResponse(ctx context.Context, err error, msg string, args ...any) util.JSONResponse {
+	var eerr spec.MatrixError
+	if errors.As(err, &eerr) {
 		var status int
 		switch eerr.ErrCode {
 		case spec.ErrorInvalidParam:
@@ -218,7 +221,7 @@ func GetPushRuleAttrByRuleID(ctx context.Context, scope, kind, ruleID, attr stri
 	}
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: map[string]interface{}{
+		JSON: map[string]any{
 			attr: attrGet((*rulesPtr)[i]),
 		},
 	}
@@ -309,12 +312,12 @@ func pushRuleIndexByID(rules []*pushrules.Rule, id string) int {
 	return -1
 }
 
-func pushRuleAttrGetter(attr string) (func(*pushrules.Rule) interface{}, error) {
+func pushRuleAttrGetter(attr string) (func(*pushrules.Rule) any, error) {
 	switch attr {
 	case "actions":
-		return func(rule *pushrules.Rule) interface{} { return rule.Actions }, nil
+		return func(rule *pushrules.Rule) any { return rule.Actions }, nil
 	case "enabled":
-		return func(rule *pushrules.Rule) interface{} { return rule.Enabled }, nil
+		return func(rule *pushrules.Rule) any { return rule.Enabled }, nil
 	default:
 		return nil, spec.InvalidParam("invalid push rule attribute")
 	}

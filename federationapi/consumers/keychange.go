@@ -59,7 +59,7 @@ func NewKeyChangeConsumer(
 	}
 }
 
-// Start consuming from key servers
+// Start consuming from key servers.
 func (t *KeyChangeConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1,
@@ -84,11 +84,11 @@ func (t *KeyChangeConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) boo
 	}
 	switch m.Type {
 	case api.TypeCrossSigningUpdate:
-		return t.onCrossSigningMessage(m)
+		return t.onCrossSigningMessage(m) //nolint:contextcheck
 	case api.TypeDeviceKeyUpdate:
 		fallthrough
 	default:
-		return t.onDeviceKeyMessage(m)
+		return t.onDeviceKeyMessage(m) //nolint:contextcheck
 	}
 }
 

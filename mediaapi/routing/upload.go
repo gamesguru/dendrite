@@ -18,21 +18,22 @@ import (
 	"path"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/mediaapi/fileutils"
 	"codefloe.com/pat-s/dendrite/mediaapi/storage"
 	"codefloe.com/pat-s/dendrite/mediaapi/thumbnailer"
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	log "github.com/sirupsen/logrus"
 )
 
 // uploadRequest metadata included in or derivable from an upload request
 // https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-media-r0-upload
-// NOTE: The members come from HTTP request metadata such as headers, query parameters or can be derived from such
+// NOTE: The members come from HTTP request metadata such as headers, query parameters or can be derived from such.
 type uploadRequest struct {
 	MediaMetadata *types.MediaMetadata
 	Logger        *log.Entry
@@ -69,7 +70,7 @@ func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db sto
 
 // parseAndValidateRequest parses the incoming upload request to validate and extract
 // all the metadata about the media being uploaded.
-// Returns either an uploadRequest or an error formatted as a util.JSONResponse
+// Returns either an uploadRequest or an error formatted as a util.JSONResponse.
 func parseAndValidateRequest(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device) (*uploadRequest, *util.JSONResponse) {
 	r := &uploadRequest{
 		MediaMetadata: &types.MediaMetadata{
@@ -241,7 +242,7 @@ func requestEntityTooLargeJSONResponse(maxFileSizeBytes config.FileSizeBytes) *u
 	}
 }
 
-// Validate validates the uploadRequest fields
+// Validate validates the uploadRequest fields.
 func (r *uploadRequest) Validate(maxFileSizeBytes config.FileSizeBytes) *util.JSONResponse {
 	if maxFileSizeBytes > 0 && r.MediaMetadata.FileSizeBytes > types.FileSizeBytes(maxFileSizeBytes) {
 		return requestEntityTooLargeJSONResponse(maxFileSizeBytes)
@@ -309,13 +310,13 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 	}
 
-	go func() {
+	go func() { //nolint:contextcheck
 		file, err := os.Open(string(finalPath))
 		if err != nil {
 			r.Logger.WithError(err).Error("unable to open file")
 			return
 		}
-		defer file.Close() // nolint: errcheck
+		defer file.Close()
 		// http.DetectContentType only needs 512 bytes
 		buf := make([]byte, 512)
 		_, err = file.Read(buf)

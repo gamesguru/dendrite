@@ -10,13 +10,14 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 type loginResponse struct {
@@ -33,12 +34,13 @@ type flow struct {
 	Type string `json:"type"`
 }
 
-// Login implements GET and POST /login
+// Login implements GET and POST /login.
 func Login(
 	req *http.Request, userAPI userapi.ClientUserAPI,
 	cfg *config.ClientAPI,
 ) util.JSONResponse {
-	if req.Method == http.MethodGet {
+	switch req.Method {
+	case http.MethodGet:
 		loginFlows := []flow{{Type: authtypes.LoginTypePassword}}
 		if len(cfg.Derived.ApplicationServices) > 0 {
 			loginFlows = append(loginFlows, flow{Type: authtypes.LoginTypeApplicationService})
@@ -50,7 +52,7 @@ func Login(
 				Flows: loginFlows,
 			},
 		}
-	} else if req.Method == http.MethodPost {
+	case http.MethodPost:
 		login, cleanup, authErr := auth.LoginFromJSONReader(req, userAPI, userAPI, cfg)
 		if authErr != nil {
 			return *authErr

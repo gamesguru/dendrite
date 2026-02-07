@@ -101,7 +101,7 @@ func (c *FederationAPI) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-// The config for setting a proxy to use for server->server requests
+// The config for setting a proxy to use for server->server requests.
 type Proxy struct {
 	// Is the proxy enabled?
 	Enabled bool `yaml:"enabled"`

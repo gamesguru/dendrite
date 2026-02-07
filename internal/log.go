@@ -84,7 +84,7 @@ func (h *logLevelHook) Levels() []logrus.Level {
 
 // callerPrettyfier is a function that given a runtime.Frame object, will
 // extract the calling function's name and file, and return them in a nicely
-// formatted way
+// formatted way.
 func callerPrettyfier(f *runtime.Frame) (string, string) {
 	// Retrieve just the function name
 	s := strings.Split(f.Function, ".")
@@ -128,8 +128,8 @@ func SetupStdLogging() {
 	})
 }
 
-// File type hooks should be provided a path to a directory to store log files
-func checkFileHookParams(params map[string]interface{}) {
+// File type hooks should be provided a path to a directory to store log files.
+func checkFileHookParams(params map[string]any) {
 	path, ok := params["path"]
 	if !ok {
 		logrus.Fatalf("Expecting a parameter \"path\" for logging hook of type \"file\"")
@@ -140,9 +140,12 @@ func checkFileHookParams(params map[string]interface{}) {
 	}
 }
 
-// Add a new FSHook to the logger. Each component will log in its own file
+// Add a new FSHook to the logger. Each component will log in its own file.
 func setupFileHook(hook config.LogrusHook, level logrus.Level) {
-	dirPath := (hook.Params["path"]).(string)
+	dirPath, ok := (hook.Params["path"]).(string)
+	if !ok {
+		logrus.Fatal("log hook 'path' param is not a string")
+	}
 	fullPath := filepath.Join(dirPath, "dendrite.log")
 
 	if err := os.MkdirAll(path.Dir(fullPath), os.ModePerm); err != nil {
@@ -152,7 +155,7 @@ func setupFileHook(hook config.LogrusHook, level logrus.Level) {
 	// Create timberjack logger with daily rotation and gzip compression
 	writer := &timberjack.Logger{
 		Filename:    fullPath,
-		MaxBackups:  7,                 // keep 7 days of backups
+		MaxBackups:  7,                 //nolint:mnd                 // keep 7 days of backups
 		Compression: "gzip",            // compress rotated files
 		RotateAt:    []string{"00:00"}, // rotate daily at midnight
 	}
@@ -174,8 +177,8 @@ func setupFileHook(hook config.LogrusHook, level logrus.Level) {
 	})
 }
 
-// CloseAndLogIfError Closes io.Closer and logs the error if any
-func CloseAndLogIfError(ctx context.Context, closer io.Closer, message string) {
+// CloseAndLogIfError Closes io.Closer and logs the error if any.
+func CloseAndLogIfError(ctx context.Context, closer io.Closer, message string) { //nolint:contextcheck
 	if closer == nil {
 		return
 	}

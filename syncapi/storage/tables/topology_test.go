@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
@@ -13,7 +15,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/stretchr/testify/assert"
 )
 
 func newTopologyTable(t *testing.T, dbType test.DBType) (tables.Topology, *sql.DB, func()) {
@@ -52,7 +53,7 @@ func TestTopologyTable(t *testing.T) {
 			for i, ev := range events {
 				topoPos, err := tab.InsertEventInTopology(ctx, txn, ev, types.StreamPosition(i))
 				if err != nil {
-					return fmt.Errorf("failed to InsertEventInTopology: %s", err)
+					return fmt.Errorf("failed to InsertEventInTopology: %w", err)
 				}
 				// topo pos = depth, depth starts at 1, hence 1+i
 				if topoPos != types.StreamPosition(1+i) {
@@ -63,13 +64,13 @@ func TestTopologyTable(t *testing.T) {
 			// check ordering works without limit
 			eventIDs, start, end, err := tab.SelectEventIDsInRange(ctx, txn, room.ID, 0, highestPos, highestPos, 100, true)
 			assert.NoError(t, err, "failed to SelectEventIDsInRange")
-			test.AssertEventIDsEqual(t, eventIDs, events[:])
+			test.AssertEventIDsEqual(t, eventIDs, events)
 			assert.Equal(t, types.TopologyToken{Depth: 1, PDUPosition: 0}, start)
 			assert.Equal(t, types.TopologyToken{Depth: 5, PDUPosition: 4}, end)
 
 			eventIDs, start, end, err = tab.SelectEventIDsInRange(ctx, txn, room.ID, 0, highestPos, highestPos, 100, false)
 			assert.NoError(t, err, "failed to SelectEventIDsInRange")
-			test.AssertEventIDsEqual(t, eventIDs, test.Reversed(events[:]))
+			test.AssertEventIDsEqual(t, eventIDs, test.Reversed(events))
 			assert.Equal(t, types.TopologyToken{Depth: 5, PDUPosition: 4}, start)
 			assert.Equal(t, types.TopologyToken{Depth: 1, PDUPosition: 0}, end)
 

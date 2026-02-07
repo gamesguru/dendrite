@@ -46,7 +46,7 @@ func Test_EventAuth(t *testing.T) {
 	}
 
 	// Craft the illegal join event, with auth events from different rooms
-	ev := room2.CreateEvent(t, bob, "m.room.member", map[string]interface{}{
+	ev := room2.CreateEvent(t, bob, "m.room.member", map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID), test.WithAuthIDs(authEventIDs))
 
@@ -67,7 +67,7 @@ func Test_EventAuth(t *testing.T) {
 }
 
 // Test_ResolvePartialStateAuth_NoConflicts tests that when there are no conflicts,
-// the function returns all unique state events
+// the function returns all unique state events.
 func Test_ResolvePartialStateAuth_NoConflicts(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -124,7 +124,7 @@ func Test_ResolvePartialStateAuth_NoConflicts(t *testing.T) {
 }
 
 // Test_ResolvePartialStateAuth_WithConflicts tests that conflicting events
-// are detected and would be passed to state resolution
+// are detected and would be passed to state resolution.
 func Test_ResolvePartialStateAuth_WithConflicts(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
@@ -142,7 +142,7 @@ func Test_ResolvePartialStateAuth_WithConflicts(t *testing.T) {
 
 	// Create a different power levels event to simulate conflict
 	// In partial state, we might have a different power levels from auth events
-	conflictingPL := room.CreateEvent(t, alice, spec.MRoomPowerLevels, map[string]interface{}{
+	conflictingPL := room.CreateEvent(t, alice, spec.MRoomPowerLevels, map[string]any{
 		"users": map[string]int{
 			alice.ID: 100,
 			bob.ID:   50, // Different from original
@@ -200,7 +200,7 @@ func Test_ResolvePartialStateAuth_WithConflicts(t *testing.T) {
 }
 
 // Test_ResolvePartialStateAuth_NewStateFromAuth tests that auth events
-// with new state keys are added to the result
+// with new state keys are added to the result.
 func Test_ResolvePartialStateAuth_NewStateFromAuth(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
@@ -218,7 +218,7 @@ func Test_ResolvePartialStateAuth_NewStateFromAuth(t *testing.T) {
 
 	// Auth events include a membership event not in local state
 	// This simulates receiving auth events with member info we don't have
-	bobMember := room.CreateEvent(t, bob, spec.MRoomMember, map[string]interface{}{
+	bobMember := room.CreateEvent(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 

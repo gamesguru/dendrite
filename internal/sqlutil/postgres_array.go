@@ -16,7 +16,7 @@ import (
 type Int64Array []int64
 
 // Scan implements the sql.Scanner interface.
-func (a *Int64Array) Scan(src interface{}) error {
+func (a *Int64Array) Scan(src any) error {
 	if src == nil {
 		*a = nil
 		return nil
@@ -82,7 +82,7 @@ func (a Int64Array) Value() (driver.Value, error) {
 type StringArray []string
 
 // Scan implements the sql.Scanner interface.
-func (a *StringArray) Scan(src interface{}) error {
+func (a *StringArray) Scan(src any) error {
 	if src == nil {
 		*a = nil
 		return nil

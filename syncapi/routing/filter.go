@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
@@ -19,10 +20,9 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/sync"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// GetFilter implements GET /_matrix/client/r0/user/{userId}/filter/{filterId}
+// GetFilter implements GET /_matrix/client/r0/user/{userId}/filter/{filterId}.
 func GetFilter(
 	req *http.Request, device *api.Device, syncDB storage.Database, userID string, filterID string,
 ) util.JSONResponse {
@@ -86,7 +86,7 @@ func PutFilter(
 
 	var filter synctypes.Filter
 
-	defer req.Body.Close() // nolint:errcheck
+	defer req.Body.Close()
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{

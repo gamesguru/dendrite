@@ -12,11 +12,12 @@ import (
 	"net/http"
 	"regexp"
 
-	"codefloe.com/pat-s/dendrite/clientapi/userutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/clientapi/userutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 const (
@@ -35,7 +36,7 @@ var (
 	validUsernameRegex    = regexp.MustCompile(`^[0-9a-z_\-+=./]+$`)
 )
 
-// ValidatePassword returns an error if the password is invalid
+// ValidatePassword returns an error if the password is invalid.
 func ValidatePassword(password string) error {
 	// https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/rest/client/v2_alpha/register.py#L161
 	if len(password) > maxPasswordLength {
@@ -48,13 +49,13 @@ func ValidatePassword(password string) error {
 
 // PasswordResponse returns a util.JSONResponse for a given error, if any.
 func PasswordResponse(err error) *util.JSONResponse {
-	switch err {
-	case ErrPasswordWeak:
+	if errors.Is(err, ErrPasswordWeak) {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.WeakPassword(ErrPasswordWeak.Error()),
 		}
-	case ErrPasswordTooLong:
+	}
+	if errors.Is(err, ErrPasswordTooLong) {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON(ErrPasswordTooLong.Error()),
@@ -63,7 +64,7 @@ func PasswordResponse(err error) *util.JSONResponse {
 	return nil
 }
 
-// ValidateUsername returns an error if the username is invalid
+// ValidateUsername returns an error if the username is invalid.
 func ValidateUsername(localpart string, domain spec.ServerName) error {
 	// https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/rest/client/v2_alpha/register.py#L161
 	if id := fmt.Sprintf("@%s:%s", localpart, domain); len(id) > maxUsernameLength {
@@ -78,13 +79,13 @@ func ValidateUsername(localpart string, domain spec.ServerName) error {
 
 // UsernameResponse returns a util.JSONResponse for the given error, if any.
 func UsernameResponse(err error) *util.JSONResponse {
-	switch err {
-	case ErrUsernameTooLong:
+	if errors.Is(err, ErrUsernameTooLong) {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON(err.Error()),
 		}
-	case ErrUsernameInvalid, ErrUsernameUnderscore:
+	}
+	if errors.Is(err, ErrUsernameInvalid) || errors.Is(err, ErrUsernameUnderscore) {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.InvalidUsername(err.Error()),
@@ -93,7 +94,7 @@ func UsernameResponse(err error) *util.JSONResponse {
 	return nil
 }
 
-// ValidateApplicationServiceUsername returns an error if the username is invalid for an application service
+// ValidateApplicationServiceUsername returns an error if the username is invalid for an application service.
 func ValidateApplicationServiceUsername(localpart string, domain spec.ServerName) error {
 	userID := userutil.MakeUserID(localpart, domain)
 	return ValidateApplicationServiceUserID(userID)
@@ -149,7 +150,7 @@ func userIDIsWithinApplicationServiceNamespace(
 }
 
 // usernameMatchesMultipleExclusiveNamespaces will check if a given username matches
-// more than one exclusive namespace. More than one is not allowed
+// more than one exclusive namespace. More than one is not allowed.
 func userIDMatchesMultipleExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	userID string,

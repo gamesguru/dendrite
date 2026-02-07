@@ -17,18 +17,17 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 )
@@ -45,7 +44,7 @@ var deviceListUpdateCount = prometheus.NewCounterVec(
 
 const requestTimeout = time.Second * 30
 
-func init() {
+func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		deviceListUpdateCount,
 	)
@@ -203,9 +202,9 @@ func (u *DeviceListUpdater) Start() error {
 	}
 
 	newStaleLists := dedupeStaleLists(staleLists)
-	offset, step := time.Second*10, time.Second
-	if max := len(newStaleLists); max > 120 {
-		step = (time.Second * 120) / time.Duration(max)
+	offset, step := time.Second*10, time.Second //nolint:mnd
+	if max := len(newStaleLists); max > 120 {   //nolint:mnd
+		step = (time.Second * 120) / time.Duration(max) //nolint:mnd
 	}
 	for _, userID := range newStaleLists {
 		userID := userID // otherwise we are only sending the last entry
@@ -217,7 +216,7 @@ func (u *DeviceListUpdater) Start() error {
 	return nil
 }
 
-// CleanUp removes stale device entries for users we don't share a room with anymore
+// CleanUp removes stale device entries for users we don't share a room with anymore.
 func (u *DeviceListUpdater) CleanUp() error {
 	staleUsers, err := u.db.StaleDeviceLists(u.process.Context(), []spec.ServerName{})
 	if err != nil {
@@ -419,7 +418,7 @@ func (u *DeviceListUpdater) worker(ch chan spec.ServerName, workerID int) {
 			time.Sleep(time.Second * 2)
 
 			// -2, so we have space for incoming device list updates over federation
-			maxServers := (cap(ch) - len(ch)) - 2
+			maxServers := (cap(ch) - len(ch)) - 2 //nolint:mnd
 			if maxServers <= 0 {
 				continue
 			}
@@ -534,36 +533,41 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 	res, err := u.fedClient.GetUserDevices(ctx, u.thisServer, serverName, userID)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return time.Minute * 10, err
+			return time.Minute * 10, err //nolint:mnd
 		}
-		switch e := err.(type) {
-		case *json.UnmarshalTypeError, *json.SyntaxError:
+		var unmarshalErr *json.UnmarshalTypeError
+		var syntaxErr *json.SyntaxError
+		var fedErr *fedsenderapi.FederationClientError
+		var netErr net.Error
+		var httpErr gomatrix.HTTPError
+		switch {
+		case errors.As(err, &unmarshalErr), errors.As(err, &syntaxErr):
 			logger.WithError(err).Debugf("Device list update for %q contained invalid JSON", userID)
 			return defaultWaitTime, nil
-		case *fedsenderapi.FederationClientError:
-			if e.RetryAfter > 0 {
-				return e.RetryAfter, err
-			} else if e.Blacklisted {
-				return time.Hour * 8, err
+		case errors.As(err, &fedErr):
+			if fedErr.RetryAfter > 0 {
+				return fedErr.RetryAfter, err
+			} else if fedErr.Blacklisted {
+				return time.Hour * 8, err //nolint:mnd
 			}
-		case net.Error:
+		case errors.As(err, &netErr):
 			// Use the default waitTime, if it's a timeout.
 			// It probably doesn't make sense to try further users.
-			if !e.Timeout() {
-				logger.WithError(e).Debug("GetUserDevices returned net.Error")
-				return time.Minute * 10, err
+			if !netErr.Timeout() {
+				logger.WithError(netErr).Debug("GetUserDevices returned net.Error")
+				return time.Minute * 10, err //nolint:mnd
 			}
-		case gomatrix.HTTPError:
+		case errors.As(err, &httpErr):
 			// The remote server returned an error, give it some time to recover.
 			// This is to avoid spamming remote servers, which may not be Matrix servers anymore.
-			if e.Code >= 300 {
-				logger.WithError(e).Debug("GetUserDevices returned gomatrix.HTTPError")
+			if httpErr.Code >= 300 { //nolint:mnd
+				logger.WithError(httpErr).Debug("GetUserDevices returned gomatrix.HTTPError")
 				return hourWaitTime, err
 			}
 		default:
 			// Something else failed
 			logger.WithError(err).Debugf("GetUserDevices returned unknown error type: %T", err)
-			return time.Minute * 10, err
+			return time.Minute * 10, err //nolint:mnd
 		}
 	}
 	if res.UserID != userID {
@@ -587,7 +591,7 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 		}
 		u.api.PerformUploadDeviceKeys(ctx, uploadReq, uploadRes)
 	}
-	err = u.updateDeviceList(&res)
+	err = u.updateDeviceList(&res) //nolint:contextcheck
 	if err != nil {
 		logger.WithError(err).Error("Fetched device list but failed to store/emit it")
 		return defaultWaitTime, err

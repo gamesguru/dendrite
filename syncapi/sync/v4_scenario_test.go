@@ -10,19 +10,20 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 // =============================================================================
 // Timeline Scenario Tests (based on Synapse's test_rooms_timeline.py)
-// =============================================================================
+// =============================================================================.
 
-// TestTimelineLimitedFlag tests the limited flag behaviour
-// Based on Synapse's test_rooms_limited_initial_sync and test_rooms_not_limited_initial_sync
+// TestTimelineLimitedFlag tests the limited flag behavior
+// Based on Synapse's test_rooms_limited_initial_sync and test_rooms_not_limited_initial_sync.
 func TestTimelineLimitedFlag(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -90,7 +91,7 @@ func TestTimelineLimitedFlag(t *testing.T) {
 }
 
 // TestNumLiveCalculationScenarios tests num_live calculation scenarios
-// Based on Synapse's num_live assertions in test_rooms_timeline.py
+// Based on Synapse's num_live assertions in test_rooms_timeline.py.
 func TestNumLiveCalculationScenarios(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -174,7 +175,7 @@ func TestNumLiveCalculationScenarios(t *testing.T) {
 }
 
 // TestBanVisibilityTimeline tests that banned users only see events up to their ban
-// Based on Synapse's test_rooms_ban_initial_sync
+// Based on Synapse's test_rooms_ban_initial_sync.
 func TestBanVisibilityTimeline(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -237,11 +238,9 @@ func TestBanVisibilityTimeline(t *testing.T) {
 				if membership == spec.Join {
 					// Joined users see all events
 					visibleCount++
-				} else {
+				} else if eventPos <= membershipPos {
 					// Banned/left users see events up to their membership change
-					if eventPos <= membershipPos {
-						visibleCount++
-					}
+					visibleCount++
 				}
 			}
 
@@ -252,10 +251,10 @@ func TestBanVisibilityTimeline(t *testing.T) {
 
 // =============================================================================
 // Invite Scenario Tests (based on Synapse's test_rooms_invites.py)
-// =============================================================================
+// =============================================================================.
 
 // TestInviteRoomDataStructure tests that invite rooms have correct structure
-// Based on Synapse's test_rooms_invite_shared_history_initial_sync
+// Based on Synapse's test_rooms_invite_shared_history_initial_sync.
 func TestInviteRoomDataStructure(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -323,7 +322,7 @@ func TestInviteRoomDataStructure(t *testing.T) {
 }
 
 // TestInviteStrippedStateTypes tests which state types are included in invite_state
-// Based on Synapse's expected stripped state in test_rooms_invite_shared_history_initial_sync
+// Based on Synapse's expected stripped state in test_rooms_invite_shared_history_initial_sync.
 func TestInviteStrippedStateTypes(t *testing.T) {
 	t.Parallel()
 	expectedStrippedTypes := []struct {
@@ -368,10 +367,10 @@ func TestInviteStrippedStateTypes(t *testing.T) {
 
 // =============================================================================
 // Required State Delta Tests (based on Synapse's test_rooms_required_state.py)
-// =============================================================================
+// =============================================================================.
 
 // TestRequiredStateDeltaLIVE tests that LIVE rooms only get state updates
-// Based on Synapse's test_rooms_required_state_incremental_sync_LIVE
+// Based on Synapse's test_rooms_required_state_incremental_sync_LIVE.
 func TestRequiredStateDeltaLIVE(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -440,7 +439,7 @@ func TestRequiredStateDeltaLIVE(t *testing.T) {
 		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// Calculate expected behaviour based on BuildRoomData logic
+			// Calculate expected behavior based on BuildRoomData logic
 			shouldFetchState := false
 			reason := ""
 
@@ -452,21 +451,22 @@ func TestRequiredStateDeltaLIVE(t *testing.T) {
 				reason = "incremental sync with timeline events and $LAZY"
 			}
 
-			if tt.expectFullState {
+			switch {
+			case tt.expectFullState:
 				assert.True(t, shouldFetchState, tt.description)
 				assert.Equal(t, "initial sync", reason)
-			} else if tt.expectStateUpdates {
+			case tt.expectStateUpdates:
 				assert.True(t, shouldFetchState, tt.description)
 				assert.Contains(t, reason, "$LAZY")
-			} else {
+			default:
 				assert.False(t, shouldFetchState, tt.description)
 			}
 		})
 	}
 }
 
-// TestRequiredStateWildcardPatterns tests wildcard pattern behaviour
-// Based on Synapse's test_rooms_required_state_wildcard_*
+// TestRequiredStateWildcardPatterns tests wildcard pattern behavior.
+// Based on Synapse's test_rooms_required_state_wildcard_*.
 func TestRequiredStateWildcardPatterns(t *testing.T) {
 	t.Parallel()
 	userID := "@alice:localhost"
@@ -562,10 +562,10 @@ func TestRequiredStateWildcardPatterns(t *testing.T) {
 
 // =============================================================================
 // Connection State Tests (based on Synapse's test_connection_tracking.py)
-// =============================================================================
+// =============================================================================.
 
 // TestConnectionStatePersistence tests connection state tracking
-// Based on Synapse's LIVE/PREVIOUSLY/NEVER state transitions
+// Based on Synapse's LIVE/PREVIOUSLY/NEVER state transitions.
 func TestConnectionStatePersistence(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -623,7 +623,7 @@ func TestConnectionStatePersistence(t *testing.T) {
 }
 
 // TestConnectionStateRoomSubscriptions tests room subscription handling
-// Based on Synapse's test_room_subscriptions_* tests
+// Based on Synapse's test_room_subscriptions_* tests.
 func TestConnectionStateRoomSubscriptions(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -685,10 +685,10 @@ func TestConnectionStateRoomSubscriptions(t *testing.T) {
 
 // =============================================================================
 // Newly Joined Room Tests (based on Synapse's test_rooms_newly_joined_*)
-// =============================================================================
+// =============================================================================.
 
-// TestNewlyJoinedRoomBehaviour tests behaviour for newly joined rooms
-// Based on Synapse's test_rooms_newly_joined_incremental_sync
+// TestNewlyJoinedRoomBehaviour tests behavior for newly joined rooms
+// Based on Synapse's test_rooms_newly_joined_incremental_sync.
 func TestNewlyJoinedRoomBehaviour(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -788,10 +788,10 @@ func TestNewlyJoinedRoomBehaviour(t *testing.T) {
 
 // =============================================================================
 // Bump Stamp Scenario Tests (based on Synapse's bump stamp tests)
-// =============================================================================
+// =============================================================================.
 
 // TestBumpStampEventFiltering tests which events affect bump_stamp
-// Based on Synapse's test_rooms_bump_stamp
+// Based on Synapse's test_rooms_bump_stamp.
 func TestBumpStampEventFiltering(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -898,10 +898,10 @@ func TestBumpStampEventFiltering(t *testing.T) {
 
 // =============================================================================
 // Heroes Scenario Tests (based on Synapse's hero tests)
-// =============================================================================
+// =============================================================================.
 
 // TestHeroesMaxLimit tests the maximum number of heroes
-// Based on Synapse's test_rooms_meta_heroes_max
+// Based on Synapse's test_rooms_meta_heroes_max.
 func TestHeroesMaxLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -944,7 +944,7 @@ func TestHeroesMaxLimit(t *testing.T) {
 }
 
 // TestHeroesWhenBanned tests hero extraction when user is banned
-// Based on Synapse's test_rooms_meta_heroes_when_banned
+// Based on Synapse's test_rooms_meta_heroes_when_banned.
 func TestHeroesWhenBanned(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

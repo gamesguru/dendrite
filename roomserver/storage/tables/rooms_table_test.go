@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
@@ -11,8 +14,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateRoomsTable(t *testing.T, dbType test.DBType) (tab tables.Rooms, close func()) {
@@ -42,7 +43,7 @@ func TestRoomsTable(t *testing.T) {
 	room := test.NewRoom(t, alice)
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreateRoomsTable(t, dbType)
+		tab, close := mustCreateRoomsTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		wantRoomNID, err := tab.InsertRoomNID(ctx, nil, room.ID, room.Version)

@@ -14,16 +14,16 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3"
 )
 
 // NewUserDatabase opens a new Postgres or Sqlite database (based on dataSourceName scheme)
-// and sets postgres connection parameters
+// and sets postgres connection parameters.
 func NewUserDatabase(
 	ctx context.Context,
 	conMan *sqlutil.Connections,
@@ -45,7 +45,7 @@ func NewUserDatabase(
 }
 
 // NewKeyDatabase opens a new Postgres or Sqlite database (base on dataSourceName) scheme)
-// and sets postgres connection parameters.
+// and sets postgres connection parameters..
 func NewKeyDatabase(conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions) (KeyDatabase, error) {
 	switch {
 	case dbProperties.ConnectionString.IsSQLite():

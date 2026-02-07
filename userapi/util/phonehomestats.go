@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type phoneHomeStats struct {
 	prevData   timestampToRUUsage
-	stats      map[string]interface{}
+	stats      map[string]any
 	serverName spec.ServerName
 	startTime  time.Time
 	cfg        *config.Dendrite
@@ -48,7 +48,7 @@ func StartPhoneHomeCollector(startTime time.Time, cfg *config.Dendrite, statsDB 
 		db:         statsDB,
 		isMonolith: true,
 		client: &http.Client{
-			Timeout:   time.Second * 30,
+			Timeout:   time.Second * 30, //nolint:mnd
 			Transport: http.DefaultTransport,
 		},
 	}
@@ -64,7 +64,7 @@ func StartPhoneHomeCollector(startTime time.Time, cfg *config.Dendrite, statsDB 
 }
 
 func (p *phoneHomeStats) collect() {
-	p.stats = make(map[string]interface{})
+	p.stats = make(map[string]any)
 	// general information
 	p.stats["homeserver"] = p.serverName
 	p.stats["monolith"] = p.isMonolith
@@ -149,7 +149,10 @@ func (p *phoneHomeStats) collect() {
 	}
 	request.Header.Set("User-Agent", "Dendrite/"+internal.VersionString())
 
-	_, err = p.client.Do(request)
+	resp, err := p.client.Do(request)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil {
 		logrus.WithError(err).Error("Unable to send phone-home statistics")
 		return

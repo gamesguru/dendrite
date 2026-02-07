@@ -6,7 +6,7 @@ import (
 )
 
 // Version can be set at build time using:
-// -ldflags "-X codefloe.com/pat-s/dendrite/internal.version=1.0.0"
+// -ldflags "-X codefloe.com/pat-s/dendrite/internal.version=1.0.0".
 var version = "dev"
 
 const (
@@ -17,6 +17,7 @@ func VersionString() string {
 	return version
 }
 
+//nolint:gochecknoinits
 func init() {
 	// If version was set via ldflags, use it as-is but append git revision
 	parts := []string{}

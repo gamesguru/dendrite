@@ -19,14 +19,14 @@ import (
 	"testing"
 	"time"
 
-	api2 "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
+	api2 "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
@@ -475,8 +475,7 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	updater := DeviceListUpdater{
 		workerChans: make([]chan spec.ServerName, 1),
 		isBlacklistedOrBackingOffFn: func(s spec.ServerName) (*statistics.ServerStatistics, error) {
-			switch s {
-			case unreachableServer:
+			if s == unreachableServer {
 				return nil, &api2.FederationClientError{Blacklisted: true}
 			}
 			return nil, nil

@@ -11,14 +11,15 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/federationapi/queue"
 	"codefloe.com/pat-s/dendrite/federationapi/statistics"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -74,7 +75,8 @@ func TestFederationClientQueryKeys(t *testing.T) {
 
 func TestFederationClientQueryKeysBlacklisted(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
-	testDB.AddServerToBlacklist("server")
+	err := testDB.AddServerToBlacklist("server")
+	assert.NoError(t, err)
 
 	cfg := config.FederationAPI{
 		Matrix: &config.Global{
@@ -98,7 +100,7 @@ func TestFederationClientQueryKeysBlacklisted(t *testing.T) {
 		federation: fedClient,
 		queues:     queues,
 	}
-	_, err := fedapi.QueryKeys(context.Background(), "origin", "server", nil)
+	_, err = fedapi.QueryKeys(context.Background(), "origin", "server", nil)
 	assert.NotNil(t, err)
 	assert.False(t, fedClient.queryKeysCalled)
 }
@@ -165,7 +167,7 @@ func TestFederationClientClaimKeys(t *testing.T) {
 
 func TestFederationClientClaimKeysBlacklisted(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
-	testDB.AddServerToBlacklist("server")
+	_ = testDB.AddServerToBlacklist("server")
 
 	cfg := config.FederationAPI{
 		Matrix: &config.Global{

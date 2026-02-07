@@ -14,18 +14,19 @@ import (
 	"slices"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+
 	asAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// SetRoomAlias implements alias.RoomserverInternalAPI
+// SetRoomAlias implements alias.RoomserverInternalAPI.
 func (r *RoomserverInternalAPI) SetRoomAlias(
 	ctx context.Context,
 	senderID spec.SenderID,
@@ -51,7 +52,7 @@ func (r *RoomserverInternalAPI) SetRoomAlias(
 	return false, nil
 }
 
-// GetRoomIDForAlias implements alias.RoomserverInternalAPI
+// GetRoomIDForAlias implements alias.RoomserverInternalAPI.
 func (r *RoomserverInternalAPI) GetRoomIDForAlias(
 	ctx context.Context,
 	request *api.GetRoomIDForAliasRequest,
@@ -90,7 +91,7 @@ func (r *RoomserverInternalAPI) GetRoomIDForAlias(
 	return err
 }
 
-// GetAliasesForRoomID implements alias.RoomserverInternalAPI
+// GetAliasesForRoomID implements alias.RoomserverInternalAPI.
 func (r *RoomserverInternalAPI) GetAliasesForRoomID(
 	ctx context.Context,
 	request *api.GetAliasesForRoomIDRequest,
@@ -106,9 +107,9 @@ func (r *RoomserverInternalAPI) GetAliasesForRoomID(
 	return nil
 }
 
-// nolint:gocyclo
 // RemoveRoomAlias implements alias.RoomserverInternalAPI
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func (r *RoomserverInternalAPI) RemoveRoomAlias(ctx context.Context, senderID spec.SenderID, alias string) (aliasFound bool, aliasRemoved bool, err error) {
 	roomID, err := r.DB.GetRoomIDForAlias(ctx, alias)
 	if err != nil {
@@ -161,7 +162,7 @@ func (r *RoomserverInternalAPI) RemoveRoomAlias(ctx context.Context, senderID sp
 	}
 
 	ev, err := r.DB.GetStateEvent(ctx, roomID, spec.MRoomCanonicalAlias, "")
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return true, false, err
 	} else if ev != nil {
 		stateAlias := gjson.GetBytes(ev.Content(), "alias").Str

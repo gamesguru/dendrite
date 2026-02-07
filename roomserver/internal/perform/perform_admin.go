@@ -10,8 +10,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
@@ -20,10 +26,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/storage"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
 )
 
 type Admin struct {
@@ -159,11 +161,13 @@ func (r *Admin) PerformAdminEvacuateUser(
 	}
 
 	inviteRoomIDs, err := r.DB.GetRoomsByMembership(ctx, *fullUserID, spec.Invite)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
-	allRooms := append(roomIDs, inviteRoomIDs...)
+	allRooms := make([]string, 0, len(roomIDs)+len(inviteRoomIDs))
+	allRooms = append(allRooms, roomIDs...)
+	allRooms = append(allRooms, inviteRoomIDs...)
 	affected = make([]string, 0, len(allRooms))
 	for _, roomID := range allRooms {
 		leaveReq := &api.PerformLeaveRequest{
@@ -245,7 +249,7 @@ func (r *Admin) PerformAdminDownloadState(
 		var state gomatrixserverlib.StateResponse
 		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
 		if err != nil {
-			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
+			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %w", fwdExtremity, err)
 		}
 		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {

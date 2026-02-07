@@ -3,22 +3,23 @@ package streams
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/internal"
+	"codefloe.com/pat-s/dendrite/syncapi/notifier"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"codefloe.com/pat-s/dendrite/syncapi/notifier"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/sirupsen/logrus"
 )
 
 // The max number of per-room goroutines to have running.
@@ -136,7 +137,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		)
 		if jerr != nil {
 			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
-			if ctxErr := req.Context.Err(); ctxErr != nil || jerr == sql.ErrTxDone {
+			if ctxErr := req.Context.Err(); ctxErr != nil || errors.Is(jerr, sql.ErrTxDone) {
 				return from
 			}
 			continue
@@ -173,7 +174,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			)
 			if err != nil {
 				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
-				if err == context.DeadlineExceeded || err == context.Canceled || err == sql.ErrTxDone {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
 					return from
 				}
 				continue
@@ -281,7 +282,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 		var pos types.StreamPosition
 		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents); err != nil {
 			req.Log.WithError(err).Error("d.addRoomDeltaToResponse failed")
-			if err == context.DeadlineExceeded || err == context.Canceled || err == sql.ErrTxDone {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
 				return newPos
 			}
 			continue
@@ -318,7 +319,7 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 			&eventFilter, true, true,
 		)
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
 		}
@@ -349,7 +350,7 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 			&filter, true, true,
 		)
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
 		}
@@ -361,10 +362,10 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 	return dbEvents, nil
 }
 
-// Limit the recent events to X when going backwards
+// Limit the recent events to X when going backwards.
 const recentEventBackwardsLimit = 100
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -386,7 +387,11 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	)
 	recentEvents := make([]*rstypes.HeaderedEvent, len(recEvents))
 	for i := range recEvents {
-		recentEvents[i] = recEvents[i].(*rstypes.HeaderedEvent)
+		he, ok := recEvents[i].(*rstypes.HeaderedEvent)
+		if !ok {
+			continue
+		}
+		recentEvents[i] = he
 	}
 
 	// If we didn't return any events at all then don't bother doing anything else.
@@ -417,7 +422,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			ctx, snapshot, delta.RoomID, true, limited, stateFilter,
 			device, recentEvents, delta.StateEvents,
 		)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return r.From, fmt.Errorf("p.lazyLoadMembers: %w", err)
 		}
 	}
@@ -648,7 +653,7 @@ func applyHistoryVisibilityFilter(
 	return events, nil
 }
 
-// nolint: gocyclo
+//nolint:gocyclo
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -716,7 +721,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			false, limited, stateFilter,
 			device, recentEvents, stateEvents,
 		)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
 	}
@@ -834,7 +839,9 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	for _, membership := range memberships {
 		p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), membership.EventID())
 	}
-	stateEvents = append(newStateEvents, memberships...)
+	stateEvents = make([]*rstypes.HeaderedEvent, 0, len(newStateEvents)+len(memberships))
+	stateEvents = append(stateEvents, newStateEvents...)
+	stateEvents = append(stateEvents, memberships...)
 	return stateEvents, nil
 }
 
@@ -843,7 +850,7 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 func (p *PDUStreamProvider) addIgnoredUsersToFilter(ctx context.Context, snapshot storage.DatabaseTransaction, req *types.SyncRequest, eventFilter *synctypes.RoomEventFilter) error {
 	ignores, err := snapshot.IgnoresForUser(ctx, req.Device.UserID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err

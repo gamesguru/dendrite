@@ -19,9 +19,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 
-	"codefloe.com/pat-s/dendrite/setup/base"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi/api"
 	"codefloe.com/pat-s/dendrite/clientapi/auth"
@@ -32,8 +29,10 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"codefloe.com/pat-s/dendrite/internal/transactions"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/base"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type WellKnownClientHomeserver struct {
@@ -54,7 +53,8 @@ type WellKnownClientResponse struct {
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
 // applied:
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
 	dendriteCfg *config.Dendrite,
@@ -154,7 +154,7 @@ func Setup(
 			httputil.MakeExternalAPI("shared_secret_registration", func(req *http.Request) util.JSONResponse {
 				if req.Method == http.MethodGet {
 					return util.JSONResponse{
-						Code: 200,
+						Code: http.StatusOK,
 						JSON: struct {
 							Nonce string `json:"nonce"`
 						}{
@@ -195,7 +195,7 @@ func Setup(
 				return AdminDeleteRegistrationToken(req, cfg, userAPI)
 			default:
 				return util.MatrixErrorResponse(
-					404,
+					404, //nolint:mnd
 					string(spec.ErrorNotFound),
 					"unknown method",
 				)
@@ -366,7 +366,11 @@ func Setup(
 			// once all joins are processed, drop them from the cache. Further requests
 			// will be processed as usual.
 			sf.Forget(vars["roomIDOrAlias"] + device.UserID)
-			return resp.(util.JSONResponse)
+			jsonResp, ok := resp.(util.JSONResponse)
+			if !ok {
+				return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+			}
+			return jsonResp
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 
@@ -410,7 +414,11 @@ func Setup(
 			// once all joins are processed, drop them from the cache. Further requests
 			// will be processed as usual.
 			sf.Forget(vars["roomID"] + device.UserID)
-			return resp.(util.JSONResponse)
+			jsonResp, ok := resp.(util.JSONResponse)
+			if !ok {
+				return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+			}
+			return jsonResp
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/rooms/{roomID}/leave",
@@ -1255,8 +1263,8 @@ func Setup(
 	// Stub implementations for sytest
 	v3mux.Handle("/events",
 		httputil.MakeAuthAPI("events", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			return util.JSONResponse{Code: http.StatusOK, JSON: map[string]interface{}{
-				"chunk": []interface{}{},
+			return util.JSONResponse{Code: http.StatusOK, JSON: map[string]any{
+				"chunk": []any{},
 				"start": "",
 				"end":   "",
 			}}
@@ -1265,7 +1273,7 @@ func Setup(
 
 	v3mux.Handle("/initialSync",
 		httputil.MakeAuthAPI("initial_sync", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			return util.JSONResponse{Code: http.StatusOK, JSON: map[string]interface{}{
+			return util.JSONResponse{Code: http.StatusOK, JSON: map[string]any{
 				"end": "",
 			}}
 		}, httputil.WithAllowGuests()),
@@ -1363,7 +1371,7 @@ func Setup(
 		version := req.URL.Query().Get("version")
 		if version == "" {
 			return util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.InvalidParam("version must be specified"),
 			}
 		}
@@ -1384,7 +1392,7 @@ func Setup(
 		version := req.URL.Query().Get("version")
 		if version == "" {
 			return util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.InvalidParam("version must be specified"),
 			}
 		}
@@ -1416,7 +1424,7 @@ func Setup(
 		version := req.URL.Query().Get("version")
 		if version == "" {
 			return util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.InvalidParam("version must be specified"),
 			}
 		}
@@ -1572,7 +1580,7 @@ func Setup(
 	synapseAdminRouter.Handle("/admin/v1/event_reports",
 		httputil.MakeAdminAPI("admin_report_events", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			from := parseUint64OrDefault(req.URL.Query().Get("from"), 0)
-			limit := parseUint64OrDefault(req.URL.Query().Get("limit"), 100)
+			limit := parseUint64OrDefault(req.URL.Query().Get("limit"), 100) //nolint:mnd
 			dir := req.URL.Query().Get("dir")
 			userID := req.URL.Query().Get("user_id")
 			roomID := req.URL.Query().Get("room_id")

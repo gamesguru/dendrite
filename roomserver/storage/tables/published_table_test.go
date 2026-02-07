@@ -43,7 +43,7 @@ func TestPublishedTable(t *testing.T) {
 	alice := test.NewUser(t)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreatePublishedTable(t, dbType)
+		tab, close := mustCreatePublishedTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		// Publish some rooms

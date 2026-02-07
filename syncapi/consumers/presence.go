@@ -10,6 +10,10 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/nats-io/nats.go"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/process"
@@ -18,9 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/nats-io/nats.go"
-	"github.com/sirupsen/logrus"
 )
 
 // OutputTypingEventConsumer consumes events that originated in the EDU server.

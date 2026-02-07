@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/matrix-org/gomatrix"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // RequestTurnServer implements:
@@ -44,7 +44,8 @@ func RequestTurnServer(req *http.Request, device *api.Device, cfg *config.Client
 		TTL:  int(duration.Seconds()),
 	}
 
-	if turnConfig.SharedSecret != "" {
+	switch {
+	case turnConfig.SharedSecret != "":
 		expiry := time.Now().Add(duration).Unix()
 		resp.Username = fmt.Sprintf("%d:%s", expiry, device.UserID)
 		mac := hmac.New(sha1.New, []byte(turnConfig.SharedSecret))
@@ -58,10 +59,10 @@ func RequestTurnServer(req *http.Request, device *api.Device, cfg *config.Client
 		}
 
 		resp.Password = base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	} else if turnConfig.Username != "" && turnConfig.Password != "" {
+	case turnConfig.Username != "" && turnConfig.Password != "":
 		resp.Username = turnConfig.Username
 		resp.Password = turnConfig.Password
-	} else {
+	default:
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: struct{}{},

@@ -19,7 +19,7 @@ type httpClient struct {
 // NewHTTPClient creates a new Push Gateway client.
 func NewHTTPClient(disableTLSValidation bool) Client {
 	hc := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 30 * time.Second, //nolint:mnd
 		Transport: &http.Transport{
 			DisableKeepAlives: true,
 			TLSClientConfig: &tls.Config{
@@ -49,8 +49,7 @@ func (h *httpClient) Notify(ctx context.Context, url string, req *NotifyRequest,
 	if err != nil {
 		return err
 	}
-
-	defer internal.CloseAndLogIfError(ctx, hresp.Body, "failed to close response body")
+	defer hresp.Body.Close()
 
 	if hresp.StatusCode == http.StatusOK {
 		return json.NewDecoder(hresp.Body).Decode(resp)

@@ -7,22 +7,23 @@
 package api
 
 import (
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 // An OutputType is a type of roomserver output.
 type OutputType string
 
 const (
-	// OutputTypeNewRoomEvent indicates that the event is an OutputNewRoomEvent
+	// OutputTypeNewRoomEvent indicates that the event is an OutputNewRoomEvent.
 	OutputTypeNewRoomEvent OutputType = "new_room_event"
-	// OutputTypeOldRoomEvent indicates that the event is an OutputOldRoomEvent
+	// OutputTypeOldRoomEvent indicates that the event is an OutputOldRoomEvent.
 	OutputTypeOldRoomEvent OutputType = "old_room_event"
-	// OutputTypeNewInviteEvent indicates that the event is an OutputNewInviteEvent
+	// OutputTypeNewInviteEvent indicates that the event is an OutputNewInviteEvent.
 	OutputTypeNewInviteEvent OutputType = "new_invite_event"
-	// OutputTypeRetireInviteEvent indicates that the event is an OutputRetireInviteEvent
+	// OutputTypeRetireInviteEvent indicates that the event is an OutputRetireInviteEvent.
 	OutputTypeRetireInviteEvent OutputType = "retire_invite_event"
 	// OutputTypeRedactedEvent indicates that the event is an OutputRedactedEvent
 	//
@@ -36,22 +37,22 @@ const (
 	// immediately followed by a OutputTypeRedactedEvent. In the uncommon case of receiving the redaction BEFORE the event to redact,
 	// the roomserver will emit a OutputTypeNewRoomEvent of the event to redact immediately followed by a OutputTypeRedactedEvent.
 	//
-	// In order to honour redactions correctly, downstream components must ignore m.room.redaction events emitted via OutputTypeNewRoomEvent.
+	// In order to honor redactions correctly, downstream components must ignore m.room.redaction events emitted via OutputTypeNewRoomEvent.
 	// When downstream components receive an OutputTypeRedactedEvent they must:
 	// - Pull out the event to redact from the database. They should have this because the redaction is validated.
 	// - Redact the event and set the corresponding `unsigned` fields to indicate it as redacted.
 	// - Replace the event in the database.
 	OutputTypeRedactedEvent OutputType = "redacted_event"
 
-	// OutputTypeNewPeek indicates that the kafka event is an OutputNewPeek
+	// OutputTypeNewPeek indicates that the kafka event is an OutputNewPeek.
 	OutputTypeNewPeek OutputType = "new_peek"
-	// OutputTypeNewInboundPeek indicates that the kafka event is an OutputNewInboundPeek
+	// OutputTypeNewInboundPeek indicates that the kafka event is an OutputNewInboundPeek.
 	OutputTypeNewInboundPeek OutputType = "new_inbound_peek"
-	// OutputTypeRetirePeek indicates that the kafka event is an OutputRetirePeek
+	// OutputTypeRetirePeek indicates that the kafka event is an OutputRetirePeek.
 	OutputTypeRetirePeek OutputType = "retire_peek"
-	// OutputTypePurgeRoom indicates the event is an OutputPurgeRoom
+	// OutputTypePurgeRoom indicates the event is an OutputPurgeRoom.
 	OutputTypePurgeRoom OutputType = "purge_room"
-	// OutputTypeUnPartialStatedRoom indicates a room has completed partial state resync (MSC3706)
+	// OutputTypeUnPartialStatedRoom indicates a room has completed partial state resync (MSC3706).
 	OutputTypeUnPartialStatedRoom OutputType = "un_partial_stated_room"
 )
 
@@ -242,7 +243,7 @@ type OutputNewPeek struct {
 	DeviceID string
 }
 
-// An OutputNewInboundPeek is written whenever a server starts peeking into a room
+// An OutputNewInboundPeek is written whenever a server starts peeking into a room.
 type OutputNewInboundPeek struct {
 	RoomID string
 	PeekID string

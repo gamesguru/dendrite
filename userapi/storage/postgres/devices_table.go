@@ -12,13 +12,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const devicesSchema = `
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS userapi_devices (
     -- migration to different domain names easier.
     localpart TEXT NOT NULL,
 	server_name TEXT NOT NULL,
-    -- When this devices was first recognised on the network, as a unix timestamp (ms resolution).
+    -- When this devices was first recognized on the network, as a unix timestamp (ms resolution).
     created_ts BIGINT NOT NULL,
     -- The display name, human friendlier than device_id and updatable
     display_name TEXT,
@@ -145,9 +146,10 @@ func (s *devicesStatements) InsertDevice(
 	localpart string, serverName spec.ServerName,
 	accessToken string, displayName *string, ipAddr, userAgent string,
 ) (*api.Device, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	var sessionID int64
 	stmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
+	defer stmt.Close()
 	if err := stmt.QueryRowContext(ctx, id, localpart, serverName, accessToken, createdTimeMS, displayName, createdTimeMS, ipAddr, userAgent).Scan(&sessionID); err != nil {
 		return nil, fmt.Errorf("insertDeviceStmt: %w", err)
 	}
@@ -180,6 +182,7 @@ func (s *devicesStatements) DeleteDevice(
 	localpart string, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDeviceStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, id, localpart, serverName)
 	return err
 }
@@ -192,6 +195,7 @@ func (s *devicesStatements) DeleteDevices(
 	devices []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDevicesStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, localpart, serverName, devices)
 	return err
 }
@@ -204,6 +208,7 @@ func (s *devicesStatements) DeleteDevicesByLocalpart(
 	exceptDeviceID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDevicesByLocalpartStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, localpart, serverName, exceptDeviceID)
 	return err
 }
@@ -214,6 +219,7 @@ func (s *devicesStatements) UpdateDeviceName(
 	deviceID string, displayName *string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceNameStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, displayName, localpart, serverName, deviceID)
 	return err
 }
@@ -234,7 +240,7 @@ func (s *devicesStatements) SelectDeviceByToken(
 }
 
 // selectDeviceByID retrieves a device from the database with the given user
-// localpart and deviceID
+// localpart and deviceID.
 func (s *devicesStatements) SelectDeviceByID(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -262,7 +268,7 @@ func (s *devicesStatements) SelectDeviceByID(
 }
 
 func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error) {
-	rows, err := s.selectDevicesByIDStmt.QueryContext(ctx, deviceIDs)
+	rows, err := s.selectDevicesByIDStmt.QueryContext(ctx, deviceIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +301,9 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 	exceptDeviceID string,
 ) ([]api.Device, error) {
 	devices := []api.Device{}
-	rows, err := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt).QueryContext(ctx, localpart, serverName, exceptDeviceID)
+	selectDevicesByLocalpartStmt := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt)
+	defer selectDevicesByLocalpartStmt.Close()
+	rows, err := selectDevicesByLocalpartStmt.QueryContext(ctx, localpart, serverName, exceptDeviceID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return devices, err
 	}
@@ -333,8 +341,9 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 }
 
 func (s *devicesStatements) UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error {
-	lastSeenTs := time.Now().UnixNano() / 1000000
+	lastSeenTs := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceLastSeenStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, lastSeenTs, ipAddr, userAgent, localpart, serverName, deviceID)
 	return err
 }

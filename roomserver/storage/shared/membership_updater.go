@@ -5,9 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib"
+
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 type MembershipUpdater struct {
@@ -70,22 +71,22 @@ func (d *Database) membershipUpdaterTxn(
 	}, nil
 }
 
-// IsInvite implements types.MembershipUpdater
+// IsInvite implements types.MembershipUpdater.
 func (u *MembershipUpdater) IsInvite() bool {
 	return u.oldMembership == tables.MembershipStateInvite
 }
 
-// IsJoin implements types.MembershipUpdater
+// IsJoin implements types.MembershipUpdater.
 func (u *MembershipUpdater) IsJoin() bool {
 	return u.oldMembership == tables.MembershipStateJoin
 }
 
-// IsLeave implements types.MembershipUpdater
+// IsLeave implements types.MembershipUpdater.
 func (u *MembershipUpdater) IsLeave() bool {
 	return u.oldMembership == tables.MembershipStateLeaveOrBan
 }
 
-// IsKnock implements types.MembershipUpdater
+// IsKnock implements types.MembershipUpdater.
 func (u *MembershipUpdater) IsKnock() bool {
 	return u.oldMembership == tables.MembershipStateKnock
 }

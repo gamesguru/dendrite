@@ -266,10 +266,10 @@ func CheckServerAllowedToSeeEvent(
 	ctx context.Context, db storage.Database, info *types.RoomInfo, roomID string, eventID string, serverName spec.ServerName, isServerInRoom bool, querier api.QuerySenderIDAPI,
 ) (bool, error) {
 	stateAtEvent, err := db.GetHistoryVisibilityState(ctx, info, eventID, string(serverName))
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		// No error, so continue normally
-	case tables.ErrOptimisationNotSupported:
+	case errors.Is(err, tables.ErrOptimisationNotSupported):
 		// The database engine didn't support this optimisation, so fall back to using
 		// the old and slow method
 		stateAtEvent, err = slowGetHistoryVisibilityState(ctx, db, info, roomID, eventID, serverName, querier)
@@ -277,15 +277,14 @@ func CheckServerAllowedToSeeEvent(
 			return false, err
 		}
 	default:
-		switch err.(type) {
-		case types.MissingStateError:
+		var missingStateErr types.MissingStateError
+		if errors.As(err, &missingStateErr) {
 			// If there's no state then we assume it's open visibility, as Synapse does:
 			// https://github.com/matrix-org/synapse/blob/aec87a0f9369a3015b2a53469f88d1de274e8b71/synapse/visibility.py#L654-L655
 			return true, nil
-		default:
-			// Something else went wrong
-			return false, err
 		}
+		// Something else went wrong
+		return false, err
 	}
 	return auth.IsServerAllowed(ctx, querier, serverName, isServerInRoom, stateAtEvent), nil
 }

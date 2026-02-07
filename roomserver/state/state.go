@@ -690,7 +690,7 @@ func (c *calculateStateMetrics) stop(stateNID types.StateSnapshotNID, err error)
 	return stateNID, err
 }
 
-func init() {
+func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		calculateStateDurations, calculateStatePrevEventLength,
 		calculateStateFullStateLength, calculateStateConflictLength,
@@ -1046,7 +1046,7 @@ func (v *StateResolution) resolveConflictsV2(
 
 	// Kill the reference to this so that the GC may pick it up, since we no
 	// longer need this after this point.
-	gotAuthEvents = nil // nolint:ineffassign
+	gotAuthEvents = nil
 
 	// Resolve the conflicts.
 	resolvedEvents := func() []gomatrixserverlib.PDU {
@@ -1162,7 +1162,7 @@ func (v *StateResolution) loadStateEvents(
 			panic(fmt.Errorf("corrupt DB: Missing event numeric ID %d", entry.EventNID))
 		}
 		result = append(result, event.PDU)
-		eventIDMap[event.PDU.EventID()] = entry
+		eventIDMap[event.EventID()] = entry
 		v.events[entry.EventNID] = event.PDU
 	}
 	return result, eventIDMap, nil

@@ -2,6 +2,7 @@ version: '2'
 run:
   build-tags:
     - test
+    - goolm
 linters:
   default: none
   enable:
@@ -9,7 +10,6 @@ linters:
     - bidichk
     - bodyclose
     - contextcheck
-    - depguard
     - dogsled
     - durationcheck
     - errcheck
@@ -20,9 +20,7 @@ linters:
     - gochecknoinits
     - gocritic
     - godot
-    - goheader
     - gomoddirectives
-    - gomodguard
     - goprintffuncname
     - govet
     - importas
@@ -42,110 +40,24 @@ linters:
     - whitespace
     - zerologlint
   settings:
-    depguard:
-      rules:
-        agent:
-          list-mode: lax
-          files:
-            - '**/agent/**/*.go'
-            - '**/agent/*.go'
-            - '**/cmd/agent/**/*.go'
-            - '**/cmd/agent/*.go'
-            - '!**/cli/admin/agent/*.go'
-            - '!**/cli/admin/agent/**/*.go'
-            - '!**/cli/org/agent/*.go'
-            - '!**/cli/org/agent/**/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd/server
-            - pkg: codeberg.org/crowci/crow/v5/server
-            - pkg: codeberg.org/crowci/crow/v5/web
-        cli:
-          list-mode: lax
-          files:
-            - '**/cli/**/*.go'
-            - '**/cli/*.go'
-            - '**/cmd/cli/**/*.go'
-            - '**/cmd/cli/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/agent
-            - pkg: codeberg.org/crowci/crow/v5/server
-            - pkg: codeberg.org/crowci/crow/v5/cmd/agent
-            - pkg: codeberg.org/crowci/crow/v5/cmd/server
-            - pkg: codeberg.org/crowci/crow/v5/web
-        crow-go:
-          list-mode: lax
-          files:
-            - '**/crow-go/crow/**/*.go'
-            - '**/crow-go/crow/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/agent
-            - pkg: codeberg.org/crowci/crow/v5/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd
-            - pkg: codeberg.org/crowci/crow/v5/pipeline
-            - pkg: codeberg.org/crowci/crow/v5/server
-            - pkg: codeberg.org/crowci/crow/v5/shared
-            - pkg: codeberg.org/crowci/crow/v5/web
-        pipeline:
-          list-mode: lax
-          files:
-            - '**/pipeline/**/*.go'
-            - '**/pipeline/*.go'
-            - '!**/cli/pipeline/*.go'
-            - '!**/cli/pipeline/**/*.go'
-            - '!**/server/pipeline/*.go'
-            - '!**/server/pipeline/**/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/agent
-            - pkg: codeberg.org/crowci/crow/v5/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd
-            - pkg: codeberg.org/crowci/crow/v5/server
-            - pkg: codeberg.org/crowci/crow/v5/web
-        server:
-          list-mode: lax
-          files:
-            - '**/server/**/*.go'
-            - '**/server/*.go'
-            - '**/cmd/server/**/*.go'
-            - '**/cmd/server/*.go'
-            - '**/web/**/*.go'
-            - '**/web/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/agent
-            - pkg: codeberg.org/crowci/crow/v5/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd/agent
-            - pkg: codeberg.org/crowci/crow/v5/cmd/cli
-            - pkg: codeberg.org/crowci/crow/v5/crow-go/crow
-        shared:
-          list-mode: lax
-          files:
-            - '**/shared/**/*.go'
-            - '**/shared/*.go'
-            - '!**/pipeline/shared/*.go'
-            - '!**/pipeline/shared/**/*.go'
-          deny:
-            - pkg: codeberg.org/crowci/crow/v5/agent
-            - pkg: codeberg.org/crowci/crow/v5/cli
-            - pkg: codeberg.org/crowci/crow/v5/cmd
-            - pkg: codeberg.org/crowci/crow/v5/pipeline
-            - pkg: codeberg.org/crowci/crow/v5/server
-            - pkg: codeberg.org/crowci/crow/v5/web
     errorlint:
       errorf-multi: true
     forbidigo:
       forbid:
         - pattern: context\.WithCancel$
         - pattern: ^print.*$
-        - pattern: panic
         - pattern: ^log.Fatal().*$
     godot:
       scope: toplevel
       exclude:
-        - '^\s*cSpell:'
         - '^\s*TODO:'
+        - '^\s*FIXME:'
+        - '^\s*NOTSPEC:'
       capital: true
       period: true
+    gomoddirectives:
+      replace-allow-list:
+        - github.com/matrix-org/gomatrixserverlib
     misspell:
       locale: US
     mnd:
@@ -159,15 +71,6 @@ linters:
         - make
         - time.*
         - strings.Split
-        - callerName
-        - random.GetRandomBytes
-    revive:
-      rules:
-        - name: var-naming
-          arguments:
-            - []
-            - []
-            - - skipPackageNameChecks: true
   exclusions:
     generated: lax
     presets:
@@ -178,17 +81,12 @@ linters:
     rules:
       - linters:
           - mnd
-        path: fixtures|cmd/agent/flags.go|cmd/server/flags.go|pipeline/backend/kubernetes/flags.go|_test.go
-      # Multi-forge migration: deprecated User fields (ForgeID, ForgeRemoteID, AccessToken, RefreshToken, Expiry)
-      # are still used for backward compatibility during the transition to the UserForge table.
-      # TODO: Remove this exclusion after migration is complete and deprecated fields are removed.
-      - linters:
-          - staticcheck
-        text: 'SA1019:.*is deprecated.*Use.*UserForge'
+        path: _test\.go
     paths:
       - third_party$
       - builtin$
       - examples$
+      - vendor$
 formatters:
   enable:
     - gci
@@ -199,7 +97,7 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(codeberg.org/crowci/crow)
+        - prefix(codefloe.com/pat-s/dendrite)
       custom-order: true
     gofmt:
       simplify: true
@@ -214,3 +112,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - vendor$

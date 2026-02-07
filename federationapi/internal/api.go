@@ -3,9 +3,16 @@ package internal
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/matrix-org/gomatrix"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/federationapi/queue"
@@ -15,14 +22,9 @@ import (
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
 )
 
-// FederationInternalAPI is an implementation of api.FederationInternalAPI
+// FederationInternalAPI is an implementation of api.FederationInternalAPI.
 type FederationInternalAPI struct {
 	db                 storage.Database
 	cfg                *config.FederationAPI
@@ -55,7 +57,10 @@ func NewFederationInternalAPI(
 			KeyDatabase: serverKeyDB,
 		}
 
-		pubKey := cfg.Matrix.PrivateKey.Public().(ed25519.PublicKey)
+		pubKey, ok := cfg.Matrix.PrivateKey.Public().(ed25519.PublicKey)
+		if !ok {
+			logrus.Panicf("failed to cast public key to ed25519.PublicKey")
+		}
 		addDirectFetcher := func() {
 			keyRing.KeyFetchers = append(
 				keyRing.KeyFetchers,
@@ -113,7 +118,7 @@ func NewFederationInternalAPI(
 	}
 }
 
-// SetPartialStateWorker sets the partial state worker for MSC3706 background state resync
+// SetPartialStateWorker sets the partial state worker for MSC3706 background state resync.
 func (a *FederationInternalAPI) SetPartialStateWorker(worker *PartialStateWorker) {
 	a.partialStateWorker = worker
 }
@@ -141,11 +146,11 @@ func failBlacklistableError(err error, stats *statistics.ServerStatistics) (unti
 	if err == nil {
 		return
 	}
-	mxerr, ok := err.(gomatrix.HTTPError)
-	if !ok {
+	var mxerr gomatrix.HTTPError
+	if !errors.As(err, &mxerr) {
 		return stats.Failure()
 	}
-	if mxerr.Code == 401 { // invalid signature in X-Matrix header
+	if mxerr.Code == 401 { //nolint:mnd // invalid signature in X-Matrix header
 		return stats.Failure()
 	}
 	if mxerr.Code >= 500 && mxerr.Code < 600 { // internal server errors
@@ -155,8 +160,8 @@ func failBlacklistableError(err error, stats *statistics.ServerStatistics) (unti
 }
 
 func (a *FederationInternalAPI) doRequestIfNotBackingOffOrBlacklisted(
-	s spec.ServerName, request func() (interface{}, error),
-) (interface{}, error) {
+	s spec.ServerName, request func() (any, error),
+) (any, error) {
 	stats, err := a.IsBlacklistedOrBackingOff(s)
 	if err != nil {
 		return nil, err
@@ -180,8 +185,8 @@ func (a *FederationInternalAPI) doRequestIfNotBackingOffOrBlacklisted(
 }
 
 func (a *FederationInternalAPI) doRequestIfNotBlacklisted(
-	s spec.ServerName, request func() (interface{}, error),
-) (interface{}, error) {
+	s spec.ServerName, request func() (any, error),
+) (any, error) {
 	stats := a.statistics.ForServer(s)
 	if blacklisted := stats.Blacklisted(); blacklisted {
 		return stats, &api.FederationClientError{

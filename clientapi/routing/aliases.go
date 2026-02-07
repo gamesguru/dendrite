@@ -11,14 +11,15 @@ import (
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// GetAliases implements GET /_matrix/client/r0/rooms/{roomId}/aliases
+// GetAliases implements GET /_matrix/client/r0/rooms/{roomId}/aliases.
 func GetAliases(
 	req *http.Request, rsAPI api.ClientRoomserverAPI, device *userapi.Device, roomID string,
 ) util.JSONResponse {
@@ -93,7 +94,7 @@ func GetAliases(
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: response,
 	}
 }

@@ -24,7 +24,7 @@ func (s ServerNames) Len() int           { return len(s) }
 func (s ServerNames) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s ServerNames) Less(i, j int) bool { return s[i] < s[j] }
 
-// tracks peeks we're performing on another server over federation
+// OutboundPeek tracks peeks we're performing on another server over federation.
 type OutboundPeek struct {
 	PeekID            string
 	RoomID            string
@@ -34,7 +34,7 @@ type OutboundPeek struct {
 	RenewalInterval   int64
 }
 
-// tracks peeks other servers are performing on us over federation
+// InboundPeek tracks peeks other servers are performing on us over federation.
 type InboundPeek struct {
 	PeekID            string
 	RoomID            string

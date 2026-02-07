@@ -25,15 +25,13 @@ import (
 	"time"
 
 	sentryhttp "github.com/getsentry/sentry-go/http"
+	"github.com/kardianos/minwinsvc"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"github.com/kardianos/minwinsvc"
-
-	"github.com/sirupsen/logrus"
-
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
 )
@@ -77,7 +75,7 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 		)
 	}
 	opts := []fclient.ClientOption{
-		fclient.WithTimeout(time.Minute * 5),
+		fclient.WithTimeout(time.Minute * 5), //nolint:mnd
 		fclient.WithSkipVerify(cfg.FederationAPI.DisableTLSValidation),
 		fclient.WithKeepAlives(!cfg.FederationAPI.DisableHTTPKeepalives),
 		fclient.WithUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString())),
@@ -94,11 +92,11 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
 	routers.DendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 	routers.DendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
-			w.WriteHeader(503)
+			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(struct {
 				Warnings []string `json:"warnings"`
 			}{
@@ -106,7 +104,7 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 			})
 			return
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 }
 

@@ -10,29 +10,25 @@ import (
 	"context"
 	"image"
 	"image/draw"
-
-	// Imported for gif codec
+	// Imported for gif codec.
 	_ "image/gif"
 	"image/jpeg"
-
-	// Imported for png codec
+	// Imported for png codec.
 	_ "image/png"
 	"os"
 	"time"
 
-	// Imported for webp codec
-	_ "golang.org/x/image/webp"
-
-	xdraw "golang.org/x/image/draw"
-
 	log "github.com/sirupsen/logrus"
+	xdraw "golang.org/x/image/draw"
+	// Imported for webp codec.
+	_ "golang.org/x/image/webp"
 
 	"codefloe.com/pat-s/dendrite/mediaapi/storage"
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
-// GenerateThumbnails generates the configured thumbnail sizes for the source file
+// GenerateThumbnails generates the configured thumbnail sizes for the source file.
 func GenerateThumbnails(
 	ctx context.Context,
 	src types.Path,
@@ -65,7 +61,7 @@ func GenerateThumbnails(
 	return false, nil
 }
 
-// GenerateThumbnail generates the configured thumbnail size for the source file
+// GenerateThumbnail generates the configured thumbnail size for the source file.
 func GenerateThumbnail(
 	ctx context.Context,
 	src types.Path,
@@ -105,7 +101,7 @@ func readFile(src string) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close() // nolint: errcheck
+	defer file.Close()
 
 	img, _, err := image.Decode(file)
 	if err != nil {
@@ -123,7 +119,7 @@ func writeFile(img image.Image, dst string) (err error) {
 	defer (func() { err = out.Close() })()
 
 	return jpeg.Encode(out, img, &jpeg.Options{
-		Quality: 85,
+		Quality: 85, //nolint:mnd
 	})
 }
 
@@ -225,7 +221,7 @@ func createThumbnail(
 
 // adjustSize scales an image to fit within the provided width and height
 // If the source aspect ratio is different to the target dimensions, one edge will be smaller than requested
-// If crop is set to true, the image will be scaled to fill the width and height with any excess being cropped off
+// If crop is set to true, the image will be scaled to fill the width and height with any excess being cropped off.
 func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *log.Entry) (int, int, error) {
 	var out image.Image
 	var err error
@@ -246,8 +242,8 @@ func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *lo
 
 		scaled := scaleImage(img, scaleW, scaleH)
 
-		xoff := (scaled.Bounds().Dx() - w) / 2
-		yoff := (scaled.Bounds().Dy() - h) / 2
+		xoff := (scaled.Bounds().Dx() - w) / 2 //nolint:mnd
+		yoff := (scaled.Bounds().Dy() - h) / 2 //nolint:mnd
 
 		tr := image.Rect(0, 0, w, h)
 		target := image.NewRGBA(tr)
@@ -265,14 +261,14 @@ func adjustSize(dst types.Path, img image.Image, w, h int, crop bool, logger *lo
 	return out.Bounds().Max.X, out.Bounds().Max.Y, nil
 }
 
-// scaleImage scales an image to the exact dimensions specified
+// scaleImage scales an image to the exact dimensions specified.
 func scaleImage(img image.Image, w, h int) image.Image {
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), xdraw.Over, nil)
 	return dst
 }
 
-// thumbnailImage scales an image to fit within maxW x maxH while preserving aspect ratio
+// thumbnailImage scales an image to fit within maxW x maxH while preserving aspect ratio.
 func thumbnailImage(img image.Image, maxW, maxH int) image.Image {
 	srcW := img.Bounds().Dx()
 	srcH := img.Bounds().Dy()

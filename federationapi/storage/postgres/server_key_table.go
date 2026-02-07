@@ -11,10 +11,11 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const serverSigningKeysSchema = `
@@ -79,7 +80,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 		nameAndKeyIDs = append(nameAndKeyIDs, nameAndKeyID(request))
 	}
 	stmt := s.bulkSelectServerKeysStmt
-	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs)
+	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +120,7 @@ func (s *serverSigningKeyStatements) UpsertServerKeys(
 	key gomatrixserverlib.PublicKeyLookupResult,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertServerKeysStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		string(request.ServerName),

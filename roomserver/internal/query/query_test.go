@@ -12,17 +12,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// used to implement RoomserverInternalAPIEventDB to test getAuthChain
+// used to implement RoomserverInternalAPIEventDB to test getAuthChain.
 type getEventDB struct {
 	eventMap map[string]gomatrixserverlib.PDU
 }
@@ -39,7 +40,7 @@ func (db *getEventDB) addFakeEvent(eventID string, authIDs []string) error {
 	for _, authID := range authIDs {
 		authEvents = append(authEvents, []any{authID, struct{}{}})
 	}
-	builder := map[string]interface{}{
+	builder := map[string]any{
 		"event_id":    eventID,
 		"room_id":     "!room:a",
 		"auth_events": authEvents,
@@ -75,7 +76,7 @@ func (db *getEventDB) addFakeEvents(graph map[string][]string) error {
 	return nil
 }
 
-// EventsFromIDs implements RoomserverInternalAPIEventDB
+// EventsFromIDs implements RoomserverInternalAPIEventDB.
 func (db *getEventDB) EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) (res []types.Event, err error) {
 	for _, evID := range eventIDs {
 		res = append(res, types.Event{

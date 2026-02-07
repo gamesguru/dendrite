@@ -9,14 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"gotest.tools/v3/assert"
+
+	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // Mock roomserver API for testing
@@ -146,7 +147,7 @@ func (s *sendEventTestRoomserverAPI) InputRoomEvents(ctx context.Context, req *r
 	s.savedInputRoomEvents = req.InputRoomEvents
 }
 
-// Test that user ID state keys are translated correctly
+// Test that user ID state keys are translated correctly.
 func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 	nonpseudoIDRoomVersion := gomatrixserverlib.RoomVersionV10
 	pseudoIDRoomVersion := gomatrixserverlib.RoomVersionPseudoIDs

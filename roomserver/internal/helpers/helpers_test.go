@@ -5,15 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
 )
 
@@ -40,7 +39,6 @@ func TestIsInvitePendingWithoutNID(t *testing.T) {
 		// store all events
 		var authNIDs []types.EventNID
 		for _, x := range room.Events() {
-
 			roomInfo, err := db.GetOrCreateRoomInfo(context.Background(), x.PDU)
 			assert.NoError(t, err)
 			assert.NotNil(t, roomInfo)

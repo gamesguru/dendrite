@@ -11,9 +11,10 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/util"
 )
 
 func UpDropEventReferenceSHAEvents(ctx context.Context, tx *sql.Tx) error {
@@ -35,7 +36,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// figure out if there are duplicates
-	dupeRows, err := tx.QueryContext(ctx, `SELECT previous_event_id FROM roomserver_previous_events GROUP BY previous_event_id HAVING count(previous_event_id) > 1`)
+	dupeRows, err := tx.QueryContext(ctx, `SELECT previous_event_id FROM roomserver_previous_events GROUP BY previous_event_id HAVING count(previous_event_id) > 1`) //nolint:sqlclosecheck
 	if err != nil {
 		return fmt.Errorf("failed to query duplicate event ids")
 	}
@@ -56,7 +57,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 	// if we found duplicates, check if we can combine them, e.g. they are in the same room
 	for _, dupeID := range prevEvents {
 		var dupeNIDsRows *sql.Rows
-		dupeNIDsRows, err = tx.QueryContext(ctx, `SELECT event_nids FROM roomserver_previous_events WHERE previous_event_id = $1`, dupeID)
+		dupeNIDsRows, err = tx.QueryContext(ctx, `SELECT event_nids FROM roomserver_previous_events WHERE previous_event_id = $1`, dupeID) //nolint:sqlclosecheck
 		if err != nil {
 			return fmt.Errorf("failed to query duplicate event ids")
 		}

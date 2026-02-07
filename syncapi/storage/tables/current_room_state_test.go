@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres"
@@ -14,7 +16,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 func newCurrentRoomStateTable(t *testing.T, dbType test.DBType) (tables.CurrentRoomState, *sql.DB, func()) {
@@ -49,7 +50,7 @@ func TestCurrentRoomStateTable(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, db, close := newCurrentRoomStateTable(t, dbType)
+		tab, db, close := newCurrentRoomStateTable(t, dbType) //nolint:contextcheck
 		defer close()
 		events := room.CurrentState()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {

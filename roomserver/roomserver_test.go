@@ -7,35 +7,31 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
+	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/roomserver/acls"
-	"codefloe.com/pat-s/dendrite/roomserver/state"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/userapi"
-
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
-
-	"github.com/matrix-org/gomatrixserverlib"
-
 	"codefloe.com/pat-s/dendrite/federationapi"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver"
+	"codefloe.com/pat-s/dendrite/roomserver/acls"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/dendrite/roomserver/state"
+	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/syncapi"
-
-	"codefloe.com/pat-s/dendrite/roomserver"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/userapi"
+	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -79,10 +75,10 @@ func testSharedUsers(t *testing.T, rsAPI api.RoomserverInternalAPI) {
 	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetTrustedPrivateChat))
 
 	// Invite and join Bob
-	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
@@ -120,7 +116,7 @@ func testKickUsers(t *testing.T, rsAPI api.RoomserverInternalAPI, usrAPI userAPI
 	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat), test.GuestsCanJoin(true))
 
 	// Join with the guest user
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
@@ -182,10 +178,10 @@ func Test_QueryLeftUsers(t *testing.T) {
 	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetTrustedPrivateChat))
 
 	// Invite and join Bob
-	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
@@ -239,7 +235,7 @@ func TestPurgeRoom(t *testing.T) {
 	}
 
 	// Invite Bob
-	inviteEvent := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+	inviteEvent := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
 
@@ -252,7 +248,7 @@ func TestPurgeRoom(t *testing.T) {
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches) //nolint:contextcheck
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +262,7 @@ func TestPurgeRoom(t *testing.T) {
 		rsAPI.SetFederationAPI(fsAPI, nil)
 
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, fsAPI.IsBlacklistedOrBackingOff)
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the room
 		if err = api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
@@ -466,7 +462,7 @@ func TestRedaction(t *testing.T) {
 			name:         "can redact own message",
 			wantRedacted: true,
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
+				redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
 
 				builderEv := mustCreateEvent(t, fledglingEvent{
 					Type:       spec.MRoomRedaction,
@@ -474,7 +470,7 @@ func TestRedaction(t *testing.T) {
 					RoomID:     room.ID,
 					Redacts:    redactedEvent.EventID(),
 					Depth:      redactedEvent.Depth() + 1,
-					PrevEvents: []interface{}{redactedEvent.EventID()},
+					PrevEvents: []any{redactedEvent.EventID()},
 				})
 				room.InsertEvent(t, builderEv)
 			},
@@ -483,7 +479,7 @@ func TestRedaction(t *testing.T) {
 			name:         "can redact others message, allowed by PL",
 			wantRedacted: true,
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]interface{}{"body": "hello world"})
+				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "hello world"})
 
 				builderEv := mustCreateEvent(t, fledglingEvent{
 					Type:       spec.MRoomRedaction,
@@ -491,7 +487,7 @@ func TestRedaction(t *testing.T) {
 					RoomID:     room.ID,
 					Redacts:    redactedEvent.EventID(),
 					Depth:      redactedEvent.Depth() + 1,
-					PrevEvents: []interface{}{redactedEvent.EventID()},
+					PrevEvents: []any{redactedEvent.EventID()},
 				})
 				room.InsertEvent(t, builderEv)
 			},
@@ -500,7 +496,7 @@ func TestRedaction(t *testing.T) {
 			name:         "can redact others message, same server",
 			wantRedacted: true,
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
+				redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
 
 				builderEv := mustCreateEvent(t, fledglingEvent{
 					Type:       spec.MRoomRedaction,
@@ -508,7 +504,7 @@ func TestRedaction(t *testing.T) {
 					RoomID:     room.ID,
 					Redacts:    redactedEvent.EventID(),
 					Depth:      redactedEvent.Depth() + 1,
-					PrevEvents: []interface{}{redactedEvent.EventID()},
+					PrevEvents: []any{redactedEvent.EventID()},
 				})
 				room.InsertEvent(t, builderEv)
 			},
@@ -516,7 +512,7 @@ func TestRedaction(t *testing.T) {
 		{
 			name: "can not redact others message, missing PL",
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]interface{}{"body": "hello world"})
+				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "hello world"})
 
 				builderEv := mustCreateEvent(t, fledglingEvent{
 					Type:       spec.MRoomRedaction,
@@ -524,7 +520,7 @@ func TestRedaction(t *testing.T) {
 					RoomID:     room.ID,
 					Redacts:    redactedEvent.EventID(),
 					Depth:      redactedEvent.Depth() + 1,
-					PrevEvents: []interface{}{redactedEvent.EventID()},
+					PrevEvents: []any{redactedEvent.EventID()},
 				})
 				room.InsertEvent(t, builderEv)
 			},
@@ -537,7 +533,7 @@ func TestRedaction(t *testing.T) {
 		defer close()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches) //nolint:contextcheck
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -552,10 +548,10 @@ func TestRedaction(t *testing.T) {
 				var err error
 
 				room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(charlie.ID))
 
@@ -620,7 +616,7 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 
 	// a room we create in the database, used for authorisation
 	allowedByRoomExists := test.NewRoom(t, alice)
-	allowedByRoomExists.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	allowedByRoomExists.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": spec.Join,
 	}, test.WithStateKey(bob.ID))
 
@@ -647,7 +643,7 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 			name: "restricted only", // bob is not allowed to join
 			prepareRoomFunc: func(t *testing.T) *test.Room {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV8))
-				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]any{
 					"join_rule": spec.Restricted,
 				}, test.WithStateKey(""))
 				return r
@@ -658,7 +654,7 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 			name: "knock_restricted",
 			prepareRoomFunc: func(t *testing.T) *test.Room {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV8))
-				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]any{
 					"join_rule": spec.KnockRestricted,
 				}, test.WithStateKey(""))
 				return r
@@ -669,10 +665,10 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 			name: "restricted with pending invite", // bob should be allowed to join
 			prepareRoomFunc: func(t *testing.T) *test.Room {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV8))
-				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]any{
 					"join_rule": spec.Restricted,
 				}, test.WithStateKey(""))
-				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": spec.Invite,
 				}, test.WithStateKey(bob.ID))
 				return r
@@ -683,18 +679,18 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 			name: "restricted with allowed room_id, but missing room", // bob should not be allowed to join, as we don't know about the room
 			prepareRoomFunc: func(t *testing.T) *test.Room {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV10))
-				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]any{
 					"join_rule": spec.KnockRestricted,
-					"allow": []map[string]interface{}{
+					"allow": []map[string]any{
 						{
 							"room_id": allowedByRoomNotExists.ID,
 							"type":    spec.MRoomMembership,
 						},
 					},
 				}, test.WithStateKey(""))
-				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership":                       spec.Join,
-					"join_authorised_via_users_server": alice.ID,
+					"join_authorised_via_users_server": alice.ID, //nolint:misspell // Matrix spec uses British spelling
 				}, test.WithStateKey(bob.ID))
 				return r
 			},
@@ -704,18 +700,18 @@ func TestQueryRestrictedJoinAllowed(t *testing.T) {
 			name: "restricted with allowed room_id", // bob should be allowed to join, as we know about the room
 			prepareRoomFunc: func(t *testing.T) *test.Room {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV10))
-				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomJoinRules, map[string]any{
 					"join_rule": spec.KnockRestricted,
-					"allow": []map[string]interface{}{
+					"allow": []map[string]any{
 						{
 							"room_id": allowedByRoomExists.ID,
 							"type":    spec.MRoomMembership,
 						},
 					},
 				}, test.WithStateKey(""))
-				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership":                       spec.Join,
-					"join_authorised_via_users_server": alice.ID,
+					"join_authorised_via_users_server": alice.ID, //nolint:misspell // Matrix spec uses British spelling
 				}, test.WithStateKey(bob.ID))
 				return r
 			},
@@ -885,7 +881,7 @@ func TestUpgrade(t *testing.T) {
 			upgradeUser: alice.ID,
 			roomFunc: func(rsAPI api.RoomserverInternalAPI) string {
 				r := test.NewRoom(t, alice)
-				r.CreateAndInsert(t, alice, spec.MRoomName, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomName, map[string]any{
 					"name": "my new name",
 				}, test.WithStateKey(""))
 				r.CreateAndInsert(t, alice, spec.MRoomCanonicalAlias, eventutil.CanonicalAliasContent{
@@ -893,12 +889,12 @@ func TestUpgrade(t *testing.T) {
 				}, test.WithStateKey(""))
 
 				// this will be transferred
-				r.CreateAndInsert(t, alice, "m.custom.event", map[string]interface{}{
+				r.CreateAndInsert(t, alice, "m.custom.event", map[string]any{
 					"random": "i should exist",
 				}, test.WithStateKey(""))
 
 				// the following will be ignored
-				r.CreateAndInsert(t, alice, "m.custom.event", map[string]interface{}{
+				r.CreateAndInsert(t, alice, "m.custom.event", map[string]any{
 					"random": "i will be ignored",
 				}, test.WithStateKey(alice.ID))
 
@@ -988,7 +984,7 @@ func TestUpgrade(t *testing.T) {
 			upgradeUser: alice.ID,
 			roomFunc: func(rsAPI api.RoomserverInternalAPI) string {
 				r := test.NewRoom(t, alice)
-				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": spec.Ban,
 				}, test.WithStateKey(charlie.ID))
 				if err := api.SendEvents(ctx, rsAPI, api.KindNew, r.Events(), "test", "test", "test", nil, false); err != nil {
@@ -1005,7 +1001,7 @@ func TestUpgrade(t *testing.T) {
 			roomFunc: func(rsAPI api.RoomserverInternalAPI) string {
 				r := test.NewRoom(t, alice)
 
-				r.CreateAndInsert(t, alice, "m.space.child", map[string]interface{}{}, test.WithStateKey(spaceChild.ID))
+				r.CreateAndInsert(t, alice, "m.space.child", map[string]any{}, test.WithStateKey(spaceChild.ID))
 				if err := api.SendEvents(ctx, rsAPI, api.KindNew, r.Events(), "test", "test", "test", nil, false); err != nil {
 					t.Errorf("failed to send events: %v", err)
 				}
@@ -1020,8 +1016,8 @@ func TestUpgrade(t *testing.T) {
 			roomFunc: func(rsAPI api.RoomserverInternalAPI) string {
 				r := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV6))
 				// Bob and Charlie join
-				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{"membership": spec.Join}, test.WithStateKey(bob.ID))
-				r.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]interface{}{"membership": spec.Join}, test.WithStateKey(charlie.ID))
+				r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+				r.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(charlie.ID))
 
 				// make Charlie an admin so the room can be upgraded
 				r.CreateAndInsert(t, alice, spec.MRoomPowerLevels, gomatrixserverlib.PowerLevelContent{
@@ -1031,10 +1027,10 @@ func TestUpgrade(t *testing.T) {
 				}, test.WithStateKey(""))
 
 				// Alice creates a custom event
-				r.CreateAndInsert(t, alice, "m.custom.event", map[string]interface{}{
+				r.CreateAndInsert(t, alice, "m.custom.event", map[string]any{
 					"random": "data",
 				}, test.WithStateKey(alice.ID))
-				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
 
 				if err := api.SendEvents(ctx, rsAPI, api.KindNew, r.Events(), "test", "test", "test", nil, false); err != nil {
 					t.Errorf("failed to send events: %v", err)
@@ -1233,7 +1229,7 @@ func TestNewServerACLs(t *testing.T) {
 }
 
 // Validate that changing the AckPolicy/AckWait of room consumers
-// results in their recreation
+// results in their recreation.
 func TestRoomConsumerRecreation(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -1323,7 +1319,7 @@ func TestEmptyRooms(t *testing.T) {
 	r1 := test.NewRoom(t, alice)
 	r2 := test.NewRoom(t, alice)
 
-	r2.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+	r2.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)

@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/mediaapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type Database struct {

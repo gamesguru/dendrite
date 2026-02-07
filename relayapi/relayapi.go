@@ -7,6 +7,10 @@
 package relayapi
 
 import (
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/federationapi/producers"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
@@ -17,9 +21,6 @@ import (
 	"codefloe.com/pat-s/dendrite/relayapi/storage"
 	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/sirupsen/logrus"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.

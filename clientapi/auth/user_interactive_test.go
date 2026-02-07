@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var (
 	ctx        = context.Background()
 	serverName = spec.ServerName("example.com")
-	// space separated localpart+password -> account
+	// Space separated localpart+password -> account.
 	lookup = make(map[string]*api.Account)
 	device = &api.Device{
 		AccessToken: "flibble",

@@ -10,10 +10,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -24,10 +30,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/sirupsen/logrus"
 )
 
 type ContextRespsonse struct {
@@ -58,11 +60,13 @@ func Context(
 
 	filter, err := parseRoomEventFilter(req)
 	if err != nil {
-		errMsg := ""
-		switch err.(type) {
-		case *json.InvalidUnmarshalError:
+		var errMsg string
+		var invalidUnmarshalErr *json.InvalidUnmarshalError
+		var numErr *strconv.NumError
+		switch {
+		case errors.As(err, &invalidUnmarshalErr):
 			errMsg = "unable to parse filter"
-		case *strconv.NumError:
+		case errors.As(err, &numErr):
 			errMsg = "unable to parse limit"
 		default:
 			errMsg = err.Error()
@@ -116,7 +120,7 @@ func Context(
 
 	id, requestedEvent, err := snapshot.SelectContextEvent(ctx, roomID, eventID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound(fmt.Sprintf("Event %s not found", eventID)),
@@ -152,11 +156,11 @@ func Context(
 
 	// Limit is split up for before/after events
 	if filter.Limit > 1 {
-		filter.Limit = filter.Limit / 2
+		filter.Limit /= 2
 	}
 
 	eventsBefore, err := snapshot.SelectContextBeforeEvent(ctx, id, roomID, filter)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		logrus.WithError(err).Error("unable to fetch before events")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -165,7 +169,7 @@ func Context(
 	}
 
 	_, eventsAfter, err := snapshot.SelectContextAfterEvent(ctx, id, roomID, filter)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		logrus.WithError(err).Error("unable to fetch after events")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -207,7 +211,9 @@ func Context(
 
 	newState := state
 	if filter.LazyLoadMembers {
-		allEvents := append(eventsBeforeFiltered, eventsAfterFiltered...)
+		allEvents := make([]*rstypes.HeaderedEvent, 0, len(eventsBeforeFiltered)+len(eventsAfterFiltered)+1)
+		allEvents = append(allEvents, eventsBeforeFiltered...)
+		allEvents = append(allEvents, eventsAfterFiltered...)
 		allEvents = append(allEvents, &requestedEvent)
 		evs := synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(allEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
@@ -269,7 +275,9 @@ func applyHistoryVisibilityOnContextEvents(
 		eventIDsAfter[ev.EventID()] = struct{}{}
 	}
 
-	allEvents := append(eventsBefore, eventsAfter...)
+	allEvents := make([]*rstypes.HeaderedEvent, 0, len(eventsBefore)+len(eventsAfter))
+	allEvents = append(allEvents, eventsBefore...)
+	allEvents = append(allEvents, eventsAfter...)
 	filteredEvents, err := internal.ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, allEvents, nil, userID, "context")
 	if err != nil {
 		return nil, nil, err
@@ -342,7 +350,7 @@ func applyLazyLoadMembers(
 
 func parseRoomEventFilter(req *http.Request) (*synctypes.RoomEventFilter, error) {
 	// Default room filter
-	filter := &synctypes.RoomEventFilter{Limit: 10}
+	filter := &synctypes.RoomEventFilter{Limit: 10} //nolint:mnd
 
 	l := req.URL.Query().Get("limit")
 	f := req.URL.Query().Get("filter")
@@ -352,7 +360,7 @@ func parseRoomEventFilter(req *http.Request) (*synctypes.RoomEventFilter, error)
 			return nil, err
 		}
 		// NOTSPEC: feels like a good idea to have an upper bound limit
-		if limit > 100 {
+		if limit > 100 { //nolint:mnd
 			limit = 100
 		}
 		filter.Limit = limit

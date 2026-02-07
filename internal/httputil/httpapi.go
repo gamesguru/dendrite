@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -26,10 +27,9 @@ import (
 	"codefloe.com/pat-s/dendrite/clientapi/auth"
 	"codefloe.com/pat-s/dendrite/internal"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// BasicAuth is used for authorization on /metrics handlers
+// BasicAuth is used for authorization on /metrics handlers.
 type BasicAuth struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -44,7 +44,7 @@ type AuthAPIOpts struct {
 // the user is allowed to do specific things.
 type AuthAPIOption func(opts *AuthAPIOpts)
 
-// WithAllowGuests checks that guest users have access to this endpoint
+// WithAllowGuests checks that guest users have access to this endpoint.
 func WithAllowGuests() AuthAPIOption {
 	return func(opts *AuthAPIOpts) {
 		opts.GuestAccessAllowed = true
@@ -190,10 +190,7 @@ func MakeOptionalAuthAPI(
 func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse) http.Handler {
 	// TODO: We shouldn't be directly reading env vars here, inject it in instead.
 	// Refactor this when we split out config structs.
-	verbose := false
-	if os.Getenv("DENDRITE_TRACE_HTTP") == "1" {
-		verbose = true
-	}
+	verbose := os.Getenv("DENDRITE_TRACE_HTTP") == "1"
 	h := util.MakeJSONAPI(util.NewJSONRequestHandler(f))
 	withSpan := func(w http.ResponseWriter, req *http.Request) {
 		nextWriter := w
@@ -247,7 +244,7 @@ func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse
 }
 
 // MakeHTTPAPI adds Span metrics to the HTML Handler function
-// This is used to serve HTML alongside JSON error messages
+// This is used to serve HTML alongside JSON error messages.
 func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enableMetrics bool, f func(http.ResponseWriter, *http.Request), checks ...AuthAPIOption) http.Handler {
 	withSpan := func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodOptions {
@@ -298,7 +295,7 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 	)
 }
 
-// WrapHandlerInBasicAuth adds basic auth to a handler. Only used for /metrics
+// WrapHandlerInBasicAuth adds basic auth to a handler. Only used for /metrics.
 func WrapHandlerInBasicAuth(h http.Handler, b BasicAuth) http.HandlerFunc {
 	if b.Username == "" || b.Password == "" {
 		logrus.Warn("Metrics are exposed without protection. Make sure you set up protection at proxy level.")

@@ -12,15 +12,15 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/storage/shared"
 	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3/deltas"
 )
 
-// NewUserDatabase creates a new accounts and profiles database
+// NewUserDatabase creates a new accounts and profiles database.
 func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, serverName spec.ServerName, bcryptCost int, openIDTokenLifetimeMS int64, loginTokenLifetime time.Duration, serverNoticesLocalpart string) (*shared.Database, error) {
 	db, writer, err := conMan.Connection(dbProperties)
 	if err != nil {
@@ -46,7 +46,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteRegistrationsTokenTable: %w", err)
 	}
-	accountsTable, err := NewSQLiteAccountsTable(db, serverName)
+	accountsTable, err := NewSQLiteAccountsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteAccountsTable: %w", err)
 	}
@@ -54,7 +54,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteAccountDataTable: %w", err)
 	}
-	devicesTable, err := NewSQLiteDevicesTable(db, serverName)
+	devicesTable, err := NewSQLiteDevicesTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteDevicesTable: %w", err)
 	}
@@ -90,7 +90,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewSQLiteStatsTable(db, serverName)
+	statsTable, err := NewSQLiteStatsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteStatsTable: %w", err)
 	}

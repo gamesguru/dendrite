@@ -20,7 +20,7 @@ import (
 // Schema for tracking rooms with partial state from MSC3706 faster joins.
 // Two tables are used:
 // - roomserver_partial_state_rooms: tracks which rooms have partial state
-// - roomserver_partial_state_rooms_servers: tracks servers known to be in the room
+// - roomserver_partial_state_rooms_servers: tracks servers known to be in the room.
 const partialStateSchema = `
 -- Track rooms where we've done a partial-state join (MSC3706)
 CREATE TABLE IF NOT EXISTS roomserver_partial_state_rooms (
@@ -112,6 +112,7 @@ func (s *partialStateStatements) InsertPartialStateRoom(
 ) error {
 	// Insert the room entry
 	stmt := sqlutil.TxStmt(txn, s.insertPartialStateRoomStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomNID, joinEventNID, joinedVia, deviceListStreamID)
 	if err != nil {
 		return err
@@ -119,7 +120,7 @@ func (s *partialStateStatements) InsertPartialStateRoom(
 
 	// Insert the servers
 	if len(serversInRoom) > 0 {
-		stmt = sqlutil.TxStmt(txn, s.insertPartialStateRoomServersStmt)
+		stmt = sqlutil.TxStmt(txn, s.insertPartialStateRoomServersStmt) //nolint:sqlclosecheck
 		_, err = stmt.ExecContext(ctx, roomNID, serversInRoom)
 		if err != nil {
 			return err
@@ -134,6 +135,7 @@ func (s *partialStateStatements) SelectPartialStateRoom(
 ) (bool, error) {
 	var result int
 	stmt := sqlutil.TxStmt(txn, s.selectPartialStateRoomStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomNID).Scan(&result)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -148,7 +150,8 @@ func (s *partialStateStatements) SelectPartialStateServers(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectPartialStateServersStmt)
-	rows, err := stmt.QueryContext(ctx, roomNID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomNID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +172,8 @@ func (s *partialStateStatements) SelectAllPartialStateRooms(
 	ctx context.Context, txn *sql.Tx,
 ) ([]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectAllPartialStateRoomsStmt)
-	rows, err := stmt.QueryContext(ctx)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +195,7 @@ func (s *partialStateStatements) SelectDeviceListStreamID(
 ) (int64, error) {
 	var streamID int64
 	stmt := sqlutil.TxStmt(txn, s.selectDeviceListStreamIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomNID).Scan(&streamID)
 	if err == sql.ErrNoRows {
 		return 0, nil
@@ -206,6 +211,7 @@ func (s *partialStateStatements) DeletePartialStateRoom(
 ) (int64, error) {
 	var deviceListStreamID int64
 	stmt := sqlutil.TxStmt(txn, s.deletePartialStateRoomStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomNID).Scan(&deviceListStreamID)
 	if err == sql.ErrNoRows {
 		// Room wasn't in partial state, nothing to do

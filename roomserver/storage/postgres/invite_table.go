@@ -95,7 +95,9 @@ func (s *inviteStatements) InsertInviteEvent(
 	targetUserNID, senderUserNID types.EventStateKeyNID,
 	inviteEventJSON []byte,
 ) (bool, error) {
-	result, err := sqlutil.TxStmt(txn, s.insertInviteEventStmt).ExecContext(
+	insertInviteEventStmt := sqlutil.TxStmt(txn, s.insertInviteEventStmt)
+	defer insertInviteEventStmt.Close()
+	result, err := insertInviteEventStmt.ExecContext(
 		ctx, inviteEventID, roomNID, targetUserNID, senderUserNID, inviteEventJSON,
 	)
 	if err != nil {
@@ -113,7 +115,8 @@ func (s *inviteStatements) UpdateInviteRetired(
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.updateInviteRetiredStmt)
-	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -130,13 +133,14 @@ func (s *inviteStatements) UpdateInviteRetired(
 	return eventIDs, rows.Err()
 }
 
-// SelectInviteActiveForUserInRoom returns a list of sender state key NIDs
+// SelectInviteActiveForUserInRoom returns a list of sender state key NIDs.
 func (s *inviteStatements) SelectInviteActiveForUserInRoom(
 	ctx context.Context, txn *sql.Tx,
 	targetUserNID types.EventStateKeyNID, roomNID types.RoomNID,
 ) ([]types.EventStateKeyNID, []string, []byte, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectInviteActiveForUserInRoomStmt)
-	rows, err := stmt.QueryContext(
+	defer stmt.Close()
+	rows, err := stmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
 		ctx, targetUserNID, roomNID,
 	)
 	if err != nil {

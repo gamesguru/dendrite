@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 func main() {
@@ -61,7 +61,7 @@ func main() {
 			{
 				Type:  "file",
 				Level: "info",
-				Params: map[string]interface{}{
+				Params: map[string]any{
 					"path": filepath.Join(*dirPath, "log"),
 				},
 			},

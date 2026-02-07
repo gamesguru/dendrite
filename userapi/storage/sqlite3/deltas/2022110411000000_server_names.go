@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 var serverNamesTables = []string{

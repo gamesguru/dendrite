@@ -95,7 +95,7 @@ func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []
 		return true
 	}
 
-	logger := util.GetLogger(context.TODO()).WithFields(log.Fields{
+	logger := util.GetLogger(context.TODO()).WithFields(log.Fields{ //nolint:contextcheck
 		"sender":     output.Sender,
 		"user_id":    output.UserID,
 		"device_id":  output.DeviceID,
@@ -118,7 +118,7 @@ func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []
 		}
 	}
 
-	streamPos, err := s.db.StoreNewSendForDeviceMessage(
+	streamPos, err := s.db.StoreNewSendForDeviceMessage( //nolint:contextcheck
 		s.ctx, output.UserID, output.DeviceID, output.SendToDeviceEvent,
 	)
 	if err != nil {

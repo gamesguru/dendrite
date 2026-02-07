@@ -20,12 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"github.com/tidwall/gjson"
-
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"golang.org/x/term"
 
+	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/setup"
 )
 
@@ -57,11 +56,11 @@ var (
 	isAdmin       = flag.Bool("admin", false, "Create an admin account")
 	resetPassword = flag.Bool("reset-password", false, "Deprecated")
 	serverURL     = flag.String("url", "http://localhost:8008", "The URL to connect to.")
-	timeout       = flag.Duration("timeout", time.Second*30, "Timeout for the http client when connecting to the server")
+	timeout       = flag.Duration("timeout", time.Second*30, "Timeout for the http client when connecting to the server") //nolint:mnd
 )
 
 var cl = http.Client{
-	Timeout:   time.Second * 30,
+	Timeout:   time.Second * 30, //nolint:mnd
 	Transport: http.DefaultTransport,
 }
 
@@ -133,7 +132,7 @@ func sharedSecretRegister(sharedSecret, serverURL, localpart, password string, a
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
-	defer nonceResp.Body.Close() // nolint: errcheck
+	defer nonceResp.Body.Close()
 
 	nonce := gjson.GetBytes(body, "nonce").Str
 
@@ -165,7 +164,7 @@ func sharedSecretRegister(sharedSecret, serverURL, localpart, password string, a
 	if err != nil {
 		return "", fmt.Errorf("unable to create account: %w", err)
 	}
-	defer regResp.Body.Close() // nolint: errcheck
+	defer regResp.Body.Close()
 	if regResp.StatusCode < 200 || regResp.StatusCode >= 300 {
 		body, _ = io.ReadAll(regResp.Body)
 		return "", fmt.Errorf("got HTTP %d error from server: %s", regResp.StatusCode, string(body))
@@ -195,7 +194,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdFile != "" {
 		pw, err := os.ReadFile(pwdFile)
 		if err != nil {
-			return "", fmt.Errorf("unable to read password from file: %v", err)
+			return "", fmt.Errorf("unable to read password from file: %w", err)
 		}
 		return strings.TrimSpace(string(pw)), nil
 	}
@@ -204,7 +203,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdStdin {
 		data, err := io.ReadAll(r)
 		if err != nil {
-			return "", fmt.Errorf("unable to read password from stdin: %v", err)
+			return "", fmt.Errorf("unable to read password from stdin: %w", err)
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
@@ -214,13 +213,13 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 		fmt.Print("Enter Password: ")
 		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %w", err)
 		}
 		fmt.Println()
 		fmt.Print("Confirm Password: ")
 		bytePassword2, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %w", err)
 		}
 		fmt.Println()
 		if strings.TrimSpace(string(bytePassword)) != strings.TrimSpace(string(bytePassword2)) {

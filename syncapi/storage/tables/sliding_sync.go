@@ -11,8 +11,8 @@ import (
 	"database/sql"
 )
 
-// SlidingSyncConnection represents a sliding sync connection
-// Each connection is uniquely identified by (user_id, device_id, conn_id)
+// SlidingSyncConnection represents a sliding sync connection.
+// Each connection is uniquely identified by (user_id, device_id, conn_id).
 type SlidingSyncConnection struct {
 	ConnectionKey int64 // Primary key (auto-increment)
 	UserID        string
@@ -21,16 +21,16 @@ type SlidingSyncConnection struct {
 	CreatedTS     int64 // Unix timestamp in milliseconds
 }
 
-// SlidingSyncConnectionPosition represents a snapshot position in a connection's history
-// Each sync response creates a new position
+// SlidingSyncConnectionPosition represents a snapshot position in a connection's history.
+// Each sync response creates a new position.
 type SlidingSyncConnectionPosition struct {
 	ConnectionPosition int64 // Primary key (auto-increment) - This is what goes in the pos token!
 	ConnectionKey      int64 // FK to connections
 	CreatedTS          int64 // Unix timestamp in milliseconds
 }
 
-// SlidingSyncRequiredState represents a deduplicated required_state configuration
-// Stored as JSON array of [type, state_key] tuples: [["m.room.create",""],["m.room.member","$ME"]]
+// SlidingSyncRequiredState represents a deduplicated required_state configuration.
+// Stored as JSON array of [type, state_key] tuples: [["m.room.create",""],["m.room.member","$ME"]].
 type SlidingSyncRequiredState struct {
 	RequiredStateID int64  // Primary key (auto-increment)
 	ConnectionKey   int64  // FK to connections
@@ -38,7 +38,7 @@ type SlidingSyncRequiredState struct {
 }
 
 // SlidingSyncRoomConfig tracks what room config was used at a specific position
-// This allows detecting config changes (timeline_limit increase, required_state expansion)
+// This allows detecting config changes (timeline_limit increase, required_state expansion).
 type SlidingSyncRoomConfig struct {
 	ConnectionPosition int64  // FK to positions (composite key part 1)
 	RoomID             string // Composite key part 2
@@ -57,14 +57,14 @@ type SlidingSyncConnectionStream struct {
 }
 
 // SlidingSyncConnectionList tracks list state for operation generation
-// Stores the room IDs that were in a list at the last position
+// Stores the room IDs that were in a list at the last position.
 type SlidingSyncConnectionList struct {
 	ConnectionKey int64  // FK to connections (composite key part 1)
 	ListName      string // Composite key part 2
 	RoomIDs       string // JSON array of room IDs
 }
 
-// SlidingSync table interface for managing sliding sync connection state
+// SlidingSync table interface for managing sliding sync connection state.
 type SlidingSync interface {
 	// ===== Connection Management =====
 
@@ -142,9 +142,10 @@ type SlidingSync interface {
 	// Scans backwards through positions to find the last time we sent data for this stream
 	SelectLatestConnectionStream(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, stream string) (*SlidingSyncConnectionStream, error)
 
-	// SelectAllLatestConnectionStreams retrieves all stream states for a connection at the latest position
-	// Returns map[roomID]map[stream]*SlidingSyncConnectionStream
-	// DEPRECATED: Use SelectConnectionStreamsByPosition for incremental syncs to avoid old state bleeding in
+	// SelectAllLatestConnectionStreams retrieves all stream states for a connection at the latest position.
+	// Returns map[roomID]map[stream]*SlidingSyncConnectionStream.
+	//
+	// Deprecated: Use SelectConnectionStreamsByPosition for incremental syncs to avoid old state bleeding in.
 	SelectAllLatestConnectionStreams(ctx context.Context, txn *sql.Tx, connectionKey int64) (map[string]map[string]*SlidingSyncConnectionStream, error)
 
 	// SelectConnectionStreamsByPosition retrieves all streams for a specific position
@@ -166,7 +167,7 @@ type SlidingSync interface {
 }
 
 // SlidingSyncJoinedRoom represents cached room metadata for rooms with local members
-// Based on Synapse's sliding_sync_joined_rooms table
+// Based on Synapse's sliding_sync_joined_rooms table.
 type SlidingSyncJoinedRoom struct {
 	RoomID                   string
 	EventStreamOrdering      int64  // Stream position of the most recent event
@@ -178,7 +179,7 @@ type SlidingSyncJoinedRoom struct {
 }
 
 // SlidingSyncMembershipSnapshot represents per-user membership with room state snapshot
-// Based on Synapse's sliding_sync_membership_snapshots table
+// Based on Synapse's sliding_sync_membership_snapshots table.
 type SlidingSyncMembershipSnapshot struct {
 	RoomID                   string
 	UserID                   string
@@ -195,7 +196,7 @@ type SlidingSyncMembershipSnapshot struct {
 }
 
 // SlidingSyncRoomMetadata table interface for managing room metadata optimization (Phase 12)
-// These tables cache room state for efficient sliding sync queries
+// These tables cache room state for efficient sliding sync queries.
 type SlidingSyncRoomMetadata interface {
 	// ===== Rooms To Recalculate (Background Job Queue) =====
 

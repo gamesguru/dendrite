@@ -38,7 +38,7 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 	}
 
 	// Create the tables.
-	if err = d.create(db); err != nil {
+	if err = d.create(db); err != nil { //nolint:contextcheck
 		return nil, err
 	}
 
@@ -58,7 +58,7 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 }
 
 func executeMigration(ctx context.Context, db *sql.DB) error {
-	// TODO: Remove when we are sure we are not having goose artefacts in the db
+	// TODO: Remove when we are sure we are not having goose artifacts in the db
 	// This forces an error, which indicates the migration is already applied, since the
 	// column event_nid was removed from the table
 	migrationName := "roomserver: state blocks refactor"

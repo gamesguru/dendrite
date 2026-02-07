@@ -9,18 +9,19 @@ package deltas
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 func UpDropEventReferenceSHA(ctx context.Context, tx *sql.Tx) error {
 	var count int
 	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM roomserver_events GROUP BY event_id HAVING count(event_id) > 1`).
 		Scan(&count)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("failed to query duplicate event ids")
 	}
 	if count > 0 {
@@ -53,7 +54,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("failed to query duplicate event ids")
 	}
-	defer internal.CloseAndLogIfError(ctx, dupeRows, "failed to close rows")
+	defer dupeRows.Close()
 
 	var prevEvents []string
 	var prevEventID string
@@ -74,7 +75,7 @@ func UpDropEventReferenceSHAPrevEvents(ctx context.Context, tx *sql.Tx) error {
 		if err != nil {
 			return fmt.Errorf("failed to query duplicate event ids")
 		}
-		defer internal.CloseAndLogIfError(ctx, dupeNIDsRows, "failed to close rows")
+		defer dupeNIDsRows.Close()
 		var dupeNIDs sqlutil.Int64Array
 		for dupeNIDsRows.Next() {
 			var nidsArr sqlutil.Int64Array

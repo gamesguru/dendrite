@@ -11,11 +11,12 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const profilesSchema = `
@@ -86,7 +87,9 @@ func (s *profilesStatements) InsertProfile(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.insertProfileStmt).ExecContext(ctx, localpart, serverName, "", "")
+	insertProfileStmt := sqlutil.TxStmt(txn, s.insertProfileStmt)
+	defer insertProfileStmt.Close()
+	_, err = insertProfileStmt.ExecContext(ctx, localpart, serverName, "", "")
 	return
 }
 
@@ -116,6 +119,7 @@ func (s *profilesStatements) SetAvatarURL(
 	}
 	var changed bool
 	stmt := sqlutil.TxStmt(txn, s.setAvatarURLStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, avatarURL, localpart, serverName).Scan(&profile.DisplayName, &changed)
 	return profile, changed, err
 }
@@ -132,6 +136,7 @@ func (s *profilesStatements) SetDisplayName(
 	}
 	var changed bool
 	stmt := sqlutil.TxStmt(txn, s.setDisplayNameStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, displayName, localpart, serverName).Scan(&profile.AvatarURL, &changed)
 	return profile, changed, err
 }
@@ -143,7 +148,7 @@ func (s *profilesStatements) SelectProfilesBySearch(
 	// The fmt.Sprintf directive below is building a parameter for the
 	// "LIKE" condition in the SQL query. %% escapes the % char, so the
 	// statement in the end will look like "LIKE %searchString%".
-	rows, err := s.selectProfilesBySearchStmt.QueryContext(ctx, fmt.Sprintf("%%%s%%", searchString), limit)
+	rows, err := s.selectProfilesBySearchStmt.QueryContext(ctx, fmt.Sprintf("%%%s%%", searchString), limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

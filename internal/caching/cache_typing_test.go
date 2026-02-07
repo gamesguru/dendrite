@@ -34,7 +34,7 @@ func TestEDUCache(t *testing.T) {
 	})
 }
 
-func testAddTypingUser(t *testing.T, tCache *EDUCache) { // nolint: unparam
+func testAddTypingUser(t *testing.T, tCache *EDUCache) { //nolint:unparam
 	present := time.Now()
 	tests := []struct {
 		userID string

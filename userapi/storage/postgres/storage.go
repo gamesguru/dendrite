@@ -12,17 +12,17 @@ import (
 	"fmt"
 	"time"
 
+	// Import the postgres database driver.
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/userapi/storage/shared"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	// Import the postgres database driver.
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// NewDatabase creates a new accounts and profiles database
+// NewDatabase creates a new accounts and profiles database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, serverName spec.ServerName, bcryptCost int, openIDTokenLifetimeMS int64, loginTokenLifetime time.Duration, serverNoticesLocalpart string) (*shared.Database, error) {
 	db, writer, err := conMan.Connection(dbProperties)
 	if err != nil {
@@ -49,7 +49,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresRegistrationsTokenTable: %w", err)
 	}
-	accountsTable, err := NewPostgresAccountsTable(db, serverName)
+	accountsTable, err := NewPostgresAccountsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresAccountsTable: %w", err)
 	}
@@ -57,7 +57,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresAccountDataTable: %w", err)
 	}
-	devicesTable, err := NewPostgresDevicesTable(db, serverName)
+	devicesTable, err := NewPostgresDevicesTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresDevicesTable: %w", err)
 	}
@@ -93,7 +93,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewPostgresStatsTable(db, serverName)
+	statsTable, err := NewPostgresStatsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresStatsTable: %w", err)
 	}

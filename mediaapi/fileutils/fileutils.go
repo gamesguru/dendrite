@@ -11,26 +11,28 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // GetPathFromBase64Hash evaluates the path to a media file from its Base64Hash
 // 3 subdirectories are created for more manageable browsing and use the remainder as the file name.
 // For example, if Base64Hash is 'qwerty', the path will be 'q/w/erty/file'.
 func GetPathFromBase64Hash(base64Hash types.Base64Hash, absBasePath config.Path) (string, error) {
-	if len(base64Hash) < 3 {
+	if len(base64Hash) < 3 { //nolint:mnd
 		return "", fmt.Errorf("invalid filePath (Base64Hash too short - min 3 characters): %q", base64Hash)
 	}
-	if len(base64Hash) > 255 {
+	if len(base64Hash) > 255 { //nolint:mnd
 		return "", fmt.Errorf("invalid filePath (Base64Hash too long - max 255 characters): %q", base64Hash)
 	}
 
@@ -89,7 +91,7 @@ func MoveFileWithHashCheck(tmpDir types.Path, mediaMetadata *types.MediaMetadata
 	return types.Path(finalPath), duplicate, nil
 }
 
-// RemoveDir removes a directory and logs a warning in case of errors
+// RemoveDir removes a directory and logs a warning in case of errors.
 func RemoveDir(dir types.Path, logger *log.Entry) {
 	dirErr := os.RemoveAll(string(dir))
 	if dirErr != nil {
@@ -121,7 +123,7 @@ func WriteTempFile(
 	hasher := sha256.New()
 	teeReader := io.TeeReader(reqReader, hasher)
 	bytesWritten, err := io.Copy(tmpFileWriter, teeReader)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		RemoveDir(tmpDir, logger)
 		return
 	}
@@ -132,17 +134,17 @@ func WriteTempFile(
 		return
 	}
 
-	hash = types.Base64Hash(base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)[:]))
+	hash = types.Base64Hash(base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)))
 	size = types.FileSizeBytes(bytesWritten)
 	path = tmpDir
 	return
 }
 
-// moveFile attempts to move the file src to dst
+// moveFile attempts to move the file src to dst.
 func moveFile(src types.Path, dst types.Path) error {
 	dstDir := filepath.Dir(string(dst))
 
-	err := os.MkdirAll(dstDir, 0o770)
+	err := os.MkdirAll(dstDir, 0o770) //nolint:mnd
 	if err != nil {
 		return fmt.Errorf("failed to make directory: %w", err)
 	}
@@ -165,10 +167,10 @@ func createTempFileWriter(absBasePath config.Path) (*bufio.Writer, *os.File, typ
 	return writer, tmpFile, tmpDir, nil
 }
 
-// createTempDir creates a tmp/<random string> directory within baseDirectory and returns its path
+// createTempDir creates a tmp/<random string> directory within baseDirectory and returns its path.
 func createTempDir(baseDirectory config.Path) (types.Path, error) {
 	baseTmpDir := filepath.Join(string(baseDirectory), "tmp")
-	if err := os.MkdirAll(baseTmpDir, 0o770); err != nil {
+	if err := os.MkdirAll(baseTmpDir, 0o770); err != nil { //nolint:mnd
 		return "", fmt.Errorf("failed to create base temp dir: %w", err)
 	}
 	tmpDir, err := os.MkdirTemp(baseTmpDir, "")
@@ -180,7 +182,7 @@ func createTempDir(baseDirectory config.Path) (types.Path, error) {
 
 // createFileWriter creates a buffered file writer with a new file
 // The caller should flush the writer before closing the file.
-// Returns the file handle as it needs to be closed when writing is complete
+// Returns the file handle as it needs to be closed when writing is complete.
 func createFileWriter(directory types.Path) (*bufio.Writer, *os.File, error) {
 	filePath := filepath.Join(string(directory), "content")
 	file, err := os.Create(filePath)

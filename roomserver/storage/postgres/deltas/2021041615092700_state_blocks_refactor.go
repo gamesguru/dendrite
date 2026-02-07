@@ -9,12 +9,14 @@ package deltas
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+
+	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/util"
-	"github.com/sirupsen/logrus"
 )
 
 type stateSnapshotData struct {
@@ -28,7 +30,7 @@ type stateBlockData struct {
 	EventNIDs     types.EventNIDs
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	logrus.Warn("Performing state storage upgrade. Please wait, this may take some time!")
 	defer logrus.Warn("State storage upgrade complete")
@@ -97,7 +99,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 		types.MRoomCreateNID, types.EmptyStateKeyNID,
 	)
 	if err != nil {
-		return fmt.Errorf("resetting create events snapshots to 0 errored: %s", err)
+		return fmt.Errorf("resetting create events snapshots to 0 errored: %w", err)
 	}
 
 	batchsize := 100
@@ -139,34 +141,10 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 
 		logrus.Warnf("Rewriting snapshots %d-%d of %d...", batchoffset, batchoffset+batchsize, snapshotcount)
 		var snapshots []stateBlockData
-
 		var badCreateSnapshots []stateBlockData
-		for snapshotrows.Next() {
-			var snapshot stateBlockData
-			var eventsarray []sql.NullInt64
-			var nulStateBlockNID sql.NullInt64
-			if err = snapshotrows.Scan(&snapshot.StateSnapshotNID, &snapshot.RoomNID, &nulStateBlockNID, &eventsarray); err != nil {
-				return fmt.Errorf("rows.Scan: %w", err)
-			}
-			if nulStateBlockNID.Valid {
-				snapshot.StateBlockNID = types.StateBlockNID(nulStateBlockNID.Int64)
-			}
-			// Dendrite v0.1.0 would not make a state block for the create event, resulting in [NULL] from the query above.
-			// Remember the snapshot and we'll fill it in after we close this cursor as we can't have 2 queries running at the same time
-			if len(eventsarray) == 1 && !eventsarray[0].Valid {
-				badCreateSnapshots = append(badCreateSnapshots, snapshot)
-				continue
-			}
-			for _, e := range eventsarray {
-				if e.Valid {
-					snapshot.EventNIDs = append(snapshot.EventNIDs, types.EventNID(e.Int64))
-				}
-			}
-			snapshot.EventNIDs = snapshot.EventNIDs[:util.SortAndUnique(snapshot.EventNIDs)]
-			snapshots = append(snapshots, snapshot)
-		}
-		if err = snapshotrows.Close(); err != nil {
-			return fmt.Errorf("snapshots.Close: %w", err)
+		snapshots, badCreateSnapshots, err = readSnapshotRows(snapshotrows)
+		if err != nil {
+			return err
 		}
 		// fill in bad create snapshots
 		for _, s := range badCreateSnapshots {
@@ -174,11 +152,11 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 			err = tx.QueryRowContext(ctx,
 				`SELECT event_nid FROM roomserver_events WHERE state_snapshot_nid = $1 AND event_type_nid = 1`, s.StateSnapshotNID,
 			).Scan(&createEventNID)
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("cannot xref null state block with snapshot %d: %s", s.StateSnapshotNID, err)
+				return fmt.Errorf("cannot xref null state block with snapshot %d: %w", s.StateSnapshotNID, err)
 			}
 			if createEventNID == 0 {
 				return fmt.Errorf("cannot xref null state block with snapshot %d, no create event", s.StateSnapshotNID)
@@ -241,13 +219,13 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	var count int64
 
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM roomserver_events WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, maxsnapshotid).Scan(&count); err != nil {
-		return fmt.Errorf("assertion query failed: %s", err)
+		return fmt.Errorf("assertion query failed: %w", err)
 	}
 	if count > 0 {
 		var res sql.Result
 		var c int64
 		res, err = tx.ExecContext(ctx, `UPDATE roomserver_events SET state_snapshot_nid = 0 WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, maxsnapshotid)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("failed to reset invalid state snapshots: %w", err)
 		}
 		if c, err = res.RowsAffected(); err != nil {
@@ -257,7 +235,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM roomserver_rooms WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, maxsnapshotid).Scan(&count); err != nil {
-		return fmt.Errorf("assertion query failed: %s", err)
+		return fmt.Errorf("assertion query failed: %w", err)
 	}
 	if count > 0 {
 		var debugRoomID string
@@ -293,6 +271,40 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+func readSnapshotRows(snapshotrows *sql.Rows) ([]stateBlockData, []stateBlockData, error) {
+	defer snapshotrows.Close()
+	var snapshots []stateBlockData
+	var badCreateSnapshots []stateBlockData
+	for snapshotrows.Next() {
+		var snapshot stateBlockData
+		var eventsarray []sql.NullInt64
+		var nulStateBlockNID sql.NullInt64
+		if err := snapshotrows.Scan(&snapshot.StateSnapshotNID, &snapshot.RoomNID, &nulStateBlockNID, &eventsarray); err != nil {
+			return nil, nil, fmt.Errorf("rows.Scan: %w", err)
+		}
+		if nulStateBlockNID.Valid {
+			snapshot.StateBlockNID = types.StateBlockNID(nulStateBlockNID.Int64)
+		}
+		// Dendrite v0.1.0 would not make a state block for the create event, resulting in [NULL] from the query above.
+		// Remember the snapshot and we'll fill it in after we close this cursor as we can't have 2 queries running at the same time
+		if len(eventsarray) == 1 && !eventsarray[0].Valid {
+			badCreateSnapshots = append(badCreateSnapshots, snapshot)
+			continue
+		}
+		for _, e := range eventsarray {
+			if e.Valid {
+				snapshot.EventNIDs = append(snapshot.EventNIDs, types.EventNID(e.Int64))
+			}
+		}
+		snapshot.EventNIDs = snapshot.EventNIDs[:util.SortAndUnique(snapshot.EventNIDs)]
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := snapshotrows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("snapshotrows.Err: %w", err)
+	}
+	return snapshots, badCreateSnapshots, nil
 }
 
 func DownStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {

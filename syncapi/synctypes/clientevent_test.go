@@ -83,7 +83,7 @@ func verifyEventFields(t *testing.T, got EventFieldsToVerify, want EventFieldsTo
 	}
 }
 
-func TestToClientEvent(t *testing.T) { // nolint: gocyclo
+func TestToClientEvent(t *testing.T) { //nolint:gocyclo
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV1).NewEventFromTrustedJSON([]byte(`{
 		"type": "m.room.name",
 		"state_key": "",
@@ -144,7 +144,7 @@ func TestToClientEvent(t *testing.T) { // nolint: gocyclo
 		`"room_id":"!test:localhost","sender":"@test:localhost","state_key":"","type":"m.room.name",` +
 		`"unsigned":{"prev_content":{"name":"Goodbye World"}}}`
 	if !bytes.Equal([]byte(out), j) {
-		t.Errorf("ClientEvent marshalled to wrong bytes: wanted %s, got %s", out, string(j))
+		t.Errorf("ClientEvent marshaled to wrong bytes: wanted %s, got %s", out, string(j))
 	}
 }
 
@@ -179,7 +179,7 @@ func TestToClientFormatSync(t *testing.T) {
 	}
 }
 
-func TestToClientEventFormatSyncFederation(t *testing.T) { // nolint: gocyclo
+func TestToClientEventFormatSyncFederation(t *testing.T) { //nolint:gocyclo
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10).NewEventFromTrustedJSON([]byte(`{
 		"type": "m.room.name",
 		"state_key": "",
@@ -254,7 +254,7 @@ func userIDForSender(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, 
 	return spec.NewUserID(testUserID, true)
 }
 
-func TestToClientEventsFormatSyncFederation(t *testing.T) { // nolint: gocyclo
+func TestToClientEventsFormatSyncFederation(t *testing.T) { //nolint:gocyclo
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{
 		"type": "m.room.name",
         "state_key": "testSenderID",
@@ -370,7 +370,7 @@ func TestToClientEventsFormatSyncFederation(t *testing.T) { // nolint: gocyclo
 		})
 }
 
-func TestToClientEventsFormatSync(t *testing.T) { // nolint: gocyclo
+func TestToClientEventsFormatSync(t *testing.T) { //nolint:gocyclo
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{
 		"type": "m.room.name",
         "state_key": "testSenderID",
@@ -438,7 +438,10 @@ func TestToClientEventsFormatSync(t *testing.T) { // nolint: gocyclo
 	var prev PrevEventRef
 	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
 	prev.PrevSenderID = testUserID
-	expectedUnsigned, _ := json.Marshal(prev)
+	expectedUnsigned, err := json.Marshal(prev)
+	if err != nil {
+		t.Fatalf("failed to marshal prev: %s", err)
+	}
 
 	ce2 := clientEvents[1]
 	verifyEventFields(t,
@@ -462,7 +465,7 @@ func TestToClientEventsFormatSync(t *testing.T) { // nolint: gocyclo
 		})
 }
 
-func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { // nolint: gocyclo
+func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { //nolint:gocyclo
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{
 		"type": "m.room.name",
         "state_key": "testSenderID",
@@ -530,7 +533,10 @@ func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { // nolint: go
 	var prev PrevEventRef
 	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
 	prev.PrevSenderID = "unknownSenderID"
-	expectedUnsigned, _ := json.Marshal(prev)
+	expectedUnsigned, err := json.Marshal(prev)
+	if err != nil {
+		t.Fatalf("failed to marshal prev: %s", err)
+	}
 
 	ce2 := clientEvents[1]
 	verifyEventFields(t,
@@ -554,7 +560,7 @@ func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { // nolint: go
 		})
 }
 
-// MSC4115 Tests
+// MSC4115 Tests.
 
 func TestAnnotateEventWithMembership_StableIdentifier(t *testing.T) {
 	event := &ClientEvent{
@@ -569,7 +575,7 @@ func TestAnnotateEventWithMembership_StableIdentifier(t *testing.T) {
 	}
 
 	// Verify the membership field was added with stable identifier
-	var unsigned map[string]interface{}
+	var unsigned map[string]any
 	if err := json.Unmarshal(event.Unsigned, &unsigned); err != nil {
 		t.Fatalf("failed to unmarshal unsigned: %s", err)
 	}
@@ -605,7 +611,7 @@ func TestAnnotateEventWithMembership_UnstableIdentifier(t *testing.T) {
 	}
 
 	// Verify the membership field was added with unstable identifier
-	var unsigned map[string]interface{}
+	var unsigned map[string]any
 	if err := json.Unmarshal(event.Unsigned, &unsigned); err != nil {
 		t.Fatalf("failed to unmarshal unsigned: %s", err)
 	}
@@ -632,7 +638,7 @@ func TestAnnotateEventWithMembership_EmptyUnsigned(t *testing.T) {
 	}
 
 	// Verify the membership field was added
-	var unsigned map[string]interface{}
+	var unsigned map[string]any
 	if err := json.Unmarshal(event.Unsigned, &unsigned); err != nil {
 		t.Fatalf("failed to unmarshal unsigned: %s", err)
 	}
@@ -662,7 +668,7 @@ func TestAnnotateEventWithMembership_AllMembershipStates(t *testing.T) {
 				t.Fatalf("AnnotateEventWithMembership failed for state %s: %s", state, err)
 			}
 
-			var unsigned map[string]interface{}
+			var unsigned map[string]any
 			if err := json.Unmarshal(event.Unsigned, &unsigned); err != nil {
 				t.Fatalf("failed to unmarshal unsigned: %s", err)
 			}

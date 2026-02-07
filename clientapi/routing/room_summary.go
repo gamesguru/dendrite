@@ -11,17 +11,18 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// RoomSummaryResponse represents the response for MSC3266 room summary API
+// RoomSummaryResponse represents the response for MSC3266 room summary API.
 type RoomSummaryResponse struct {
 	RoomID           string   `json:"room_id"`
 	RoomType         string   `json:"room_type,omitempty"`
@@ -187,7 +188,7 @@ func GetRoomSummary(
 }
 
 // fetchRoomSummaryViaFederation attempts to fetch room summary via federation
-// Returns nil if federation fails or room is not accessible
+// Returns nil if federation fails or room is not accessible.
 func fetchRoomSummaryViaFederation(
 	ctx context.Context,
 	fsAPI api.FederationInternalAPI,
@@ -238,22 +239,22 @@ func fetchRoomSummaryViaFederation(
 	return nil
 }
 
-// convertHierarchyToSummary converts a federation hierarchy room to a room summary response
+// convertHierarchyToSummary converts a federation hierarchy room to a room summary response.
 func convertHierarchyToSummary(room fclient.RoomHierarchyRoom) RoomSummaryResponse {
 	var roomType string
 	if room.RoomType != nil {
 		roomType = *room.RoomType
 	}
 	summary := RoomSummaryResponse{
-		RoomID:           room.PublicRoom.RoomID,
-		Name:             room.PublicRoom.Name,
-		Topic:            room.PublicRoom.Topic,
-		AvatarURL:        room.PublicRoom.AvatarURL,
-		CanonicalAlias:   room.PublicRoom.CanonicalAlias,
-		NumJoinedMembers: int(room.PublicRoom.JoinedMembersCount),
-		GuestCanJoin:     room.PublicRoom.GuestCanJoin,
-		WorldReadable:    room.PublicRoom.WorldReadable,
-		JoinRule:         room.PublicRoom.JoinRule,
+		RoomID:           room.RoomID,
+		Name:             room.Name,
+		Topic:            room.Topic,
+		AvatarURL:        room.AvatarURL,
+		CanonicalAlias:   room.CanonicalAlias,
+		NumJoinedMembers: room.JoinedMembersCount,
+		GuestCanJoin:     room.GuestCanJoin,
+		WorldReadable:    room.WorldReadable,
+		JoinRule:         room.JoinRule,
 		RoomType:         roomType,
 	}
 
@@ -268,7 +269,7 @@ func convertHierarchyToSummary(room fclient.RoomHierarchyRoom) RoomSummaryRespon
 	return summary
 }
 
-// parseRoomIDOrAlias resolves a room alias to room ID, or validates a room ID
+// parseRoomIDOrAlias resolves a room alias to room ID, or validates a room ID.
 func parseRoomIDOrAlias(ctx context.Context, roomIDOrAlias string, roomserverAPI rsAPI.ClientRoomserverAPI) (string, *util.JSONResponse) {
 	// Try parsing as room ID first
 	if roomID, err := spec.NewRoomID(roomIDOrAlias); err == nil {
@@ -309,7 +310,7 @@ func parseRoomIDOrAlias(ctx context.Context, roomIDOrAlias string, roomserverAPI
 }
 
 // checkRoomAccess determines if the user can access the room summary
-// Returns (canAccess, membership)
+// Returns (canAccess, membership).
 func checkRoomAccess(
 	ctx context.Context,
 	roomserverAPI rsAPI.ClientRoomserverAPI,
@@ -344,7 +345,7 @@ func checkRoomAccess(
 	}
 
 	// Allow access if user is/was a member (join, invite, leave, ban)
-	// This matches Synapse behaviour - you can see summary of rooms you've been in
+	// This matches Synapse behavior - you can see summary of rooms you've been in
 	if membership == "join" || membership == "invite" || membership == "leave" || membership == "ban" {
 		return true, membership
 	}
@@ -354,7 +355,7 @@ func checkRoomAccess(
 }
 
 // checkUnauthenticatedAccess determines if an unauthenticated user can access the room summary
-// Only allows access to public or world-readable rooms
+// Only allows access to public or world-readable rooms.
 func checkUnauthenticatedAccess(
 	roomState map[gomatrixserverlib.StateKeyTuple]string,
 ) bool {
@@ -385,7 +386,7 @@ func checkUnauthenticatedAccess(
 	return false
 }
 
-// getUserMembership gets the current membership state for a user in a room
+// getUserMembership gets the current membership state for a user in a room.
 func getUserMembership(ctx context.Context, roomserverAPI rsAPI.ClientRoomserverAPI, roomID string, userID spec.UserID) string {
 	var membershipRes rsAPI.QueryMembershipForUserResponse
 	err := roomserverAPI.QueryMembershipForUser(ctx, &rsAPI.QueryMembershipForUserRequest{
@@ -400,7 +401,7 @@ func getUserMembership(ctx context.Context, roomserverAPI rsAPI.ClientRoomserver
 	return membershipRes.Membership
 }
 
-// getRoomVersion queries the room version
+// getRoomVersion queries the room version.
 func getRoomVersion(ctx context.Context, roomserverAPI rsAPI.ClientRoomserverAPI, roomID string) string {
 	roomVersion, err := roomserverAPI.QueryRoomVersionForRoom(ctx, roomID)
 	if err != nil {
@@ -411,7 +412,7 @@ func getRoomVersion(ctx context.Context, roomserverAPI rsAPI.ClientRoomserverAPI
 	return string(roomVersion)
 }
 
-// buildRoomSummaryResponse constructs the response from room state
+// buildRoomSummaryResponse constructs the response from room state.
 func buildRoomSummaryResponse(
 	roomID string,
 	roomState map[gomatrixserverlib.StateKeyTuple]string,
@@ -482,7 +483,7 @@ func buildRoomSummaryResponse(
 	return response
 }
 
-// toCacheResponse converts routing.RoomSummaryResponse to caching.RoomSummaryResponse
+// toCacheResponse converts routing.RoomSummaryResponse to caching.RoomSummaryResponse.
 func toCacheResponse(r RoomSummaryResponse) caching.RoomSummaryResponse {
 	return caching.RoomSummaryResponse{
 		RoomID:           r.RoomID,
@@ -502,7 +503,7 @@ func toCacheResponse(r RoomSummaryResponse) caching.RoomSummaryResponse {
 	}
 }
 
-// fromCacheResponse converts caching.RoomSummaryResponse to routing.RoomSummaryResponse
+// fromCacheResponse converts caching.RoomSummaryResponse to routing.RoomSummaryResponse.
 func fromCacheResponse(r caching.RoomSummaryResponse) RoomSummaryResponse {
 	return RoomSummaryResponse{
 		RoomID:           r.RoomID,

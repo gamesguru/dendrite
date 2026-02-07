@@ -63,14 +63,16 @@ func PrepareEventJSONTable(db *sql.DB) (tables.EventJSON, error) {
 func (s *eventJSONStatements) InsertEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.insertEventJSONStmt).ExecContext(ctx, int64(eventNID), eventJSON)
+	insertStmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
+	defer insertStmt.Close()
+	_, err := insertStmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }
 
 func (s *eventJSONStatements) BulkSelectEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 ) ([]tables.EventJSONPair, error) {
-	iEventNIDs := make([]interface{}, len(eventNIDs))
+	iEventNIDs := make([]any, len(eventNIDs))
 	for k, v := range eventNIDs {
 		iEventNIDs[k] = v
 	}

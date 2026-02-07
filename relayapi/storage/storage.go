@@ -12,15 +12,16 @@ package storage
 import (
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(
 	conMan *sqlutil.Connections,
 	dbProperties *config.DatabaseOptions,

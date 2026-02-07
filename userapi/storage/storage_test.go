@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/userapi/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -21,12 +18,15 @@ import (
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal/pushrules"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
 const loginTokenLifetime = time.Minute
@@ -50,7 +50,7 @@ func mustCreateUserDatabase(t *testing.T, dbType test.DBType) (storage.UserDatab
 	}
 }
 
-// Tests storing and getting account data
+// Tests storing and getting account data.
 func Test_AccountData(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
@@ -81,7 +81,7 @@ func Test_AccountData(t *testing.T) {
 	})
 }
 
-// Tests the creation of accounts
+// Tests the creation of accounts.
 func Test_Accounts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)

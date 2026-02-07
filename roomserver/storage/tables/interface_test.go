@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/test"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 func TestExtractContentValue(t *testing.T) {
@@ -78,7 +79,7 @@ func TestExtractContentValue(t *testing.T) {
 			result := ExtractContentValue(tt.event)
 			if tt.wantJSON {
 				// For JSON responses, verify the specific key exists with expected value
-				var parsed map[string]interface{}
+				var parsed map[string]any
 				err := json.Unmarshal([]byte(result), &parsed)
 				assert.NoError(t, err, "Expected valid JSON")
 				assert.Equal(t, tt.wantValue, parsed[tt.want], "JSON key %q should have expected value", tt.want)

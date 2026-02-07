@@ -14,15 +14,13 @@ import (
 	"regexp"
 	"strings"
 
+	gologme "github.com/gologme/log"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
-	"github.com/yggdrasil-network/yggquic"
-
 	"github.com/yggdrasil-network/yggdrasil-go/src/config"
 	yggdrasilcore "github.com/yggdrasil-network/yggdrasil-go/src/core"
 	yggdrasilmulticast "github.com/yggdrasil-network/yggdrasil-go/src/multicast"
-
-	gologme "github.com/gologme/log"
+	"github.com/yggdrasil-network/yggquic"
 )
 
 type Node struct {

@@ -15,10 +15,8 @@ import (
 	"strconv"
 	"time"
 
-	syncAPITypes "codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -29,6 +27,7 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/process"
+	syncAPITypes "codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -69,7 +68,7 @@ func NewOutputRoomEventConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputRoomEventConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
@@ -80,7 +79,7 @@ func (s *OutputRoomEventConsumer) Start() error {
 // onMessage is called when the federation server receives a new event from the room server output log.
 // It is unsafe to call this with messages for the same room in multiple gorountines
 // because updates it will likely fail with a types.EventIDMismatchError when it
-// realises that it cannot update the room state using the deltas.
+// realizes that it cannot update the room state using the deltas.
 func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	receivedType := api.OutputType(msg.Header.Get(jetstream.RoomEventType))
@@ -103,7 +102,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	switch output.Type {
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
-		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil {
+		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
 			// panic rather than continue with an inconsistent database
 			log.WithFields(log.Fields{
 				"event_id":   ev.EventID(),
@@ -141,7 +140,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 }
 
 // processInboundPeek starts tracking a new federated inbound peek (replacing the existing one if any)
-// causing the federationapi to start sending messages to the peeking server
+// causing the federationapi to start sending messages to the peeking server.
 func (s *OutputRoomEventConsumer) processInboundPeek(orp api.OutputNewInboundPeek) error {
 	// FIXME: there's a race here - we should start /sending new peeked events
 	// atomically after the orp.LatestEventID to ensure there are no gaps between
@@ -293,7 +292,7 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 		msg.Header.Set(jetstream.UserID, ev.Sender)
 
 		var presence *nats.Msg
-		presence, err = s.natsClient.RequestMsg(msg, time.Second*10)
+		presence, err = s.natsClient.RequestMsg(msg, time.Second*10) //nolint:mnd
 		if err != nil {
 			log.WithError(err).Errorf("unable to get presence")
 			continue

@@ -7,16 +7,18 @@
 package routing
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/util"
 )
 
-// recaptchaTemplate is an HTML webpage template for recaptcha auth
+// recaptchaTemplate is an HTML webpage template for recaptcha auth.
 const recaptchaTemplate = `
 <html>
 <head>
@@ -57,7 +59,7 @@ function captchaDone() {
 `
 
 // successTemplate is an HTML template presented to the user after successful
-// recaptcha completion
+// recaptcha completion.
 const successTemplate = `
 <html>
 <head>
@@ -81,7 +83,7 @@ if (window.onAuthDone) {
 </html>
 `
 
-// serveTemplate fills template data and serves it using http.ResponseWriter
+// serveTemplate fills template data and serves it using http.ResponseWriter.
 func serveTemplate(w http.ResponseWriter, templateHTML string, data map[string]string) {
 	t := template.Must(template.New("response").Parse(templateHTML))
 	if err := t.Execute(w, data); err != nil {
@@ -89,7 +91,7 @@ func serveTemplate(w http.ResponseWriter, templateHTML string, data map[string]s
 	}
 }
 
-// AuthFallback implements GET and POST /auth/{authType}/fallback/web?session={sessionID}
+// AuthFallback implements GET and POST /auth/{authType}/fallback/web?session={sessionID}.
 func AuthFallback(
 	w http.ResponseWriter, req *http.Request, authType string,
 	cfg *config.ClientAPI,
@@ -134,11 +136,12 @@ func AuthFallback(
 		serveTemplate(w, successTemplate, data)
 	}
 
-	if req.Method == http.MethodGet {
+	switch req.Method {
+	case http.MethodGet:
 		// Handle Recaptcha
 		serveRecaptcha()
 		return
-	} else if req.Method == http.MethodPost {
+	case http.MethodPost:
 		// Handle Recaptcha
 		clientIP := req.RemoteAddr
 		err := req.ParseForm()
@@ -151,16 +154,16 @@ func AuthFallback(
 
 		response := req.Form.Get(cfg.RecaptchaFormField)
 		err = validateRecaptcha(cfg, response, clientIP)
-		switch err {
-		case ErrMissingResponse:
+		switch {
+		case errors.Is(err, ErrMissingResponse):
 			w.WriteHeader(http.StatusBadRequest)
 			serveRecaptcha() // serve the initial page again, instead of nothing
 			return
-		case ErrInvalidCaptcha:
+		case errors.Is(err, ErrInvalidCaptcha):
 			w.WriteHeader(http.StatusUnauthorized)
 			serveRecaptcha()
 			return
-		case nil:
+		case err == nil:
 		default: // something else failed
 			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
 			serveRecaptcha()

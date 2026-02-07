@@ -14,11 +14,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/util"
 )
 
 const stateSnapshotSchema = `
@@ -93,6 +94,7 @@ func (s *stateSnapshotStatements) InsertState(
 		return
 	}
 	insertStmt := sqlutil.TxStmt(txn, s.insertStateStmt)
+	defer insertStmt.Close()
 	err = insertStmt.QueryRowContext(ctx, stateBlockNIDs.Hash(), int64(roomNID), string(stateBlockNIDsJSON)).Scan(&stateNID)
 	if err != nil {
 		return 0, err
@@ -103,7 +105,7 @@ func (s *stateSnapshotStatements) InsertState(
 func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 	ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID,
 ) ([]types.StateBlockNIDList, error) {
-	nids := make([]interface{}, len(stateNIDs))
+	nids := make([]any, len(stateNIDs))
 	for k, v := range stateNIDs {
 		nids[k] = v
 	}
@@ -112,10 +114,11 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 	if err != nil {
 		return nil, err
 	}
-	defer selectPrep.Close() // nolint:errcheck
+	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
+	defer selectStmt.Close()
 
-	rows, err := selectStmt.QueryContext(ctx, nids...)
+	rows, err := selectStmt.QueryContext(ctx, nids...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +158,9 @@ func (s *stateSnapshotStatements) selectStateBlockNIDsForRoomNID(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
 ) ([]types.StateBlockNID, error) {
 	var res []types.StateBlockNID
-	rows, err := sqlutil.TxStmt(txn, s.selectStateBlockNIDsStmt).QueryContext(ctx, roomNID)
+	selectStateBlockNIDsStmt := sqlutil.TxStmt(txn, s.selectStateBlockNIDsStmt)
+	defer selectStateBlockNIDsStmt.Close()
+	rows, err := selectStateBlockNIDsStmt.QueryContext(ctx, roomNID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return res, nil
 	}

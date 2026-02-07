@@ -87,7 +87,7 @@ func TxStmtContext(context context.Context, transaction *sql.Tx, statement *sql.
 	return statement
 }
 
-// Hack of the century
+// Hack of the century.
 func QueryVariadic(count int) string {
 	return QueryVariadicOffset(count, 0)
 }
@@ -113,12 +113,12 @@ func minOfInts(a, b int) int {
 
 // QueryProvider defines the interface for querys used by RunLimitedVariablesQuery.
 type QueryProvider interface {
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // ExecProvider defines the interface for querys used by RunLimitedVariablesExec.
 type ExecProvider interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // SQLite3MaxVariables is the default maximum number of host parameters in a single SQL statement
@@ -126,32 +126,39 @@ type ExecProvider interface {
 const SQLite3MaxVariables = 999
 
 // RunLimitedVariablesQuery split up a query with more variables than the used database can handle in multiple queries.
-func RunLimitedVariablesQuery(ctx context.Context, query string, qp QueryProvider, variables []interface{}, limit uint, rowHandler func(*sql.Rows) error) error {
+func RunLimitedVariablesQuery(ctx context.Context, query string, qp QueryProvider, variables []any, limit uint, rowHandler func(*sql.Rows) error) error {
 	var start int
 	for start < len(variables) {
 		n := minOfInts(len(variables)-start, int(limit))
 		nextQuery := strings.Replace(query, "($1)", QueryVariadic(n), 1)
-		rows, err := qp.QueryContext(ctx, nextQuery, variables[start:start+n]...)
-		if err != nil {
-			util.GetLogger(ctx).WithError(err).Error("QueryContext returned an error")
+		if err := runLimitedVariablesQueryBatch(ctx, qp, nextQuery, variables[start:start+n], rowHandler); err != nil {
 			return err
 		}
-		err = rowHandler(rows)
-		if closeErr := rows.Close(); closeErr != nil {
-			util.GetLogger(ctx).WithError(closeErr).Error("RunLimitedVariablesQuery: failed to close rows")
-			return err
-		}
-		if err != nil {
-			util.GetLogger(ctx).WithError(err).Error("RunLimitedVariablesQuery: rowHandler returned error")
-			return err
-		}
-		start = start + n
+		start += n
+	}
+	return nil
+}
+
+func runLimitedVariablesQueryBatch(ctx context.Context, qp QueryProvider, query string, variables []any, rowHandler func(*sql.Rows) error) error {
+	rows, err := qp.QueryContext(ctx, query, variables...)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("QueryContext returned an error")
+		return err
+	}
+	defer rows.Close()
+	if err = rowHandler(rows); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("RunLimitedVariablesQuery: rowHandler returned error")
+		return err
+	}
+	if err = rows.Err(); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("RunLimitedVariablesQuery: rows.Err returned error")
+		return err
 	}
 	return nil
 }
 
 // RunLimitedVariablesExec split up a query with more variables than the used database can handle in multiple queries.
-func RunLimitedVariablesExec(ctx context.Context, query string, qp ExecProvider, variables []interface{}, limit uint) error {
+func RunLimitedVariablesExec(ctx context.Context, query string, qp ExecProvider, variables []any, limit uint) error {
 	var start int
 	for start < len(variables) {
 		n := minOfInts(len(variables)-start, int(limit))
@@ -161,7 +168,7 @@ func RunLimitedVariablesExec(ctx context.Context, query string, qp ExecProvider,
 			util.GetLogger(ctx).WithError(err).Error("ExecContext returned an error")
 			return err
 		}
-		start = start + n
+		start += n
 	}
 	return nil
 }
@@ -175,8 +182,8 @@ type StatementList []struct {
 // Prepare the SQL for each statement in the list and assign the result to the prepared statement.
 func (s StatementList) Prepare(db *sql.DB) (err error) {
 	for _, statement := range s {
-		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil {
-			err = fmt.Errorf("error %q while preparing statement: %s", err, statement.SQL)
+		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil { //nolint:sqlclosecheck
+			err = fmt.Errorf("error while preparing statement %s: %w", statement.SQL, err)
 			return
 		}
 	}

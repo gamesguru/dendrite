@@ -10,17 +10,18 @@ package mscs
 import (
 	"context"
 
+	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/mscs/msc2836"
-	"github.com/matrix-org/util"
-	"github.com/sirupsen/logrus"
 )
 
-// Enable MSCs - returns an error on unknown MSCs
+// Enable MSCs - returns an error on unknown MSCs.
 func Enable(cfg *config.Dendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, caches *caching.Caches) error {
 	for _, msc := range cfg.MSCs.MSCs {
 		util.GetLogger(context.Background()).WithField("msc", msc).Info("Enabling MSC")

@@ -12,17 +12,17 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/clientapi/producers"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/matrix-org/util"
 )
 
-// GetAccountData implements GET /user/{userId}/[rooms/{roomid}/]account_data/{type}
+// GetAccountData implements GET /user/{userId}/[rooms/{roomid}/]account_data/{type}.
 func GetAccountData(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	userID string, roomID string, dataType string,
@@ -65,7 +65,7 @@ func GetAccountData(
 	}
 }
 
-// SaveAccountData implements PUT /user/{userId}/[rooms/{roomId}/]account_data/{type}
+// SaveAccountData implements PUT /user/{userId}/[rooms/{roomId}/]account_data/{type}.
 func SaveAccountData(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	userID string, roomID string, dataType string, syncProducer *producers.SyncAPIProducer,
@@ -77,7 +77,7 @@ func SaveAccountData(
 		}
 	}
 
-	defer req.Body.Close() // nolint: errcheck
+	defer req.Body.Close()
 
 	if req.Body == http.NoBody {
 		return util.JSONResponse{
@@ -131,7 +131,7 @@ type fullyReadEvent struct {
 	EventID string `json:"event_id"`
 }
 
-// SaveReadMarker implements POST /rooms/{roomId}/read_markers
+// SaveReadMarker implements POST /rooms/{roomId}/read_markers.
 func SaveReadMarker(
 	req *http.Request,
 	userAPI api.ClientUserAPI, rsAPI roomserverAPI.ClientRoomserverAPI,

@@ -15,7 +15,7 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 )
 
-// SQL statements for rooms to recalculate
+// SQL statements for rooms to recalculate.
 const insertRoomToRecalculateSQL = `
 	INSERT INTO syncapi_sliding_sync_rooms_to_recalculate (room_id)
 	VALUES ($1)
@@ -32,7 +32,7 @@ const deleteRoomToRecalculateSQL = `
 	WHERE room_id = $1
 `
 
-// SQL statements for joined rooms
+// SQL statements for joined rooms.
 const upsertJoinedRoomSQL = `
 	INSERT INTO syncapi_sliding_sync_joined_rooms
 		(room_id, event_stream_ordering, bump_stamp, room_type, room_name, is_encrypted, tombstone_successor_room_id)
@@ -64,7 +64,7 @@ const deleteJoinedRoomSQL = `
 	WHERE room_id = $1
 `
 
-// SQL statements for membership snapshots
+// SQL statements for membership snapshots.
 const upsertMembershipSnapshotSQL = `
 	INSERT INTO syncapi_sliding_sync_membership_snapshots
 		(room_id, user_id, sender, membership_event_id, membership, forgotten, event_stream_ordering,
@@ -152,12 +152,13 @@ func NewPostgresSlidingSyncRoomMetadataTable(db *sql.DB) (tables.SlidingSyncRoom
 	}.Prepare(db)
 }
 
-// ===== Rooms To Recalculate =====
+// ===== Rooms To Recalculate =====.
 
 func (s *slidingSyncRoomMetadataStatements) InsertRoomToRecalculate(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertRoomToRecalculateStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -166,7 +167,8 @@ func (s *slidingSyncRoomMetadataStatements) SelectRoomsToRecalculate(
 	ctx context.Context, txn *sql.Tx, limit int,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsToRecalculateStmt)
-	rows, err := stmt.QueryContext(ctx, limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -187,16 +189,18 @@ func (s *slidingSyncRoomMetadataStatements) DeleteRoomToRecalculate(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomToRecalculateStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
 
-// ===== Joined Rooms =====
+// ===== Joined Rooms =====.
 
 func (s *slidingSyncRoomMetadataStatements) UpsertJoinedRoom(
 	ctx context.Context, txn *sql.Tx, room *tables.SlidingSyncJoinedRoom,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertJoinedRoomStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx,
 		room.RoomID,
 		room.EventStreamOrdering,
@@ -213,6 +217,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (*tables.SlidingSyncJoinedRoom, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedRoomStmt)
+	defer stmt.Close()
 	var room tables.SlidingSyncJoinedRoom
 	var roomType, roomName, tombstone sql.NullString
 	err := stmt.QueryRowContext(ctx, roomID).Scan(
@@ -243,7 +248,8 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRooms(
 		return make(map[string]*tables.SlidingSyncJoinedRoom), nil
 	}
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedRoomsStmt)
-	rows, err := stmt.QueryContext(ctx, roomIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +282,7 @@ func (s *slidingSyncRoomMetadataStatements) DeleteJoinedRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJoinedRoomStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -290,7 +297,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRoomsByFilters(
 		FROM syncapi_sliding_sync_joined_rooms
 		WHERE 1=1
 	`
-	args := []interface{}{}
+	args := []any{}
 	argNum := 1
 
 	if isEncrypted != nil {
@@ -322,7 +329,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRoomsByFilters(
 		args = append(args, limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -351,12 +358,13 @@ func (s *slidingSyncRoomMetadataStatements) SelectJoinedRoomsByFilters(
 	return rooms, rows.Err()
 }
 
-// ===== Membership Snapshots =====
+// ===== Membership Snapshots =====.
 
 func (s *slidingSyncRoomMetadataStatements) UpsertMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, snapshot *tables.SlidingSyncMembershipSnapshot,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertMembershipSnapshotStmt)
+	defer stmt.Close()
 	forgotten := 0
 	if snapshot.Forgotten {
 		forgotten = 1
@@ -382,6 +390,7 @@ func (s *slidingSyncRoomMetadataStatements) SelectMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) (*tables.SlidingSyncMembershipSnapshot, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotStmt)
+	defer stmt.Close()
 	var snapshot tables.SlidingSyncMembershipSnapshot
 	var forgotten int
 	var roomType, roomName, tombstone sql.NullString
@@ -420,9 +429,11 @@ func (s *slidingSyncRoomMetadataStatements) SelectMembershipSnapshotsForUser(
 
 	if len(memberships) == 0 {
 		stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotsForUserStmt)
+		defer stmt.Close()
 		rows, err = stmt.QueryContext(ctx, userID)
 	} else {
 		stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotsForUserWithMembershipsStmt)
+		defer stmt.Close()
 		rows, err = stmt.QueryContext(ctx, userID, memberships)
 	}
 	if err != nil {
@@ -464,6 +475,7 @@ func (s *slidingSyncRoomMetadataStatements) UpdateMembershipForgotten(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, forgotten bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateMembershipForgottenStmt)
+	defer stmt.Close()
 	forgottenInt := 0
 	if forgotten {
 		forgottenInt = 1
@@ -476,17 +488,18 @@ func (s *slidingSyncRoomMetadataStatements) DeleteMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteMembershipSnapshotStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID, userID)
 	return err
 }
 
-// Helper function to convert empty strings to NULL
-func nullIfEmpty(s string) interface{} {
+// Helper function to convert empty strings to NULL.
+func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}
 	return s
 }
 
-// Ensure we implement the interface
+// Ensure we implement the interface.
 var _ tables.SlidingSyncRoomMetadata = &slidingSyncRoomMetadataStatements{}

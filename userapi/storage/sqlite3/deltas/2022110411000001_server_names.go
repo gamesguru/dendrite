@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 // I know what you're thinking: you're wondering "why doesn't this use $1

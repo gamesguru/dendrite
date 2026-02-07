@@ -51,7 +51,7 @@ func NewSigningKeyUpdateConsumer(
 	}
 }
 
-// Start consuming from key servers
+// Start consuming from key servers.
 func (t *SigningKeyUpdateConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1,

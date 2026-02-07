@@ -10,12 +10,6 @@ import (
 	"flag"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,11 +17,17 @@ import (
 
 	"codefloe.com/pat-s/dendrite/appservice"
 	"codefloe.com/pat-s/dendrite/federationapi"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver"
 	"codefloe.com/pat-s/dendrite/setup"
 	basepkg "codefloe.com/pat-s/dendrite/setup/base"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/mscs"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi"
 )
 
@@ -109,7 +109,7 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to start opentracing")
 	}
-	defer closer.Close() // nolint: errcheck
+	defer closer.Close()
 
 	// setup sentry
 	if cfg.Global.Sentry.Enabled {
@@ -128,7 +128,7 @@ func main() {
 		go func() {
 			processCtx.ComponentStarted()
 			<-processCtx.WaitForShutdown()
-			if !sentry.Flush(time.Second * 5) {
+			if !sentry.Flush(time.Second * 5) { //nolint:mnd
 				logrus.Warnf("failed to flush all Sentry events!")
 			}
 			processCtx.ComponentFinished()

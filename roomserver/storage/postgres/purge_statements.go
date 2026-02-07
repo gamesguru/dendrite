@@ -103,7 +103,9 @@ func (s *purgeStatements) PurgeRoom(
 		s.purgePublishedStmt,
 	}
 	for _, stmt := range purgeByRoomID {
-		_, err := sqlutil.TxStmt(txn, stmt).ExecContext(ctx, roomID)
+		execStmt := sqlutil.TxStmt(txn, stmt)
+		defer execStmt.Close()
+		_, err := execStmt.ExecContext(ctx, roomID)
 		if err != nil {
 			return err
 		}
@@ -123,7 +125,9 @@ func (s *purgeStatements) PurgeRoom(
 		s.purgeRoomStmt,
 	}
 	for _, stmt := range purgeByRoomNID {
-		_, err := sqlutil.TxStmt(txn, stmt).ExecContext(ctx, roomNID)
+		execStmt := sqlutil.TxStmt(txn, stmt)
+		defer execStmt.Close()
+		_, err := execStmt.ExecContext(ctx, roomNID)
 		if err != nil {
 			return err
 		}

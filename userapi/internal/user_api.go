@@ -15,20 +15,20 @@ import (
 	"strconv"
 	"time"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/pushrules"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 
+	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
+	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/internal/pushrules"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
@@ -83,7 +83,7 @@ func (a *UserInternalAPI) PerformAdminDeleteRegistrationToken(ctx context.Contex
 	return a.DB.DeleteRegistrationToken(ctx, tokenString)
 }
 
-func (a *UserInternalAPI) PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]interface{}) (*clientapi.RegistrationToken, error) {
+func (a *UserInternalAPI) PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error) {
 	return a.DB.UpdateRegistrationToken(ctx, tokenString, newAttributes)
 }
 
@@ -162,7 +162,7 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 }
 
 func postRegisterJoinRooms(cfg *config.UserAPI, acc *api.Account, rsAPI rsapi.UserRoomserverAPI) {
-	// POST register behaviour: check if the user is a normal user.
+	// POST register behavior: check if the user is a normal user.
 	// If the user is a normal user, add user to room specified in the configuration "auto_join_rooms".
 	if acc.AccountType != api.AccountTypeAppService && acc.AppServiceID == "" {
 		for room := range cfg.AutoJoinRooms {
@@ -187,7 +187,7 @@ func addUserToRoom(
 	username string,
 	userID string,
 ) error {
-	addGroupContent := make(map[string]interface{})
+	addGroupContent := make(map[string]any)
 	// This make sure the user's username can be displayed correctly.
 	// Because the newly-registered user doesn't have an avatar, the avatar_url is not needed.
 	addGroupContent["displayname"] = username
@@ -251,7 +251,7 @@ func (a *UserInternalAPI) PerformAccountCreation(ctx context.Context, req *api.P
 		return fmt.Errorf("a.DB.SetDisplayName: %w", err)
 	}
 
-	postRegisterJoinRooms(a.Config, acc, a.RSAPI)
+	postRegisterJoinRooms(a.Config, acc, a.RSAPI) //nolint:contextcheck
 
 	res.AccountCreated = true
 	res.Account = acc
@@ -266,7 +266,7 @@ func (a *UserInternalAPI) PerformPasswordUpdate(ctx context.Context, req *api.Pe
 		return err
 	}
 	if req.LogoutDevices {
-		if _, err := a.DB.RemoveAllDevices(context.Background(), req.Localpart, req.ServerName, ""); err != nil {
+		if _, err := a.DB.RemoveAllDevices(context.Background(), req.Localpart, req.ServerName, ""); err != nil { //nolint:contextcheck
 			return err
 		}
 	}
@@ -308,7 +308,7 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 		return nil
 	}
 	// create empty device keys and upload them to trigger device list changes
-	return a.deviceListUpdate(dev.UserID, []string{dev.ID}, req.FromRegistration)
+	return a.deviceListUpdate(dev.UserID, []string{dev.ID}, req.FromRegistration) //nolint:contextcheck
 }
 
 func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.PerformDeviceDeletionRequest, res *api.PerformDeviceDeletionResponse) error {
@@ -348,7 +348,7 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 		return fmt.Errorf("a.KeyAPI.PerformDeleteKeys: %w", err)
 	}
 	// create empty device keys and upload them to delete what was once there and trigger device list changes
-	return a.deviceListUpdate(req.UserID, deletedDeviceIDs, false)
+	return a.deviceListUpdate(req.UserID, deletedDeviceIDs, false) //nolint:contextcheck
 }
 
 func (a *UserInternalAPI) deviceListUpdate(userID string, deviceIDs []string, fromRegistration bool) error {
@@ -370,7 +370,7 @@ func (a *UserInternalAPI) deviceListUpdate(userID string, deviceIDs []string, fr
 		return err
 	}
 	if uploadRes.Error != nil {
-		return fmt.Errorf("failed to delete device keys: %v", uploadRes.Error)
+		return fmt.Errorf("failed to delete device keys: %w", uploadRes.Error)
 	}
 	if len(uploadRes.KeyErrors) > 0 {
 		return fmt.Errorf("failed to delete device keys, key errors: %+v", uploadRes.KeyErrors)
@@ -406,7 +406,7 @@ func (a *UserInternalAPI) PerformDeviceUpdate(ctx context.Context, req *api.Perf
 		return fmt.Errorf("server name %s is not local", domain)
 	}
 	dev, err := a.DB.GetDeviceByID(ctx, localpart, domain, req.DeviceID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		res.DeviceExists = false
 		return nil
 	} else if err != nil {
@@ -423,7 +423,7 @@ func (a *UserInternalAPI) PerformDeviceUpdate(ctx context.Context, req *api.Perf
 	if req.DisplayName != nil && dev.DisplayName != *req.DisplayName {
 		// display name has changed: update the device key
 		var uploadRes api.PerformUploadKeysResponse
-		if err := a.PerformUploadKeys(context.Background(), &api.PerformUploadKeysRequest{
+		if err := a.PerformUploadKeys(context.Background(), &api.PerformUploadKeysRequest{ //nolint:contextcheck
 			UserID: req.RequestingUserID,
 			DeviceKeys: []api.DeviceKeys{
 				{
@@ -438,7 +438,7 @@ func (a *UserInternalAPI) PerformDeviceUpdate(ctx context.Context, req *api.Perf
 			return err
 		}
 		if uploadRes.Error != nil {
-			return fmt.Errorf("failed to update device key display name: %v", uploadRes.Error)
+			return fmt.Errorf("failed to update device key display name: %w", uploadRes.Error)
 		}
 		if len(uploadRes.KeyErrors) > 0 {
 			return fmt.Errorf("failed to update device key display name, key errors: %+v", uploadRes.KeyErrors)
@@ -459,7 +459,7 @@ func (a *UserInternalAPI) QueryProfile(ctx context.Context, userID string) (*aut
 	}
 	prof, err := a.DB.GetProfileByLocalpart(ctx, local, domain)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, appserviceAPI.ErrProfileNotExists
 		}
 		return nil, err
@@ -566,7 +566,7 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 	}
 	device, err := a.DB.GetDeviceByAccessToken(ctx, req.AccessToken)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err
@@ -676,9 +676,9 @@ func (a *UserInternalAPI) PerformAccountDeactivation(ctx context.Context, req *a
 	return err
 }
 
-// PerformOpenIDTokenCreation creates a new token that a relying party uses to authenticate a user
+// PerformOpenIDTokenCreation creates a new token that a relying party uses to authenticate a user.
 func (a *UserInternalAPI) PerformOpenIDTokenCreation(ctx context.Context, req *api.PerformOpenIDTokenCreationRequest, res *api.PerformOpenIDTokenCreationResponse) error {
-	token := util.RandomString(24)
+	token := util.RandomString(24) //nolint:mnd
 
 	exp, err := a.DB.CreateOpenIDToken(ctx, token, req.UserID)
 
@@ -691,7 +691,7 @@ func (a *UserInternalAPI) PerformOpenIDTokenCreation(ctx context.Context, req *a
 	return err
 }
 
-// QueryOpenIDToken validates that the OpenID token was issued for the user, the replying party uses this for validation
+// QueryOpenIDToken validates that the OpenID token was issued for the user, the replying party uses this for validation.
 func (a *UserInternalAPI) QueryOpenIDToken(ctx context.Context, req *api.QueryOpenIDTokenRequest, res *api.QueryOpenIDTokenResponse) error {
 	openIDTokenAttrs, err := a.DB.GetOpenIDTokenAttributes(ctx, req.Token)
 	if err != nil {
@@ -732,7 +732,8 @@ func (a *UserInternalAPI) UpdateBackupKeyAuthData(ctx context.Context, req *api.
 func (a *UserInternalAPI) uploadBackupKeys(ctx context.Context, req *api.PerformKeyBackupRequest) (*api.PerformKeyBackupResponse, error) {
 	res := &api.PerformKeyBackupResponse{}
 	// you can only upload keys for the CURRENT version
-	version, _, _, _, deleted, err := a.DB.GetKeyBackup(ctx, req.UserID, "")
+	version, algorithm, _, etag, deleted, err := a.DB.GetKeyBackup(ctx, req.UserID, "")
+	_, _ = algorithm, etag
 	if err != nil {
 		return res, fmt.Errorf("failed to query version: %w", err)
 	}
@@ -776,7 +777,7 @@ func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyB
 		if errors.Is(err, strconv.ErrSyntax) {
 			return res, nil
 		}
-		return res, fmt.Errorf("failed to query key backup: %s", err)
+		return res, fmt.Errorf("failed to query key backup: %w", err)
 	}
 	res.Algorithm = algorithm
 	res.AuthData = authData
@@ -793,7 +794,7 @@ func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyB
 
 	result, err := a.DB.GetBackupKeys(ctx, version, req.UserID, req.KeysForRoomID, req.KeysForSessionID)
 	if err != nil {
-		return res, fmt.Errorf("failed to query keys: %s", err)
+		return res, fmt.Errorf("failed to query keys: %w", err)
 	}
 	res.Keys = result
 	return res, nil
@@ -834,20 +835,20 @@ func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.Query
 func (a *UserInternalAPI) PerformPusherSet(ctx context.Context, req *api.PerformPusherSetRequest, res *struct{}) error {
 	util.GetLogger(ctx).WithFields(logrus.Fields{
 		"localpart":    req.Localpart,
-		"pushkey":      req.Pusher.PushKey,
-		"display_name": req.Pusher.AppDisplayName,
+		"pushkey":      req.PushKey,
+		"display_name": req.AppDisplayName,
 	}).Info("PerformPusherCreation")
 	if !req.Append {
-		err := a.DB.RemovePushers(ctx, req.Pusher.AppID, req.Pusher.PushKey)
+		err := a.DB.RemovePushers(ctx, req.AppID, req.PushKey)
 		if err != nil {
 			return err
 		}
 	}
-	if req.Pusher.Kind == "" {
-		return a.DB.RemovePusher(ctx, req.Pusher.AppID, req.Pusher.PushKey, req.Localpart, req.ServerName)
+	if req.Kind == "" {
+		return a.DB.RemovePusher(ctx, req.AppID, req.PushKey, req.Localpart, req.ServerName)
 	}
-	if req.Pusher.PushKeyTS == 0 {
-		req.Pusher.PushKeyTS = int64(time.Now().Unix())
+	if req.PushKeyTS == 0 {
+		req.PushKeyTS = time.Now().Unix()
 	}
 	return a.DB.UpsertPusher(ctx, req.Pusher, req.Localpart, req.ServerName)
 }
@@ -922,14 +923,14 @@ func (a *UserInternalAPI) QueryAccountAvailability(ctx context.Context, req *api
 
 func (a *UserInternalAPI) QueryAccountByPassword(ctx context.Context, req *api.QueryAccountByPasswordRequest, res *api.QueryAccountByPasswordResponse) error {
 	acc, err := a.DB.GetAccountByPassword(ctx, req.Localpart, req.ServerName, req.PlaintextPassword)
-	switch err {
-	case sql.ErrNoRows: // user does not exist
+	switch {
+	case errors.Is(err, sql.ErrNoRows): // user does not exist
 		return nil
-	case bcrypt.ErrMismatchedHashAndPassword: // user exists, but password doesn't match
+	case errors.Is(err, bcrypt.ErrMismatchedHashAndPassword): // user exists, but password doesn't match
 		return nil
-	case bcrypt.ErrHashTooShort: // user exists, but probably a passwordless account
+	case errors.Is(err, bcrypt.ErrHashTooShort): // user exists, but probably a passwordless account
 		return nil
-	case nil:
+	case err == nil:
 		res.Exists = true
 		res.Account = acc
 		return nil

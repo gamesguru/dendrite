@@ -15,21 +15,20 @@ import (
 
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrixserverlib/tokens"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/transactions"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // Unspecced server notice request
@@ -44,8 +43,9 @@ type sendServerNoticeRequest struct {
 	StateKey string `json:"state_key,omitempty"`
 }
 
-// nolint:gocyclo
 // SendServerNotice sends a message to a specific user. It can only be invoked by an admin.
+//
+//nolint:gocyclo
 func SendServerNotice(
 	req *http.Request,
 	cfgNotices *config.ServerNotices,
@@ -141,12 +141,12 @@ func SendServerNotice(
 	// create a new room for the user
 	if len(commonRooms) == 0 {
 		powerLevelContent := eventutil.InitialPowerLevelsContent(gomatrixserverlib.MustGetRoomVersion(roomVersion), senderUserID.String())
-		powerLevelContent.Users[r.UserID] = -10 // taken from Synapse
+		powerLevelContent.Users[r.UserID] = -10 //nolint:mnd // taken from Synapse
 		pl, err := json.Marshal(powerLevelContent)
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
-		createContent := map[string]interface{}{}
+		createContent := map[string]any{}
 		createContent["m.federate"] = false
 		cc, err := json.Marshal(createContent)
 		if err != nil {
@@ -217,7 +217,7 @@ func SendServerNotice(
 
 	startedGeneratingEvent := time.Now()
 
-	request := map[string]interface{}{
+	request := map[string]any{
 		"body":    r.Content.Body,
 		"msgtype": r.Content.MsgType,
 	}
@@ -292,7 +292,7 @@ func (r sendServerNoticeRequest) valid() (ok bool) {
 }
 
 // getSenderDevice creates a user account to be used when sending server notices.
-// It returns an userapi.Device, which is used for building the event
+// It returns an userapi.Device, which is used for building the event.
 func getSenderDevice(
 	ctx context.Context,
 	rsAPI api.ClientRoomserverAPI,

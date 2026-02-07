@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type uploadKeysRequest struct {
@@ -67,7 +67,7 @@ func UploadKeys(req *http.Request, keyAPI api.ClientKeyAPI, device *api.Device) 
 	if len(uploadRes.KeyErrors) > 0 {
 		util.GetLogger(req.Context()).WithField("key_errors", uploadRes.KeyErrors).Error("Failed to upload one or more keys")
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: uploadRes.KeyErrors,
 		}
 	}
@@ -76,9 +76,9 @@ func UploadKeys(req *http.Request, keyAPI api.ClientKeyAPI, device *api.Device) 
 		keyCount = uploadRes.OneTimeKeyCounts[0].KeyCount
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: struct {
-			OTKCounts interface{} `json:"one_time_key_counts"`
+			OTKCounts any `json:"one_time_key_counts"`
 		}{keyCount},
 	}
 }
@@ -90,11 +90,11 @@ type queryKeysRequest struct {
 
 func (r *queryKeysRequest) GetTimeout() time.Duration {
 	if r.Timeout == 0 {
-		return 10 * time.Second
+		return 10 * time.Second //nolint:mnd
 	}
 	timeout := time.Duration(r.Timeout) * time.Millisecond
 	if timeout > time.Second*20 {
-		timeout = time.Second * 20
+		timeout = time.Second * 20 //nolint:mnd
 	}
 	return timeout
 }
@@ -112,8 +112,8 @@ func QueryKeys(req *http.Request, keyAPI api.ClientKeyAPI, device *api.Device) u
 		Timeout:       r.GetTimeout(),
 	}, &queryRes)
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: http.StatusOK,
+		JSON: map[string]any{
 			"device_keys":       queryRes.DeviceKeys,
 			"master_keys":       queryRes.MasterKeys,
 			"self_signing_keys": queryRes.SelfSigningKeys,
@@ -131,7 +131,7 @@ type claimKeysRequest struct {
 
 func (r *claimKeysRequest) GetTimeout() time.Duration {
 	if r.TimeoutMS == 0 {
-		return 10 * time.Second
+		return 10 * time.Second //nolint:mnd
 	}
 	return time.Duration(r.TimeoutMS) * time.Millisecond
 }
@@ -155,8 +155,8 @@ func ClaimKeys(req *http.Request, keyAPI api.ClientKeyAPI) util.JSONResponse {
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: http.StatusOK,
+		JSON: map[string]any{
 			"one_time_keys": claimRes.OneTimeKeys,
 			"failures":      claimRes.Failures,
 		},

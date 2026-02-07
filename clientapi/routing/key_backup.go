@@ -8,13 +8,15 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type keyBackupVersion struct {
@@ -46,7 +48,7 @@ type keyBackupSessionResponse struct {
 }
 
 // Create a new key backup. Request must contain a `keyBackupVersion`. Returns a `keyBackupVersionCreateResponse`.
-// Implements  POST /_matrix/client/r0/room_keys/version
+// Implements  POST /_matrix/client/r0/room_keys/version.
 func CreateKeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device) util.JSONResponse {
 	var kb keyBackupVersion
 	resErr := httputil.UnmarshalJSONRequest(req, &kb)
@@ -70,7 +72,7 @@ func CreateKeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, de
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: keyBackupVersionCreateResponse{
 			Version: version,
 		},
@@ -78,23 +80,23 @@ func CreateKeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, de
 }
 
 // KeyBackupVersion returns the key backup version specified. If `version` is empty, the latest `keyBackupVersionResponse` is returned.
-// Implements GET  /_matrix/client/r0/room_keys/version and GET /_matrix/client/r0/room_keys/version/{version}
+// Implements GET  /_matrix/client/r0/room_keys/version and GET /_matrix/client/r0/room_keys/version/{version}.
 func KeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device, version string) util.JSONResponse {
 	queryResp, err := userAPI.QueryKeyBackup(req.Context(), &userapi.QueryKeyBackupRequest{
 		UserID:  device.UserID,
 		Version: version,
 	})
 	if err != nil {
-		return util.ErrorResponse(fmt.Errorf("QueryKeyBackup: %s", err))
+		return util.ErrorResponse(fmt.Errorf("QueryKeyBackup: %w", err))
 	}
 	if !queryResp.Exists {
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("version not found"),
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: keyBackupVersionResponse{
 			Algorithm: queryResp.Algorithm,
 			AuthData:  queryResp.AuthData,
@@ -106,7 +108,7 @@ func KeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, device *
 }
 
 // Modify the auth data of a key backup. Version must not be empty. Request must contain a `keyBackupVersion`
-// Implements PUT  /_matrix/client/r0/room_keys/version/{version}
+// Implements PUT  /_matrix/client/r0/room_keys/version/{version}.
 func ModifyKeyBackupVersionAuthData(req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device, version string) util.JSONResponse {
 	var kb keyBackupVersion
 	resErr := httputil.UnmarshalJSONRequest(req, &kb)
@@ -119,25 +121,26 @@ func ModifyKeyBackupVersionAuthData(req *http.Request, userAPI userapi.ClientUse
 		AuthData:  kb.AuthData,
 		Algorithm: kb.Algorithm,
 	})
-	switch e := err.(type) {
-	case spec.ErrRoomKeysVersion:
+	var roomKeysErr spec.ErrRoomKeysVersion
+	switch {
+	case errors.As(err, &roomKeysErr):
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: e,
+			JSON: roomKeysErr,
 		}
-	case nil:
+	case err == nil:
 	default:
-		return util.ErrorResponse(fmt.Errorf("PerformKeyBackup: %w", e))
+		return util.ErrorResponse(fmt.Errorf("PerformKeyBackup: %w", err))
 	}
 
 	if !performKeyBackupResp.Exists {
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("backup version not found"),
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: keyBackupVersionCreateResponse{
 			Version: performKeyBackupResp.Version,
 		},
@@ -145,20 +148,20 @@ func ModifyKeyBackupVersionAuthData(req *http.Request, userAPI userapi.ClientUse
 }
 
 // Delete a version of key backup. Version must not be empty. If the key backup was previously deleted, will return 200 OK.
-// Implements DELETE  /_matrix/client/r0/room_keys/version/{version}
+// Implements DELETE  /_matrix/client/r0/room_keys/version/{version}.
 func DeleteKeyBackupVersion(req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device, version string) util.JSONResponse {
 	exists, err := userAPI.DeleteKeyBackup(req.Context(), device.UserID, version)
 	if err != nil {
-		return util.ErrorResponse(fmt.Errorf("DeleteKeyBackup: %s", err))
+		return util.ErrorResponse(fmt.Errorf("DeleteKeyBackup: %w", err))
 	}
 	if !exists {
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("backup version not found"),
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: struct{}{},
 	}
 }
@@ -173,24 +176,25 @@ func UploadBackupKeys(
 		Keys:    *keys,
 	})
 
-	switch e := err.(type) {
-	case spec.ErrRoomKeysVersion:
+	var roomKeysErr2 spec.ErrRoomKeysVersion
+	switch {
+	case errors.As(err, &roomKeysErr2):
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: e,
+			JSON: roomKeysErr2,
 		}
-	case nil:
+	case err == nil:
 	default:
-		return util.ErrorResponse(fmt.Errorf("PerformKeyBackup: %w", e))
+		return util.ErrorResponse(fmt.Errorf("PerformKeyBackup: %w", err))
 	}
 	if !performKeyBackupResp.Exists {
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("backup version not found"),
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: keyBackupSessionResponse{
 			Count: performKeyBackupResp.KeyCount,
 			ETag:  performKeyBackupResp.KeyETag,
@@ -214,23 +218,24 @@ func GetBackupKeys(
 	}
 	if !queryResp.Exists {
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("version not found"),
 		}
 	}
-	if sessionID != "" {
+	switch {
+	case sessionID != "":
 		// return the key itself if it was found
 		roomData, ok := queryResp.Keys[roomID]
 		if ok {
 			key, ok := roomData[sessionID]
 			if ok {
 				return util.JSONResponse{
-					Code: 200,
+					Code: http.StatusOK,
 					JSON: key,
 				}
 			}
 		}
-	} else if roomID != "" {
+	case roomID != "":
 		roomData, ok := queryResp.Keys[roomID]
 		if !ok {
 			// If no keys are found, then an object with an empty sessions property will be returned
@@ -238,15 +243,14 @@ func GetBackupKeys(
 		}
 		// wrap response in "sessions"
 		return util.JSONResponse{
-			Code: 200,
+			Code: http.StatusOK,
 			JSON: struct {
 				Sessions map[string]userapi.KeyBackupSession `json:"sessions"`
 			}{
 				Sessions: roomData,
 			},
 		}
-
-	} else {
+	default:
 		// response is the same as the upload request
 		var resp keyBackupSessionRequest
 		resp.Rooms = make(map[string]struct {
@@ -260,12 +264,12 @@ func GetBackupKeys(
 			}
 		}
 		return util.JSONResponse{
-			Code: 200,
+			Code: http.StatusOK,
 			JSON: resp,
 		}
 	}
 	return util.JSONResponse{
-		Code: 404,
+		Code: 404, //nolint:mnd
 		JSON: spec.NotFound("keys not found"),
 	}
 }

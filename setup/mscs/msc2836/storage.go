@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 type eventInfo struct {
@@ -58,7 +60,7 @@ type DB struct {
 	updateChildMetadataExploredStmt        *sql.Stmt
 }
 
-// NewDatabase loads the database for msc2836
+// NewDatabase loads the database for msc2836.
 func NewDatabase(conMan *sqlutil.Connections, dbOpts *config.DatabaseOptions) (Database, error) {
 	if dbOpts.ConnectionString.IsPostgres() {
 		return newPostgresDatabase(conMan, dbOpts)
@@ -234,12 +236,16 @@ func (p *DB) StoreRelation(ctx context.Context, ev *types.HeaderedEvent) error {
 	}
 	count, hash := extractChildMetadata(ev)
 	return p.writer.Do(p.db, nil, func(txn *sql.Tx) error {
-		_, err := txn.Stmt(p.insertEdgeStmt).ExecContext(ctx, parent, child, relType, relationRoomID, string(relationServersJSON))
+		edgeStmt := txn.Stmt(p.insertEdgeStmt)
+		defer edgeStmt.Close()
+		_, err := edgeStmt.ExecContext(ctx, parent, child, relType, relationRoomID, string(relationServersJSON))
 		if err != nil {
 			return err
 		}
 		util.GetLogger(ctx).Infof("StoreRelation child=%s parent=%s rel_type=%s", child, parent, relType)
-		_, err = txn.Stmt(p.insertNodeStmt).ExecContext(ctx, ev.EventID(), ev.OriginServerTS(), ev.RoomID().String(), count, base64.RawStdEncoding.EncodeToString(hash), 0)
+		nodeStmt := txn.Stmt(p.insertNodeStmt)
+		defer nodeStmt.Close()
+		_, err = nodeStmt.ExecContext(ctx, ev.EventID(), ev.OriginServerTS(), ev.RoomID().String(), count, base64.RawStdEncoding.EncodeToString(hash), 0)
 		return err
 	})
 }
@@ -266,7 +272,7 @@ func (p *DB) ChildMetadata(ctx context.Context, eventID string) (count int, hash
 	var b64hash string
 	var exploredInt int
 	if err = p.selectChildMetadataStmt.QueryRowContext(ctx, eventID).Scan(&count, &b64hash, &exploredInt); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 		}
 		return
@@ -292,7 +298,7 @@ func (p *DB) ChildrenForParent(ctx context.Context, eventID, relType string, rec
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	var children []eventInfo
 	for rows.Next() {
 		var evInfo eventInfo

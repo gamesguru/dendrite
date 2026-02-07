@@ -68,7 +68,7 @@ func main() {
 		panic(err)
 	}
 
-	var bodyObj interface{}
+	var bodyObj any
 	var bodyBytes []byte
 	method := "GET"
 	if *requestPost {
@@ -112,7 +112,7 @@ func main() {
 		panic(err)
 	}
 
-	var res interface{}
+	var res any
 	err = client.DoRequestAndParseResponse(
 		context.TODO(),
 		httpReq,

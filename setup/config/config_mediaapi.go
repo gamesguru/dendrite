@@ -32,8 +32,8 @@ type MediaAPI struct {
 	ThumbnailSizes []ThumbnailSize `yaml:"thumbnail_sizes"`
 }
 
-// DefaultMaxFileSizeBytes defines the default file size allowed in transfers
-var DefaultMaxFileSizeBytes = FileSizeBytes(10485760)
+// DefaultMaxFileSizeBytes defines the default file size allowed in transfers.
+var DefaultMaxFileSizeBytes = FileSizeBytes(10485760) //nolint:mnd
 
 func (c *MediaAPI) Defaults(opts DefaultOpts) {
 	c.MaxFileSizeBytes = DefaultMaxFileSizeBytes
@@ -41,18 +41,18 @@ func (c *MediaAPI) Defaults(opts DefaultOpts) {
 	if opts.Generate {
 		c.ThumbnailSizes = []ThumbnailSize{
 			{
-				Width:        32,
-				Height:       32,
+				Width:        32, //nolint:mnd
+				Height:       32, //nolint:mnd
 				ResizeMethod: "crop",
 			},
 			{
-				Width:        96,
-				Height:       96,
+				Width:        96, //nolint:mnd
+				Height:       96, //nolint:mnd
 				ResizeMethod: "crop",
 			},
 			{
-				Width:        640,
-				Height:       480,
+				Width:        640, //nolint:mnd
+				Height:       480, //nolint:mnd
 				ResizeMethod: "scale",
 			},
 		}

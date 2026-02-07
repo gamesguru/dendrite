@@ -32,7 +32,7 @@ import (
 // state can be satisfied from the local server's perspective.
 func mustAwaitFullState(requiredState types.RequiredStateConfig, cfg *config.Global) bool {
 	for _, tuple := range requiredState.Include {
-		if len(tuple) < 2 {
+		if len(tuple) < 2 { //nolint:mnd
 			continue
 		}
 		stateType, stateKey := tuple[0], tuple[1]
@@ -56,7 +56,7 @@ func mustAwaitFullState(requiredState types.RequiredStateConfig, cfg *config.Glo
 			if strings.HasPrefix(stateKey, "@") && strings.Contains(stateKey, ":") {
 				// Extract server name from user ID
 				parts := strings.SplitN(stateKey, ":", 2)
-				if len(parts) == 2 {
+				if len(parts) == 2 { //nolint:mnd
 					serverName := spec.ServerName(parts[1])
 					if !cfg.IsLocalServerName(serverName) {
 						// Remote user membership request requires full state
@@ -70,7 +70,7 @@ func mustAwaitFullState(requiredState types.RequiredStateConfig, cfg *config.Glo
 }
 
 // V4ConnectionState tracks per-connection state for sliding sync
-// Phase 10: Stream-based delta tracking
+// Phase 10: Stream-based delta tracking.
 type V4ConnectionState struct {
 	// Database connection key (stable identifier)
 	ConnectionKey int64
@@ -85,9 +85,9 @@ type V4ConnectionState struct {
 }
 
 // determineRoomStreamState determines the RoomStreamState for a room based on connection state
-// This is used to drive incremental sync behaviour (initial vs live vs previously)
+// This is used to drive incremental sync behavior (initial vs live vs previously).
 // CRITICAL: Detects membership transitions (like v3 sync's NewlyJoined) to properly handle
-// rejoin scenarios where a user left/was kicked and then rejoined
+// rejoin scenarios where a user left/was kicked and then rejoined.
 func determineRoomStreamState(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -214,8 +214,8 @@ func determineRoomStreamState(
 }
 
 // logV4Response logs full response body at trace level (sensitive data)
-// Enable with logging.*.level: trace in config
-func logV4Response(response interface{}, userID, deviceID string, statusCode int) {
+// Enable with logging.*.level: trace in config.
+func logV4Response(response any, userID, deviceID string, statusCode int) {
 	responseBodyJSON, err := json.Marshal(response)
 	if err == nil {
 		logrus.WithFields(logrus.Fields{
@@ -314,7 +314,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	}
 
 	// Phase 10: Get or create connection (returns connection_key)
-	connectionKey, err := rp.db.GetOrCreateConnection(req.Context(), device.UserID, device.ID, connID)
+	connectionKey, err := rp.db.GetOrCreateConnection(req.Context(), device.UserID, device.ID, connID) //nolint:contextcheck
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get or create sliding sync connection")
 		return util.JSONResponse{
@@ -326,14 +326,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	// Validate position token if provided
 	if since != nil {
 		// Validate that the position exists and belongs to this connection
-		err = rp.db.ValidateConnectionPosition(req.Context(), since.ConnectionPosition, connectionKey)
+		err = rp.db.ValidateConnectionPosition(req.Context(), since.ConnectionPosition, connectionKey) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"provided_position": since.ConnectionPosition,
 				"connection_key":    connectionKey,
 			}).Warn("Invalid position token - client should start fresh")
 			// Return M_UNKNOWN_POS to signal the client to start a fresh connection
-			// This matches Synapse behaviour and tells the client the position is stale
+			// This matches Synapse behavior and tells the client the position is stale
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.MatrixError{
@@ -346,7 +346,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// Clean up old positions (like Synapse does)
 		// Now that the client has used this position, we can delete all other positions
 		// This prevents old state from accumulating and bleeding into new sessions
-		if cleanupErr := rp.db.DeleteOtherConnectionPositions(req.Context(), connectionKey, since.ConnectionPosition); cleanupErr != nil {
+		if cleanupErr := rp.db.DeleteOtherConnectionPositions(req.Context(), connectionKey, since.ConnectionPosition); cleanupErr != nil { //nolint:contextcheck
 			logrus.WithError(cleanupErr).WithFields(logrus.Fields{
 				"connection_key": connectionKey,
 				"keep_position":  since.ConnectionPosition,
@@ -364,7 +364,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	if since != nil {
 		// Load streams for the SPECIFIC position the client is syncing from
 		// This is critical: we want the state AS IT WAS at that position, not "latest across all positions"
-		previousStreamStates, err = rp.db.GetConnectionStreamsByPosition(req.Context(), since.ConnectionPosition)
+		previousStreamStates, err = rp.db.GetConnectionStreamsByPosition(req.Context(), since.ConnectionPosition) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Error("Failed to load connection stream states")
 			return util.JSONResponse{
@@ -390,7 +390,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		}
 
 		// Also load room configs for timeline expansion tracking
-		previousRoomConfigs, err = rp.db.GetRoomConfigsByPosition(req.Context(), since.ConnectionPosition)
+		previousRoomConfigs, err = rp.db.GetRoomConfigsByPosition(req.Context(), since.ConnectionPosition) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Error("Failed to load connection room configs")
 			// Non-fatal - continue with empty configs (will trigger timeline expansion)
@@ -410,7 +410,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// Clear stale receipt delivery state for this connection
 		// This ensures receipts are re-delivered on fresh sync (e.g., after logout/login, token expiry)
-		if deleteErr := rp.db.DeleteConnectionReceipts(req.Context(), connectionKey); deleteErr != nil {
+		if deleteErr := rp.db.DeleteConnectionReceipts(req.Context(), connectionKey); deleteErr != nil { //nolint:contextcheck
 			logrus.WithError(deleteErr).WithField("connection_key", connectionKey).Warn("Failed to clear connection receipts on fresh sync")
 			// Non-fatal - continue with the sync
 		}
@@ -434,7 +434,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 	// Update presence and last seen (reuse existing v3 logic)
 	rp.updateLastSeen(req, device)
-	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID)
+	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID) //nolint:contextcheck
 
 	// Main sync loop - similar to v3 sync
 	// Loop until we have updates to return or timeout expires
@@ -446,7 +446,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// For incremental syncs with timeout, wait for changes
 		// This implements long-polling (per MSC4186 spec line 236)
-		// Synapse behaviour: always wait if timeout > 0 AND since != nil, regardless of global position
+		// Synapse behavior: always wait if timeout > 0 AND since != nil, regardless of global position
 		logrus.WithFields(logrus.Fields{
 			"since_nil": since == nil,
 			"timeout":   v4Req.Timeout,
@@ -487,7 +487,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			case <-timer.C:
 				// Timeout - return current position without changes
 				logrus.Info("[V4_SYNC] Timeout expired with no changes")
-				timeoutResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
+				timeoutResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout") //nolint:contextcheck
 				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
 				return util.JSONResponse{
 					Code: http.StatusOK,
@@ -496,7 +496,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			case <-req.Context().Done():
 				// Client disconnected
 				logrus.Info("[V4_SYNC] Client disconnected during wait")
-				disconnectResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "disconnect")
+				disconnectResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "disconnect") //nolint:contextcheck
 				logV4Response(*disconnectResp, device.UserID, device.ID, http.StatusOK)
 				return util.JSONResponse{
 					Code: http.StatusOK,
@@ -507,7 +507,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// Phase 10: Create new connection position for this sync response
 		// This is what goes into the pos token
-		connState.ConnectionPosition, err = rp.db.CreateConnectionPosition(req.Context(), connState.ConnectionKey)
+		connState.ConnectionPosition, err = rp.db.CreateConnectionPosition(req.Context(), connState.ConnectionKey) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Error("Failed to create connection position")
 			return util.JSONResponse{
@@ -541,7 +541,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				"force_initial":  forceInitialSync,
 			}).Debug("[V4_SYNC] Processing list")
 
-			list, err := rp.processRoomList(ctx, device.UserID, listName, listConfig, connState, forceInitialSync)
+			list, err := rp.processRoomList(ctx, device.UserID, listName, listConfig, connState, forceInitialSync) //nolint:contextcheck
 			if err != nil {
 				// Log error but continue processing other lists
 				logrus.WithError(err).WithField("list_name", listName).Error("[V4_SYNC] Failed to process list")
@@ -591,7 +591,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// Get partial state room IDs for filtering (MSC3706 faster joins)
 		// This is used for both list rooms and explicit subscriptions
 		partialStateRooms := make(map[string]bool)
-		partialStateRoomIDs, err := rp.rsAPI.GetPartialStateRoomIDs(ctx)
+		partialStateRoomIDs, err := rp.rsAPI.GetPartialStateRoomIDs(ctx) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Warn("[V4_SYNC] Failed to get partial state rooms")
 		} else {
@@ -618,21 +618,21 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// Add/merge rooms from explicit subscriptions
 		// Explicit subscriptions override list config for that room
-		// Per MSC4186 and Synapse behaviour, we must filter subscriptions to only include
+		// Per MSC4186 and Synapse behavior, we must filter subscriptions to only include
 		// rooms where the user has appropriate membership (not self-left)
 		// Filters applied (matching Synapse):
 		// 1. Membership filtering: exclude self-left rooms, allow kicked rooms
 		// 2. Ignored user invite filtering: exclude invites from ignored users
 		// 3. Partial state filtering (MSC3706): exclude partial state rooms if required_state needs full state
 		if len(v4Req.RoomSubscriptions) > 0 {
-			subSnapshot, subSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
+			subSnapshot, subSnapshotErr := rp.db.NewDatabaseSnapshot(ctx) //nolint:contextcheck
 			if subSnapshotErr != nil {
 				logrus.WithError(subSnapshotErr).Error("[V4_SYNC] Failed to create snapshot for subscription filtering")
 			} else {
 				defer func() { _ = subSnapshot.Rollback() }()
 
 				// Get list of kicked rooms (leave where sender != user) to allow those subscriptions
-				kickedRoomIDs, kickedErr := subSnapshot.KickedRoomIDs(ctx, device.UserID)
+				kickedRoomIDs, kickedErr := subSnapshot.KickedRoomIDs(ctx, device.UserID) //nolint:contextcheck
 				kickedRooms := make(map[string]bool)
 				if kickedErr != nil {
 					logrus.WithError(kickedErr).Warn("[V4_SYNC] Failed to get kicked rooms, will filter all left rooms")
@@ -644,7 +644,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 				// Get ignored users for invite filtering
 				ignoredUsers := make(map[string]bool)
-				ignoresData, ignoresErr := subSnapshot.IgnoresForUser(ctx, device.UserID)
+				ignoresData, ignoresErr := subSnapshot.IgnoresForUser(ctx, device.UserID) //nolint:contextcheck
 				if ignoresErr != nil {
 					logrus.WithError(ignoresErr).Warn("[V4_SYNC] Failed to get ignored users")
 				} else if ignoresData != nil && ignoresData.List != nil {
@@ -656,10 +656,10 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// Get current invites to build room -> sender map for ignored user filtering
 				inviteSenders := make(map[string]string)
 				if len(ignoredUsers) > 0 {
-					maxInviteID, maxInviteErr := subSnapshot.MaxStreamPositionForInvites(ctx)
+					maxInviteID, maxInviteErr := subSnapshot.MaxStreamPositionForInvites(ctx) //nolint:contextcheck
 					if maxInviteErr == nil && maxInviteID > 0 {
 						inviteRange := types.Range{From: 0, To: maxInviteID, Backwards: false}
-						invites, _, _, invitesErr := subSnapshot.InviteEventsInRange(ctx, device.UserID, inviteRange)
+						invites, _, _, invitesErr := subSnapshot.InviteEventsInRange(ctx, device.UserID, inviteRange) //nolint:contextcheck
 						if invitesErr != nil {
 							logrus.WithError(invitesErr).Warn("[V4_SYNC] Failed to get invites for ignored user filtering")
 						} else {
@@ -676,7 +676,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					// - Include joined, invited, banned rooms
 					// - Include kicked rooms (leave where sender != user)
 					// - Exclude self-left rooms (unless newly_left, which we don't track yet)
-					membership, _, membershipErr := subSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64)
+					membership, _, membershipErr := subSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64) //nolint:contextcheck
 					if membershipErr != nil {
 						logrus.WithError(membershipErr).WithFields(logrus.Fields{
 							"room_id": roomID,
@@ -736,7 +736,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// For incremental sync, only include rooms with changes since last sync
 		if since != nil && len(roomsToPopulate) > 0 {
 			// Create temporary snapshot for filtering query
-			filterSnapshot, filterSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
+			filterSnapshot, filterSnapshotErr := rp.db.NewDatabaseSnapshot(ctx) //nolint:contextcheck
 			if filterSnapshotErr != nil {
 				return util.JSONResponse{
 					Code: http.StatusInternalServerError,
@@ -752,14 +752,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 
 			// Query database for rooms that have PDU events since the last sync position
-			roomsWithPDUChanges, pduChangesErr := filterSnapshot.RoomsWithEventsSince(ctx, candidateRoomIDs, since.StreamToken.PDUPosition)
+			roomsWithPDUChanges, pduChangesErr := filterSnapshot.RoomsWithEventsSince(ctx, candidateRoomIDs, since.StreamToken.PDUPosition) //nolint:contextcheck
 			if pduChangesErr != nil {
 				logrus.WithError(pduChangesErr).Error("[V4_SYNC] Failed to filter PDU changed rooms")
 				// Continue without filtering on error - return all rooms
 			} else {
 				// Also query for rooms with invite changes
 				// Invites are tracked separately in InvitePosition stream
-				roomsWithInviteChanges, inviteChangesErr := filterSnapshot.RoomsWithInvitesSince(ctx, device.UserID, candidateRoomIDs, since.StreamToken.InvitePosition)
+				roomsWithInviteChanges, inviteChangesErr := filterSnapshot.RoomsWithInvitesSince(ctx, device.UserID, candidateRoomIDs, since.StreamToken.InvitePosition) //nolint:contextcheck
 				if inviteChangesErr != nil {
 					logrus.WithError(inviteChangesErr).Error("[V4_SYNC] Failed to filter invite changed rooms")
 					// Continue with just PDU filtering
@@ -785,7 +785,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// Also include rooms that have never been sent on this connection
 				// These should always be included as they're "new" to the client
 				for roomID := range roomsToPopulate {
-					roomState := determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID)
+					roomState := determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID) //nolint:contextcheck
 					if roomState.Status == types.HaveSentRoomNever {
 						roomsToKeep[roomID] = true
 						if roomKeepReasons[roomID] != "" {
@@ -807,7 +807,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						subscriptionRoomIDs = append(subscriptionRoomIDs, roomID)
 					}
 
-					prevConfigs, batchErr := rp.db.GetLatestRoomConfigsBatch(ctx, connState.ConnectionKey, subscriptionRoomIDs)
+					prevConfigs, batchErr := rp.db.GetLatestRoomConfigsBatch(ctx, connState.ConnectionKey, subscriptionRoomIDs) //nolint:contextcheck
 					if batchErr != nil {
 						logrus.WithError(batchErr).Debug("[V4_SYNC] Failed to batch get previous room configs")
 					} else {
@@ -882,7 +882,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// Phase 3: Populate room data for all rooms
 		// Create a single database snapshot for all room queries
-		snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+		snapshot, err := rp.db.NewDatabaseSnapshot(ctx) //nolint:contextcheck
 		if err != nil {
 			return util.JSONResponse{
 				Code: http.StatusInternalServerError,
@@ -905,8 +905,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		for roomID, config := range roomsToPopulate {
 			// Phase 10: Determine room state from previous stream states
-			// This drives incremental sync behaviour (initial vs live vs previously)
-			roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID)
+			// This drives incremental sync behavior (initial vs live vs previously)
+			roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID) //nolint:contextcheck
 
 			// Check for timeline expansion per MSC4186
 			// Per MSC4186: "if the timeline_limit has increased (to say N) the server SHOULD
@@ -974,7 +974,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				fromPosPtr = &since.StreamToken
 			}
 
-			roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, currentPos, fromPosPtr, requiredStateConfig, timelineExpanded)
+			roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, currentPos, fromPosPtr, requiredStateConfig, timelineExpanded) //nolint:contextcheck
 			if buildErr != nil {
 				// Log error but continue with other rooms
 				logrus.WithError(buildErr).WithField("room_id", roomID).Error("[V4_SYNC] Failed to build room data")
@@ -988,7 +988,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// Clear receipt delivery state for this room so receipts are re-delivered
 				// This is necessary because the client is resetting its view of the room (initial:true)
 				// and needs to receive current receipt positions to avoid stuck unread badges
-				if deleteErr := rp.db.DeleteConnectionReceiptsForRoom(req.Context(), connectionKey, roomID); deleteErr != nil {
+				if deleteErr := rp.db.DeleteConnectionReceiptsForRoom(req.Context(), connectionKey, roomID); deleteErr != nil { //nolint:contextcheck
 					logrus.WithError(deleteErr).WithFields(logrus.Fields{
 						"room_id":        roomID,
 						"connection_key": connectionKey,
@@ -1010,7 +1010,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				"room_status":         roomStatus,
 				"last_token":          lastToken,
 			}).Debug("[V4_STATE_DEBUG] Persisting stream state to database")
-			if streamErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", roomStatus, lastToken); streamErr != nil {
+			if streamErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", roomStatus, lastToken); streamErr != nil { //nolint:contextcheck
 				logrus.WithError(streamErr).WithFields(logrus.Fields{
 					"room_id":             roomID,
 					"connection_position": connState.ConnectionPosition,
@@ -1028,13 +1028,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			// We need a valid required_state_id due to foreign key constraint
 			var requiredStateID int64
 			if requiredStateConfig != nil {
-				// Serialise required_state to JSON for deduplication
+				// Serialize required_state to JSON for deduplication
 				requiredStateJSON, marshalErr := json.Marshal(requiredStateConfig)
 				if marshalErr != nil {
-					logrus.WithError(marshalErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to serialise required_state")
+					logrus.WithError(marshalErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to serialize required_state")
 				} else {
 					var getErr error
-					requiredStateID, getErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, string(requiredStateJSON))
+					requiredStateID, getErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, string(requiredStateJSON)) //nolint:contextcheck
 					if getErr != nil {
 						logrus.WithError(getErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to get/create required_state_id")
 					}
@@ -1044,7 +1044,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			if requiredStateID == 0 {
 				emptyJSON := "[]"
 				var defaultErr error
-				requiredStateID, defaultErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, emptyJSON)
+				requiredStateID, defaultErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, emptyJSON) //nolint:contextcheck
 				if defaultErr != nil {
 					logrus.WithError(defaultErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to get/create default required_state_id")
 					// Continue without storing room config - this will cause timeline expansion to repeat
@@ -1052,7 +1052,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 			}
 			if requiredStateID != 0 {
-				if configErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, config.TimelineLimit, requiredStateID); configErr != nil {
+				if configErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, config.TimelineLimit, requiredStateID); configErr != nil { //nolint:contextcheck
 					logrus.WithError(configErr).WithFields(logrus.Fields{
 						"room_id":           roomID,
 						"timeline_limit":    config.TimelineLimit,
@@ -1084,7 +1084,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 				// Copy forward the "events" stream state to the new position
 				if eventsStream, ok := streams["events"]; ok {
-					if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", eventsStream.RoomStatus, eventsStream.LastToken); updateErr != nil {
+					if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", eventsStream.RoomStatus, eventsStream.LastToken); updateErr != nil { //nolint:contextcheck
 						logrus.WithError(updateErr).WithFields(logrus.Fields{
 							"room_id":             roomID,
 							"connection_position": connState.ConnectionPosition,
@@ -1114,7 +1114,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					continue
 				}
 				// Copy forward the room config to the new position
-				if updateErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, prevConfig.TimelineLimit, prevConfig.RequiredStateID); updateErr != nil {
+				if updateErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, prevConfig.TimelineLimit, prevConfig.RequiredStateID); updateErr != nil { //nolint:contextcheck
 					logrus.WithError(updateErr).WithFields(logrus.Fields{
 						"room_id":             roomID,
 						"connection_position": connState.ConnectionPosition,
@@ -1143,7 +1143,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions)
+		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Error("Failed to process extensions")
 			// Continue anyway - extensions are optional, return empty extension response
@@ -1171,13 +1171,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			// IMPORTANT: This must be done in a separate write transaction, NOT in the read-only snapshot
 			if len(deliveredReceipts) > 0 {
 				logrus.WithField("count", len(deliveredReceipts)).Debug("[RECEIPTS] Updating connection state for delivered receipts")
-				txn, err := rp.db.NewDatabaseTransaction(ctx)
+				txn, err := rp.db.NewDatabaseTransaction(ctx) //nolint:contextcheck
 				if err != nil {
 					logrus.WithError(err).Error("[RECEIPTS] Failed to create write transaction")
 				} else {
 					defer func() { _ = txn.Rollback() }()
 					for _, receipt := range deliveredReceipts {
-						err := txn.UpsertConnectionReceipt(
+						err := txn.UpsertConnectionReceipt( //nolint:contextcheck
 							ctx, connectionKey,
 							receipt.RoomID, receipt.Type, receipt.UserID,
 							receipt.EventID, receipt.Timestamp,
@@ -1258,7 +1258,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 }
 
 // v4ResponseHasUpdates checks if a sliding sync response has meaningful updates
-// Similar to v3 sync's HasUpdates() method
+// Similar to v3 sync's HasUpdates() method.
 func v4ResponseHasUpdates(response types.SlidingSyncResponse) bool {
 	// Check if any list has operations
 	for _, list := range response.Lists {
@@ -1307,7 +1307,7 @@ func v4ResponseHasUpdates(response types.SlidingSyncResponse) bool {
 	return false
 }
 
-// getRoomsForList fetches rooms based on invite filter configuration
+// getRoomsForList fetches rooms based on invite filter configuration.
 func (rp *RequestPool) getRoomsForList(
 	ctx context.Context,
 	userID string,
@@ -1326,8 +1326,8 @@ func (rp *RequestPool) getRoomsForList(
 }
 
 // getAllActiveMembershipRooms fetches all rooms where user has active membership
-// Per MSC4186 and Synapse behaviour: joined, invited, banned, kicked rooms are included
-// Self-left rooms are excluded from default lists
+// Per MSC4186 and Synapse behavior: joined, invited, banned, kicked rooms are included
+// Self-left rooms are excluded from default lists.
 func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID string) ([]RoomWithBumpStamp, error) {
 	joinedRooms, err := rp.GetRoomsForUser(ctx, userID, "join")
 	if err != nil {
@@ -1357,7 +1357,7 @@ func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID s
 	return deduplicateRooms(rooms), nil
 }
 
-// deduplicateRooms removes duplicate rooms, keeping the first occurrence
+// deduplicateRooms removes duplicate rooms, keeping the first occurrence.
 func deduplicateRooms(rooms []RoomWithBumpStamp) []RoomWithBumpStamp {
 	seen := make(map[string]bool, len(rooms))
 	deduped := make([]RoomWithBumpStamp, 0, len(rooms))
@@ -1370,7 +1370,7 @@ func deduplicateRooms(rooms []RoomWithBumpStamp) []RoomWithBumpStamp {
 	return deduped
 }
 
-// processRoomList handles a single room list configuration
+// processRoomList handles a single room list configuration.
 func (rp *RequestPool) processRoomList(
 	ctx context.Context,
 	userID string,
@@ -1402,7 +1402,7 @@ func (rp *RequestPool) processRoomList(
 	// Apply sliding window if range is specified
 	var windowedRooms []RoomWithBumpStamp
 	var rangeSpec []int
-	if len(config.Range) == 2 {
+	if len(config.Range) == 2 { //nolint:mnd
 		rangeSpec = config.Range
 		windowedRooms = ApplySlidingWindow(rooms, rangeSpec)
 	} else {
@@ -1426,7 +1426,7 @@ func (rp *RequestPool) processRoomList(
 		// even when the room membership hasn't changed.
 		// Following Synapse's approach: rooms should be included when they have ANY updates
 		// (events, receipts, notification counts), not just membership changes.
-		// TODO: Optimise by tracking which specific rooms have updates (like Synapse's get_rooms_that_might_have_updates)
+		// TODO: Optimize by tracking which specific rooms have updates (like Synapse's get_rooms_that_might_have_updates)
 		var previousRoomIDs []string
 		listChanged := true // Always send updates
 
@@ -1494,7 +1494,7 @@ func (rp *RequestPool) processRoomList(
 	}, nil
 }
 
-// equalStringSlices checks if two string slices have the same elements in order
+// equalStringSlices checks if two string slices have the same elements in order.
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

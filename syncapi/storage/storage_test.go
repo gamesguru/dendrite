@@ -9,6 +9,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/gjson"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
@@ -17,10 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/gjson"
 )
 
 var ctx = context.Background()
@@ -78,7 +79,7 @@ func WithSnapshot(t *testing.T, db storage.Database, f func(snapshot storage.Dat
 	}
 }
 
-// These tests assert basic functionality of RecentEvents for PDUs
+// These tests assert basic functionality of RecentEvents for PDUs.
 func TestRecentEventsPDU(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := MustCreateDatabase(t, dbType)
@@ -89,7 +90,7 @@ func TestRecentEventsPDU(t *testing.T) {
 
 		// actual test room
 		r := test.NewRoom(t, alice)
-		r.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hi"})
+		r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hi"})
 		events := r.Events()
 		positions := MustWriteEvents(t, db, events)
 
@@ -192,7 +193,7 @@ func TestRecentEventsPDU(t *testing.T) {
 	})
 }
 
-// The purpose of this test is to ensure that backfill does indeed go backwards, using a topology token
+// The purpose of this test is to ensure that backfill does indeed go backwards, using a topology token.
 func TestGetEventsInRangeWithTopologyToken(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := MustCreateDatabase(t, dbType)
@@ -200,7 +201,7 @@ func TestGetEventsInRangeWithTopologyToken(t *testing.T) {
 		alice := test.NewUser(t)
 		r := test.NewRoom(t, alice)
 		for i := 0; i < 10; i++ {
-			r.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": fmt.Sprintf("hi %d", i)})
+			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("hi %d", i)})
 		}
 		events := r.Events()
 		_ = MustWriteEvents(t, db, events)
@@ -234,7 +235,7 @@ func TestGetEventsInRangeWithTopologyTokenNoEventsForFilter(t *testing.T) {
 		alice := test.NewUser(t)
 		r := test.NewRoom(t, alice)
 		for i := 0; i < 10; i++ {
-			r.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": fmt.Sprintf("hi %d", i)})
+			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("hi %d", i)})
 		}
 		events := r.Events()
 		_ = MustWriteEvents(t, db, events)
@@ -322,7 +323,7 @@ func TestStreamToTopologicalPosition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer txn.Rollback()
+		defer func() { _ = txn.Rollback() }()
 		MustWriteEvents(t, db, r.Events())
 
 		for _, tc := range testCases {
@@ -351,7 +352,7 @@ func TestStreamToTopologicalPosition(t *testing.T) {
 // With a total depth of 4. It tests that:
 // - Backpagination over the whole fork should include all messages and not leave any out.
 // - Backpagination from the middle of the fork should not return duplicates (things later than the token).
-func TestGetEventsInRangeWithEventsSameDepth(t *testing.T) {
+Func TestGetEventsInRangeWithEventsSameDepth(t *testing.T) {
 	t.Parallel()
 	db := MustCreateDatabase(t)
 
@@ -437,11 +438,10 @@ func TestGetEventsInRangeWithEventsSameDepth(t *testing.T) {
 	}
 }
 
-// The purpose of this test is to make sure that the query to pull out events is honouring the room ID correctly.
+// TestGetEventsInTopologicalRangeMultiRoom makes sure that the query to pull out events is honoring the room ID correctly.
 // It works by creating two rooms with the same events in them, then selecting events by topological range.
-// Specifically, we know that events with the same depth but lower stream positions are selected, and it's possible
-// that this check isn't using the room ID if the brackets are wrong in the SQL query.
-func TestGetEventsInTopologicalRangeMultiRoom(t *testing.T) {
+// Specifically, we know that events with the same depth but lower stream positions are selected, and it's possible that this check isn't using the room ID if the brackets are wrong in the SQL query.
+Func TestGetEventsInTopologicalRangeMultiRoom(t *testing.T) {
 	t.Parallel()
 	db := MustCreateDatabase(t)
 
@@ -486,13 +486,13 @@ func TestGetEventsInTopologicalRangeMultiRoom(t *testing.T) {
 	assertEventsEqual(t, "", true, gots, reversed(eventsB))
 }
 
-// The purpose of this test is to make sure that events are returned in the right *order* when they have been inserted in a manner similar to
+// TestGetEventsInRangeWithEventsInsertedLikeBackfill makes sure that events are returned in the right *order* when they have been inserted in a manner similar to
 // how any kind of backfill operation will insert the events. This test inserts the SimpleRoom events in a manner similar to how backfill over
 // federation would:
 // - First inserts join event of test user C
 // - Inserts chunks of history in strata e.g (25-30, 20-25, 15-20, 10-15, 5-10, 0-5).
 // The test then does a backfill to ensure that the response is ordered correctly according to depth.
-func TestGetEventsInRangeWithEventsInsertedLikeBackfill(t *testing.T) {
+Func TestGetEventsInRangeWithEventsInsertedLikeBackfill(t *testing.T) {
 	t.Parallel()
 	db := MustCreateDatabase(t)
 	events, _ := SimpleRoom(t, testRoomID, testUserIDA, testUserIDB)
@@ -542,7 +542,7 @@ func TestGetEventsInRangeWithEventsInsertedLikeBackfill(t *testing.T) {
 		assertEventsEqual(t, from.String(), true, gots, events[i:endi])
 		from = topologyTokenBefore(t, db, paginatedEvents[len(paginatedEvents)-1].EventID())
 	}
-}
+}.
 */
 
 func TestSendToDeviceBehaviour(t *testing.T) {
@@ -660,8 +660,8 @@ func TestSendToDeviceBehaviour(t *testing.T) {
 	})
 }
 
-/*
-func TestInviteBehaviour(t *testing.T) {
+/* TestInviteBehaviour is currently disabled.
+Func TestInviteBehaviour(t *testing.T) {
 	db := MustCreateDatabase(t)
 	inviteRoom1 := "!inviteRoom1:somewhere"
 	inviteEvent1 := MustCreateEvent(t, inviteRoom1, nil, &gomatrixserverlib.EventBuilder{
@@ -782,7 +782,7 @@ func topologyTokenBefore(t *testing.T, db storage.Database, eventID string) *typ
 	}
 	tok.Decrement()
 	return &tok
-}
+}.
 */
 
 func pointer[t any](s t) *t {
@@ -816,7 +816,7 @@ func TestRoomSummary(t *testing.T) {
 			name:        "invited user",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(1), InvitedMemberCount: pointer(1), Heroes: []string{bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "invite",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -825,10 +825,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "invited user, but declined",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(1), InvitedMemberCount: pointer(0), Heroes: []string{bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "invite",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -837,10 +837,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "joined user after invitation",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(2), InvitedMemberCount: pointer(0), Heroes: []string{bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "invite",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -849,10 +849,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "multiple joined user",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(3), InvitedMemberCount: pointer(0), Heroes: []string{charlie.ID, bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(charlie.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -861,10 +861,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "multiple joined/invited user",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(2), InvitedMemberCount: pointer(1), Heroes: []string{charlie.ID, bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "invite",
 				}, test.WithStateKey(charlie.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -873,13 +873,13 @@ func TestRoomSummary(t *testing.T) {
 			name:        "multiple joined/invited/left user",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(1), InvitedMemberCount: pointer(1), Heroes: []string{charlie.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "invite",
 				}, test.WithStateKey(charlie.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -888,10 +888,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "leaving user after joining",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(1), InvitedMemberCount: pointer(0), Heroes: []string{bob.ID}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -901,7 +901,7 @@ func TestRoomSummary(t *testing.T) {
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(len(moreUserIDs) + 1), InvitedMemberCount: pointer(0), Heroes: moreUserIDs[:5]},
 			additionalEvents: func(t *testing.T, room *test.Room) {
 				for _, x := range moreUsers {
-					room.CreateAndInsert(t, x, spec.MRoomMember, map[string]interface{}{
+					room.CreateAndInsert(t, x, spec.MRoomMember, map[string]any{
 						"membership": "join",
 					}, test.WithStateKey(x.ID))
 				}
@@ -911,10 +911,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "canonical alias set",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(2), InvitedMemberCount: pointer(0), Heroes: []string{}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, alice, spec.MRoomCanonicalAlias, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomCanonicalAlias, map[string]any{
 					"alias": "myalias",
 				}, test.WithStateKey(""))
 			},
@@ -923,10 +923,10 @@ func TestRoomSummary(t *testing.T) {
 			name:        "room name set",
 			wantSummary: &types.Summary{JoinedMemberCount: pointer(2), InvitedMemberCount: pointer(0), Heroes: []string{}},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, alice, spec.MRoomName, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomName, map[string]any{
 					"name": "my room name",
 				}, test.WithStateKey(""))
 			},
@@ -950,7 +950,7 @@ func TestRoomSummary(t *testing.T) {
 
 				transaction, err := db.NewDatabaseTransaction(ctx)
 				assert.NoError(t, err)
-				defer transaction.Rollback()
+				defer func() { _ = transaction.Rollback() }()
 
 				summary, err := transaction.GetRoomSummary(ctx, r.ID, alice.ID)
 				assert.NoError(t, err)
@@ -980,7 +980,7 @@ func TestRecentEvents(t *testing.T) {
 
 		transaction, err := db.NewDatabaseTransaction(ctx)
 		assert.NoError(t, err)
-		defer transaction.Rollback()
+		defer func() { _ = transaction.Rollback() }()
 
 		// get all recent events from 0 to 100 (we only created 5 events, so we should get 5 back)
 		roomEvs, err := transaction.RecentEvents(ctx, roomIDs, types.Range{From: 0, To: 100}, &filter, true, true)
@@ -1028,7 +1028,7 @@ func TestRedaction(t *testing.T) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
 
-		redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hi"})
+		redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hi"})
 		redactionEvent := room.CreateEvent(t, alice, spec.MRoomRedaction, map[string]string{"redacts": redactedEvent.EventID()})
 
 		db, close := MustCreateDatabase(t, dbType)

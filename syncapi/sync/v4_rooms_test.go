@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestSortRoomsByActivity tests room sorting by bump stamp
+// TestSortRoomsByActivity tests room sorting by bump stamp.
 func TestSortRoomsByActivity(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -116,7 +116,7 @@ func TestSortRoomsByActivity(t *testing.T) {
 	}
 }
 
-// TestApplySlidingWindow tests the sliding window extraction
+// TestApplySlidingWindow tests the sliding window extraction.
 func TestApplySlidingWindow(t *testing.T) {
 	t.Parallel()
 	rooms := []RoomWithBumpStamp{
@@ -200,7 +200,7 @@ func TestApplySlidingWindow(t *testing.T) {
 	}
 }
 
-// TestApplySlidingWindowEdgeCases tests edge cases for sliding window
+// TestApplySlidingWindowEdgeCases tests edge cases for sliding window.
 func TestApplySlidingWindowEdgeCases(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -254,7 +254,7 @@ func TestApplySlidingWindowEdgeCases(t *testing.T) {
 	}
 }
 
-// TestGenerateSyncOperation tests SYNC operation generation
+// TestGenerateSyncOperation tests SYNC operation generation.
 func TestGenerateSyncOperation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -310,7 +310,7 @@ func TestGenerateSyncOperation(t *testing.T) {
 	}
 }
 
-// TestContains tests the contains helper function
+// TestContains tests the contains helper function.
 func TestContains(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -391,7 +391,7 @@ func TestContains(t *testing.T) {
 	}
 }
 
-// TestEqualStringSlices tests the equalStringSlices helper function
+// TestEqualStringSlices tests the equalStringSlices helper function.
 func TestEqualStringSlices(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -20,6 +20,7 @@ var noOpHTTPTransport = &http.Transport{
 	},
 }
 
+//nolint:gochecknoinits
 func init() {
 	noOpHTTPTransport.RegisterProtocol("matrix", &noOpHTTPRoundTripper{})
 }

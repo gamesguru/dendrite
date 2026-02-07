@@ -21,7 +21,7 @@ type StatementList []struct {
 // Prepare the SQL for each statement in the list and assign the result to the prepared statement.
 func (s StatementList) Prepare(db *sql.DB) (err error) {
 	for _, statement := range s {
-		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil {
+		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil { //nolint:sqlclosecheck // statements are stored for reuse
 			return
 		}
 	}
@@ -33,7 +33,7 @@ type transaction struct {
 	txn *sql.Tx
 }
 
-// Commit implements types.Transaction
+// Commit implements types.Transaction.
 func (t *transaction) Commit() error {
 	if t.txn == nil {
 		// The Updater structs can operate in useTxns=false mode. The code will still call this though.
@@ -42,7 +42,7 @@ func (t *transaction) Commit() error {
 	return t.txn.Commit()
 }
 
-// Rollback implements types.Transaction
+// Rollback implements types.Transaction.
 func (t *transaction) Rollback() error {
 	if t.txn == nil {
 		// The Updater structs can operate in useTxns=false mode. The code will still call this though.

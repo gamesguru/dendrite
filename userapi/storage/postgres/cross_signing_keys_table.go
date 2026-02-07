@@ -11,12 +11,13 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/userapi/types"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 var crossSigningKeysSchema = `
@@ -60,7 +61,9 @@ func NewPostgresCrossSigningKeysTable(db *sql.DB) (tables.CrossSigningKeys, erro
 func (s *crossSigningKeysStatements) SelectCrossSigningKeysForUser(
 	ctx context.Context, txn *sql.Tx, userID string,
 ) (r types.CrossSigningKeyMap, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectCrossSigningKeysForUserStmt).QueryContext(ctx, userID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectCrossSigningKeysForUserStmt)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +92,9 @@ func (s *crossSigningKeysStatements) UpsertCrossSigningKeysForUser(
 	if !ok {
 		return fmt.Errorf("unknown key purpose %q", keyType)
 	}
-	if _, err := sqlutil.TxStmt(txn, s.upsertCrossSigningKeysForUserStmt).ExecContext(ctx, userID, keyTypeInt, keyData); err != nil {
+	upsertStmt := sqlutil.TxStmt(txn, s.upsertCrossSigningKeysForUserStmt)
+	defer upsertStmt.Close()
+	if _, err := upsertStmt.ExecContext(ctx, userID, keyTypeInt, keyData); err != nil {
 		return fmt.Errorf("s.upsertCrossSigningKeysForUserStmt: %w", err)
 	}
 	return nil

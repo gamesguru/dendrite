@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/util"
 )
 
 type loginTokenStatements struct {
@@ -63,6 +64,7 @@ func NewSQLiteLoginTokenTable(db *sql.DB) (tables.LoginTokenTable, error) {
 // insert adds an already generated token to the database.
 func (s *loginTokenStatements) InsertLoginToken(ctx context.Context, txn *sql.Tx, metadata *api.LoginTokenMetadata, data *api.LoginTokenData) error {
 	stmt := sqlutil.TxStmt(txn, s.insertStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, metadata.Token, metadata.Expiration.UTC(), data.UserID)
 	return err
 }
@@ -73,6 +75,7 @@ func (s *loginTokenStatements) InsertLoginToken(ctx context.Context, txn *sql.Tx
 // The userapi_login_tokens_expiration_idx index should make that efficient.
 func (s *loginTokenStatements) DeleteLoginToken(ctx context.Context, txn *sql.Tx, token string) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteStmt)
+	defer stmt.Close()
 	res, err := stmt.ExecContext(ctx, token, time.Now().UTC())
 	if err != nil {
 		return err

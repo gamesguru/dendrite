@@ -10,13 +10,14 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
+
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
-// FederationAPIPresenceProducer produces events for the federation API server to consume
+// FederationAPIPresenceProducer produces events for the federation API server to consume.
 type FederationAPIPresenceProducer struct {
 	Topic     string
 	JetStream nats.JetStreamContext

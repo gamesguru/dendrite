@@ -32,7 +32,7 @@ import (
 	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
-// Database represents an account database
+// Database represents an account database.
 type Database struct {
 	DB                    *sql.DB
 	Writer                sqlutil.Writer
@@ -68,7 +68,7 @@ type KeyDatabase struct {
 }
 
 const (
-	// The length of generated device IDs
+	// The length of generated device IDs.
 	deviceIDByteLength   = 6
 	loginTokenByteLength = 32
 )
@@ -101,7 +101,7 @@ func (d *Database) DeleteRegistrationToken(ctx context.Context, tokenString stri
 	return
 }
 
-func (d *Database) UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]interface{}) (updatedToken *clientapi.RegistrationToken, err error) {
+func (d *Database) UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (updatedToken *clientapi.RegistrationToken, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		updatedToken, err = d.RegistrationTokens.UpdateRegistrationToken(ctx, txn, tokenString, newAttributes)
 		return err
@@ -138,7 +138,7 @@ func (d *Database) GetProfileByLocalpart(
 }
 
 // SetAvatarURL updates the avatar URL of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query
+// localpart. Returns an error if something went wrong with the SQL query.
 func (d *Database) SetAvatarURL(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -152,7 +152,7 @@ func (d *Database) SetAvatarURL(
 }
 
 // SetDisplayName updates the display name of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query
+// localpart. Returns an error if something went wrong with the SQL query.
 func (d *Database) SetDisplayName(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -277,7 +277,7 @@ func (d *Database) QueryPushRules(
 // If the account data is not specific to a room, the room ID should be an empty string
 // If an account data already exists for a given set (user, room, data type), it will
 // update the corresponding row with the new content
-// Returns a SQL error if there was an issue with the insertion/update
+// Returns a SQL error if there was an issue with the insertion/update.
 func (d *Database) SaveAccountData(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string, content json.RawMessage,
@@ -289,7 +289,7 @@ func (d *Database) SaveAccountData(
 
 // GetAccountData returns account data related to a given localpart
 // If no account data could be found, returns an empty arrays
-// Returns an error if there was an issue with the retrieval
+// Returns an error if there was an issue with the retrieval.
 func (d *Database) GetAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (
 	global map[string]json.RawMessage,
 	rooms map[string]map[string]json.RawMessage,
@@ -301,7 +301,7 @@ func (d *Database) GetAccountData(ctx context.Context, localpart string, serverN
 // GetAccountDataByType returns account data matching a given
 // localpart, room ID and type.
 // If no account data could be found, returns nil
-// Returns an error if there was an issue with the retrieval
+// Returns an error if there was an issue with the retrieval.
 func (d *Database) GetAccountDataByType(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string,
@@ -311,7 +311,7 @@ func (d *Database) GetAccountDataByType(
 	)
 }
 
-// GetNewNumericLocalpart generates and returns a new unused numeric localpart
+// GetNewNumericLocalpart generates and returns a new unused numeric localpart.
 func (d *Database) GetNewNumericLocalpart(
 	ctx context.Context, serverName spec.ServerName,
 ) (int64, error) {
@@ -391,7 +391,7 @@ func (d *Database) GetThreePIDsForLocalpart(
 // If the DB returns sql.ErrNoRows the Localpart isn't taken.
 func (d *Database) CheckAccountAvailability(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error) {
 	_, err := d.Accounts.SelectAccountByLocalpart(ctx, localpart, serverName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}
 	return false, err
@@ -404,7 +404,7 @@ func (d *Database) GetAccountByLocalpart(ctx context.Context, localpart string, 
 ) (*api.Account, error) {
 	// try to get the account with lowercase localpart (majority)
 	acc, err := d.Accounts.SelectAccountByLocalpart(ctx, strings.ToLower(localpart), serverName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		acc, err = d.Accounts.SelectAccountByLocalpart(ctx, localpart, serverName) // try with localpart as passed by the request
 	}
 	return acc, err
@@ -424,7 +424,7 @@ func (d *Database) DeactivateAccount(ctx context.Context, localpart string, serv
 	})
 }
 
-// CreateOpenIDToken persists a new token that was issued for OpenID Connect
+// CreateOpenIDToken persists a new token that was issued for OpenID Connect.
 func (d *Database) CreateOpenIDToken(
 	ctx context.Context,
 	token, userID string,
@@ -440,7 +440,7 @@ func (d *Database) CreateOpenIDToken(
 	return expiresAtMS, err
 }
 
-// GetOpenIDTokenAttributes gets the attributes of issued an OIDC auth token
+// GetOpenIDTokenAttributes gets the attributes of issued an OIDC auth token.
 func (d *Database) GetOpenIDTokenAttributes(
 	ctx context.Context,
 	token string,
@@ -518,7 +518,7 @@ func (d *Database) CountBackupKeys(
 	return
 }
 
-// nolint:nakedret
+//nolint:nakedret
 func (d *Database) UpsertBackupKeys(
 	ctx context.Context, version, userID string, uploads []api.InternalKeyBackupSession,
 ) (count int64, etag string, err error) {
@@ -576,7 +576,7 @@ func (d *Database) UpsertBackupKeys(
 			} else {
 				oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
 				if err != nil {
-					return fmt.Errorf("failed to parse old etag: %s", err)
+					return fmt.Errorf("failed to parse old etag: %w", err)
 				}
 				newETag = strconv.FormatInt(oldETagInt+1, 10)
 			}
@@ -725,7 +725,7 @@ func (d *Database) RemoveDevices(
 	devices []string,
 ) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		if err := d.Devices.DeleteDevices(ctx, txn, localpart, serverName, devices); err != sql.ErrNoRows {
+		if err := d.Devices.DeleteDevices(ctx, txn, localpart, serverName, devices); !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		return nil
@@ -745,7 +745,7 @@ func (d *Database) RemoveAllDevices(
 		if err != nil {
 			return err
 		}
-		if err := d.Devices.DeleteDevicesByLocalpart(ctx, txn, localpart, serverName, exceptDeviceID); err != sql.ErrNoRows {
+		if err := d.Devices.DeleteDevicesByLocalpart(ctx, txn, localpart, serverName, exceptDeviceID); !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		return nil
@@ -804,7 +804,7 @@ func (d *Database) GetLoginTokenDataByToken(ctx context.Context, token string) (
 	return d.LoginTokens.SelectLoginToken(ctx, token)
 }
 
-func (d *Database) InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]interface{}, n *api.Notification) error {
+func (d *Database) InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.Notifications.Insert(ctx, txn, localpart, serverName, eventID, pos, pushrules.BoolTweakOr(tweaks, pushrules.HighlightTweak, false), n)
 	})
@@ -885,7 +885,7 @@ func (d *Database) RemovePusher(
 ) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		err := d.Pushers.DeletePusher(ctx, txn, appid, pushkey, localpart, serverName)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err
@@ -1066,13 +1066,13 @@ func (d *KeyDatabase) MarkDeviceListStale(ctx context.Context, userID string, is
 func (d *KeyDatabase) DeleteDeviceKeys(ctx context.Context, userID string, deviceIDs []gomatrixserverlib.KeyID) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		for _, deviceID := range deviceIDs {
-			if err := d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget(ctx, txn, userID, deviceID); err != nil && err != sql.ErrNoRows {
+			if err := d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget(ctx, txn, userID, deviceID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget: %w", err)
 			}
-			if err := d.DeviceKeysTable.DeleteDeviceKeys(ctx, txn, userID, string(deviceID)); err != nil && err != sql.ErrNoRows {
+			if err := d.DeviceKeysTable.DeleteDeviceKeys(ctx, txn, userID, string(deviceID)); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.DeviceKeysTable.DeleteDeviceKeys: %w", err)
 			}
-			if err := d.OneTimeKeysTable.DeleteOneTimeKeys(ctx, txn, userID, string(deviceID)); err != nil && err != sql.ErrNoRows {
+			if err := d.OneTimeKeysTable.DeleteOneTimeKeys(ctx, txn, userID, string(deviceID)); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.OneTimeKeysTable.DeleteOneTimeKeys: %w", err)
 			}
 		}

@@ -7,9 +7,10 @@
 package caching
 
 import (
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 // Caches contains a set of references to caches. They may be
@@ -34,7 +35,7 @@ type Caches struct {
 }
 
 // RoomSummaryResponse is cached separately to avoid circular imports with clientapi.
-// This mirrors the structure in clientapi/routing/room_summary.go
+// This mirrors the structure in clientapi/routing/room_summary.go.
 type RoomSummaryResponse struct {
 	RoomID           string   `json:"room_id"`
 	RoomType         string   `json:"room_type,omitempty"`

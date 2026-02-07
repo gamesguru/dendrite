@@ -11,13 +11,13 @@ import (
 type ProcessContext struct {
 	mu       sync.RWMutex
 	wg       sync.WaitGroup      // used to wait for components to shutdown
-	ctx      context.Context     // cancelled when Stop is called
+	ctx      context.Context     // canceled when Stop is called
 	shutdown context.CancelFunc  // shut down Dendrite
 	degraded map[string]struct{} // reasons why the process is degraded
 }
 
 func NewProcessContext() *ProcessContext {
-	ctx, shutdown := context.WithCancel(context.Background())
+	ctx, shutdown := context.WithCancel(context.Background()) //nolint:forbidigo
 	return &ProcessContext{
 		ctx:      ctx,
 		shutdown: shutdown,
@@ -26,7 +26,7 @@ func NewProcessContext() *ProcessContext {
 }
 
 func (b *ProcessContext) Context() context.Context {
-	return context.WithValue(b.ctx, "scope", "process") // nolint:staticcheck
+	return context.WithValue(b.ctx, "scope", "process") //nolint:staticcheck
 }
 
 func (b *ProcessContext) ComponentStarted() {

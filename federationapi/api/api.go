@@ -103,7 +103,7 @@ type P2PFederationAPI interface {
 
 // KeyserverFederationAPI is a subset of gomatrixserverlib.FederationClient functions which the keyserver
 // implements as proxy calls, with built-in backoff/retries/etc. Errors returned from functions in
-// this interface are of type FederationClientError
+// this interface are of type FederationClientError.
 type KeyserverFederationAPI interface {
 	GetUserDevices(ctx context.Context, origin, s spec.ServerName, userID string) (res fclient.RespUserDevices, err error)
 	ClaimKeys(ctx context.Context, origin, s spec.ServerName, oneTimeKeys map[string]map[string]string) (res fclient.RespClaimKeys, err error)
@@ -163,9 +163,9 @@ type PerformJoinRequest struct {
 	RoomID string `json:"room_id"`
 	UserID string `json:"user_id"`
 	// The sorted list of servers to try. Servers will be tried sequentially, after de-duplication.
-	ServerNames types.ServerNames      `json:"server_names"`
-	Content     map[string]interface{} `json:"content"`
-	Unsigned    map[string]interface{} `json:"unsigned"`
+	ServerNames types.ServerNames `json:"server_names"`
+	Content     map[string]any    `json:"content"`
+	Unsigned    map[string]any    `json:"unsigned"`
 }
 
 type PerformJoinResponse struct {
@@ -201,14 +201,14 @@ type PerformInviteResponse struct {
 	Event *rstypes.HeaderedEvent `json:"event"`
 }
 
-// QueryJoinedHostServerNamesInRoomRequest is a request to QueryJoinedHostServerNames
+// QueryJoinedHostServerNamesInRoomRequest is a request to QueryJoinedHostServerNames.
 type QueryJoinedHostServerNamesInRoomRequest struct {
 	RoomID             string `json:"room_id"`
 	ExcludeSelf        bool   `json:"exclude_self"`
 	ExcludeBlacklisted bool   `json:"exclude_blacklisted"`
 }
 
-// QueryJoinedHostServerNamesInRoomResponse is a response to QueryJoinedHostServerNames
+// QueryJoinedHostServerNamesInRoomResponse is a response to QueryJoinedHostServerNames.
 type QueryJoinedHostServerNamesInRoomResponse struct {
 	ServerNames []spec.ServerName `json:"server_names"`
 }

@@ -13,16 +13,17 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type invite struct {
@@ -45,7 +46,7 @@ var (
 	errNotInRoom    = errors.New("the server isn't currently in the room")
 )
 
-// CreateInvitesFrom3PIDInvites implements POST /_matrix/federation/v1/3pid/onbind
+// CreateInvitesFrom3PIDInvites implements POST /_matrix/federation/v1/3pid/onbind.
 func CreateInvitesFrom3PIDInvites(
 	req *http.Request, rsAPI api.FederationRoomserverAPI,
 	cfg *config.FederationAPI,
@@ -107,7 +108,7 @@ func CreateInvitesFrom3PIDInvites(
 	}
 }
 
-// ExchangeThirdPartyInvite implements PUT /_matrix/federation/v1/exchange_third_party_invite/{roomID}
+// ExchangeThirdPartyInvite implements PUT /_matrix/federation/v1/exchange_third_party_invite/{roomID}.
 func ExchangeThirdPartyInvite(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -176,7 +177,7 @@ func ExchangeThirdPartyInvite(
 
 	// Auth and build the event from what the remote server sent us
 	event, err := buildMembershipEvent(httpReq.Context(), &proto, rsAPI, cfg)
-	if err == errNotInRoom {
+	if errors.Is(err, errNotInRoom) {
 		return util.JSONResponse{
 			Code: http.StatusNotFound,
 			JSON: spec.NotFound("Unknown room " + roomID),
@@ -296,7 +297,7 @@ func createInviteFrom3PIDInvite(
 	}
 
 	event, err := buildMembershipEvent(ctx, proto, rsAPI, cfg)
-	if err == errNotInRoom {
+	if errors.Is(err, errNotInRoom) {
 		return nil, sendToRemoteServer(ctx, inv, federation, cfg, *proto)
 	}
 	if err != nil {

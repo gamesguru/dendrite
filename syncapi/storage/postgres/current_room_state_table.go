@@ -13,6 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
@@ -20,8 +23,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const currentRoomStateSchema = `
@@ -77,7 +78,7 @@ const selectRoomIDsWithMembershipSQL = "" +
 	"SELECT DISTINCT room_id FROM syncapi_current_room_state WHERE type = 'm.room.member' AND state_key = $1 AND membership = $2"
 
 // selectKickedRoomIDsSQL returns rooms where the user was kicked (leave membership where sender != user).
-// Per MSC4186/Synapse behaviour, kicked rooms should be included in the sliding sync room list.
+// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
 const selectKickedRoomIDsSQL = "" +
 	"SELECT DISTINCT room_id FROM syncapi_current_room_state WHERE type = 'm.room.member' AND state_key = $1 AND membership = 'leave' AND sender != $1"
 
@@ -175,7 +176,9 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 func (s *currentRoomStateStatements) SelectJoinedUsers(
 	ctx context.Context, txn *sql.Tx,
 ) (map[string][]string, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt).QueryContext(ctx)
+	selectStmt := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +202,9 @@ func (s *currentRoomStateStatements) SelectJoinedUsers(
 func (s *currentRoomStateStatements) SelectJoinedUsersInRoom(
 	ctx context.Context, txn *sql.Tx, roomIDs []string,
 ) (map[string][]string, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectJoinedUsersInRoomStmt).QueryContext(ctx, roomIDs)
+	selectStmt := sqlutil.TxStmt(txn, s.selectJoinedUsersInRoomStmt)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, roomIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -223,10 +228,11 @@ func (s *currentRoomStateStatements) SelectRoomIDsWithMembership(
 	ctx context.Context,
 	txn *sql.Tx,
 	userID string,
-	membership string, // nolint: unparam
+	membership string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomIDsWithMembershipStmt)
-	rows, err := stmt.QueryContext(ctx, userID, membership)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userID, membership) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -244,14 +250,15 @@ func (s *currentRoomStateStatements) SelectRoomIDsWithMembership(
 }
 
 // SelectKickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
-// Per MSC4186/Synapse behaviour, kicked rooms should be included in the sliding sync room list.
+// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
 func (s *currentRoomStateStatements) SelectKickedRoomIDs(
 	ctx context.Context,
 	txn *sql.Tx,
 	userID string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectKickedRoomIDsStmt)
-	rows, err := stmt.QueryContext(ctx, userID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +282,8 @@ func (s *currentRoomStateStatements) SelectRoomIDsWithAnyMembership(
 	userID string,
 ) (map[string]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomIDsWithAnyMembershipStmt)
-	rows, err := stmt.QueryContext(ctx, userID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +308,7 @@ func (s *currentRoomStateStatements) SelectCurrentState(
 	excludeEventIDs []string,
 ) ([]*rstypes.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectCurrentStateStmt)
+	defer stmt.Close()
 	senders, notSenders := getSendersStateFilterFilter(stateFilter)
 	// We're going to query members later, so remove them from this request
 	if stateFilter.LazyLoadMembers && !stateFilter.IncludeRedundantMembers {
@@ -330,6 +339,7 @@ func (s *currentRoomStateStatements) DeleteRoomStateByEventID(
 	ctx context.Context, txn *sql.Tx, eventID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateByEventIDStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, eventID)
 	return err
 }
@@ -338,6 +348,7 @@ func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateForRoomStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -348,7 +359,7 @@ func (s *currentRoomStateStatements) UpsertRoomState(
 ) error {
 	// Parse content as JSON and search for an "url" key
 	containsURL := false
-	var content map[string]interface{}
+	var content map[string]any
 	if json.Unmarshal(event.Content(), &content) != nil {
 		// Set containsURL to true if url is present
 		_, containsURL = content["url"]
@@ -361,6 +372,7 @@ func (s *currentRoomStateStatements) UpsertRoomState(
 
 	// upsert state event
 	stmt := sqlutil.TxStmt(txn, s.upsertRoomStateStmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(
 		ctx,
 		event.RoomID().String(),
@@ -381,6 +393,7 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) ([]types.StreamEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventsWithEventIDsStmt)
+	defer stmt.Close()
 	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
@@ -440,9 +453,10 @@ func (s *currentRoomStateStatements) SelectStateEvent(
 	ctx context.Context, txn *sql.Tx, roomID, evType, stateKey string,
 ) (*rstypes.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectStateEventStmt)
+	defer stmt.Close()
 	var res []byte
 	err := stmt.QueryRowContext(ctx, roomID, evType, stateKey).Scan(&res)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -459,7 +473,8 @@ func (s *currentRoomStateStatements) SelectSharedUsers(
 	ctx context.Context, txn *sql.Tx, userID string, otherUserIDs []string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectSharedUsersStmt)
-	rows, err := stmt.QueryContext(ctx, userID, otherUserIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userID, otherUserIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +493,8 @@ func (s *currentRoomStateStatements) SelectSharedUsers(
 
 func (s *currentRoomStateStatements) SelectRoomHeroes(ctx context.Context, txn *sql.Tx, roomID, excludeUserID string, memberships []string) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomHeroesStmt)
-	rows, err := stmt.QueryContext(ctx, roomID, memberships, excludeUserID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomID, memberships, excludeUserID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +513,7 @@ func (s *currentRoomStateStatements) SelectRoomHeroes(ctx context.Context, txn *
 
 func (s *currentRoomStateStatements) SelectMembershipCount(ctx context.Context, txn *sql.Tx, roomID, membership string) (count int, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipCountStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, membership).Scan(&count)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

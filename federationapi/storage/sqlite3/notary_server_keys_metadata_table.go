@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const notaryServerKeysMetadataSchema = `
@@ -34,7 +35,7 @@ const upsertServerKeysSQL = "" +
 	" ON CONFLICT (server_name, key_id) DO UPDATE SET notary_id = $1"
 
 // for a given (server_name, key_id), find the existing notary ID and valid until. Used to check if we will replace it
-// JOINs with the json table
+// JOINs with the json table.
 const selectNotaryKeyMetadataSQL = `
 	SELECT federationsender_notary_server_keys_metadata.notary_id, valid_until FROM federationsender_notary_server_keys_json
 	JOIN federationsender_notary_server_keys_metadata ON
@@ -43,7 +44,7 @@ const selectNotaryKeyMetadataSQL = `
 `
 
 // select the response which has the highest valid_until value
-// JOINs with the json table
+// JOINs with the json table.
 const selectNotaryKeyResponsesSQL = `
 	SELECT response_json FROM federationsender_notary_server_keys_json
 	WHERE server_name = $1 AND valid_until = (
@@ -52,7 +53,7 @@ const selectNotaryKeyResponsesSQL = `
 `
 
 // select the responses which have the given key IDs
-// JOINs with the json table
+// JOINs with the json table.
 const selectNotaryKeyResponsesWithKeyIDsSQL = `
 	SELECT response_json FROM federationsender_notary_server_keys_json
 	JOIN federationsender_notary_server_keys_metadata ON
@@ -61,7 +62,7 @@ const selectNotaryKeyResponsesWithKeyIDsSQL = `
 	GROUP BY federationsender_notary_server_keys_json.notary_id
 `
 
-// JOINs with the metadata table
+// JOINs with the metadata table.
 const deleteUnusedServerKeysJSONSQL = `
 	DELETE FROM federationsender_notary_server_keys_json WHERE federationsender_notary_server_keys_json.notary_id NOT IN (
 		SELECT DISTINCT notary_id FROM federationsender_notary_server_keys_metadata
@@ -100,7 +101,9 @@ func (s *notaryServerKeysMetadataStatements) UpsertKey(
 	// see if the existing notary ID a) exists, b) has a longer valid_until
 	var existingNotaryID tables.NotaryID
 	var existingValidUntil spec.Timestamp
-	if err := txn.Stmt(s.selectNotaryKeyMetadataStmt).QueryRowContext(ctx, serverName, keyID).Scan(&existingNotaryID, &existingValidUntil); err != nil {
+	selectNotaryKeyMetadataStmt := txn.Stmt(s.selectNotaryKeyMetadataStmt)
+	defer selectNotaryKeyMetadataStmt.Close()
+	if err := selectNotaryKeyMetadataStmt.QueryRowContext(ctx, serverName, keyID).Scan(&existingNotaryID, &existingValidUntil); err != nil {
 		if err != sql.ErrNoRows {
 			return 0, err
 		}
@@ -110,7 +113,9 @@ func (s *notaryServerKeysMetadataStatements) UpsertKey(
 		return existingNotaryID, nil
 	}
 	// overwrite the notary_id for this (server_name, key_id) tuple
-	_, err := txn.Stmt(s.upsertServerKeysStmt).ExecContext(ctx, notaryID, serverName, keyID)
+	upsertServerKeysStmt := txn.Stmt(s.upsertServerKeysStmt)
+	defer upsertServerKeysStmt.Close()
+	_, err := upsertServerKeysStmt.ExecContext(ctx, notaryID, serverName, keyID)
 	return notaryID, err
 }
 
@@ -118,9 +123,11 @@ func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn
 	var rows *sql.Rows
 	var err error
 	if len(keyIDs) == 0 {
-		rows, err = txn.Stmt(s.selectNotaryKeyResponsesStmt).QueryContext(ctx, string(serverName))
+		selectNotaryKeyResponsesStmt := txn.Stmt(s.selectNotaryKeyResponsesStmt)
+		defer selectNotaryKeyResponsesStmt.Close()
+		rows, err = selectNotaryKeyResponsesStmt.QueryContext(ctx, string(serverName))
 	} else {
-		iKeyIDs := make([]interface{}, len(keyIDs)+1)
+		iKeyIDs := make([]any, len(keyIDs)+1)
 		iKeyIDs[0] = serverName
 		for i := range keyIDs {
 			iKeyIDs[i+1] = string(keyIDs[i])
@@ -150,6 +157,8 @@ func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn
 }
 
 func (s *notaryServerKeysMetadataStatements) DeleteOldJSONResponses(ctx context.Context, txn *sql.Tx) error {
-	_, err := txn.Stmt(s.deleteUnusedServerKeysJSONStmt).ExecContext(ctx)
+	deleteUnusedServerKeysJSONStmt := txn.Stmt(s.deleteUnusedServerKeysJSONStmt)
+	defer deleteUnusedServerKeysJSONStmt.Close()
+	_, err := deleteUnusedServerKeysJSONStmt.ExecContext(ctx)
 	return err
 }

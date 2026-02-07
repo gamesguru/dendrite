@@ -9,10 +9,17 @@ package routing
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
@@ -23,12 +30,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/matrix-org/util"
 )
 
 func SendBan(
@@ -328,7 +329,7 @@ func SendInvite(
 	return response
 }
 
-// sendInvite sends an invitation to a user. Returns a JSONResponse and an error
+// sendInvite sends an invitation to a user. Returns a JSONResponse and an error.
 func sendInvite(
 	ctx context.Context,
 	device *userapi.Device,
@@ -381,25 +382,20 @@ func sendInvite(
 		SendAsServer:    string(device.UserDomain()),
 	})
 
-	switch e := err.(type) {
-	case roomserverAPI.ErrInvalidID:
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.InvalidParam(e.Error()),
-		}, e
-	case roomserverAPI.ErrNotAllowed:
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(e.Error()),
-		}, e
-	case nil:
-	default:
-		util.GetLogger(ctx).WithError(err).Error("PerformInvite failed")
-		sentry.CaptureException(err)
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}, err
+	{
+		var e roomserverAPI.ErrInvalidID
+		var e1 roomserverAPI.ErrNotAllowed
+		switch {
+		case errors.As(err, &e):
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam(e.Error())}, e
+		case errors.As(err, &e1):
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(e1.Error())}, e1
+		case err == nil:
+		default:
+			util.GetLogger(ctx).WithError(err).Error("PerformInvite failed")
+			sentry.CaptureException(err)
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}, err
+		}
 	}
 
 	return util.JSONResponse{
@@ -549,37 +545,28 @@ func checkAndProcessThreepid(
 		req.Context(), device, body, cfg, rsAPI, profileAPI,
 		roomID, evTime,
 	)
-	switch e := err.(type) {
-	case nil:
-	case threepid.ErrMissingParameter:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(err.Error()),
-		}
-	case threepid.ErrNotTrusted:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.NotTrusted(body.IDServer),
-		}
-	case eventutil.ErrRoomNoExists:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound(err.Error()),
-		}
-	case gomatrixserverlib.BadJSONError:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(e.Error()),
-		}
-	default:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+	{
+		var e threepid.ErrMissingParameter
+		var e1 threepid.ErrNotTrusted
+		var e2 eventutil.ErrRoomNoExists
+		var e3 gomatrixserverlib.BadJSONError
+		switch {
+		case err == nil:
+		case errors.As(err, &e):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
+		case errors.As(err, &e1):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.IDServer)}
+		case errors.As(err, &e2):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		case errors.As(err, &e3):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(e3.Error())}
+		default:
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 	return

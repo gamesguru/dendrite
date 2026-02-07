@@ -61,7 +61,8 @@ type missingStateReq struct {
 
 // processEventWithMissingState is the entrypoint for a missingStateReq
 // request, as called from processRoomEvent.
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func (t *missingStateReq) processEventWithMissingState(
 	ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion,
 ) (*parsedRespState, error) {
@@ -82,7 +83,7 @@ func (t *missingStateReq) processEventWithMissingState(
 	// event ids and then use /event to fetch the individual events.
 	// However not all version of synapse support /state_ids so you may
 	// need to fallback to /state.
-	t.log = util.GetLogger(ctx).WithFields(map[string]interface{}{
+	t.log = util.GetLogger(ctx).WithFields(map[string]any{
 		"txn_event":       e.EventID(),
 		"room_id":         e.RoomID().String(),
 		"txn_prev_events": e.PrevEventIDs(),
@@ -112,7 +113,8 @@ func (t *missingStateReq) processEventWithMissingState(
 				SendAsServer: api.DoNotSendToOtherServers,
 			})
 			if err != nil {
-				if _, ok := err.(types.RejectedError); !ok {
+				var rejErr types.RejectedError
+				if !errors.As(err, &rejErr) {
 					return nil, fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 				}
 			}
@@ -162,7 +164,8 @@ func (t *missingStateReq) processEventWithMissingState(
 		}
 		for _, ire := range outlierRoomEvents {
 			if err = t.inputer.processRoomEvent(ctx, t.virtualHost, &ire); err != nil {
-				if _, ok := err.(types.RejectedError); !ok {
+				var rejErr types.RejectedError
+				if !errors.As(err, &rejErr) {
 					return fmt.Errorf("t.inputer.processRoomEvent (outlier): %w", err)
 				}
 			}
@@ -193,7 +196,8 @@ func (t *missingStateReq) processEventWithMissingState(
 		SendAsServer:  api.DoNotSendToOtherServers,
 	})
 	if err != nil {
-		if _, ok := err.(types.RejectedError); !ok {
+		var rejErr types.RejectedError
+		if !errors.As(err, &rejErr) {
 			return nil, fmt.Errorf("t.inputer.processRoomEvent (backward extremity): %w", err)
 		}
 	}
@@ -210,7 +214,8 @@ func (t *missingStateReq) processEventWithMissingState(
 			SendAsServer: api.DoNotSendToOtherServers,
 		})
 		if err != nil {
-			if _, ok := err.(types.RejectedError); !ok {
+			var rejErr types.RejectedError
+			if !errors.As(err, &rejErr) {
 				return nil, fmt.Errorf("t.inputer.processRoomEvent (fast forward): %w", err)
 			}
 		}
@@ -265,13 +270,14 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 		// come from the roomserver, if we know all the required events, or it will
 		// come from a remote server via /state_ids if not.
 		prevState, trustworthy, err := t.lookupStateAfterEvent(ctx, roomVersion, e.RoomID().String(), prevEventID)
-		switch err2 := err.(type) {
-		case gomatrixserverlib.EventValidationError:
+		var err2 gomatrixserverlib.EventValidationError
+		switch {
+		case err == nil:
+		case errors.As(err, &err2):
 			if !err2.Persistable {
 				return nil, err2
 			}
 			validationError = err2
-		case nil:
 		default:
 			return nil, fmt.Errorf("t.lookupStateAfterEvent: %w", err)
 		}
@@ -319,13 +325,14 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 		t.roomsMu.Lock(e.RoomID().String())
 		resolvedState, err = t.resolveStatesAndCheck(ctx, roomVersion, respStates, e)
 		t.roomsMu.Unlock(e.RoomID().String())
-		switch err2 := err.(type) {
-		case gomatrixserverlib.EventValidationError:
+		var err2 gomatrixserverlib.EventValidationError
+		switch {
+		case err == nil:
+		case errors.As(err, &err2):
 			if !err2.Persistable {
 				return nil, err2
 			}
 			validationError = err2
-		case nil:
 		default:
 			return nil, fmt.Errorf("t.resolveStatesAndCheck: %w", err)
 		}
@@ -356,16 +363,18 @@ func (t *missingStateReq) lookupStateAfterEvent(ctx context.Context, roomVersion
 	// fetch the event we're missing and add it to the pile
 	var validationError error
 	h, err := t.lookupEvent(ctx, roomVersion, roomID, eventID, false)
-	switch e := err.(type) {
-	case gomatrixserverlib.EventValidationError:
-		if !e.Persistable {
+	var evtValErr gomatrixserverlib.EventValidationError
+	var sigErr verifySigError
+	switch {
+	case errors.As(err, &evtValErr):
+		if !evtValErr.Persistable {
 			logrus.WithContext(ctx).WithError(err).Errorf("Failed to look up event %s", eventID)
-			return nil, false, e
+			return nil, false, evtValErr
 		}
-		validationError = e
-	case verifySigError:
+		validationError = evtValErr
+	case errors.As(err, &sigErr):
 		return respState, false, nil
-	case nil:
+	case err == nil:
 		// do nothing
 	default:
 		logrus.WithContext(ctx).WithError(err).Errorf("Failed to look up event %s", eventID)
@@ -437,7 +446,7 @@ func (t *missingStateReq) lookupStateAfterEventLocally(ctx context.Context, even
 	}
 
 	// encourage GC
-	stateEvents, stateEventNIDs, stateEntries, stateAtEvents = nil, nil, nil, nil // nolint:ineffassign
+	stateEvents = nil
 
 	missingAuthEvents := map[string]bool{}
 	res.AuthEvents = make([]gomatrixserverlib.PDU, 0, len(stateEvents)*3)
@@ -516,21 +525,24 @@ retryAllowedState:
 	if err = checkAllowedByState(backwardsExtremity, resolvedStateEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
-		switch missing := err.(type) {
-		case gomatrixserverlib.MissingAuthEventError:
+		var missing gomatrixserverlib.MissingAuthEventError
+		switch {
+		case errors.As(err, &missing):
 			h, err2 := t.lookupEvent(ctx, roomVersion, backwardsExtremity.RoomID().String(), missing.AuthEventID, true)
-			switch e := err2.(type) {
-			case gomatrixserverlib.EventValidationError:
-				if !e.Persistable {
-					return nil, e
+			var evtValErr2 gomatrixserverlib.EventValidationError
+			var sigErr2 verifySigError
+			switch {
+			case errors.As(err2, &evtValErr2):
+				if !evtValErr2.Persistable {
+					return nil, evtValErr2
 				}
-				validationError = e
-			case verifySigError:
+				validationError = evtValErr2
+			case errors.As(err2, &sigErr2):
 				return &parsedRespState{
 					AuthEvents:  authEventList,
 					StateEvents: resolvedStateEvents,
 				}, nil
-			case nil:
+			case err2 == nil:
 				// do nothing
 			default:
 				return nil, fmt.Errorf("missing auth event %s and failed to look it up: %w", missing.AuthEventID, err2)
@@ -549,7 +561,7 @@ retryAllowedState:
 }
 
 // get missing events for `e`. If `isGapFilled`=true then `newEvents` contains all the events to inject,
-// without `e`. If `isGapFilled=false` then `newEvents` contains the response to /get_missing_events
+// without `e`. If `isGapFilled=false` then `newEvents` contains the response to /get_missing_events.
 func (t *missingStateReq) getMissingEvents(ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion) (newEvents []gomatrixserverlib.PDU, isGapFilled, prevStateKnown bool, err error) {
 	trace, ctx := internal.StartRegion(ctx, "getMissingEvents")
 	defer trace.EndRegion()
@@ -569,7 +581,7 @@ func (t *missingStateReq) getMissingEvents(ctx context.Context, e gomatrixserver
 	for _, server := range t.servers {
 		var m fclient.RespMissingEvents
 		if m, err = t.federation.LookupMissingEvents(ctx, t.virtualHost, server, e.RoomID().String(), fclient.MissingEvents{
-			Limit: 20,
+			Limit: 20, //nolint:mnd
 			// The latest event IDs that the sender already has. These are skipped when retrieving the previous events of latest_events.
 			EarliestEvents: latestEvents,
 			// The event IDs to retrieve the previous events for.
@@ -719,9 +731,9 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 	var stateIDs gomatrixserverlib.StateIDResponse
 	var err error
 	count := 0
-	totalctx, totalcancel := context.WithTimeout(ctx, time.Minute*5)
+	totalctx, totalcancel := context.WithTimeout(ctx, time.Minute*5) //nolint:mnd
 	for _, serverName := range t.servers {
-		reqctx, reqcancel := context.WithTimeout(totalctx, time.Second*20)
+		reqctx, reqcancel := context.WithTimeout(totalctx, time.Second*20) //nolint:mnd
 		stateIDs, err = t.federation.LookupStateIDs(reqctx, t.virtualHost, serverName, roomID, eventID)
 		reqcancel()
 		if err == nil {
@@ -761,9 +773,6 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 			delete(missing, evID)
 		}
 	}
-
-	// encourage GC
-	events = nil // nolint:ineffassign
 
 	concurrentRequests := 8
 	missingCount := len(missing)
@@ -816,20 +825,22 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 		// Define what we'll do in order to fetch the missing event ID.
 		fetch := func(missingEventID string) {
 			h, herr := t.lookupEvent(ctx, roomVersion, roomID, missingEventID, false)
-			switch e := herr.(type) {
-			case gomatrixserverlib.EventValidationError:
-				if !e.Persistable {
+			{
+				var e gomatrixserverlib.EventValidationError
+				var e1 verifySigError
+				switch {
+				case errors.As(herr, &e):
+					if !e.Persistable {
+						return
+					}
+				case errors.As(herr, &e1):
+					return
+				case herr == nil:
+					break
+				default:
+					t.log.WithFields(logrus.Fields{"missing_event_id": missingEventID}).WithError(herr).Warn("Failed to fetch missing event")
 					return
 				}
-			case verifySigError:
-				return
-			case nil:
-				break
-			default:
-				t.log.WithFields(logrus.Fields{
-					"missing_event_id": missingEventID,
-				}).WithError(herr).Warn("Failed to fetch missing event")
-				return
 			}
 			haveEventsMutex.Lock()
 			t.cacheAndReturn(h)
@@ -859,7 +870,7 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 
 func (t *missingStateReq) createRespStateFromStateIDs(
 	stateIDs gomatrixserverlib.StateIDResponse,
-) (*parsedRespState, error) { // nolint:unparam
+) (*parsedRespState, error) {
 	t.haveEventsMutex.Lock()
 	defer t.haveEventsMutex.Unlock()
 
@@ -913,7 +924,7 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	var validationError error
 serverLoop:
 	for _, serverName := range t.servers {
-		reqctx, cancel := context.WithTimeout(ctx, time.Second*30)
+		reqctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 		defer cancel()
 		txn, err := t.federation.GetEvent(reqctx, t.virtualHost, serverName, missingEventID)
 		if err != nil || len(txn.PDUs) == 0 {
@@ -929,24 +940,23 @@ serverLoop:
 			continue
 		}
 		event, err = verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
-		switch e := err.(type) {
-		case gomatrixserverlib.EventValidationError:
-			// If the event is persistable, e.g. failed validation for exceeding
-			// byte sizes, we can "accept" the event.
-			if e.Persistable {
-				validationError = e
+		{
+			var e gomatrixserverlib.EventValidationError
+			switch {
+			case errors.As(err, &e):
+				if e.Persistable {
+					validationError = e
+					found = true
+					break serverLoop
+				}
+				break serverLoop
+			case err == nil:
 				found = true
 				break serverLoop
+			default:
+				t.log.WithError(err).WithField("missing_event_id", missingEventID).Warnf("Failed to parse event JSON of event returned from /event")
+				continue
 			}
-			// If we can't persist the event, we probably can't do so with results
-			// from other servers, so also break the loop.
-			break serverLoop
-		case nil:
-			found = true
-			break serverLoop
-		default:
-			t.log.WithError(err).WithField("missing_event_id", missingEventID).Warnf("Failed to parse event JSON of event returned from /event")
-			continue
 		}
 	}
 	if !found {

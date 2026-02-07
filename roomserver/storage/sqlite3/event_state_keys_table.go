@@ -29,7 +29,7 @@ const eventStateKeysSchema = `
 		ON CONFLICT DO NOTHING;
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertEventStateKeyNIDSQL = `
 	INSERT INTO roomserver_event_state_keys (event_state_key) VALUES ($1)
 	  ON CONFLICT DO NOTHING
@@ -85,6 +85,7 @@ func (s *eventStateKeyStatements) InsertEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKey string,
 ) (eventStateKeyNID types.EventStateKeyNID, err error) {
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventStateKeyNIDStmt)
+	defer insertStmt.Close()
 	if err := insertStmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID); err != nil {
 		return 0, fmt.Errorf("resultStmt.QueryRowContext.Scan: %w", err)
 	}
@@ -96,6 +97,7 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectEventStateKeyNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -103,7 +105,7 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKeys []string,
 ) (map[string]types.EventStateKeyNID, error) {
-	iEventStateKeys := make([]interface{}, len(eventStateKeys))
+	iEventStateKeys := make([]any, len(eventStateKeys))
 	for k, v := range eventStateKeys {
 		iEventStateKeys[k] = v
 	}
@@ -134,7 +136,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	ctx context.Context, txn *sql.Tx, eventStateKeyNIDs []types.EventStateKeyNID,
 ) (map[types.EventStateKeyNID]string, error) {
-	iEventStateKeyNIDs := make([]interface{}, len(eventStateKeyNIDs))
+	iEventStateKeyNIDs := make([]any, len(eventStateKeyNIDs))
 	for k, v := range eventStateKeyNIDs {
 		iEventStateKeyNIDs[k] = v
 	}
@@ -145,7 +147,8 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	}
 	defer internal.CloseAndLogIfError(ctx, selectPrep, "selectPrep.close() failed")
 	stmt := sqlutil.TxStmt(txn, selectPrep)
-	rows, err := stmt.QueryContext(ctx, iEventStateKeyNIDs...)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, iEventStateKeyNIDs...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

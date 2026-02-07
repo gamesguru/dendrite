@@ -112,8 +112,9 @@ func (s *previousEventStatements) InsertPreviousEvent(
 	var eventNIDs string
 	eventNIDAsString := fmt.Sprintf("%d", eventNID)
 	selectStmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
+	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, previousEventID).Scan(&eventNIDs)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("selectStmt.QueryRowContext.Scan: %w", err)
 	}
 	var nids []string
@@ -129,6 +130,7 @@ func (s *previousEventStatements) InsertPreviousEvent(
 		eventNIDs = eventNIDAsString
 	}
 	insertStmt := sqlutil.TxStmt(txn, s.insertPreviousEventStmt)
+	defer insertStmt.Close()
 	_, err = insertStmt.ExecContext(
 		ctx, previousEventID, eventNIDs,
 	)
@@ -142,5 +144,6 @@ func (s *previousEventStatements) SelectPreviousEventExists(
 ) error {
 	var ok int64
 	stmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
+	defer stmt.Close()
 	return stmt.QueryRowContext(ctx, eventID).Scan(&ok)
 }

@@ -23,7 +23,7 @@ import (
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
 //
-// stateEventIDs are the event IDs of the state events that were fetched during resync.
+// StateEventIDs are the event IDs of the state events that were fetched during resync.
 //
 //nolint:gocyclo
 func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {

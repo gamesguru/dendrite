@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/state"
@@ -17,8 +20,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // This is a utility for inspecting state snapshots and running state resolution
@@ -48,7 +49,7 @@ func (d dummyQuerier) QueryUserIDForSender(ctx context.Context, roomID spec.Room
 	return senderID.ToUserID(), nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func main() {
 	ctx := context.Background()
 	cfg := setup.ParseFlags(true)
@@ -80,7 +81,7 @@ func main() {
 	fmt.Println("Opening database")
 	roomserverDB, err := storage.Open(
 		processCtx.Context(), cm, &dbOpts,
-		caching.NewRistrettoCache(8*1024*1024, time.Minute*5, caching.DisableMetrics),
+		caching.NewRistrettoCache(8*1024*1024, time.Minute*5, caching.DisableMetrics), //nolint:mnd
 	)
 	if err != nil {
 		panic(err)
@@ -96,7 +97,7 @@ func main() {
 	fmt.Println("Fetching", len(snapshotNIDs), "snapshot NIDs")
 
 	if *difference {
-		if len(snapshotNIDs) != 2 {
+		if len(snapshotNIDs) != 2 { //nolint:mnd
 			panic("need exactly two state snapshot NIDs to calculate difference")
 		}
 		var removed, added []types.StateEntry

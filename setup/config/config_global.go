@@ -97,9 +97,9 @@ func (c *Global) Defaults(opts DefaultOpts) {
 			"vector.im",
 		}
 	}
-	c.KeyValidityPeriod = time.Hour * 24 * 7
+	c.KeyValidityPeriod = time.Hour * 24 * 7 //nolint:mnd
 	if opts.SingleDatabase {
-		c.DatabaseOptions.Defaults(90)
+		c.DatabaseOptions.Defaults(90) //nolint:mnd
 	}
 	c.JetStream.Defaults(opts)
 	c.Metrics.Defaults(opts)
@@ -256,7 +256,7 @@ type OldVerifyKeys struct {
 	ExpiredAt spec.Timestamp `yaml:"expired_at"`
 }
 
-// The configuration to use for Prometheus metrics
+// The configuration to use for Prometheus metrics.
 type Metrics struct {
 	// Whether or not the metrics are enabled
 	Enabled bool `yaml:"enabled"`
@@ -280,7 +280,7 @@ func (c *Metrics) Defaults(opts DefaultOpts) {
 func (c *Metrics) Verify(configErrs *ConfigErrors) {
 }
 
-// ServerNotices defines the configuration used for sending server notices
+// ServerNotices defines the configuration used for sending server notices.
 type ServerNotices struct {
 	Enabled bool `yaml:"enabled"`
 	// The localpart to be used when sending notices
@@ -311,7 +311,7 @@ type Cache struct {
 }
 
 func (c *Cache) Defaults() {
-	c.EstimatedMaxSize = 1024 * 1024 * 1024 // 1GB
+	c.EstimatedMaxSize = 1024 * 1024 * 1024 //nolint:mnd // 1GB
 	c.MaxAge = time.Hour
 }
 
@@ -344,7 +344,7 @@ func (c *ReportStats) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-// The configuration to use for Sentry error reporting
+// The configuration to use for Sentry error reporting.
 type Sentry struct {
 	Enabled bool `yaml:"enabled"`
 	// The DSN to connect to e.g "https://examplePublicKey@o0.ingest.sentry.io/0"
@@ -381,17 +381,17 @@ func (c *DatabaseOptions) Defaults(conns int) {
 
 func (c *DatabaseOptions) Verify(configErrs *ConfigErrors) {}
 
-// MaxIdleConns returns maximum idle connections to the DB
+// MaxIdleConns returns maximum idle connections to the DB.
 func (c DatabaseOptions) MaxIdleConns() int {
 	return c.MaxIdleConnections
 }
 
-// MaxOpenConns returns maximum open connections to the DB
+// MaxOpenConns returns maximum open connections to the DB.
 func (c DatabaseOptions) MaxOpenConns() int {
 	return c.MaxOpenConnections
 }
 
-// ConnMaxLifetime returns maximum amount of time a connection may be reused
+// ConnMaxLifetime returns maximum amount of time a connection may be reused.
 func (c DatabaseOptions) ConnMaxLifetime() time.Duration {
 	return time.Duration(c.ConnMaxLifetimeSeconds) * time.Second
 }
@@ -408,7 +408,7 @@ type DNSCacheOptions struct {
 func (c *DNSCacheOptions) Defaults() {
 	c.Enabled = false
 	c.CacheSize = 256
-	c.CacheLifetime = time.Minute * 5
+	c.CacheLifetime = time.Minute * 5 //nolint:mnd
 }
 
 func (c *DNSCacheOptions) Verify(configErrs *ConfigErrors) {
@@ -431,11 +431,11 @@ func (d *DataUnit) UnmarshalText(text []byte) error {
 	s := strings.ToLower(string(text))
 	switch {
 	case strings.HasSuffix(s, "tb"):
-		s, magnitude = s[:len(s)-2], 1024*1024*1024*1024
+		s, magnitude = s[:len(s)-2], 1024*1024*1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "gb"):
-		s, magnitude = s[:len(s)-2], 1024*1024*1024
+		s, magnitude = s[:len(s)-2], 1024*1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "mb"):
-		s, magnitude = s[:len(s)-2], 1024*1024
+		s, magnitude = s[:len(s)-2], 1024
 	case strings.HasSuffix(s, "kb"):
 		s, magnitude = s[:len(s)-2], 1024
 	default:

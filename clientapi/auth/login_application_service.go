@@ -9,26 +9,27 @@ package auth
 import (
 	"context"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/util"
 )
 
 // LoginTypeApplicationService describes how to authenticate as an
-// application service
+// application service.
 type LoginTypeApplicationService struct {
 	Config *config.ClientAPI
 	Token  string
 }
 
-// Name implements Type
+// Name implements Type.
 func (t *LoginTypeApplicationService) Name() string {
 	return authtypes.LoginTypeApplicationService
 }
 
-// LoginFromJSON implements Type
+// LoginFromJSON implements Type.
 func (t *LoginTypeApplicationService) LoginFromJSON(
 	ctx context.Context, reqBytes []byte,
 ) (*Login, LoginCleanupFunc, *util.JSONResponse) {

@@ -76,9 +76,9 @@ func TestIgnores(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tab.Rollback() // nolint: errcheck
+		defer tab.Rollback() //nolint:errcheck
 
-		ignoredUsers := &types.IgnoredUsers{List: map[string]interface{}{
+		ignoredUsers := &types.IgnoredUsers{List: map[string]any{
 			bob.ID: "",
 		}}
 		if err = tab.UpdateIgnoresForUser(context.Background(), alice.ID, ignoredUsers); err != nil {

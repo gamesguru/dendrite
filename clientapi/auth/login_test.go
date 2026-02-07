@@ -15,12 +15,13 @@ import (
 	"strings"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/clientapi/userutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/clientapi/userutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 func TestLoginFromJSONReader(t *testing.T) {

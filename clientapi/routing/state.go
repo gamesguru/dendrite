@@ -12,14 +12,15 @@ import (
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 type stateEventInStateResp struct {
@@ -33,7 +34,7 @@ type stateEventInStateResp struct {
 // append the necessary keys to them if applicable before returning them.
 // Returns an error if something went wrong in the process.
 // TODO: Check if the user is in the room. If not, check if the room's history
-// is publicly visible. Current behaviour is returning an empty array if the
+// is publicly visible. Current behavior is returning an empty array if the
 // user cannot see the room's history.
 func OnIncomingStateRequest(ctx context.Context, device *userapi.Device, rsAPI api.ClientRoomserverAPI, roomID string) util.JSONResponse {
 	var worldReadable bool
@@ -388,7 +389,7 @@ func OnIncomingStateTypeRequest(
 		}, event),
 	}
 
-	var res interface{}
+	var res any
 	if eventFormat {
 		res = stateEvent
 	} else {

@@ -9,12 +9,13 @@ package internal
 import (
 	"sync"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/relayapi/storage"
-	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/federationapi/producers"
+	"codefloe.com/pat-s/dendrite/relayapi/storage"
+	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 )
 
 type RelayInternalAPI struct {

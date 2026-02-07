@@ -48,13 +48,11 @@ const (
 
 func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enablePrometheus bool) *Caches {
 	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: int64((maxCost / 1024) * 10), // 10 counters per 1KB data, affects bloom filter size
-		BufferItems: 64,                           // recommended by the ristretto godocs as a sane buffer size value
+		NumCounters: int64((maxCost / 1024) * 10), //nolint:mnd // 10 counters per 1KB data, affects bloom filter size
+		BufferItems: 64,                           //nolint:mnd                           // recommended by the ristretto godocs as a sane buffer size value
 		MaxCost:     int64(maxCost),               // max cost is in bytes, as per the Dendrite config
 		Metrics:     true,
-		KeyToHash: func(key interface{}) (uint64, uint64) {
-			return z.KeyToHash(key)
-		},
+		KeyToHash:   z.KeyToHash,
 	})
 	if err != nil {
 		panic(err)
@@ -130,7 +128,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 				cache:   cache,
 				Prefix:  federationPDUsCache,
 				Mutable: true,
-				MaxAge:  lesserOf(time.Hour/2, maxAge),
+				MaxAge:  lesserOf(time.Hour/2, maxAge), //nolint:mnd
 			},
 		},
 		FederationEDUs: &RistrettoCostedCachePartition[int64, *gomatrixserverlib.EDU]{ // queue NID -> EDU
@@ -138,20 +136,20 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 				cache:   cache,
 				Prefix:  federationEDUsCache,
 				Mutable: true,
-				MaxAge:  lesserOf(time.Hour/2, maxAge),
+				MaxAge:  lesserOf(time.Hour/2, maxAge), //nolint:mnd
 			},
 		},
 		RoomHierarchies: &RistrettoCachePartition[string, fclient.RoomHierarchyResponse]{ // room ID -> space response
 			cache:   cache,
 			Prefix:  spaceSummaryRoomsCache,
 			Mutable: true,
-			MaxAge:  lesserOf(5*time.Minute, maxAge), // 5 minute TTL (matches Synapse)
+			MaxAge:  lesserOf(5*time.Minute, maxAge), //nolint:mnd // 5 minute TTL (matches Synapse)
 		},
 		RoomHierarchyFailures: &RistrettoCachePartition[string, struct{}]{ // room ID -> failed federation marker
 			cache:   cache,
 			Prefix:  spaceSummaryFailuresCache,
 			Mutable: true,
-			MaxAge:  lesserOf(5*time.Minute, maxAge), // 5 minute TTL for negative cache
+			MaxAge:  lesserOf(5*time.Minute, maxAge), //nolint:mnd // 5 minute TTL for negative cache
 		},
 		LazyLoading: &RistrettoCachePartition[lazyLoadingCacheKey, string]{ // composite key -> event ID
 			cache:   cache,
@@ -163,7 +161,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 			cache:   cache,
 			Prefix:  roomSummaryCache,
 			Mutable: true,
-			MaxAge:  lesserOf(5*time.Minute, maxAge), // 5 minute TTL for room summaries
+			MaxAge:  lesserOf(5*time.Minute, maxAge), //nolint:mnd // 5 minute TTL for room summaries
 		},
 	}
 }
@@ -178,7 +176,7 @@ func (c *RistrettoCostedCachePartition[K, V]) Set(key K, value V) {
 }
 
 type RistrettoCachePartition[K keyable, V any] struct {
-	cache   *ristretto.Cache //nolint:all,unused
+	cache   *ristretto.Cache
 	Prefix  byte
 	Mutable bool
 	MaxAge  time.Duration

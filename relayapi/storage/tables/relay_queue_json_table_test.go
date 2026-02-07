@@ -12,15 +12,16 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -120,7 +121,8 @@ func TestShouldRetrieveInsertedTransaction(t *testing.T) {
 		assert.Equal(t, 1, len(storedJSON))
 
 		var storedTx gomatrixserverlib.Transaction
-		json.Unmarshal(storedJSON[1], &storedTx)
+		err = json.Unmarshal(storedJSON[1], &storedTx)
+		assert.NoError(t, err)
 
 		assert.Equal(t, transaction, storedTx)
 	})

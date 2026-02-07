@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 )
 
 const devicesSchema = `
@@ -132,10 +132,12 @@ func (s *devicesStatements) InsertDevice(
 	localpart string, serverName spec.ServerName,
 	accessToken string, displayName *string, ipAddr, userAgent string,
 ) (*api.Device, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	var sessionID int64
 	countStmt := sqlutil.TxStmt(txn, s.selectDevicesCountStmt)
+	defer countStmt.Close()
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
+	defer insertStmt.Close()
 	if err := countStmt.QueryRowContext(ctx).Scan(&sessionID); err != nil {
 		return nil, err
 	}
@@ -163,8 +165,9 @@ func (s *devicesStatements) InsertDeviceWithSessionID(ctx context.Context, txn *
 	accessToken string, displayName *string, ipAddr, userAgent string,
 	sessionID int64,
 ) (*api.Device, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
+	defer insertStmt.Close()
 	if _, err := insertStmt.ExecContext(ctx, id, localpart, serverName, accessToken, createdTimeMS, displayName, sessionID, createdTimeMS, ipAddr, userAgent); err != nil {
 		return nil, err
 	}
@@ -188,6 +191,7 @@ func (s *devicesStatements) DeleteDevice(
 	localpart string, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDeviceStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, id, localpart, serverName)
 	return err
 }
@@ -197,14 +201,15 @@ func (s *devicesStatements) DeleteDevices(
 	localpart string, serverName spec.ServerName,
 	devices []string,
 ) error {
-	orig := strings.Replace(deleteDevicesSQL, "($3)", sqlutil.QueryVariadicOffset(len(devices), 2), 1)
+	orig := strings.Replace(deleteDevicesSQL, "($3)", sqlutil.QueryVariadicOffset(len(devices), 2), 1) //nolint:mnd
 	prep, err := s.db.Prepare(orig)
 	if err != nil {
 		return err
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "DeleteDevices.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, prep)
-	params := make([]interface{}, len(devices)+2)
+	defer stmt.Close()
+	params := make([]any, len(devices)+2)
 	params[0] = localpart
 	params[1] = serverName
 	for i, v := range devices {
@@ -220,6 +225,7 @@ func (s *devicesStatements) DeleteDevicesByLocalpart(
 	exceptDeviceID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDevicesByLocalpartStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, localpart, serverName, exceptDeviceID)
 	return err
 }
@@ -230,6 +236,7 @@ func (s *devicesStatements) UpdateDeviceName(
 	deviceID string, displayName *string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceNameStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, displayName, localpart, serverName, deviceID)
 	return err
 }
@@ -250,7 +257,7 @@ func (s *devicesStatements) SelectDeviceByToken(
 }
 
 // selectDeviceByID retrieves a device from the database with the given user
-// localpart and deviceID
+// localpart and deviceID.
 func (s *devicesStatements) SelectDeviceByID(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -283,7 +290,9 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 	exceptDeviceID string,
 ) ([]api.Device, error) {
 	devices := []api.Device{}
-	rows, err := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt).QueryContext(ctx, localpart, serverName, exceptDeviceID)
+	selectDevicesByLocalpartStmt := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt)
+	defer selectDevicesByLocalpartStmt.Close()
+	rows, err := selectDevicesByLocalpartStmt.QueryContext(ctx, localpart, serverName, exceptDeviceID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return devices, err
 	}
@@ -322,12 +331,12 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 
 func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error) {
 	sqlQuery := strings.Replace(selectDevicesByIDSQL, "($1)", sqlutil.QueryVariadic(len(deviceIDs)), 1)
-	iDeviceIDs := make([]interface{}, len(deviceIDs))
+	iDeviceIDs := make([]any, len(deviceIDs))
 	for i := range deviceIDs {
 		iDeviceIDs[i] = deviceIDs[i]
 	}
 
-	rows, err := s.db.QueryContext(ctx, sqlQuery, iDeviceIDs...)
+	rows, err := s.db.QueryContext(ctx, sqlQuery, iDeviceIDs...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -355,8 +364,9 @@ func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []s
 }
 
 func (s *devicesStatements) UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error {
-	lastSeenTs := time.Now().UnixNano() / 1000000
+	lastSeenTs := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceLastSeenStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, lastSeenTs, ipAddr, userAgent, localpart, serverName, deviceID)
 	return err
 }

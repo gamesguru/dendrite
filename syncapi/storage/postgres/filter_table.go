@@ -10,11 +10,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+
+	"github.com/matrix-org/gomatrixserverlib"
 
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 const filterSchema = `
@@ -66,7 +68,9 @@ func (s *filterStatements) SelectFilter(
 ) error {
 	// Retrieve filter from database (stored as canonical JSON)
 	var filterData []byte
-	err := sqlutil.TxStmt(txn, s.selectFilterStmt).QueryRowContext(ctx, localpart, filterID).Scan(&filterData)
+	selectStmt := sqlutil.TxStmt(txn, s.selectFilterStmt)
+	defer selectStmt.Close()
+	err := selectStmt.QueryRowContext(ctx, localpart, filterID).Scan(&filterData)
 	if err != nil {
 		return err
 	}
@@ -83,7 +87,7 @@ func (s *filterStatements) InsertFilter(
 ) (filterID string, err error) {
 	var existingFilterID string
 
-	// Serialise json
+	// Serialize json
 	filterJSON, err := json.Marshal(filter)
 	if err != nil {
 		return "", err
@@ -100,10 +104,10 @@ func (s *filterStatements) InsertFilter(
 	// This can result in a race condition when two clients try to insert the
 	// same filter and localpart at the same time, however this is not a
 	// problem as both calls will result in the same filterID
-	err = sqlutil.TxStmt(txn, s.selectFilterIDByContentStmt).QueryRowContext(
+	err = sqlutil.TxStmt(txn, s.selectFilterIDByContentStmt).QueryRowContext( //nolint:sqlclosecheck
 		ctx, localpart, filterJSON,
 	).Scan(&existingFilterID)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
 	// If it does, return the existing ID
@@ -112,7 +116,7 @@ func (s *filterStatements) InsertFilter(
 	}
 
 	// Otherwise insert the filter and return the new ID
-	err = sqlutil.TxStmt(txn, s.insertFilterStmt).QueryRowContext(ctx, filterJSON, localpart).
-		Scan(&filterID)
+	err = sqlutil.TxStmt(txn, s.insertFilterStmt).QueryRowContext(ctx, filterJSON, localpart). //nolint:sqlclosecheck
+													Scan(&filterID)
 	return
 }

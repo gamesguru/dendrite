@@ -10,12 +10,13 @@ package api
 import (
 	"fmt"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
-// for detecting rejected events and returning 403 instead of 500ing
+// for detecting rejected events and returning 403 instead of 500ing.
 const InputWasRejected = "InputWasRejected"
 
 type Kind int
@@ -93,14 +94,14 @@ type TransactionID struct {
 	TransactionID string `json:"id"`
 }
 
-// InputRoomEventsRequest is a request to InputRoomEvents
+// InputRoomEventsRequest is a request to InputRoomEvents.
 type InputRoomEventsRequest struct {
 	InputRoomEvents []InputRoomEvent `json:"input_room_events"`
 	Asynchronous    bool             `json:"async"`
 	VirtualHost     spec.ServerName  `json:"virtual_host"`
 }
 
-// InputRoomEventsResponse is a response to InputRoomEvents
+// InputRoomEventsResponse is a response to InputRoomEvents.
 type InputRoomEventsResponse struct {
 	ErrMsg     string // set if there was any error
 	NotAllowed bool   // true if an event in the input was not allowed.

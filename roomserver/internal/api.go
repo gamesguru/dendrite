@@ -29,7 +29,7 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI
+// RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI.
 type RoomserverInternalAPI struct {
 	*input.Inputer
 	*query.Queryer
@@ -76,7 +76,7 @@ func NewRoomserverAPI(
 
 	serverACLs := acls.NewServerACLs(roomserverDB)
 	producer := &producers.RoomEventProducer{
-		Topic:     string(dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent)),
+		Topic:     dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent),
 		JetStream: js,
 		ACLs:      serverACLs,
 	}
@@ -96,7 +96,7 @@ func NewRoomserverAPI(
 		enableMetrics:          enableMetrics,
 		defaultRoomVersion:     dendriteCfg.RoomServer.DefaultRoomVersion,
 		PartialStateTracker:    NewPartialStateTracker(),
-		// perform-er structs + queryer struct get initialised when we have a federation sender to use
+		// perform-er structs + queryer struct get initialized when we have a federation sender to use
 	}
 	return a
 }
@@ -208,7 +208,7 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		RSAPI: r,
 	}
 
-	if err := r.Inputer.Start(); err != nil {
+	if err := r.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start roomserver input API")
 	}
 }
@@ -237,7 +237,7 @@ func (r *RoomserverInternalAPI) StateQuerier() gomatrixserverlib.StateQuerier {
 func (r *RoomserverInternalAPI) HandleInvite(
 	ctx context.Context, inviteEvent *types.HeaderedEvent,
 ) error {
-	outputEvents, err := r.Inviter.ProcessInviteMembership(ctx, inviteEvent)
+	outputEvents, err := r.ProcessInviteMembership(ctx, inviteEvent)
 	if err != nil {
 		return err
 	}
@@ -351,50 +351,50 @@ func (r *RoomserverInternalAPI) InsertReportedEvent(
 	return r.DB.InsertReportedEvent(ctx, roomID, eventID, reportingUserID, reason, score)
 }
 
-// MSC3706 Partial State Join methods
+// MSC3706 Partial State Join methods.
 
-// SetRoomPartialState marks a room as having partial state after a faster join
+// SetRoomPartialState marks a room as having partial state after a faster join.
 func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return r.DB.SetRoomPartialState(ctx, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
 }
 
-// IsRoomPartialState returns true if the room has partial state
+// IsRoomPartialState returns true if the room has partial state.
 func (r *RoomserverInternalAPI) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error) {
 	return r.DB.IsRoomPartialState(ctx, roomNID)
 }
 
 // ClearRoomPartialState removes the partial state flag from a room
-// Returns the device list stream ID that was stored at join time for device list replay
+// Returns the device list stream ID that was stored at join time for device list replay.
 func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	return r.DB.ClearRoomPartialState(ctx, roomNID)
 }
 
-// GetPartialStateServers returns servers known to be in a partial state room
+// GetPartialStateServers returns servers known to be in a partial state room.
 func (r *RoomserverInternalAPI) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
 	return r.DB.GetPartialStateServers(ctx, roomNID)
 }
 
-// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
+// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room.
 func (r *RoomserverInternalAPI) GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	return r.DB.GetPartialStateDeviceListStreamID(ctx, roomNID)
 }
 
-// GetAllPartialStateRooms returns all rooms with partial state
+// GetAllPartialStateRooms returns all rooms with partial state.
 func (r *RoomserverInternalAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	return r.DB.GetAllPartialStateRooms(ctx)
 }
 
-// RoomInfoByNID returns room information for the given room NID
+// RoomInfoByNID returns room information for the given room NID.
 func (r *RoomserverInternalAPI) RoomInfoByNID(ctx context.Context, roomNID types.RoomNID) (*types.RoomInfo, error) {
 	return r.DB.RoomInfoByNID(ctx, roomNID)
 }
 
-// LatestEventIDs returns the latest event IDs and state snapshot for a room
+// LatestEventIDs returns the latest event IDs and state snapshot for a room.
 func (r *RoomserverInternalAPI) LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error) {
 	return r.DB.LatestEventIDs(ctx, roomNID)
 }
 
-// RoomIDFromNID returns the room ID for a given room NID
+// RoomIDFromNID returns the room ID for a given room NID.
 func (r *RoomserverInternalAPI) RoomIDFromNID(ctx context.Context, roomNID types.RoomNID) (string, error) {
 	return r.DB.RoomIDFromNID(ctx, roomNID)
 }
@@ -435,7 +435,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 		LocalOnly:  true,
 	}
 	membershipsRes := &api.QueryMembershipsForRoomResponse{}
-	if err := r.Queryer.QueryMembershipsForRoom(ctx, membershipsReq, membershipsRes); err != nil {
+	if err := r.QueryMembershipsForRoom(ctx, membershipsReq, membershipsRes); err != nil {
 		logrus.WithError(err).WithField("room_id", roomID).Error("Failed to query memberships for un-partial-stated room")
 		return
 	}
@@ -478,5 +478,5 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
 func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {
-	return r.Inputer.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
+	return r.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
 }

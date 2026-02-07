@@ -19,13 +19,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/appservice"
 	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/embed"
@@ -35,26 +32,29 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi"
 	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver"
 	"codefloe.com/pat-s/dendrite/setup"
 	basepkg "codefloe.com/pat-s/dendrite/setup/base"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/mscs"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/userapi"
-	"github.com/sirupsen/logrus"
 )
 
 var (
 	instanceName   = flag.String("name", "dendrite-p2p-ygg", "the name of this P2P demo instance")
-	instancePort   = flag.Int("port", 8008, "the port that the client API will listen on")
+	instancePort   = flag.Int("port", 8008, "the port that the client API will listen on") //nolint:mnd
 	instancePeer   = flag.String("peer", "", "the static Yggdrasil peers to connect to, comma separated-list")
 	instanceListen = flag.String("listen", "tls://:0", "the port Yggdrasil peers can connect to")
 	instanceDir    = flag.String("dir", ".", "the directory to store the databases in (if --config not specified)")
 )
 
-// nolint: gocyclo
+//nolint:gocyclo
 func main() {
 	flag.Parse()
 	internal.SetupPprof()
@@ -107,7 +107,11 @@ func main() {
 		}
 	}
 
-	pk = sk.Public().(ed25519.PublicKey)
+	var ok bool
+	pk, ok = sk.Public().(ed25519.PublicKey)
+	if !ok {
+		panic("unexpected key type")
+	}
 
 	// use custom config if config flag is set
 	if configFlagSet {
@@ -164,7 +168,7 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to start opentracing")
 	}
-	defer closer.Close() // nolint: errcheck
+	defer closer.Close()
 
 	if cfg.Global.Sentry.Enabled {
 		logrus.Info("Setting up Sentry for debugging...")
@@ -189,7 +193,7 @@ func main() {
 	defer func() {
 		processCtx.ShutdownDendrite()
 		processCtx.WaitForShutdown()
-	}() // nolint: errcheck
+	}()
 
 	ygg, err := yggconn.Setup(sk, *instanceName, ".", *instancePeer, *instanceListen)
 	if err != nil {
@@ -249,9 +253,9 @@ func main() {
 	httpServer := &http.Server{
 		Addr:         ":0",
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		ReadTimeout:  10 * time.Second, //nolint:mnd
+		WriteTimeout: 10 * time.Second, //nolint:mnd
+		IdleTimeout:  30 * time.Second, //nolint:mnd
 		BaseContext: func(_ net.Listener) context.Context {
 			return context.Background()
 		},

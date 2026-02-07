@@ -12,14 +12,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const accountsSchema = `
@@ -116,8 +116,9 @@ func (s *accountsStatements) InsertAccount(
 	localpart string, serverName spec.ServerName,
 	hash, appserviceID string, accountType api.AccountType,
 ) (*api.Account, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.insertAccountStmt)
+	defer stmt.Close()
 
 	var err error
 	if accountType != api.AccountTypeAppService {
@@ -187,7 +188,8 @@ func (s *accountsStatements) SelectNewNumericLocalpart(
 ) (id int64, err error) {
 	stmt := s.selectNewNumericLocalpartStmt
 	if txn != nil {
-		stmt = sqlutil.TxStmt(txn, stmt)
+		stmt = sqlutil.TxStmt(txn, stmt) //nolint:sqlclosecheck
+		defer stmt.Close()
 	}
 	err = stmt.QueryRowContext(ctx, serverName).Scan(&id)
 	return id + 1, err

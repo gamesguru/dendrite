@@ -78,6 +78,7 @@ func (s *roomAliasesStatements) InsertRoomAlias(
 	ctx context.Context, txn *sql.Tx, alias string, roomID string, creatorUserID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertRoomAliasStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, alias, roomID, creatorUserID)
 	return err
 }
@@ -86,6 +87,7 @@ func (s *roomAliasesStatements) SelectRoomIDFromAlias(
 	ctx context.Context, txn *sql.Tx, alias string,
 ) (roomID string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomIDFromAliasStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, alias).Scan(&roomID)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -98,7 +100,8 @@ func (s *roomAliasesStatements) SelectAliasesFromRoomID(
 ) (aliases []string, err error) {
 	aliases = []string{}
 	stmt := sqlutil.TxStmt(txn, s.selectAliasesFromRoomIDStmt)
-	rows, err := stmt.QueryContext(ctx, roomID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return
 	}
@@ -121,6 +124,7 @@ func (s *roomAliasesStatements) SelectCreatorIDFromAlias(
 	ctx context.Context, txn *sql.Tx, alias string,
 ) (creatorID string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectCreatorIDFromAliasStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, alias).Scan(&creatorID)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -132,6 +136,7 @@ func (s *roomAliasesStatements) DeleteRoomAlias(
 	ctx context.Context, txn *sql.Tx, alias string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomAliasStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, alias)
 	return err
 }

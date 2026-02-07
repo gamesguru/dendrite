@@ -5,15 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateServerKeyDB(t *testing.T, dbType test.DBType) (tables.FederationServerSigningKeys, func()) {
@@ -39,7 +40,7 @@ func mustCreateServerKeyDB(t *testing.T, dbType test.DBType) (tables.FederationS
 
 func TestServerKeysTable(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		tab, close := mustCreateServerKeyDB(t, dbType)
 		t.Cleanup(func() {
 			close()

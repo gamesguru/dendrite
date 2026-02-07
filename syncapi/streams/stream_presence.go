@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/syncapi/notifier"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type PresenceStreamProvider struct {
@@ -58,7 +58,7 @@ func (p *PresenceStreamProvider) IncrementalSync(
 	from, to types.StreamPosition,
 ) types.StreamPosition {
 	// We pull out a larger number than the filter asks for, since we're filtering out events later
-	presences, err := snapshot.PresenceAfter(ctx, from, synctypes.EventFilter{Limit: 1000})
+	presences, err := snapshot.PresenceAfter(ctx, from, synctypes.EventFilter{Limit: 1000}) //nolint:mnd
 	if err != nil {
 		req.Log.WithError(err).Error("p.DB.PresenceAfter failed")
 		return from
@@ -98,7 +98,10 @@ func (p *PresenceStreamProvider) IncrementalSync(
 		pres, ok := p.cache.Load(cacheKey)
 		if ok {
 			// skip already sent presence
-			prevPresence := pres.(*types.PresenceInternal)
+			prevPresence, presOk := pres.(*types.PresenceInternal)
+			if !presOk {
+				continue
+			}
 			currentlyActive := prevPresence.CurrentlyActive()
 			skip := prevPresence.Equals(presence) && currentlyActive && req.Device.UserID != presence.UserID
 			_, membershipChange := req.MembershipChanges[presence.UserID]

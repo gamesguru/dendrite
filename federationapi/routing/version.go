@@ -8,8 +8,9 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/internal"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/internal"
 )
 
 type version struct {
@@ -21,7 +22,7 @@ type server struct {
 	Name    string `json:"name"`
 }
 
-// Version returns the server version
+// Version returns the server version.
 func Version() util.JSONResponse {
 	return util.JSONResponse{
 		Code: http.StatusOK,

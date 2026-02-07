@@ -7,6 +7,9 @@
 package setup
 
 import (
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi"
 	"codefloe.com/pat-s/dendrite/clientapi/api"
@@ -25,8 +28,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/syncapi"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
 )
 
 // Monolith represents an instantiation of all dependencies required to build
@@ -48,7 +49,7 @@ type Monolith struct {
 	ExtUserDirectoryProvider userapi.QuerySearchProfilesAPI
 }
 
-// AddAllPublicRoutes attaches all public paths to the given router
+// AddAllPublicRoutes attaches all public paths to the given router.
 func (m *Monolith) AddAllPublicRoutes(
 	processCtx *process.ProcessContext,
 	cfg *config.Dendrite,

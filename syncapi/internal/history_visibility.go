@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 )
 
+//nolint:gochecknoinits
 func init() {
 	prometheus.MustRegister(calculateHistoryVisibilityDuration)
 }
@@ -47,11 +48,11 @@ var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 var historyVisibilityPriority = map[gomatrixserverlib.HistoryVisibility]uint8{
 	spec.WorldReadable:                         0,
 	gomatrixserverlib.HistoryVisibilityShared:  1,
-	gomatrixserverlib.HistoryVisibilityInvited: 2,
-	gomatrixserverlib.HistoryVisibilityJoined:  3,
+	gomatrixserverlib.HistoryVisibilityInvited: 2, //nolint:mnd
+	gomatrixserverlib.HistoryVisibilityJoined:  3, //nolint:mnd
 }
 
-// eventVisibility contains the history visibility and membership state at a given event
+// eventVisibility contains the history visibility and membership state at a given event.
 type eventVisibility struct {
 	visibility        gomatrixserverlib.HistoryVisibility
 	membershipAtEvent string

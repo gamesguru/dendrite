@@ -27,7 +27,8 @@ type SyncServerDatasource struct {
 }
 
 // NewDatabase creates a new sync server database
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*SyncServerDatasource, error) {
 	var d SyncServerDatasource
 	var err error
@@ -63,11 +64,11 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	events, err := NewSqliteEventsTable(d.db, &d.streamID)
+	events, err := NewSqliteEventsTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
-	roomState, err := NewSqliteCurrentRoomStateTable(d.db, &d.streamID)
+	roomState, err := NewSqliteCurrentRoomStateTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
@@ -87,7 +88,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	sendToDevice, err := NewSqliteSendToDeviceTable(d.db)
+	sendToDevice, err := NewSqliteSendToDeviceTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
@@ -95,7 +96,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	receipts, err := NewSqliteReceiptsTable(d.db, &d.streamID)
+	receipts, err := NewSqliteReceiptsTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}

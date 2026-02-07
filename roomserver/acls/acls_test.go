@@ -11,9 +11,10 @@ import (
 	"regexp"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 )
 
 func TestOpenACLsWithBlacklist(t *testing.T) {

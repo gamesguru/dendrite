@@ -10,13 +10,14 @@ import (
 	"net/http"
 	"strconv"
 
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// GetNotifications handles /_matrix/client/r0/notifications
+// GetNotifications handles /_matrix/client/r0/notifications.
 func GetNotifications(
 	req *http.Request, device *userapi.Device,
 	userAPI userapi.ClientUserAPI,

@@ -110,11 +110,11 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 		hisVis.HistoryVisibility = r.visibility
 	}
 
-	r.CreateAndInsert(t, r.creator, spec.MRoomCreate, map[string]interface{}{
+	r.CreateAndInsert(t, r.creator, spec.MRoomCreate, map[string]any{
 		"creator":      r.creator.ID,
 		"room_version": r.Version,
 	}, WithStateKey(""))
-	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]interface{}{
+	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, WithStateKey(r.creator.ID))
 	r.CreateAndInsert(t, r.creator, spec.MRoomPowerLevels, plContent, WithStateKey(""))
@@ -128,7 +128,7 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 }
 
 // Create an event in this room but do not insert it. Does not modify the room in any way (depth, fwd extremities, etc) so is thread-safe.
-func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, content interface{}, mods ...eventModifier) *rstypes.HeaderedEvent {
+func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, content any, mods ...eventModifier) *rstypes.HeaderedEvent {
 	t.Helper()
 	depth := 1 + len(r.events) // depth starts at 1
 
@@ -228,14 +228,14 @@ func (r *Room) CurrentState() []*rstypes.HeaderedEvent {
 	return events
 }
 
-func (r *Room) CreateAndInsert(t *testing.T, creator *User, eventType string, content interface{}, mods ...eventModifier) *rstypes.HeaderedEvent {
+func (r *Room) CreateAndInsert(t *testing.T, creator *User, eventType string, content any, mods ...eventModifier) *rstypes.HeaderedEvent {
 	t.Helper()
 	he := r.CreateEvent(t, creator, eventType, content, mods...)
 	r.InsertEvent(t, he)
 	return he
 }
 
-// All room modifiers are below
+// All room modifiers are below.
 
 type roomModifier func(t *testing.T, r *Room)
 

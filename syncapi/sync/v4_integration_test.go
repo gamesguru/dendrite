@@ -10,14 +10,15 @@ import (
 	"context"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 // TestDetermineRoomStreamState tests the room stream state determination logic
-// This is critical for incremental sync behaviour (initial vs live vs previously)
+// This is critical for incremental sync behavior (initial vs live vs previously).
 func TestDetermineRoomStreamState(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -211,7 +212,7 @@ func TestDetermineRoomStreamState(t *testing.T) {
 	}
 }
 
-// TestDetermineRoomStreamStateRejoinScenarios tests various rejoin scenarios
+// TestDetermineRoomStreamStateRejoinScenarios tests various rejoin scenarios.
 func TestDetermineRoomStreamStateRejoinScenarios(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -292,7 +293,7 @@ func TestDetermineRoomStreamStateRejoinScenarios(t *testing.T) {
 				userID: {membership: tt.currMembership, topoPos: tt.currTopoPos},
 			}
 
-			// For the "previous" position query (pos=100 from token), we need different behaviour
+			// For the "previous" position query (pos=100 from token), we need different behavior
 			// This is tricky with our simple mock - the mock doesn't support position-based queries properly
 			// For this test, we rely on the current position being different from previous
 
@@ -303,7 +304,7 @@ func TestDetermineRoomStreamStateRejoinScenarios(t *testing.T) {
 	}
 }
 
-// TestV4ConnectionStateInitialization tests V4ConnectionState creation
+// TestV4ConnectionStateInitialization tests V4ConnectionState creation.
 func TestV4ConnectionStateInitialization(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -348,7 +349,7 @@ func TestV4ConnectionStateInitialization(t *testing.T) {
 	}
 }
 
-// TestGetRoomMetadata tests room metadata extraction functions
+// TestGetRoomMetadata tests room metadata extraction functions.
 func TestGetRoomMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -474,7 +475,7 @@ func TestGetRoomMetadata(t *testing.T) {
 	})
 }
 
-// TestGetHeroes tests the heroes extraction for room display
+// TestGetHeroes tests the heroes extraction for room display.
 func TestGetHeroes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -562,7 +563,7 @@ func TestGetHeroes(t *testing.T) {
 	}
 }
 
-// TestCalculateBumpStamp tests bump stamp calculation
+// TestCalculateBumpStamp tests bump stamp calculation.
 func TestCalculateBumpStamp(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -12,9 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/internal"
 )
 
 type SharedSecretRegistrationRequest struct {
@@ -45,7 +46,7 @@ type SharedSecretRegistration struct {
 
 func NewSharedSecretRegistration(sharedSecret string) *SharedSecretRegistration {
 	cache := ttlcache.New[string, bool](
-		ttlcache.WithTTL[string, bool](5 * time.Minute),
+		ttlcache.WithTTL[string, bool](5 * time.Minute), //nolint:mnd
 	)
 	go cache.Start() // starts automatic cleanup
 	return &SharedSecretRegistration{
@@ -55,7 +56,7 @@ func NewSharedSecretRegistration(sharedSecret string) *SharedSecretRegistration 
 }
 
 func (r *SharedSecretRegistration) GenerateNonce() string {
-	nonce := util.RandomString(16)
+	nonce := util.RandomString(16) //nolint:mnd
 	r.nonces.Set(nonce, true, ttlcache.DefaultTTL)
 	return nonce
 }

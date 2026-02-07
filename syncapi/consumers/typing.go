@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
@@ -18,8 +21,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/notifier"
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/nats-io/nats.go"
-	log "github.com/sirupsen/logrus"
 )
 
 // OutputTypingEventConsumer consumes events that originated in the EDU server.

@@ -9,11 +9,18 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
@@ -23,11 +30,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 )
 
 // http://matrix.org/docs/spec/client_server/r0.2.0.html#put-matrix-client-r0-rooms-roomid-send-eventtype-txnid
@@ -59,7 +61,7 @@ var sendEventDuration = prometheus.NewHistogramVec(
 //	/rooms/{roomID}/send/{eventType}/{txnID}
 //	/rooms/{roomID}/state/{eventType}/{stateKey}
 //
-// nolint: gocyclo
+//nolint:gocyclo
 func SendEvent(
 	req *http.Request,
 	device *userapi.Device,
@@ -92,7 +94,7 @@ func SendEvent(
 			}
 		}
 
-		newStateKey, innerErr := synctypes.FromClientStateKey(*parsedRoomID, *stateKey, func(roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
+		newStateKey, innerErr := synctypes.FromClientStateKey(*parsedRoomID, *stateKey, func(roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) { //nolint:contextcheck
 			return rsAPI.QuerySenderIDForUser(req.Context(), roomID, userID)
 		})
 		if innerErr != nil {
@@ -110,11 +112,15 @@ func SendEvent(
 	// this avoids a situation where events that are received in quick succession are sent to the roomserver in a jumbled order
 	userID := device.UserID
 	domain := device.UserDomain()
-	mutex, _ := userRoomSendMutexes.LoadOrStore(roomID+userID, &sync.Mutex{})
-	mutex.(*sync.Mutex).Lock()
-	defer mutex.(*sync.Mutex).Unlock()
+	mutexVal, _ := userRoomSendMutexes.LoadOrStore(roomID+userID, &sync.Mutex{})
+	mu, ok := mutexVal.(*sync.Mutex)
+	if !ok {
+		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	mu.Lock()
+	defer mu.Unlock()
 
-	var r map[string]interface{} // must be a JSON object
+	var r map[string]any // must be a JSON object
 	resErr := httputil.UnmarshalJSONRequest(req, &r)
 	if resErr != nil {
 		return *resErr
@@ -129,11 +135,11 @@ func SendEvent(
 
 	startedGeneratingEvent := time.Now()
 
-	// If we're sending a membership update, make sure to strip the authorised
+	// If we're sending a membership update, make sure to strip the authorized
 	// via key if it is present, otherwise other servers won't be able to auth
 	// the event if the room is set to the "restricted" join rule.
 	if eventType == spec.MRoomMember {
-		delete(r, "join_authorised_via_users_server")
+		delete(r, "join_authorised_via_users_server") //nolint:misspell
 	}
 
 	// for power level events we need to replace the userID with the pseudoID
@@ -181,7 +187,9 @@ func SendEvent(
 			}
 		}
 		var found int
-		requestAliases := append(aliasReq.AltAliases, aliasReq.Alias)
+		requestAliases := make([]string, len(aliasReq.AltAliases)+1)
+		copy(requestAliases, aliasReq.AltAliases)
+		requestAliases[len(aliasReq.AltAliases)] = aliasReq.Alias
 		for _, alias := range aliasRes.Aliases {
 			for _, altAlias := range requestAliases {
 				if altAlias == alias {
@@ -251,12 +259,15 @@ func SendEvent(
 	return res
 }
 
-func updatePowerLevels(req *http.Request, r map[string]interface{}, roomID string, rsAPI api.ClientRoomserverAPI) error {
+func updatePowerLevels(req *http.Request, r map[string]any, roomID string, rsAPI api.ClientRoomserverAPI) error {
 	users, ok := r["users"]
 	if !ok {
 		return nil
 	}
-	userMap := users.(map[string]interface{})
+	userMap, ok := users.(map[string]any)
+	if !ok {
+		return nil
+	}
 	validRoomID, err := spec.NewRoomID(roomID)
 	if err != nil {
 		return err
@@ -282,7 +293,7 @@ func updatePowerLevels(req *http.Request, r map[string]interface{}, roomID strin
 
 // stateEqual compares the new and the existing state event content. If they are equal, returns a *util.JSONResponse
 // with the existing event_id, making this an idempotent request.
-func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID string, newContent map[string]interface{}) *util.JSONResponse {
+func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID string, newContent map[string]any) *util.JSONResponse {
 	stateRes := api.QueryCurrentStateResponse{}
 	tuple := gomatrixserverlib.StateKeyTuple{
 		EventType: eventType,
@@ -296,7 +307,7 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 		return nil
 	}
 	if existingEvent, ok := stateRes.StateEvents[tuple]; ok {
-		var existingContent map[string]interface{}
+		var existingContent map[string]any
 		if err = json.Unmarshal(existingEvent.Content(), &existingContent); err != nil {
 			return nil
 		}
@@ -306,14 +317,13 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 				JSON: sendEventResponse{existingEvent.EventID()},
 			}
 		}
-
 	}
 	return nil
 }
 
 func generateSendEvent(
 	ctx context.Context,
-	r map[string]interface{},
+	r map[string]any,
 	device *userapi.Device,
 	roomID, eventType string, stateKey *string,
 	rsAPI api.ClientRoomserverAPI,
@@ -381,34 +391,24 @@ func generateSendEvent(
 
 	var queryRes api.QueryLatestEventsAndStateResponse
 	e, err := eventutil.QueryAndBuildEvent(ctx, &proto, &identity, evTime, rsAPI, &queryRes)
-	switch specificErr := err.(type) {
-	case nil:
-	case eventutil.ErrRoomNoExists:
-		return nil, &util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("Room does not exist"),
-		}
-	case gomatrixserverlib.BadJSONError:
-		return nil, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(specificErr.Error()),
-		}
-	case gomatrixserverlib.EventValidationError:
-		if specificErr.Code == gomatrixserverlib.EventValidationTooLarge {
-			return nil, &util.JSONResponse{
-				Code: http.StatusRequestEntityTooLarge,
-				JSON: spec.BadJSON(specificErr.Error()),
+	{
+		var specificErr eventutil.ErrRoomNoExists
+		var specificErr1 gomatrixserverlib.BadJSONError
+		var specificErr2 gomatrixserverlib.EventValidationError
+		switch {
+		case err == nil:
+		case errors.As(err, &specificErr):
+			return nil, &util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room does not exist")}
+		case errors.As(err, &specificErr1):
+			return nil, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(specificErr1.Error())}
+		case errors.As(err, &specificErr2):
+			if specificErr2.Code == gomatrixserverlib.EventValidationTooLarge {
+				return nil, &util.JSONResponse{Code: http.StatusRequestEntityTooLarge, JSON: spec.BadJSON(specificErr2.Error())}
 			}
-		}
-		return nil, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(specificErr.Error()),
-		}
-	default:
-		util.GetLogger(ctx).WithError(err).Error("eventutil.BuildEvent failed")
-		return nil, &util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+			return nil, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(specificErr2.Error())}
+		default:
+			util.GetLogger(ctx).WithError(err).Error("eventutil.BuildEvent failed")
+			return nil, &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 
@@ -428,8 +428,8 @@ func generateSendEvent(
 		return rsAPI.QueryUserIDForSender(ctx, *validRoomID, senderID)
 	}); err != nil {
 		code := 403
-		validationErr, ok := err.(*gomatrixserverlib.EventValidationError)
-		if ok {
+		var validationErr *gomatrixserverlib.EventValidationError
+		if errors.As(err, &validationErr) {
 			code = validationErr.Code
 		}
 		return nil, &util.JSONResponse{
@@ -440,7 +440,7 @@ func generateSendEvent(
 
 	// User should not be able to send a tombstone event to the same room.
 	if e.Type() == "m.room.tombstone" {
-		content := make(map[string]interface{})
+		content := make(map[string]any)
 		if err = json.Unmarshal(e.Content(), &content); err != nil {
 			util.GetLogger(ctx).WithError(err).Error("Cannot unmarshal the event content.")
 			return nil, &util.JSONResponse{

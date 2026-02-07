@@ -9,7 +9,7 @@ package depth
 // MaxDepth is the maximum depth value allowed for Matrix events.
 // This corresponds to the canonical JSON integer limit (2^53 - 1),
 // which is JavaScript's Number.MAX_SAFE_INTEGER.
-// Events with depth values exceeding this cannot be serialised to valid
+// Events with depth values exceeding this cannot be serialized to valid
 // canonical JSON and will be rejected by compliant servers.
 const MaxDepth int64 = 9007199254740991
 

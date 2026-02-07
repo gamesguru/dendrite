@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var (
@@ -28,7 +29,7 @@ var (
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
 	})
 
-	// private keys that tests can use
+	// Private keys that tests can use.
 	PrivateKeyA = ed25519.NewKeyFromSeed([]byte{
 		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 77,

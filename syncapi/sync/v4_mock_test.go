@@ -9,17 +9,18 @@ package sync
 import (
 	"context"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // mockSnapshot implements storage.DatabaseTransaction for testing
-// Uses interface embedding - only override methods needed for tests
+// Uses interface embedding - only override methods needed for tests.
 type mockSnapshot struct {
 	storage.DatabaseTransaction
 
@@ -40,7 +41,7 @@ type mockMembership struct {
 	topoPos    int64
 }
 
-// newMockSnapshot creates a new mock snapshot with default empty maps
+// newMockSnapshot creates a new mock snapshot with default empty maps.
 func newMockSnapshot() *mockSnapshot {
 	return &mockSnapshot{
 		membershipForUser:  make(map[string]map[string]mockMembership),
@@ -54,7 +55,7 @@ func newMockSnapshot() *mockSnapshot {
 	}
 }
 
-// SetMembership sets the membership for a user in a room
+// SetMembership sets the membership for a user in a room.
 func (m *mockSnapshot) SetMembership(roomID, userID, membership string, topoPos int64) {
 	if m.membershipForUser[roomID] == nil {
 		m.membershipForUser[roomID] = make(map[string]mockMembership)
@@ -65,7 +66,7 @@ func (m *mockSnapshot) SetMembership(roomID, userID, membership string, topoPos 
 	}
 }
 
-// SetStateEvent sets a state event for a room
+// SetStateEvent sets a state event for a room.
 func (m *mockSnapshot) SetStateEvent(roomID, eventType, stateKey string, event *rstypes.HeaderedEvent) {
 	if m.stateEvents[roomID] == nil {
 		m.stateEvents[roomID] = make(map[string]*rstypes.HeaderedEvent)
@@ -74,22 +75,22 @@ func (m *mockSnapshot) SetStateEvent(roomID, eventType, stateKey string, event *
 	m.stateEvents[roomID][key] = event
 }
 
-// SetRecentEvents sets recent events for a room
+// SetRecentEvents sets recent events for a room.
 func (m *mockSnapshot) SetRecentEvents(roomID string, events types.RecentEvents) {
 	m.recentEvents[roomID] = events
 }
 
-// SetRoomSummary sets the room summary for a room
+// SetRoomSummary sets the room summary for a room.
 func (m *mockSnapshot) SetRoomSummary(roomID string, summary *types.Summary) {
 	m.roomSummaries[roomID] = summary
 }
 
-// SetMaxStreamPosition sets the max stream position for a room
+// SetMaxStreamPosition sets the max stream position for a room.
 func (m *mockSnapshot) SetMaxStreamPosition(roomID string, pos types.StreamPosition) {
 	m.maxStreamPositions[roomID] = pos
 }
 
-// SetMembershipCount sets the membership count for a room
+// SetMembershipCount sets the membership count for a room.
 func (m *mockSnapshot) SetMembershipCount(roomID, membership string, count int) {
 	if m.membershipCounts[roomID] == nil {
 		m.membershipCounts[roomID] = make(map[string]int)
@@ -97,7 +98,7 @@ func (m *mockSnapshot) SetMembershipCount(roomID, membership string, count int) 
 	m.membershipCounts[roomID][membership] = count
 }
 
-// Interface implementations
+// Interface implementations.
 
 func (m *mockSnapshot) SelectMembershipForUser(ctx context.Context, roomID, userID string, pos int64) (string, int64, error) {
 	if roomUsers, ok := m.membershipForUser[roomID]; ok {
@@ -180,12 +181,12 @@ func (m *mockSnapshot) EventPositionInTopology(ctx context.Context, eventID stri
 	return types.TopologyToken{Depth: 10, PDUPosition: 100}, nil
 }
 
-// Transaction interface methods (no-ops for testing)
+// Transaction interface methods (no-ops for testing).
 func (m *mockSnapshot) Commit() error   { return nil }
 func (m *mockSnapshot) Rollback() error { return nil }
 
 // mockRoomserverAPI implements api.SyncRoomserverAPI for testing
-// Uses interface embedding to satisfy the interface without implementing all methods
+// Uses interface embedding to satisfy the interface without implementing all methods.
 type mockRoomserverAPI struct {
 	roomserverAPI.SyncRoomserverAPI
 }
@@ -195,7 +196,7 @@ func (m *mockRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spe
 }
 
 // createMockStateEvent creates a mock HeaderedEvent for testing
-// This is a simple helper that creates events with minimal structure
+// This is a simple helper that creates events with minimal structure.
 func createMockStateEvent(eventType, stateKey, content string) *rstypes.HeaderedEvent {
 	// Create a minimal valid event JSON with proper room version format
 	eventJSON := []byte(`{

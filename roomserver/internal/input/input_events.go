@@ -16,29 +16,26 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"github.com/tidwall/gjson"
-
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-
-	"codefloe.com/pat-s/dendrite/roomserver/acls"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
-
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
+	"github.com/tidwall/gjson"
 
 	fedapi "codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/hooks"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/acls"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/dendrite/roomserver/state"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
+	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // MaximumMissingProcessingTime is the maximum time we allow "processRoomEvent" to fetch
@@ -67,7 +64,8 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 // difficulty is in ensuring that we correctly annotate events with the correct
 // state deltas when sending to kafka streams
 // TODO: Break up function - we should probably do transaction ID checks before calling this.
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func (r *Inputer) processRoomEvent(
 	ctx context.Context,
 	virtualHost spec.ServerName,
@@ -151,7 +149,7 @@ func (r *Inputer) processRoomEvent(
 	if input.Kind == api.KindOutlier && roomInfo != nil {
 		wasRejected, werr := r.DB.IsEventRejected(ctx, roomInfo.RoomNID, event.EventID())
 		switch {
-		case werr == sql.ErrNoRows:
+		case errors.Is(werr, sql.ErrNoRows):
 			// We haven't seen this event before so continue.
 		case werr != nil:
 			// Something has gone wrong trying to find out if we rejected
@@ -188,7 +186,7 @@ func (r *Inputer) processRoomEvent(
 		if err = r.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, serverReq, serverRes); err != nil {
 			return fmt.Errorf("r.FSAPI.QueryJoinedHostServerNamesInRoom: %w", err)
 		}
-		// Sort all of the servers into a map so that we can randomise
+		// Sort all of the servers into a map so that we can randomize
 		// their order. Then make sure that the input origin and the
 		// event origin are first on the list.
 		servers := map[spec.ServerName]struct{}{}
@@ -278,8 +276,8 @@ func (r *Inputer) processRoomEvent(
 				// really do anything with the event other than reject it at this point.
 				isRejected = true
 				rejectionErr = fmt.Errorf("missingState.processEventWithMissingState: %w", err)
-				switch e := err.(type) {
-				case gomatrixserverlib.EventValidationError:
+				var e gomatrixserverlib.EventValidationError
+				if errors.As(err, &e) {
 					if e.Persistable && stateSnapshot != nil {
 						// We retrieved some state and we ended up having to call /state_ids for
 						// the new event in question (probably because closing the gap by using
@@ -568,7 +566,7 @@ func (r *Inputer) processRoomEvent(
 
 	// If guest_access changed and is not can_join, kick all guest users.
 	if event.Type() == spec.MRoomGuestAccess && gjson.GetBytes(event.Content(), "guest_access").Str != "can_join" {
-		if err = r.kickGuests(ctx, event, roomInfo); err != nil && err != sql.ErrNoRows {
+		if err = r.kickGuests(ctx, event, roomInfo); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			logrus.WithError(err).Error("failed to kick guest users on m.room.guest_access revocation")
 		}
 	}
@@ -579,7 +577,7 @@ func (r *Inputer) processRoomEvent(
 	return nil
 }
 
-// handleRemoteRoomUpgrade updates published rooms and room aliases
+// handleRemoteRoomUpgrade updates published rooms and room aliases.
 func (r *Inputer) handleRemoteRoomUpgrade(ctx context.Context, event gomatrixserverlib.PDU) error {
 	oldRoomID := event.RoomID().String()
 	newRoomID := gjson.GetBytes(event.Content(), "replacement_room").Str
@@ -596,7 +594,8 @@ func (r *Inputer) handleRemoteRoomUpgrade(ctx context.Context, event gomatrixser
 // state resolution between the local partial state and the event's auth
 // events. This ensures bans and other restrictions are enforced even when
 // we don't have complete room state.
-// nolint:nakedret
+//
+//nolint:nakedret
 func (r *Inputer) processStateBefore(
 	ctx context.Context,
 	roomInfo *types.RoomInfo,
@@ -838,7 +837,8 @@ func (r *Inputer) resolvePartialStateAuth(
 // we've failed to retrieve the auth chain altogether (in which case
 // an error is returned) or we've successfully retrieved them all and
 // they are now in the database.
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func (r *Inputer) fetchAuthEvents(
 	ctx context.Context,
 	logger *logrus.Entry,
@@ -912,7 +912,7 @@ func (r *Inputer) fetchAuthEvents(
 
 	// Reuse these to reduce allocations.
 	_authEventNIDs := [5]types.EventNID{}
-	isRejected := false
+	var isRejected bool
 nextAuthEvent:
 	for _, authEvent := range gomatrixserverlib.ReverseTopologicalOrdering(
 		gomatrixserverlib.ToPDUs(res.AuthEvents.UntrustedEvents(event.Version())),

@@ -84,14 +84,18 @@ func NewPostgresKeyBackupTable(db *sql.DB) (tables.KeyBackupTable, error) {
 func (s keyBackupStatements) CountKeys(
 	ctx context.Context, txn *sql.Tx, userID, version string,
 ) (count int64, err error) {
-	err = txn.Stmt(s.countKeysStmt).QueryRowContext(ctx, userID, version).Scan(&count)
+	countKeysStmt := txn.Stmt(s.countKeysStmt)
+	defer countKeysStmt.Close()
+	err = countKeysStmt.QueryRowContext(ctx, userID, version).Scan(&count)
 	return
 }
 
 func (s *keyBackupStatements) InsertBackupKey(
 	ctx context.Context, txn *sql.Tx, userID, version string, key api.InternalKeyBackupSession,
 ) (err error) {
-	_, err = txn.Stmt(s.insertBackupKeyStmt).ExecContext(
+	insertBackupKeyStmt := txn.Stmt(s.insertBackupKeyStmt)
+	defer insertBackupKeyStmt.Close()
+	_, err = insertBackupKeyStmt.ExecContext(
 		ctx, userID, key.RoomID, key.SessionID, version, key.FirstMessageIndex, key.ForwardedCount, key.IsVerified, string(key.SessionData),
 	)
 	return
@@ -100,7 +104,9 @@ func (s *keyBackupStatements) InsertBackupKey(
 func (s *keyBackupStatements) UpdateBackupKey(
 	ctx context.Context, txn *sql.Tx, userID, version string, key api.InternalKeyBackupSession,
 ) (err error) {
-	_, err = txn.Stmt(s.updateBackupKeyStmt).ExecContext(
+	updateBackupKeyStmt := txn.Stmt(s.updateBackupKeyStmt)
+	defer updateBackupKeyStmt.Close()
+	_, err = updateBackupKeyStmt.ExecContext(
 		ctx, key.FirstMessageIndex, key.ForwardedCount, key.IsVerified, string(key.SessionData), userID, key.RoomID, key.SessionID, version,
 	)
 	return
@@ -109,7 +115,9 @@ func (s *keyBackupStatements) UpdateBackupKey(
 func (s *keyBackupStatements) SelectKeys(
 	ctx context.Context, txn *sql.Tx, userID, version string,
 ) (map[string]map[string]api.KeyBackupSession, error) {
-	rows, err := txn.Stmt(s.selectKeysStmt).QueryContext(ctx, userID, version)
+	selectKeysStmt := txn.Stmt(s.selectKeysStmt)
+	defer selectKeysStmt.Close()
+	rows, err := selectKeysStmt.QueryContext(ctx, userID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +127,9 @@ func (s *keyBackupStatements) SelectKeys(
 func (s *keyBackupStatements) SelectKeysByRoomID(
 	ctx context.Context, txn *sql.Tx, userID, version, roomID string,
 ) (map[string]map[string]api.KeyBackupSession, error) {
-	rows, err := txn.Stmt(s.selectKeysByRoomIDStmt).QueryContext(ctx, userID, version, roomID)
+	selectKeysByRoomIDStmt := txn.Stmt(s.selectKeysByRoomIDStmt)
+	defer selectKeysByRoomIDStmt.Close()
+	rows, err := selectKeysByRoomIDStmt.QueryContext(ctx, userID, version, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +139,9 @@ func (s *keyBackupStatements) SelectKeysByRoomID(
 func (s *keyBackupStatements) SelectKeysByRoomIDAndSessionID(
 	ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string,
 ) (map[string]map[string]api.KeyBackupSession, error) {
-	rows, err := txn.Stmt(s.selectKeysByRoomIDAndSessionIDStmt).QueryContext(ctx, userID, version, roomID, sessionID)
+	selectKeysByRoomIDAndSessionIDStmt := txn.Stmt(s.selectKeysByRoomIDAndSessionIDStmt)
+	defer selectKeysByRoomIDAndSessionIDStmt.Close()
+	rows, err := selectKeysByRoomIDAndSessionIDStmt.QueryContext(ctx, userID, version, roomID, sessionID)
 	if err != nil {
 		return nil, err
 	}

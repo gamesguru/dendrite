@@ -12,9 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -22,7 +19,10 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/federationapi/routing"
 	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/setup/process"
 )
 
 type server struct {
@@ -84,7 +84,7 @@ func TestMain(m *testing.M) {
 				Generate:       true,
 				SingleDatabase: false,
 			})
-			cfg.Global.ServerName = spec.ServerName(s.name)
+			cfg.Global.ServerName = s.name
 			cfg.Global.PrivateKey = testPriv
 			cfg.Global.JetStream.InMemory = true
 			cfg.Global.JetStream.TopicPrefix = string(s.name[:1])

@@ -9,12 +9,13 @@ package sync
 import (
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
 // TestFindRelevantRoomIDsForExtension tests the extension room filtering logic
-// This implements MSC3959/MSC3960 behaviour for lists/rooms parameters
+// This implements MSC3959/MSC3960 behavior for lists/rooms parameters.
 func TestFindRelevantRoomIDsForExtension(t *testing.T) {
 	t.Parallel()
 	// Setup common test data
@@ -48,7 +49,7 @@ func TestFindRelevantRoomIDsForExtension(t *testing.T) {
 		description             string
 	}{
 		{
-			name:                    "nil lists and nil rooms - default wildcard behaviour",
+			name:                    "nil lists and nil rooms - default wildcard behavior",
 			requestedLists:          nil,
 			requestedRooms:          nil,
 			actualLists:             actualLists,
@@ -239,7 +240,7 @@ func TestFindRelevantRoomIDsForExtension(t *testing.T) {
 	}
 }
 
-// TestFindRelevantRoomIDsForExtensionDeduplication tests that duplicate rooms are handled
+// TestFindRelevantRoomIDsForExtensionDeduplication tests that duplicate rooms are handled.
 func TestFindRelevantRoomIDsForExtensionDeduplication(t *testing.T) {
 	t.Parallel()
 	// Room appears in both list and subscription

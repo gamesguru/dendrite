@@ -28,13 +28,13 @@ type RoomMetadataQueuer interface {
 }
 
 const (
-	// Number of concurrent workers processing rooms
+	// Number of concurrent workers processing rooms.
 	metadataWorkerCount = 2
-	// How often to check for rooms needing recalculation
+	// How often to check for rooms needing recalculation.
 	metadataTickerInterval = time.Minute
-	// Batch size for initial population
+	// Batch size for initial population.
 	metadataBatchSize = 100
-	// Delay between processing batches to avoid overloading
+	// Delay between processing batches to avoid overloading.
 	metadataBatchDelay = time.Millisecond * 100
 )
 
@@ -50,7 +50,7 @@ type SlidingSyncMetadataWorker struct {
 	retryMap     map[string]time.Time
 }
 
-// NewSlidingSyncMetadataWorker creates a new metadata worker
+// NewSlidingSyncMetadataWorker creates a new metadata worker.
 func NewSlidingSyncMetadataWorker(
 	processCtx *process.ProcessContext,
 	db storage.Database,
@@ -92,13 +92,13 @@ func (w *SlidingSyncMetadataWorker) Start() error {
 }
 
 // checkNeedsInitialPopulation checks if we need to do initial population
-// by checking if the recalculation queue or joined_rooms table is empty
+// by checking if the recalculation queue or joined_rooms table is empty.
 func (w *SlidingSyncMetadataWorker) checkNeedsInitialPopulation() (bool, error) { //nolint:unparam // error kept for interface compatibility
 	ctx := w.process.Context()
 
 	// Check if SlidingSyncRoomMetadata is nil (tables not yet created)
 	if w.roomMetadata == nil {
-		logrus.Warn("[SLIDING_SYNC_METADATA] SlidingSyncRoomMetadata table not initialised")
+		logrus.Warn("[SLIDING_SYNC_METADATA] SlidingSyncRoomMetadata table not initialized")
 		return false, nil
 	}
 
@@ -132,7 +132,7 @@ func (w *SlidingSyncMetadataWorker) checkNeedsInitialPopulation() (bool, error) 
 	return true, nil
 }
 
-// queueInitialPopulation queries all existing rooms and queues them for processing
+// queueInitialPopulation queries all existing rooms and queues them for processing.
 func (w *SlidingSyncMetadataWorker) queueInitialPopulation() {
 	ctx := w.process.Context()
 
@@ -193,7 +193,7 @@ func (w *SlidingSyncMetadataWorker) queueInitialPopulation() {
 	logrus.WithField("room_count", len(roomIDs)).Info("[SLIDING_SYNC_METADATA] Initial population queuing complete")
 }
 
-// QueueRoom adds a room to the processing queue
+// QueueRoom adds a room to the processing queue.
 func (w *SlidingSyncMetadataWorker) QueueRoom(roomID string) {
 	select {
 	case w.workerCh <- roomID:
@@ -201,13 +201,13 @@ func (w *SlidingSyncMetadataWorker) QueueRoom(roomID string) {
 		// Channel full, add to retry map
 		w.retryMu.Lock()
 		if _, exists := w.retryMap[roomID]; !exists {
-			w.retryMap[roomID] = time.Now().Add(time.Second * 30)
+			w.retryMap[roomID] = time.Now().Add(time.Second * 30) //nolint:mnd
 		}
 		w.retryMu.Unlock()
 	}
 }
 
-// worker processes rooms from the channel
+// worker processes rooms from the channel.
 func (w *SlidingSyncMetadataWorker) worker(workerID int) {
 	for roomID := range w.workerCh {
 		select {
@@ -224,13 +224,13 @@ func (w *SlidingSyncMetadataWorker) worker(workerID int) {
 
 			// Schedule retry
 			w.retryMu.Lock()
-			w.retryMap[roomID] = time.Now().Add(time.Minute * 5)
+			w.retryMap[roomID] = time.Now().Add(time.Minute * 5) //nolint:mnd
 			w.retryMu.Unlock()
 		}
 	}
 }
 
-// tickerLoop periodically checks for rooms needing recalculation and retries failed rooms
+// tickerLoop periodically checks for rooms needing recalculation and retries failed rooms.
 func (w *SlidingSyncMetadataWorker) tickerLoop() {
 	ticker := time.NewTicker(metadataTickerInterval)
 	defer ticker.Stop()
@@ -246,7 +246,7 @@ func (w *SlidingSyncMetadataWorker) tickerLoop() {
 	}
 }
 
-// processRetries moves due items from retryMap back to workerCh
+// processRetries moves due items from retryMap back to workerCh.
 func (w *SlidingSyncMetadataWorker) processRetries() {
 	w.retryMu.Lock()
 	now := time.Now()
@@ -266,7 +266,7 @@ func (w *SlidingSyncMetadataWorker) processRetries() {
 	}
 }
 
-// checkRecalculateQueue checks the database queue for rooms needing recalculation
+// checkRecalculateQueue checks the database queue for rooms needing recalculation.
 func (w *SlidingSyncMetadataWorker) checkRecalculateQueue() {
 	ctx := w.process.Context()
 
@@ -281,7 +281,7 @@ func (w *SlidingSyncMetadataWorker) checkRecalculateQueue() {
 	}
 }
 
-// processRoom calculates and stores metadata for a single room
+// processRoom calculates and stores metadata for a single room.
 func (w *SlidingSyncMetadataWorker) processRoom(roomID string) error {
 	ctx := w.process.Context()
 
@@ -316,7 +316,7 @@ func (w *SlidingSyncMetadataWorker) processRoom(roomID string) error {
 	return nil
 }
 
-// extractRoomMetadata extracts room metadata from current state events
+// extractRoomMetadata extracts room metadata from current state events.
 func (w *SlidingSyncMetadataWorker) extractRoomMetadata(
 	ctx context.Context,
 	snapshot *shared.DatabaseTransaction,
@@ -379,7 +379,7 @@ func (w *SlidingSyncMetadataWorker) extractRoomMetadata(
 	return room, nil
 }
 
-// updateMembershipSnapshots updates membership snapshots for all members in a room
+// updateMembershipSnapshots updates membership snapshots for all members in a room.
 func (w *SlidingSyncMetadataWorker) updateMembershipSnapshots(
 	ctx context.Context,
 	snapshot *shared.DatabaseTransaction,

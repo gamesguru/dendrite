@@ -15,13 +15,14 @@ import (
 	"net/http"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // OWASP recommends at least 128 bits of entropy for tokens: https://www.owasp.org/index.php/Insufficient_Session-ID_Length
-// 32 bytes => 256 bits
+// 32 bytes => 256 bits.
 var tokenByteLength = 32
 
 // DeviceDatabase represents a device database.

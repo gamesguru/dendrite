@@ -4,14 +4,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreatePreviousEventsTable(t *testing.T, dbType test.DBType) (tab tables.PreviousEvents, close func()) {
@@ -41,7 +42,7 @@ func TestPreviousEventsTable(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreatePreviousEventsTable(t, dbType)
+		tab, close := mustCreatePreviousEventsTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		for _, x := range room.Events() {

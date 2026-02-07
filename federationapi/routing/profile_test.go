@@ -14,6 +14,12 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/ed25519"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/signing"
 	fedAPI "codefloe.com/pat-s/dendrite/federationapi"
@@ -25,11 +31,6 @@ import (
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/ed25519"
 )
 
 type fakeUserAPI struct {
@@ -48,7 +49,7 @@ func TestHandleQueryProfile(t *testing.T) {
 		defer close()
 
 		natsInstance := jetstream.NATSInstance{}
-		cfg.FederationAPI.Matrix.SigningIdentity.ServerName = testOrigin
+		cfg.FederationAPI.Matrix.ServerName = testOrigin
 		cfg.FederationAPI.Matrix.Metrics.Enabled = false
 		fedClient := fakeFedClient{}
 		serverKeyAPI := &signing.YggdrasilKeys{}
@@ -60,7 +61,10 @@ func TestHandleQueryProfile(t *testing.T) {
 
 		_, sk, _ := ed25519.GenerateKey(nil)
 		keyID := signing.KeyID
-		pk := sk.Public().(ed25519.PublicKey)
+		pk, ok := sk.Public().(ed25519.PublicKey)
+		if !ok {
+			t.Fatal("unexpected public key type")
+		}
 		serverName := spec.ServerName(hex.EncodeToString(pk))
 		req := fclient.NewFederationRequest("GET", serverName, testOrigin, "/_matrix/federation/v1/query/profile?user_id="+url.QueryEscape("@user:"+string(testOrigin)))
 		type queryContent struct{}
@@ -69,7 +73,10 @@ func TestHandleQueryProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
 		}
-		req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
+		err = req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
+		if err != nil {
+			t.Fatalf("Error: %s", err.Error())
+		}
 		httpReq, err := req.HTTPRequest()
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
@@ -79,7 +86,7 @@ func TestHandleQueryProfile(t *testing.T) {
 
 		res := w.Result()
 		data, _ := io.ReadAll(res.Body)
-		println(string(data))
+		t.Log(string(data))
 		assert.Equal(t, 200, res.StatusCode)
 	})
 }

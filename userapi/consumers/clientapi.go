@@ -15,12 +15,11 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/pushgateway"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
-
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/userapi/producers"
+	"codefloe.com/pat-s/dendrite/userapi/storage"
 	"codefloe.com/pat-s/dendrite/userapi/util"
 )
 

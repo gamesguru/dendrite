@@ -11,13 +11,13 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // See https://matrix.org/docs/spec/client_server/r0.6.1#get-matrix-client-r0-pushers
@@ -92,7 +92,9 @@ func (s *pushersStatements) InsertPusher(
 	pushkey string, pushkeyTS int64, kind api.PusherKind, appid, appdisplayname, devicedisplayname, profiletag, lang, data,
 	localpart string, serverName spec.ServerName,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.insertPusherStmt).ExecContext(ctx, localpart, serverName, session_id, pushkey, pushkeyTS, kind, appid, appdisplayname, devicedisplayname, profiletag, lang, data)
+	insertPusherStmt := sqlutil.TxStmt(txn, s.insertPusherStmt)
+	defer insertPusherStmt.Close()
+	_, err := insertPusherStmt.ExecContext(ctx, localpart, serverName, session_id, pushkey, pushkeyTS, kind, appid, appdisplayname, devicedisplayname, profiletag, lang, data)
 	return err
 }
 
@@ -101,7 +103,7 @@ func (s *pushersStatements) SelectPushers(
 	localpart string, serverName spec.ServerName,
 ) ([]api.Pusher, error) {
 	pushers := []api.Pusher{}
-	rows, err := s.selectPushersStmt.QueryContext(ctx, localpart, serverName)
+	rows, err := s.selectPushersStmt.QueryContext(ctx, localpart, serverName) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return pushers, err
 	}
@@ -140,13 +142,17 @@ func (s *pushersStatements) DeletePusher(
 	ctx context.Context, txn *sql.Tx, appid, pushkey,
 	localpart string, serverName spec.ServerName,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deletePusherStmt).ExecContext(ctx, appid, pushkey, localpart, serverName)
+	deletePusherStmt := sqlutil.TxStmt(txn, s.deletePusherStmt)
+	defer deletePusherStmt.Close()
+	_, err := deletePusherStmt.ExecContext(ctx, appid, pushkey, localpart, serverName)
 	return err
 }
 
 func (s *pushersStatements) DeletePushers(
 	ctx context.Context, txn *sql.Tx, appid, pushkey string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deletePushersByAppIdAndPushKeyStmt).ExecContext(ctx, appid, pushkey)
+	deletePushersByAppIdAndPushKeyStmt := sqlutil.TxStmt(txn, s.deletePushersByAppIdAndPushKeyStmt)
+	defer deletePushersByAppIdAndPushKeyStmt.Close()
+	_, err := deletePushersByAppIdAndPushKeyStmt.ExecContext(ctx, appid, pushkey)
 	return err
 }

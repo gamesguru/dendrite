@@ -79,7 +79,7 @@ func mustMakeAccountAndDevice(
 	accDB tables.AccountsTable,
 	devDB tables.DevicesTable,
 	localpart string,
-	serverName spec.ServerName, // nolint:unparam
+	serverName spec.ServerName, //nolint:unparam
 	accType api.AccountType,
 	userAgent string,
 ) {
@@ -127,11 +127,11 @@ func mustUserUpdateRegistered(
 	}
 }
 
-// These tests must run sequentially, as they build up on each other
+// These tests must run sequentially, as they build up on each other.
 func Test_UserStatistics(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, accDB, devDB, statsDB, close := mustMakeDBs(t, dbType)
+		db, accDB, devDB, statsDB, close := mustMakeDBs(t, dbType) //nolint:contextcheck
 		defer close()
 		wantType := "SQLite"
 		if dbType == test.DBTypePostgres {

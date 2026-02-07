@@ -14,22 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/test/testrig"
+	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
-	"gotest.tools/v3/poll"
-
-	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
+	"gotest.tools/v3/poll"
 
 	"codefloe.com/pat-s/dendrite/federationapi/statistics"
 	"codefloe.com/pat-s/dendrite/federationapi/storage"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/dendrite/test/testrig"
 )
 
 func mustCreateFederationDatabase(t *testing.T, dbType test.DBType, realDatabase bool) (storage.Database, *process.ProcessContext, func()) {
@@ -603,9 +602,10 @@ func TestSendPDUBatches(t *testing.T) {
 	pduMultiplier := uint32(3)
 	for i := 0; i < maxPDUsPerTransaction*int(pduMultiplier); i++ {
 		ev := mustCreatePDU(t)
-		headeredJSON, _ := json.Marshal(ev)
+		headeredJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal PDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-		err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+		err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 		assert.NoError(t, err, "failed to associate PDU with destinations")
 	}
 
@@ -647,9 +647,10 @@ func TestSendEDUBatches(t *testing.T) {
 	eduMultiplier := uint32(3)
 	for i := 0; i < maxEDUsPerTransaction*int(eduMultiplier); i++ {
 		ev := mustCreateEDU(t)
-		ephemeralJSON, _ := json.Marshal(ev)
+		ephemeralJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal EDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(ephemeralJSON))
-		err := db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
+		err = db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
 		assert.NoError(t, err, "failed to associate EDU with destinations")
 	}
 
@@ -691,17 +692,19 @@ func TestSendPDUAndEDUBatches(t *testing.T) {
 	multiplier := uint32(3)
 	for i := 0; i < maxPDUsPerTransaction*int(multiplier)+1; i++ {
 		ev := mustCreatePDU(t)
-		headeredJSON, _ := json.Marshal(ev)
+		headeredJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal PDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-		err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+		err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 		assert.NoError(t, err, "failed to associate PDU with destinations")
 	}
 
 	for i := 0; i < maxEDUsPerTransaction*int(multiplier); i++ {
 		ev := mustCreateEDU(t)
-		ephemeralJSON, _ := json.Marshal(ev)
+		ephemeralJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal EDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(ephemeralJSON))
-		err := db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
+		err = db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
 		assert.NoError(t, err, "failed to associate EDU with destinations")
 	}
 
@@ -741,9 +744,10 @@ func TestExternalFailureBackoffDoesntStartQueue(t *testing.T) {
 	queues.statistics.ForServer(destination).Failure()
 	destinations := map[spec.ServerName]struct{}{destination: {}}
 	ev := mustCreatePDU(t)
-	headeredJSON, _ := json.Marshal(ev)
+	headeredJSON, err := json.Marshal(ev)
+	assert.NoError(t, err, "failed to marshal PDU")
 	nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-	err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+	err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 	assert.NoError(t, err, "failed to associate PDU with destinations")
 
 	pollEnd := time.Now().Add(3 * time.Second)

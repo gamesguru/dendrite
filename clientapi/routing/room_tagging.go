@@ -10,15 +10,16 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/clientapi/producers"
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// GetTags implements GET /_matrix/client/r0/user/{userID}/rooms/{roomID}/tags
+// GetTags implements GET /_matrix/client/r0/user/{userID}/rooms/{roomID}/tags.
 func GetTags(
 	req *http.Request,
 	userAPI api.ClientUserAPI,
@@ -51,7 +52,7 @@ func GetTags(
 
 // PutTag implements PUT /_matrix/client/r0/user/{userID}/rooms/{roomID}/tags/{tag}
 // Put functionality works by getting existing data from the DB (if any), adding
-// the tag to the "map" and saving the new "map" to the DB
+// the tag to the "map" and saving the new "map" to the DB.
 func PutTag(
 	req *http.Request,
 	userAPI api.ClientUserAPI,
@@ -103,7 +104,7 @@ func PutTag(
 
 // DeleteTag implements DELETE /_matrix/client/r0/user/{userID}/rooms/{roomID}/tags/{tag}
 // Delete functionality works by obtaining the saved tags, removing the intended tag from
-// the "map" and then saving the new "map" in the DB
+// the "map" and then saving the new "map" in the DB.
 func DeleteTag(
 	req *http.Request,
 	userAPI api.ClientUserAPI,
@@ -155,7 +156,7 @@ func DeleteTag(
 }
 
 // obtainSavedTags gets all tags scoped to a userID and roomID
-// from the database
+// from the database.
 func obtainSavedTags(
 	req *http.Request,
 	userID string,
@@ -182,15 +183,15 @@ func obtainSavedTags(
 	return tags, nil
 }
 
-// saveTagData saves the provided tag data into the database
+// saveTagData saves the provided tag data into the database.
 func saveTagData(
 	req *http.Request,
 	userID string,
 	roomID string,
 	userAPI api.ClientUserAPI,
-	Tag gomatrix.TagContent,
+	tag gomatrix.TagContent,
 ) error {
-	newTagData, err := json.Marshal(Tag)
+	newTagData, err := json.Marshal(tag)
 	if err != nil {
 		return err
 	}

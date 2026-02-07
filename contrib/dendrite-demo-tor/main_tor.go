@@ -95,12 +95,12 @@ func SetupAndServeHTTPS(
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to create onion")
 	}
-	defer onion.Close() // nolint: errcheck
+	defer onion.Close()
 	listener, err := onion.ListenTLS()
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to serve HTTPS")
 	}
-	defer listener.Close() // nolint: errcheck
+	defer listener.Close()
 
 	externalHTTPSAddr := config.ServerAddress{}
 	https, err := config.HTTPAddress("https://" + listener.Addr().String())

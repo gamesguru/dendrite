@@ -11,13 +11,14 @@ import (
 	"fmt"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/shared"
-	"codefloe.com/pat-s/dendrite/test"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/relayapi/storage/shared"
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 type testFedClient struct {

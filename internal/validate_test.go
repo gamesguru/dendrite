@@ -1,15 +1,17 @@
 package internal
 
 import (
+	"errors"
 	"net/http"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 func Test_validatePassword(t *testing.T) {
@@ -177,7 +179,7 @@ func Test_validateUsername(t *testing.T) {
 			}
 
 			// Application services are allowed usernames starting with an underscore
-			if tt.wantErr == ErrUsernameUnderscore {
+			if errors.Is(tt.wantErr, ErrUsernameUnderscore) {
 				return
 			}
 			gotErr = ValidateApplicationServiceUsername(tt.localpart, tt.domain)
@@ -192,7 +194,7 @@ func Test_validateUsername(t *testing.T) {
 }
 
 // This method tests validation of the provided Application Service token and
-// username that they're registering
+// username that they're registering.
 func TestValidateApplicationServiceRequest(t *testing.T) {
 	t.Parallel()
 	// Create a fake application service

@@ -19,7 +19,7 @@ RUN --mount=target=. \
     sh -c 'USERARCH=$(go env GOARCH); \
     if [ "$TARGETARCH" = "$USERARCH" ]; then CGO=1; else CGO=0; fi; \
     GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED="$CGO" \
-    go build -v -trimpath -o /out/ ./cmd/...'
+    go build -tags goolm -v -trimpath -o /out/ ./cmd/...'
 
 #
 # Builds the Dendrite image containing all required binaries

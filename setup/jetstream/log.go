@@ -17,26 +17,26 @@ func NewLogAdapter() *LogAdapter {
 	}
 }
 
-func (l *LogAdapter) Noticef(format string, v ...interface{}) {
+func (l *LogAdapter) Noticef(format string, v ...any) {
 	l.entry.Infof(format, v...)
 }
 
-func (l *LogAdapter) Warnf(format string, v ...interface{}) {
+func (l *LogAdapter) Warnf(format string, v ...any) {
 	l.entry.Warnf(format, v...)
 }
 
-func (l *LogAdapter) Fatalf(format string, v ...interface{}) {
+func (l *LogAdapter) Fatalf(format string, v ...any) {
 	l.entry.Fatalf(format, v...)
 }
 
-func (l *LogAdapter) Errorf(format string, v ...interface{}) {
+func (l *LogAdapter) Errorf(format string, v ...any) {
 	l.entry.Errorf(format, v...)
 }
 
-func (l *LogAdapter) Debugf(format string, v ...interface{}) {
+func (l *LogAdapter) Debugf(format string, v ...any) {
 	l.entry.Debugf(format, v...)
 }
 
-func (l *LogAdapter) Tracef(format string, v ...interface{}) {
+func (l *LogAdapter) Tracef(format string, v ...any) {
 	l.entry.Tracef(format, v...)
 }

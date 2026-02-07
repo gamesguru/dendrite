@@ -13,6 +13,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrix"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/gjson"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
+
 	"codefloe.com/pat-s/dendrite/appservice"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/routing"
@@ -32,16 +43,6 @@ import (
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi"
 	uapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/gjson"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/crypto"
-	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 type userDevice struct {
@@ -160,7 +161,7 @@ func TestGetPutDevices(t *testing.T) {
 	})
 }
 
-// Deleting devices requires the UIA dance, so do this in a different test
+// Deleting devices requires the UIA dance, so do this in a different test.
 func TestDeleteDevice(t *testing.T) {
 	alice := test.NewUser(t)
 	localpart, serverName, _ := gomatrixserverlib.SplitID('@', alice.ID)
@@ -216,7 +217,7 @@ func TestDeleteDevice(t *testing.T) {
 
 		// prepare UIA request body
 		reqBody := bytes.Buffer{}
-		if err := json.NewEncoder(&reqBody).Encode(map[string]interface{}{
+		if err := json.NewEncoder(&reqBody).Encode(map[string]any{
 			"auth": map[string]string{
 				"session":  sessionID,
 				"type":     authtypes.LoginTypePassword,
@@ -265,7 +266,7 @@ func TestDeleteDevice(t *testing.T) {
 	})
 }
 
-// Deleting devices requires the UIA dance, so do this in a different test
+// Deleting devices requires the UIA dance, so do this in a different test.
 func TestDeleteDevices(t *testing.T) {
 	alice := test.NewUser(t)
 	localpart, serverName, _ := gomatrixserverlib.SplitID('@', alice.ID)
@@ -324,7 +325,7 @@ func TestDeleteDevices(t *testing.T) {
 
 		// prepare UIA request body
 		reqBody := bytes.Buffer{}
-		if err := json.NewEncoder(&reqBody).Encode(map[string]interface{}{
+		if err := json.NewEncoder(&reqBody).Encode(map[string]any{
 			"auth": map[string]string{
 				"session":  sessionID,
 				"type":     authtypes.LoginTypePassword,
@@ -377,9 +378,9 @@ func createAccessTokens(t *testing.T, accessTokens map[*test.User]userDevice, us
 		}, userRes); err != nil {
 			t.Errorf("failed to create account: %s", err)
 		}
-		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]interface{}{
+		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]any{
 			"type": authtypes.LoginTypePassword,
-			"identifier": map[string]interface{}{
+			"identifier": map[string]any{
 				"type": "m.id.user",
 				"user": u.ID,
 			},
@@ -639,7 +640,7 @@ func TestTyping(t *testing.T) {
 		// Needed to create accounts
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		// We mostly need the rsAPI/userAPI for this test, so nil for other APIs etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -724,7 +725,7 @@ func TestMembership(t *testing.T) {
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		rsAPI.SetUserAPI(userAPI)
 		// We mostly need the rsAPI/userAPI for this test, so nil for other APIs etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -932,12 +933,12 @@ func TestCapabilities(t *testing.T) {
 	tempRoomServerCfg.Defaults(config.DefaultOpts{})
 	defaultRoomVersion := tempRoomServerCfg.DefaultRoomVersion
 
-	expectedMap := map[string]interface{}{
-		"capabilities": map[string]interface{}{
+	expectedMap := map[string]any{
+		"capabilities": map[string]any{
 			"m.change_password": map[string]bool{
 				"enabled": true,
 			},
-			"m.room_versions": map[string]interface{}{
+			"m.room_versions": map[string]any{
 				"default":   defaultRoomVersion,
 				"available": versionsMap,
 			},
@@ -963,7 +964,7 @@ func TestCapabilities(t *testing.T) {
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		// We mostly need the rsAPI/userAPI for this test, so nil for other APIs etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -1110,7 +1111,7 @@ func Test3PID(t *testing.T) {
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		// We mostly need the rsAPI/userAPI for this test, so nil for other APIs etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -1673,12 +1674,12 @@ func TestKeys(t *testing.T) {
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		accessTokens := map[*test.User]userDevice{
 			alice: {},
 		}
-		createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+		createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers) //nolint:contextcheck
 
 		// Start a TLSServer with our client mux
 		srv := httptest.NewTLSServer(routers.Client)
@@ -1748,6 +1749,7 @@ func TestKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer resp.Body.Close()
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -1926,9 +1928,9 @@ func TestKeyBackup(t *testing.T) {
 		{
 			name: "can not update backup with wrong version",
 			request: func(t *testing.T) *http.Request {
-				reqBody := test.WithJSONBody(t, map[string]interface{}{
-					"rooms": map[string]interface{}{
-						"!testroom:test": map[string]interface{}{
+				reqBody := test.WithJSONBody(t, map[string]any{
+					"rooms": map[string]any{
+						"!testroom:test": map[string]any{
 							"sessions": map[string]uapi.KeyBackupSession{},
 						},
 					},
@@ -1945,9 +1947,9 @@ func TestKeyBackup(t *testing.T) {
 		{
 			name: "can update backup with correct version",
 			request: func(t *testing.T) *http.Request {
-				reqBody := test.WithJSONBody(t, map[string]interface{}{
-					"rooms": map[string]interface{}{
-						"!testroom:test": map[string]interface{}{
+				reqBody := test.WithJSONBody(t, map[string]any{
+					"rooms": map[string]any{
+						"!testroom:test": map[string]any{
 							"sessions": map[string]uapi.KeyBackupSession{
 								"dummySession": {
 									FirstMessageIndex: 1,
@@ -1968,7 +1970,7 @@ func TestKeyBackup(t *testing.T) {
 		{
 			name: "can update backup with correct version for specific room",
 			request: func(t *testing.T) *http.Request {
-				reqBody := test.WithJSONBody(t, map[string]interface{}{
+				reqBody := test.WithJSONBody(t, map[string]any{
 					"sessions": map[string]uapi.KeyBackupSession{
 						"dummySession": {
 							FirstMessageIndex: 1,
@@ -2197,7 +2199,7 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(alice.ID))
 			},
@@ -2212,7 +2214,7 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -2349,10 +2351,10 @@ func TestReportEvent(t *testing.T) {
 	charlie := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 
-	room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(charlie.ID))
-	eventToReport := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
+	eventToReport := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)

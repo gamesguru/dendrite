@@ -13,7 +13,7 @@ import (
 )
 
 // UpCreateSlidingSyncTables creates the tables required for sliding sync (MSC3575/MSC4186)
-// This migration MUST run before 2025110501_connection_receipts which depends on these tables
+// This migration MUST run before 2025110501_connection_receipts which depends on these tables.
 func UpCreateSlidingSyncTables(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 -- Sliding Sync Connection State Tables (MSC3575/MSC4186)

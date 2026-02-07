@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/bcrypt"
 
 	"codefloe.com/pat-s/dendrite/internal/pushgateway"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
@@ -100,7 +100,7 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 			Kind:    api.HTTPKind,
 			AppID:   appID,
 			PushKey: pushKey,
-			Data: map[string]interface{}{
+			Data: map[string]any{
 				"url": srv.URL,
 			},
 		}, aliceLocalpart, serverName); err != nil {

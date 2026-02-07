@@ -9,21 +9,22 @@ package postgres
 import (
 	"database/sql"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/shared"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// Database stores information needed by the relayapi
+// Database stores information needed by the relayapi.
 type Database struct {
 	shared.Database
 	db     *sql.DB
 	writer sqlutil.Writer
 }
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(
 	conMan *sqlutil.Connections,
 	dbProperties *config.DatabaseOptions,

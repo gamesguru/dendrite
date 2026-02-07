@@ -9,35 +9,36 @@ package types
 import (
 	"sync"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
-// FileSizeBytes is a file size in bytes
+// FileSizeBytes is a file size in bytes.
 type FileSizeBytes int64
 
-// ContentType is an HTTP Content-Type header string representing the MIME type of a request body
+// ContentType is an HTTP Content-Type header string representing the MIME type of a request body.
 type ContentType string
 
-// Filename is a string representing the name of a file
+// Filename is a string representing the name of a file.
 type Filename string
 
-// Base64Hash is a base64 URLEncoding string representation of a SHA-256 hash sum
+// Base64Hash is a base64 URLEncoding string representation of a SHA-256 hash sum.
 type Base64Hash string
 
-// Path is an absolute or relative UNIX filesystem path
+// Path is an absolute or relative UNIX filesystem path.
 type Path string
 
-// MediaID is a string representing the unique identifier for a file (could be a hash but does not have to be)
+// MediaID is a string representing the unique identifier for a file (could be a hash but does not have to be).
 type MediaID string
 
-// RequestMethod is an HTTP request method i.e. GET, POST, etc
+// RequestMethod is an HTTP request method i.e. GET, POST, etc.
 type RequestMethod string
 
-// MatrixUserID is a Matrix user ID string in the form @user:domain e.g. @alice:matrix.org
+// MatrixUserID is a Matrix user ID string in the form @user:domain e.g. @alice:matrix.org.
 type MatrixUserID string
 
-// MediaMetadata is metadata associated with a media file
+// MediaMetadata is metadata associated with a media file.
 type MediaMetadata struct {
 	MediaID           MediaID
 	Origin            spec.ServerName
@@ -49,7 +50,7 @@ type MediaMetadata struct {
 	UserID            MatrixUserID
 }
 
-// RemoteRequestResult is used for broadcasting the result of a request for a remote file to routines waiting on the condition
+// RemoteRequestResult is used for broadcasting the result of a request for a remote file to routines waiting on the condition.
 type RemoteRequestResult struct {
 	// Condition used for the requester to signal the result to all other routines waiting on this condition
 	Cond *sync.Cond
@@ -67,16 +68,16 @@ type ActiveRemoteRequests struct {
 	MXCToResult map[string]*RemoteRequestResult
 }
 
-// ThumbnailSize contains a single thumbnail size configuration
+// ThumbnailSize contains a single thumbnail size configuration.
 type ThumbnailSize config.ThumbnailSize
 
-// ThumbnailMetadata contains the metadata about an individual thumbnail
+// ThumbnailMetadata contains the metadata about an individual thumbnail.
 type ThumbnailMetadata struct {
 	MediaMetadata *MediaMetadata
 	ThumbnailSize ThumbnailSize
 }
 
-// ThumbnailGenerationResult is used for broadcasting the result of thumbnail generation to routines waiting on the condition
+// ThumbnailGenerationResult is used for broadcasting the result of thumbnail generation to routines waiting on the condition.
 type ThumbnailGenerationResult struct {
 	// Condition used for the generator to signal the result to all other routines waiting on this condition
 	Cond *sync.Cond
@@ -92,8 +93,8 @@ type ActiveThumbnailGeneration struct {
 	PathToResult map[string]*ThumbnailGenerationResult
 }
 
-// Crop indicates we should crop the thumbnail on resize
+// Crop indicates we should crop the thumbnail on resize.
 const Crop = "crop"
 
-// Scale indicates we should scale the thumbnail on resize
+// Scale indicates we should scale the thumbnail on resize.
 const Scale = "scale"

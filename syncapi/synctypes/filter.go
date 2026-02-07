@@ -20,7 +20,7 @@ type Filter struct {
 	Room        RoomFilter  `json:"room,omitempty"`
 }
 
-// EventFilter is used to define filtering rules for events
+// EventFilter is used to define filtering rules for events.
 type EventFilter struct {
 	Limit      int       `json:"limit,omitempty"`
 	NotSenders *[]string `json:"not_senders,omitempty"`
@@ -29,7 +29,7 @@ type EventFilter struct {
 	Types      *[]string `json:"types,omitempty"`
 }
 
-// RoomFilter is used to define filtering rules for room-related events
+// RoomFilter is used to define filtering rules for room-related events.
 type RoomFilter struct {
 	NotRooms     *[]string       `json:"not_rooms,omitempty"`
 	Rooms        *[]string       `json:"rooms,omitempty"`
@@ -40,7 +40,7 @@ type RoomFilter struct {
 	AccountData  RoomEventFilter `json:"account_data,omitempty"`
 }
 
-// StateFilter is used to define filtering rules for state events
+// StateFilter is used to define filtering rules for state events.
 type StateFilter struct {
 	NotSenders                *[]string `json:"not_senders,omitempty"`
 	NotTypes                  *[]string `json:"not_types,omitempty"`
@@ -55,7 +55,7 @@ type StateFilter struct {
 	ContainsURL               *bool     `json:"contains_url,omitempty"`
 }
 
-// RoomEventFilter is used to define filtering rules for events in rooms
+// RoomEventFilter is used to define filtering rules for events in rooms.
 type RoomEventFilter struct {
 	Limit                     int       `json:"limit,omitempty"`
 	NotSenders                *[]string `json:"not_senders,omitempty"`
@@ -75,7 +75,7 @@ const (
 	EventFormatFederation = "federation"
 )
 
-// Validate checks if the filter contains valid property values
+// Validate checks if the filter contains valid property values.
 func (filter *Filter) Validate() error {
 	if filter.EventFormat != "" && filter.EventFormat != EventFormatClient && filter.EventFormat != EventFormatFederation {
 		return errors.New("bad event_format value. Must be one of [\"client\", \"federation\"]")
@@ -84,7 +84,7 @@ func (filter *Filter) Validate() error {
 }
 
 // DefaultFilter returns the default filter used by the Matrix server if no filter is provided in
-// the request
+// the request.
 func DefaultFilter() Filter {
 	return Filter{
 		AccountData: DefaultEventFilter(),
@@ -104,11 +104,11 @@ func DefaultFilter() Filter {
 }
 
 // DefaultEventFilter returns the default event filter used by the Matrix server if no filter is
-// provided in the request
+// provided in the request.
 func DefaultEventFilter() EventFilter {
 	return EventFilter{
 		// parity with synapse: https://github.com/matrix-org/synapse/blob/v1.80.0/synapse/api/filtering.py#L336
-		Limit:      10,
+		Limit:      10, //nolint:mnd
 		NotSenders: nil,
 		NotTypes:   nil,
 		Senders:    nil,
@@ -117,7 +117,7 @@ func DefaultEventFilter() EventFilter {
 }
 
 // DefaultStateFilter returns the default state event filter used by the Matrix server if no filter
-// is provided in the request
+// is provided in the request.
 func DefaultStateFilter() StateFilter {
 	return StateFilter{
 		NotSenders:              nil,
@@ -133,11 +133,11 @@ func DefaultStateFilter() StateFilter {
 }
 
 // DefaultRoomEventFilter returns the default room event filter used by the Matrix server if no
-// filter is provided in the request
+// filter is provided in the request.
 func DefaultRoomEventFilter() RoomEventFilter {
 	return RoomEventFilter{
 		// parity with synapse: https://github.com/matrix-org/synapse/blob/v1.80.0/synapse/api/filtering.py#L336
-		Limit:       10,
+		Limit:       10, //nolint:mnd
 		NotSenders:  nil,
 		NotTypes:    nil,
 		Senders:     nil,

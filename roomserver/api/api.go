@@ -15,7 +15,7 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// ErrInvalidID is an error returned if the userID is invalid
+// ErrInvalidID is an error returned if the userID is invalid.
 type ErrInvalidID struct {
 	Err error
 }
@@ -25,7 +25,7 @@ func (e ErrInvalidID) Error() string {
 }
 
 // ErrNotAllowed is an error returned if the user is not allowed
-// to execute some action (e.g. invite)
+// to execute some action (e.g. invite).
 type ErrNotAllowed struct {
 	Err error
 }
@@ -167,7 +167,7 @@ type QueryMembershipAPI interface {
 	) (map[string]*types.HeaderedEvent, error)
 }
 
-// API functions required by the syncapi
+// API functions required by the syncapi.
 type SyncRoomserverAPI interface {
 	QueryLatestEventsAndStateAPI
 	QueryBulkStateContentAPI

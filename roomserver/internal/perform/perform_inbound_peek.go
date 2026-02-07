@@ -8,6 +8,9 @@ package perform
 import (
 	"context"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
@@ -15,8 +18,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/state"
 	"codefloe.com/pat-s/dendrite/roomserver/storage"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/util"
 )
 
 type InboundPeeker struct {
@@ -25,7 +26,7 @@ type InboundPeeker struct {
 }
 
 // PerformInboundPeek handles peeking into matrix rooms, including over
-// federation by talking to the federationapi. called when a remote server
+// federation by talking to the federationapi. Called when a remote server
 // initiates a /peek over federation.
 //
 // It should atomically figure out the current state of the room (for the

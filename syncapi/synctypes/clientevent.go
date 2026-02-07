@@ -18,18 +18,18 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// EventUnsignedFields contains field names found in the 'unsigned' data on events
+// EventUnsignedFields contains field names found in the 'unsigned' data on events.
 const (
 	// UnsignedFieldMembership is the user's membership state at the time of the event, per MSC4115
-	// This is the stable field name (MSC4115 completed FCP June 2024)
+	// This is the stable field name (MSC4115 completed FCP June 2024).
 	UnsignedFieldMembership = "membership"
 
 	// UnsignedFieldMSC4115Membership is the unstable field name for MSC4115
-	// Kept for backwards compatibility during transition period
+	// Kept for backwards compatibility during transition period.
 	UnsignedFieldMSC4115Membership = "io.element.msc4115.membership"
 )
 
-// PrevEventRef represents a reference to a previous event in a state event upgrade
+// PrevEventRef represents a reference to a previous event in a state event upgrade.
 type PrevEventRef struct {
 	PrevContent   json.RawMessage `json:"prev_content"`
 	ReplacesState string          `json:"replaces_state"`
@@ -39,7 +39,7 @@ type PrevEventRef struct {
 type ClientEventFormat int
 
 const (
-	// FormatAll will include all client event keys
+	// FormatAll will include all client event keys.
 	FormatAll ClientEventFormat = iota
 	// FormatSync will include only the event keys required by the /sync API. Notably, this
 	// means the 'room_id' will be missing from the events.
@@ -493,7 +493,7 @@ func AnnotateEventWithMembership(event *ClientEvent, membership string, useStabl
 //   - userID: The user whose membership we're checking
 //   - stateAfterEvent: Map of (event_type, state_key) -> PDU representing state after this event
 //
-// Returns the membership string ("join", "invite", "leave", "ban", "knock")
+// Returns the membership string ("join", "invite", "leave", "ban", "knock").
 func DetermineMembershipAtEvent(
 	event gomatrixserverlib.PDU,
 	userID string,

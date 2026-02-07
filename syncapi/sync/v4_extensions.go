@@ -11,24 +11,25 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/syncapi/internal"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
 )
 
 // findRelevantRoomIDsForExtension handles the reserved `lists`/`rooms` keys for extensions.
 // Extensions should only return results for rooms in the Sliding Sync response. This matches up
 // the requested rooms/lists with the actual lists/rooms in the Sliding Sync response.
 //
-// Behaviour (MSC3959, MSC3960, MSC3961):
+// Behavior (MSC3959, MSC3960, MSC3961):
 //
-//	nil (omitted)              // Default: Process all rooms (wildcard behaviour)
+//	nil (omitted)              // Default: Process all rooms (wildcard behavior)
 //	{"lists": []}              // Explicitly process no lists
 //	{"lists": ["rooms", "dms"]} // Process only specified lists
 //	{"lists": ["*"]}           // Process all lists (explicit wildcard)
@@ -43,7 +44,7 @@ import (
 //	actualLists: The actual lists from the Sliding Sync response
 //	actualRoomSubscriptions: The actual room subscriptions from the Sliding Sync request
 //
-// Returns: Set of room IDs to process for this extension
+// Returns: Set of room IDs to process for this extension.
 func findRelevantRoomIDsForExtension(
 	requestedLists []string,
 	requestedRooms []string,
@@ -75,7 +76,7 @@ func findRelevantRoomIDsForExtension(
 			}
 		}
 	} else {
-		// nil (omitted) = default to wildcard behaviour (all room subscriptions)
+		// nil (omitted) = default to wildcard behavior (all room subscriptions)
 		for roomID := range actualRoomSubscriptions {
 			relevantRoomIDs[roomID] = true
 		}
@@ -113,7 +114,7 @@ func findRelevantRoomIDsForExtension(
 			}
 		}
 	} else {
-		// nil (omitted) = default to wildcard behaviour (all lists)
+		// nil (omitted) = default to wildcard behavior (all lists)
 		for _, list := range actualLists {
 			for _, op := range list.Ops {
 				for _, roomID := range op.RoomIDs {
@@ -137,8 +138,8 @@ func findRelevantRoomIDsForExtension(
 //
 // For now, we process all extensions together. Future optimization: split by PreProcess/PostProcess.
 //
-// responseLists: The actual lists from the sliding sync response (for extension filtering)
-// roomSubscriptions: The actual room subscriptions from the sliding sync request (for extension filtering)
+// ResponselLists: The actual lists from the sliding sync response (for extension filtering).
+// RoomSubscriptions: The actual room subscriptions from the sliding sync request (for extension filtering).
 func (rp *RequestPool) ProcessExtensions(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -335,7 +336,7 @@ func (rp *RequestPool) processToDeviceExtension(
 // - Initial sync: device_unused_fallback_key_types returns empty array []
 // - Incremental sync: device_lists includes changed/left users
 //
-// Reference: /tmp/msc3884_research.md lines 89-93, /tmp/matrix_js_sdk_findings.md lines 86-99
+// Reference: /tmp/msc3884_research.md lines 89-93, /tmp/matrix_js_sdk_findings.md lines 86-99.
 func (rp *RequestPool) processE2EEExtension(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -378,7 +379,7 @@ func (rp *RequestPool) processE2EEExtension(
 			resp.DeviceUnusedFallbackKeyTypes = queryRes.UnusedFallbackAlgorithms
 			resp.DeviceUnusedFallbackKeyTypesLegacy = queryRes.UnusedFallbackAlgorithms
 		}
-		// If nil, keep the empty slice we initialised above
+		// If nil, keep the empty slice we initialized above
 	}
 
 	// For incremental sync, get device list changes
@@ -425,11 +426,11 @@ func (rp *RequestPool) processE2EEExtension(
 	}
 
 	// Always return e2ee extension if requested
-	// Synapse behaviour: always returns OTK counts and device lists (even if empty arrays)
+	// Synapse behavior: always returns OTK counts and device lists (even if empty arrays)
 	return resp, nil
 }
 
-// processAccountDataExtension handles account data extension
+// processAccountDataExtension handles account data extension.
 func (rp *RequestPool) processAccountDataExtension(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -463,7 +464,7 @@ func (rp *RequestPool) processAccountDataExtension(
 	// Get account data changes in this range
 	// Use filter with high limit to get all account data (typically < 100 events)
 	filter := synctypes.EventFilter{
-		Limit: 1000, // High limit to get all account data
+		Limit: 1000, //nolint:mnd // High limit to get all account data
 	}
 	dataTypes, lastPos, err := snapshot.GetAccountDataInRange(ctx, userID, r, &filter)
 	if err != nil {
@@ -552,7 +553,7 @@ func (rp *RequestPool) processAccountDataExtension(
 }
 
 // processReceiptsExtension handles read receipts extension
-// IMPORTANT: Response contains a SINGLE event per room, not an array (matrix-js-sdk expects this)
+// IMPORTANT: Response contains a SINGLE event per room, not an array (matrix-js-sdk expects this).
 func (rp *RequestPool) processReceiptsExtension(
 	ctx context.Context,
 	_ storage.DatabaseTransaction, // unused - using fresh snapshot for read committed isolation
@@ -648,7 +649,7 @@ func (rp *RequestPool) processReceiptsExtension(
 			Type: "m.receipt",
 		}
 		// Structure: eventID -> receiptType -> userID -> {ts}
-		// This allows m.read and m.read.private to be serialised separately
+		// This allows m.read and m.read.private to be serialized separately
 		content := make(map[string]map[string]map[string]ReceiptTS)
 		for _, receipt := range roomReceipts {
 			eventContent, ok := content[receipt.EventID]
@@ -688,18 +689,18 @@ func (rp *RequestPool) processReceiptsExtension(
 	return resp, 0, deliveredReceipts, nil
 }
 
-// ReceiptMRead represents the m.read structure for receipts
+// ReceiptMRead represents the m.read structure for receipts.
 type ReceiptMRead struct {
 	User map[string]ReceiptTS `json:"m.read"`
 }
 
-// ReceiptTS represents a receipt timestamp
+// ReceiptTS represents a receipt timestamp.
 type ReceiptTS struct {
 	TS spec.Timestamp `json:"ts"`
 }
 
 // processTypingExtension handles typing notifications extension
-// IMPORTANT: Response contains a SINGLE event per room, not an array (matrix-js-sdk expects this)
+// IMPORTANT: Response contains a SINGLE event per room, not an array (matrix-js-sdk expects this).
 func (rp *RequestPool) processTypingExtension(
 	_ context.Context, // unused - typing uses EDUCache directly
 	_ storage.DatabaseTransaction, // unused - typing uses EDUCache directly
@@ -763,7 +764,7 @@ func (rp *RequestPool) processTypingExtension(
 
 		// Marshal typing user IDs into content
 		var err error
-		ev.Content, err = json.Marshal(map[string]interface{}{
+		ev.Content, err = json.Marshal(map[string]any{
 			"user_ids": users,
 		})
 		if err != nil {

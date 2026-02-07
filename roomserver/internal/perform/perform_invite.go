@@ -9,7 +9,12 @@ package perform
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
@@ -20,9 +25,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 type QueryState struct {
@@ -39,7 +41,7 @@ func (q *QueryState) GetAuthEvents(ctx context.Context, event gomatrixserverlib.
 }
 
 func (q *QueryState) GetState(ctx context.Context, roomID spec.RoomID, stateWanted []gomatrixserverlib.StateKeyTuple) ([]gomatrixserverlib.PDU, error) {
-	info, err := q.Database.RoomInfo(ctx, roomID.String())
+	info, err := q.RoomInfo(ctx, roomID.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load RoomInfo: %w", err)
 	}
@@ -55,7 +57,7 @@ func (q *QueryState) GetState(ctx context.Context, roomID spec.RoomID, stateWant
 		for _, stateNID := range stateEntries {
 			stateNIDs = append(stateNIDs, stateNID.EventNID)
 		}
-		stateEvents, err := q.Database.Events(ctx, info.RoomVersion, stateNIDs)
+		stateEvents, err := q.Events(ctx, info.RoomVersion, stateNIDs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to obtain required events: %w", err)
 		}
@@ -117,7 +119,7 @@ func (r *Inviter) ProcessInviteMembership(
 	return outputUpdates, nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (r *Inviter) PerformInvite(
 	ctx context.Context,
 	req *api.PerformInviteRequest,
@@ -220,11 +222,9 @@ func (r *Inviter) PerformInvite(
 
 	inviteEvent, err := gomatrixserverlib.PerformInvite(ctx, input, r.FSAPI)
 	if err != nil {
-		switch e := err.(type) {
-		case spec.MatrixError:
-			if e.ErrCode == spec.ErrorForbidden {
-				return api.ErrNotAllowed{Err: fmt.Errorf("%s", e.Err)}
-			}
+		var matrixErr spec.MatrixError
+		if errors.As(err, &matrixErr) && matrixErr.ErrCode == spec.ErrorForbidden {
+			return api.ErrNotAllowed{Err: fmt.Errorf("%s", matrixErr.Err)}
 		}
 		return err
 	}
@@ -245,7 +245,7 @@ func (r *Inviter) PerformInvite(
 		},
 	}
 	inputRes := &api.InputRoomEventsResponse{}
-	r.Inputer.InputRoomEvents(context.Background(), inputReq, inputRes)
+	r.Inputer.InputRoomEvents(context.Background(), inputReq, inputRes) //nolint:contextcheck
 	if err := inputRes.Err(); err != nil {
 		util.GetLogger(ctx).WithField("event_id", inviteEvent.EventID()).Error("r.InputRoomEvents failed")
 		return api.ErrNotAllowed{Err: err}

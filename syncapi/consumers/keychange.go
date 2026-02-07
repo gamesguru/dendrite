@@ -10,6 +10,10 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/nats-io/nats.go"
+	"github.com/sirupsen/logrus"
+
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
@@ -19,9 +23,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/getsentry/sentry-go"
-	"github.com/nats-io/nats.go"
-	"github.com/sirupsen/logrus"
 )
 
 // OutputKeyChangeEventConsumer consumes events that originated in the key server.
@@ -62,7 +63,7 @@ func NewOutputKeyChangeEventConsumer(
 	return s
 }
 
-// Start consuming from the key server
+// Start consuming from the key server.
 func (s *OutputKeyChangeEventConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		s.ctx, s.jetstream, s.topic, s.durable, 1,

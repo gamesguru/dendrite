@@ -110,7 +110,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 1, EventID: "b"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 
 		// Now delete one of the relations
@@ -136,7 +136,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 1, EventID: "b"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 
 		// Insert some new relations
@@ -182,7 +182,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 3, EventID: "d"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 	})
 }

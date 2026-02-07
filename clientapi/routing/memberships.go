@@ -10,10 +10,11 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // https://matrix.org/docs/spec/client_server/r0.6.0#get-matrix-client-r0-rooms-roomid-joined-members
@@ -27,7 +28,7 @@ type joinedMember struct {
 }
 
 // The database stores 'displayname' without an underscore.
-// Deserialize into this and then change to the actual API response
+// Deserialize into this and then change to the actual API response.
 type databaseJoinedMember struct {
 	DisplayName string `json:"displayname"`
 	AvatarURL   string `json:"avatar_url"`

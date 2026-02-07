@@ -11,21 +11,22 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	relayInternal "codefloe.com/pat-s/dendrite/relayapi/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	relayInternal "codefloe.com/pat-s/dendrite/relayapi/internal"
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // Setup registers HTTP handlers with the given ServeMux.
 // The provided publicAPIMux MUST have `UseEncodedPath()` enabled or else routes will incorrectly
 // path unescape twice (once from the router, once from MakeRelayAPI). We need to have this enabled
-// so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz]
+// so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz].
 func Setup(
 	fedMux *httputil.Router,
 	cfg *config.FederationAPI,
@@ -115,7 +116,7 @@ func MakeRelayAPI(
 		}()
 		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
-			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
+			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params") //nolint:mnd
 		}
 
 		jsonRes := f(req, fedReq, vars)

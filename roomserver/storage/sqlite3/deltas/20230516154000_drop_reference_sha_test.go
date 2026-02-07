@@ -3,10 +3,11 @@ package deltas
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestUpDropEventReferenceSHAPrevEvents(t *testing.T) {
@@ -43,6 +44,7 @@ INSERT INTO roomserver_events (event_nid, room_nid) VALUES (1, 1)
 	stmt, err := db.PrepareContext(ctx.Context(), `INSERT INTO roomserver_previous_events (previous_event_id, event_nids, previous_reference_sha256) VALUES ($1, $2, $3)`)
 	assert.Nil(t, err)
 	assert.NotNil(t, stmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx.Context(), "1", "{1,2}", "a")
 	assert.Nil(t, err)
 	_, err = stmt.ExecContext(ctx.Context(), "1", "{1,2,3}", "b")
@@ -53,6 +55,6 @@ INSERT INTO roomserver_events (event_nid, room_nid) VALUES (1, 1)
 	assert.Nil(t, err)
 	assert.NotNil(t, txn)
 	err = UpDropEventReferenceSHAPrevEvents(ctx.Context(), txn)
-	defer txn.Rollback()
+	defer func() { _ = txn.Rollback() }()
 	assert.NoError(t, err)
 }

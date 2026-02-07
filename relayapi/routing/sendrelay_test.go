@@ -12,15 +12,16 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/internal"
 	"codefloe.com/pat-s/dendrite/relayapi/routing"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/shared"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -41,12 +42,12 @@ func createFederationRequest(
 	txnID gomatrixserverlib.TransactionID,
 	origin spec.ServerName,
 	destination spec.ServerName,
-	content interface{},
+	content any,
 ) fclient.FederationRequest {
 	federationPathPrefixV1 := "/_matrix/federation/v1"
 	path := federationPathPrefixV1 + "/send_relay/" + string(txnID) + "/" + userID.String()
 	request := fclient.NewFederationRequest("PUT", origin, destination, path)
-	request.SetContent(content)
+	_ = request.SetContent(content)
 
 	return request
 }

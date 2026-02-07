@@ -11,9 +11,10 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const relayServersSchema = `
@@ -74,6 +75,7 @@ func (s *relayServersStatements) InsertRelayServers(
 ) error {
 	for _, relayServer := range relayServers {
 		stmt := sqlutil.TxStmt(txn, s.insertRelayServersStmt)
+		defer stmt.Close()
 		if _, err := stmt.ExecContext(ctx, serverName, relayServer); err != nil {
 			return err
 		}
@@ -87,7 +89,8 @@ func (s *relayServersStatements) SelectRelayServers(
 	serverName spec.ServerName,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRelayServersStmt)
-	rows, err := stmt.QueryContext(ctx, serverName)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, serverName) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +120,8 @@ func (s *relayServersStatements) DeleteRelayServers(
 	}
 
 	stmt := sqlutil.TxStmt(txn, deleteStmt)
-	params := make([]interface{}, len(relayServers)+1)
+	defer stmt.Close()
+	params := make([]any, len(relayServers)+1)
 	params[0] = serverName
 	for i, v := range relayServers {
 		params[i+1] = v
@@ -133,6 +137,7 @@ func (s *relayServersStatements) DeleteAllRelayServers(
 	serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllRelayServersStmt)
+	defer stmt.Close()
 	if _, err := stmt.ExecContext(ctx, serverName); err != nil {
 		return err
 	}

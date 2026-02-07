@@ -11,13 +11,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 type GetAccountByPassword func(ctx context.Context, req *api.QueryAccountByPasswordRequest, res *api.QueryAccountByPasswordResponse) error
@@ -51,8 +52,14 @@ func (t *LoginTypePassword) LoginFromJSON(ctx context.Context, reqBytes []byte) 
 	return login, func(context.Context, *util.JSONResponse) {}, nil
 }
 
-func (t *LoginTypePassword) Login(ctx context.Context, req interface{}) (*Login, *util.JSONResponse) {
-	r := req.(*PasswordRequest)
+func (t *LoginTypePassword) Login(ctx context.Context, req any) (*Login, *util.JSONResponse) {
+	r, ok := req.(*PasswordRequest)
+	if !ok {
+		return nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("unexpected request type"),
+		}
+	}
 	username := r.Username()
 	if username == "" {
 		return nil, &util.JSONResponse{

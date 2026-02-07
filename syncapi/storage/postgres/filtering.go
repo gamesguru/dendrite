@@ -14,7 +14,7 @@ import (
 
 // filterConvertWildcardToSQL converts wildcards as defined in
 // https://matrix.org/docs/spec/client_server/r0.3.0.html#post-matrix-client-r0-user-userid-filter
-// to SQL wildcards that can be used with LIKE()
+// to SQL wildcards that can be used with LIKE().
 func filterConvertTypeWildcardToSQL(values *[]string) []string {
 	if values == nil {
 		// Return nil instead of []string{} so IS NULL can work correctly when

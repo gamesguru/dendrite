@@ -12,13 +12,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type Database struct {
@@ -383,7 +384,7 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	})
 }
 
-// SetServerRetryState updates the retry state for a server (failure count and retry time)
+// SetServerRetryState updates the retry state for a server (failure count and retry time).
 func (d *Database) SetServerRetryState(
 	ctx context.Context,
 	serverName spec.ServerName,
@@ -395,7 +396,7 @@ func (d *Database) SetServerRetryState(
 	})
 }
 
-// GetServerRetryState retrieves the retry state for a server
+// GetServerRetryState retrieves the retry state for a server.
 func (d *Database) GetServerRetryState(
 	ctx context.Context,
 	serverName spec.ServerName,
@@ -408,14 +409,14 @@ func (d *Database) GetServerRetryState(
 	return failureCount, retryUntilTs.Time(), true, nil
 }
 
-// GetAllServerRetryStates retrieves all retry states (for loading on startup)
+// GetAllServerRetryStates retrieves all retry states (for loading on startup).
 func (d *Database) GetAllServerRetryStates(
 	ctx context.Context,
 ) (map[spec.ServerName]types.RetryState, error) {
 	return d.FederationRetryState.SelectAllRetryStates(ctx, nil)
 }
 
-// ClearServerRetryState removes the retry state for a server (called on success)
+// ClearServerRetryState removes the retry state for a server (called on success).
 func (d *Database) ClearServerRetryState(
 	ctx context.Context,
 	serverName spec.ServerName,

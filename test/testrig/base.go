@@ -48,9 +48,9 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		connStr, closeDb := test.PrepareDBConnectionString(t, dbType)
 		cfg.Global.DatabaseOptions = config.DatabaseOptions{
 			ConnectionString:       config.DataSource(connStr),
-			MaxOpenConnections:     10,
-			MaxIdleConnections:     2,
-			ConnMaxLifetimeSeconds: 60,
+			MaxOpenConnections:     10, //nolint:mnd
+			MaxIdleConnections:     2,  //nolint:mnd
+			ConnMaxLifetimeSeconds: 60, //nolint:mnd
 		}
 		return &cfg, ctx, func() {
 			ctx.ShutdownDendrite()

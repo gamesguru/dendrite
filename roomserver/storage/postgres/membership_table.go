@@ -12,12 +12,13 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const membershipSchema = `
@@ -74,7 +75,7 @@ var selectJoinedUsersSetForRoomsSQL = "" +
 	" GROUP BY target_nid"
 
 // Insert a row in to membership table so that it can be locked by the
-// SELECT FOR UPDATE
+// SELECT FOR UPDATE.
 const insertMembershipSQL = "" +
 	"INSERT INTO roomserver_membership (room_nid, target_nid, target_local)" +
 	" VALUES ($1, $2, $3)" +
@@ -130,7 +131,7 @@ var selectKnownUsersSQL = "" +
 	"  SELECT DISTINCT room_nid FROM roomserver_membership WHERE target_nid=$1 AND membership_nid = " + fmt.Sprintf("%d", tables.MembershipStateJoin) +
 	") AND membership_nid = " + fmt.Sprintf("%d", tables.MembershipStateJoin) + " AND event_state_key LIKE $2 LIMIT $3"
 
-// selectLocalServerInRoomSQL is an optimised case for checking if we, the local server,
+// selectLocalServerInRoomSQL is an optimized case for checking if we, the local server,
 // are in the room by using the target_local column of the membership table. Normally when
 // we want to know if a server is in a room, we have to unmarshal the entire room state which
 // is expensive. The presence of a single row from this query suggests we're still in the
@@ -138,7 +139,7 @@ var selectKnownUsersSQL = "" +
 const selectLocalServerInRoomSQL = "" +
 	"SELECT room_nid FROM roomserver_membership WHERE target_local = true AND membership_nid = $1 AND room_nid = $2 LIMIT 1"
 
-// selectServerMembersInRoomSQL is an optimised case for checking for server members in a room.
+// selectServerMembersInRoomSQL is an optimized case for checking for server members in a room.
 // The JOIN is significantly leaner than the previous case of looking up event NIDs and reading the
 // membership events from the database, as the JOIN query amounts to little more than two index
 // scans which are very fast. The presence of a single row from this query suggests the server is
@@ -218,7 +219,8 @@ func (s *membershipStatements) SelectJoinedUsers(
 	result := make([]types.EventStateKeyNID, 0, len(targetUserNIDs))
 
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt)
-	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, targetUserNIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, targetUserNIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +242,7 @@ func (s *membershipStatements) InsertMembership(
 	localTarget bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertMembershipStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomNID, targetUserNID, localTarget)
 	return err
 }
@@ -248,7 +251,7 @@ func (s *membershipStatements) SelectMembershipForUpdate(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) (membership tables.MembershipState, err error) {
-	err = sqlutil.TxStmt(txn, s.selectMembershipForUpdateStmt).QueryRowContext(
+	err = sqlutil.TxStmt(txn, s.selectMembershipForUpdateStmt).QueryRowContext( //nolint:sqlclosecheck
 		ctx, roomNID, targetUserNID,
 	).Scan(&membership)
 	return
@@ -259,6 +262,7 @@ func (s *membershipStatements) SelectMembershipFromRoomAndTarget(
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) (eventNID types.EventNID, membership tables.MembershipState, forgotten bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipFromRoomAndTargetStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(
 		ctx, roomNID, targetUserNID,
 	).Scan(&membership, &eventNID, &forgotten)
@@ -275,8 +279,8 @@ func (s *membershipStatements) SelectMembershipsFromRoom(
 	} else {
 		stmt = s.selectMembershipsFromRoomStmt
 	}
-	stmt = sqlutil.TxStmt(txn, stmt)
-	rows, err := stmt.QueryContext(ctx, roomNID)
+	stmt = sqlutil.TxStmt(txn, stmt)             //nolint:sqlclosecheck
+	rows, err := stmt.QueryContext(ctx, roomNID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return
 	}
@@ -303,8 +307,8 @@ func (s *membershipStatements) SelectMembershipsFromRoomAndMembership(
 	} else {
 		stmt = s.selectMembershipsFromRoomAndMembershipStmt
 	}
-	stmt = sqlutil.TxStmt(txn, stmt)
-	rows, err = stmt.QueryContext(ctx, roomNID, membership)
+	stmt = sqlutil.TxStmt(txn, stmt)                        //nolint:sqlclosecheck
+	rows, err = stmt.QueryContext(ctx, roomNID, membership) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return
 	}
@@ -325,7 +329,9 @@ func (s *membershipStatements) UpdateMembership(
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, senderUserNID types.EventStateKeyNID, membership tables.MembershipState,
 	eventNID types.EventNID, forgotten bool,
 ) (bool, error) {
-	res, err := sqlutil.TxStmt(txn, s.updateMembershipStmt).ExecContext(
+	updateMembershipStmt := sqlutil.TxStmt(txn, s.updateMembershipStmt)
+	defer updateMembershipStmt.Close()
+	res, err := updateMembershipStmt.ExecContext(
 		ctx, roomNID, targetUserNID, senderUserNID, membership, eventNID, forgotten,
 	)
 	if err != nil {
@@ -340,7 +346,8 @@ func (s *membershipStatements) SelectRoomsWithMembership(
 	userID types.EventStateKeyNID, membershipState tables.MembershipState,
 ) ([]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithMembershipStmt)
-	rows, err := stmt.QueryContext(ctx, membershipState, userID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, membershipState, userID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -367,8 +374,9 @@ func (s *membershipStatements) SelectJoinedUsersSetForRooms(
 		err  error
 	)
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsStmt)
+	defer stmt.Close()
 	if len(userNIDs) > 0 {
-		stmt = sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsAndUserStmt)
+		stmt = sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsAndUserStmt) //nolint:sqlclosecheck
 		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs, userNIDs)
 	} else {
 		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs)
@@ -395,7 +403,8 @@ func (s *membershipStatements) SelectKnownUsers(
 	userID types.EventStateKeyNID, searchString string, limit int,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectKnownUsersStmt)
-	rows, err := stmt.QueryContext(ctx, userID, fmt.Sprintf("%%%s%%", searchString), limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, userID, fmt.Sprintf("%%%s%%", searchString), limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +424,9 @@ func (s *membershipStatements) UpdateForgetMembership(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, forget bool,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.updateMembershipForgetRoomStmt).ExecContext(
+	updateMembershipForgetRoomStmt := sqlutil.TxStmt(txn, s.updateMembershipForgetRoomStmt)
+	defer updateMembershipForgetRoomStmt.Close()
+	_, err := updateMembershipForgetRoomStmt.ExecContext(
 		ctx, roomNID, targetUserNID, forget,
 	)
 	return err
@@ -427,6 +438,7 @@ func (s *membershipStatements) SelectLocalServerInRoom(
 ) (bool, error) {
 	var nid types.RoomNID
 	stmt := sqlutil.TxStmt(txn, s.selectLocalServerInRoomStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, tables.MembershipStateJoin, roomNID).Scan(&nid)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -444,6 +456,7 @@ func (s *membershipStatements) SelectServerInRoom(
 ) (bool, error) {
 	var nid types.RoomNID
 	stmt := sqlutil.TxStmt(txn, s.selectServerInRoomStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, tables.MembershipStateJoin, roomNID, serverName).Scan(&nid)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -458,7 +471,9 @@ func (s *membershipStatements) DeleteMembership(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteMembershipStmt).ExecContext(
+	deleteMembershipStmt := sqlutil.TxStmt(txn, s.deleteMembershipStmt)
+	defer deleteMembershipStmt.Close()
+	_, err := deleteMembershipStmt.ExecContext(
 		ctx, roomNID, targetUserNID,
 	)
 	return err

@@ -19,6 +19,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+
 	fs "codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/internal/hooks"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
@@ -28,10 +33,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 const (
@@ -95,7 +96,7 @@ func toClientResponse(ctx context.Context, res *MSC2836EventRelationshipsRespons
 	return out
 }
 
-// Enable this MSC
+// Enable this MSC.
 func Enable(
 	cfg *config.Dendrite, cm *sqlutil.Connections, routers httputil.Routers, rsAPI roomserver.RoomserverInternalAPI, fsAPI fs.FederationInternalAPI,
 	userAPI userapi.UserInternalAPI, keyRing gomatrixserverlib.JSONVerifier,
@@ -105,8 +106,11 @@ func Enable(
 		return fmt.Errorf("cannot enable MSC2836: %w", err)
 	}
 	hooks.Enable()
-	hooks.Attach(hooks.KindNewEventPersisted, func(headeredEvent interface{}) {
-		he := headeredEvent.(*types.HeaderedEvent)
+	hooks.Attach(hooks.KindNewEventPersisted, func(headeredEvent any) {
+		he, ok := headeredEvent.(*types.HeaderedEvent)
+		if !ok {
+			return
+		}
 		hookErr := db.StoreRelation(context.Background(), he)
 		if hookErr != nil {
 			util.GetLogger(context.Background()).WithError(hookErr).WithField("event_id", he.EventID()).Error(
@@ -161,14 +165,14 @@ func eventRelationshipHandler(db Database, rsAPI roomserver.RoomserverInternalAP
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("failed to decode HTTP request as JSON")
 			return util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.BadJSON(fmt.Sprintf("invalid json: %s", err)),
 			}
 		}
 		userID, err := spec.NewUserID(device.UserID, true)
 		if err != nil {
 			return util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.BadJSON(fmt.Sprintf("invalid json: %s", err)),
 			}
 		}
@@ -181,13 +185,13 @@ func eventRelationshipHandler(db Database, rsAPI roomserver.RoomserverInternalAP
 			isFederatedRequest: false,
 			db:                 db,
 		}
-		res, resErr := rc.process()
+		res, resErr := rc.process() //nolint:contextcheck
 		if resErr != nil {
 			return *resErr
 		}
 
 		return util.JSONResponse{
-			Code: 200,
+			Code: 200, //nolint:mnd
 			JSON: toClientResponse(req.Context(), res, rsAPI),
 		}
 	}
@@ -200,7 +204,7 @@ func federatedEventRelationship(
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("failed to decode HTTP request as JSON")
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.BadJSON(fmt.Sprintf("invalid json: %s", err)),
 		}
 	}
@@ -214,7 +218,7 @@ func federatedEventRelationship(
 		fsAPI:              fsAPI,
 		serverName:         fedReq.Origin(),
 	}
-	res, resErr := rc.process()
+	res, resErr := rc.process() //nolint:contextcheck
 	if resErr != nil {
 		return *resErr
 	}
@@ -249,7 +253,7 @@ func federatedEventRelationship(
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: res.MSC2836EventRelationshipsResponse,
 	}
 }
@@ -267,8 +271,8 @@ func (rc *reqCtx) process() (*MSC2836EventRelationshipsResponse, *util.JSONRespo
 	}
 	if event == nil || !rc.authorisedToSeeEvent(event) {
 		return nil, &util.JSONResponse{
-			Code: 403,
-			JSON: spec.Forbidden("Event does not exist or you are not authorised to see it"),
+			Code: 403, //nolint:mnd
+			JSON: spec.Forbidden("Event does not exist or you are not authorized to see it"),
 		}
 	}
 	rc.roomVersion = event.Version()
@@ -358,7 +362,7 @@ func (rc *reqCtx) fetchUnknownEvent(eventID, roomID string) *types.HeaderedEvent
 	}
 	// query up to 5 servers
 	serversToQuery := queryRes.ServerNames
-	if len(serversToQuery) > 5 {
+	if len(serversToQuery) > 5 { //nolint:mnd
 		serversToQuery = serversToQuery[:5]
 	}
 
@@ -393,7 +397,7 @@ func (rc *reqCtx) includeParent(childEvent *types.HeaderedEvent) (parent *types.
 
 // If include_children: true, lookup all events which have event_id as an m.relationship
 // Apply history visibility checks to all these events and add the ones which pass into the response array,
-// honouring the recent_first flag and the limit.
+// honoring the recent_first flag and the limit.
 func (rc *reqCtx) includeChildren(db Database, parentID string, limit int, recentFirst bool) ([]*types.HeaderedEvent, *util.JSONResponse) {
 	if rc.hasUnexploredChildren(parentID) {
 		// we need to do a remote request to pull in the children as we are missing them locally.
@@ -403,7 +407,7 @@ func (rc *reqCtx) includeChildren(db Database, parentID string, limit int, recen
 			res, err := rc.fsAPI.MSC2836EventRelationships(rc.ctx, rc.serverName, srv, fclient.MSC2836EventRelationshipsRequest{
 				EventID:     parentID,
 				Direction:   "down",
-				Limit:       100,
+				Limit:       100, //nolint:mnd
 				MaxBreadth:  -1,
 				MaxDepth:    1, // we just want the children from this parent
 				RecentFirst: true,
@@ -447,7 +451,7 @@ func (rc *reqCtx) includeChildren(db Database, parentID string, limit int, recen
 }
 
 // Begin to walk the thread DAG in the direction specified, either depth or breadth first according to the depth_first flag,
-// honouring the limit, max_depth and max_breadth values according to the following rules
+// honoring the limit, max_depth and max_breadth values according to the following rules.
 func walkThread(
 	ctx context.Context, db Database, rc *reqCtx, included map[string]bool, limit int,
 ) ([]*types.HeaderedEvent, bool) {
@@ -456,7 +460,7 @@ func walkThread(
 		ctx: ctx,
 		req: rc.req,
 		db:  db,
-		fn: func(wi *walkInfo) bool {
+		fn: func(wi *walkInfo) bool { //nolint:contextcheck
 			// If already processed event, skip.
 			if included[wi.EventID] {
 				return false
@@ -487,7 +491,7 @@ func walkThread(
 	return result, limited
 }
 
-// MSC2836EventRelationships performs an /event_relationships request to a remote server
+// MSC2836EventRelationships performs an /event_relationships request to a remote server.
 func (rc *reqCtx) MSC2836EventRelationships(eventID string, srv spec.ServerName, ver gomatrixserverlib.RoomVersion) (*MSC2836EventRelationshipsResponse, error) {
 	res, err := rc.fsAPI.MSC2836EventRelationships(rc.ctx, rc.serverName, srv, fclient.MSC2836EventRelationshipsRequest{
 		EventID:     eventID,
@@ -532,8 +536,8 @@ func (rc *reqCtx) authorisedToSeeEvent(event *types.HeaderedEvent) bool {
 	}
 	// make sure the user is in this room
 	// Allow events if the member is in the room
-	// TODO: This does not honour history_visibility
-	// TODO: This does not honour m.room.create content
+	// TODO: This does not honor history_visibility
+	// TODO: This does not honor m.room.create content
 	var queryMembershipRes roomserver.QueryMembershipForUserResponse
 	err := rc.rsAPI.QueryMembershipForUser(rc.ctx, &roomserver.QueryMembershipForUserRequest{
 		RoomID: event.RoomID().String(),
@@ -569,7 +573,7 @@ func (rc *reqCtx) getServersForEventID(eventID string) []spec.ServerName {
 	}
 	// query up to 5 servers
 	serversToQuery := queryRes.ServerNames
-	if len(serversToQuery) > 5 {
+	if len(serversToQuery) > 5 { //nolint:mnd
 		serversToQuery = serversToQuery[:5]
 	}
 	return serversToQuery
@@ -730,7 +734,7 @@ func (rc *reqCtx) getChildMetadata(eventID string) (count int, hash []byte) {
 // hasUnexploredChildren returns true if this event has unexplored children.
 // "An event has unexplored children if the `unsigned` child count on the parent does not match
 // how many children the server believes the parent to have. In addition, if the counts match but
-// the hashes do not match, then the event is unexplored."
+// the hashes do not match, then the event is unexplored.".
 func (rc *reqCtx) hasUnexploredChildren(eventID string) bool {
 	if rc.isFederatedRequest {
 		return false // we only explore children for clients, not servers.
@@ -776,7 +780,7 @@ type walker struct {
 	fn  func(wi *walkInfo) bool // callback invoked for each event walked, return true to terminate the walk
 }
 
-// WalkFrom the event ID given
+// WalkFrom the event ID given.
 func (w *walker) WalkFrom(eventID string) (limited bool, err error) {
 	children, err := w.childrenForParent(eventID)
 	if err != nil {
@@ -804,7 +808,7 @@ func (w *walker) WalkFrom(eventID string) (limited bool, err error) {
 	return false, nil
 }
 
-// addChildren adds an event's children to the to walk data structure
+// addChildren adds an event's children to the to walk data structure.
 func (w *walker) addChildren(toWalk []walkInfo, children []eventInfo, depthOfChildren int) []walkInfo {
 	// Check what number child this event is (ordered by recent_first) compared to its parent, does it exceed (greater than) max_breadth? If yes, skip.
 	if len(children) > w.req.MaxBreadth {
@@ -854,7 +858,7 @@ func (w *walker) nextChild(toWalk []walkInfo) (*walkInfo, []walkInfo) {
 	return &child, toWalk
 }
 
-// childrenForParent returns the children events for this event ID, honouring the direction: up|down flags
+// childrenForParent returns the children events for this event ID, honoring the direction: up|down flags
 // meaning this can actually be returning the parent for the event instead of the children.
 func (w *walker) childrenForParent(eventID string) ([]eventInfo, error) {
 	if w.req.Direction == "down" {

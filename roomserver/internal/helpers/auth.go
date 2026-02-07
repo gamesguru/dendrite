@@ -117,27 +117,27 @@ func (ae *authEvents) Valid() bool {
 	return ae.valid
 }
 
-// Create implements gomatrixserverlib.AuthEventProvider
+// Create implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) Create() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomCreateNID), nil
 }
 
-// PowerLevels implements gomatrixserverlib.AuthEventProvider
+// PowerLevels implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) PowerLevels() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomPowerLevelsNID), nil
 }
 
-// JoinRules implements gomatrixserverlib.AuthEventProvider
+// JoinRules implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) JoinRules() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomJoinRulesNID), nil
 }
 
-// Memmber implements gomatrixserverlib.AuthEventProvider
+// Memmber implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) Member(stateKey spec.SenderID) (gomatrixserverlib.PDU, error) {
 	return ae.lookupEvent(types.MRoomMemberNID, string(stateKey)), nil
 }
 
-// ThirdPartyInvite implements gomatrixserverlib.AuthEventProvider
+// ThirdPartyInvite implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) ThirdPartyInvite(stateKey string) (gomatrixserverlib.PDU, error) {
 	return ae.lookupEvent(types.MRoomThirdPartyInviteNID, stateKey), nil
 }

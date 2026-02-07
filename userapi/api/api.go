@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/userapi/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -22,6 +20,8 @@ import (
 	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal/pushrules"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
 // UserInternalAPI is the internal API for information about users and devices.
@@ -34,7 +34,7 @@ type UserInternalAPI interface {
 	QueryAccountByLocalpart(ctx context.Context, req *QueryAccountByLocalpartRequest, res *QueryAccountByLocalpartResponse) (err error)
 }
 
-// api functions required by the appservice api
+// api functions required by the appservice api.
 type AppserviceUserAPI interface {
 	PerformAccountCreation(ctx context.Context, req *PerformAccountCreationRequest, res *PerformAccountCreationResponse) error
 	PerformDeviceCreation(ctx context.Context, req *PerformDeviceCreationRequest, res *PerformDeviceCreationResponse) error
@@ -45,12 +45,12 @@ type RoomserverUserAPI interface {
 	QueryAccountByLocalpart(ctx context.Context, req *QueryAccountByLocalpartRequest, res *QueryAccountByLocalpartResponse) (err error)
 }
 
-// api functions required by the media api
+// api functions required by the media api.
 type MediaUserAPI interface {
 	QueryAcccessTokenAPI
 }
 
-// api functions required by the federation api
+// api functions required by the federation api.
 type FederationUserAPI interface {
 	UploadDeviceKeysAPI
 	QueryOpenIDToken(ctx context.Context, req *QueryOpenIDTokenRequest, res *QueryOpenIDTokenResponse) error
@@ -62,7 +62,7 @@ type FederationUserAPI interface {
 	PerformClaimKeys(ctx context.Context, req *PerformClaimKeysRequest, res *PerformClaimKeysResponse)
 }
 
-// api functions required by the sync api
+// api functions required by the sync api.
 type SyncUserAPI interface {
 	QueryAcccessTokenAPI
 	SyncKeyAPI
@@ -73,7 +73,7 @@ type SyncUserAPI interface {
 	QueryDeviceInfos(ctx context.Context, req *QueryDeviceInfosRequest, res *QueryDeviceInfosResponse) error
 }
 
-// api functions required by the client api
+// api functions required by the client api.
 type ClientUserAPI interface {
 	QueryAcccessTokenAPI
 	LoginTokenInternalAPI
@@ -91,7 +91,7 @@ type ClientUserAPI interface {
 	PerformAdminListRegistrationTokens(ctx context.Context, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	PerformAdminGetRegistrationToken(ctx context.Context, tokenString string) (*clientapi.RegistrationToken, error)
 	PerformAdminDeleteRegistrationToken(ctx context.Context, tokenString string) error
-	PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]interface{}) (*clientapi.RegistrationToken, error)
+	PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 	PerformAccountCreation(ctx context.Context, req *PerformAccountCreationRequest, res *PerformAccountCreationResponse) error
 	PerformDeviceCreation(ctx context.Context, req *PerformDeviceCreationRequest, res *PerformDeviceCreationResponse) error
 	PerformDeviceUpdate(ctx context.Context, req *PerformDeviceUpdateRequest, res *PerformDeviceUpdateResponse) error
@@ -124,12 +124,12 @@ type ProfileAPI interface {
 	SetDisplayName(ctx context.Context, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
 }
 
-// custom api functions required by pinecone / p2p demos
+// custom api functions required by pinecone / p2p demos.
 type QuerySearchProfilesAPI interface {
 	QuerySearchProfiles(ctx context.Context, req *QuerySearchProfilesRequest, res *QuerySearchProfilesResponse) error
 }
 
-// common function for creating authenticated endpoints (used in client/media/sync api)
+// common function for creating authenticated endpoints (used in client/media/sync api).
 type QueryAcccessTokenAPI interface {
 	QueryAccessToken(ctx context.Context, req *QueryAccessTokenRequest, res *QueryAccessTokenResponse) error
 }
@@ -163,19 +163,21 @@ type KeyBackupSession struct {
 func (a *KeyBackupSession) ShouldReplaceRoomKey(newKey *KeyBackupSession) bool {
 	// https://spec.matrix.org/unstable/client-server-api/#backup-algorithm-mmegolm_backupv1curve25519-aes-sha2
 	// "if the keys have different values for is_verified, then it will keep the key that has is_verified set to true"
-	if newKey.IsVerified && !a.IsVerified {
+	switch {
+	case newKey.IsVerified && !a.IsVerified:
 		return true
-	} else if newKey.FirstMessageIndex < a.FirstMessageIndex {
+	case newKey.FirstMessageIndex < a.FirstMessageIndex:
 		// "if they have the same values for is_verified, then it will keep the key with a lower first_message_index"
 		return true
-	} else if newKey.ForwardedCount < a.ForwardedCount {
+	case newKey.ForwardedCount < a.ForwardedCount:
 		// "and finally, is is_verified and first_message_index are equal, then it will keep the key with a lower forwarded_count"
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
-// Internal KeyBackupData for passing to/from the storage layer
+// Internal KeyBackupData for passing to/from the storage layer.
 type InternalKeyBackupSession struct {
 	KeyBackupSession
 	RoomID    string
@@ -211,7 +213,7 @@ type QueryKeyBackupResponse struct {
 	Keys map[string]map[string]KeyBackupSession // the keys if ReturnKeys=true
 }
 
-// InputAccountDataRequest is the request for InputAccountData
+// InputAccountDataRequest is the request for InputAccountData.
 type InputAccountDataRequest struct {
 	UserID      string          // required: the user to set account data for
 	RoomID      string          // optional: the room to associate the account data with
@@ -219,7 +221,7 @@ type InputAccountDataRequest struct {
 	AccountData json.RawMessage // required: the message content
 }
 
-// InputAccountDataResponse is the response for InputAccountData
+// InputAccountDataResponse is the response for InputAccountData.
 type InputAccountDataResponse struct{}
 
 type PerformDeviceUpdateRequest struct {
@@ -243,12 +245,12 @@ type PerformDeviceDeletionRequest struct {
 
 type PerformDeviceDeletionResponse struct{}
 
-// QueryDeviceInfosRequest is the request to QueryDeviceInfos
+// QueryDeviceInfosRequest is the request to QueryDeviceInfos.
 type QueryDeviceInfosRequest struct {
 	DeviceIDs []string
 }
 
-// QueryDeviceInfosResponse is the response to QueryDeviceInfos
+// QueryDeviceInfosResponse is the response to QueryDeviceInfos.
 type QueryDeviceInfosResponse struct {
 	DeviceInfo map[string]struct {
 		DisplayName string
@@ -256,7 +258,7 @@ type QueryDeviceInfosResponse struct {
 	}
 }
 
-// QueryAccessTokenRequest is the request for QueryAccessToken
+// QueryAccessTokenRequest is the request for QueryAccessToken.
 type QueryAccessTokenRequest struct {
 	AccessToken string
 	// optional user ID, valid only if the token is an appservice.
@@ -264,37 +266,37 @@ type QueryAccessTokenRequest struct {
 	AppServiceUserID string
 }
 
-// QueryAccessTokenResponse is the response for QueryAccessToken
+// QueryAccessTokenResponse is the response for QueryAccessToken.
 type QueryAccessTokenResponse struct {
 	Device *Device
 	Err    string // e.g ErrorForbidden
 }
 
-// QueryAccountDataRequest is the request for QueryAccountData
+// QueryAccountDataRequest is the request for QueryAccountData.
 type QueryAccountDataRequest struct {
 	UserID   string // required: the user to get account data for.
 	RoomID   string // optional: the room ID, or global account data if not specified.
 	DataType string // optional: the data type, or all types if not specified.
 }
 
-// QueryAccountDataResponse is the response for QueryAccountData
+// QueryAccountDataResponse is the response for QueryAccountData.
 type QueryAccountDataResponse struct {
 	GlobalAccountData map[string]json.RawMessage            // type -> data
 	RoomAccountData   map[string]map[string]json.RawMessage // room -> type -> data
 }
 
-// QueryDevicesRequest is the request for QueryDevices
+// QueryDevicesRequest is the request for QueryDevices.
 type QueryDevicesRequest struct {
 	UserID string
 }
 
-// QueryDevicesResponse is the response for QueryDevices
+// QueryDevicesResponse is the response for QueryDevices.
 type QueryDevicesResponse struct {
 	UserExists bool
 	Devices    []Device
 }
 
-// QuerySearchProfilesRequest is the request for QueryProfile
+// QuerySearchProfilesRequest is the request for QueryProfile.
 type QuerySearchProfilesRequest struct {
 	// The search string to match
 	SearchString string
@@ -302,13 +304,13 @@ type QuerySearchProfilesRequest struct {
 	Limit int
 }
 
-// QuerySearchProfilesResponse is the response for QuerySearchProfilesRequest
+// QuerySearchProfilesResponse is the response for QuerySearchProfilesRequest.
 type QuerySearchProfilesResponse struct {
 	// Profiles matching the search
 	Profiles []authtypes.Profile
 }
 
-// PerformAccountCreationRequest is the request for PerformAccountCreation
+// PerformAccountCreationRequest is the request for PerformAccountCreation.
 type PerformAccountCreationRequest struct {
 	AccountType AccountType     // Required: whether this is a guest or user account
 	Localpart   string          // Required: The localpart for this account. Ignored if account type is guest.
@@ -319,13 +321,13 @@ type PerformAccountCreationRequest struct {
 	OnConflict   Conflict
 }
 
-// PerformAccountCreationResponse is the response for PerformAccountCreation
+// PerformAccountCreationResponse is the response for PerformAccountCreation.
 type PerformAccountCreationResponse struct {
 	AccountCreated bool
 	Account        *Account
 }
 
-// PerformAccountCreationRequest is the request for PerformAccountCreation
+// PerformAccountCreationRequest is the request for PerformAccountCreation.
 type PerformPasswordUpdateRequest struct {
 	Localpart     string          // Required: The localpart for this account.
 	ServerName    spec.ServerName // Required: The domain for this account.
@@ -333,7 +335,7 @@ type PerformPasswordUpdateRequest struct {
 	LogoutDevices bool            // Optional: Whether to log out all user devices.
 }
 
-// PerformAccountCreationResponse is the response for PerformAccountCreation
+// PerformAccountCreationResponse is the response for PerformAccountCreation.
 type PerformPasswordUpdateResponse struct {
 	PasswordUpdated bool
 	Account         *Account
@@ -350,7 +352,7 @@ type PerformLastSeenUpdateRequest struct {
 // PerformLastSeenUpdateResponse is the response for PerformLastSeenUpdate.
 type PerformLastSeenUpdateResponse struct{}
 
-// PerformDeviceCreationRequest is the request for PerformDeviceCreation
+// PerformDeviceCreationRequest is the request for PerformDeviceCreation.
 type PerformDeviceCreationRequest struct {
 	Localpart   string
 	ServerName  spec.ServerName // optional: if blank, default server name used
@@ -374,45 +376,45 @@ type PerformDeviceCreationRequest struct {
 	FromRegistration bool
 }
 
-// PerformDeviceCreationResponse is the response for PerformDeviceCreation
+// PerformDeviceCreationResponse is the response for PerformDeviceCreation.
 type PerformDeviceCreationResponse struct {
 	DeviceCreated bool
 	Device        *Device
 }
 
-// PerformAccountDeactivationRequest is the request for PerformAccountDeactivation
+// PerformAccountDeactivationRequest is the request for PerformAccountDeactivation.
 type PerformAccountDeactivationRequest struct {
 	Localpart  string
 	ServerName spec.ServerName // optional: if blank, default server name used
 }
 
-// PerformAccountDeactivationResponse is the response for PerformAccountDeactivation
+// PerformAccountDeactivationResponse is the response for PerformAccountDeactivation.
 type PerformAccountDeactivationResponse struct {
 	AccountDeactivated bool
 }
 
-// PerformOpenIDTokenCreationRequest is the request for PerformOpenIDTokenCreation
+// PerformOpenIDTokenCreationRequest is the request for PerformOpenIDTokenCreation.
 type PerformOpenIDTokenCreationRequest struct {
 	UserID string
 }
 
-// PerformOpenIDTokenCreationResponse is the response for PerformOpenIDTokenCreation
+// PerformOpenIDTokenCreationResponse is the response for PerformOpenIDTokenCreation.
 type PerformOpenIDTokenCreationResponse struct {
 	Token OpenIDToken
 }
 
-// QueryOpenIDTokenRequest is the request for QueryOpenIDToken
+// QueryOpenIDTokenRequest is the request for QueryOpenIDToken.
 type QueryOpenIDTokenRequest struct {
 	Token string
 }
 
-// QueryOpenIDTokenResponse is the response for QueryOpenIDToken
+// QueryOpenIDTokenResponse is the response for QueryOpenIDToken.
 type QueryOpenIDTokenResponse struct {
 	Sub         string // The Matrix User ID that generated the token
 	ExpiresAtMS int64
 }
 
-// Device represents a client's device (mobile, web, etc)
+// Device represents a client's device (mobile, web, etc).
 type Device struct {
 	ID     string
 	UserID string
@@ -455,25 +457,25 @@ type Account struct {
 	// TODO: Associations (e.g. with application services)
 }
 
-// OpenIDToken represents an OpenID token
+// OpenIDToken represents an OpenID token.
 type OpenIDToken struct {
 	Token       string
 	UserID      string
 	ExpiresAtMS int64
 }
 
-// OpenIDTokenInfo represents the attributes associated with an issued OpenID token
+// OpenIDTokenInfo represents the attributes associated with an issued OpenID token.
 type OpenIDTokenAttributes struct {
 	UserID      string
 	ExpiresAtMS int64
 }
 
-// UserInfo is for returning information about the user an OpenID token was issued for
+// UserInfo is for returning information about the user an OpenID token was issued for.
 type UserInfo struct {
 	Sub string // The Matrix user's ID who generated the token
 }
 
-// ErrorForbidden is an error indicating that the supplied access token is forbidden
+// ErrorForbidden is an error indicating that the supplied access token is forbidden.
 type ErrorForbidden struct {
 	Message string
 }
@@ -491,25 +493,25 @@ func (e *ErrorConflict) Error() string {
 	return "Conflict: " + e.Message
 }
 
-// Conflict is an enum representing what to do when encountering conflicting when creating profiles/devices
+// Conflict is an enum representing what to do when encountering conflicting when creating profiles/devices.
 type Conflict int
 
-// AccountType is an enum representing the kind of account
+// AccountType is an enum representing the kind of account.
 type AccountType int
 
 const (
-	// ConflictUpdate will update matching records returning no error
+	// ConflictUpdate will update matching records returning no error.
 	ConflictUpdate Conflict = 1
-	// ConflictAbort will reject the request with ErrorConflict
+	// ConflictAbort will reject the request with ErrorConflict.
 	ConflictAbort Conflict = 2
 
-	// AccountTypeUser indicates this is a user account
+	// AccountTypeUser indicates this is a user account.
 	AccountTypeUser AccountType = 1
-	// AccountTypeGuest indicates this is a guest account
+	// AccountTypeGuest indicates this is a guest account.
 	AccountTypeGuest AccountType = 2
-	// AccountTypeAdmin indicates this is an admin account
+	// AccountTypeAdmin indicates this is an admin account.
 	AccountTypeAdmin AccountType = 3
-	// AccountTypeAppService indicates this is an appservice account
+	// AccountTypeAppService indicates this is an appservice account.
 	AccountTypeAppService AccountType = 4
 )
 
@@ -535,18 +537,18 @@ type PerformPusherDeletionRequest struct {
 	SessionID  int64
 }
 
-// Pusher represents a push notification subscriber
+// Pusher represents a push notification subscriber.
 type Pusher struct {
-	SessionID         int64                  `json:"session_id,omitempty"`
-	PushKey           string                 `json:"pushkey"`
-	PushKeyTS         int64                  `json:"pushkey_ts,omitempty"`
-	Kind              PusherKind             `json:"kind"`
-	AppID             string                 `json:"app_id"`
-	AppDisplayName    string                 `json:"app_display_name"`
-	DeviceDisplayName string                 `json:"device_display_name"`
-	ProfileTag        string                 `json:"profile_tag"`
-	Language          string                 `json:"lang"`
-	Data              map[string]interface{} `json:"data"`
+	SessionID         int64          `json:"session_id,omitempty"`
+	PushKey           string         `json:"pushkey"`
+	PushKeyTS         int64          `json:"pushkey_ts,omitempty"`
+	Kind              PusherKind     `json:"kind"`
+	AppID             string         `json:"app_id"`
+	AppDisplayName    string         `json:"app_display_name"`
+	DeviceDisplayName string         `json:"device_display_name"`
+	ProfileTag        string         `json:"profile_tag"`
+	Language          string         `json:"lang"`
+	Data              map[string]any `json:"data"`
 }
 
 type PusherKind string
@@ -642,7 +644,7 @@ type QueryAccountByLocalpartResponse struct {
 	Account *Account
 }
 
-// API functions required by the clientapi
+// API functions required by the clientapi.
 type ClientKeyAPI interface {
 	UploadDeviceKeysAPI
 	QueryKeys(ctx context.Context, req *QueryKeysRequest, res *QueryKeysResponse)
@@ -658,7 +660,7 @@ type UploadDeviceKeysAPI interface {
 	PerformUploadDeviceKeys(ctx context.Context, req *PerformUploadDeviceKeysRequest, res *PerformUploadDeviceKeysResponse)
 }
 
-// API functions required by the syncapi
+// API functions required by the syncapi.
 type SyncKeyAPI interface {
 	QueryKeyChanges(ctx context.Context, req *QueryKeyChangesRequest, res *QueryKeyChangesResponse) error
 	QueryOneTimeKeys(ctx context.Context, req *QueryOneTimeKeysRequest, res *QueryOneTimeKeysResponse) error
@@ -673,7 +675,7 @@ type FederationKeyAPI interface {
 	PerformClaimKeys(ctx context.Context, req *PerformClaimKeysRequest, res *PerformClaimKeysResponse)
 }
 
-// KeyError is returned if there was a problem performing/querying the server
+// KeyError is returned if there was a problem performing/querying the server.
 type KeyError struct {
 	Err                string `json:"error"`
 	IsInvalidSignature bool   `json:"is_invalid_signature,omitempty"` // M_INVALID_SIGNATURE
@@ -702,7 +704,7 @@ type DeviceMessage struct {
 	DeviceChangeID int64
 }
 
-// OutputCrossSigningKeyUpdate is an entry in the signing key update output kafka log
+// OutputCrossSigningKeyUpdate is an entry in the signing key update output kafka log.
 type OutputCrossSigningKeyUpdate struct {
 	CrossSigningKeyUpdate `json:"signing_keys"`
 }
@@ -746,7 +748,7 @@ type DeviceKeys struct {
 	KeyJSON []byte
 }
 
-// WithStreamID returns a copy of this device message with the given stream ID
+// WithStreamID returns a copy of this device message with the given stream ID.
 func (k *DeviceKeys) WithStreamID(streamID int64) DeviceMessage {
 	return DeviceMessage{
 		DeviceKeys: k,
@@ -765,13 +767,13 @@ type OneTimeKeys struct {
 	KeyJSON map[string]json.RawMessage
 }
 
-// Split a key in KeyJSON into algorithm and key ID
+// Split a key in KeyJSON into algorithm and key ID.
 func (k *OneTimeKeys) Split(keyIDWithAlgo string) (algo string, keyID string) {
 	segments := strings.Split(keyIDWithAlgo, ":")
 	return segments[0], segments[1]
 }
 
-// OneTimeKeysCount represents the counts of one-time keys for a single device
+// OneTimeKeysCount represents the counts of one-time keys for a single device.
 type OneTimeKeysCount struct {
 	// The user who owns this device
 	UserID string
@@ -796,13 +798,13 @@ type FallbackKeys struct {
 	KeyJSON map[string]json.RawMessage
 }
 
-// Split a key in KeyJSON into algorithm and key ID
+// Split a key in KeyJSON into algorithm and key ID.
 func (k *FallbackKeys) Split(keyIDWithAlgo string) (algo string, keyID string) {
 	segments := strings.Split(keyIDWithAlgo, ":")
 	return segments[0], segments[1]
 }
 
-// PerformUploadKeysRequest is the request to PerformUploadKeys
+// PerformUploadKeysRequest is the request to PerformUploadKeys.
 type PerformUploadKeysRequest struct {
 	UserID       string // Required - User performing the request
 	DeviceID     string // Optional - Device performing the request, for fetching OTK count
@@ -820,7 +822,7 @@ type PerformUploadKeysRequest struct {
 	FromRegistration bool
 }
 
-// PerformUploadKeysResponse is the response to PerformUploadKeys
+// PerformUploadKeysResponse is the response to PerformUploadKeys.
 type PerformUploadKeysResponse struct {
 	// A fatal error when processing e.g database failures
 	Error *KeyError
@@ -842,7 +844,7 @@ type PerformDeleteKeysResponse struct {
 	Error *KeyError
 }
 
-// KeyError sets a key error field on KeyErrors
+// KeyError sets a key error field on KeyErrors.
 func (r *PerformUploadKeysResponse) KeyError(userID, deviceID string, err *KeyError) {
 	if r.KeyErrors[userID] == nil {
 		r.KeyErrors[userID] = make(map[string]*KeyError)
@@ -860,7 +862,7 @@ type PerformClaimKeysResponse struct {
 	// Map of user_id to device_id to algorithm:key_id to key JSON
 	OneTimeKeys map[string]map[string]map[string]json.RawMessage
 	// Map of remote server domain to error JSON
-	Failures map[string]interface{}
+	Failures map[string]any
 	// Set if there was a fatal error processing this action
 	Error *KeyError
 }
@@ -896,7 +898,7 @@ type QueryKeysRequest struct {
 
 type QueryKeysResponse struct {
 	// Map of remote server domain to error JSON
-	Failures map[string]interface{}
+	Failures map[string]any
 	// Map of user_id to device_id to device_key
 	DeviceKeys map[string]map[string]json.RawMessage
 	// Maps of user_id to cross signing key

@@ -10,8 +10,6 @@ import (
 	"context"
 	"sync"
 
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
@@ -20,6 +18,8 @@ import (
 	"codefloe.com/pat-s/dendrite/appservice/query"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/setup/process"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
@@ -72,7 +72,7 @@ func NewInternalAPI(
 
 // generateAppServiceAccounts creates a dummy account based off the
 // `sender_localpart` field of each application service if it doesn't
-// exist already
+// exist already.
 func generateAppServiceAccount(
 	userAPI userapi.AppserviceUserAPI,
 	as config.ApplicationService,

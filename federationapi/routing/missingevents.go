@@ -9,11 +9,12 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 type getMissingEventRequest struct {
@@ -74,7 +75,7 @@ func GetMissingEvents(
 	}
 }
 
-// filterEvents returns only those events with matching roomID
+// filterEvents returns only those events with matching roomID.
 func filterEvents(
 	events []*types.HeaderedEvent, roomID string,
 ) []*types.HeaderedEvent {

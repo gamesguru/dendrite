@@ -14,13 +14,6 @@ import (
 	"sync"
 	"time"
 
-	fedInternal "codefloe.com/pat-s/dendrite/federationapi/internal"
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
@@ -28,6 +21,14 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	fedInternal "codefloe.com/pat-s/dendrite/federationapi/internal"
+	"codefloe.com/pat-s/dendrite/federationapi/producers"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 const (
@@ -42,8 +43,9 @@ const (
 // so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz]
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
-// applied:
-// nolint: gocyclo
+// applied.
+//
+//nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
 	dendriteCfg *config.Dendrite,
@@ -410,8 +412,8 @@ func Setup(
 				httpReq, request, cfg, rsAPI, keys, *roomID, eventID,
 			)
 			// not all responses get wrapped in [code, body]
-			var body interface{}
-			body = []interface{}{
+			var body any
+			body = []any{
 				res.Code, res.JSON,
 			}
 			jerr, ok := res.JSON.(spec.MatrixError)
@@ -495,8 +497,8 @@ func Setup(
 				httpReq, request, cfg, rsAPI, keys, roomID, eventID,
 			)
 			// not all responses get wrapped in [code, body]
-			var body interface{}
-			body = []interface{}{
+			var body any
+			body = []any{
 				res.Code, res.JSON,
 			}
 			jerr, ok := res.JSON.(spec.MatrixError)
@@ -685,7 +687,7 @@ func MakeFedAPI(
 		go wakeup.Wakeup(req.Context(), fedReq.Origin())
 		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
-			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
+			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params") //nolint:mnd
 		}
 
 		jsonRes := f(req, fedReq, vars)
@@ -714,7 +716,6 @@ func MakeFedHTTPAPI(
 		enc := json.NewEncoder(w)
 		logger := util.GetLogger(req.Context())
 		if fedReq == nil {
-
 			logger.Debugf("VerifyUserFromRequest %s -> HTTP %d", req.RemoteAddr, errResp.Code)
 			w.WriteHeader(errResp.Code)
 			if err := enc.Encode(errResp); err != nil {
@@ -759,6 +760,6 @@ func (f *FederationWakeups) Wakeup(ctx context.Context, origin spec.ServerName) 
 			return
 		}
 	}
-	f.FsAPI.MarkServersAlive([]spec.ServerName{origin})
+	f.FsAPI.MarkServersAlive([]spec.ServerName{origin}) //nolint:contextcheck
 	f.origins.Store(origin, time.Now())
 }

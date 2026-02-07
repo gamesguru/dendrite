@@ -84,7 +84,9 @@ func NewPostgresRelationsTable(db *sql.DB) (tables.Relations, error) {
 func (s *relationsStatements) InsertRelation(
 	ctx context.Context, txn *sql.Tx, roomID, eventID, childEventID, childEventType, relType string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.insertRelationStmt).ExecContext(
+	insertRelationStmt := sqlutil.TxStmt(txn, s.insertRelationStmt)
+	defer insertRelationStmt.Close()
+	_, err = insertRelationStmt.ExecContext(
 		ctx, roomID, eventID, childEventID, childEventType, relType,
 	)
 	return
@@ -94,13 +96,14 @@ func (s *relationsStatements) DeleteRelation(
 	ctx context.Context, txn *sql.Tx, roomID, childEventID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRelationStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx, roomID, childEventID,
 	)
 	return err
 }
 
-// SelectRelationsInRange returns a map rel_type -> []child_event_id
+// SelectRelationsInRange returns a map rel_type -> []child_event_id.
 func (s *relationsStatements) SelectRelationsInRange(
 	ctx context.Context, txn *sql.Tx, roomID, eventID, relType, eventType string,
 	r types.Range, limit int,
@@ -108,11 +111,11 @@ func (s *relationsStatements) SelectRelationsInRange(
 	var lastPos types.StreamPosition
 	var stmt *sql.Stmt
 	if r.Backwards {
-		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeDescStmt)
+		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeDescStmt) //nolint:sqlclosecheck
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeAscStmt)
+		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeAscStmt) //nolint:sqlclosecheck
 	}
-	rows, err := stmt.QueryContext(ctx, roomID, eventID, relType, eventType, r.Low(), r.High(), limit)
+	rows, err := stmt.QueryContext(ctx, roomID, eventID, relType, eventType, r.Low(), r.High(), limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, lastPos, err
 	}
@@ -145,6 +148,7 @@ func (s *relationsStatements) SelectMaxRelationID(
 	ctx context.Context, txn *sql.Tx,
 ) (id int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMaxRelationIDStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&id)
 	return
 }

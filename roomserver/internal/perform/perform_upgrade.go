@@ -9,18 +9,20 @@ package perform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/sirupsen/logrus"
 )
 
 type Upgrader struct {
@@ -28,7 +30,7 @@ type Upgrader struct {
 	URSAPI api.RoomserverInternalAPI
 }
 
-// PerformRoomUpgrade upgrades a room from one version to another
+// PerformRoomUpgrade upgrades a room from one version to another.
 func (r *Upgrader) PerformRoomUpgrade(
 	ctx context.Context,
 	roomID string, userID spec.UserID, roomVersion gomatrixserverlib.RoomVersion, additionalCreators []string,
@@ -36,7 +38,7 @@ func (r *Upgrader) PerformRoomUpgrade(
 	return r.performRoomUpgrade(ctx, roomID, userID, roomVersion, additionalCreators)
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (r *Upgrader) performRoomUpgrade(
 	ctx context.Context,
 	roomID string, userID spec.UserID, roomVersion gomatrixserverlib.RoomVersion, additionalCreators []string,
@@ -72,7 +74,7 @@ func (r *Upgrader) performRoomUpgrade(
 	}
 	oldRoomRes := &api.QueryLatestEventsAndStateResponse{}
 	if err = r.URSAPI.QueryLatestEventsAndState(ctx, oldRoomReq, oldRoomRes); err != nil {
-		return "", fmt.Errorf("failed to get latest state: %s", err)
+		return "", fmt.Errorf("failed to get latest state: %w", err)
 	}
 	var oldCreateEvent *types.HeaderedEvent
 	for _, ev := range oldRoomRes.StateEvents {
@@ -91,7 +93,7 @@ func (r *Upgrader) performRoomUpgrade(
 	if !newRoomVerImpl.DomainlessRoomIDs() {
 		// TODO (#267): Check room ID doesn't clash with an existing one, and we
 		//              probably shouldn't be using pseudo-random strings, maybe GUIDs?
-		newRoomID = fmt.Sprintf("!%s:%s", util.RandomString(16), userID.Domain())
+		newRoomID = fmt.Sprintf("!%s:%s", util.RandomString(16), userID.Domain()) //nolint:mnd
 
 		// Make the tombstone event
 		tombstoneEvent, pErr = r.makeTombstoneEvent(ctx, evTime, *senderID, userID.Domain(), roomID, newRoomID)
@@ -109,7 +111,7 @@ func (r *Upgrader) performRoomUpgrade(
 	}{}
 	// keep existing values in old room e.g type/m.federate
 	if err = json.Unmarshal(oldCreateEvent.Content(), &content); err != nil {
-		return "", fmt.Errorf("failed to copy old create event content to new create event: %s", err)
+		return "", fmt.Errorf("failed to copy old create event content to new create event: %w", err)
 	}
 	content.Predecessor.RoomID = roomID
 	content.Predecessor.EventID = ""
@@ -118,7 +120,7 @@ func (r *Upgrader) performRoomUpgrade(
 	}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
-		return "", fmt.Errorf("failed to make content for new create event: %s", err)
+		return "", fmt.Errorf("failed to make content for new create event: %w", err)
 	}
 	// make the create event up-front so the roomserver can calculate the room NID to store.
 	createContent, err := api.GenerateCreateContent(ctx, roomVersion, userID.String(), contentJSON, additionalCreators)
@@ -169,7 +171,7 @@ func (r *Upgrader) performRoomUpgrade(
 
 	// Send the setup events to the new room
 	if pErr = r.sendInitialEvents(ctx, evTime, *senderID, userID.Domain(), newRoomID, roomVersion, newCreateEvent, eventsToMake); pErr != nil {
-		return "", fmt.Errorf("sendInitialEvents: %s", pErr)
+		return "", fmt.Errorf("sendInitialEvents: %w", pErr)
 	}
 
 	// 5. Send the tombstone event to the old room
@@ -218,7 +220,7 @@ func (r *Upgrader) restrictOldRoomPowerLevels(ctx context.Context, evTime time.T
 	// If possible, the power levels in the old room should also be modified to
 	// prevent sending of events and inviting new users. For example, setting
 	// events_default and invite to the greater of 50 and users_default + 1.
-	restrictedDefaultPowerLevel := int64(50)
+	restrictedDefaultPowerLevel := int64(50) //nolint:mnd
 	if restrictedPowerLevelContent.UsersDefault+1 > restrictedDefaultPowerLevel {
 		restrictedDefaultPowerLevel = restrictedPowerLevelContent.UsersDefault + 1
 	}
@@ -231,10 +233,10 @@ func (r *Upgrader) restrictOldRoomPowerLevels(ctx context.Context, evTime time.T
 		Content:  restrictedPowerLevelContent,
 	})
 
-	switch resErr.(type) {
-	case api.ErrNotAllowed:
+	switch {
+	case errors.As(resErr, &api.ErrNotAllowed{}):
 		util.GetLogger(ctx).WithField(logrus.ErrorKey, resErr).Warn("UpgradeRoom: Could not restrict power levels in old room")
-	case nil:
+	case resErr == nil:
 		return r.sendHeaderedEvent(ctx, userDomain, restrictedPowerLevelsHeadered, api.DoNotSendToOtherServers)
 	default:
 		return resErr
@@ -244,11 +246,11 @@ func (r *Upgrader) restrictOldRoomPowerLevels(ctx context.Context, evTime time.T
 
 func moveLocalAliases(ctx context.Context,
 	roomID, newRoomID string, senderID spec.SenderID,
-	URSAPI api.RoomserverInternalAPI,
+	ursAPI api.RoomserverInternalAPI,
 ) (err error) {
 	aliasReq := api.GetAliasesForRoomIDRequest{RoomID: roomID}
 	aliasRes := api.GetAliasesForRoomIDResponse{}
-	if err = URSAPI.GetAliasesForRoomID(ctx, &aliasReq, &aliasRes); err != nil {
+	if err = ursAPI.GetAliasesForRoomID(ctx, &aliasReq, &aliasRes); err != nil {
 		return fmt.Errorf("failed to get old room aliases: %w", err)
 	}
 
@@ -259,16 +261,17 @@ func moveLocalAliases(ctx context.Context,
 	}
 
 	for _, alias := range aliasRes.Aliases {
-		aliasFound, aliasRemoved, err := URSAPI.RemoveRoomAlias(ctx, senderID, alias)
-		if err != nil {
+		aliasFound, aliasRemoved, err := ursAPI.RemoveRoomAlias(ctx, senderID, alias)
+		switch {
+		case err != nil:
 			return fmt.Errorf("failed to remove old room alias: %w", err)
-		} else if !aliasFound {
+		case !aliasFound:
 			return fmt.Errorf("failed to remove old room alias: alias not found, possible race")
-		} else if !aliasRemoved {
+		case !aliasRemoved:
 			return fmt.Errorf("failed to remove old alias")
 		}
 
-		aliasAlreadyExists, err := URSAPI.SetRoomAlias(ctx, senderID, *parsedNewRoomID, alias)
+		aliasAlreadyExists, err := ursAPI.SetRoomAlias(ctx, senderID, *parsedNewRoomID, alias)
 		if err != nil {
 			return fmt.Errorf("failed to set new room alias: %w", err)
 		} else if aliasAlreadyExists {
@@ -298,12 +301,12 @@ func (r *Upgrader) clearOldCanonicalAliasEvent(ctx context.Context, oldRoom *api
 
 	emptyCanonicalAliasEvent, resErr := r.makeHeaderedEvent(ctx, evTime, senderID, userDomain, roomID, gomatrixserverlib.FledglingEvent{
 		Type:    spec.MRoomCanonicalAlias,
-		Content: map[string]interface{}{},
+		Content: map[string]any{},
 	})
-	switch resErr.(type) {
-	case api.ErrNotAllowed:
+	switch {
+	case errors.As(resErr, &api.ErrNotAllowed{}):
 		util.GetLogger(ctx).WithField(logrus.ErrorKey, resErr).Warn("UpgradeRoom: Could not set empty canonical alias event in old room")
-	case nil:
+	case resErr == nil:
 		return r.sendHeaderedEvent(ctx, userDomain, emptyCanonicalAliasEvent, api.DoNotSendToOtherServers)
 	default:
 		return resErr
@@ -330,11 +333,11 @@ func (r *Upgrader) publishIfOldRoomWasPublic(ctx context.Context, roomID, newRoo
 
 func publishNewRoomAndUnpublishOldRoom(
 	ctx context.Context,
-	URSAPI api.RoomserverInternalAPI,
+	ursAPI api.RoomserverInternalAPI,
 	oldRoomID, newRoomID string,
 ) {
 	// expose this room in the published room list
-	if err := URSAPI.PerformPublish(ctx, &api.PerformPublishRequest{
+	if err := ursAPI.PerformPublish(ctx, &api.PerformPublishRequest{
 		RoomID:     newRoomID,
 		Visibility: spec.Public,
 	}); err != nil {
@@ -343,7 +346,7 @@ func publishNewRoomAndUnpublishOldRoom(
 	}
 
 	// remove the old room from the published room list
-	if err := URSAPI.PerformPublish(ctx, &api.PerformPublishRequest{
+	if err := ursAPI.PerformPublish(ctx, &api.PerformPublishRequest{
 		RoomID:     oldRoomID,
 		Visibility: "private",
 	}); err != nil {
@@ -386,7 +389,8 @@ func (r *Upgrader) userIsAuthorized(ctx context.Context, senderID spec.SenderID,
 }
 
 // Return the events to create AFTER the new create event
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func (r *Upgrader) generateInitialEvents(
 	ctx context.Context, oldRoom *api.QueryLatestEventsAndStateResponse, senderID spec.SenderID, _ string, newVersion gomatrixserverlib.RoomVersion,
 	creators []string,
@@ -446,7 +450,7 @@ func (r *Upgrader) generateInitialEvents(
 	// that we preserve fields we don't otherwise know about. We'll always
 	// set the membership to join though, because that is necessary to auth
 	// the events after it.
-	newMembershipContent := map[string]interface{}{}
+	newMembershipContent := map[string]any{}
 	_ = json.Unmarshal(oldMembershipEvent.Content(), &newMembershipContent)
 	newMembershipContent["membership"] = spec.Join
 	newMembershipEvent := gomatrixserverlib.FledglingEvent{
@@ -474,7 +478,7 @@ func (r *Upgrader) generateInitialEvents(
 	// events. We'll set a sane default of "invite" so that if the
 	// existing join rules contains garbage, the room can still be
 	// upgraded.
-	newJoinRulesContent := map[string]interface{}{
+	newJoinRulesContent := map[string]any{
 		"join_rule": spec.Invite, // sane default
 	}
 	_ = json.Unmarshal(oldJoinRulesEvent.Content(), &newJoinRulesContent)
@@ -539,7 +543,7 @@ func (r *Upgrader) sendInitialEvents(
 	builtEvents = append(builtEvents, &types.HeaderedEvent{PDU: newCreateEvent})
 	authEvents, _ := gomatrixserverlib.NewAuthEvents([]gomatrixserverlib.PDU{newCreateEvent})
 	for i, e := range eventsToMake {
-		depth := i + 2 // depth starts at 2 since we made the create event already.
+		depth := i + 2 //nolint:mnd // depth starts at 2 since we made the create event already.
 
 		proto := gomatrixserverlib.ProtoEvent{
 			SenderID: string(senderID),
@@ -604,7 +608,7 @@ func (r *Upgrader) makeTombstoneEvent(
 	evTime time.Time,
 	senderID spec.SenderID, senderDomain spec.ServerName, roomID, newRoomID string,
 ) (*types.HeaderedEvent, error) {
-	content := map[string]interface{}{
+	content := map[string]any{
 		"body":             "This room has been replaced",
 		"replacement_room": newRoomID,
 	}
@@ -633,14 +637,17 @@ func (r *Upgrader) makeHeaderedEvent(ctx context.Context, evTime time.Time, send
 	}
 	var queryRes api.QueryLatestEventsAndStateResponse
 	headeredEvent, err := eventutil.QueryAndBuildEvent(ctx, &proto, identity, evTime, r.URSAPI, &queryRes)
-	switch e := err.(type) {
-	case nil:
-	case eventutil.ErrRoomNoExists:
-		return nil, e
-	case gomatrixserverlib.BadJSONError:
-		return nil, e
-	case gomatrixserverlib.EventValidationError:
-		return nil, e
+	var errRoomNoExists eventutil.ErrRoomNoExists
+	var badJSONErr gomatrixserverlib.BadJSONError
+	var eventValidationErr gomatrixserverlib.EventValidationError
+	switch {
+	case err == nil:
+	case errors.As(err, &errRoomNoExists):
+		return nil, errRoomNoExists
+	case errors.As(err, &badJSONErr):
+		return nil, badJSONErr
+	case errors.As(err, &eventValidationErr):
+		return nil, eventValidationErr
 	default:
 		return nil, fmt.Errorf("failed to build new %q event: %w", proto.Type, err)
 	}

@@ -23,7 +23,7 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 )
 
-// QueryLatestEventsAndStateRequest is a request to QueryLatestEventsAndState
+// QueryLatestEventsAndStateRequest is a request to QueryLatestEventsAndState.
 type QueryLatestEventsAndStateRequest struct {
 	// The room ID to query the latest events for.
 	RoomID string `json:"room_id"`
@@ -55,7 +55,7 @@ type QueryLatestEventsAndStateResponse struct {
 	Depth int64 `json:"depth"`
 }
 
-// QueryStateAfterEventsRequest is a request to QueryStateAfterEvents
+// QueryStateAfterEventsRequest is a request to QueryStateAfterEvents.
 type QueryStateAfterEventsRequest struct {
 	// The room ID to query the state in.
 	RoomID string `json:"room_id"`
@@ -66,7 +66,7 @@ type QueryStateAfterEventsRequest struct {
 	StateToFetch []gomatrixserverlib.StateKeyTuple `json:"state_to_fetch"`
 }
 
-// QueryStateAfterEventsResponse is a response to QueryStateAfterEvents
+// QueryStateAfterEventsResponse is a response to QueryStateAfterEvents.
 type QueryStateAfterEventsResponse struct {
 	// Does the room exist on this roomserver?
 	// If the room doesn't exist this will be false and StateEvents will be empty.
@@ -81,7 +81,7 @@ type QueryStateAfterEventsResponse struct {
 	StateEvents []*types.HeaderedEvent `json:"state_events"`
 }
 
-// QueryEventsByIDRequest is a request to QueryEventsByID
+// QueryEventsByIDRequest is a request to QueryEventsByID.
 type QueryEventsByIDRequest struct {
 	// The roomID to query events for. If this is empty, we first try to fetch the roomID from the database
 	// as this is needed for further processing/parsing events.
@@ -90,7 +90,7 @@ type QueryEventsByIDRequest struct {
 	EventIDs []string `json:"event_ids"`
 }
 
-// QueryEventsByIDResponse is a response to QueryEventsByID
+// QueryEventsByIDResponse is a response to QueryEventsByID.
 type QueryEventsByIDResponse struct {
 	// A list of events with the requested IDs.
 	// If the roomserver does not have a copy of a requested event
@@ -102,7 +102,7 @@ type QueryEventsByIDResponse struct {
 	Events []*types.HeaderedEvent `json:"events"`
 }
 
-// QueryMembershipForUserRequest is a request to QueryMembership
+// QueryMembershipForUserRequest is a request to QueryMembership.
 type QueryMembershipForUserRequest struct {
 	// ID of the room to fetch membership from
 	RoomID string
@@ -110,7 +110,7 @@ type QueryMembershipForUserRequest struct {
 	UserID spec.UserID
 }
 
-// QueryMembershipForUserResponse is a response to QueryMembership
+// QueryMembershipForUserResponse is a response to QueryMembership.
 type QueryMembershipForUserResponse struct {
 	// The EventID of the latest "m.room.member" event for the sender,
 	// if HasBeenInRoom is true.
@@ -128,7 +128,7 @@ type QueryMembershipForUserResponse struct {
 	SenderID *spec.SenderID
 }
 
-// QueryMembershipsForRoomRequest is a request to QueryMembershipsForRoom
+// QueryMembershipsForRoomRequest is a request to QueryMembershipsForRoom.
 type QueryMembershipsForRoomRequest struct {
 	// If true, only returns the membership events of "join" membership
 	JoinedOnly bool `json:"joined_only"`
@@ -142,7 +142,7 @@ type QueryMembershipsForRoomRequest struct {
 	SenderID spec.SenderID `json:"sender"`
 }
 
-// QueryMembershipsForRoomResponse is a response to QueryMembershipsForRoom
+// QueryMembershipsForRoomResponse is a response to QueryMembershipsForRoom.
 type QueryMembershipsForRoomResponse struct {
 	// The "m.room.member" events (of "join" membership) in the client format
 	JoinEvents []synctypes.ClientEvent `json:"join_events"`
@@ -153,7 +153,7 @@ type QueryMembershipsForRoomResponse struct {
 	IsRoomForgotten bool `json:"is_room_forgotten"`
 }
 
-// QueryServerJoinedToRoomRequest is a request to QueryServerJoinedToRoom
+// QueryServerJoinedToRoomRequest is a request to QueryServerJoinedToRoom.
 type QueryServerJoinedToRoomRequest struct {
 	// Server name of the server to find. If not specified, we will
 	// default to checking if the local server is joined.
@@ -162,7 +162,7 @@ type QueryServerJoinedToRoomRequest struct {
 	RoomID string `json:"room_id"`
 }
 
-// QueryMembershipsForRoomResponse is a response to QueryServerJoinedToRoom
+// QueryMembershipsForRoomResponse is a response to QueryServerJoinedToRoom.
 type QueryServerJoinedToRoomResponse struct {
 	// True if the room exists on the server
 	RoomExists bool `json:"room_exists"`
@@ -174,7 +174,7 @@ type QueryServerJoinedToRoomResponse struct {
 	IsPartialState bool `json:"is_partial_state"`
 }
 
-// QueryServerAllowedToSeeEventRequest is a request to QueryServerAllowedToSeeEvent
+// QueryServerAllowedToSeeEventRequest is a request to QueryServerAllowedToSeeEvent.
 type QueryServerAllowedToSeeEventRequest struct {
 	// The event ID to look up invites in.
 	EventID string `json:"event_id"`
@@ -182,13 +182,13 @@ type QueryServerAllowedToSeeEventRequest struct {
 	ServerName spec.ServerName `json:"server_name"`
 }
 
-// QueryServerAllowedToSeeEventResponse is a response to QueryServerAllowedToSeeEvent
+// QueryServerAllowedToSeeEventResponse is a response to QueryServerAllowedToSeeEvent.
 type QueryServerAllowedToSeeEventResponse struct {
 	// Wether the server in question is allowed to see the event
 	AllowedToSeeEvent bool `json:"can_see_event"`
 }
 
-// QueryMissingEventsRequest is a request to QueryMissingEvents
+// QueryMissingEventsRequest is a request to QueryMissingEvents.
 type QueryMissingEventsRequest struct {
 	// Events which are known previous to the gap in the timeline.
 	EarliestEvents []string `json:"earliest_events"`
@@ -200,13 +200,13 @@ type QueryMissingEventsRequest struct {
 	ServerName spec.ServerName `json:"server_name"`
 }
 
-// QueryMissingEventsResponse is a response to QueryMissingEvents
+// QueryMissingEventsResponse is a response to QueryMissingEvents.
 type QueryMissingEventsResponse struct {
 	// Missing events, arbritrary order.
 	Events []*types.HeaderedEvent `json:"events"`
 }
 
-// QueryStateAndAuthChainRequest is a request to QueryStateAndAuthChain
+// QueryStateAndAuthChainRequest is a request to QueryStateAndAuthChain.
 type QueryStateAndAuthChainRequest struct {
 	// The room ID to query the state in.
 	RoomID string `json:"room_id"`
@@ -224,7 +224,7 @@ type QueryStateAndAuthChainRequest struct {
 	ResolveState bool `json:"resolve_state"`
 }
 
-// QueryStateAndAuthChainResponse is a response to QueryStateAndAuthChain
+// QueryStateAndAuthChainResponse is a response to QueryStateAndAuthChain.
 type QueryStateAndAuthChainResponse struct {
 	// Does the room exist on this roomserver?
 	// If the room doesn't exist this will be false and StateEvents will be empty.
@@ -248,7 +248,7 @@ type QueryRoomVersionForRoomRequest struct {
 	RoomID string `json:"room_id"`
 }
 
-// QueryRoomVersionForRoomResponse is a response to QueryRoomVersionForRoomRequest
+// QueryRoomVersionForRoomResponse is a response to QueryRoomVersionForRoomRequest.
 type QueryRoomVersionForRoomResponse struct {
 	RoomVersion gomatrixserverlib.RoomVersion `json:"room_version"`
 }
@@ -462,13 +462,13 @@ func (rq *JoinRoomQuerier) RestrictedRoomJoinInfo(ctx context.Context, roomID sp
 		return nil, fmt.Errorf("InternalServerError: Failed to query room: %w", err)
 	}
 
-	userJoinedToRoom, err := rq.Roomserver.UserJoinedToRoom(ctx, types.RoomNID(roomInfo.RoomNID), senderID)
+	userJoinedToRoom, err := rq.Roomserver.UserJoinedToRoom(ctx, roomInfo.RoomNID, senderID)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.UserJoinedToRoom failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)
 	}
 
-	locallyJoinedUsers, err := rq.Roomserver.LocallyJoinedUsers(ctx, roomInfo.RoomVersion, types.RoomNID(roomInfo.RoomNID))
+	locallyJoinedUsers, err := rq.Roomserver.LocallyJoinedUsers(ctx, roomInfo.RoomVersion, roomInfo.RoomNID)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.GetLocallyJoinedUsers failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)

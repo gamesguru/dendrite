@@ -22,27 +22,25 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"github.com/tidwall/gjson"
-
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrixserverlib/tokens"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// Prometheus metrics
+// Prometheus metrics.
 var amtRegUsers = prometheus.NewCounter(
 	prometheus.CounterOpts{
 		Name: "dendrite_clientapi_reg_users_total",
@@ -66,7 +64,7 @@ type sessionsDict struct {
 	deleteSessionToDeviceID map[string]string
 }
 
-// defaultTimeout is the timeout used to clean up sessions
+// defaultTimeout is the timeout used to clean up sessions.
 const defaultTimeOut = time.Minute * 5
 
 // getCompletedStages returns the completed stages for a session.
@@ -81,7 +79,7 @@ func (d *sessionsDict) getCompletedStages(sessionID string) []authtypes.LoginTyp
 	return make([]authtypes.LoginType, 0)
 }
 
-// addParams adds a registerRequest to a sessionID and starts a timer to delete that registerRequest
+// addParams adds a registerRequest to a sessionID and starts a timer to delete that registerRequest.
 func (d *sessionsDict) addParams(sessionID string, r registerRequest) {
 	d.startTimer(defaultTimeOut, sessionID)
 	d.Lock()
@@ -226,10 +224,10 @@ type authDict struct {
 
 // https://spec.matrix.org/v1.7/client-server-api/#user-interactive-authentication-api
 type userInteractiveResponse struct {
-	Flows     []authtypes.Flow       `json:"flows"`
-	Completed []authtypes.LoginType  `json:"completed"`
-	Params    map[string]interface{} `json:"params"`
-	Session   string                 `json:"session"`
+	Flows     []authtypes.Flow      `json:"flows"`
+	Completed []authtypes.LoginType `json:"completed"`
+	Params    map[string]any        `json:"params"`
+	Session   string                `json:"session"`
 }
 
 // newUserInteractiveResponse will return a struct to be sent back to the client
@@ -237,7 +235,7 @@ type userInteractiveResponse struct {
 func newUserInteractiveResponse(
 	sessionID string,
 	fs []authtypes.Flow,
-	params map[string]interface{},
+	params map[string]any,
 ) userInteractiveResponse {
 	return userInteractiveResponse{
 		fs, sessions.getCompletedStages(sessionID), params, sessionID,
@@ -251,7 +249,7 @@ type registerResponse struct {
 	DeviceID    string `json:"device_id,omitempty"`
 }
 
-// recaptchaResponse represents the HTTP response from a Google Recaptcha server
+// recaptchaResponse represents the HTTP response from a Google Recaptcha server.
 type recaptchaResponse struct {
 	Success     bool      `json:"success"`
 	ChallengeTS time.Time `json:"challenge_ts"`
@@ -265,7 +263,7 @@ var (
 	ErrCaptchaDisabled = errors.New("captcha registration is disabled")
 )
 
-// validateRecaptcha returns an error response if the captcha response is invalid
+// validateRecaptcha returns an error response if the captcha response is invalid.
 func validateRecaptcha(
 	cfg *config.ClientAPI,
 	response string,
@@ -293,7 +291,7 @@ func validateRecaptcha(
 	}
 
 	// Close the request once we're finishing reading from it
-	defer resp.Body.Close() // nolint: errcheck
+	defer resp.Body.Close()
 
 	// Grab the body of the response from the captcha server
 	var r recaptchaResponse
@@ -363,7 +361,7 @@ func UserIDIsWithinApplicationServiceNamespace(
 }
 
 // UsernameMatchesMultipleExclusiveNamespaces will check if a given username matches
-// more than one exclusive namespace. More than one is not allowed
+// more than one exclusive namespace. More than one is not allowed.
 func UsernameMatchesMultipleExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	username string,
@@ -383,7 +381,7 @@ func UsernameMatchesMultipleExclusiveNamespaces(
 }
 
 // UsernameMatchesExclusiveNamespaces will check if a given username matches any
-// application service's exclusive users namespace
+// application service's exclusive users namespace.
 func UsernameMatchesExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	username string,
@@ -454,7 +452,7 @@ func Register(
 	userAPI userapi.ClientUserAPI,
 	cfg *config.ClientAPI,
 ) util.JSONResponse {
-	defer req.Body.Close() // nolint: errcheck
+	defer req.Body.Close()
 	reqBody, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{
@@ -634,7 +632,7 @@ func handleGuestRegistration(
 }
 
 // localpartMatchesExclusiveNamespaces will check if a given username matches any
-// application service's exclusive users namespace
+// application service's exclusive users namespace.
 func localpartMatchesExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	localpart string,
@@ -645,7 +643,8 @@ func localpartMatchesExclusiveNamespaces(
 
 // handleRegistrationFlow will direct and complete registration flow stages
 // that the client has requested.
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func handleRegistrationFlow(
 	req *http.Request,
 	r registerRequest,
@@ -702,15 +701,14 @@ func handleRegistrationFlow(
 	case authtypes.LoginTypeRecaptcha:
 		// Check given captcha response
 		err := validateRecaptcha(cfg, r.Auth.Response, req.RemoteAddr)
-		switch err {
-		case ErrCaptchaDisabled:
+		switch {
+		case errors.Is(err, ErrCaptchaDisabled):
 			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Unknown(err.Error())}
-		case ErrMissingResponse:
+		case errors.Is(err, ErrMissingResponse):
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
-		case ErrInvalidCaptcha:
+		case errors.Is(err, ErrInvalidCaptcha):
 			return util.JSONResponse{Code: http.StatusUnauthorized, JSON: spec.BadJSON(err.Error())}
-		case nil:
-		default:
+		case err != nil:
 			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
 			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
@@ -787,7 +785,7 @@ func handleApplicationServiceRegistration(
 
 // checkAndCompleteFlow checks if a given registration flow is completed given
 // a set of allowed flows. If so, registration is completed, otherwise a
-// response with
+// response with.
 func checkAndCompleteFlow(
 	flow []authtypes.LoginType,
 	req *http.Request,
@@ -819,7 +817,7 @@ func checkAndCompleteFlow(
 // We pass in each individual part of the request here instead of just passing a
 // registerRequest, as this function serves requests encoded as both
 // registerRequests and legacyRegisterRequests, which share some attributes but
-// not all
+// not all.
 func completeRegistration(
 	ctx context.Context,
 	userAPI userapi.ClientUserAPI,
@@ -852,7 +850,8 @@ func completeRegistration(
 		OnConflict:   userapi.ConflictAbort,
 	}, &accRes)
 	if err != nil {
-		if _, ok := err.(*userapi.ErrorConflict); ok { // user already exists
+		var conflictErr *userapi.ErrorConflict
+		if errors.As(err, &conflictErr) { // user already exists
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.UserInUse("Desired user ID is already taken."),
@@ -1055,10 +1054,10 @@ func RegisterAvailable(
 }
 
 func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, sr *SharedSecretRegistration, req *http.Request) util.JSONResponse {
-	ssrr, err := NewSharedSecretRegistrationRequest(req.Body)
+	ssrr, err := NewSharedSecretRegistrationRequest(req.Body) //nolint:contextcheck
 	if err != nil {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.BadJSON(fmt.Sprintf("malformed json: %s", err)),
 		}
 	}
@@ -1068,7 +1067,7 @@ func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.Clien
 	}
 	if !valid {
 		return util.JSONResponse{
-			Code: 403,
+			Code: 403, //nolint:mnd
 			JSON: spec.Forbidden("bad mac"),
 		}
 	}

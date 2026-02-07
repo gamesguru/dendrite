@@ -12,11 +12,12 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/util"
 )
 
 const stateDataSchema = `
@@ -85,6 +86,7 @@ func (s *stateBlockStatements) BulkInsertStateData(
 		nids[i] = entries[i].EventNID
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertStateDataStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(
 		ctx, nids.Hash(), eventNIDsAsArray(nids),
 	).Scan(&id)
@@ -95,7 +97,8 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs,
 ) ([][]types.EventNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateBlockEntriesStmt)
-	rows, err := stmt.QueryContext(ctx, stateBlockNIDsAsArray(stateBlockNIDs))
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, stateBlockNIDsAsArray(stateBlockNIDs)) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

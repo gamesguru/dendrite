@@ -65,7 +65,7 @@ func (a *UserInternalAPI) PerformUploadKeys(ctx context.Context, req *api.Perfor
 
 func (a *UserInternalAPI) PerformClaimKeys(ctx context.Context, req *api.PerformClaimKeysRequest, res *api.PerformClaimKeysResponse) {
 	res.OneTimeKeys = make(map[string]map[string]map[string]json.RawMessage)
-	res.Failures = make(map[string]interface{})
+	res.Failures = make(map[string]any)
 	// wrap request map in a top-level by-domain map
 	domainToDeviceKeys := make(map[string]map[string]map[string]string)
 	for userID, val := range req.OneTimeKeys {
@@ -136,7 +136,7 @@ func (a *UserInternalAPI) claimRemoteKeys(
 
 			if err != nil {
 				util.GetLogger(ctx).WithError(err).WithField("server", domain).Error("ClaimKeys failed")
-				res.Failures[domain] = map[string]interface{}{
+				res.Failures[domain] = map[string]any{
 					"message": err.Error(),
 				}
 				failures++
@@ -234,14 +234,14 @@ func (a *UserInternalAPI) PerformMarkAsStaleIfNeeded(ctx context.Context, req *a
 	return a.Updater.ManualUpdate(ctx, req.Domain, req.UserID)
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysRequest, res *api.QueryKeysResponse) {
 	var respMu sync.Mutex
 	res.DeviceKeys = make(map[string]map[string]json.RawMessage)
 	res.MasterKeys = make(map[string]fclient.CrossSigningKey)
 	res.SelfSigningKeys = make(map[string]fclient.CrossSigningKey)
 	res.UserSigningKeys = make(map[string]fclient.CrossSigningKey)
-	res.Failures = make(map[string]interface{})
+	res.Failures = make(map[string]any)
 
 	// make a map from domain to device keys
 	domainToDeviceKeys := make(map[string]map[string][]string)
@@ -413,7 +413,6 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 				fetchRemote[domain] = make(map[string][]string)
 			}
 			fetchRemote[domain][userID] = append(fetchRemote[domain][userID], deviceIDs...)
-
 		}
 	}
 	return fetchRemote
@@ -521,7 +520,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 		}
 	}
 	for userID := range userIDsForAllDevices {
-		err := a.Updater.ManualUpdate(context.Background(), spec.ServerName(serverName), userID)
+		err := a.Updater.ManualUpdate(context.Background(), spec.ServerName(serverName), userID) //nolint:contextcheck
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -561,7 +560,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 		return
 	}
 	respMu.Lock()
-	res.Failures[serverName] = map[string]interface{}{
+	res.Failures[serverName] = map[string]any{
 		"message": err.Error(),
 	}
 	respMu.Unlock()

@@ -14,14 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/clientapi"
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/syncapi"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -30,17 +24,22 @@ import (
 	"codefloe.com/pat-s/dendrite/appservice"
 	"codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/appservice/consumers"
+	"codefloe.com/pat-s/dendrite/clientapi"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/federationapi/statistics"
 	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver"
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/dendrite/syncapi"
 	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/userapi"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/dendrite/userapi"
+	uapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -331,14 +330,14 @@ func testProtocol(t *testing.T, asAPI api.AppServiceInternalAPI, proto string, w
 	}
 }
 
-// Tests that the roomserver consumer only receives one invite
+// Tests that the roomserver consumer only receives one invite.
 func TestRoomserverConsumerOneInvite(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 
 	// Invite Bob
-	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
 
@@ -448,7 +447,7 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		room := test.NewRoom(t, alice)
 
 		// Invite Bob
-		room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+		room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 			"membership": "invite",
 		}, test.WithStateKey(bob.ID))
 
@@ -469,11 +468,11 @@ func TestOutputAppserviceEvent(t *testing.T) {
 					switch membership {
 					case spec.Invite:
 						// Accept the invite
-						joinEv := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+						joinEv := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 							"membership": "join",
 						}, test.WithStateKey(bob.ID))
 
-						if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, []*types.HeaderedEvent{joinEv}, "test", "test", "test", nil, false); err != nil {
+						if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, []*types.HeaderedEvent{joinEv}, "test", "test", "test", nil, false); err != nil { //nolint:contextcheck
 							t.Fatalf("failed to send events: %v", err)
 						}
 					case spec.Join: // the AS has received the join event, now hit `/joined_members` to validate that
@@ -580,9 +579,9 @@ func createAccessTokens(t *testing.T, accessTokens map[*test.User]userDevice, us
 		}, userRes); err != nil {
 			t.Errorf("failed to create account: %s", err)
 		}
-		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]interface{}{
+		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]any{
 			"type": authtypes.LoginTypePassword,
-			"identifier": map[string]interface{}{
+			"identifier": map[string]any{
 				"type": "m.id.user",
 				"user": u.ID,
 			},

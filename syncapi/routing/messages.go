@@ -59,7 +59,8 @@ type messagesResp struct {
 // OnIncomingMessagesRequest implements the /messages endpoint from the
 // client-server API.
 // See: https://matrix.org/docs/spec/client_server/latest.html#get-matrix-client-r0-rooms-roomid-messages
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func OnIncomingMessagesRequest(
 	req *http.Request, db storage.Database, roomID string, device *userapi.Device,
 	rsAPI api.SyncRoomserverAPI,
@@ -285,7 +286,7 @@ func OnIncomingMessagesRequest(
 				JSON: spec.InternalServerError{},
 			}
 		}
-		res.State = append(res.State, synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(membershipEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		res.State = append(res.State, synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(membershipEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 			return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 		})...)
 	}
@@ -329,7 +330,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 ) {
 	emptyToken := types.TopologyToken{}
 	// Retrieve the events from the local database.
-	streamEvents, _, end, err := r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering)
+	streamEvents, _, end, err := r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
 	if err != nil {
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
@@ -337,7 +338,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	end.Decrement()
 
 	var events []*rstypes.HeaderedEvent
-	util.GetLogger(r.ctx).WithFields(logrus.Fields{
+	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
 		"start":     r.from,
 		"end":       r.to,
 		"backwards": r.backwardOrdering,
@@ -347,11 +348,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// reached the oldest event in the room (or the most recent one, depending
 	// on the ordering), or we've reached a backward extremity.
 	if len(streamEvents) == 0 {
-		if events, err = r.handleEmptyEventsSlice(); err != nil {
+		if events, err = r.handleEmptyEventsSlice(); err != nil { //nolint:contextcheck
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
 	} else {
-		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil {
+		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil { //nolint:contextcheck
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
 	}
@@ -363,7 +364,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// Apply room history visibility filter
 	startTime := time.Now()
-	filteredEvents, err := internal.ApplyHistoryVisibilityFilter(r.ctx, r.snapshot, r.rsAPI, events, nil, r.deviceUserID, "messages")
+	filteredEvents, err := internal.ApplyHistoryVisibilityFilter(r.ctx, r.snapshot, r.rsAPI, events, nil, r.deviceUserID, "messages") //nolint:contextcheck
 	if err != nil {
 		return []synctypes.ClientEvent{}, *r.from, *r.to, nil
 	}
@@ -490,11 +491,11 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 			if r.wasToProvided {
 				// The condition in the SQL query is a strict "greater than" so
 				// we need to check against to-1.
-				streamPos := types.StreamPosition(streamEvents[len(streamEvents)-1].StreamPosition)
+				streamPos := streamEvents[len(streamEvents)-1].StreamPosition
 				isSetLargeEnough = (r.to.PDUPosition-1 == streamPos)
 			}
 		} else {
-			streamPos := types.StreamPosition(streamEvents[0].StreamPosition)
+			streamPos := streamEvents[0].StreamPosition
 			isSetLargeEnough = (r.from.PDUPosition-1 == streamPos)
 		}
 	}

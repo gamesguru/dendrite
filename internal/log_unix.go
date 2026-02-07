@@ -22,7 +22,7 @@ import (
 
 // SetupHookLogging configures the logging hooks defined in the configuration.
 // If something fails here it means that the logging was improperly configured,
-// so we just exit with the error
+// so we just exit with the error.
 func SetupHookLogging(hooks []config.LogrusHook) {
 	levelLogAddedMu.Lock()
 	defer levelLogAddedMu.Unlock()
@@ -30,7 +30,7 @@ func SetupHookLogging(hooks []config.LogrusHook) {
 		// Check we received a proper logging level
 		level, err := logrus.ParseLevel(hook.Level)
 		if err != nil {
-			logrus.Fatalf("Unrecognised logging level %s: %q", hook.Level, err)
+			logrus.Fatalf("Unrecognized logging level %s: %q", hook.Level, err)
 		}
 
 		// Perform a first filter on the logs according to the lowest level of all
@@ -49,7 +49,7 @@ func SetupHookLogging(hooks []config.LogrusHook) {
 		case "std":
 			setupStdLogHook(level)
 		default:
-			logrus.Fatalf("Unrecognised logging hook type: %s", hook.Type)
+			logrus.Fatalf("Unrecognized logging hook type: %s", hook.Type)
 		}
 	}
 	setupStdLogHook(logrus.InfoLevel)
@@ -57,7 +57,7 @@ func SetupHookLogging(hooks []config.LogrusHook) {
 	logrus.SetOutput(io.Discard)
 }
 
-func checkSyslogHookParams(params map[string]interface{}) {
+func checkSyslogHookParams(params map[string]any) {
 	addr, ok := params["address"]
 	if !ok {
 		logrus.Fatalf("Expecting a parameter \"address\" for logging hook of type \"syslog\"")
@@ -86,7 +86,9 @@ func setupStdLogHook(level logrus.Level) {
 }
 
 func setupSyslogHook(hook config.LogrusHook, level logrus.Level) {
-	syslogHook, err := lSyslog.NewSyslogHook(hook.Params["protocol"].(string), hook.Params["address"].(string), syslog.LOG_INFO, "dendrite")
+	protocol, _ := hook.Params["protocol"].(string)
+	address, _ := hook.Params["address"].(string)
+	syslogHook, err := lSyslog.NewSyslogHook(protocol, address, syslog.LOG_INFO, "dendrite")
 	if err == nil {
 		logrus.AddHook(&logLevelHook{level, syslogHook})
 	}

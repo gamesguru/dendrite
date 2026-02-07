@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	log "github.com/sirupsen/logrus"
 )
 
 const openIDTokenSchema = `
@@ -60,12 +61,13 @@ func (s *openIDTokenStatements) InsertOpenIDToken(
 	expiresAtMS int64,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.insertTokenStmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, token, localpart, serverName, expiresAtMS)
 	return
 }
 
 // selectOpenIDTokenAtrributes gets the attributes associated with an OpenID token from the DB
-// Returns the existing token's attributes, or err if no token is found
+// Returns the existing token's attributes, or err if no token is found.
 func (s *openIDTokenStatements) SelectOpenIDTokenAtrributes(
 	ctx context.Context,
 	token string,

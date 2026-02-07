@@ -9,12 +9,13 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// Logout handles POST /logout
+// Logout handles POST /logout.
 func Logout(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 ) util.JSONResponse {
@@ -37,7 +38,7 @@ func Logout(
 	}
 }
 
-// LogoutAll handles POST /logout/all
+// LogoutAll handles POST /logout/all.
 func LogoutAll(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 ) util.JSONResponse {

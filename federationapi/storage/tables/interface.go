@@ -10,9 +10,10 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/federationapi/types"
 )
 
 type NotaryID int64
@@ -114,7 +115,7 @@ type FederationNotaryServerKeysJSON interface {
 	InsertJSONResponse(ctx context.Context, txn *sql.Tx, keyQueryResponseJSON gomatrixserverlib.ServerKeys, serverName spec.ServerName, validUntil spec.Timestamp) (NotaryID, error)
 }
 
-// FederationNotaryServerKeysMetadata persists the metadata for FederationNotaryServerKeysJSON
+// FederationNotaryServerKeysMetadata persists the metadata for FederationNotaryServerKeysJSON.
 type FederationNotaryServerKeysMetadata interface {
 	// UpsertKey updates or inserts a (server_name, key_id) tuple, pointing it via NotaryID at the the response which has the longest valid_until_ts
 	// `newNotaryID` and `newValidUntil` should be the notary ID / valid_until  which has this (server_name, key_id) tuple already, e.g one you just inserted.

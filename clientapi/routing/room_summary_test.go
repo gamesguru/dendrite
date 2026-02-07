@@ -13,14 +13,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// Mock roomserver API for room summary testing
+// Mock roomserver API for room summary testing.
 type roomSummaryTestRoomserverAPI struct {
 	rsapi.ClientRoomserverAPI
 	t *testing.T
@@ -103,14 +104,20 @@ func (r *roomSummaryTestRoomserverAPI) QueryBulkStateContent(
 				}
 			case spec.MRoomCreate:
 				if room.roomType != "" {
-					content, _ := json.Marshal(map[string]string{"type": room.roomType})
+					content, merr := json.Marshal(map[string]string{"type": room.roomType})
+					if merr != nil {
+						continue
+					}
 					roomState[tuple] = string(content)
 				} else {
 					roomState[tuple] = "{}"
 				}
 			case spec.MRoomEncryption:
 				if room.encryption != "" {
-					content, _ := json.Marshal(map[string]string{"algorithm": room.encryption})
+					content, merr := json.Marshal(map[string]string{"algorithm": room.encryption})
+					if merr != nil {
+						continue
+					}
 					roomState[tuple] = string(content)
 				}
 			case spec.MRoomMember:
@@ -184,7 +191,7 @@ func TestGetRoomSummary(t *testing.T) {
 		room           *mockRoomData
 		userID         string // empty for unauthenticated
 		expectedCode   int
-		expectedFields map[string]interface{}
+		expectedFields map[string]any
 	}{
 		{
 			name:   "public room - unauthenticated",
@@ -200,7 +207,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":            "!public:test",
 				"name":               "Public Room",
 				"topic":              "A public room",
@@ -222,7 +229,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "@alice:test",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":    "!public:test",
 				"membership": "join",
 			},
@@ -255,7 +262,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "@bob:test",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":    "!private:test",
 				"name":       "Private Room",
 				"membership": "join",
@@ -289,7 +296,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":        "!worldreadable:test",
 				"world_readable": true,
 			},
@@ -309,7 +316,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "@alice:test",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":                     "!encrypted:test",
 				"im.nheko.summary.encryption": "m.megolm.v1.aes-sha2",
 			},
@@ -328,7 +335,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":   "!space:test",
 				"room_type": "m.space",
 			},
@@ -346,7 +353,7 @@ func TestGetRoomSummary(t *testing.T) {
 			},
 			userID:       "",
 			expectedCode: http.StatusOK,
-			expectedFields: map[string]interface{}{
+			expectedFields: map[string]any{
 				"room_id":                       "!versioned:test",
 				"im.nheko.summary.room_version": "10",
 			},
@@ -406,7 +413,7 @@ func TestGetRoomSummary(t *testing.T) {
 					t.Fatalf("failed to marshal response: %v", err)
 				}
 
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				if err := json.Unmarshal(jsonBytes, &respMap); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
@@ -426,7 +433,7 @@ func TestGetRoomSummary(t *testing.T) {
 	}
 }
 
-// TestRoomSummaryCache tests the caching behaviour
+// TestRoomSummaryCache tests the caching behavior.
 func TestRoomSummaryCache(t *testing.T) {
 	rsAPI := newRoomSummaryTestRoomserverAPI(t)
 	rsAPI.addRoom(&mockRoomData{
@@ -463,14 +470,20 @@ func TestRoomSummaryCache(t *testing.T) {
 	}
 
 	// Both responses should be equivalent
-	json1, _ := json.Marshal(resp1.JSON)
-	json2, _ := json.Marshal(resp2.JSON)
+	json1, err := json.Marshal(resp1.JSON)
+	if err != nil {
+		t.Fatalf("failed to marshal resp1: %s", err)
+	}
+	json2, err := json.Marshal(resp2.JSON)
+	if err != nil {
+		t.Fatalf("failed to marshal resp2: %s", err)
+	}
 	if string(json1) != string(json2) {
 		t.Errorf("cached response differs from original:\noriginal: %s\ncached: %s", json1, json2)
 	}
 }
 
-// Test cache implementation
+// Test cache implementation.
 type testRoomSummaryCache struct {
 	data map[string]caching.RoomSummaryResponse
 }

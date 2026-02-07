@@ -27,7 +27,7 @@ func (s *FederationInternalAPI) StoreKeys(
 	ctx := context.Background()
 
 	// Store any keys that we were given in our database.
-	return s.keyRing.KeyDatabase.StoreKeys(ctx, results)
+	return s.keyRing.KeyDatabase.StoreKeys(ctx, results) //nolint:contextcheck
 }
 
 func (s *FederationInternalAPI) FetchKeys(
@@ -46,12 +46,12 @@ func (s *FederationInternalAPI) FetchKeys(
 
 	// First, check if any of these key checks are for our own keys. If
 	// they are then we will satisfy them directly.
-	s.handleLocalKeys(ctx, requests, results)
+	s.handleLocalKeys(ctx, requests, results) //nolint:contextcheck
 
 	// Then consult our local database and see if we have the requested
 	// keys. These might come from a cache, depending on the database
 	// implementation used.
-	if err := s.handleDatabaseKeys(ctx, now, requests, results); err != nil {
+	if err := s.handleDatabaseKeys(ctx, now, requests, results); err != nil { //nolint:contextcheck
 		return nil, err
 	}
 
@@ -65,7 +65,7 @@ func (s *FederationInternalAPI) FetchKeys(
 		}
 
 		// Ask the fetcher to look up our keys.
-		if err := s.handleFetcherKeys(ctx, now, fetcher, requests, results); err != nil {
+		if err := s.handleFetcherKeys(ctx, now, fetcher, requests, results); err != nil { //nolint:contextcheck
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"fetcher_name": fetcher.FetcherName(),
 			}).Errorf("Failed to retrieve %d key(s)", len(requests))
@@ -110,7 +110,7 @@ func (s *FederationInternalAPI) handleLocalKeys(
 			delete(requests, req)
 
 			// Insert our own key into the response.
-			results[req] = gomatrixserverlib.PublicKeyLookupResult{
+			results[req] = gomatrixserverlib.PublicKeyLookupResult{ //nolint:forcetypeassert
 				VerifyKey: gomatrixserverlib.VerifyKey{
 					Key: spec.Base64Bytes(s.cfg.Matrix.PrivateKey.Public().(ed25519.PublicKey)),
 				},
@@ -127,7 +127,7 @@ func (s *FederationInternalAPI) handleLocalKeys(
 					delete(requests, req)
 
 					// Insert our own key into the response.
-					results[req] = gomatrixserverlib.PublicKeyLookupResult{
+					results[req] = gomatrixserverlib.PublicKeyLookupResult{ //nolint:forcetypeassert
 						VerifyKey: gomatrixserverlib.VerifyKey{
 							Key: spec.Base64Bytes(oldVerifyKey.PrivateKey.Public().(ed25519.PublicKey)),
 						},
@@ -191,7 +191,7 @@ func (s *FederationInternalAPI) handleFetcherKeys(
 	}).Infof("Fetching %d key(s)", len(requests))
 
 	// Create a context that limits our requests to 30 seconds.
-	fetcherCtx, fetcherCancel := context.WithTimeout(ctx, time.Second*30)
+	fetcherCtx, fetcherCancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 	defer fetcherCancel()
 
 	// Try to fetch the keys.
@@ -231,7 +231,7 @@ func (s *FederationInternalAPI) handleFetcherKeys(
 	}
 
 	// Store the keys from our store map.
-	if err = s.keyRing.KeyDatabase.StoreKeys(context.Background(), storeResults); err != nil {
+	if err = s.keyRing.KeyDatabase.StoreKeys(context.Background(), storeResults); err != nil { //nolint:contextcheck
 		logrus.WithError(err).WithFields(logrus.Fields{
 			"fetcher_name":  fetcher.FetcherName(),
 			"database_name": s.keyRing.KeyDatabase.FetcherName(),

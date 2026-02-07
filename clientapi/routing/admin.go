@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -20,6 +18,8 @@ import (
 	"golang.org/x/exp/constraints"
 
 	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/setup/config"
@@ -70,7 +70,7 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 		token = util.RandomString(int(length))
 	}
 
-	if len(token) > 64 {
+	if len(token) > 64 { //nolint:mnd
 		// Token present in request body, but is too long.
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -124,8 +124,8 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: 200, //nolint:mnd
+		JSON: map[string]any{
 			"token":        token,
 			"uses_allowed": getReturnValue(usesAllowed),
 			"pending":      pending,
@@ -166,8 +166,8 @@ func AdminListRegistrationTokens(req *http.Request, cfg *config.ClientAPI, userA
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: 200, //nolint:mnd
+		JSON: map[string]any{
 			"registration_tokens": tokens,
 		},
 	}
@@ -187,7 +187,7 @@ func AdminGetRegistrationToken(req *http.Request, cfg *config.ClientAPI, userAPI
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: token,
 	}
 }
@@ -206,8 +206,8 @@ func AdminDeleteRegistrationToken(req *http.Request, cfg *config.ClientAPI, user
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{},
+		Code: 200, //nolint:mnd
+		JSON: map[string]any{},
 	}
 }
 
@@ -224,7 +224,7 @@ func AdminUpdateRegistrationToken(req *http.Request, cfg *config.ClientAPI, user
 			JSON: spec.BadJSON(fmt.Sprintf("Failed to decode request body: %s", err)),
 		}
 	}
-	newAttributes := make(map[string]interface{})
+	newAttributes := make(map[string]any)
 	usesAllowed, ok := request["uses_allowed"]
 	if ok {
 		// Only add usesAllowed to newAtrributes if it is present and valid
@@ -259,7 +259,7 @@ func AdminUpdateRegistrationToken(req *http.Request, cfg *config.ClientAPI, user
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: *updatedToken,
 	}
 }
@@ -271,20 +271,20 @@ func AdminEvacuateRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAP
 	}
 
 	affected, err := rsAPI.PerformAdminEvacuateRoom(req.Context(), vars["roomID"])
-	switch err.(type) {
-	case nil:
-	case eventutil.ErrRoomNoExists:
-		return util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound(err.Error()),
+	if err != nil {
+		var roomNoExists eventutil.ErrRoomNoExists
+		if errors.As(err, &roomNoExists) {
+			return util.JSONResponse{
+				Code: http.StatusNotFound,
+				JSON: spec.NotFound(err.Error()),
+			}
 		}
-	default:
 		logrus.WithError(err).WithField("roomID", vars["roomID"]).Error("Failed to evacuate room")
 		return util.ErrorResponse(err)
 	}
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: 200, //nolint:mnd
+		JSON: map[string]any{
 			"affected": affected,
 		},
 	}
@@ -303,8 +303,8 @@ func AdminEvacuateUser(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAP
 	}
 
 	return util.JSONResponse{
-		Code: 200,
-		JSON: map[string]interface{}{
+		Code: 200, //nolint:mnd
+		JSON: map[string]any{
 			"affected": affected,
 		},
 	}
@@ -321,7 +321,7 @@ func AdminPurgeRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) 
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: struct{}{},
 	}
 }
@@ -407,7 +407,7 @@ func AdminResetPassword(req *http.Request, cfg *config.ClientAPI, device *userap
 }
 
 func AdminReindex(req *http.Request, cfg *config.ClientAPI, device *userapi.Device, natsClient *nats.Conn) util.JSONResponse {
-	_, err := natsClient.RequestMsg(nats.NewMsg(cfg.Matrix.JetStream.Prefixed(jetstream.InputFulltextReindex)), time.Second*10)
+	_, err := natsClient.RequestMsg(nats.NewMsg(cfg.Matrix.JetStream.Prefixed(jetstream.InputFulltextReindex)), time.Second*10) //nolint:mnd
 	if err != nil {
 		logrus.WithError(err).Error("failed to publish nats message")
 		return util.JSONResponse{
@@ -477,7 +477,7 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 	if err = rsAPI.PerformAdminDownloadState(req.Context(), roomID, device.UserID, spec.ServerName(serverName)); err != nil {
 		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
 			return util.JSONResponse{
-				Code: 200,
+				Code: 200, //nolint:mnd
 				JSON: spec.NotFound(err.Error()),
 			}
 		}
@@ -489,7 +489,7 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 		return util.ErrorResponse(err)
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: struct{}{},
 	}
 }

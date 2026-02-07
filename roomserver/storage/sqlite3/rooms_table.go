@@ -11,15 +11,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/matrix-org/gomatrixserverlib"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 const roomsSchema = `
@@ -33,7 +35,7 @@ const roomsSchema = `
   );
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertRoomNIDSQL = `
 	INSERT INTO roomserver_rooms (room_id, room_version) VALUES ($1, $2)
 	  ON CONFLICT DO NOTHING
@@ -111,7 +113,7 @@ func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
 		{&s.selectLatestEventNIDsStmt, selectLatestEventNIDsSQL},
 		{&s.selectLatestEventNIDsForUpdateStmt, selectLatestEventNIDsForUpdateSQL},
 		{&s.updateLatestEventNIDsStmt, updateLatestEventNIDsSQL},
-		//{&s.selectRoomVersionForRoomNIDsStmt, selectRoomVersionForRoomNIDsSQL},
+		// {&s.selectRoomVersionForRoomNIDsStmt, selectRoomVersionForRoomNIDsSQL},
 		{&s.selectRoomInfoStmt, selectRoomInfoSQL},
 		{&s.selectRoomNIDForUpdateStmt, selectRoomNIDForUpdateSQL},
 		{&s.selectResyncStateNIDStmt, selectResyncStateNIDSQL},
@@ -124,11 +126,12 @@ func (s *roomStatements) SelectRoomInfo(ctx context.Context, txn *sql.Tx, roomID
 	var latestNIDsJSON string
 	var stateSnapshotNID types.StateSnapshotNID
 	stmt := sqlutil.TxStmt(txn, s.selectRoomInfoStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(
 		&info.RoomVersion, &info.RoomNID, &stateSnapshotNID, &latestNIDsJSON,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
@@ -147,6 +150,7 @@ func (s *roomStatements) InsertRoomNID(
 	roomID string, roomVersion gomatrixserverlib.RoomVersion,
 ) (roomNID types.RoomNID, err error) {
 	insertStmt := sqlutil.TxStmt(txn, s.insertRoomNIDStmt)
+	defer insertStmt.Close()
 	if err = insertStmt.QueryRowContext(ctx, roomID, roomVersion).Scan(&roomNID); err != nil {
 		return 0, fmt.Errorf("resultStmt.QueryRowContext.Scan: %w", err)
 	}
@@ -158,6 +162,7 @@ func (s *roomStatements) SelectRoomNID(
 ) (types.RoomNID, error) {
 	var roomNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectRoomNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(&roomNID)
 	return types.RoomNID(roomNID), err
 }
@@ -167,6 +172,7 @@ func (s *roomStatements) SelectRoomNIDForUpdate(
 ) (types.RoomNID, error) {
 	var roomNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectRoomNIDForUpdateStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(&roomNID)
 	return types.RoomNID(roomNID), err
 }
@@ -178,6 +184,7 @@ func (s *roomStatements) SelectLatestEventNIDs(
 	var nidsJSON string
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&nidsJSON, &stateSnapshotNID)
 	if err != nil {
 		return nil, 0, err
@@ -196,6 +203,7 @@ func (s *roomStatements) SelectLatestEventsNIDsForUpdate(
 	var lastEventSentNID int64
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsForUpdateStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&nidsJSON, &lastEventSentNID, &stateSnapshotNID)
 	if err != nil {
 		return nil, 0, 0, err
@@ -215,6 +223,7 @@ func (s *roomStatements) UpdateLatestEventNIDs(
 	stateSnapshotNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateLatestEventNIDsStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		eventNIDsAsArray(eventNIDs),
@@ -233,13 +242,14 @@ func (s *roomStatements) SelectRoomVersionsForRoomNIDs(
 	if err != nil {
 		return nil, err
 	}
-	defer sqlPrep.Close() // nolint:errcheck
+	defer sqlPrep.Close()
 	sqlStmt := sqlutil.TxStmt(txn, sqlPrep)
-	iRoomNIDs := make([]interface{}, len(roomNIDs))
+	defer sqlStmt.Close()
+	iRoomNIDs := make([]any, len(roomNIDs))
 	for i, v := range roomNIDs {
 		iRoomNIDs[i] = v
 	}
-	rows, err := sqlStmt.QueryContext(ctx, iRoomNIDs...)
+	rows, err := sqlStmt.QueryContext(ctx, iRoomNIDs...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +267,7 @@ func (s *roomStatements) SelectRoomVersionsForRoomNIDs(
 }
 
 func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roomNIDs []types.RoomNID) ([]string, error) {
-	iRoomNIDs := make([]interface{}, len(roomNIDs))
+	iRoomNIDs := make([]any, len(roomNIDs))
 	for i, v := range roomNIDs {
 		iRoomNIDs[i] = v
 	}
@@ -285,7 +295,7 @@ func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roo
 }
 
 func (s *roomStatements) BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, roomIDs []string) ([]types.RoomNID, error) {
-	iRoomIDs := make([]interface{}, len(roomIDs))
+	iRoomIDs := make([]any, len(roomIDs))
 	for i, v := range roomIDs {
 		iRoomIDs[i] = v
 	}
@@ -317,6 +327,7 @@ func (s *roomStatements) SelectResyncStateNID(
 ) (types.StateSnapshotNID, error) {
 	var resyncStateNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectResyncStateNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&resyncStateNID)
 	if err != nil {
 		return 0, err
@@ -328,6 +339,7 @@ func (s *roomStatements) UpdateResyncStateNID(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, resyncStateNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateResyncStateNIDStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(roomNID), int64(resyncStateNID))
 	return err
 }

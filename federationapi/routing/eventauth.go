@@ -9,14 +9,15 @@ import (
 	"context"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
-// GetEventAuth returns event auth for the roomID and eventID
+// GetEventAuth returns event auth for the roomID and eventID.
 func GetEventAuth(
 	ctx context.Context,
 	request *fclient.FederationRequest,

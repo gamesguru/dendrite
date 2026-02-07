@@ -23,18 +23,18 @@ import (
 
 const (
 	partialStateWorkerCount = 4
-	// Initial backoff delay after first failure
+	// Initial backoff delay after first failure.
 	partialStateMinBackoff = time.Minute * 1
-	// Maximum backoff delay (cap)
+	// Maximum backoff delay (cap).
 	partialStateMaxBackoff = time.Hour * 1
-	// Maximum number of retries before giving up on a room
+	// Maximum number of retries before giving up on a room.
 	partialStateMaxRetries = 16
-	// Jitter bounds for backoff calculation
+	// Jitter bounds for backoff calculation.
 	maxJitterMultiplier = 1.4
 	minJitterMultiplier = 0.8
 )
 
-// roomRetryInfo tracks retry state for a single room
+// roomRetryInfo tracks retry state for a single room.
 type roomRetryInfo struct {
 	retryAt    time.Time
 	retryCount uint32
@@ -51,7 +51,7 @@ type PartialStateWorker struct {
 	retryMap map[types.RoomNID]*roomRetryInfo
 }
 
-// NewPartialStateWorker creates a new partial state worker
+// NewPartialStateWorker creates a new partial state worker.
 func NewPartialStateWorker(
 	processCtx *process.ProcessContext,
 	rsAPI roomserverAPI.FederationRoomserverAPI,
@@ -69,11 +69,11 @@ func NewPartialStateWorker(
 // backoffDuration calculates the backoff duration for a given retry count using
 // exponential backoff with jitter, similar to the federation queue statistics.
 func (w *PartialStateWorker) backoffDuration(retryCount uint32) time.Duration {
-	// Add jitter to minimise thundering herd effects
+	// Add jitter to minimize thundering herd effects
 	jitter := rand.Float64()*(maxJitterMultiplier-minJitterMultiplier) + minJitterMultiplier
 
 	// Exponential backoff: minBackoff * 2^retryCount, capped at maxBackoff
-	backoff := float64(partialStateMinBackoff) * math.Pow(2, float64(retryCount)) * jitter
+	backoff := float64(partialStateMinBackoff) * math.Pow(2, float64(retryCount)) * jitter //nolint:mnd
 
 	duration := time.Duration(backoff)
 	if duration > partialStateMaxBackoff {
@@ -82,7 +82,7 @@ func (w *PartialStateWorker) backoffDuration(retryCount uint32) time.Duration {
 	return duration
 }
 
-// Start begins the partial state worker, queuing all rooms with partial state for processing
+// Start begins the partial state worker, queuing all rooms with partial state for processing.
 func (w *PartialStateWorker) Start() error {
 	// Skip if rsAPI is not available (e.g., in tests)
 	if w.rsAPI == nil {
@@ -108,10 +108,10 @@ func (w *PartialStateWorker) Start() error {
 		logrus.WithField("count", len(roomNIDs)).Info("Queuing partial state rooms for background resync")
 
 		// Stagger the initial queue to avoid thundering herd
-		offset := time.Second * 5
+		offset := time.Second * 5 //nolint:mnd
 		step := time.Second
-		if max := len(roomNIDs); max > 60 {
-			step = (time.Second * 60) / time.Duration(max)
+		if max := len(roomNIDs); max > 60 { //nolint:mnd
+			step = (time.Second * 60) / time.Duration(max) //nolint:mnd
 		}
 
 		for _, roomNID := range roomNIDs {
@@ -126,7 +126,7 @@ func (w *PartialStateWorker) Start() error {
 	return nil
 }
 
-// QueueRoom adds a room to the queue for partial state processing
+// QueueRoom adds a room to the queue for partial state processing.
 func (w *PartialStateWorker) QueueRoom(roomNID types.RoomNID) {
 	select {
 	case w.workerCh <- roomNID:
@@ -135,7 +135,7 @@ func (w *PartialStateWorker) QueueRoom(roomNID types.RoomNID) {
 		w.retryMu.Lock()
 		if _, exists := w.retryMap[roomNID]; !exists {
 			w.retryMap[roomNID] = &roomRetryInfo{
-				retryAt:    time.Now().Add(time.Second * 30),
+				retryAt:    time.Now().Add(time.Second * 30), //nolint:mnd
 				retryCount: 0,
 			}
 		}
@@ -143,7 +143,7 @@ func (w *PartialStateWorker) QueueRoom(roomNID types.RoomNID) {
 	}
 }
 
-// worker processes rooms from the channel
+// worker processes rooms from the channel.
 func (w *PartialStateWorker) worker(workerID int) {
 	for roomNID := range w.workerCh {
 		select {
@@ -192,7 +192,7 @@ func (w *PartialStateWorker) worker(workerID int) {
 	}
 }
 
-// retryLoop periodically retries failed rooms
+// retryLoop periodically retries failed rooms.
 func (w *PartialStateWorker) retryLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -226,7 +226,7 @@ func (w *PartialStateWorker) retryLoop() {
 	}
 }
 
-// processRoom fetches the full state for a room with partial state
+// processRoom fetches the full state for a room with partial state.
 func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	// Create a root span for tracing the entire partial state resync
 	trace, ctx := internal.StartTask(w.process.Context(), "PartialStateWorker.processRoom")

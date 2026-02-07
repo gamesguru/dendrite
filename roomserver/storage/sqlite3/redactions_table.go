@@ -72,6 +72,7 @@ func (s *redactionStatements) InsertRedaction(
 	ctx context.Context, txn *sql.Tx, info tables.RedactionInfo,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertRedactionStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, info.RedactionEventID, info.RedactsEventID, info.Validated)
 	return err
 }
@@ -81,6 +82,7 @@ func (s *redactionStatements) SelectRedactionInfoByRedactionEventID(
 ) (info *tables.RedactionInfo, err error) {
 	info = &tables.RedactionInfo{}
 	stmt := sqlutil.TxStmt(txn, s.selectRedactionInfoByRedactionEventIDStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, redactionEventID).Scan(
 		&info.RedactionEventID, &info.RedactsEventID, &info.Validated,
 	)
@@ -96,6 +98,7 @@ func (s *redactionStatements) SelectRedactionInfoByEventBeingRedacted(
 ) (info *tables.RedactionInfo, err error) {
 	info = &tables.RedactionInfo{}
 	stmt := sqlutil.TxStmt(txn, s.selectRedactionInfoByEventBeingRedactedStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, eventID).Scan(
 		&info.RedactionEventID, &info.RedactsEventID, &info.Validated,
 	)
@@ -110,6 +113,7 @@ func (s *redactionStatements) MarkRedactionValidated(
 	ctx context.Context, txn *sql.Tx, redactionEventID string, validated bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.markRedactionValidatedStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, validated, redactionEventID)
 	return err
 }

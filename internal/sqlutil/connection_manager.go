@@ -52,7 +52,10 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 	existing, loaded := c.existingConnections.LoadOrStore(dbProperties.ConnectionString, &con{})
 	if loaded {
 		// We found an existing connection
-		ex := existing.(*con)
+		ex, ok := existing.(*con)
+		if !ok {
+			return nil, nil, fmt.Errorf("unexpected type for existing connection")
+		}
 		return ex.db, ex.writer, nil
 	}
 

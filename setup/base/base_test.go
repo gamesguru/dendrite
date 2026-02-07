@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	basepkg "codefloe.com/pat-s/dendrite/setup/base"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
-	"github.com/stretchr/testify/assert"
 )
 
 //go:embed static/*.gotmpl
@@ -54,6 +55,7 @@ func TestLandingPage_Tcp(t *testing.T) {
 	// do the request
 	resp, err := s.Client().Do(req)
 	assert.NoError(t, err)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// read the response
@@ -96,6 +98,7 @@ func TestLandingPage_UnixSocket(t *testing.T) {
 	}
 	resp, err := client.Get("http://unix/")
 	assert.NoError(t, err)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// read the response

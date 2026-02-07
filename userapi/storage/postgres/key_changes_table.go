@@ -65,7 +65,7 @@ func NewPostgresKeyChangesTable(db *sql.DB) (tables.KeyChanges, error) {
 }
 
 func executeMigration(ctx context.Context, db *sql.DB) error {
-	// TODO: Remove when we are sure we are not having goose artefacts in the db
+	// TODO: Remove when we are sure we are not having goose artifacts in the db
 	// This forces an error, which indicates the migration is already applied, since the
 	// column partition was removed from the table
 	migrationName := "keyserver: refactor key changes"
@@ -99,7 +99,7 @@ func (s *keyChangesStatements) SelectKeyChanges(
 	ctx context.Context, fromOffset, toOffset int64,
 ) (userIDs []string, latestOffset int64, err error) {
 	latestOffset = fromOffset
-	rows, err := s.selectKeyChangesStmt.QueryContext(ctx, fromOffset, toOffset)
+	rows, err := s.selectKeyChangesStmt.QueryContext(ctx, fromOffset, toOffset) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, 0, err
 	}

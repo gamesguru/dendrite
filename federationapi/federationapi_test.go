@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/federationapi/routing"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
@@ -28,6 +25,10 @@ import (
 	"codefloe.com/pat-s/dendrite/federationapi"
 	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/federationapi/internal"
+	"codefloe.com/pat-s/dendrite/federationapi/routing"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
@@ -51,7 +52,7 @@ func (f *fedRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spec
 	return &senderID, nil
 }
 
-// PerformJoin will call this function
+// PerformJoin will call this function.
 func (f *fedRoomserverAPI) InputRoomEvents(ctx context.Context, req *rsapi.InputRoomEventsRequest, res *rsapi.InputRoomEventsResponse) {
 	if f.inputRoomEvents == nil {
 		return
@@ -59,7 +60,7 @@ func (f *fedRoomserverAPI) InputRoomEvents(ctx context.Context, req *rsapi.Input
 	f.inputRoomEvents(ctx, req, res)
 }
 
-// keychange consumer calls this
+// Keychange consumer calls this.
 func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error) {
 	if f.queryRoomsForUser == nil {
 		return nil, nil
@@ -67,7 +68,7 @@ func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.Us
 	return f.queryRoomsForUser(ctx, userID, desiredMembership)
 }
 
-// GetAllPartialStateRooms is called by PartialStateWorker
+// GetAllPartialStateRooms is called by PartialStateWorker.
 func (f *fedRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	return []types.RoomNID{}, nil
 }
@@ -105,7 +106,10 @@ func (f *fedClient) GetServerKeys(ctx context.Context, matrixServer spec.ServerN
 
 	keys.ServerName = matrixServer
 	keys.ValidUntilTS = spec.AsTimestamp(time.Now().Add(10 * time.Hour))
-	publicKey := pkey.Public().(ed25519.PublicKey)
+	publicKey, ok := pkey.Public().(ed25519.PublicKey)
+	if !ok {
+		panic("unexpected key type")
+	}
 	keys.VerifyKeys = map[gomatrixserverlib.KeyID]gomatrixserverlib.VerifyKey{
 		keyID: {
 			Key: spec.Base64Bytes(publicKey),
@@ -368,8 +372,8 @@ func TestRoomsV3URLEscapeDoNot404(t *testing.T) {
 			t.Errorf("expected an error, got none")
 			continue
 		}
-		gerr, ok := err.(gomatrix.HTTPError)
-		if !ok {
+		var gerr gomatrix.HTTPError
+		if !errors.As(err, &gerr) {
 			t.Errorf("failed to cast response error as gomatrix.HTTPError: %s", err)
 			continue
 		}

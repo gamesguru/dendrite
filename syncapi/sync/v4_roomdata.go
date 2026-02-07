@@ -10,24 +10,25 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
-// roomMembershipResult holds the result of membership detection
+// roomMembershipResult holds the result of membership detection.
 type roomMembershipResult struct {
 	membership  string
 	inviteEvent *rstypes.HeaderedEvent
 }
 
 // detectRoomMembership determines the user's membership in a room
-// Checks both PDU-based membership and active invites
+// Checks both PDU-based membership and active invites.
 func (rp *RequestPool) detectRoomMembership(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -70,7 +71,7 @@ func (rp *RequestPool) detectRoomMembership(
 	return result
 }
 
-// shouldFetchRequiredState determines if required state should be fetched
+// shouldFetchRequiredState determines if required state should be fetched.
 func shouldFetchRequiredState(
 	requiredStateConfig *types.RequiredStateConfig,
 	isInitialForRoom bool,
@@ -95,7 +96,7 @@ func shouldFetchRequiredState(
 	return false, ""
 }
 
-// populateMemberCounts adds joined and invited member counts to room data
+// populateMemberCounts adds joined and invited member counts to room data.
 func (rp *RequestPool) populateMemberCounts(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -123,7 +124,7 @@ func (rp *RequestPool) populateMemberCounts(
 	}
 }
 
-// populatePrevBatch generates prev_batch token if timeline is limited
+// populatePrevBatch generates prev_batch token if timeline is limited.
 func (rp *RequestPool) populatePrevBatch(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -237,7 +238,7 @@ func (rp *RequestPool) BuildRoomData(
 		}).Debug("[REQUIRED_STATE] Skipping required_state (no timeline events or $LAZY not requested)")
 	}
 
-	// Notification counts (hardcoded to 0 per Synapse behaviour for encrypted rooms)
+	// Notification counts (hardcoded to 0 per Synapse behavior for encrypted rooms)
 	roomData.NotificationCount = 0
 	roomData.HighlightCount = 0
 
@@ -263,7 +264,7 @@ func (rp *RequestPool) BuildRoomData(
 // For initial syncs (NEVER), gets historical events
 // For incremental syncs (LIVE/PREVIOUSLY), gets only new events since last sync
 // Returns the events, whether the timeline was limited (truncated due to hitting the limit), and num_live count
-// fromToken is used to calculate num_live (how many events arrived after the sync request's since token)
+// fromToken is used to calculate num_live (how many events arrived after the sync request's since token).
 func (rp *RequestPool) getTimelineEvents(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -390,7 +391,7 @@ func (rp *RequestPool) getTimelineEvents(
 	return clientEvents, events.Limited, numLive, nil
 }
 
-// getRoomNameFromDB retrieves m.room.name state event from database
+// getRoomNameFromDB retrieves m.room.name state event from database.
 func (rp *RequestPool) getRoomNameFromDB(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.name", "")
 	if err != nil || event == nil {
@@ -400,7 +401,7 @@ func (rp *RequestPool) getRoomNameFromDB(ctx context.Context, snapshot storage.D
 	return gjson.GetBytes(event.Content(), "name").Str
 }
 
-// getRoomAvatar retrieves m.room.avatar state event
+// getRoomAvatar retrieves m.room.avatar state event.
 func (rp *RequestPool) getRoomAvatar(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.avatar", "")
 	if err != nil || event == nil {
@@ -410,7 +411,7 @@ func (rp *RequestPool) getRoomAvatar(ctx context.Context, snapshot storage.Datab
 	return gjson.GetBytes(event.Content(), "url").Str
 }
 
-// getRoomTopic retrieves m.room.topic state event
+// getRoomTopic retrieves m.room.topic state event.
 func (rp *RequestPool) getRoomTopic(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.topic", "")
 	if err != nil || event == nil {
@@ -422,7 +423,7 @@ func (rp *RequestPool) getRoomTopic(ctx context.Context, snapshot storage.Databa
 
 // getRequiredState retrieves and filters state events based on required_state configuration
 // Phase 4: Supports include/exclude patterns with wildcard matching
-// Phase 5: Supports $LAZY pattern for lazy member loading
+// Phase 5: Supports $LAZY pattern for lazy member loading.
 func (rp *RequestPool) getRequiredState(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -492,7 +493,7 @@ func (rp *RequestPool) getRequiredState(
 }
 
 // matchesRequiredState checks if an event matches the required_state configuration
-// Phase 5: Added lazySenders parameter for $LAZY pattern matching
+// Phase 5: Added lazySenders parameter for $LAZY pattern matching.
 func (rp *RequestPool) matchesRequiredState(
 	event *rstypes.HeaderedEvent,
 	userID string,
@@ -507,7 +508,7 @@ func (rp *RequestPool) matchesRequiredState(
 
 	// Check if excluded
 	for _, pattern := range config.Exclude {
-		if len(pattern) == 2 {
+		if len(pattern) == 2 { //nolint:mnd
 			if matchesPattern(eventType, pattern[0]) && matchesStateKeyPattern(stateKey, pattern[1], userID, lazySenders) {
 				return false // Explicitly excluded
 			}
@@ -516,7 +517,7 @@ func (rp *RequestPool) matchesRequiredState(
 
 	// Check if included
 	for _, pattern := range config.Include {
-		if len(pattern) == 2 {
+		if len(pattern) == 2 { //nolint:mnd
 			if matchesPattern(eventType, pattern[0]) && matchesStateKeyPattern(stateKey, pattern[1], userID, lazySenders) {
 				// Debug: Log $ME membership matches
 				if pattern[0] == "m.room.member" && pattern[1] == "$ME" {
@@ -536,7 +537,7 @@ func (rp *RequestPool) matchesRequiredState(
 	return false // Not included
 }
 
-// matchesPattern checks if a value matches a pattern (supports "*" wildcard)
+// matchesPattern checks if a value matches a pattern (supports "*" wildcard).
 func matchesPattern(value, pattern string) bool {
 	if pattern == "*" {
 		return true
@@ -546,7 +547,7 @@ func matchesPattern(value, pattern string) bool {
 }
 
 // matchesStateKeyPattern checks if a state key matches a pattern
-// Supports "*" wildcard, "$ME" (current user), and "$LAZY" (timeline senders)
+// Supports "*" wildcard, "$ME" (current user), and "$LAZY" (timeline senders).
 func matchesStateKeyPattern(stateKey, pattern, userID string, lazySenders map[string]bool) bool {
 	if pattern == "*" {
 		return true
@@ -565,7 +566,7 @@ func matchesStateKeyPattern(stateKey, pattern, userID string, lazySenders map[st
 }
 
 // extractLazySenders extracts sender IDs from timeline events if $LAZY is specified
-// Phase 5: Returns a map of sender IDs for lazy member loading
+// Phase 5: Returns a map of sender IDs for lazy member loading.
 func (rp *RequestPool) extractLazySenders(config *types.RequiredStateConfig, timeline []synctypes.ClientEvent) map[string]bool {
 	// Check if $LAZY pattern is present
 	hasLazy := false
@@ -592,7 +593,7 @@ func (rp *RequestPool) extractLazySenders(config *types.RequiredStateConfig, tim
 }
 
 // BumpEventTypes defines the event types that count as "activity" for bump_stamp calculation
-// Per MSC4186/Synapse, only these events should bump a room to the top of the list
+// Per MSC4186/Synapse, only these events should bump a room to the top of the list.
 var BumpEventTypes = map[string]bool{
 	"m.room.create":    true,
 	"m.room.message":   true,
@@ -605,7 +606,7 @@ var BumpEventTypes = map[string]bool{
 
 // calculateBumpStamp calculates the stream position of the most recent "bumping" event
 // Returns an opaque integer (stream position) for use in client-side room sorting
-// Per MSC4186: Only specific event types count as "bump" events
+// Per MSC4186: Only specific event types count as "bump" events.
 func (rp *RequestPool) calculateBumpStamp(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -643,7 +644,7 @@ func (rp *RequestPool) calculateBumpStamp(
 // buildInviteRoomData constructs room data for an invited room
 // Returns stripped state events for room preview (MSC4186 Section 4.3)
 // Phase 11: Element X compatibility
-// inviteEvent contains the invite_room_state in its unsigned field for federated invites
+// inviteEvent contains the invite_room_state in its unsigned field for federated invites.
 func (rp *RequestPool) buildInviteRoomData(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,

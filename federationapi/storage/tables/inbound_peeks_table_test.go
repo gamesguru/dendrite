@@ -5,15 +5,16 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateInboundpeeksTable(t *testing.T, dbType test.DBType) (tables.FederationInboundPeeks, func()) {

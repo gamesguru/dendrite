@@ -40,7 +40,7 @@ import (
 //	      |
 //	      7 <----- latest
 //
-// Can only be called once at a time
+// Can only be called once at a time.
 func (r *Inputer) updateLatestEvents(
 	ctx context.Context,
 	roomInfo *types.RoomInfo,
@@ -75,7 +75,7 @@ func (r *Inputer) updateLatestEvents(
 		historyVisibility: historyVisibility,
 	}
 
-	if err = u.doUpdateLatestEvents(); err != nil {
+	if err = u.doUpdateLatestEvents(); err != nil { //nolint:contextcheck
 		return fmt.Errorf("u.doUpdateLatestEvents: %w", err)
 	}
 
@@ -333,7 +333,7 @@ func (u *latestEventsUpdater) latestState() error {
 		sentry.WithScope(func(scope *sentry.Scope) {
 			scope.SetLevel("warning")
 			scope.SetTag("room_id", u.event.RoomID().String())
-			scope.SetContext("State reset", map[string]interface{}{
+			scope.SetContext("State reset", map[string]any{
 				"Event ID":      u.event.EventID(),
 				"Old state NID": fmt.Sprintf("%d", u.oldStateNID),
 				"New state NID": fmt.Sprintf("%d", u.newStateNID),
@@ -460,7 +460,7 @@ func (u *latestEventsUpdater) makeOutputNewRoomEvent() (*api.OutputEvent, error)
 	}, nil
 }
 
-// retrieve an event nid -> event ID map for all events that need updating
+// retrieve an event nid -> event ID map for all events that need updating.
 func (u *latestEventsUpdater) stateEventMap() (map[types.EventNID]string, error) {
 	cap := len(u.added) + len(u.removed) + len(u.stateBeforeEventRemoves) + len(u.stateBeforeEventAdds)
 	stateEventNIDs := make(types.EventNIDs, 0, cap)

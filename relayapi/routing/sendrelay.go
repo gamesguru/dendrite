@@ -10,12 +10,13 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/relayapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/relayapi/api"
 )
 
 // SendTransactionToRelay implements PUT /_matrix/federation/v1/send_relay/{txnID}/{userID}
@@ -64,5 +65,5 @@ func SendTransactionToRelay(
 		}
 	}
 
-	return util.JSONResponse{Code: 200}
+	return util.JSONResponse{Code: 200} //nolint:mnd
 }

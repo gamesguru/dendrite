@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +17,7 @@ import (
 
 type HTTPRequestOpt func(req *http.Request)
 
-func WithJSONBody(t *testing.T, body interface{}) HTTPRequestOpt {
+func WithJSONBody(t *testing.T, body any) HTTPRequestOpt {
 	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -56,7 +57,11 @@ func ListenAndServe(t *testing.T, router http.Handler, withTLS bool) (apiURL str
 	if err != nil {
 		t.Fatalf("failed to listen: %s", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("failed to cast listener address to *net.TCPAddr")
+	}
+	port := tcpAddr.Port
 	srv := http.Server{}
 
 	var wg sync.WaitGroup
@@ -68,7 +73,7 @@ func ListenAndServe(t *testing.T, router http.Handler, withTLS bool) (apiURL str
 		if withTLS {
 			certFile := filepath.Join(t.TempDir(), "dendrite.cert")
 			keyFile := filepath.Join(t.TempDir(), "dendrite.key")
-			err = NewTLSKey(keyFile, certFile, 1024)
+			err = NewTLSKey(keyFile, certFile, 1024) //nolint:mnd
 			if err != nil {
 				t.Errorf("failed to make TLS key: %s", err)
 				return
@@ -77,7 +82,7 @@ func ListenAndServe(t *testing.T, router http.Handler, withTLS bool) (apiURL str
 		} else {
 			err = srv.Serve(listener)
 		}
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Logf("Listen failed: %s", err)
 		}
 	}()

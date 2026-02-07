@@ -9,8 +9,9 @@ package storage
 import (
 	"context"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/mediaapi/types"
 )
 
 type Database interface {

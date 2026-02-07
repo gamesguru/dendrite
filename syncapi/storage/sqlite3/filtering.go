@@ -24,10 +24,10 @@ const (
 // and it's easier just to have the caller extract the relevant
 // parts.
 func prepareWithFilters(
-	db *sql.DB, txn *sql.Tx, query string, params []interface{},
+	db *sql.DB, txn *sql.Tx, query string, params []any,
 	senders, notsenders, types, nottypes *[]string, excludeEventIDs []string,
 	containsURL *bool, limit int, order FilterOrder,
-) (*sql.Stmt, []interface{}, error) {
+) (*sql.Stmt, []any, error) {
 	offset := len(params)
 	if senders != nil {
 		if count := len(*senders); count > 0 {

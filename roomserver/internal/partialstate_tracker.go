@@ -14,7 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// DefaultAwaitTimeout is the default timeout for awaiting full state
+// DefaultAwaitTimeout is the default timeout for awaiting full state.
 const DefaultAwaitTimeout = 5 * time.Minute
 
 // PartialStateTracker tracks rooms in partial state and allows callers to wait
@@ -27,16 +27,16 @@ type PartialStateTracker struct {
 	mu            sync.Mutex
 }
 
-// NewPartialStateTracker creates a new PartialStateTracker
+// NewPartialStateTracker creates a new PartialStateTracker.
 func NewPartialStateTracker() *PartialStateTracker {
 	return &PartialStateTracker{
 		roomObservers: make(map[string][]chan struct{}),
 	}
 }
 
-// AwaitFullState blocks until the room has full state or the context is cancelled.
+// AwaitFullState blocks until the room has full state or the context is canceled.
 // If the room is not in partial state, this returns immediately.
-// Returns an error if the context is cancelled or times out.
+// Returns an error if the context is canceled or times out.
 func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string) error {
 	// Create a channel to wait on
 	ch := make(chan struct{})
@@ -74,7 +74,7 @@ func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string)
 	}
 }
 
-// AwaitFullStateWithTimeout is a convenience wrapper that adds a timeout to the context
+// AwaitFullStateWithTimeout is a convenience wrapper that adds a timeout to the context.
 func (t *PartialStateTracker) AwaitFullStateWithTimeout(ctx context.Context, roomID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -106,14 +106,14 @@ func (t *PartialStateTracker) NotifyUnPartialStated(roomID string) {
 	delete(t.roomObservers, roomID)
 }
 
-// PendingRoomCount returns the number of rooms with pending observers
+// PendingRoomCount returns the number of rooms with pending observers.
 func (t *PartialStateTracker) PendingRoomCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.roomObservers)
 }
 
-// HasObservers returns true if there are any observers waiting for this room
+// HasObservers returns true if there are any observers waiting for this room.
 func (t *PartialStateTracker) HasObservers(roomID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

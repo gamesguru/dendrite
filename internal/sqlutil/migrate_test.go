@@ -55,7 +55,9 @@ var failMigration = sqlutil.Migration{
 }
 
 func Test_migrations_Up(t *testing.T) {
-	withFail := append(dummyMigrations, failMigration)
+	withFail := make([]sqlutil.Migration, 0, len(dummyMigrations)+1)
+	withFail = append(withFail, dummyMigrations...)
+	withFail = append(withFail, failMigration)
 
 	tests := []struct {
 		name       string

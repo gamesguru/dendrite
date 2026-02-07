@@ -6,15 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateFederationDatabase(t *testing.T, dbType test.DBType) (storage.Database, func()) {
@@ -41,7 +42,7 @@ func TestExpireEDUs(t *testing.T) {
 	ctx := context.Background()
 	destinations := map[spec.ServerName]struct{}{"localhost": {}}
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateFederationDatabase(t, dbType)
+		db, close := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer close()
 		// insert some data
 		for i := 0; i < 100; i++ {
@@ -92,7 +93,7 @@ func TestOutboundPeeking(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, closeDB := mustCreateFederationDatabase(t, dbType)
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer closeDB()
 		peekID := util.RandomString(8)
 		var renewalInterval int64 = 1000
@@ -174,7 +175,7 @@ func TestInboundPeeking(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, closeDB := mustCreateFederationDatabase(t, dbType)
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer closeDB()
 		peekID := util.RandomString(8)
 		var renewalInterval int64 = 1000

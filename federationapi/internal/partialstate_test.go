@@ -20,7 +20,7 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/process"
 )
 
-// TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing
+// TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing.
 func TestPartialStateWorkerQueueRoom(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -43,7 +43,7 @@ func TestPartialStateWorkerQueueRoom(t *testing.T) {
 	}
 }
 
-// TestPartialStateWorkerQueueRoomFullChannel tests fallback to retry map when channel is full
+// TestPartialStateWorkerQueueRoomFullChannel tests fallback to retry map when channel is full.
 func TestPartialStateWorkerQueueRoomFullChannel(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -69,7 +69,7 @@ func TestPartialStateWorkerQueueRoomFullChannel(t *testing.T) {
 	assert.True(t, exists, "Room should be in retry map when channel is full")
 }
 
-// TestPartialStateWorkerDuplicateQueue tests that duplicate queue requests don't overwrite retry times
+// TestPartialStateWorkerDuplicateQueue tests that duplicate queue requests don't overwrite retry times.
 func TestPartialStateWorkerDuplicateQueue(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -103,7 +103,7 @@ func TestPartialStateWorkerDuplicateQueue(t *testing.T) {
 	assert.Equal(t, firstInfo.retryAt, secondInfo.retryAt, "Duplicate queue should not update retry time")
 }
 
-// TestPartialStateWorkerRetryMapCleanup tests that retry map entries are properly moved to the queue
+// TestPartialStateWorkerRetryMapCleanup tests that retry map entries are properly moved to the queue.
 func TestPartialStateWorkerRetryMapCleanup(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -149,7 +149,7 @@ func TestPartialStateWorkerRetryMapCleanup(t *testing.T) {
 	assert.Equal(t, 1, remainingRetries, "Room 3 should still be in retry map")
 }
 
-// mockPartialStateRoomserverAPI implements minimal interface for testing
+// mockPartialStateRoomserverAPI implements minimal interface for testing.
 type mockPartialStateRoomserverAPI struct {
 	partialStateRooms map[types.RoomNID]bool
 	partialServers    map[types.RoomNID][]string
@@ -207,7 +207,7 @@ func (m *mockPartialStateRoomserverAPI) RoomIDFromNID(ctx context.Context, roomN
 	return "", nil // Room not found
 }
 
-// TestPartialStateWorkerSkipsNonPartialRooms tests that non-partial rooms are skipped
+// TestPartialStateWorkerSkipsNonPartialRooms tests that non-partial rooms are skipped.
 func TestPartialStateWorkerSkipsNonPartialRooms(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -229,7 +229,7 @@ func TestPartialStateWorkerSkipsNonPartialRooms(t *testing.T) {
 	assert.False(t, hasPartialState, "Room should not have partial state")
 }
 
-// TestPartialStateJoinClientTracking tests that the PartialStateJoinClient tracks join metadata
+// TestPartialStateJoinClientTracking tests that the PartialStateJoinClient tracks join metadata.
 func TestPartialStateJoinClientTracking(t *testing.T) {
 	// Test initial state
 	client := &PartialStateJoinClient{
@@ -250,7 +250,7 @@ func TestPartialStateJoinClientTracking(t *testing.T) {
 	assert.Contains(t, client.LastJoinServersInRoom, "server1.example.com")
 }
 
-// TestPartialStateWorkerConcurrency tests concurrent queue operations
+// TestPartialStateWorkerConcurrency tests concurrent queue operations.
 func TestPartialStateWorkerConcurrency(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -283,7 +283,7 @@ func TestPartialStateWorkerConcurrency(t *testing.T) {
 	assert.Equal(t, 50, total, "All rooms should be queued in channel or retry map")
 }
 
-// TestPartialStateWorkerRaceConditions tests for data races in concurrent operations
+// TestPartialStateWorkerRaceConditions tests for data races in concurrent operations.
 func TestPartialStateWorkerRaceConditions(t *testing.T) {
 	processCtx := process.NewProcessContext()
 	defer processCtx.ShutdownDendrite()
@@ -355,7 +355,7 @@ func TestPartialStateWorkerRaceConditions(t *testing.T) {
 	// Test passes if no race conditions detected (run with -race flag)
 }
 
-// TestPartialStateConstants verifies the configuration constants
+// TestPartialStateConstants verifies the configuration constants.
 func TestPartialStateConstants(t *testing.T) {
 	assert.Equal(t, 4, partialStateWorkerCount, "Worker count should be 4")
 	assert.Equal(t, time.Minute*1, partialStateMinBackoff, "Min backoff should be 1 minute")
@@ -363,7 +363,7 @@ func TestPartialStateConstants(t *testing.T) {
 	assert.Equal(t, 16, partialStateMaxRetries, "Max retries should be 16")
 }
 
-// TestPartialStateWorkerContextCancellation tests that workers respect context cancellation
+// TestPartialStateWorkerContextCancellation tests that workers respect context cancellation.
 func TestPartialStateWorkerContextCancellation(t *testing.T) {
 	processCtx := process.NewProcessContext()
 

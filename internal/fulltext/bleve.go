@@ -14,10 +14,7 @@ import (
 	"strings"
 
 	"github.com/blevesearch/bleve/v2"
-	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	// side effect imports to allow all possible languages
+	// Side effect imports to allow all possible languages.
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ar"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/cjk"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ckb"
@@ -39,12 +36,14 @@ import (
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ru"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/sv"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/tr"
+	"github.com/blevesearch/bleve/v2/mapping"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
 )
 
-// Search contains all existing bleve.Index
+// Search contains all existing bleve.Index.
 type Search struct {
 	FulltextIndex bleve.Index
 }
@@ -57,7 +56,7 @@ type Indexer interface {
 	Close() error
 }
 
-// IndexElement describes the layout of an element to index
+// IndexElement describes the layout of an element to index.
 type IndexElement struct {
 	EventID        string
 	RoomID         string
@@ -66,7 +65,7 @@ type IndexElement struct {
 	StreamPosition int64
 }
 
-// SetContentType sets i.ContentType given an identifier
+// SetContentType sets i.ContentType given an identifier.
 func (i *IndexElement) SetContentType(v string) {
 	switch v {
 	case "m.room.message":
@@ -78,7 +77,7 @@ func (i *IndexElement) SetContentType(v string) {
 	}
 }
 
-// New opens a new/existing fulltext index
+// New opens a new/existing fulltext index.
 func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, err error) {
 	fts = &Search{}
 	fts.FulltextIndex, err = openIndex(cfg)
@@ -98,12 +97,12 @@ func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, 
 	return fts, nil
 }
 
-// Close closes the fulltext index
+// Close closes the fulltext index.
 func (f *Search) Close() error {
 	return f.FulltextIndex.Close()
 }
 
-// Index indexes the given elements
+// Index indexes the given elements.
 func (f *Search) Index(elements ...IndexElement) error {
 	batch := f.FulltextIndex.NewBatch()
 
@@ -116,7 +115,7 @@ func (f *Search) Index(elements ...IndexElement) error {
 	return f.FulltextIndex.Batch(batch)
 }
 
-// Delete deletes an indexed element by the eventID
+// Delete deletes an indexed element by the eventID.
 func (f *Search) Delete(eventID string) error {
 	return f.FulltextIndex.Delete(eventID)
 }

@@ -8,10 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // Statistics contains information about all of the remote federated
@@ -181,7 +181,7 @@ const (
 // Uses exponential backoff starting at 2^MinBackoffExponent seconds and capping at
 // 2^maxBackoffExponent seconds, with jitter to avoid thundering herd.
 func (s *ServerStatistics) duration(count uint32) time.Duration {
-	// Add some jitter to minimise the chance of having multiple backoffs
+	// Add some jitter to minimize the chance of having multiple backoffs
 	// ending at the same time.
 	jitter := rand.Float64()*(maxJitterMultiplier-minJitterMultiplier) + minJitterMultiplier
 
@@ -265,7 +265,7 @@ func (s *ServerStatistics) Success(method SendMethod) {
 
 // Failure marks a failure and starts backing off if needed.
 // It will return the time that the current failure
-// will result in backoff waiting until, and a bool signalling
+// will result in backoff waiting until, and a bool signaling
 // whether we have blacklisted and therefore to give up.
 func (s *ServerStatistics) Failure() (time.Time, bool) {
 	// Return immediately if we have blacklisted this node.
@@ -328,7 +328,11 @@ func (s *ServerStatistics) Failure() (time.Time, bool) {
 	if until == nil {
 		return time.Time{}, false
 	}
-	return until.(time.Time), false
+	t, ok := until.(time.Time)
+	if !ok {
+		return time.Time{}, false
+	}
+	return t, false
 }
 
 // MarkServerAlive removes the assumed offline and blacklisted statuses from this server.

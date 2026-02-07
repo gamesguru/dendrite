@@ -7,6 +7,8 @@
 package mediaapi
 
 import (
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/httputil"
@@ -15,8 +17,6 @@ import (
 	"codefloe.com/pat-s/dendrite/mediaapi/storage"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the MediaAPI component.

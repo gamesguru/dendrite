@@ -6,11 +6,11 @@ import (
 	"database/sql"
 	"errors"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
@@ -220,7 +220,7 @@ type Purge interface {
 	) error
 }
 
-// PartialState tracks rooms with partial state from MSC3706 faster joins
+// PartialState tracks rooms with partial state from MSC3706 faster joins.
 type PartialState interface {
 	// InsertPartialStateRoom inserts a new partial state room entry
 	// deviceListStreamID is the current device list stream position at the time of the partial state join

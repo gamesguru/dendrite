@@ -14,6 +14,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/nats-io/nats.go"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+
 	dendriteInternal "codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/fulltext"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -29,11 +35,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/nats-io/nats.go"
-	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -82,7 +83,7 @@ func NewOutputRoomEventConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputRoomEventConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
@@ -122,32 +123,32 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 				return true
 			}
 		}
-		err = s.onNewRoomEvent(s.ctx, *output.NewRoomEvent)
+		err = s.onNewRoomEvent(s.ctx, *output.NewRoomEvent) //nolint:contextcheck
 		if err == nil && s.asProducer != nil {
 			if err = s.asProducer.ProduceRoomEvents(msg); err != nil {
 				log.WithError(err).Warn("failed to produce OutputAppserviceEvent")
 			}
 		}
 	case api.OutputTypeOldRoomEvent:
-		err = s.onOldRoomEvent(s.ctx, *output.OldRoomEvent)
+		err = s.onOldRoomEvent(s.ctx, *output.OldRoomEvent) //nolint:contextcheck
 	case api.OutputTypeNewInviteEvent:
-		s.onNewInviteEvent(s.ctx, *output.NewInviteEvent)
+		s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
 	case api.OutputTypeRetireInviteEvent:
-		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent)
+		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
-		s.onNewPeek(s.ctx, *output.NewPeek)
+		s.onNewPeek(s.ctx, *output.NewPeek) //nolint:contextcheck
 	case api.OutputTypeRetirePeek:
-		s.onRetirePeek(s.ctx, *output.RetirePeek)
+		s.onRetirePeek(s.ctx, *output.RetirePeek) //nolint:contextcheck
 	case api.OutputTypeRedactedEvent:
-		err = s.onRedactEvent(s.ctx, *output.RedactedEvent)
+		err = s.onRedactEvent(s.ctx, *output.RedactedEvent) //nolint:contextcheck
 	case api.OutputTypePurgeRoom:
-		err = s.onPurgeRoom(s.ctx, *output.PurgeRoom)
+		err = s.onPurgeRoom(s.ctx, *output.PurgeRoom) //nolint:contextcheck
 		if err != nil {
 			log.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from sync API")
 			return true // non-fatal, as otherwise we end up in a loop of trying to purge the room
 		}
 	case api.OutputTypeUnPartialStatedRoom:
-		err = s.onUnPartialStatedRoom(s.ctx, *output.UnPartialStatedRoom)
+		err = s.onUnPartialStatedRoom(s.ctx, *output.UnPartialStatedRoom) //nolint:contextcheck
 	default:
 		log.WithField("type", output.Type).Debug(
 			"roomserver output log: ignoring unknown output type",
@@ -331,7 +332,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	notifyRegion, _ := dendriteInternal.StartRegion(ctx, "NotifySyncClients")
 	notifyRegion.SetTag("pdu_position", pduPos)
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos})
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
 	notifyRegion.EndRegion()
 
 	return nil
@@ -391,7 +392,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	s.queueRoomMetadataUpdate(ev)
 
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos})
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
 
 	return nil
 }
@@ -470,7 +471,7 @@ func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 	pduPos, err := s.db.RetireInviteEvent(ctx, msg.EventID)
 	// It's possible we just haven't heard of this invite yet, so
 	// we should not panic if we try to retire it.
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   msg.EventID,
@@ -666,7 +667,7 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 		notifyRegion, _ := dendriteInternal.StartRegion(ctx, "NotifySyncClients")
 		notifyRegion.SetTag("pdu_position", lastPos)
 		s.pduStream.Advance(lastPos)
-		s.notifier.OnNewEvent(nil, msg.RoomID, nil, types.StreamingToken{PDUPosition: lastPos})
+		s.notifier.OnNewEvent(nil, msg.RoomID, nil, types.StreamingToken{PDUPosition: lastPos}) //nolint:contextcheck
 		notifyRegion.EndRegion()
 	}
 	trace.SetTag("notified_position", lastPos)

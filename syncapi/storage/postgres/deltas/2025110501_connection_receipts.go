@@ -13,7 +13,7 @@ import (
 )
 
 // UpAddConnectionReceipts adds a table to track per-connection receipt delivery state
-// This prevents receipt repetition across concurrent sliding sync connections (MSC4186)
+// This prevents receipt repetition across concurrent sliding sync connections (MSC4186).
 func UpAddConnectionReceipts(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 -- Track which receipts have been delivered to each sliding sync connection

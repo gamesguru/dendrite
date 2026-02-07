@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
@@ -12,7 +14,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateEventsTable(t *testing.T, dbType test.DBType) (tables.Events, func()) {
@@ -43,7 +44,7 @@ func Test_EventsTable(t *testing.T) {
 	room := test.NewRoom(t, alice)
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreateEventsTable(t, dbType)
+		tab, close := mustCreateEventsTable(t, dbType) //nolint:contextcheck
 		defer close()
 		// create some dummy data
 		eventIDs := make([]string, 0, len(room.Events()))

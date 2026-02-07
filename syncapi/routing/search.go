@@ -30,7 +30,7 @@ import (
 	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// nolint:gocyclo
+//nolint:gocyclo
 func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts fulltext.Indexer, from *string, rsAPI roomserverAPI.SyncRoomserverAPI) util.JSONResponse {
 	start := time.Now()
 	var (
@@ -234,10 +234,10 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 			Context: SearchContextResponse{
 				Start: startToken.String(),
 				End:   endToken.String(),
-				EventsAfter: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				EventsAfter: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 				}),
-				EventsBefore: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				EventsBefore: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 				}),
 				ProfileInfo: profileInfos,
@@ -258,7 +258,7 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 					JSON: spec.InternalServerError{},
 				}
 			}
-			stateForRooms[event.RoomID().String()] = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(state), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			stateForRooms[event.RoomID().String()] = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(state), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 				return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 			})
 		}
@@ -296,7 +296,7 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 	}
 }
 
-// contextEvents returns the events around a given eventID
+// contextEvents returns the events around a given eventID.
 func contextEvents(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,

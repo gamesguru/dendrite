@@ -14,6 +14,12 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/ed25519"
+
 	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/signing"
 	fedAPI "codefloe.com/pat-s/dendrite/federationapi"
 	"codefloe.com/pat-s/dendrite/federationapi/routing"
@@ -23,11 +29,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/ed25519"
 )
 
 type fakeFedClient struct {
@@ -46,7 +47,7 @@ func TestHandleQueryDirectory(t *testing.T) {
 		defer close()
 
 		natsInstance := jetstream.NATSInstance{}
-		cfg.FederationAPI.Matrix.SigningIdentity.ServerName = testOrigin
+		cfg.FederationAPI.Matrix.ServerName = testOrigin
 		cfg.FederationAPI.Matrix.Metrics.Enabled = false
 		fedClient := fakeFedClient{}
 		serverKeyAPI := &signing.YggdrasilKeys{}
@@ -58,7 +59,10 @@ func TestHandleQueryDirectory(t *testing.T) {
 
 		_, sk, _ := ed25519.GenerateKey(nil)
 		keyID := signing.KeyID
-		pk := sk.Public().(ed25519.PublicKey)
+		pk, ok := sk.Public().(ed25519.PublicKey)
+		if !ok {
+			t.Fatal("unexpected public key type")
+		}
 		serverName := spec.ServerName(hex.EncodeToString(pk))
 		req := fclient.NewFederationRequest("GET", serverName, testOrigin, "/_matrix/federation/v1/query/directory?room_alias="+url.QueryEscape("#room:server"))
 		type queryContent struct{}
@@ -67,7 +71,10 @@ func TestHandleQueryDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
 		}
-		req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
+		err = req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
+		if err != nil {
+			t.Fatalf("Error: %s", err.Error())
+		}
 		httpReq, err := req.HTTPRequest()
 		if err != nil {
 			t.Fatalf("Error: %s", err.Error())
@@ -77,7 +84,7 @@ func TestHandleQueryDirectory(t *testing.T) {
 
 		res := w.Result()
 		data, _ := io.ReadAll(res.Body)
-		println(string(data))
+		t.Log(string(data))
 		assert.Equal(t, 200, res.StatusCode)
 	})
 }

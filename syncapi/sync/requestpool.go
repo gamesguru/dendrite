@@ -11,6 +11,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -33,7 +34,7 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// RequestPool manages HTTP long-poll connections for /sync
+// RequestPool manages HTTP long-poll connections for /sync.
 type RequestPool struct {
 	db       storage.Database
 	cfg      *config.SyncAPI
@@ -59,7 +60,7 @@ type PresenceConsumer interface {
 	EmitPresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool)
 }
 
-// NewRequestPool makes a new RequestPool
+// NewRequestPool makes a new RequestPool.
 func NewRequestPool(
 	db storage.Database, cfg *config.SyncAPI,
 	userAPI userapi.SyncUserAPI,
@@ -86,13 +87,13 @@ func NewRequestPool(
 		v4Connections: &sync.Map{},
 	}
 	go rp.cleanLastSeen()
-	go rp.cleanPresence(db, time.Minute*5)
+	go rp.cleanPresence(db, time.Minute*5) //nolint:mnd
 	return rp
 }
 
 func (rp *RequestPool) cleanLastSeen() {
 	for {
-		rp.lastseen.Range(func(key interface{}, _ interface{}) bool {
+		rp.lastseen.Range(func(key any, _ any) bool {
 			rp.lastseen.Delete(key)
 			return true
 		})
@@ -105,8 +106,11 @@ func (rp *RequestPool) cleanPresence(db storage.Presence, cleanupTime time.Durat
 		return
 	}
 	for {
-		rp.presence.Range(func(key interface{}, v interface{}) bool {
-			p := v.(types.PresenceInternal)
+		rp.presence.Range(func(key any, v any) bool {
+			p, ok := v.(types.PresenceInternal)
+			if !ok {
+				return true
+			}
 			if time.Since(p.LastActiveTS.Time()) > cleanupTime {
 				rp.updatePresence(db, types.PresenceUnavailable.String(), p.UserID)
 				rp.presence.Delete(key)
@@ -117,8 +121,8 @@ func (rp *RequestPool) cleanPresence(db storage.Presence, cleanupTime time.Durat
 	}
 }
 
-// set a unix timestamp of when it last saw the types
-// this way it can filter based on time
+// Set a unix timestamp of when it last saw the types.
+// This way it can filter based on time.
 type PresenceMap struct {
 	mu   sync.Mutex
 	seen map[string]map[types.Presence]time.Time
@@ -127,10 +131,10 @@ type PresenceMap struct {
 var lastPresence PresenceMap
 
 // how long before the online status expires
-// should be long enough that any client will have another sync before expiring
+// should be long enough that any client will have another sync before expiring.
 const presenceTimeout = time.Second * 10
 
-// updatePresence sends presence updates to the SyncAPI and FederationAPI
+// updatePresence sends presence updates to the SyncAPI and FederationAPI.
 func (rp *RequestPool) updatePresence(db storage.Presence, presence string, userID string) {
 	// allow checking back on presence to set offline if needed
 	rp.updatePresenceInternal(db, presence, userID, true)
@@ -197,7 +201,7 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 
 	// ensure we also send the current status_msg to federated servers and not nil
 	dbPresence, err := db.GetPresences(context.Background(), []string{userID})
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return
 	}
 	if len(dbPresence) > 0 && dbPresence[0] != nil {
@@ -209,8 +213,8 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// avoid spamming presence updates when syncing
 	existingPresence, ok := rp.presence.LoadOrStore(userID, newPresence)
 	if ok {
-		p := existingPresence.(types.PresenceInternal)
-		if p.ClientFields.Presence == newPresence.ClientFields.Presence {
+		p, ok := existingPresence.(types.PresenceInternal)
+		if ok && p.ClientFields.Presence == newPresence.ClientFields.Presence {
 			return
 		}
 	}
@@ -253,7 +257,7 @@ func (rp *RequestPool) updateLastSeen(req *http.Request, device *userapi.Device)
 		UserAgent:  req.UserAgent(),
 	}
 	lsres := &userapi.PerformLastSeenUpdateResponse{}
-	go rp.userAPI.PerformLastSeenUpdate(req.Context(), lsreq, lsres) // nolint:errcheck
+	go rp.userAPI.PerformLastSeenUpdate(req.Context(), lsreq, lsres) //nolint:errcheck
 
 	rp.lastseen.Store(device.UserID+device.ID, time.Now())
 }
@@ -283,7 +287,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 	// Extract values from request
 	syncReq, err := newSyncRequest(req, *device, rp.db)
 	if err != nil {
-		if err == types.ErrMalformedSyncToken {
+		if errors.Is(err, types.ErrMalformedSyncToken) {
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.InvalidParam(err.Error()),
@@ -332,7 +336,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 				// Only try to get OTKs if the context isn't already done.
 				if syncReq.Context.Err() == nil {
 					err = internal.DeviceOTKCounts(syncReq.Context, rp.userAPI, syncReq.Device.UserID, syncReq.Device.ID, syncReq.Response)
-					if err != nil && err != context.Canceled {
+					if err != nil && !errors.Is(err, context.Canceled) {
 						syncReq.Log.WithError(err).Warn("failed to get OTK counts")
 					}
 				}
@@ -549,7 +553,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 				syncReq.Since = currentPos
 				// do not loop again if the ?timeout= is 0 as that means "return immediately"
 				if syncReq.Timeout > 0 {
-					syncReq.Timeout = syncReq.Timeout - time.Since(startTime)
+					syncReq.Timeout -= time.Since(startTime)
 					if syncReq.Timeout < 0 {
 						syncReq.Timeout = 0
 					}
@@ -570,21 +574,21 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 	to := req.URL.Query().Get("to")
 	if from == "" || to == "" {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.InvalidParam("missing ?from= or ?to="),
 		}
 	}
 	fromToken, err := types.NewStreamTokenFromString(from)
 	if err != nil {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.InvalidParam("bad 'from' value"),
 		}
 	}
 	toToken, err := types.NewStreamTokenFromString(to)
 	if err != nil {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.InvalidParam("bad 'to' value"),
 		}
 	}
@@ -620,7 +624,7 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 	}
 	succeeded = true
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: struct {
 			Changed []string `json:"changed"`
 			Left    []string `json:"left"`

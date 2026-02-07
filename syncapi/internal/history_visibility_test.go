@@ -6,12 +6,13 @@ import (
 	"math"
 	"testing"
 
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"gotest.tools/v3/assert"
+
+	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/syncapi/storage"
 )
 
 type mockHisVisRoomserverAPI struct {
@@ -76,7 +77,7 @@ func (s *mockDB) SelectMembershipForUser(ctx context.Context, roomID string, use
 // allows them to see events (a boundary), then the history visibility event itself should be shown
 // ( spec: https://spec.matrix.org/v1.8/client-server-api/#server-behaviour-5 )
 //
-// This also aims to emulate "Only see history_visibility changes on bounadries" in sytest/tests/30rooms/30history-visibility.pl
+// This also aims to emulate "Only see history_visibility changes on bounadries" in sytest/tests/30rooms/30history-visibility.pl.
 func Test_ApplyHistoryVisbility_Boundaries(t *testing.T) {
 	ctx := context.Background()
 

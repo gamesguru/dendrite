@@ -12,11 +12,12 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/mediaapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const thumbnailSchema = `
@@ -40,12 +41,12 @@ INSERT INTO mediaapi_thumbnail (media_id, media_origin, content_type, file_size_
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
-// Note: this selects one specific thumbnail
+// Note: this selects one specific thumbnail.
 const selectThumbnailSQL = `
 SELECT content_type, file_size_bytes, creation_ts FROM mediaapi_thumbnail WHERE media_id = $1 AND media_origin = $2 AND width = $3 AND height = $4 AND resize_method = $5
 `
 
-// Note: this selects all thumbnails for a media_origin and media_id
+// Note: this selects all thumbnails for a media_origin and media_id.
 const selectThumbnailsSQL = `
 SELECT content_type, file_size_bytes, creation_ts, width, height, resize_method FROM mediaapi_thumbnail WHERE media_id = $1 AND media_origin = $2 ORDER BY creation_ts ASC
 `
@@ -72,7 +73,9 @@ func NewSQLiteThumbnailsTable(db *sql.DB) (tables.Thumbnails, error) {
 
 func (s *thumbnailStatements) InsertThumbnail(ctx context.Context, txn *sql.Tx, thumbnailMetadata *types.ThumbnailMetadata) error {
 	thumbnailMetadata.MediaMetadata.CreationTimestamp = spec.AsTimestamp(time.Now())
-	_, err := sqlutil.TxStmtContext(ctx, txn, s.insertThumbnailStmt).ExecContext(
+	insertStmt := sqlutil.TxStmtContext(ctx, txn, s.insertThumbnailStmt)
+	defer insertStmt.Close()
+	_, err := insertStmt.ExecContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
 		thumbnailMetadata.MediaMetadata.Origin,
@@ -105,7 +108,9 @@ func (s *thumbnailStatements) SelectThumbnail(
 			ResizeMethod: resizeMethod,
 		},
 	}
-	err := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailStmt).QueryRowContext(
+	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailStmt)
+	defer selectStmt.Close()
+	err := selectStmt.QueryRowContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
 		thumbnailMetadata.MediaMetadata.Origin,
@@ -124,7 +129,9 @@ func (s *thumbnailStatements) SelectThumbnails(
 	ctx context.Context, txn *sql.Tx, mediaID types.MediaID,
 	mediaOrigin spec.ServerName,
 ) ([]*types.ThumbnailMetadata, error) {
-	rows, err := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailsStmt).QueryContext(
+	selectAllStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailsStmt)
+	defer selectAllStmt.Close()
+	rows, err := selectAllStmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
 		ctx, mediaID, mediaOrigin,
 	)
 	if err != nil {

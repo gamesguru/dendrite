@@ -33,7 +33,7 @@ func (k *mockKeyAPI) PerformUploadKeys(ctx context.Context, req *userapi.Perform
 
 func (k *mockKeyAPI) SetUserAPI(i userapi.UserInternalAPI) {}
 
-// PerformClaimKeys claims one-time keys for use in pre-key messages
+// PerformClaimKeys claims one-time keys for use in pre-key messages.
 func (k *mockKeyAPI) PerformClaimKeys(ctx context.Context, req *userapi.PerformClaimKeysRequest, res *userapi.PerformClaimKeysResponse) {
 }
 
@@ -210,7 +210,7 @@ func leaveResponseWithRooms(syncResponse *types.Response, userID string, roomIDs
 	return syncResponse
 }
 
-// tests that joining a room which results in sharing a new user includes that user in `changed`
+// tests that joining a room which results in sharing a new user includes that user in `changed`.
 func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
 	t.Parallel()
 	newShareUser := "@bill:localhost"
@@ -234,7 +234,7 @@ func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
 	})
 }
 
-// tests that leaving a room which results in sharing no rooms with a user includes that user in `left`
+// tests that leaving a room which results in sharing no rooms with a user includes that user in `left`.
 func TestKeyChangeCatchupOnLeaveShareLeftUser(t *testing.T) {
 	t.Parallel()
 	removeUser := "@bill:localhost"

@@ -14,10 +14,6 @@ import (
 	"testing"
 	"time"
 
-	api2 "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/userapi/producers"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -25,11 +21,15 @@ import (
 	"github.com/nats-io/nats.go"
 	"golang.org/x/crypto/bcrypt"
 
+	api2 "codefloe.com/pat-s/dendrite/appservice/api"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/internal"
+	"codefloe.com/pat-s/dendrite/userapi/producers"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
 )
 
@@ -62,7 +62,7 @@ func (d *dummyProducer) PublishMsg(msg *nats.Msg, opts ...nats.PubOpt) (*nats.Pu
 
 func MustMakeInternalAPI(t *testing.T, opts apiTestOpts, dbType test.DBType, publisher producers.JetStreamPublisher) (api.UserInternalAPI, storage.UserDatabase, func()) {
 	if opts.loginTokenLifetime == 0 {
-		opts.loginTokenLifetime = api.DefaultLoginTokenLifetime * time.Millisecond
+		opts.loginTokenLifetime = api.DefaultLoginTokenLifetime
 	}
 	cfg, ctx, close := testrig.CreateConfig(t, dbType)
 	sName := serverName
@@ -136,7 +136,6 @@ func TestQueryProfile(t *testing.T) {
 			mode = "HTTP"
 		}
 		for _, tc := range testCases {
-
 			profile, gotErr := testAPI.QueryProfile(context.TODO(), tc.userID)
 			if tc.wantErr == nil && gotErr != nil || tc.wantErr != nil && gotErr == nil {
 				t.Errorf("QueryProfile %s error, got %s want %s", mode, gotErr, tc.wantErr)
@@ -172,7 +171,7 @@ func TestQueryProfile(t *testing.T) {
 func TestPasswordlessLoginFails(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+		userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 		defer close()
 		_, err := accountDB.CreateAccount(ctx, "auser", serverName, "", "", api.AccountTypeAppService)
 		if err != nil {
@@ -198,7 +197,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("tokenLoginFlow", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 			_, err := accountDB.CreateAccount(ctx, "auser", serverName, "apassword", "", api.AccountTypeUser)
 			if err != nil {
@@ -248,7 +247,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("expiredTokenIsNotReturned", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{loginTokenLifetime: -1 * time.Second}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{loginTokenLifetime: -1 * time.Second}, dbType, nil) //nolint:contextcheck
 			defer close()
 
 			creq := api.PerformLoginTokenCreationRequest{
@@ -273,7 +272,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("deleteWorks", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 
 			creq := api.PerformLoginTokenCreationRequest{
@@ -304,7 +303,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("deleteUnknownIsNoOp", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 			dreq := api.PerformLoginTokenDeletionRequest{Token: "non-existent token"}
 			var dresp api.PerformLoginTokenDeletionResponse
@@ -322,7 +321,7 @@ func TestQueryAccountByLocalpart(t *testing.T) {
 
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, db, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+		intAPI, db, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		createdAcc, err := db.CreateAccount(ctx, localpart, userServername, "", "", alice.AccountType)
@@ -401,7 +400,7 @@ func TestAccountData(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		for _, tc := range testCases {
@@ -517,7 +516,7 @@ func TestDevices(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		for _, tc := range creationTests {
@@ -622,7 +621,7 @@ func TestDeviceIDReuse(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		publisher := &dummyProducer{t: t}
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, publisher)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, publisher) //nolint:contextcheck
 		defer close()
 
 		res := api.PerformDeviceCreationResponse{}

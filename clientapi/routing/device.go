@@ -12,13 +12,14 @@ import (
 	"net"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth"
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
+
+	"codefloe.com/pat-s/dendrite/clientapi/auth"
+	"codefloe.com/pat-s/dendrite/clientapi/httputil"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 // https://matrix.org/docs/spec/client_server/r0.6.1#get-matrix-client-r0-devices
@@ -41,7 +42,7 @@ type devicesDeleteJSON struct {
 	Devices []string `json:"devices"`
 }
 
-// GetDeviceByID handles /devices/{deviceID}
+// GetDeviceByID handles /devices/{deviceID}.
 func GetDeviceByID(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	deviceID string,
@@ -82,7 +83,7 @@ func GetDeviceByID(
 	}
 }
 
-// GetDevicesByLocalpart handles /devices
+// GetDevicesByLocalpart handles /devices.
 func GetDevicesByLocalpart(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 ) util.JSONResponse {
@@ -115,12 +116,12 @@ func GetDevicesByLocalpart(
 	}
 }
 
-// UpdateDeviceByID handles PUT on /devices/{deviceID}
+// UpdateDeviceByID handles PUT on /devices/{deviceID}.
 func UpdateDeviceByID(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	deviceID string,
 ) util.JSONResponse {
-	defer req.Body.Close() // nolint: errcheck
+	defer req.Body.Close()
 
 	payload := deviceUpdateJSON{}
 
@@ -154,7 +155,7 @@ func UpdateDeviceByID(
 	}
 }
 
-// DeleteDeviceById handles DELETE requests to /devices/{deviceId}
+// DeleteDeviceById handles DELETE requests to /devices/{deviceId}.
 func DeleteDeviceById(
 	req *http.Request, userInteractiveAuth *auth.UserInteractive, userAPI api.ClientUserAPI, device *api.Device,
 	deviceID string,
@@ -169,7 +170,7 @@ func DeleteDeviceById(
 		}
 	}()
 	ctx := req.Context()
-	defer req.Body.Close() // nolint:errcheck
+	defer req.Body.Close()
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{
@@ -216,7 +217,7 @@ func DeleteDeviceById(
 	// 1 compromised access token could be used to logout all devices.
 	if login.Username() != localpart && login.Username() != device.UserID {
 		return util.JSONResponse{
-			Code: 403,
+			Code: 403, //nolint:mnd
 			JSON: spec.Forbidden("Cannot delete another user's device"),
 		}
 	}
@@ -241,7 +242,7 @@ func DeleteDeviceById(
 	}
 }
 
-// DeleteDevices handles POST requests to /delete_devices
+// DeleteDevices handles POST requests to /delete_devices.
 func DeleteDevices(
 	req *http.Request, userInteractiveAuth *auth.UserInteractive, userAPI api.ClientUserAPI, device *api.Device,
 ) util.JSONResponse {
@@ -254,7 +255,7 @@ func DeleteDevices(
 			JSON: spec.BadJSON("The request body could not be read: " + err.Error()),
 		}
 	}
-	defer req.Body.Close() // nolint:errcheck
+	defer req.Body.Close()
 
 	// initiate UIA
 	login, errRes := userInteractiveAuth.Verify(ctx, bodyBytes, device)
@@ -296,7 +297,7 @@ func DeleteDevices(
 	}
 }
 
-// stripIPPort converts strings like "[::1]:12345" to "::1"
+// stripIPPort converts strings like "[::1]:12345" to "::1".
 func stripIPPort(addr string) string {
 	ip := net.ParseIP(addr)
 	if ip != nil {

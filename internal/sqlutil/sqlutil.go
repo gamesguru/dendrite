@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"regexp"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 var skipSanityChecks = flag.Bool("skip-db-sanity", false, "Ignore sanity checks on the database connections (NOT RECOMMENDED!)")
@@ -52,8 +53,7 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer) (*sql.DB, error) 
 				logrus.Warnf("WARNING: Configuring 'max_open_conns' to be unlimited is not recommended. This can result in bad performance or deadlocks.")
 			}
 
-			switch driverName {
-			case "pgx":
+			if driverName == "pgx" {
 				// Perform a quick sanity check if possible that we aren't trying to use more database
 				// connections than PostgreSQL is willing to give us.
 				var max, reserved int

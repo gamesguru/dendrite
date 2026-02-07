@@ -7,13 +7,15 @@
 package routing
 
 import (
+	"errors"
 	"net/http"
+
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 func LeaveRoomByID(
@@ -50,16 +52,13 @@ func LeaveRoomByID(
 			return *resp
 		}
 		// Check for specific error types from roomserver
-		switch e := err.(type) {
-		case roomserverAPI.ErrNotAllowed:
-			return util.JSONResponse{
-				Code: http.StatusForbidden,
-				JSON: spec.Forbidden(e.Error()),
-			}
-		default:
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.Unknown(err.Error()),
+		{
+			var e roomserverAPI.ErrNotAllowed
+			switch {
+			case errors.As(err, &e):
+				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(e.Error())}
+			default:
+				return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.Unknown(err.Error())}
 			}
 		}
 	}

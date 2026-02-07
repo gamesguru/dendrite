@@ -9,10 +9,11 @@ package routing
 import (
 	"net/http"
 
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/version"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/util"
+
+	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/version"
 )
 
 // GetCapabilities returns information about the server's supported feature set
@@ -27,12 +28,12 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse 
 		}
 	}
 
-	response := map[string]interface{}{
-		"capabilities": map[string]interface{}{
+	response := map[string]any{
+		"capabilities": map[string]any{
 			"m.change_password": map[string]bool{
 				"enabled": true,
 			},
-			"m.room_versions": map[string]interface{}{
+			"m.room_versions": map[string]any{
 				"default":   rsAPI.DefaultRoomVersion(),
 				"available": versionsMap,
 			},

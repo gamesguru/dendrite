@@ -13,10 +13,11 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const queuePDUsSchema = `
@@ -97,6 +98,7 @@ func (s *queuePDUsStatements) InsertQueuePDU(
 	nid int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertQueuePDUStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		transactionID, // the transaction ID that we initially attempted
@@ -117,13 +119,14 @@ func (s *queuePDUsStatements) DeleteQueuePDUs(
 		return fmt.Errorf("s.deleteQueueJSON s.db.Prepare: %w", err)
 	}
 
-	params := make([]interface{}, len(jsonNIDs)+1)
+	params := make([]any, len(jsonNIDs)+1)
 	params[0] = serverName
 	for k, v := range jsonNIDs {
 		params[k+1] = v
 	}
 
 	stmt := sqlutil.TxStmt(txn, deleteStmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, params...)
 	return err
 }
@@ -133,6 +136,7 @@ func (s *queuePDUsStatements) SelectQueuePDUNextTransactionID(
 ) (gomatrixserverlib.TransactionID, error) {
 	var transactionID gomatrixserverlib.TransactionID
 	stmt := sqlutil.TxStmt(txn, s.selectQueueNextTransactionIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, serverName).Scan(&transactionID)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -145,6 +149,7 @@ func (s *queuePDUsStatements) SelectQueuePDUReferenceJSONCount(
 ) (int64, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.selectQueueReferenceJSONCountStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, jsonNID).Scan(&count)
 	if err == sql.ErrNoRows {
 		return -1, nil
@@ -158,7 +163,8 @@ func (s *queuePDUsStatements) SelectQueuePDUs(
 	limit int,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueuePDUsStmt)
-	rows, err := stmt.QueryContext(ctx, serverName, limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, serverName, limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +185,8 @@ func (s *queuePDUsStatements) SelectQueuePDUServerNames(
 	ctx context.Context, txn *sql.Tx,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueueServerNamesStmt)
-	rows, err := stmt.QueryContext(ctx)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

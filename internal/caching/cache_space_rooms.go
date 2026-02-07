@@ -2,7 +2,7 @@ package caching
 
 import "github.com/matrix-org/gomatrixserverlib/fclient"
 
-// RoomHierarchyCache caches responses to federated room hierarchy requests (A.K.A. 'space summaries')
+// RoomHierarchyCache caches responses to federated room hierarchy requests (A.K.A. 'space summaries').
 type RoomHierarchyCache interface {
 	GetRoomHierarchy(roomID string) (r fclient.RoomHierarchyResponse, ok bool)
 	StoreRoomHierarchy(roomID string, r fclient.RoomHierarchyResponse)

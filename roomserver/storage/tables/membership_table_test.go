@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
@@ -12,7 +14,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateMembershipTable(t *testing.T, dbType test.DBType) (tab tables.Membership, stateKeyTab tables.EventStateKeys, close func()) {
@@ -48,7 +49,7 @@ func mustCreateMembershipTable(t *testing.T, dbType test.DBType) (tab tables.Mem
 func TestMembershipTable(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, stateKeyTab, close := mustCreateMembershipTable(t, dbType)
+		tab, stateKeyTab, close := mustCreateMembershipTable(t, dbType) //nolint:contextcheck
 		defer close()
 		_ = close
 

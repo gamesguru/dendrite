@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"time"
 
+	"golang.org/x/exp/constraints"
+
 	"codefloe.com/pat-s/dendrite/clientapi/api"
 	internal "codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"golang.org/x/exp/constraints"
 )
 
 const registrationTokensSchema = `
@@ -91,6 +92,7 @@ func NewSQLiteRegistrationTokensTable(db *sql.DB) (tables.RegistrationTokensTabl
 func (s *registrationTokenStatements) RegistrationTokenExists(ctx context.Context, tx *sql.Tx, token string) (bool, error) {
 	var existingToken string
 	stmt := sqlutil.TxStmt(tx, s.selectTokenStatement)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, token).Scan(&existingToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -103,6 +105,7 @@ func (s *registrationTokenStatements) RegistrationTokenExists(ctx context.Contex
 
 func (s *registrationTokenStatements) InsertRegistrationToken(ctx context.Context, tx *sql.Tx, registrationToken *api.RegistrationToken) (bool, error) {
 	stmt := sqlutil.TxStmt(tx, s.insertTokenStatement)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		*registrationToken.Token,
@@ -131,14 +134,15 @@ func (s *registrationTokenStatements) ListRegistrationTokens(ctx context.Context
 	var expiryTime *int64
 	var rows *sql.Rows
 	var err error
-	if returnAll {
-		stmt = sqlutil.TxStmt(tx, s.listAllTokensStatement)
+	switch {
+	case returnAll:
+		stmt = sqlutil.TxStmt(tx, s.listAllTokensStatement) //nolint:sqlclosecheck
 		rows, err = stmt.QueryContext(ctx)
-	} else if valid {
-		stmt = sqlutil.TxStmt(tx, s.listValidTokensStatement)
+	case valid:
+		stmt = sqlutil.TxStmt(tx, s.listValidTokensStatement) //nolint:sqlclosecheck
 		rows, err = stmt.QueryContext(ctx, time.Now().UnixNano()/int64(time.Millisecond))
-	} else {
-		stmt = sqlutil.TxStmt(tx, s.listInvalidTokenStatement)
+	default:
+		stmt = sqlutil.TxStmt(tx, s.listInvalidTokenStatement) //nolint:sqlclosecheck
 		rows, err = stmt.QueryContext(ctx, time.Now().UnixNano()/int64(time.Millisecond))
 	}
 	if err != nil {
@@ -170,6 +174,7 @@ func (s *registrationTokenStatements) ListRegistrationTokens(ctx context.Context
 
 func (s *registrationTokenStatements) GetRegistrationToken(ctx context.Context, tx *sql.Tx, tokenString string) (*api.RegistrationToken, error) {
 	stmt := sqlutil.TxStmt(tx, s.getTokenStatement)
+	defer stmt.Close()
 	var pending, completed, usesAllowed *int32
 	var expiryTime *int64
 	err := stmt.QueryRowContext(ctx, tokenString).Scan(&pending, &completed, &usesAllowed, &expiryTime)
@@ -188,6 +193,7 @@ func (s *registrationTokenStatements) GetRegistrationToken(ctx context.Context, 
 
 func (s *registrationTokenStatements) DeleteRegistrationToken(ctx context.Context, tx *sql.Tx, tokenString string) error {
 	stmt := sqlutil.TxStmt(tx, s.deleteTokenStatement)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, tokenString)
 	if err != nil {
 		return err
@@ -195,24 +201,25 @@ func (s *registrationTokenStatements) DeleteRegistrationToken(ctx context.Contex
 	return nil
 }
 
-func (s *registrationTokenStatements) UpdateRegistrationToken(ctx context.Context, tx *sql.Tx, tokenString string, newAttributes map[string]interface{}) (*api.RegistrationToken, error) {
+func (s *registrationTokenStatements) UpdateRegistrationToken(ctx context.Context, tx *sql.Tx, tokenString string, newAttributes map[string]any) (*api.RegistrationToken, error) {
 	var stmt *sql.Stmt
 	usesAllowed, usesAllowedPresent := newAttributes["usesAllowed"]
 	expiryTime, expiryTimePresent := newAttributes["expiryTime"]
-	if usesAllowedPresent && expiryTimePresent {
-		stmt = sqlutil.TxStmt(tx, s.updateTokenUsesAllowedAndExpiryTimeStatement)
+	switch {
+	case usesAllowedPresent && expiryTimePresent:
+		stmt = sqlutil.TxStmt(tx, s.updateTokenUsesAllowedAndExpiryTimeStatement) //nolint:sqlclosecheck
 		_, err := stmt.ExecContext(ctx, tokenString, usesAllowed, expiryTime)
 		if err != nil {
 			return nil, err
 		}
-	} else if usesAllowedPresent {
-		stmt = sqlutil.TxStmt(tx, s.updateTokenUsesAllowedStatement)
+	case usesAllowedPresent:
+		stmt = sqlutil.TxStmt(tx, s.updateTokenUsesAllowedStatement) //nolint:sqlclosecheck
 		_, err := stmt.ExecContext(ctx, tokenString, usesAllowed)
 		if err != nil {
 			return nil, err
 		}
-	} else if expiryTimePresent {
-		stmt = sqlutil.TxStmt(tx, s.updateTokenExpiryTimeStatement)
+	case expiryTimePresent:
+		stmt = sqlutil.TxStmt(tx, s.updateTokenExpiryTimeStatement) //nolint:sqlclosecheck
 		_, err := stmt.ExecContext(ctx, tokenString, expiryTime)
 		if err != nil {
 			return nil, err

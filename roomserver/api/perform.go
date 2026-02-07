@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 type PerformCreateRoomRequest struct {
@@ -32,12 +33,12 @@ type PerformCreateRoomRequest struct {
 }
 
 type PerformJoinRequest struct {
-	RoomIDOrAlias string                 `json:"room_id_or_alias"`
-	UserID        string                 `json:"user_id"`
-	IsGuest       bool                   `json:"is_guest"`
-	Content       map[string]interface{} `json:"content"`
-	ServerNames   []spec.ServerName      `json:"server_names"`
-	Unsigned      map[string]interface{} `json:"unsigned"`
+	RoomIDOrAlias string            `json:"room_id_or_alias"`
+	UserID        string            `json:"user_id"`
+	IsGuest       bool              `json:"is_guest"`
+	Content       map[string]any    `json:"content"`
+	ServerNames   []spec.ServerName `json:"server_names"`
+	Unsigned      map[string]any    `json:"unsigned"`
 }
 
 type PerformLeaveRequest struct {
@@ -46,8 +47,8 @@ type PerformLeaveRequest struct {
 }
 
 type PerformLeaveResponse struct {
-	Code    int         `json:"code,omitempty"`
-	Message interface{} `json:"message,omitempty"`
+	Code    int `json:"code,omitempty"`
+	Message any `json:"message,omitempty"`
 }
 
 type InviteInput struct {
@@ -95,7 +96,7 @@ const limitPrevEventIDs = 100
 
 // PrevEventIDs returns the prev_event IDs of either 100 backwards extremities or
 // len(r.BackwardsExtremities). Limited to 100, due to Synapse/Dendrite stopping after reaching
-// this limit. (which sounds sane)
+// this limit. (which sounds sane).
 func (r *PerformBackfillRequest) PrevEventIDs() []string {
 	var uniqueIDs map[string]struct{}
 
@@ -165,7 +166,7 @@ type PerformInboundPeekResponse struct {
 	LatestEvent *types.HeaderedEvent `json:"latest_event"`
 }
 
-// PerformForgetRequest is a request to PerformForget
+// PerformForgetRequest is a request to PerformForget.
 type PerformForgetRequest struct {
 	RoomID string `json:"room_id"`
 	UserID string `json:"user_id"`

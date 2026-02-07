@@ -10,8 +10,9 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const assumedOfflineSchema = `
@@ -63,6 +64,7 @@ func (s *assumedOfflineStatements) InsertAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertAssumedOfflineStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -71,21 +73,27 @@ func (s *assumedOfflineStatements) SelectAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) (bool, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectAssumedOfflineStmt)
+	defer stmt.Close()
 	res, err := stmt.QueryContext(ctx, serverName)
 	if err != nil {
 		return false, err
 	}
-	defer res.Close() // nolint:errcheck
+	defer res.Close()
 	// The query will return the server name if the server is assume offline, and
 	// will return no rows if not. By calling Next, we find out if a row was
 	// returned or not - we don't care about the value itself.
-	return res.Next(), nil
+	found := res.Next()
+	if err := res.Err(); err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 func (s *assumedOfflineStatements) DeleteAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAssumedOfflineStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -94,6 +102,7 @@ func (s *assumedOfflineStatements) DeleteAllAssumedOffline(
 	ctx context.Context, txn *sql.Tx,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllAssumedOfflineStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx)
 	return err
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3"
@@ -11,7 +13,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/stretchr/testify/assert"
 )
 
 func mustCreateStateSnapshotTable(t *testing.T, dbType test.DBType) (tab tables.StateSnapshot, close func()) {
@@ -50,7 +51,7 @@ func mustCreateStateSnapshotTable(t *testing.T, dbType test.DBType) (tab tables.
 func TestStateSnapshotTable(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreateStateSnapshotTable(t, dbType)
+		tab, close := mustCreateStateSnapshotTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		// generate some dummy data

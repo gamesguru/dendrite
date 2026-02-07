@@ -9,30 +9,31 @@ package internal
 import (
 	"context"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/relayapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/relayapi/api"
 )
 
-// SetRelayingEnabled implements api.RelayInternalAPI
+// SetRelayingEnabled implements api.RelayInternalAPI.
 func (r *RelayInternalAPI) SetRelayingEnabled(enabled bool) {
 	r.relayingEnabledMutex.Lock()
 	defer r.relayingEnabledMutex.Unlock()
 	r.relayingEnabled = enabled
 }
 
-// RelayingEnabled implements api.RelayInternalAPI
+// RelayingEnabled implements api.RelayInternalAPI.
 func (r *RelayInternalAPI) RelayingEnabled() bool {
 	r.relayingEnabledMutex.Lock()
 	defer r.relayingEnabledMutex.Unlock()
 	return r.relayingEnabled
 }
 
-// PerformRelayServerSync implements api.RelayInternalAPI
+// PerformRelayServerSync implements api.RelayInternalAPI.
 func (r *RelayInternalAPI) PerformRelayServerSync(
 	ctx context.Context,
 	userID spec.UserID,
@@ -46,7 +47,7 @@ func (r *RelayInternalAPI) PerformRelayServerSync(
 		logrus.Errorf("P2PGetTransactionFromRelay: %s", err.Error())
 		return err
 	}
-	r.processTransaction(&asyncResponse.Transaction)
+	r.processTransaction(&asyncResponse.Transaction) //nolint:contextcheck
 
 	prevEntry = fclient.RelayEntry{EntryID: asyncResponse.EntryID}
 	for asyncResponse.EntriesQueued {
@@ -58,13 +59,13 @@ func (r *RelayInternalAPI) PerformRelayServerSync(
 			logrus.Errorf("P2PGetTransactionFromRelay: %s", err.Error())
 			return err
 		}
-		r.processTransaction(&asyncResponse.Transaction)
+		r.processTransaction(&asyncResponse.Transaction) //nolint:contextcheck
 	}
 
 	return nil
 }
 
-// PerformStoreTransaction implements api.RelayInternalAPI
+// PerformStoreTransaction implements api.RelayInternalAPI.
 func (r *RelayInternalAPI) PerformStoreTransaction(
 	ctx context.Context,
 	transaction gomatrixserverlib.Transaction,
@@ -87,7 +88,7 @@ func (r *RelayInternalAPI) PerformStoreTransaction(
 	return err
 }
 
-// QueryTransactions implements api.RelayInternalAPI
+// QueryTransactions implements api.RelayInternalAPI.
 func (r *RelayInternalAPI) QueryTransactions(
 	ctx context.Context,
 	userID spec.UserID,

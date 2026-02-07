@@ -9,6 +9,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -255,7 +256,6 @@ func (oq *destinationQueue) getPendingFromDatabase() {
 	// in memory then we'll no longer consider this queue to be overflowed.
 	if !overflowed {
 		oq.overflowed.Store(false)
-	} else {
 	}
 	// If we've retrieved some events then notify the destination queue goroutine.
 	if retrieved {
@@ -383,7 +383,7 @@ func (oq *destinationQueue) backgroundSend() {
 
 		// If we have pending PDUs or EDUs then construct a transaction.
 		// Try sending the next transaction and see what happens.
-		terr, sendMethod := oq.nextTransaction(toSendPDUs, toSendEDUs)
+		sendMethod, terr := oq.nextTransaction(toSendPDUs, toSendEDUs)
 		if terr != nil {
 			// We failed to send the transaction. Mark it as a failure.
 			_, blacklisted := oq.statistics.Failure()
@@ -412,13 +412,13 @@ func (oq *destinationQueue) backgroundSend() {
 func (oq *destinationQueue) nextTransaction(
 	pdus []*queuedPDU,
 	edus []*queuedEDU,
-) (err error, sendMethod statistics.SendMethod) {
+) (sendMethod statistics.SendMethod, err error) {
 	// Create the transaction.
 	t, pduReceipts, eduReceipts := oq.createTransaction(pdus, edus)
 	logrus.WithField("server_name", oq.destination).Debugf("Sending transaction %q containing %d PDUs, %d EDUs", t.TransactionID, len(t.PDUs), len(t.EDUs))
 
 	// Try to send the transaction to the destination server.
-	ctx, cancel := context.WithTimeout(oq.process.Context(), time.Minute*5)
+	ctx, cancel := context.WithTimeout(oq.process.Context(), time.Minute*5) //nolint:mnd
 	defer cancel()
 
 	relayServers := oq.statistics.KnownRelayServers()
@@ -439,7 +439,7 @@ func (oq *destinationQueue) nextTransaction(
 			// TODO : how to pass through actual userID here?!?!?!?!
 			userID, userErr := spec.NewUserID("@user:"+string(oq.destination), false)
 			if userErr != nil {
-				return userErr, sendMethod
+				return sendMethod, userErr
 			}
 
 			// Attempt sending to each known relay server.
@@ -466,8 +466,7 @@ func (oq *destinationQueue) nextTransaction(
 			}
 		}
 	}
-	switch errResponse := err.(type) {
-	case nil:
+	if err == nil {
 		// Clean up the transaction in the database.
 		if pduReceipts != nil {
 			// logrus.Infof("Cleaning PDUs %q", pduReceipt.String())
@@ -485,8 +484,10 @@ func (oq *destinationQueue) nextTransaction(
 		oq.transactionIDMutex.Lock()
 		oq.transactionID = ""
 		oq.transactionIDMutex.Unlock()
-		return nil, sendMethod
-	case gomatrix.HTTPError:
+		return sendMethod, nil
+	}
+	var errResponse gomatrix.HTTPError
+	if errors.As(err, &errResponse) {
 		// Report that we failed to send the transaction and we
 		// will retry again, subject to backoff.
 
@@ -495,14 +496,13 @@ func (oq *destinationQueue) nextTransaction(
 		// to a 400-ish error
 		code := errResponse.Code
 		logrus.Debug("Transaction failed with HTTP", code)
-		return err, sendMethod
-	default:
-		logrus.WithFields(logrus.Fields{
-			"destination":   oq.destination,
-			logrus.ErrorKey: err,
-		}).Debugf("Failed to send transaction %q", t.TransactionID)
-		return err, sendMethod
+		return sendMethod, err
 	}
+	logrus.WithFields(logrus.Fields{
+		"destination":   oq.destination,
+		logrus.ErrorKey: err,
+	}).Debugf("Failed to send transaction %q", t.TransactionID)
+	return sendMethod, err
 }
 
 // createTransaction generates a gomatrixserverlib.Transaction from the provided pdus and edus.

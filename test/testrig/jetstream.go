@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/nats-io/nats.go"
 
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 )
 

@@ -11,6 +11,12 @@ import (
 	"encoding/json"
 	"strconv"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/federationapi/queue"
 	"codefloe.com/pat-s/dendrite/federationapi/storage"
 	fedTypes "codefloe.com/pat-s/dendrite/federationapi/types"
@@ -19,11 +25,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/nats-io/nats.go"
-	log "github.com/sirupsen/logrus"
 )
 
 // OutputReceiptConsumer consumes events that originate in the clientapi.
@@ -61,7 +62,7 @@ func NewOutputPresenceConsumer(
 	}
 }
 
-// Start consuming from the clientapi
+// Start consuming from the clientapi.
 func (t *OutputPresenceConsumer) Start() error {
 	if !t.outboundPresenceEnabled {
 		return nil
@@ -93,7 +94,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		return true
 	}
 
-	roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join")
+	roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join") //nolint:contextcheck
 	if err != nil {
 		log.WithError(err).Error("failed to calculate joined rooms for user")
 		return true
@@ -112,7 +113,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	}
 
 	// send this presence to all servers who share rooms with this user.
-	joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true)
+	joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true) //nolint:contextcheck
 	if err != nil {
 		log.WithError(err).Error("failed to get joined hosts")
 		return true
@@ -152,7 +153,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	}
 
 	log.Tracef("sending presence EDU to %d servers", len(joined))
-	if err = t.queues.SendEDU(edu, serverName, joined); err != nil {
+	if err = t.queues.SendEDU(edu, serverName, joined); err != nil { //nolint:contextcheck
 		log.WithError(err).Error("failed to send EDU")
 		return false
 	}

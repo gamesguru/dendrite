@@ -34,7 +34,7 @@ func (r *roomDirectoryResponse) fillServers(servers []spec.ServerName) {
 	}
 }
 
-// DirectoryRoom looks up a room alias
+// DirectoryRoom looks up a room alias.
 func DirectoryRoom(
 	req *http.Request,
 	roomAlias string,
@@ -114,7 +114,7 @@ func DirectoryRoom(
 	}
 }
 
-// SetLocalAlias implements PUT /directory/room/{roomAlias}
+// SetLocalAlias implements PUT /directory/room/{roomAlias}.
 func SetLocalAlias(
 	req *http.Request,
 	device *userapi.Device,
@@ -226,7 +226,7 @@ func SetLocalAlias(
 	}
 }
 
-// RemoveLocalAlias implements DELETE /directory/room/{roomAlias}
+// RemoveLocalAlias implements DELETE /directory/room/{roomAlias}.
 func RemoveLocalAlias(
 	req *http.Request,
 	device *userapi.Device,
@@ -331,7 +331,7 @@ type roomVisibility struct {
 	Visibility string `json:"visibility"`
 }
 
-// GetVisibility implements GET /directory/list/room/{roomID}
+// GetVisibility implements GET /directory/list/room/{roomID}.
 func GetVisibility(
 	req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI,
 	roomID string,

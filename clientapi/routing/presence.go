@@ -12,16 +12,17 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/clientapi/producers"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
-	"github.com/nats-io/nats.go"
-	log "github.com/sirupsen/logrus"
 )
 
 type presenceReq struct {
@@ -86,7 +87,7 @@ func GetPresence(
 	msg := nats.NewMsg(presenceTopic)
 	msg.Header.Set(jetstream.UserID, userID)
 
-	presence, err := natsClient.RequestMsg(msg, time.Second*10)
+	presence, err := natsClient.RequestMsg(msg, time.Second*10) //nolint:mnd
 	if err != nil {
 		log.WithError(err).Errorf("unable to get presence")
 		return util.JSONResponse{

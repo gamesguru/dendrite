@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 var staleDeviceListsSchema = `
@@ -81,7 +81,7 @@ func (s *staleDeviceListsStatements) InsertStaleDeviceList(ctx context.Context, 
 }
 
 func (s *staleDeviceListsStatements) SelectUserIDsWithStaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error) {
-	// we only query for 1 domain or all domains so optimise for those use cases
+	// we only query for 1 domain or all domains so optimize for those use cases
 	if len(domains) == 0 {
 		rows, err := s.selectStaleDeviceListsStmt.QueryContext(ctx, true)
 		if err != nil {
@@ -104,7 +104,7 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithStaleDeviceLists(ctx conte
 	return result, nil
 }
 
-// DeleteStaleDeviceLists removes users from stale device lists
+// DeleteStaleDeviceLists removes users from stale device lists.
 func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 	ctx context.Context, txn *sql.Tx, userIDs []string,
 ) error {
@@ -114,7 +114,7 @@ func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 		return err
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
-	stmt = sqlutil.TxStmt(txn, stmt)
+	stmt = sqlutil.TxStmt(txn, stmt) //nolint:sqlclosecheck
 
 	params := make([]any, len(userIDs))
 	for i := range userIDs {

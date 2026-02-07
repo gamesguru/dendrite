@@ -11,16 +11,18 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/curve25519"
+
+	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
 func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.CrossSigningKeyPurpose) error {
@@ -33,7 +35,7 @@ func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.
 	for keyID, keyData := range key.Keys {
 		b64 := keyData.Encode()
 		tokens := strings.Split(string(keyID), ":")
-		if len(tokens) != 2 {
+		if len(tokens) != 2 { //nolint:mnd
 			return fmt.Errorf("key ID is incorrectly formatted")
 		}
 		if tokens[1] != b64 {
@@ -50,9 +52,9 @@ func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.
 			}
 		default:
 			// We can't enforce the key length to be correct for an
-			// algorithm that we don't recognise, so instead we'll
+			// algorithm that we don't recognize, so instead we'll
 			// just make sure that it isn't incredibly excessive.
-			if l := len(keyData); l > 4096 {
+			if l := len(keyData); l > 4096 { //nolint:mnd
 				return fmt.Errorf("unknown key type is too long (%d bytes)", l)
 			}
 		}
@@ -69,7 +71,7 @@ func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.
 			case "curve25519":
 				return fmt.Errorf("curve25519 signatures are impossible")
 			default:
-				if l := len(originSignature); l > 4096 {
+				if l := len(originSignature); l > 4096 { //nolint:mnd
 					return fmt.Errorf("unknown signature type is too long (%d bytes)", l)
 				}
 			}
@@ -96,7 +98,7 @@ func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.
 	return nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (a *UserInternalAPI) PerformUploadDeviceKeys(ctx context.Context, req *api.PerformUploadDeviceKeysRequest, res *api.PerformUploadDeviceKeysResponse) {
 	// Find the keys to store.
 	byPurpose := map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey{}
@@ -251,7 +253,7 @@ func (a *UserInternalAPI) PerformUploadDeviceKeys(ctx context.Context, req *api.
 	if update.MasterKey == nil && update.SelfSigningKey == nil {
 		return
 	}
-	if err := a.KeyChangeProducer.ProduceSigningKeyUpdate(update); err != nil {
+	if err := a.KeyChangeProducer.ProduceSigningKeyUpdate(update); err != nil { //nolint:contextcheck
 		res.Error = &api.KeyError{
 			Err: fmt.Sprintf("a.Producer.ProduceSigningKeyUpdate: %s", err),
 		}
@@ -334,7 +336,7 @@ func (a *UserInternalAPI) PerformUploadDeviceSignatures(ctx context.Context, req
 			MasterKey:      &masterKey,
 			SelfSigningKey: &selfSigningKey,
 		}
-		if err := a.KeyChangeProducer.ProduceSigningKeyUpdate(update); err != nil {
+		if err := a.KeyChangeProducer.ProduceSigningKeyUpdate(update); err != nil { //nolint:contextcheck
 			res.Error = &api.KeyError{
 				Err: fmt.Sprintf("a.Producer.ProduceSigningKeyUpdate: %s", err),
 			}
@@ -470,7 +472,7 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 			}
 
 			sigMap, err := a.KeyDatabase.CrossSigningSigsForTarget(ctx, req.UserID, targetUserID, keyID)
-			if err != nil && err != sql.ErrNoRows {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				logrus.WithError(err).Errorf("Failed to get cross-signing signatures for user %q key %q", targetUserID, keyID)
 				continue
 			}
@@ -516,7 +518,7 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 func (a *UserInternalAPI) QuerySignatures(ctx context.Context, req *api.QuerySignaturesRequest, res *api.QuerySignaturesResponse) {
 	for targetUserID, forTargetUser := range req.TargetIDs {
 		keyMap, err := a.KeyDatabase.CrossSigningKeysForUser(ctx, targetUserID)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			res.Error = &api.KeyError{
 				Err: fmt.Sprintf("a.DB.CrossSigningKeysForUser: %s", err),
 			}
@@ -548,7 +550,7 @@ func (a *UserInternalAPI) QuerySignatures(ctx context.Context, req *api.QuerySig
 		for _, targetKeyID := range forTargetUser {
 			// Get own signatures only.
 			sigMap, err := a.KeyDatabase.CrossSigningSigsForTarget(ctx, targetUserID, targetUserID, targetKeyID)
-			if err != nil && err != sql.ErrNoRows {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				res.Error = &api.KeyError{
 					Err: fmt.Sprintf("a.DB.CrossSigningSigsForTarget: %s", err),
 				}

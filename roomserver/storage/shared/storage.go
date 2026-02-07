@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"sort"
 
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -18,7 +16,9 @@ import (
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/state"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
@@ -51,7 +51,7 @@ type Database struct {
 	GetRoomUpdaterFn   func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
 }
 
-// EventDatabase contains all tables needed to work with events
+// EventDatabase contains all tables needed to work with events.
 type EventDatabase struct {
 	DB                  *sql.DB
 	Cache               caching.RoomServerCaches
@@ -506,7 +506,7 @@ func (d *Database) GetMembership(ctx context.Context, roomNID types.RoomNID, req
 	senderMembershipEventNID, senderMembership, isRoomforgotten, err := d.MembershipTable.SelectMembershipFromRoomAndTarget(
 		ctx, nil, roomNID, requestSenderUserNID,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// The user has never been a member of that room
 		return 0, false, false, nil
 	} else if err != nil {
@@ -790,7 +790,7 @@ func (d *EventDatabase) StoreEvent(
 			event.Depth(),
 			isRejected,
 		); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				// We've already inserted the event so select the numeric event ID
 				eventNID, stateNID, err = d.EventsTable.SelectEvent(ctx, txn, event.EventID())
 			} else if err != nil {
@@ -972,12 +972,11 @@ func extractRoomVersionFromCreateEvent(event gomatrixserverlib.PDU) (
 	}
 	// A room version was specified in the event content?
 	if createContent.RoomVersion != nil {
-		roomVersion = gomatrixserverlib.RoomVersion(*createContent.RoomVersion)
+		roomVersion = *createContent.RoomVersion
 	}
 	return roomVersion, err
 }
 
-// nolint:gocyclo
 // MaybeRedactEvent manages the redacted status of events. There's two cases to consider in order to comply with the spec:
 // "servers should not apply or send redactions to clients until both the redaction event and original event have been seen, and are valid."
 // https://matrix.org/docs/spec/rooms/v3#authorization-rules-for-events
@@ -994,6 +993,8 @@ func extractRoomVersionFromCreateEvent(event gomatrixserverlib.PDU) (
 // to cross-reference with other tables when loading.
 //
 // Returns the redaction event and the redacted event if this call resulted in a redaction.
+//
+//nolint:gocyclo
 func (d *EventDatabase) MaybeRedactEvent(
 	ctx context.Context, roomInfo *types.RoomInfo, eventNID types.EventNID, event gomatrixserverlib.PDU, plResolver state.PowerLevelResolver,
 	querier api.QuerySenderIDAPI,
@@ -1154,7 +1155,7 @@ func (d *EventDatabase) applyRedactions(events []types.Event) {
 	}
 }
 
-// loadEvent loads a single event or returns nil on any problems/missing event
+// loadEvent loads a single event or returns nil on any problems/missing event.
 func (d *EventDatabase) loadEvent(ctx context.Context, roomInfo *types.RoomInfo, eventID string) *types.Event {
 	nids, err := d.EventNIDs(ctx, []string{eventID})
 	if err != nil {
@@ -1214,7 +1215,7 @@ func (d *Database) GetHistoryVisibilityState(ctx context.Context, roomInfo *type
 
 // GetStateEvent returns the current state event of a given type for a given room with a given state key
 // If no event could be found, returns nil
-// If there was an issue during the retrieval, returns an error
+// If there was an issue during the retrieval, returns an error.
 func (d *Database) GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*types.HeaderedEvent, error) {
 	roomInfo, err := d.roomInfo(ctx, nil, roomID)
 	if err != nil {
@@ -1228,7 +1229,7 @@ func (d *Database) GetStateEvent(ctx context.Context, roomID, evType, stateKey s
 		return nil, nil
 	}
 	eventTypeNID, err := d.GetOrCreateEventTypeNID(ctx, evType)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No rooms have an event of this type, otherwise we'd have an event type NID
 		return nil, nil
 	}
@@ -1236,7 +1237,7 @@ func (d *Database) GetStateEvent(ctx context.Context, roomID, evType, stateKey s
 		return nil, err
 	}
 	stateKeyNID, err := d.GetOrCreateEventStateKeyNID(ctx, &stateKey)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No rooms have a state event with this state key, otherwise we'd have an state key NID
 		return nil, nil
 	}
@@ -1301,7 +1302,7 @@ func (d *Database) GetStateEventsWithEventType(ctx context.Context, roomID, evTy
 		return nil, nil
 	}
 	eventTypeNID, err := d.EventTypesTable.SelectEventTypeNID(ctx, nil, evType)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No rooms have an event of this type, otherwise we'd have an event type NID
 		return nil, nil
 	}
@@ -1365,7 +1366,7 @@ func (d *Database) GetRoomsByMembership(ctx context.Context, userID spec.UserID,
 	// Convert provided user ID to NID
 	userNID, err := d.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, userID.String())
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		} else {
 			return nil, fmt.Errorf("SelectEventStateKeyNID: cannot map user ID to state key NIDs: %w", err)
@@ -1375,7 +1376,7 @@ func (d *Database) GetRoomsByMembership(ctx context.Context, userID spec.UserID,
 	// Use this NID to fetch all associated room keys (for pseudo ID rooms)
 	roomKeyMap, err := d.UserRoomKeyTable.SelectAllPublicKeysForUser(ctx, nil, userNID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			roomKeyMap = map[types.RoomNID]ed25519.PublicKey{}
 		} else {
 			return nil, fmt.Errorf("SelectAllPublicKeysForUser: could not select user room public keys for user: %w", err)
@@ -1397,7 +1398,7 @@ func (d *Database) GetRoomsByMembership(ctx context.Context, userID spec.UserID,
 		// Convert the string representation to its NID
 		pseudoIDStateKeys, sqlErr := d.EventStateKeysTable.BulkSelectEventStateKeyNID(ctx, nil, userRoomKeys)
 		if sqlErr != nil {
-			if sqlErr == sql.ErrNoRows {
+			if errors.Is(sqlErr, sql.ErrNoRows) {
 				pseudoIDStateKeys = map[string]types.EventStateKeyNID{}
 			} else {
 				return nil, fmt.Errorf("BulkSelectEventStateKeyNID: could not select state keys for public room keys: %w", err)
@@ -1521,7 +1522,6 @@ func (d *Database) GetBulkStateContent(ctx context.Context, roomIDs []string, tu
 			continue
 		}
 		eventStateKeys = append(eventStateKeys, tuple.StateKey)
-
 	}
 
 	eventStateKeyNIDMap, err := d.eventStateKeyNIDs(ctx, nil, eventStateKeys)
@@ -1708,7 +1708,7 @@ func (d *Database) RoomsWithACLs(ctx context.Context) ([]string, error) {
 
 // EmptyRooms returns all rooms that the local server has left.
 func (d *Database) EmptyRooms(ctx context.Context) ([]string, error) {
-	eventTypeNID := types.EventTypeNID(5)
+	eventTypeNID := types.EventTypeNID(5) //nolint:mnd
 
 	roomNIDs, err := d.EventsTable.SelectRoomsWithEventTypeNID(ctx, nil, eventTypeNID)
 	if err != nil {
@@ -1732,7 +1732,7 @@ func (d *Database) EmptyRooms(ctx context.Context) ([]string, error) {
 	return d.RoomsTable.BulkSelectRoomIDs(ctx, nil, leftRoomsNIDs)
 }
 
-// ForgetRoom sets a users room to forgotten
+// ForgetRoom sets a users room to forgotten.
 func (d *Database) ForgetRoom(ctx context.Context, userID, roomID string, forget bool) error {
 	roomNIDs, err := d.RoomsTable.BulkSelectRoomNIDs(ctx, nil, []string{roomID})
 	if err != nil {
@@ -1757,7 +1757,7 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		roomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomID)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("room %s does not exist", roomID)
 			}
 			return fmt.Errorf("failed to lock the room: %w", err)
@@ -1914,7 +1914,7 @@ func (d *Database) SelectUserRoomPublicKey(ctx context.Context, userID spec.User
 	return
 }
 
-// SelectUserIDsForPublicKeys returns a map from roomID -> map from senderKey -> userID
+// SelectUserIDsForPublicKeys returns a map from roomID -> map from senderKey -> userID.
 func (d *Database) SelectUserIDsForPublicKeys(ctx context.Context, publicKeys map[spec.RoomID][]ed25519.PublicKey) (result map[spec.RoomID]map[string]string, err error) {
 	result = make(map[spec.RoomID]map[string]string, len(publicKeys))
 
@@ -1996,7 +1996,7 @@ func (d *Database) InsertReportedEvent(
 	}
 
 	// We expect exactly 2 stateKeyNIDs
-	if len(stateKeyNIDs) != 2 {
+	if len(stateKeyNIDs) != 2 { //nolint:mnd
 		return 0, fmt.Errorf("expected 2 stateKeyNIDs, received %d", len(stateKeyNIDs))
 	}
 
@@ -2192,17 +2192,17 @@ func (d *Database) AdminDeleteEventReport(ctx context.Context, reportID uint64) 
 	})
 }
 
-// IsRoomPartialState returns true if the room has partial state from a faster join (MSC3706)
+// IsRoomPartialState returns true if the room has partial state from a faster join (MSC3706).
 func (d *Database) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error) {
 	return d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID)
 }
 
-// GetPartialStateServers returns the list of servers known to be in a partial state room
+// GetPartialStateServers returns the list of servers known to be in a partial state room.
 func (d *Database) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
 	return d.PartialStateTable.SelectPartialStateServers(ctx, nil, roomNID)
 }
 
-// SetRoomPartialState marks a room as having partial state after a faster join
+// SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.PartialStateTable.InsertPartialStateRoom(ctx, txn, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
@@ -2210,7 +2210,7 @@ func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNI
 }
 
 // ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
-// Returns the device list stream ID that was stored at join time for device list replay
+// Returns the device list stream ID that was stored at join time for device list replay.
 func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	var deviceListStreamID int64
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -2221,17 +2221,17 @@ func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.Room
 	return deviceListStreamID, err
 }
 
-// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
+// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room.
 func (d *Database) GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	return d.PartialStateTable.SelectDeviceListStreamID(ctx, nil, roomNID)
 }
 
-// GetAllPartialStateRooms returns all rooms that currently have partial state
+// GetAllPartialStateRooms returns all rooms that currently have partial state.
 func (d *Database) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	return d.PartialStateTable.SelectAllPartialStateRooms(ctx, nil)
 }
 
-// RoomIDFromNID returns the room ID for a given room NID
+// RoomIDFromNID returns the room ID for a given room NID.
 func (d *Database) RoomIDFromNID(ctx context.Context, roomNID types.RoomNID) (string, error) {
 	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, nil, []types.RoomNID{roomNID})
 	if err != nil {

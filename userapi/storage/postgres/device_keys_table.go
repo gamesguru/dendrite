@@ -117,7 +117,7 @@ func (s *deviceKeysStatements) SelectDeviceKeysJSON(ctx context.Context, keys []
 func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn *sql.Tx, userID string) (streamID int64, err error) {
 	// nullable if there are no results
 	var nullStream sql.NullInt64
-	err = sqlutil.TxStmt(txn, s.selectMaxStreamForUserStmt).QueryRowContext(ctx, userID).Scan(&nullStream)
+	err = sqlutil.TxStmt(txn, s.selectMaxStreamForUserStmt).QueryRowContext(ctx, userID).Scan(&nullStream) //nolint:sqlclosecheck
 	if err == sql.ErrNoRows {
 		err = nil
 	}
@@ -143,7 +143,9 @@ func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID
 func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx, keys []api.DeviceMessage) error {
 	for _, key := range keys {
 		now := time.Now().Unix()
-		_, err := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt).ExecContext(
+		upsertDeviceKeysStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
+		defer upsertDeviceKeysStmt.Close()
+		_, err := upsertDeviceKeysStmt.ExecContext(
 			ctx, key.UserID, key.DeviceID, now, string(key.KeyJSON), key.StreamID, key.DisplayName,
 		)
 		if err != nil {
@@ -154,12 +156,16 @@ func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx
 }
 
 func (s *deviceKeysStatements) DeleteDeviceKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt).ExecContext(ctx, userID, deviceID)
+	deleteDeviceKeysStmt := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt)
+	defer deleteDeviceKeysStmt.Close()
+	_, err := deleteDeviceKeysStmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
 
 func (s *deviceKeysStatements) DeleteAllDeviceKeys(ctx context.Context, txn *sql.Tx, userID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt).ExecContext(ctx, userID)
+	deleteAllDeviceKeysStmt := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt)
+	defer deleteAllDeviceKeysStmt.Close()
+	_, err := deleteAllDeviceKeysStmt.ExecContext(ctx, userID)
 	return err
 }
 
@@ -170,7 +176,7 @@ func (s *deviceKeysStatements) SelectBatchDeviceKeys(ctx context.Context, userID
 	} else {
 		stmt = s.selectBatchDeviceKeysStmt
 	}
-	rows, err := stmt.QueryContext(ctx, userID)
+	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

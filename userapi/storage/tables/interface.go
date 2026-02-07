@@ -12,13 +12,13 @@ import (
 	"encoding/json"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/types"
 )
 
@@ -28,7 +28,7 @@ type RegistrationTokensTable interface {
 	ListRegistrationTokens(ctx context.Context, txn *sql.Tx, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	GetRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string) (*clientapi.RegistrationToken, error)
 	DeleteRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string) error
-	UpdateRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string, newAttributes map[string]interface{}) (*clientapi.RegistrationToken, error)
+	UpdateRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 }
 
 type AccountDataTable interface {
@@ -147,7 +147,7 @@ const (
 	// notifications in Notifications.Select*. Note that PostgreSQL
 	// balks if this doesn't fit in INTEGER, even though we use
 	// uint32.
-	AllNotifications NotificationFilter = (1 << 31) - 1
+	AllNotifications NotificationFilter = (1 << 31) - 1 //nolint:mnd
 )
 
 type OneTimeKeys interface {

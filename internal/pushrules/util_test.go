@@ -12,14 +12,14 @@ func TestActionsToTweaks(t *testing.T) {
 		Name       string
 		Input      []*Action
 		WantKind   ActionKind
-		WantTweaks map[string]interface{}
+		WantTweaks map[string]any
 	}{
 		{"empty", nil, UnknownAction, nil},
 		{"zero", []*Action{{}}, UnknownAction, nil},
 		{"onlyPrimary", []*Action{{Kind: NotifyAction}}, NotifyAction, nil},
 		{"onlyPrimaryDontNotify", []*Action{}, UnknownAction, nil},
-		{"onlyTweak", []*Action{{Kind: SetTweakAction, Tweak: HighlightTweak}}, UnknownAction, map[string]interface{}{"highlight": nil}},
-		{"onlyTweakWithValue", []*Action{{Kind: SetTweakAction, Tweak: SoundTweak, Value: "default"}}, UnknownAction, map[string]interface{}{"sound": "default"}},
+		{"onlyTweak", []*Action{{Kind: SetTweakAction, Tweak: HighlightTweak}}, UnknownAction, map[string]any{"highlight": nil}},
+		{"onlyTweakWithValue", []*Action{{Kind: SetTweakAction, Tweak: SoundTweak, Value: "default"}}, UnknownAction, map[string]any{"sound": "default"}},
 		{
 			"all",
 			[]*Action{
@@ -27,7 +27,7 @@ func TestActionsToTweaks(t *testing.T) {
 				{Kind: SetTweakAction, Tweak: SoundTweak, Value: "default"},
 			},
 			UnknownAction,
-			map[string]interface{}{"highlight": nil, "sound": "default"},
+			map[string]any{"highlight": nil, "sound": "default"},
 		},
 	}
 	for _, tst := range tsts {
@@ -49,14 +49,14 @@ func TestActionsToTweaks(t *testing.T) {
 func TestBoolTweakOr(t *testing.T) {
 	tsts := []struct {
 		Name  string
-		Input map[string]interface{}
+		Input map[string]any
 		Def   bool
 		Want  bool
 	}{
 		{"nil", nil, false, false},
-		{"nilValue", map[string]interface{}{"highlight": nil}, true, true},
-		{"false", map[string]interface{}{"highlight": false}, true, false},
-		{"true", map[string]interface{}{"highlight": true}, false, true},
+		{"nilValue", map[string]any{"highlight": nil}, true, true},
+		{"false", map[string]any{"highlight": false}, true, false},
+		{"true", map[string]any{"highlight": true}, false, true},
 	}
 	for _, tst := range tsts {
 		t.Run(tst.Name, func(t *testing.T) {
@@ -96,12 +96,12 @@ func TestGlobToRegexp(t *testing.T) {
 func TestLookupMapPath(t *testing.T) {
 	tsts := []struct {
 		Path []string
-		Root map[string]interface{}
-		Want interface{}
+		Root map[string]any
+		Want any
 	}{
-		{[]string{"a"}, map[string]interface{}{"a": "b"}, "b"},
-		{[]string{"a"}, map[string]interface{}{"a": 42}, 42},
-		{[]string{"a", "b"}, map[string]interface{}{"a": map[string]interface{}{"b": "c"}}, "c"},
+		{[]string{"a"}, map[string]any{"a": "b"}, "b"},
+		{[]string{"a"}, map[string]any{"a": 42}, 42},
+		{[]string{"a", "b"}, map[string]any{"a": map[string]any{"b": "c"}}, "c"},
 	}
 	for _, tst := range tsts {
 		t.Run(fmt.Sprint(tst.Path, "/", tst.Want), func(t *testing.T) {
@@ -119,11 +119,11 @@ func TestLookupMapPath(t *testing.T) {
 func TestLookupMapPathInvalid(t *testing.T) {
 	tsts := []struct {
 		Path []string
-		Root map[string]interface{}
+		Root map[string]any
 	}{
 		{nil, nil},
 		{[]string{"a"}, nil},
-		{[]string{"a", "b"}, map[string]interface{}{"a": "c"}},
+		{[]string{"a", "b"}, map[string]any{"a": "c"}},
 	}
 	for _, tst := range tsts {
 		t.Run(fmt.Sprint(tst.Path), func(t *testing.T) {

@@ -44,7 +44,7 @@ type filter struct {
 	RoomTypes   []string `json:"room_types,omitempty"` // TODO: Implement filter on this
 }
 
-// GetPostPublicRooms implements GET and POST /publicRooms
+// GetPostPublicRooms implements GET and POST /publicRooms.
 func GetPostPublicRooms(
 	req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI,
 	extRoomsProvider api.ExtraPublicRoomsProvider,
@@ -164,7 +164,7 @@ func filterRooms(rooms []fclient.PublicRoom, searchTerm string) []fclient.Public
 
 // fillPublicRoomsReq fills the Limit, Since and Filter attributes of a GET or POST request
 // on /publicRooms by parsing the incoming HTTP request
-// Filter is only filled for POST requests
+// Filter is only filled for POST requests.
 func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSONResponse {
 	if httpReq.Method != "GET" && httpReq.Method != "POST" {
 		return &util.JSONResponse{
@@ -179,7 +179,7 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 		if err != nil && len(httpReq.FormValue("limit")) > 0 {
 			util.GetLogger(httpReq.Context()).WithError(err).Error("strconv.Atoi failed")
 			return &util.JSONResponse{
-				Code: 400,
+				Code: 400, //nolint:mnd
 				JSON: spec.BadJSON("limit param is not a number"),
 			}
 		}
@@ -201,7 +201,7 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 	return nil
 }
 
-// sliceInto returns a subslice of `slice` which honours the since/limit values given.
+// sliceInto returns a subslice of `slice` which honors the since/limit values given.
 //
 //	  0  1  2  3  4  5  6   index
 //	 [A, B, C, D, E, F, G]  slice
@@ -248,7 +248,7 @@ func refreshPublicRoomCache(
 
 	// TODO: this is only here to make Sytest happy, for now.
 	ns := strings.Split(request.NetworkID, "|")
-	if len(ns) == 2 {
+	if len(ns) == 2 { //nolint:mnd
 		request.NetworkID = ns[1]
 	}
 

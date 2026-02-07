@@ -38,7 +38,7 @@ INSERT INTO roomserver_event_state_keys (event_state_key_nid, event_state_key) V
     (1, '') ON CONFLICT DO NOTHING;
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertEventStateKeyNIDSQL = "" +
 	"INSERT INTO roomserver_event_state_keys (event_state_key) VALUES ($1)" +
 	" ON CONFLICT ON CONSTRAINT roomserver_event_state_key_unique" +
@@ -88,6 +88,7 @@ func (s *eventStateKeyStatements) InsertEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.insertEventStateKeyNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -97,6 +98,7 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectEventStateKeyNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -105,7 +107,8 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKeys []string,
 ) (map[string]types.EventStateKeyNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyNIDStmt)
-	rows, err := stmt.QueryContext(
+	defer stmt.Close()
+	rows, err := stmt.QueryContext( //nolint:sqlclosecheck
 		ctx, eventStateKeys,
 	)
 	if err != nil {
@@ -133,7 +136,8 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 		nIDs[i] = int64(eventStateKeyNIDs[i])
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyStmt)
-	rows, err := stmt.QueryContext(ctx, nIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, nIDs) //nolint:sqlclosecheck
 	if err != nil {
 		return nil, err
 	}

@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
@@ -16,10 +20,6 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/util"
-
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi"
@@ -33,7 +33,7 @@ func TestLogin(t *testing.T) {
 	vhUser := &test.User{ID: "@vhuser:vh1"}
 
 	ctx := context.Background()
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) { //nolint:contextcheck
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		defer close()
 		cfg.ClientAPI.RateLimiting.Enabled = false
@@ -52,7 +52,7 @@ func TestLogin(t *testing.T) {
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 		// We mostly need the userAPI for this test, so nil for other APIs/caches etc.
-		Setup(routers, cfg, nil, nil, userAPI, nil, nil, nil, nil, nil, nil, nil, nil, caching.DisableMetrics)
+		Setup(routers, cfg, nil, nil, userAPI, nil, nil, nil, nil, nil, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create password
 		password := util.RandomString(8)
@@ -136,11 +136,12 @@ func TestLogin(t *testing.T) {
 			appServiceFound := false
 			passwordFound := false
 			for _, flow := range resp.Flows {
-				if flow.Type == "m.login.password" {
+				switch flow.Type {
+				case "m.login.password":
 					passwordFound = true
-				} else if flow.Type == "m.login.application_service" {
+				case "m.login.application_service":
 					appServiceFound = true
-				} else {
+				default:
 					t.Fatalf("got unknown login flow: %s", flow.Type)
 				}
 			}
@@ -154,9 +155,9 @@ func TestLogin(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]interface{}{
+				req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]any{
 					"type": authtypes.LoginTypePassword,
-					"identifier": map[string]interface{}{
+					"identifier": map[string]any{
 						"type": "m.id.user",
 						"user": tc.userID,
 					},

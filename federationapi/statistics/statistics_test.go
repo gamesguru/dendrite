@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/test"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/dendrite/test"
 )
 
 const (
@@ -71,16 +72,18 @@ func TestBackoff(t *testing.T) {
 		}
 
 		// Check if we should be blacklisted by now.
-		if i >= stats.FailuresUntilBlacklist {
-			if !blacklist {
+		switch {
+		case i >= stats.FailuresUntilBlacklist:
+			switch {
+			case !blacklist:
 				t.Fatalf("Backoff %d should have resulted in blacklist but didn't", i)
-			} else if blacklist != blacklisted {
+			case blacklist != blacklisted:
 				t.Fatalf("Blacklisted and Failure returned different blacklist values")
-			} else {
+			default:
 				t.Logf("Backoff %d is blacklisted as expected", i)
 				continue
 			}
-		} else {
+		default:
 			if blacklist {
 				t.Fatalf("Backoff %d should not have resulted in blacklist but did", i)
 			} else {

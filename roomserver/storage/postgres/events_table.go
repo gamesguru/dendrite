@@ -223,6 +223,7 @@ func (s *eventStatements) InsertEvent(
 	var eventNID int64
 	var stateNID int64
 	stmt := sqlutil.TxStmt(txn, s.insertEventStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(
 		ctx, int64(roomNID), int64(eventTypeNID), int64(eventStateKeyNID),
 		eventID, eventNIDsAsArray(authEventNIDs), depth,
@@ -244,8 +245,8 @@ func (s *eventStatements) BulkSelectSnapshotsFromEventIDs(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) (map[types.StateSnapshotNID][]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectSnapshotsForEventIDsStmt)
-
-	rows, err := stmt.QueryContext(ctx, eventIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -273,11 +274,11 @@ func (s *eventStatements) BulkSelectStateEventByID(
 ) ([]types.StateEntry, error) {
 	var stmt *sql.Stmt
 	if excludeRejected {
-		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDExcludingRejectedStmt)
+		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDExcludingRejectedStmt) //nolint:sqlclosecheck
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDStmt)
+		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDStmt) //nolint:sqlclosecheck
 	}
-	rows, err := stmt.QueryContext(ctx, eventIDs)
+	rows, err := stmt.QueryContext(ctx, eventIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +317,7 @@ func (s *eventStatements) BulkSelectStateEventByID(
 }
 
 // bulkSelectStateEventByNID lookups a list of state events by event NID.
-// If any of the requested events are missing from the database it returns a types.MissingEventError
+// If any of the requested events are missing from the database it returns a types.MissingEventError.
 func (s *eventStatements) BulkSelectStateEventByNID(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 	stateKeyTuples []types.StateKeyTuple,
@@ -325,7 +326,8 @@ func (s *eventStatements) BulkSelectStateEventByNID(
 	sort.Sort(tuples)
 	eventTypeNIDArray, eventStateKeyNIDArray := tuples.TypesAndStateKeysAsArrays()
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateEventByNIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), eventTypeNIDArray, eventStateKeyNIDArray)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), eventTypeNIDArray, eventStateKeyNIDArray) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +361,8 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) ([]types.StateAtEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateAtEventByIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -400,6 +403,7 @@ func (s *eventStatements) UpdateEventState(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, stateNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateEventStateStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(eventNID), int64(stateNID))
 	return err
 }
@@ -408,12 +412,14 @@ func (s *eventStatements) SelectEventSentToOutput(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID,
 ) (sentToOutput bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventSentToOutputStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, int64(eventNID)).Scan(&sentToOutput)
 	return
 }
 
 func (s *eventStatements) UpdateEventSentToOutput(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) error {
 	stmt := sqlutil.TxStmt(txn, s.updateEventSentToOutputStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(eventNID))
 	return err
 }
@@ -422,6 +428,7 @@ func (s *eventStatements) SelectEventID(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID,
 ) (eventID string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventIDStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, int64(eventNID)).Scan(&eventID)
 	return
 }
@@ -430,7 +437,8 @@ func (s *eventStatements) BulkSelectStateAtEventAndReference(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 ) ([]types.StateAtEventAndReference, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateAtEventAndReferenceStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs))
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs)) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +477,8 @@ func (s *eventStatements) BulkSelectStateAtEventAndReference(
 // bulkSelectEventID returns a map from numeric event ID to string event ID.
 func (s *eventStatements) BulkSelectEventID(ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID) (map[types.EventNID]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs))
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs)) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -511,11 +520,11 @@ func (s *eventStatements) BulkSelectUnsentEventNID(ctx context.Context, txn *sql
 func (s *eventStatements) bulkSelectEventNID(ctx context.Context, txn *sql.Tx, eventIDs []string, onlyUnsent bool) (map[string]types.EventMetadata, error) {
 	var stmt *sql.Stmt
 	if onlyUnsent {
-		stmt = sqlutil.TxStmt(txn, s.bulkSelectUnsentEventNIDStmt)
+		stmt = sqlutil.TxStmt(txn, s.bulkSelectUnsentEventNIDStmt) //nolint:sqlclosecheck
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.bulkSelectEventNIDStmt)
+		stmt = sqlutil.TxStmt(txn, s.bulkSelectEventNIDStmt) //nolint:sqlclosecheck
 	}
-	rows, err := stmt.QueryContext(ctx, eventIDs)
+	rows, err := stmt.QueryContext(ctx, eventIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +561,8 @@ func (s *eventStatements) SelectRoomNIDsForEventNIDs(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 ) (map[types.EventNID]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomNIDsForEventNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs))
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs)) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -581,6 +591,7 @@ func (s *eventStatements) SelectEventRejected(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, eventID string,
 ) (rejected bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventRejectedStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomNID, eventID).Scan(&rejected)
 	return
 }
@@ -589,7 +600,8 @@ func (s *eventStatements) SelectRoomsWithEventTypeNID(
 	ctx context.Context, txn *sql.Tx, eventTypeNID types.EventTypeNID,
 ) ([]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithEventTypeNIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventTypeNID)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, eventTypeNID) //nolint:sqlclosecheck // rows closed by defer below
 	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomsWithEventTypeNID: rows.close() failed")
 	if err != nil {
 		return nil, err

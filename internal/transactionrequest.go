@@ -12,12 +12,6 @@ import (
 	"fmt"
 	"sync"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/federationapi/types"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	syncTypes "codefloe.com/pat-s/dendrite/syncapi/types"
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
@@ -25,6 +19,13 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/federationapi/producers"
+	"codefloe.com/pat-s/dendrite/federationapi/types"
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	syncTypes "codefloe.com/pat-s/dendrite/syncapi/types"
+	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
 var (
@@ -141,7 +142,7 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 				// on PDUs.
 				//
 				// This enforces that the entire transaction is rejected if a single bad PDU is
-				// sent. It is unclear if this is the correct behaviour or not.
+				// sent. It is unclear if this is the correct behavior or not.
 				//
 				// See https://github.com/matrix-org/synapse/issues/7543
 				return nil, &util.JSONResponse{
@@ -202,7 +203,7 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 	return &fclient.RespSend{PDUs: results}, nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (t *TxnReq) processEDUs(ctx context.Context) {
 	for _, e := range t.EDUs {
 		EDUCountTotal.Inc()
@@ -219,17 +220,18 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 				continue
 			}
 			_, serverName, err := gomatrixserverlib.SplitID('@', typingPayload.UserID)
-			if err != nil {
+			switch {
+			case err != nil:
 				continue
-			} else if serverName == t.ourServerName {
+			case serverName == t.ourServerName:
 				continue
-			} else if serverName != t.Origin {
+			case serverName != t.Origin:
 				continue
 			}
 			if api.IsServerBannedFromRoom(ctx, t.rsAPI, typingPayload.RoomID, serverName) {
 				continue
 			}
-			if err := t.producer.SendTyping(ctx, typingPayload.UserID, typingPayload.RoomID, typingPayload.Typing, 30*1000); err != nil {
+			if err := t.producer.SendTyping(ctx, typingPayload.UserID, typingPayload.RoomID, typingPayload.Typing, 30*1000); err != nil { //nolint:mnd
 				util.GetLogger(ctx).WithError(err).Error("Failed to send typing event to JetStream")
 			}
 		case spec.MDirectToDevice:
@@ -315,7 +317,7 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 	}
 }
 
-// processPresence handles m.receipt events
+// processPresence handles m.receipt events.
 func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) error {
 	payload := types.Presence{}
 	if err := json.Unmarshal(e.Content, &payload); err != nil {
@@ -340,7 +342,7 @@ func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) e
 	return nil
 }
 
-// processReceiptEvent sends receipt events to JetStream
+// processReceiptEvent sends receipt events to JetStream.
 func (t *TxnReq) processReceiptEvent(ctx context.Context,
 	userID, roomID, receiptType string,
 	timestamp spec.Timestamp,

@@ -10,10 +10,11 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const queuePDUsSchema = `
@@ -87,6 +88,7 @@ func (s *queuePDUsStatements) InsertQueuePDU(
 	nid int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertQueuePDUStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		transactionID, // the transaction ID that we initially attempted
@@ -102,6 +104,7 @@ func (s *queuePDUsStatements) DeleteQueuePDUs(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueuePDUsStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
@@ -111,6 +114,7 @@ func (s *queuePDUsStatements) SelectQueuePDUReferenceJSONCount(
 ) (int64, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.selectQueuePDUReferenceJSONCountStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, jsonNID).Scan(&count)
 	if err == sql.ErrNoRows {
 		// It's acceptable for there to be no rows referencing a given
@@ -127,7 +131,8 @@ func (s *queuePDUsStatements) SelectQueuePDUs(
 	limit int,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueuePDUsStmt)
-	rows, err := stmt.QueryContext(ctx, serverName, limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, serverName, limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +153,8 @@ func (s *queuePDUsStatements) SelectQueuePDUServerNames(
 	ctx context.Context, txn *sql.Tx,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueuePDUServerNamesStmt)
-	rows, err := stmt.QueryContext(ctx)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

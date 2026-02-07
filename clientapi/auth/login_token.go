@@ -10,12 +10,13 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	uapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 )
 
 // LoginTypeToken describes how to authenticate with a login token.
@@ -52,8 +53,8 @@ func (t *LoginTypeToken) LoginFromJSON(ctx context.Context, reqBytes []byte) (*L
 		}
 	}
 
-	r.Login.Identifier.Type = "m.id.user"
-	r.Login.Identifier.User = res.Data.UserID
+	r.Identifier.Type = "m.id.user"
+	r.Identifier.User = res.Data.UserID
 
 	cleanup := func(ctx context.Context, authRes *util.JSONResponse) {
 		if authRes == nil {

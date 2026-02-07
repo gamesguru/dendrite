@@ -10,10 +10,11 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 )
 
 const relayQueueSchema = `
@@ -86,6 +87,7 @@ func (s *relayQueueStatements) InsertQueueEntry(
 	nid int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertQueueEntryStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		transactionID, // the transaction ID that we initially attempted
@@ -102,6 +104,7 @@ func (s *relayQueueStatements) DeleteQueueEntries(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueueEntriesStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
@@ -113,7 +116,8 @@ func (s *relayQueueStatements) SelectQueueEntries(
 	limit int,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueueEntriesStmt)
-	rows, err := stmt.QueryContext(ctx, serverName, limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, serverName, limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +141,7 @@ func (s *relayQueueStatements) SelectQueueEntryCount(
 ) (int64, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.selectQueueEntryCountStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, serverName).Scan(&count)
 	if err == sql.ErrNoRows {
 		// It's acceptable for there to be no rows referencing a given

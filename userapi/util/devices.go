@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	log "github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/internal/pushgateway"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	log "github.com/sirupsen/logrus"
 )
 
 type PusherDevice struct {
@@ -19,7 +20,7 @@ type PusherDevice struct {
 }
 
 // GetPushDevices pushes to the configured devices of a local user.
-func GetPushDevices(ctx context.Context, localpart string, serverName spec.ServerName, tweaks map[string]interface{}, db storage.UserDatabase) ([]*PusherDevice, error) {
+func GetPushDevices(ctx context.Context, localpart string, serverName spec.ServerName, tweaks map[string]any, db storage.UserDatabase) ([]*PusherDevice, error) {
 	pushers, err := db.GetPushers(ctx, localpart, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("db.GetPushers: %w", err)
@@ -86,8 +87,8 @@ func GetPushDevices(ctx context.Context, localpart string, serverName spec.Serve
 
 // mapWithout returns a shallow copy of the map, without the given
 // key. Returns nil if the resulting map is empty.
-func mapWithout(m map[string]interface{}, key string) map[string]interface{} {
-	ret := make(map[string]interface{}, len(m))
+func mapWithout(m map[string]any, key string) map[string]any {
+	ret := make(map[string]any, len(m))
 	for k, v := range m {
 		// The specification says we do not send "url".
 		if k == key {

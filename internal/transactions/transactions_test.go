@@ -45,7 +45,7 @@ var (
 	}
 )
 
-// TestCache creates a New Cache and tests AddTransaction & FetchTransaction
+// TestCache creates a New Cache and tests AddTransaction & FetchTransaction.
 func TestCache(t *testing.T) {
 	fakeTxnCache := New()
 	u, _ := url.Parse("")

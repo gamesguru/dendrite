@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
-// GetState returns state events & auth events for the roomID, eventID
+// GetState returns state events & auth events for the roomID, eventID.
 func GetState(
 	ctx context.Context,
 	request *fclient.FederationRequest,
@@ -40,7 +41,7 @@ func GetState(
 	}}
 }
 
-// GetStateIDs returns state event IDs & auth event IDs for the roomID, eventID
+// GetStateIDs returns state event IDs & auth event IDs for the roomID, eventID.
 func GetStateIDs(
 	ctx context.Context,
 	request *fclient.FederationRequest,

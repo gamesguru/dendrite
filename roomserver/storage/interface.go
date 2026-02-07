@@ -10,10 +10,10 @@ import (
 	"context"
 	"crypto/ed25519"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
+	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/state"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"

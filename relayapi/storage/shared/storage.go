@@ -12,12 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/relayapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type Database struct {
@@ -99,7 +100,7 @@ func (d *Database) CleanTransactions(
 		// So for multiple destinations we would call send_relay multiple times and have multiple
 		// json entries of the same transaction.
 		//
-		// TLDR; this works as expected right now but can easily be optimised in the future.
+		// TLDR; this works as expected right now but can easily be optimized in the future.
 		deleteJSONErr := d.RelayQueueJSON.DeleteQueueJSON(ctx, txn, nids)
 
 		if deleteEntryErr != nil {

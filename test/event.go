@@ -12,16 +12,17 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/dendrite/roomserver/types"
 )
 
 type eventMods struct {
 	originServerTS time.Time
 	origin         spec.ServerName
 	stateKey       *string
-	unsigned       interface{}
+	unsigned       any
 	keyID          gomatrixserverlib.KeyID
 	privKey        ed25519.PrivateKey
 	authEvents     []string
@@ -41,7 +42,7 @@ func WithStateKey(skey string) eventModifier {
 	}
 }
 
-func WithUnsigned(unsigned interface{}) eventModifier {
+func WithUnsigned(unsigned any) eventModifier {
 	return func(e *eventMods) {
 		e.unsigned = unsigned
 	}
@@ -71,7 +72,7 @@ func WithOrigin(origin spec.ServerName) eventModifier {
 	}
 }
 
-// Reverse a list of events
+// Reversed reverses a list of events.
 func Reversed(in []*types.HeaderedEvent) []*types.HeaderedEvent {
 	out := make([]*types.HeaderedEvent, len(in))
 	for i := 0; i < len(in); i++ {
@@ -90,7 +91,7 @@ func AssertEventIDsEqual(t *testing.T, gotEventIDs []string, wants []*types.Head
 		w := wants[i].EventID()
 		g := gotEventIDs[i]
 		if w != g {
-			t.Errorf("event at index %d mismatch:\ngot  %s\n\nwant %s", i, string(g), string(w))
+			t.Errorf("event at index %d mismatch:\ngot  %s\n\nwant %s", i, g, w)
 		}
 	}
 }
@@ -104,7 +105,7 @@ func AssertEventsEqual(t *testing.T, gots, wants []*types.HeaderedEvent) {
 		w := wants[i].JSON()
 		g := gots[i].JSON()
 		if !bytes.Equal(w, g) {
-			t.Errorf("event at index %d mismatch:\ngot  %s\n\nwant %s", i, string(g), string(w))
+			t.Errorf("event at index %d mismatch:\ngot  %s\n\nwant %s", i, g, w)
 		}
 	}
 }

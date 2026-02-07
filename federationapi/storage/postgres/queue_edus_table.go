@@ -10,10 +10,11 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const queueEDUsSchema = `
@@ -116,6 +117,7 @@ func (s *queueEDUsStatements) InsertQueueEDU(
 	expiresAt spec.Timestamp,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertQueueEDUStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		eduType,    // the EDU type
@@ -132,6 +134,7 @@ func (s *queueEDUsStatements) DeleteQueueEDUs(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueueEDUStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
@@ -142,7 +145,8 @@ func (s *queueEDUsStatements) SelectQueueEDUs(
 	limit int,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueueEDUStmt)
-	rows, err := stmt.QueryContext(ctx, serverName, limit)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, serverName, limit) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +167,7 @@ func (s *queueEDUsStatements) SelectQueueEDUReferenceJSONCount(
 ) (int64, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.selectQueueEDUReferenceJSONCountStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, jsonNID).Scan(&count)
 	if err == sql.ErrNoRows {
 		return -1, nil
@@ -174,7 +179,8 @@ func (s *queueEDUsStatements) SelectQueueEDUServerNames(
 	ctx context.Context, txn *sql.Tx,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueueEDUServerNamesStmt)
-	rows, err := stmt.QueryContext(ctx)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +202,8 @@ func (s *queueEDUsStatements) SelectExpiredEDUs(
 	expiredBefore spec.Timestamp,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectExpiredEDUsStmt)
-	rows, err := stmt.QueryContext(ctx, expiredBefore)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, expiredBefore) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +224,7 @@ func (s *queueEDUsStatements) DeleteExpiredEDUs(
 	expiredBefore spec.Timestamp,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteExpiredEDUsStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, expiredBefore)
 	return err
 }

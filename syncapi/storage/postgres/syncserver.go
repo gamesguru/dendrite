@@ -11,12 +11,13 @@ import (
 	"context"
 	"database/sql"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	// Import the postgres database driver.
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/shared"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // SyncServerDatasource represents a sync server datasource which manages
@@ -27,7 +28,7 @@ type SyncServerDatasource struct {
 	writer sqlutil.Writer
 }
 
-// NewDatabase creates a new sync server database
+// NewDatabase creates a new sync server database.
 func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*SyncServerDatasource, error) {
 	var d SyncServerDatasource
 	var err error
@@ -38,11 +39,11 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	events, err := NewPostgresEventsTable(d.db)
+	events, err := NewPostgresEventsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
-	currState, err := NewPostgresCurrentRoomStateTable(d.db)
+	currState, err := NewPostgresCurrentRoomStateTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +63,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	sendToDevice, err := NewPostgresSendToDeviceTable(d.db)
+	sendToDevice, err := NewPostgresSendToDeviceTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	receipts, err := NewPostgresReceiptsTable(d.db)
+	receipts, err := NewPostgresReceiptsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}

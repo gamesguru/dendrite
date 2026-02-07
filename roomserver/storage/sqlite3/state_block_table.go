@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/util"
 )
 
 const stateDataSchema = `
@@ -84,6 +85,7 @@ func (s *stateBlockStatements) BulkInsertStateData(
 		return 0, fmt.Errorf("json.Marshal: %w", err)
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertStateDataStmt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(
 		ctx, nids.Hash(), js,
 	).Scan(&id)
@@ -93,7 +95,7 @@ func (s *stateBlockStatements) BulkInsertStateData(
 func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs,
 ) ([][]types.EventNID, error) {
-	intfs := make([]interface{}, len(stateBlockNIDs))
+	intfs := make([]any, len(stateBlockNIDs))
 	for i := range stateBlockNIDs {
 		intfs[i] = int64(stateBlockNIDs[i])
 	}
@@ -102,9 +104,10 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	if err != nil {
 		return nil, err
 	}
-	defer selectPrep.Close() // nolint:errcheck
+	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	rows, err := selectStmt.QueryContext(ctx, intfs...)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, intfs...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

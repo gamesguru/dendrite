@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"golang.org/x/crypto/bcrypt"
 
 	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi/storage"
@@ -29,7 +29,7 @@ func TestCollect(t *testing.T) {
 		receivedRequest := make(chan struct{}, 1)
 		// create a test server which responds to our call
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var data map[string]interface{}
+			var data map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 				t.Error(err)
 			}

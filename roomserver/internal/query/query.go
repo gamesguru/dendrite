@@ -13,15 +13,10 @@ import (
 	"errors"
 	"fmt"
 
-	// "codefloe.com/pat-s/dendrite/roomserver/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
-
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
@@ -31,7 +26,11 @@ import (
 	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/dendrite/roomserver/state"
 	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
+	// "codefloe.com/pat-s/dendrite/roomserver/internal".
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 )
 
 type Queryer struct {
@@ -59,13 +58,13 @@ func (r *Queryer) RestrictedRoomJoinInfo(ctx context.Context, roomID spec.RoomID
 		return nil, fmt.Errorf("InternalServerError: Failed to query room: %w", err)
 	}
 
-	userJoinedToRoom, err := r.UserJoinedToRoom(ctx, types.RoomNID(roomInfo.RoomNID), senderID)
+	userJoinedToRoom, err := r.UserJoinedToRoom(ctx, roomInfo.RoomNID, senderID)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.UserJoinedToRoom failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)
 	}
 
-	locallyJoinedUsers, err := r.LocallyJoinedUsers(ctx, roomInfo.RoomVersion, types.RoomNID(roomInfo.RoomNID))
+	locallyJoinedUsers, err := r.LocallyJoinedUsers(ctx, roomInfo.RoomVersion, roomInfo.RoomNID)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.GetLocallyJoinedUsers failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)
@@ -78,7 +77,7 @@ func (r *Queryer) RestrictedRoomJoinInfo(ctx context.Context, roomID spec.RoomID
 	}, nil
 }
 
-// QueryLatestEventsAndState implements api.RoomserverInternalAPI
+// QueryLatestEventsAndState implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryLatestEventsAndState(
 	ctx context.Context,
 	request *api.QueryLatestEventsAndStateRequest,
@@ -87,7 +86,7 @@ func (r *Queryer) QueryLatestEventsAndState(
 	return helpers.QueryLatestEventsAndState(ctx, r.DB, r, request, response)
 }
 
-// QueryStateAfterEvents implements api.RoomserverInternalAPI
+// QueryStateAfterEvents implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryStateAfterEvents(
 	ctx context.Context,
 	request *api.QueryStateAfterEventsRequest,
@@ -107,7 +106,8 @@ func (r *Queryer) QueryStateAfterEvents(
 
 	prevStates, err := r.DB.StateAtEventIDs(ctx, request.PrevEventIDs)
 	if err != nil {
-		if _, ok := err.(types.MissingEventError); ok {
+		var missingEventErr types.MissingEventError
+		if errors.As(err, &missingEventErr) {
 			return nil
 		}
 		return err
@@ -127,10 +127,12 @@ func (r *Queryer) QueryStateAfterEvents(
 		)
 	}
 	if err != nil {
-		if _, ok := err.(types.MissingEventError); ok {
+		var missingEventErr2 types.MissingEventError
+		if errors.As(err, &missingEventErr2) {
 			return nil
 		}
-		if _, ok := err.(types.MissingStateError); ok {
+		var missingStateErr types.MissingStateError
+		if errors.As(err, &missingStateErr) {
 			return nil
 		}
 		return err
@@ -222,7 +224,7 @@ func (r *Queryer) QueryEventsByID(
 	return nil
 }
 
-// QueryMembershipForSenderID implements api.RoomserverInternalAPI
+// QueryMembershipForSenderID implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMembershipForSenderID(
 	ctx context.Context,
 	roomID spec.RoomID,
@@ -232,7 +234,7 @@ func (r *Queryer) QueryMembershipForSenderID(
 	return r.queryMembershipForOptionalSenderID(ctx, roomID, &senderID, response)
 }
 
-// QueryMembershipForUser implements api.RoomserverInternalAPI
+// QueryMembershipForUser implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMembershipForUser(
 	ctx context.Context,
 	request *api.QueryMembershipForUserRequest,
@@ -329,10 +331,11 @@ func (r *Queryer) QueryMembershipAtEvent(
 	}
 
 	eventIDMembershipMap, err := r.DB.GetMembershipForHistoryVisibility(ctx, stateKeyNIDs[string(senderID)], info, eventIDs...)
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		return eventIDMembershipMap, nil
-	case tables.ErrOptimisationNotSupported: // fallthrough, slow way of getting the membership events for each event
+	case errors.Is(err, tables.ErrOptimisationNotSupported):
+		// fallthrough, slow way of getting the membership events for each event
 	default:
 		return eventIDMembershipMap, err
 	}
@@ -393,7 +396,7 @@ func (r *Queryer) QueryMembershipAtEvent(
 	return eventIDMembershipMap, nil
 }
 
-// QueryMembershipsForRoom implements api.RoomserverInternalAPI
+// QueryMembershipsForRoom implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMembershipsForRoom(
 	ctx context.Context,
 	request *api.QueryMembershipsForRoomRequest,
@@ -415,7 +418,7 @@ func (r *Queryer) QueryMembershipsForRoom(
 		var eventNIDs []types.EventNID
 		eventNIDs, err = r.DB.GetMembershipEventNIDsForRoom(ctx, info.RoomNID, request.JoinedOnly, request.LocalOnly)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
 			return fmt.Errorf("r.DB.GetMembershipEventNIDsForRoom: %w", err)
@@ -455,7 +458,7 @@ func (r *Queryer) QueryMembershipsForRoom(
 		var eventNIDs []types.EventNID
 		eventNIDs, err = r.DB.GetMembershipEventNIDsForRoom(ctx, info.RoomNID, request.JoinedOnly, false)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
 			return err
@@ -485,7 +488,7 @@ func (r *Queryer) QueryMembershipsForRoom(
 	return nil
 }
 
-// QueryServerJoinedToRoom implements api.RoomserverInternalAPI
+// QueryServerJoinedToRoom implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryServerJoinedToRoom(
 	ctx context.Context,
 	request *api.QueryServerJoinedToRoomRequest,
@@ -524,7 +527,7 @@ func (r *Queryer) QueryServerJoinedToRoom(
 	return nil
 }
 
-// QueryServerAllowedToSeeEvent implements api.RoomserverInternalAPI
+// QueryServerAllowedToSeeEvent implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryServerAllowedToSeeEvent(
 	ctx context.Context,
 	serverName spec.ServerName,
@@ -563,7 +566,7 @@ func (r *Queryer) QueryServerAllowedToSeeEvent(
 	)
 }
 
-// QueryMissingEvents implements api.RoomserverInternalAPI
+// QueryMissingEvents implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMissingEvents(
 	ctx context.Context,
 	request *api.QueryMissingEventsRequest,
@@ -623,7 +626,7 @@ func (r *Queryer) QueryMissingEvents(
 	return err
 }
 
-// QueryStateAndAuthChain implements api.RoomserverInternalAPI
+// QueryStateAndAuthChain implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryStateAndAuthChain(
 	ctx context.Context,
 	request *api.QueryStateAndAuthChainRequest,
@@ -705,19 +708,17 @@ func (r *Queryer) QueryStateAndAuthChain(
 	return err
 }
 
-// first bool: is rejected, second bool: state missing
+// first bool: is rejected, second bool: state missing.
 func (r *Queryer) loadStateAtEventIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) ([]gomatrixserverlib.PDU, bool, bool, error) {
 	roomState := state.NewStateResolution(r.DB, roomInfo, r)
 	prevStates, err := r.DB.StateAtEventIDs(ctx, eventIDs)
 	if err != nil {
-		switch err.(type) {
-		case types.MissingEventError:
+		var missingEventErr types.MissingEventError
+		var missingStateErr types.MissingStateError
+		if errors.As(err, &missingEventErr) || errors.As(err, &missingStateErr) {
 			return nil, false, true, nil
-		case types.MissingStateError:
-			return nil, false, true, nil
-		default:
-			return nil, false, false, err
 		}
+		return nil, false, false, err
 	}
 	// Currently only used on /state and /state_ids
 	rejected := false
@@ -793,7 +794,7 @@ func GetAuthChain(
 	return authEvents, nil
 }
 
-// QueryRoomVersionForRoom implements api.RoomserverInternalAPI
+// QueryRoomVersionForRoom implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryRoomVersionForRoom(ctx context.Context, roomID string) (gomatrixserverlib.RoomVersion, error) {
 	if roomVersion, ok := r.Cache.GetRoomVersion(roomID); ok {
 		return roomVersion, nil
@@ -876,7 +877,7 @@ func (r *Queryer) QueryRoomsForUser(ctx context.Context, userID spec.UserID, des
 
 func (r *Queryer) QueryKnownUsers(ctx context.Context, req *api.QueryKnownUsersRequest, res *api.QueryKnownUsersResponse) error {
 	users, err := r.DB.GetKnownUsers(ctx, req.UserID, req.SearchString, req.Limit)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	for _, user := range users {
@@ -970,7 +971,8 @@ func (r *Queryer) QueryAuthChain(ctx context.Context, req *api.QueryAuthChainReq
 }
 
 func (r *Queryer) InvitePending(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (bool, error) {
-	pending, _, _, _, err := helpers.IsInvitePending(ctx, r.DB, roomID.String(), senderID)
+	pending, _, inviteRoomID, _, err := helpers.IsInvitePending(ctx, r.DB, roomID.String(), senderID)
+	_ = inviteRoomID
 	return pending, err
 }
 
@@ -1025,12 +1027,12 @@ func (r *Queryer) JoinedUserCount(ctx context.Context, roomID string) (int, erro
 		return 0, nil
 	}
 
-	// TODO: this can be further optimised by just using a SELECT COUNT query
+	// TODO: this can be further optimized by just using a SELECT COUNT query
 	nids, err := r.DB.GetMembershipEventNIDsForRoom(ctx, info.RoomNID, true, false)
 	return len(nids), err
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (r *Queryer) QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (string, error) {
 	// Look up if we know anything about the room. If it doesn't exist
 	// or is a stub entry then we can't do anything.
@@ -1060,12 +1062,12 @@ func (r *Queryer) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, 
 		key, err := r.DB.SelectUserRoomPublicKey(ctx, userID, roomID)
 		if err != nil {
 			return nil, err
-		} else if key == nil {
-			return nil, nil
-		} else {
-			senderID := spec.SenderID(spec.Base64Bytes(key).Encode())
-			return &senderID, nil
 		}
+		if key == nil {
+			return nil, nil
+		}
+		senderID := spec.SenderID(spec.Base64Bytes(key).Encode())
+		return &senderID, nil
 	default:
 		senderID := spec.SenderID(userID.String())
 		return &senderID, nil
@@ -1098,7 +1100,7 @@ func (r *Queryer) QueryUserIDForSender(ctx context.Context, roomID spec.RoomID, 
 	return nil, nil
 }
 
-// RoomsWithACLs returns all room IDs for rooms with ACLs
+// RoomsWithACLs returns all room IDs for rooms with ACLs.
 func (r *Queryer) RoomsWithACLs(ctx context.Context) ([]string, error) {
 	return r.DB.RoomsWithACLs(ctx)
 }

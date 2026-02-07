@@ -11,15 +11,16 @@ import (
 	"crypto/ed25519"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"codefloe.com/pat-s/dendrite/federationapi/queue"
 	"codefloe.com/pat-s/dendrite/federationapi/statistics"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"
 	"codefloe.com/pat-s/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 type testFedClient struct {
@@ -37,8 +38,10 @@ func TestPerformWakeupServers(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
 
 	server := spec.ServerName("wakeup")
-	testDB.AddServerToBlacklist(server)
-	testDB.SetServerAssumedOffline(context.Background(), server)
+	err := testDB.AddServerToBlacklist(server)
+	assert.NoError(t, err)
+	err = testDB.SetServerAssumedOffline(context.Background(), server)
+	assert.NoError(t, err)
 	blacklisted, err := testDB.IsServerBlacklisted(server)
 	assert.NoError(t, err)
 	assert.True(t, blacklisted)
@@ -209,8 +212,8 @@ func TestPerformDirectoryLookupRelaying(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
 
 	server := spec.ServerName("wakeup")
-	testDB.SetServerAssumedOffline(context.Background(), server)
-	testDB.P2PAddRelayServersForServer(context.Background(), server, []spec.ServerName{"relay"})
+	_ = testDB.SetServerAssumedOffline(context.Background(), server)
+	_ = testDB.P2PAddRelayServersForServer(context.Background(), server, []spec.ServerName{"relay"})
 
 	_, key, err := ed25519.GenerateKey(nil)
 	assert.NoError(t, err)

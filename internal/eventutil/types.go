@@ -13,7 +13,7 @@ import (
 )
 
 // AccountData represents account data sent from the client API server to the
-// sync API server
+// sync API server.
 type AccountData struct {
 	RoomID       string              `json:"room_id"`
 	Type         string              `json:"type"`
@@ -43,7 +43,7 @@ type NotificationData struct {
 	UnreadNotificationCount int `json:"unread_notification_count"`
 }
 
-// UserProfile is a struct containing all known user profile data
+// UserProfile is a struct containing all known user profile data.
 type UserProfile struct {
 	AvatarURL   string `json:"avatar_url,omitempty"`
 	DisplayName string `json:"displayname,omitempty"`
@@ -51,11 +51,11 @@ type UserProfile struct {
 
 // WeakBoolean is a type that will Unmarshal to true or false even if the encoded
 // representation is "true"/1 or "false"/0, as well as whatever other forms are
-// recognised by strconv.ParseBool
+// recognized by strconv.ParseBool.
 type WeakBoolean bool
 
 // UnmarshalJSON is overridden here to allow strings vaguely representing a true
-// or false boolean to be set as their closest counterpart
+// or false boolean to be set as their closest counterpart.
 func (b *WeakBoolean) UnmarshalJSON(data []byte) error {
 	result, err := strconv.ParseBool(string(data))
 	if err != nil {

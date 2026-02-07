@@ -8,6 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/internal/fulltext"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
@@ -18,9 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/stretchr/testify/assert"
 )
 
 type FakeSyncRoomserverAPI struct{ rsapi.SyncRoomserverAPI }
@@ -33,9 +34,9 @@ func TestSearch(t *testing.T) {
 	alice := test.NewUser(t)
 	aliceDevice := userapi.Device{UserID: alice.ID}
 	room := test.NewRoom(t, alice)
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "context before"})
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world3!"})
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "context after"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "context before"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world3!"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "context after"})
 
 	roomsFilter := []string{room.ID}
 	roomsFilterUnknown := []string{"!unknown"}

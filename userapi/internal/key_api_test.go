@@ -138,7 +138,7 @@ func Test_QueryDeviceMessages(t *testing.T) {
 				}, // streamID 6
 			},
 		}
-		db, closeDB := mustCreateDatabase(t, dbType)
+		db, closeDB := mustCreateDatabase(t, dbType) //nolint:contextcheck
 		defer closeDB()
 		if err := db.StoreLocalDeviceKeys(ctx, deviceMessages); err != nil {
 			t.Fatalf("failed to store local devicesKeys")

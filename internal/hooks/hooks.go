@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	hookMap = make(map[string][]func(interface{}))
+	hookMap = make(map[string][]func(any))
 	hookMu  = sync.Mutex{}
 	enabled = false
 )
@@ -40,8 +40,8 @@ func Enable() {
 	enabled = true
 }
 
-// Run any hooks
-func Run(kind string, data interface{}) {
+// Run any hooks.
+func Run(kind string, data any) {
 	if !enabled {
 		return
 	}
@@ -51,8 +51,8 @@ func Run(kind string, data interface{}) {
 	}
 }
 
-// Attach a hook
-func Attach(kind string, callback func(interface{})) {
+// Attach a hook.
+func Attach(kind string, callback func(any)) {
 	if !enabled {
 		return
 	}
@@ -61,7 +61,7 @@ func Attach(kind string, callback func(interface{})) {
 	hookMap[kind] = append(hookMap[kind], callback)
 }
 
-func callbacks(kind string) []func(interface{}) {
+func callbacks(kind string) []func(any) {
 	hookMu.Lock()
 	defer hookMu.Unlock()
 	return hookMap[kind]

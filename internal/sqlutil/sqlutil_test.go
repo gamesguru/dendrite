@@ -21,10 +21,10 @@ func TestShouldReturnCorrectAmountOfResulstIfFewerVariablesThanLimit(t *testing.
 		AddRow(3)
 
 	mock.ExpectQuery(`SELECT id WHERE id IN \(\$1, \$2, \$3\)`).WillReturnRows(r)
-	// nolint:goconst
+	//nolint:goconst
 	q := "SELECT id WHERE id IN ($1)"
 	v := []int{1, 2, 3}
-	iKeyIDs := make([]interface{}, len(v))
+	iKeyIDs := make([]any, len(v))
 	for i, d := range v {
 		iKeyIDs[i] = d
 	}
@@ -58,10 +58,10 @@ func TestShouldReturnCorrectAmountOfResulstIfEqualVariablesAsLimit(t *testing.T)
 		AddRow(4)
 
 	mock.ExpectQuery(`SELECT id WHERE id IN \(\$1, \$2, \$3, \$4\)`).WillReturnRows(r)
-	// nolint:goconst
+	//nolint:goconst
 	q := "SELECT id WHERE id IN ($1)"
 	v := []int{1, 2, 3, 4}
-	iKeyIDs := make([]interface{}, len(v))
+	iKeyIDs := make([]any, len(v))
 	for i, d := range v {
 		iKeyIDs[i] = d
 	}
@@ -99,10 +99,10 @@ func TestShouldReturnCorrectAmountOfResultsIfMoreVariablesThanLimit(t *testing.T
 
 	mock.ExpectQuery(`SELECT id WHERE id IN \(\$1, \$2, \$3, \$4\)`).WillReturnRows(r1)
 	mock.ExpectQuery(`SELECT id WHERE id IN \(\$1\)`).WillReturnRows(r2)
-	// nolint:goconst
+	//nolint:goconst
 	q := "SELECT id WHERE id IN ($1)"
 	v := []int{1, 2, 3, 4, 5}
-	iKeyIDs := make([]interface{}, len(v))
+	iKeyIDs := make([]any, len(v))
 	for i, d := range v {
 		iKeyIDs[i] = d
 	}
@@ -139,10 +139,10 @@ func TestShouldReturnErrorIfRowsScanReturnsError(t *testing.T) {
 		AddRow(3)
 
 	mock.ExpectQuery(`SELECT id WHERE id IN \(\$1, \$2, \$3\)`).WillReturnRows(r)
-	// nolint:goconst
+	//nolint:goconst
 	q := "SELECT id WHERE id IN ($1)"
 	v := []int{-1, -2, 3}
-	iKeyIDs := make([]interface{}, len(v))
+	iKeyIDs := make([]any, len(v))
 	for i, d := range v {
 		iKeyIDs[i] = d
 	}
@@ -175,7 +175,7 @@ func TestRunLimitedVariablesExec(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM WHERE id IN \(\$1\, \$2\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	variables := []interface{}{
+	variables := []any{
 		1, 2, 3, 4,
 	}
 

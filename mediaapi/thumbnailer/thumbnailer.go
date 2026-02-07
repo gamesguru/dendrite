@@ -29,10 +29,10 @@ type thumbnailFitness struct {
 	fileSize       types.FileSizeBytes
 }
 
-// thumbnailTemplate is the filename template for thumbnails
+// thumbnailTemplate is the filename template for thumbnails.
 const thumbnailTemplate = "thumbnail-%vx%v-%v"
 
-// GetThumbnailPath returns the path to a thumbnail given the absolute src path and thumbnail size configuration
+// GetThumbnailPath returns the path to a thumbnail given the absolute src path and thumbnail size configuration.
 func GetThumbnailPath(src types.Path, config types.ThumbnailSize) types.Path {
 	srcDir := filepath.Dir(string(src))
 	return types.Path(filepath.Join(
@@ -50,7 +50,7 @@ func GetThumbnailPath(src types.Path, config types.ThumbnailSize) types.Path {
 // * if a cropped image is desired, prefer the same method, if scaled is desired, absolutely require scaled
 // * has a small file size
 // If a pre-generated thumbnail size is the best match, but it has not been generated yet, the caller can use the returned size to generate it.
-// Returns nil if no thumbnail matches the criteria
+// Returns nil if no thumbnail matches the criteria.
 func SelectThumbnail(desired types.ThumbnailSize, thumbnails []*types.ThumbnailMetadata, thumbnailSizes []config.ThumbnailSize) (*types.ThumbnailMetadata, *types.ThumbnailSize) {
 	var chosenThumbnail *types.ThumbnailMetadata
 	var chosenThumbnailSize *types.ThumbnailSize
@@ -81,7 +81,7 @@ func SelectThumbnail(desired types.ThumbnailSize, thumbnails []*types.ThumbnailM
 	return chosenThumbnail, chosenThumbnailSize
 }
 
-// getActiveThumbnailGeneration checks for active thumbnail generation
+// getActiveThumbnailGeneration checks for active thumbnail generation.
 func getActiveThumbnailGeneration(dst types.Path, _ types.ThumbnailSize, activeThumbnailGeneration *types.ActiveThumbnailGeneration, maxThumbnailGenerators int, logger *log.Entry) (isActive bool, busy bool, errorReturn error) {
 	// Check if there is active thumbnail generation.
 	activeThumbnailGeneration.Lock()
@@ -111,13 +111,13 @@ func getActiveThumbnailGeneration(dst types.Path, _ types.ThumbnailSize, activeT
 }
 
 // broadcastGeneration broadcasts that thumbnail generation completed and the error to all waiting goroutines
-// Note: This should only be called by the owner of the activeThumbnailGenerationResult
+// Note: This should only be called by the owner of the activeThumbnailGenerationResult.
 func broadcastGeneration(dst types.Path, activeThumbnailGeneration *types.ActiveThumbnailGeneration, _ types.ThumbnailSize, errorReturn error, logger *log.Entry) {
 	activeThumbnailGeneration.Lock()
 	defer activeThumbnailGeneration.Unlock()
 	if activeThumbnailGenerationResult, ok := activeThumbnailGeneration.PathToResult[string(dst)]; ok {
-		logger.Debugf("Signalling other goroutines waiting for this goroutine to generate the thumbnail %q", dst)
-		// Note: errorReturn is a named return value error that is signalled from here to waiting goroutines
+		logger.Debugf("Signaling other goroutines waiting for this goroutine to generate the thumbnail %q", dst)
+		// Note: errorReturn is a named return value error that is signaled from here to waiting goroutines
 		activeThumbnailGenerationResult.Err = errorReturn
 		activeThumbnailGenerationResult.Cond.Broadcast()
 	}
@@ -152,7 +152,7 @@ func isThumbnailExists(
 	return false, nil
 }
 
-// init with worst values
+// init with worst values.
 func newThumbnailFitness() thumbnailFitness {
 	return thumbnailFitness{
 		isSmaller:      1,

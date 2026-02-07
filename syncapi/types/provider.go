@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type SyncRequest struct {

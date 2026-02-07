@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const inboundPeeksSchema = `
@@ -82,6 +83,7 @@ func (s *inboundPeeksStatements) InsertInboundPeek(
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	stmt := sqlutil.TxStmt(txn, s.insertInboundPeekStmt)
+	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, roomID, serverName, peekID, nowMilli, nowMilli, renewalInterval)
 	return
 }
@@ -90,14 +92,18 @@ func (s *inboundPeeksStatements) RenewInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string, renewalInterval int64,
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
-	_, err = sqlutil.TxStmt(txn, s.renewInboundPeekStmt).ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
+	renewStmt := sqlutil.TxStmt(txn, s.renewInboundPeekStmt)
+	defer renewStmt.Close()
+	_, err = renewStmt.ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
 	return
 }
 
 func (s *inboundPeeksStatements) SelectInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (*types.InboundPeek, error) {
-	row := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt).QueryRowContext(ctx, roomID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
+	defer selectStmt.Close()
+	row := selectStmt.QueryRowContext(ctx, roomID)
 	inboundPeek := types.InboundPeek{}
 	err := row.Scan(
 		&inboundPeek.RoomID,
@@ -119,7 +125,9 @@ func (s *inboundPeeksStatements) SelectInboundPeek(
 func (s *inboundPeeksStatements) SelectInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (inboundPeeks []types.InboundPeek, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt).QueryContext(ctx, roomID)
+	selectAllStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
+	defer selectAllStmt.Close()
+	rows, err := selectAllStmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck
 	if err != nil {
 		return
 	}
@@ -146,13 +154,17 @@ func (s *inboundPeeksStatements) SelectInboundPeeks(
 func (s *inboundPeeksStatements) DeleteInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteInboundPeekStmt).ExecContext(ctx, roomID, serverName, peekID)
+	delStmt := sqlutil.TxStmt(txn, s.deleteInboundPeekStmt)
+	defer delStmt.Close()
+	_, err = delStmt.ExecContext(ctx, roomID, serverName, peekID)
 	return
 }
 
 func (s *inboundPeeksStatements) DeleteInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteInboundPeeksStmt).ExecContext(ctx, roomID)
+	delAllStmt := sqlutil.TxStmt(txn, s.deleteInboundPeeksStmt)
+	defer delAllStmt.Close()
+	_, err = delAllStmt.ExecContext(ctx, roomID)
 	return
 }

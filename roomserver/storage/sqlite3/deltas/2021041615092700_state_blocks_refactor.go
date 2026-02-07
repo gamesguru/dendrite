@@ -10,15 +10,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/util"
-	"github.com/sirupsen/logrus"
 )
 
-// nolint:gocyclo
+//nolint:gocyclo
 func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	logrus.Warn("Performing state storage upgrade. Please wait, this may take some time!")
 	defer logrus.Warn("State storage upgrade complete")
@@ -66,7 +68,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("tx.QueryContext: %w", err)
 	}
-	defer internal.CloseAndLogIfError(context.TODO(), snapshotrows, "rows.close() failed")
+	defer snapshotrows.Close()
 	for snapshotrows.Next() {
 		var snapshot types.StateSnapshotNID
 		var room types.RoomNID
@@ -91,16 +93,16 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 				types.MRoomCreateNID, types.EmptyStateKeyNID, snapshot,
 			)
 			if err != nil {
-				return fmt.Errorf("resetting create events snapshots to 0 errored: %s", err)
+				return fmt.Errorf("resetting create events snapshots to 0 errored: %w", err)
 			}
 		}
 		for _, block := range blocks {
 			if err = func() error {
-				blockrows, berr := tx.QueryContext(ctx, `SELECT event_nid FROM _roomserver_state_block WHERE state_block_nid = $1`, block)
+				blockrows, berr := tx.QueryContext(ctx, `SELECT event_nid FROM _roomserver_state_block WHERE state_block_nid = $1`, block) //nolint:sqlclosecheck // rows closed by defer below
 				if berr != nil {
 					return fmt.Errorf("tx.QueryContext (event nids from old block): %w", berr)
 				}
-				defer internal.CloseAndLogIfError(context.TODO(), blockrows, "rows.close() failed")
+				defer internal.CloseAndLogIfError(context.TODO(), blockrows, "rows.close() failed") //nolint:contextcheck
 				events := types.EventNIDs{}
 				for blockrows.Next() {
 					var event types.EventNID
@@ -108,6 +110,9 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 						return fmt.Errorf("rows.Scan: %w", err)
 					}
 					events = append(events, event)
+				}
+				if err = blockrows.Err(); err != nil {
+					return fmt.Errorf("blockrows.Err: %w", err)
 				}
 				events = events[:util.SortAndUnique(events)]
 				eventjson, eerr := json.Marshal(events)
@@ -157,19 +162,22 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 			}
 		}
 	}
+	if err = snapshotrows.Err(); err != nil {
+		return fmt.Errorf("snapshotrows.Err: %w", err)
+	}
 
 	// By this point we should have no more state_snapshot_nids below oldMaxSnapshotID in either roomserver_rooms or roomserver_events
 	// If we do, this is a problem if Dendrite tries to load the snapshot as it will not exist
 	// in roomserver_state_snapshots
 	var count int64
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM roomserver_events WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, oldMaxSnapshotID).Scan(&count); err != nil {
-		return fmt.Errorf("assertion query failed: %s", err)
+		return fmt.Errorf("assertion query failed: %w", err)
 	}
 	if count > 0 {
 		var res sql.Result
 		var c int64
 		res, err = tx.ExecContext(ctx, `UPDATE roomserver_events SET state_snapshot_nid = 0 WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, oldMaxSnapshotID)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("failed to reset invalid state snapshots: %w", err)
 		}
 		if c, err = res.RowsAffected(); err != nil {
@@ -179,7 +187,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM roomserver_rooms WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, oldMaxSnapshotID).Scan(&count); err != nil {
-		return fmt.Errorf("assertion query failed: %s", err)
+		return fmt.Errorf("assertion query failed: %w", err)
 	}
 	if count > 0 {
 		return fmt.Errorf("%d rooms exist in roomserver_rooms which have not been converted to a new state_snapshot_nid; this is a bug, please report", count)

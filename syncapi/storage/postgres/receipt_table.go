@@ -11,12 +11,13 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const receiptsSchema = `
@@ -58,7 +59,7 @@ const selectMaxReceiptIDSQL = "" +
 const purgeReceiptsSQL = "" +
 	"DELETE FROM syncapi_receipts WHERE room_id = $1"
 
-// New queries for per-connection receipt tracking (MSC4186 sliding sync)
+// New queries for per-connection receipt tracking (MSC4186 sliding sync).
 const selectLatestUserReceiptsSQL = "" +
 	"SELECT DISTINCT ON (room_id, receipt_type, user_id) " +
 	"id, room_id, receipt_type, user_id, event_id, receipt_ts " +
@@ -140,13 +141,16 @@ func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 
 func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomId, receiptType, userId, eventId, timestamp).Scan(&pos)
 	return
 }
 
 func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error) {
 	var lastPos types.StreamPosition
-	rows, err := sqlutil.TxStmt(txn, r.selectRoomReceipts).QueryContext(ctx, roomIDs, streamPos)
+	selectStmt := sqlutil.TxStmt(txn, r.selectRoomReceipts)
+	defer selectStmt.Close()
+	rows, err := selectStmt.QueryContext(ctx, roomIDs, streamPos) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return 0, nil, fmt.Errorf("unable to query room receipts: %w", err)
 	}
@@ -172,6 +176,7 @@ func (s *receiptStatements) SelectMaxReceiptID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxReceiptID)
+	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -182,7 +187,9 @@ func (s *receiptStatements) SelectMaxReceiptID(
 func (s *receiptStatements) PurgeReceipts(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeReceiptsStmt).ExecContext(ctx, roomID)
+	purgeReceiptsStmt := sqlutil.TxStmt(txn, s.purgeReceiptsStmt)
+	defer purgeReceiptsStmt.Close()
+	_, err := purgeReceiptsStmt.ExecContext(ctx, roomID)
 	return err
 }
 
@@ -202,7 +209,7 @@ func (s *receiptStatements) PurgeReceipts(
 // 1. Get latest receipt for ALL users in each room (from syncapi_receipts)
 // 2. Get last delivered receipts for this connection (from syncapi_sliding_sync_connection_receipts)
 // 3. Compare event_ids - only return receipts where event_id has changed
-// 4. Update connection state after delivery (caller's responsibility)
+// 4. Update connection state after delivery (caller's responsibility).
 func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 	ctx context.Context,
 	txn *sql.Tx,
@@ -216,7 +223,9 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 
 	// Step 1: Get latest receipts for ALL users in these rooms
 	// Note: Private receipt filtering happens in v4_extensions.go, not here
-	latestRows, err := sqlutil.TxStmt(txn, s.selectLatestUserReceipts).QueryContext(ctx, roomIDs)
+	selectLatestUserReceipts := sqlutil.TxStmt(txn, s.selectLatestUserReceipts)
+	defer selectLatestUserReceipts.Close()
+	latestRows, err := selectLatestUserReceipts.QueryContext(ctx, roomIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, fmt.Errorf("failed to query latest receipts: %w", err)
 	}
@@ -233,9 +242,14 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 		key := fmt.Sprintf("%s|%s|%s", r.RoomID, r.Type, r.UserID)
 		latestReceipts[key] = r
 	}
+	if err = latestRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate latest receipts: %w", err)
+	}
 
 	// Step 2: Get what we last delivered to this connection
-	deliveredRows, err := sqlutil.TxStmt(txn, s.selectConnectionReceipts).QueryContext(ctx, connectionKey)
+	selectConnectionReceipts := sqlutil.TxStmt(txn, s.selectConnectionReceipts)
+	defer selectConnectionReceipts.Close()
+	deliveredRows, err := selectConnectionReceipts.QueryContext(ctx, connectionKey) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, fmt.Errorf("failed to query connection receipts: %w", err)
 	}
@@ -252,6 +266,9 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 		key := fmt.Sprintf("%s|%s|%s", roomID, receiptType, userID)
 		lastDelivered[key] = eventID
 	}
+	if err = deliveredRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate connection receipts: %w", err)
+	}
 
 	// Step 3: Compare and return only changed receipts
 	var result []types.OutputReceiptEvent
@@ -266,7 +283,7 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 	return result, nil
 }
 
-// UpsertConnectionReceipt updates the last delivered receipt for a connection
+// UpsertConnectionReceipt updates the last delivered receipt for a connection.
 func (s *receiptStatements) UpsertConnectionReceipt(
 	ctx context.Context,
 	txn *sql.Tx,
@@ -274,7 +291,9 @@ func (s *receiptStatements) UpsertConnectionReceipt(
 	roomID, receiptType, userID, eventID string,
 	timestamp spec.Timestamp,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.upsertConnectionReceipt).ExecContext(
+	upsertConnectionReceipt := sqlutil.TxStmt(txn, s.upsertConnectionReceipt)
+	defer upsertConnectionReceipt.Close()
+	_, err := upsertConnectionReceipt.ExecContext(
 		ctx, connectionKey, roomID, receiptType, userID, eventID, timestamp,
 	)
 	return err
@@ -287,7 +306,9 @@ func (s *receiptStatements) DeleteConnectionReceipts(
 	txn *sql.Tx,
 	connectionKey int64,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteConnectionReceipts).ExecContext(ctx, connectionKey)
+	deleteConnectionReceipts := sqlutil.TxStmt(txn, s.deleteConnectionReceipts)
+	defer deleteConnectionReceipts.Close()
+	_, err := deleteConnectionReceipts.ExecContext(ctx, connectionKey)
 	return err
 }
 
@@ -300,6 +321,8 @@ func (s *receiptStatements) DeleteConnectionReceiptsForRoom(
 	connectionKey int64,
 	roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteConnectionReceiptsForRoom).ExecContext(ctx, connectionKey, roomID)
+	deleteConnectionReceiptsForRoom := sqlutil.TxStmt(txn, s.deleteConnectionReceiptsForRoom)
+	defer deleteConnectionReceiptsForRoom.Close()
+	_, err := deleteConnectionReceiptsForRoom.ExecContext(ctx, connectionKey, roomID)
 	return err
 }

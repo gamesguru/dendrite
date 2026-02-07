@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 type yggroundtripper struct {
@@ -24,9 +25,9 @@ func (n *Node) CreateClient() *fclient.Client {
 			inner: &http.Transport{
 				MaxIdleConns:          -1,
 				MaxIdleConnsPerHost:   -1,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 10 * time.Second,
-				IdleConnTimeout:       30 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second, //nolint:mnd
+				ResponseHeaderTimeout: 10 * time.Second, //nolint:mnd
+				IdleConnTimeout:       30 * time.Second, //nolint:mnd
 				DialContext:           n.DialerContext,
 			},
 		},
@@ -45,9 +46,9 @@ func (n *Node) CreateFederationClient(
 			inner: &http.Transport{
 				MaxIdleConns:          -1,
 				MaxIdleConnsPerHost:   -1,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 10 * time.Second,
-				IdleConnTimeout:       30 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second, //nolint:mnd
+				ResponseHeaderTimeout: 10 * time.Second, //nolint:mnd
+				IdleConnTimeout:       30 * time.Second, //nolint:mnd
 				DialContext:           n.DialerContext,
 			},
 		},

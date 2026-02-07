@@ -9,12 +9,13 @@ package sync
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/stretchr/testify/assert"
 )
 
-// TestMatchesPattern tests the event type pattern matching logic
+// TestMatchesPattern tests the event type pattern matching logic.
 func TestMatchesPattern(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -90,7 +91,7 @@ func TestMatchesPattern(t *testing.T) {
 }
 
 // TestMatchesStateKeyPattern tests the state key pattern matching logic
-// Includes $ME, $LAZY, and wildcard patterns
+// Includes $ME, $LAZY, and wildcard patterns.
 func TestMatchesStateKeyPattern(t *testing.T) {
 	t.Parallel()
 	userID := "@alice:example.com"
@@ -248,7 +249,7 @@ func TestMatchesStateKeyPattern(t *testing.T) {
 	}
 }
 
-// TestExtractLazySenders tests extraction of sender IDs from timeline events
+// TestExtractLazySenders tests extraction of sender IDs from timeline events.
 func TestExtractLazySenders(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -392,7 +393,7 @@ func TestExtractLazySenders(t *testing.T) {
 	}
 }
 
-// TestBumpEventTypes tests that the BumpEventTypes map is correct
+// TestBumpEventTypes tests that the BumpEventTypes map is correct.
 func TestBumpEventTypes(t *testing.T) {
 	t.Parallel()
 	// Verify expected bump event types are included

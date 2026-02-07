@@ -11,14 +11,15 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/roomserver/api"
 )
 
-// GetEvent returns the requested event
+// GetEvent returns the requested event.
 func GetEvent(
 	ctx context.Context,
 	request *fclient.FederationRequest,

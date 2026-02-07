@@ -9,6 +9,7 @@ package routing
 import (
 	"net/http"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -18,7 +19,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // GetEvent implements
@@ -48,7 +48,7 @@ func GetEvent(
 			JSON: spec.InternalServerError{},
 		}
 	}
-	defer db.Rollback() // nolint: errcheck
+	defer db.Rollback() //nolint:errcheck
 
 	roomID, err := spec.NewRoomID(rawRoomID)
 	if err != nil {

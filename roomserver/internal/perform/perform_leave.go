@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -21,6 +20,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
@@ -38,7 +38,7 @@ type Leaver struct {
 	Inputer *input.Inputer
 }
 
-// WriteOutputEvents implements OutputRoomEventWriter
+// WriteOutputEvents implements OutputRoomEventWriter.
 func (r *Leaver) PerformLeave(
 	ctx context.Context,
 	req *rsAPI.PerformLeaveRequest,
@@ -53,7 +53,7 @@ func (r *Leaver) PerformLeave(
 	})
 	logger.Info("User requested to leave room")
 	if strings.HasPrefix(req.RoomID, "!") {
-		output, err := r.performLeaveRoomByID(context.Background(), req, res)
+		output, err := r.performLeaveRoomByID(context.Background(), req, res) //nolint:contextcheck
 		if err != nil {
 			logger.WithError(err).Error("Failed to leave room")
 		} else {
@@ -64,11 +64,11 @@ func (r *Leaver) PerformLeave(
 	return nil, spec.InvalidParam(fmt.Sprintf("room ID %q is invalid", req.RoomID))
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (r *Leaver) performLeaveRoomByID(
 	ctx context.Context,
 	req *rsAPI.PerformLeaveRequest,
-	res *rsAPI.PerformLeaveResponse, // nolint:unparam
+	res *rsAPI.PerformLeaveResponse,
 ) ([]rsAPI.OutputEvent, error) {
 	roomID, err := spec.NewRoomID(req.RoomID)
 	if err != nil {
@@ -167,7 +167,7 @@ func (r *Leaver) performLeaveRoomByID(
 		RoomID:   req.RoomID,
 		Redacts:  "",
 	}
-	if err = proto.SetContent(map[string]interface{}{"membership": "leave"}); err != nil {
+	if err = proto.SetContent(map[string]any{"membership": "leave"}); err != nil {
 		return nil, fmt.Errorf("eb.SetContent: %w", err)
 	}
 	if err = proto.SetUnsigned(struct{}{}); err != nil {
@@ -223,7 +223,7 @@ func (r *Leaver) performLeaveRoomByID(
 func (r *Leaver) performFederatedRejectInvite(
 	ctx context.Context,
 	req *rsAPI.PerformLeaveRequest,
-	res *rsAPI.PerformLeaveResponse, // nolint:unparam
+	res *rsAPI.PerformLeaveResponse, //nolint:unparam
 	inviteDomain spec.ServerName, eventID string,
 	leaver spec.SenderID,
 ) ([]rsAPI.OutputEvent, error) {

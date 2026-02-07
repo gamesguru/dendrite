@@ -12,10 +12,11 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 const joinedHostsSchema = `
@@ -99,6 +100,7 @@ func (s *joinedHostsStatements) InsertJoinedHosts(
 	serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertJoinedHostsStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID, eventID, serverName)
 	return err
 }
@@ -106,8 +108,9 @@ func (s *joinedHostsStatements) InsertJoinedHosts(
 func (s *joinedHostsStatements) DeleteJoinedHosts(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) error {
+	stmt := sqlutil.TxStmt(txn, s.deleteJoinedHostsStmt)
+	defer stmt.Close()
 	for _, eventID := range eventIDs {
-		stmt := sqlutil.TxStmt(txn, s.deleteJoinedHostsStmt)
 		if _, err := stmt.ExecContext(ctx, eventID); err != nil {
 			return err
 		}
@@ -119,6 +122,7 @@ func (s *joinedHostsStatements) DeleteJoinedHostsForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJoinedHostsForRoomStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -127,6 +131,7 @@ func (s *joinedHostsStatements) SelectJoinedHostsWithTx(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) ([]types.JoinedHost, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedHostsStmt)
+	defer stmt.Close()
 	return joinedHostsFromStmt(ctx, stmt, roomID)
 }
 
@@ -139,7 +144,7 @@ func (s *joinedHostsStatements) SelectJoinedHosts(
 func (s *joinedHostsStatements) SelectAllJoinedHosts(
 	ctx context.Context,
 ) ([]spec.ServerName, error) {
-	rows, err := s.selectAllJoinedHostsStmt.QueryContext(ctx)
+	rows, err := s.selectAllJoinedHostsStmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,7 @@ func (s *joinedHostsStatements) SelectAllJoinedHosts(
 func (s *joinedHostsStatements) SelectJoinedHostsForRooms(
 	ctx context.Context, roomIDs []string, excludingBlacklisted bool,
 ) ([]spec.ServerName, error) {
-	iRoomIDs := make([]interface{}, len(roomIDs))
+	iRoomIDs := make([]any, len(roomIDs))
 	for i := range roomIDs {
 		iRoomIDs[i] = roomIDs[i]
 	}
@@ -169,7 +174,7 @@ func (s *joinedHostsStatements) SelectJoinedHostsForRooms(
 		query = selectJoinedHostsForRoomsExcludingBlacklistedSQL
 	}
 	sql := strings.Replace(query, "($1)", sqlutil.QueryVariadic(len(iRoomIDs)), 1)
-	rows, err := s.db.QueryContext(ctx, sql, iRoomIDs...)
+	rows, err := s.db.QueryContext(ctx, sql, iRoomIDs...) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +195,7 @@ func (s *joinedHostsStatements) SelectJoinedHostsForRooms(
 func joinedHostsFromStmt(
 	ctx context.Context, stmt *sql.Stmt, roomID string,
 ) ([]types.JoinedHost, error) {
-	rows, err := stmt.QueryContext(ctx, roomID)
+	rows, err := stmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}

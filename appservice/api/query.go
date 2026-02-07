@@ -18,7 +18,7 @@ import (
 )
 
 // AppServiceInternalAPI is used to query user and room alias data from application
-// services
+// services.
 type AppServiceInternalAPI interface {
 	// Check whether a room alias exists within any application service namespaces
 	RoomAliasExists(
@@ -39,27 +39,27 @@ type AppServiceInternalAPI interface {
 }
 
 // RoomAliasExistsRequest is a request to an application service
-// about whether a room alias exists
+// about whether a room alias exists.
 type RoomAliasExistsRequest struct {
 	// Alias we want to lookup
 	Alias string `json:"alias"`
 }
 
 // RoomAliasExistsResponse is a response from an application service
-// about whether a room alias exists
+// about whether a room alias exists.
 type RoomAliasExistsResponse struct {
 	AliasExists bool `json:"exists"`
 }
 
 // UserIDExistsRequest is a request to an application service about whether a
-// user ID exists
+// user ID exists.
 type UserIDExistsRequest struct {
 	// UserID we want to lookup
 	UserID string `json:"user_id"`
 }
 
 // UserIDExistsRequestAccessToken is a request to an application service
-// about whether a user ID exists. Includes an access token
+// about whether a user ID exists. Includes an access token.
 type UserIDExistsRequestAccessToken struct {
 	// UserID we want to lookup
 	UserID      string `json:"user_id"`
@@ -67,7 +67,7 @@ type UserIDExistsRequestAccessToken struct {
 }
 
 // UserIDExistsResponse is a response from an application service about
-// whether a user ID exists
+// whether a user ID exists.
 type UserIDExistsResponse struct {
 	UserIDExists bool `json:"exists"`
 }

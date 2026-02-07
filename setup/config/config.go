@@ -16,15 +16,15 @@ import (
 	"regexp"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+	jaegerconfig "github.com/uber/jaeger-client-go/config"
+	jaegermetrics "github.com/uber/jaeger-lib/metrics"
 	"golang.org/x/crypto/ed25519"
 	"gopkg.in/yaml.v3"
 
-	jaegerconfig "github.com/uber/jaeger-client-go/config"
-	jaegermetrics "github.com/uber/jaeger-lib/metrics"
+	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 )
 
 // keyIDRegexp defines allowable characters in Key IDs.
@@ -35,7 +35,7 @@ var keyIDRegexp = regexp.MustCompile("^ed25519:[a-zA-Z0-9_]+$")
 const Version = 2
 
 // Dendrite contains all the config used by a dendrite process.
-// Relative paths are resolved relative to the current working directory
+// Relative paths are resolved relative to the current working directory.
 type Dendrite struct {
 	// The version of the configuration file.
 	// If the version in a file doesn't match the current dendrite config
@@ -84,7 +84,7 @@ type Derived struct {
 
 		// Params that need to be returned to the client during
 		// registration in order to complete registration stages.
-		Params map[string]interface{} `json:"params"`
+		Params map[string]any `json:"params"`
 	}
 
 	// Application services parsed from their config files
@@ -123,10 +123,10 @@ func (d DataSource) IsPostgres() bool {
 // A Topic in kafka.
 type Topic string
 
-// FileSizeBytes is a file size in bytes
+// FileSizeBytes is a file size in bytes.
 type FileSizeBytes int64
 
-// ThumbnailSize contains a single thumbnail size configuration
+// ThumbnailSize contains a single thumbnail size configuration.
 type ThumbnailSize struct {
 	// Maximum width of the thumbnail image
 	Width int `yaml:"width"`
@@ -149,7 +149,7 @@ type LogrusHook struct {
 	Level string `yaml:"level"`
 
 	// The parameters for this hook.
-	Params map[string]interface{} `yaml:"params"`
+	Params map[string]any `yaml:"params"`
 }
 
 // ConfigErrors stores problems encountered when parsing a config file.
@@ -232,7 +232,11 @@ func loadConfig(
 
 			key.KeyID = keyID
 			key.PrivateKey = privateKey
-			key.PublicKey = spec.Base64Bytes(privateKey.Public().(ed25519.PublicKey))
+			pubKey, ok := privateKey.Public().(ed25519.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf("failed to convert public key to ed25519.PublicKey")
+			}
+			key.PublicKey = spec.Base64Bytes(pubKey)
 
 		case key.KeyID == "":
 			return nil, fmt.Errorf("'key_id' must be specified if 'public_key' is specified")
@@ -273,7 +277,7 @@ func LoadMatrixKey(privateKeyPath string, readFile func(string) ([]byte, error))
 func (config *Dendrite) Derive() error {
 	// Determine registrations flows based off config values
 
-	config.Derived.Registration.Params = make(map[string]interface{})
+	config.Derived.Registration.Params = make(map[string]any)
 
 	// TODO: Add email auth type
 	// TODO: Add MSISDN auth type
@@ -391,8 +395,8 @@ func checkPositive(configErrs *ConfigErrors, key string, value int64) {
 // checkLogging verifies the parameters logging.* are valid.
 func (config *Dendrite) checkLogging(configErrs *ConfigErrors) {
 	for _, logrusHook := range config.Logging {
-		checkNotEmpty(configErrs, "logging.type", string(logrusHook.Type))
-		checkNotEmpty(configErrs, "logging.level", string(logrusHook.Level))
+		checkNotEmpty(configErrs, "logging.type", logrusHook.Type)
+		checkNotEmpty(configErrs, "logging.level", logrusHook.Level)
 	}
 }
 
@@ -415,7 +419,7 @@ func (config *Dendrite) check() error { // monolithic
 	config.checkLogging(&configErrs)
 
 	// Due to how Golang manages its interface types, this condition is not redundant.
-	// In order to get the proper behaviour, it is necessary to return an explicit nil
+	// In order to get the proper behavior, it is necessary to return an explicit nil
 	// and not a nil configErrors.
 	// This is because the following equalities hold:
 	// error(nil) == nil
@@ -486,6 +490,6 @@ func (l logrusLogger) Error(msg string) {
 	l.l.Error(msg)
 }
 
-func (l logrusLogger) Infof(msg string, args ...interface{}) {
+func (l logrusLogger) Infof(msg string, args ...any) {
 	l.l.Infof(msg, args...)
 }

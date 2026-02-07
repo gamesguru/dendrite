@@ -10,13 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
 	"codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type mockKeyAPI struct {
@@ -43,7 +44,7 @@ func getAccountByPassword(ctx context.Context, req *api.QueryAccountByPasswordRe
 	return nil
 }
 
-// Tests that if there is no existing master key for the user, the request is allowed
+// Tests that if there is no existing master key for the user, the request is allowed.
 func Test_UploadCrossSigningDeviceKeys_ValidRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{
 		"master_key": {"user_id": "@user:example.com", "usage": ["master"], "keys": {"ed25519:1": "key1"}},
@@ -67,7 +68,7 @@ func Test_UploadCrossSigningDeviceKeys_ValidRequest(t *testing.T) {
 }
 
 // Require UIA if there is an existing master key and there is no auth provided.
-func Test_UploadCrossSigningDeviceKeys_Unauthorised(t *testing.T) {
+func Test_UploadCrossSigningDeviceKeys_Unauthorized(t *testing.T) {
 	userID := "@user:example.com"
 
 	// Note that there is no auth field.
@@ -120,7 +121,7 @@ func Test_UploadCrossSigningDeviceKeys_Unauthorised(t *testing.T) {
 	}
 }
 
-// Invalid JSON is rejected
+// Invalid JSON is rejected.
 func Test_UploadCrossSigningDeviceKeys_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{
 		"auth": {"type": "m.login.password", "session": "session", "user": "user", "password": "password"},

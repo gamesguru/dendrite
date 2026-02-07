@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type TypingStreamProvider struct {
@@ -54,7 +55,7 @@ func (p *TypingStreamProvider) IncrementalSync(
 			ev := synctypes.ClientEvent{
 				Type: spec.MTyping,
 			}
-			ev.Content, err = json.Marshal(map[string]interface{}{
+			ev.Content, err = json.Marshal(map[string]any{
 				"user_ids": typingUsers,
 			})
 			if err != nil {

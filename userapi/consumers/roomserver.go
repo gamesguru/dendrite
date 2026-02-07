@@ -11,12 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tidwall/gjson"
-
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/internal/pushgateway"
@@ -282,10 +281,10 @@ func (s *OutputRoomEventConsumer) copyPushrules(ctx context.Context, oldRoomID, 
 	return hasChanges, err
 }
 
-// updateMDirect copies the "is_direct" flag from oldRoomID to newROomID
+// updateMDirect copies the "is_direct" flag from oldRoomID to newROomID.
 func (s *OutputRoomEventConsumer) updateMDirect(ctx context.Context, oldRoomID, newRoomID, localpart string, serverName spec.ServerName, roomSize int) (hasChanges bool, err error) {
 	// this is most likely not a DM, so skip updating m.direct state
-	if roomSize > 2 {
+	if roomSize > 2 { //nolint:mnd
 		return false, nil
 	}
 	// Get direct message state
@@ -371,7 +370,6 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			// while inconvenient, this shouldn't stop us from sending push notifications
 			log.WithError(err).Errorf("UserAPI: failed to handle room upgrade for users")
 		}
-
 	}
 
 	// TODO: run in parallel with localRoomMembers.
@@ -597,7 +595,7 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		Actions: actions,
 		// UNSPEC: the spec doesn't say this is a ClientEvent, but the
 		// fields seem to match. room_id should be missing, which
-		// matches the behaviour of FormatSync.
+		// matches the behavior of FormatSync.
 		Event: *clientEvent,
 		// TODO: this is per-device, but it's not part of the primary
 		// key. So inserting one notification per profile tag doesn't
@@ -636,11 +634,11 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 	//
 	// TODO: think about bounding this to one per user, and what
 	// ordering guarantees we must provide.
-	go func() {
+	go func() { //nolint:contextcheck
 		// This background processing cannot be tied to a request.
 		// We're generous with the "global" timeout, each HTTP request gets its own context with
 		// at most 30 seconds below.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) //nolint:mnd
 		defer cancel()
 
 		var rejected []*pushgateway.Device
@@ -658,7 +656,7 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 				// notify each one separately.
 				for _, dev := range devices {
 					// Give each HTTP request its own context.
-					httpCtx, httpCancel := context.WithTimeout(ctx, 30*time.Second)
+					httpCtx, httpCancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd
 					rej, err := s.notifyHTTP(httpCtx, event, url, format, []*pushgateway.Device{dev}, mem.Localpart, roomName, int(userNumUnreadNotifs))
 					httpCancel()
 					if err != nil {
@@ -793,7 +791,7 @@ func (rse *ruleSetEvalContext) HasPowerLevel(senderID spec.SenderID, levelKey st
 
 // localPushDevices pushes to the configured devices of a local
 // user. The map keys are [url][format].
-func (s *OutputRoomEventConsumer) localPushDevices(ctx context.Context, localpart string, serverName spec.ServerName, tweaks map[string]interface{}) (map[string]map[string][]*pushgateway.Device, string, error) {
+func (s *OutputRoomEventConsumer) localPushDevices(ctx context.Context, localpart string, serverName spec.ServerName, tweaks map[string]any) (map[string]map[string][]*pushgateway.Device, string, error) {
 	pusherDevices, err := util.GetPushDevices(ctx, localpart, serverName, tweaks, s.db)
 	if err != nil {
 		return nil, "", fmt.Errorf("util.GetPushDevices: %w", err)

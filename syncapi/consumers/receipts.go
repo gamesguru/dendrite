@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -21,7 +22,6 @@ import (
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/streams"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // OutputReceiptEventConsumer consumes events that originated in the EDU server.
@@ -90,7 +90,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 
 	output.Timestamp = spec.Timestamp(timestamp)
 
-	streamPos, err := s.db.StoreReceipt(
+	streamPos, err := s.db.StoreReceipt( //nolint:contextcheck
 		s.ctx,
 		output.RoomID,
 		output.Type,
@@ -125,7 +125,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 			"room_id": output.RoomID,
 		}).Debug("SyncAPI receipt consumer: clearing notification count for m.read receipt")
 
-		notifStreamPos, err = s.db.UpsertRoomUnreadNotificationCounts(
+		notifStreamPos, err = s.db.UpsertRoomUnreadNotificationCounts( //nolint:contextcheck
 			s.ctx,
 			output.UserID,
 			output.RoomID,

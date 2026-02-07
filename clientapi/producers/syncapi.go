@@ -23,7 +23,7 @@ import (
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// SyncAPIProducer produces events for the sync API server to consume
+// SyncAPIProducer produces events for the sync API server to consume.
 type SyncAPIProducer struct {
 	TopicReceiptEvent      string
 	TopicSendToDeviceEvent string
@@ -70,7 +70,7 @@ func (p *SyncAPIProducer) SendToDevice(
 	// as-is, so that the federation sender can send it on with the wildcard intact.
 	if domain == p.ServerName && deviceID == "*" {
 		var res userapi.QueryDevicesResponse
-		err = p.UserAPI.QueryDevices(context.TODO(), &userapi.QueryDevicesRequest{
+		err = p.UserAPI.QueryDevices(context.TODO(), &userapi.QueryDevicesRequest{ //nolint:contextcheck
 			UserID: userID,
 		}, &res)
 		if err != nil {

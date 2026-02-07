@@ -7,7 +7,13 @@
 package routing
 
 import (
+	"errors"
 	"net/http"
+
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
@@ -15,11 +21,6 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/api"
 	userdb "codefloe.com/pat-s/dendrite/userapi/storage"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/util"
 )
 
 type reqTokenResponse struct {
@@ -68,19 +69,16 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	}
 
 	resp.SID, err = threepid.CreateSession(req.Context(), body, cfg, client)
-	switch err.(type) {
-	case nil:
-	case threepid.ErrNotTrusted:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.NotTrusted(body.IDServer),
-		}
-	default:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+	{
+		var errCase0 threepid.ErrNotTrusted
+		switch {
+		case err == nil:
+		case errors.As(err, &errCase0):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.IDServer)}
+		default:
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 
@@ -90,7 +88,7 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	}
 }
 
-// CheckAndSave3PIDAssociation implements POST /account/3pid
+// CheckAndSave3PIDAssociation implements POST /account/3pid.
 func CheckAndSave3PIDAssociation(
 	req *http.Request, threePIDAPI api.ClientUserAPI, device *api.Device,
 	cfg *config.ClientAPI, client *fclient.Client,
@@ -102,19 +100,16 @@ func CheckAndSave3PIDAssociation(
 
 	// Check if the association has been validated
 	verified, address, medium, err := threepid.CheckAssociation(req.Context(), body.Creds, cfg, client)
-	switch err.(type) {
-	case nil:
-	case threepid.ErrNotTrusted:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAssociation failed")
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.NotTrusted(body.Creds.IDServer),
-		}
-	default:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAssociation failed")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+	{
+		var errCase0 threepid.ErrNotTrusted
+		switch {
+		case err == nil:
+		case errors.As(err, &errCase0):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAssociation failed")
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.Creds.IDServer)}
+		default:
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAssociation failed")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 
@@ -169,7 +164,7 @@ func CheckAndSave3PIDAssociation(
 	}
 }
 
-// GetAssociated3PIDs implements GET /account/3pid
+// GetAssociated3PIDs implements GET /account/3pid.
 func GetAssociated3PIDs(
 	req *http.Request, threepidAPI api.ClientUserAPI, device *api.Device,
 ) util.JSONResponse {
@@ -201,7 +196,7 @@ func GetAssociated3PIDs(
 	}
 }
 
-// Forget3PID implements POST /account/3pid/delete
+// Forget3PID implements POST /account/3pid/delete.
 func Forget3PID(req *http.Request, threepidAPI api.ClientUserAPI) util.JSONResponse {
 	var body authtypes.ThreePID
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {

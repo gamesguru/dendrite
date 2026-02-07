@@ -8,13 +8,13 @@ package routing
 import (
 	"net/http"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/clientapi/httputil"
 	"codefloe.com/pat-s/dendrite/clientapi/producers"
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 type typingContentJSON struct {
@@ -23,7 +23,7 @@ type typingContentJSON struct {
 }
 
 // SendTyping handles PUT /rooms/{roomID}/typing/{userID}
-// sends the typing events to client API typingProducer
+// sends the typing events to client API typingProducer.
 func SendTyping(
 	req *http.Request, device *userapi.Device, roomID string,
 	userID string, rsAPI roomserverAPI.ClientRoomserverAPI,

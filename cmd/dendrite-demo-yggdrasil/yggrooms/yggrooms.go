@@ -11,11 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/yggconn"
-	"codefloe.com/pat-s/dendrite/federationapi/api"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/yggconn"
+	"codefloe.com/pat-s/dendrite/federationapi/api"
 )
 
 type YggdrasilRoomProvider struct {
@@ -53,10 +54,10 @@ func bulkFetchPublicRoomsFromServers(
 	limit := 200
 	// follow pipeline semantics, see https://blog.golang.org/pipelines for more info.
 	// goroutines send rooms to this channel
-	roomCh := make(chan fclient.PublicRoom, int(limit))
-	// signalling channel to tell goroutines to stop sending rooms and quit
+	roomCh := make(chan fclient.PublicRoom, limit)
+	// signaling channel to tell goroutines to stop sending rooms and quit
 	done := make(chan bool)
-	// signalling to say when we can close the room channel
+	// signaling to say when we can close the room channel
 	var wg sync.WaitGroup
 	wg.Add(len(homeservers))
 	// concurrently query for public rooms
@@ -64,7 +65,7 @@ func bulkFetchPublicRoomsFromServers(
 		go func(homeserverDomain spec.ServerName) {
 			defer wg.Done()
 			util.GetLogger(ctx).WithField("hs", homeserverDomain).Info("Querying HS for public rooms")
-			fres, err := fedClient.GetPublicRooms(ctx, origin, homeserverDomain, int(limit), "", false, "")
+			fres, err := fedClient.GetPublicRooms(ctx, origin, homeserverDomain, limit, "", false, "")
 			if err != nil {
 				util.GetLogger(ctx).WithError(err).WithField("hs", homeserverDomain).Warn(
 					"bulkFetchPublicRoomsFromServers: failed to query hs",
@@ -94,7 +95,7 @@ func bulkFetchPublicRoomsFromServers(
 
 	// fan-in results with timeout. We stop when we reach the limit.
 FanIn:
-	for len(publicRooms) < int(limit) || limit == 0 {
+	for len(publicRooms) < limit || limit == 0 {
 		// add a room or timeout
 		select {
 		case room, ok := <-roomCh:

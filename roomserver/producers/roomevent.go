@@ -9,13 +9,13 @@ package producers
 import (
 	"encoding/json"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/roomserver/acls"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/setup/jetstream"
 )
 

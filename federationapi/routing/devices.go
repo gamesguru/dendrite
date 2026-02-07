@@ -9,15 +9,16 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
+
+	"codefloe.com/pat-s/dendrite/userapi/api"
 )
 
-// GetUserDevices for the given user id
+// GetUserDevices for the given user id.
 func GetUserDevices(
 	req *http.Request,
 	keyAPI api.FederationKeyAPI,
@@ -63,9 +64,9 @@ func GetUserDevices(
 
 	for _, dev := range res.Devices {
 		var key fclient.RespUserDeviceKeys
-		err := json.Unmarshal(dev.DeviceKeys.KeyJSON, &key)
+		err := json.Unmarshal(dev.KeyJSON, &key)
 		if err != nil {
-			util.GetLogger(req.Context()).WithError(err).Warnf("malformed device key: %s", string(dev.DeviceKeys.KeyJSON))
+			util.GetLogger(req.Context()).WithError(err).Warnf("malformed device key: %s", string(dev.KeyJSON))
 			continue
 		}
 
@@ -100,7 +101,7 @@ func GetUserDevices(
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: response,
 	}
 }

@@ -113,12 +113,12 @@ func SetupAndServeHTTPS(
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to create garlic")
 	}
-	defer garlic.Close() // nolint: errcheck
+	defer garlic.Close()
 	listener, err := garlic.ListenTLS()
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to serve HTTPS")
 	}
-	defer listener.Close() // nolint: errcheck
+	defer listener.Close()
 
 	externalHTTPSAddr := config.ServerAddress{}
 	https, err := config.HTTPAddress("https://" + listener.Addr().String())

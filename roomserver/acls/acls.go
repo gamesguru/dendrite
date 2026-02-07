@@ -16,9 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 )
 
 const MRoomServerACL = "m.room.server_acl"
@@ -102,7 +103,7 @@ func compileACLRegex(orig string) (*regexp.Regexp, error) {
 	return regexp.Compile(escaped)
 }
 
-// cachedCompileACLRegex is a wrapper around compileACLRegex with added caching
+// cachedCompileACLRegex is a wrapper around compileACLRegex with added caching.
 func (s *ServerACLs) cachedCompileACLRegex(orig string) (**regexp.Regexp, error) {
 	s.aclRegexCacheMutex.RLock()
 	re, ok := s.aclRegexCache[orig]

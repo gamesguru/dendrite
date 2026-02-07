@@ -13,15 +13,16 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
 )
 
-// RoomWithBumpStamp represents a room with its latest activity timestamp
+// RoomWithBumpStamp represents a room with its latest activity timestamp.
 type RoomWithBumpStamp struct {
 	RoomID     string
 	BumpStamp  int64 // Stream position of latest event
@@ -29,7 +30,7 @@ type RoomWithBumpStamp struct {
 }
 
 // GetRoomsForUser retrieves all rooms for a user with their bump stamps
-// This will be used for building room lists and applying filters
+// This will be used for building room lists and applying filters.
 func (rp *RequestPool) GetRoomsForUser(ctx context.Context, userID string, membership string) ([]RoomWithBumpStamp, error) {
 	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
@@ -113,7 +114,7 @@ func (rp *RequestPool) GetRoomsForUser(ctx context.Context, userID string, membe
 }
 
 // GetKickedRooms retrieves rooms where the user was kicked (leave membership where sender != user).
-// Per MSC4186/Synapse behaviour, kicked rooms should be included in the sliding sync room list.
+// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
 func (rp *RequestPool) GetKickedRooms(ctx context.Context, userID string) ([]RoomWithBumpStamp, error) {
 	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
@@ -158,7 +159,7 @@ func (rp *RequestPool) GetKickedRooms(ctx context.Context, userID string) ([]Roo
 	return rooms, nil
 }
 
-// ApplyRoomFilters applies SlidingRoomFilter criteria to a list of rooms
+// ApplyRoomFilters applies SlidingRoomFilter criteria to a list of rooms.
 func (rp *RequestPool) ApplyRoomFilters(
 	ctx context.Context,
 	rooms []RoomWithBumpStamp,
@@ -209,7 +210,7 @@ func (rp *RequestPool) ApplyRoomFilters(
 
 // roomMatchesFilterWithSpaces checks if a room matches all filter criteria including spaces
 // PERFORMANCE: Accepts a snapshot parameter to avoid creating multiple database connections
-// spaceChildren is the pre-computed set of child room IDs for spaces filtering (nil if no spaces filter)
+// spaceChildren is the pre-computed set of child room IDs for spaces filtering (nil if no spaces filter).
 func (rp *RequestPool) roomMatchesFilterWithSpaces(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -272,7 +273,7 @@ func (rp *RequestPool) roomMatchesFilterWithSpaces(
 		}
 	}
 
-	// Filter by tags (for favourites/low-priority/etc)
+	// Filter by tags (for favorites/low-priority/etc)
 	if len(filter.Tags) > 0 {
 		roomTags := rp.getRoomTags(ctx, room.RoomID, userID)
 		hasMatchingTag := false
@@ -302,7 +303,7 @@ func (rp *RequestPool) roomMatchesFilterWithSpaces(
 	return true
 }
 
-// Helper functions for room properties
+// Helper functions for room properties.
 
 func (rp *RequestPool) isDirectMessage(ctx context.Context, roomID string, userID string) bool {
 	// Query m.direct account data from userAPI
@@ -339,7 +340,7 @@ func (rp *RequestPool) isDirectMessage(ctx context.Context, roomID string, userI
 	return false
 }
 
-// getRoomNameWithSnapshot uses an existing snapshot for efficient batch operations
+// getRoomNameWithSnapshot uses an existing snapshot for efficient batch operations.
 func (rp *RequestPool) getRoomNameWithSnapshot(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	// Query m.room.name state event
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.name", "")
@@ -358,7 +359,7 @@ func (rp *RequestPool) getRoomNameWithSnapshot(ctx context.Context, snapshot sto
 	return content.Name
 }
 
-// isRoomEncryptedWithSnapshot uses an existing snapshot for efficient batch operations
+// isRoomEncryptedWithSnapshot uses an existing snapshot for efficient batch operations.
 func (rp *RequestPool) isRoomEncryptedWithSnapshot(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) bool {
 	// Check for m.room.encryption state event
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.encryption", "")
@@ -366,7 +367,7 @@ func (rp *RequestPool) isRoomEncryptedWithSnapshot(ctx context.Context, snapshot
 	return err == nil && event != nil
 }
 
-// getRoomTypeWithSnapshot uses an existing snapshot for efficient batch operations
+// getRoomTypeWithSnapshot uses an existing snapshot for efficient batch operations.
 func (rp *RequestPool) getRoomTypeWithSnapshot(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	// Query m.room.create state event
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.create", "")
@@ -388,7 +389,7 @@ func (rp *RequestPool) getRoomTypeWithSnapshot(ctx context.Context, snapshot sto
 }
 
 // getSpaceChildrenWithSnapshot returns the list of child room IDs for a space
-// Uses m.space.child state events where the state_key is the child room ID
+// Uses m.space.child state events where the state_key is the child room ID.
 func (rp *RequestPool) getSpaceChildrenWithSnapshot(ctx context.Context, snapshot storage.DatabaseTransaction, spaceRoomID string) []string {
 	// Query all m.space.child state events for this space
 	// The state_key for each event is the child room ID
@@ -422,7 +423,7 @@ func (rp *RequestPool) getSpaceChildrenWithSnapshot(ctx context.Context, snapsho
 	return children
 }
 
-func (rp *RequestPool) getRoomTags(ctx context.Context, roomID string, userID string) map[string]interface{} {
+func (rp *RequestPool) getRoomTags(ctx context.Context, roomID string, userID string) map[string]any {
 	// Query m.tag room account data from userAPI
 	var res userapi.QueryAccountDataResponse
 	err := rp.userAPI.QueryAccountData(ctx, &userapi.QueryAccountDataRequest{
@@ -431,32 +432,32 @@ func (rp *RequestPool) getRoomTags(ctx context.Context, roomID string, userID st
 		DataType: "m.tag",
 	}, &res)
 	if err != nil || res.RoomAccountData == nil {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 
 	// Get m.tag data for this room from the nested map
 	roomData, ok := res.RoomAccountData[roomID]
 	if !ok {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 
 	tagData, ok := roomData["m.tag"]
 	if !ok {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 
 	// m.tag format: { "tags": { "m.favourite": {...}, "u.custom": {...} } }
 	var parsed struct {
-		Tags map[string]interface{} `json:"tags"`
+		Tags map[string]any `json:"tags"`
 	}
 	if err := json.Unmarshal(tagData, &parsed); err != nil {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 
 	return parsed.Tags
 }
 
-// SortRoomsByActivity sorts rooms by their bump stamp (most recent first)
+// SortRoomsByActivity sorts rooms by their bump stamp (most recent first).
 func SortRoomsByActivity(rooms []RoomWithBumpStamp) {
 	sort.Slice(rooms, func(i, j int) bool {
 		// Sort in descending order (most recent first)
@@ -464,9 +465,9 @@ func SortRoomsByActivity(rooms []RoomWithBumpStamp) {
 	})
 }
 
-// ApplySlidingWindow extracts the requested range from a sorted room list
+// ApplySlidingWindow extracts the requested range from a sorted room list.
 func ApplySlidingWindow(rooms []RoomWithBumpStamp, rangeSpec []int) []RoomWithBumpStamp {
-	if len(rangeSpec) != 2 {
+	if len(rangeSpec) != 2 { //nolint:mnd
 		// Invalid range, return all rooms
 		return rooms
 	}
@@ -495,7 +496,7 @@ func ApplySlidingWindow(rooms []RoomWithBumpStamp, rangeSpec []int) []RoomWithBu
 }
 
 // GenerateSyncOperation creates a SYNC operation for the initial response
-// Phase 2 focuses on SYNC operations; phases 3+ will add INSERT/DELETE/INVALIDATE
+// Phase 2 focuses on SYNC operations; phases 3+ will add INSERT/DELETE/INVALIDATE.
 func GenerateSyncOperation(rooms []RoomWithBumpStamp, rangeSpec []int) types.SlidingOperation {
 	roomIDs := make([]string, len(rooms))
 	for i, room := range rooms {
@@ -509,7 +510,7 @@ func GenerateSyncOperation(rooms []RoomWithBumpStamp, rangeSpec []int) types.Sli
 	}
 }
 
-// Helper function
+// Helper function.
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -522,7 +523,7 @@ func contains(slice []string, item string) bool {
 // GenerateListOperations generates optimal operations for list updates.
 // For initial sync or large changes, returns a SYNC operation.
 // For small incremental changes, returns INSERT/DELETE operations.
-// maxOps controls when to fall back to SYNC (0 = always use SYNC)
+// MaxOps controls when to fall back to SYNC (0 = always use SYNC).
 func GenerateListOperations(
 	previousRoomIDs []string,
 	currentRoomIDs []string,
@@ -663,7 +664,7 @@ func computeListDiff(prevList, currList []string, rangeSpec []int) []types.Slidi
 	return ops
 }
 
-// equalSlices checks if two string slices are equal
+// equalSlices checks if two string slices are equal.
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

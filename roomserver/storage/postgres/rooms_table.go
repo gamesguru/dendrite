@@ -11,12 +11,13 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/matrix-org/gomatrixserverlib"
+
 	"codefloe.com/pat-s/dendrite/internal"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/postgres/deltas"
 	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 const roomsSchema = `
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS roomserver_rooms (
 );
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertRoomNIDSQL = "" +
 	"INSERT INTO roomserver_rooms (room_id, room_version) VALUES ($1, $2)" +
 	" ON CONFLICT ON CONSTRAINT roomserver_room_id_unique" +
@@ -133,6 +134,7 @@ func (s *roomStatements) InsertRoomNID(
 ) (types.RoomNID, error) {
 	var roomNID int64
 	stmt := sqlutil.TxStmt(txn, s.insertRoomNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID, roomVersion).Scan(&roomNID)
 	return types.RoomNID(roomNID), err
 }
@@ -142,6 +144,7 @@ func (s *roomStatements) SelectRoomInfo(ctx context.Context, txn *sql.Tx, roomID
 	var latestNIDs sqlutil.Int64Array
 	var stateSnapshotNID types.StateSnapshotNID
 	stmt := sqlutil.TxStmt(txn, s.selectRoomInfoStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(
 		&info.RoomVersion, &info.RoomNID, &stateSnapshotNID, &latestNIDs,
 	)
@@ -158,6 +161,7 @@ func (s *roomStatements) SelectRoomNID(
 ) (types.RoomNID, error) {
 	var roomNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectRoomNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(&roomNID)
 	return types.RoomNID(roomNID), err
 }
@@ -167,6 +171,7 @@ func (s *roomStatements) SelectRoomNIDForUpdate(
 ) (types.RoomNID, error) {
 	var roomNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectRoomNIDForUpdateStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, roomID).Scan(&roomNID)
 	return types.RoomNID(roomNID), err
 }
@@ -177,6 +182,7 @@ func (s *roomStatements) SelectLatestEventNIDs(
 	var nids sqlutil.Int64Array
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&nids, &stateSnapshotNID)
 	if err != nil {
 		return nil, 0, err
@@ -195,6 +201,7 @@ func (s *roomStatements) SelectLatestEventsNIDsForUpdate(
 	var lastEventSentNID int64
 	var stateSnapshotNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectLatestEventNIDsForUpdateStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&nids, &lastEventSentNID, &stateSnapshotNID)
 	if err != nil {
 		return nil, 0, 0, err
@@ -215,6 +222,7 @@ func (s *roomStatements) UpdateLatestEventNIDs(
 	stateSnapshotNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateLatestEventNIDsStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		roomNID,
@@ -229,7 +237,8 @@ func (s *roomStatements) SelectRoomVersionsForRoomNIDs(
 	ctx context.Context, txn *sql.Tx, roomNIDs []types.RoomNID,
 ) (map[types.RoomNID]gomatrixserverlib.RoomVersion, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomVersionsForRoomNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, roomNIDsAsArray(roomNIDs))
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomNIDsAsArray(roomNIDs)) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +261,8 @@ func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roo
 		array = append(array, int64(nid))
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectRoomIDsStmt)
-	rows, err := stmt.QueryContext(ctx, array)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, array) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +280,8 @@ func (s *roomStatements) BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roo
 
 func (s *roomStatements) BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, roomIDs []string) ([]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectRoomNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, roomIDs)
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, roomIDs) //nolint:sqlclosecheck // rows closed by defer below
 	if err != nil {
 		return nil, err
 	}
@@ -299,6 +310,7 @@ func (s *roomStatements) SelectResyncStateNID(
 ) (types.StateSnapshotNID, error) {
 	var resyncStateNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectResyncStateNIDStmt)
+	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&resyncStateNID)
 	if err != nil {
 		return 0, err
@@ -310,6 +322,7 @@ func (s *roomStatements) UpdateResyncStateNID(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, resyncStateNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateResyncStateNIDStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(roomNID), int64(resyncStateNID))
 	return err
 }

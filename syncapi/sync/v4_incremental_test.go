@@ -9,14 +9,15 @@ package sync
 import (
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/dendrite/syncapi/types"
 )
 
-// TestHaveSentRoomFlag tests the HaveSentRoomFlag enum behaviour
+// TestHaveSentRoomFlag tests the HaveSentRoomFlag enum behavior.
 func TestHaveSentRoomFlag(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -55,7 +56,7 @@ func TestHaveSentRoomFlag(t *testing.T) {
 	}
 }
 
-// TestHaveSentRoomFlagShouldSendHistorical tests timeline fetch mode determination
+// TestHaveSentRoomFlagShouldSendHistorical tests timeline fetch mode determination.
 func TestHaveSentRoomFlagShouldSendHistorical(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -89,7 +90,7 @@ func TestHaveSentRoomFlagShouldSendHistorical(t *testing.T) {
 	}
 }
 
-// TestRoomStreamStateCreation tests creating RoomStreamState for different scenarios
+// TestRoomStreamStateCreation tests creating RoomStreamState for different scenarios.
 func TestRoomStreamStateCreation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -139,7 +140,7 @@ func TestRoomStreamStateCreation(t *testing.T) {
 	}
 }
 
-// TestNumLiveCalculation tests that num_live is calculated correctly
+// TestNumLiveCalculation tests that num_live is calculated correctly.
 func TestNumLiveCalculation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -213,7 +214,7 @@ func TestNumLiveCalculation(t *testing.T) {
 	}
 }
 
-// TestTimelineRangeCalculation tests that timeline event ranges are correct
+// TestTimelineRangeCalculation tests that timeline event ranges are correct.
 func TestTimelineRangeCalculation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -297,7 +298,7 @@ func TestTimelineRangeCalculation(t *testing.T) {
 	}
 }
 
-// TestInitialFieldCalculation tests that the initial field is set correctly
+// TestInitialFieldCalculation tests that the initial field is set correctly.
 func TestInitialFieldCalculation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -344,7 +345,7 @@ func TestInitialFieldCalculation(t *testing.T) {
 	}
 }
 
-// TestLimitedFieldFromDatabase tests that limited field comes from database
+// TestLimitedFieldFromDatabase tests that limited field comes from database.
 func TestLimitedFieldFromDatabase(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -410,7 +411,7 @@ func TestLimitedFieldFromDatabase(t *testing.T) {
 	}
 }
 
-// TestStreamTokenParsing tests position token format
+// TestStreamTokenParsing tests position token format.
 func TestStreamTokenParsing(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -462,7 +463,7 @@ func TestStreamTokenParsing(t *testing.T) {
 	}
 }
 
-// TestRoomStreamStateStatusMapping tests status string mapping
+// TestRoomStreamStateStatusMapping tests status string mapping.
 func TestRoomStreamStateStatusMapping(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -503,7 +504,7 @@ func TestRoomStreamStateStatusMapping(t *testing.T) {
 	}
 }
 
-// TestV4ResponseHasUpdates tests the response update detection logic
+// TestV4ResponseHasUpdates tests the response update detection logic.
 func TestV4ResponseHasUpdates(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

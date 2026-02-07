@@ -16,18 +16,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/dendrite/internal/eventutil"
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/roomserver/types"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 // MembershipRequest represents the body of an incoming POST request
-// on /rooms/{roomID}/(join|kick|ban|unban|leave|invite)
+// on /rooms/{roomID}/(join|kick|ban|unban|leave|invite).
 type MembershipRequest struct {
 	UserID   string `json:"user_id"`
 	Reason   string `json:"reason"`
@@ -61,7 +62,7 @@ var (
 )
 
 // ErrMissingParameter is the error raised if a request for 3PID invite has
-// an incomplete body
+// an incomplete body.
 type ErrMissingParameter struct{}
 
 func (e ErrMissingParameter) Error() string {
@@ -173,7 +174,7 @@ func queryIDServer(
 	// A Matrix ID matches with the given 3PID
 	// Get timestamp in milliseconds to compare it with the timestamps provided
 	// by the identity server
-	now := time.Now().UnixNano() / 1000000
+	now := time.Now().UnixNano() / 1000000 //nolint:mnd
 	if lookupRes.NotBefore > now || now > lookupRes.NotAfter {
 		// If the current timestamp isn't in the time frame in which the association
 		// is known to be valid, re-run the query
@@ -202,6 +203,7 @@ func queryIDServerLookup(ctx context.Context, body *MembershipRequest) (*idServe
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		// TODO: Log the error supplied with the identity server?
@@ -264,6 +266,7 @@ func queryIDServerStoreInvite(
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		errMsg := fmt.Sprintf("Identity server %s responded with a %d error code", body.IDServer, resp.StatusCode)
@@ -290,6 +293,7 @@ func queryIDServerPubKey(ctx context.Context, idServerName string, keyID string)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	var pubKeyRes struct {
 		PublicKey spec.Base64Bytes `json:"public_key"`

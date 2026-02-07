@@ -10,22 +10,23 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/matrix-org/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/dendrite/federationapi/storage/shared"
 	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// Database stores information needed by the federation sender
+// Database stores information needed by the federation sender.
 type Database struct {
 	shared.Database
 	db     *sql.DB
 	writer sqlutil.Writer
 }
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, cache caching.FederationCache, isLocalServerName func(spec.ServerName) bool) (*Database, error) {
 	var d Database
 	var err error
@@ -44,7 +45,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, err
 	}
-	queueEDUs, err := NewSQLiteQueueEDUsTable(d.db)
+	queueEDUs, err := NewSQLiteQueueEDUsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}

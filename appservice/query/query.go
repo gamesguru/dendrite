@@ -23,7 +23,7 @@ import (
 	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
-// AppServiceQueryAPI is an implementation of api.AppServiceQueryAPI
+// AppServiceQueryAPI is an implementation of api.AppServiceQueryAPI.
 type AppServiceQueryAPI struct {
 	Cfg           *config.AppServiceAPI
 	ProtocolCache map[string]api.ASProtocolResponse
@@ -31,7 +31,7 @@ type AppServiceQueryAPI struct {
 }
 
 // RoomAliasExists performs a request to '/room/{roomAlias}' on all known
-// handling application services until one admits to owning the room
+// handling application services until one admits to owning the room.
 func (a *AppServiceQueryAPI) RoomAliasExists(
 	ctx context.Context,
 	request *api.RoomAliasExistsRequest,
@@ -108,7 +108,7 @@ func (a *AppServiceQueryAPI) RoomAliasExists(
 }
 
 // UserIDExists performs a request to '/users/{userID}' on all known
-// handling application services until one admits to owning the user ID
+// handling application services until one admits to owning the user ID.
 func (a *AppServiceQueryAPI) UserIDExists(
 	ctx context.Context,
 	request *api.UserIDExistsRequest,
@@ -194,7 +194,7 @@ func requestDo[T thirdpartyResponses](as *config.ApplicationService, url string,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close() // nolint: errcheck
+	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -296,7 +296,6 @@ func (a *AppServiceQueryAPI) Protocols(
 
 	// get a single protocol response
 	if req.Protocol != "" {
-
 		a.CacheMu.Lock()
 		defer a.CacheMu.Unlock()
 		if proto, ok := a.ProtocolCache[req.Protocol]; ok {

@@ -11,25 +11,24 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/dendrite/clientapi/producers"
+	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/dendrite/internal/httputil"
+	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/dendrite/roomserver"
+	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/syncapi/routing"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-
-	"codefloe.com/pat-s/dendrite/clientapi/producers"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
 	"codefloe.com/pat-s/dendrite/syncapi/types"
 	"codefloe.com/pat-s/dendrite/test"
 	"codefloe.com/pat-s/dendrite/test/testrig"
@@ -365,8 +364,8 @@ func testSyncEventFormatPowerLevels(t *testing.T, dbType test.DBType) {
 	}
 }
 
-// Tests what happens when we create a room and then /sync before all events from /createRoom have
-// been sent to the syncapi
+// TestSyncAPICreateRoomSyncEarly tests what happens when we create a room and then /sync before all events from /createRoom have
+// been sent to the syncapi.
 func TestSyncAPICreateRoomSyncEarly(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		testSyncAPICreateRoomSyncEarly(t, dbType)
@@ -461,8 +460,8 @@ func testSyncAPICreateRoomSyncEarly(t *testing.T, dbType test.DBType) { //nolint
 	}
 }
 
-// Test that if we hit /sync we get back presence: online, regardless of whether messages get delivered
-// via NATS. Regression test for a flakey test "User sees their own presence in a sync"
+// TestSyncAPIUpdatePresenceImmediately tests that if we hit /sync we get back presence: online, regardless of whether messages get delivered
+// via NATS. Regression test for a flakey test "User sees their own presence in a sync".
 func TestSyncAPIUpdatePresenceImmediately(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		testSyncAPIUpdatePresenceImmediately(t, dbType)
@@ -518,7 +517,7 @@ func testSyncAPIUpdatePresenceImmediately(t *testing.T, dbType test.DBType) {
 	}
 }
 
-// This is mainly what Sytest is doing in "test_history_visibility"
+// TestMessageHistoryVisibility is mainly what Sytest is doing in "test_history_visibility".
 func TestMessageHistoryVisibility(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		testHistoryVisibility(t, dbType)
@@ -630,7 +629,7 @@ func testHistoryVisibility(t *testing.T, dbType test.DBType) {
 
 					// send the events/messages to NATS to create the rooms
 					beforeJoinBody := fmt.Sprintf("Before invite in a %s room", tc.historyVisibility)
-					beforeJoinEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": beforeJoinBody})
+					beforeJoinEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": beforeJoinBody})
 					eventsToSend := append(room.Events(), beforeJoinEv)
 					if err := rsapi.SendEvents(ctx, rsAPI, rsapi.KindNew, eventsToSend, "test", "test", "test", nil, false); err != nil {
 						t.Fatalf("failed to send events: %v", err)
@@ -664,11 +663,11 @@ func testHistoryVisibility(t *testing.T, dbType test.DBType) {
 					verifyEventVisible(t, tc.wantResult.seeWithoutJoin, beforeJoinEv, res.Chunk)
 
 					// Create invite, a message, join the room and create another message.
-					inviteEv := room.CreateAndInsert(t, alice, "m.room.member", map[string]interface{}{"membership": "invite"}, test.WithStateKey(bob.ID))
-					afterInviteEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": fmt.Sprintf("After invite in a %s room", tc.historyVisibility)})
-					joinEv := room.CreateAndInsert(t, bob, "m.room.member", map[string]interface{}{"membership": "join"}, test.WithStateKey(bob.ID))
+					inviteEv := room.CreateAndInsert(t, alice, "m.room.member", map[string]any{"membership": "invite"}, test.WithStateKey(bob.ID))
+					afterInviteEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("After invite in a %s room", tc.historyVisibility)})
+					joinEv := room.CreateAndInsert(t, bob, "m.room.member", map[string]any{"membership": "join"}, test.WithStateKey(bob.ID))
 					afterJoinBody := fmt.Sprintf("After join in a %s room", tc.historyVisibility)
-					msgEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": afterJoinBody})
+					msgEv := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": afterJoinBody})
 
 					eventsToSend = append([]*rstypes.HeaderedEvent{}, inviteEv, afterInviteEv, joinEv, msgEv)
 
@@ -776,10 +775,10 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(alice.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -795,10 +794,10 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(alice.ID))
 			},
@@ -815,7 +814,7 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -855,10 +854,10 @@ func TestGetMembership(t *testing.T) {
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))
-				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "leave",
 				}, test.WithStateKey(bob.ID))
 			},
@@ -1186,10 +1185,10 @@ func testContext(t *testing.T, dbType test.DBType) {
 
 	room := test.NewRoom(t, user)
 
-	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world 1!"})
-	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world 2!"})
-	thirdMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world3!"})
-	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world4!"})
+	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world 1!"})
+	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world 2!"})
+	thirdMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world3!"})
+	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world4!"})
 
 	if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
 		t.Fatalf("failed to send events: %v", err)
@@ -1255,7 +1254,7 @@ func testContext(t *testing.T, dbType test.DBType) {
 func TestUpdateRelations(t *testing.T) {
 	testCases := []struct {
 		name         string
-		eventContent map[string]interface{}
+		eventContent map[string]any
 		eventType    string
 	}{
 		{
@@ -1263,24 +1262,24 @@ func TestUpdateRelations(t *testing.T) {
 		},
 		{
 			name: "unable to unmarshal event should not error",
-			eventContent: map[string]interface{}{
-				"m.relates_to": map[string]interface{}{
-					"event_id": map[string]interface{}{}, // this should be a string and not struct
+			eventContent: map[string]any{
+				"m.relates_to": map[string]any{
+					"event_id": map[string]any{},
 				},
 			},
 		},
 		{
 			name: "empty event ID is ignored",
-			eventContent: map[string]interface{}{
-				"m.relates_to": map[string]interface{}{
+			eventContent: map[string]any{
+				"m.relates_to": map[string]any{
 					"event_id": "",
 				},
 			},
 		},
 		{
 			name: "empty rel_type is ignored",
-			eventContent: map[string]interface{}{
-				"m.relates_to": map[string]interface{}{
+			eventContent: map[string]any{
+				"m.relates_to": map[string]any{
 					"event_id": "$randomEventID",
 					"rel_type": "",
 				},
@@ -1289,8 +1288,8 @@ func TestUpdateRelations(t *testing.T) {
 		{
 			name:      "redactions are ignored",
 			eventType: spec.MRoomRedaction,
-			eventContent: map[string]interface{}{
-				"m.relates_to": map[string]interface{}{
+			eventContent: map[string]any{
+				"m.relates_to": map[string]any{
 					"event_id": "$randomEventID",
 					"rel_type": "m.replace",
 				},
@@ -1298,8 +1297,8 @@ func TestUpdateRelations(t *testing.T) {
 		},
 		{
 			name: "valid event is correctly written",
-			eventContent: map[string]interface{}{
-				"m.relates_to": map[string]interface{}{
+			eventContent: map[string]any{
+				"m.relates_to": map[string]any{
 					"event_id": "$randomEventID",
 					"rel_type": "m.replace",
 				},
@@ -1316,7 +1315,7 @@ func TestUpdateRelations(t *testing.T) {
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		t.Cleanup(close)
-		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database) //nolint:contextcheck
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1369,14 +1368,14 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 		t.Fatalf("failed to send events: %v", err)
 	}
 
-	ev1 := room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "first"})
-	ev2 := room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{
+	ev1 := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "first"})
+	ev2 := room.CreateAndInsert(t, user, "m.room.message", map[string]any{
 		"body": " * first",
-		"m.new_content": map[string]interface{}{
+		"m.new_content": map[string]any{
 			"body":    "first",
 			"msgtype": "m.text",
 		},
-		"m.relates_to": map[string]interface{}{
+		"m.relates_to": map[string]any{
 			"event_id": ev1.EventID(),
 			"rel_type": "m.replace",
 		},
@@ -1410,9 +1409,9 @@ func searchRequest(t *testing.T, router *httputil.Router, accessToken, searchTer
 	w := httptest.NewRecorder()
 	rq := test.NewRequest(t, "POST", "/_matrix/client/v3/search", test.WithQueryParams(map[string]string{
 		"access_token": accessToken,
-	}), test.WithJSONBody(t, map[string]interface{}{
-		"search_categories": map[string]interface{}{
-			"room_events": map[string]interface{}{
+	}), test.WithJSONBody(t, map[string]any{
+		"search_categories": map[string]any{
+			"room_events": map[string]any{
 				"filters":     roomList,
 				"search_term": searchTerm,
 			},
