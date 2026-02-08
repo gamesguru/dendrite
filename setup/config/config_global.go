@@ -2,8 +2,8 @@ package config
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -90,7 +90,7 @@ func (c *Global) Defaults(opts DefaultOpts) {
 	if opts.Generate {
 		c.ServerName = "localhost"
 		c.PrivateKeyPath = "matrix_key.pem"
-		_, c.PrivateKey, _ = ed25519.GenerateKey(rand.New(rand.NewSource(0)))
+		_, c.PrivateKey, _ = ed25519.GenerateKey(rand.Reader)
 		c.KeyID = "ed25519:auto"
 		c.TrustedIDServers = []string{
 			"matrix.org",
