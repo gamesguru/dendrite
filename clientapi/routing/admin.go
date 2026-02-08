@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,6 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/constraints"
 
 	clientapi "codefloe.com/pat-s/dendrite/clientapi/api"
 	"codefloe.com/pat-s/dendrite/internal"
@@ -135,7 +135,7 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 	}
 }
 
-func getReturnValue[t constraints.Integer](in *t) any {
+func getReturnValue[t cmp.Ordered](in *t) any {
 	if in == nil {
 		return nil
 	}

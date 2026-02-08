@@ -1,11 +1,10 @@
 package sqlite3
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"time"
-
-	"golang.org/x/exp/constraints"
 
 	"codefloe.com/pat-s/dendrite/clientapi/api"
 	internal "codefloe.com/pat-s/dendrite/internal"
@@ -117,7 +116,7 @@ func (s *registrationTokenStatements) InsertRegistrationToken(ctx context.Contex
 	return true, nil
 }
 
-func getInsertValue[t constraints.Integer](in *t) any {
+func getInsertValue[t cmp.Ordered](in *t) any {
 	if in == nil {
 		return nil
 	}
