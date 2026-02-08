@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm && !windows
-// +build !wasm,!windows
 
 package util
 
