@@ -12,13 +12,37 @@ package internal
 import (
 	"io"
 	"log/syslog"
+	"os"
 
-	"github.com/MFAshby/stdemuxerhook"
 	"github.com/sirupsen/logrus"
 	lSyslog "github.com/sirupsen/logrus/hooks/syslog"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 )
+
+// stdDemuxerHook demuxes log entries by severity:
+// error/panic/fatal → stderr, everything else → stdout.
+type stdDemuxerHook struct {
+	formatter logrus.Formatter
+}
+
+func (h *stdDemuxerHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (h *stdDemuxerHook) Fire(entry *logrus.Entry) error {
+	data, err := h.formatter.Format(entry)
+	if err != nil {
+		return err
+	}
+	switch entry.Level {
+	case logrus.ErrorLevel, logrus.FatalLevel, logrus.PanicLevel:
+		_, err = os.Stderr.Write(data)
+	default:
+		_, err = os.Stdout.Write(data)
+	}
+	return err
+}
 
 // SetupHookLogging configures the logging hooks defined in the configuration.
 // If something fails here it means that the logging was improperly configured,
@@ -81,7 +105,7 @@ func setupStdLogHook(level logrus.Level) {
 	if stdLevelLogAdded[level] {
 		return
 	}
-	logrus.AddHook(&logLevelHook{level, stdemuxerhook.New(logrus.StandardLogger())})
+	logrus.AddHook(&logLevelHook{level, &stdDemuxerHook{formatter: logrus.StandardLogger().Formatter}})
 	stdLevelLogAdded[level] = true
 }
 

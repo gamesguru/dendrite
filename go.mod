@@ -4,7 +4,6 @@ require (
 	github.com/Arceliar/phony v0.0.0-20220903101357-530938a4b13d
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.3.9
-	github.com/MFAshby/stdemuxerhook v1.0.0
 	github.com/blevesearch/bleve/v2 v2.5.7
 	github.com/coder/websocket v1.8.14
 	github.com/cretz/bine v0.2.0
