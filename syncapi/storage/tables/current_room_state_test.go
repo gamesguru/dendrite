@@ -55,7 +55,6 @@ func TestCurrentRoomStateTable(t *testing.T) {
 		events := room.CurrentState()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for i, ev := range events {
-				ev.StateKeyResolved = ev.StateKey()
 				userID, err := spec.NewUserID(string(ev.SenderID()), true)
 				if err != nil {
 					return err

@@ -197,6 +197,7 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 	}
 	headeredEvent := &rstypes.HeaderedEvent{PDU: ev}
 	headeredEvent.Visibility = r.visibility
+	headeredEvent.StateKeyResolved = ev.StateKey()
 	return headeredEvent
 }
 
