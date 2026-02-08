@@ -21,7 +21,6 @@ import (
 	"golang.org/x/crypto/ed25519"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/signing"
 	fedAPI "codefloe.com/pat-s/dendrite/federationapi"
 	"codefloe.com/pat-s/dendrite/federationapi/routing"
 	"codefloe.com/pat-s/dendrite/internal/caching"
@@ -52,7 +51,7 @@ func TestHandleQueryProfile(t *testing.T) {
 		cfg.FederationAPI.Matrix.ServerName = testOrigin
 		cfg.FederationAPI.Matrix.Metrics.Enabled = false
 		fedClient := fakeFedClient{}
-		serverKeyAPI := &signing.YggdrasilKeys{}
+		serverKeyAPI := &testKeys{}
 		keyRing := serverKeyAPI.KeyRing()
 		fedapi := fedAPI.NewInternalAPI(processCtx, cfg, cm, &natsInstance, &fedClient, nil, nil, keyRing, true)
 		userapi := fakeUserAPI{}
@@ -60,7 +59,7 @@ func TestHandleQueryProfile(t *testing.T) {
 		routing.Setup(routers, cfg, nil, fedapi, keyRing, &fedClient, &userapi, &cfg.MSCs, nil, caching.DisableMetrics)
 
 		_, sk, _ := ed25519.GenerateKey(nil)
-		keyID := signing.KeyID
+		keyID := testKeyID
 		pk, ok := sk.Public().(ed25519.PublicKey)
 		if !ok {
 			t.Fatal("unexpected public key type")

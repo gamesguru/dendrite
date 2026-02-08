@@ -20,7 +20,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/cmd/dendrite-demo-yggdrasil/signing"
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/httputil"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -69,7 +68,7 @@ func TestCreateInvalidRelayPublicRoutesPanics(t *testing.T) {
 
 func createGetRelayTxnHTTPRequest(serverName spec.ServerName, userID string) *http.Request {
 	_, sk, _ := ed25519.GenerateKey(nil)
-	keyID := signing.KeyID
+	keyID := testKeyID
 	pk, ok := sk.Public().(ed25519.PublicKey)
 	if !ok {
 		panic("sk.Public() is not ed25519.PublicKey")
@@ -91,7 +90,7 @@ type sendRelayContent struct {
 
 func createSendRelayTxnHTTPRequest(serverName spec.ServerName, txnID string, userID string) *http.Request {
 	_, sk, _ := ed25519.GenerateKey(nil)
-	keyID := signing.KeyID
+	keyID := testKeyID
 	pk, ok := sk.Public().(ed25519.PublicKey)
 	if !ok {
 		panic("sk.Public() is not ed25519.PublicKey")
@@ -119,7 +118,7 @@ func TestCreateRelayPublicRoutes(t *testing.T) {
 		relayAPI := relayapi.NewRelayInternalAPI(cfg, cm, nil, nil, nil, nil, true, caches)
 		assert.NotNil(t, relayAPI)
 
-		serverKeyAPI := &signing.YggdrasilKeys{}
+		serverKeyAPI := &testKeys{}
 		keyRing := serverKeyAPI.KeyRing()
 		relayapi.AddPublicRoutes(routers, cfg, keyRing, relayAPI)
 
@@ -172,7 +171,7 @@ func TestDisableRelayPublicRoutes(t *testing.T) {
 		relayAPI := relayapi.NewRelayInternalAPI(cfg, cm, nil, nil, nil, nil, false, caches)
 		assert.NotNil(t, relayAPI)
 
-		serverKeyAPI := &signing.YggdrasilKeys{}
+		serverKeyAPI := &testKeys{}
 		keyRing := serverKeyAPI.KeyRing()
 		relayapi.AddPublicRoutes(routers, cfg, keyRing, relayAPI)
 

@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-package signing
+package relayapi_test
 
 import (
 	"context"
@@ -16,24 +16,24 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-const KeyID = "ed25519:dendrite-demo-yggdrasil"
+const testKeyID = "ed25519:dendrite-demo-yggdrasil"
 
-type YggdrasilKeys struct{}
+type testKeys struct{}
 
-func (f *YggdrasilKeys) KeyRing() *gomatrixserverlib.KeyRing {
+func (f *testKeys) KeyRing() *gomatrixserverlib.KeyRing {
 	return &gomatrixserverlib.KeyRing{
 		KeyDatabase: f,
 	}
 }
 
-func (f *YggdrasilKeys) FetchKeys(
+func (f *testKeys) FetchKeys(
 	ctx context.Context,
 	requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
 ) (map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult, error) {
 	res := make(map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult)
 	for req := range requests {
-		if req.KeyID != KeyID {
-			return nil, fmt.Errorf("FetchKeys: cannot fetch key with ID %s, should be %s", req.KeyID, KeyID)
+		if req.KeyID != testKeyID {
+			return nil, fmt.Errorf("FetchKeys: cannot fetch key with ID %s, should be %s", req.KeyID, testKeyID)
 		}
 
 		hexkey, err := hex.DecodeString(string(req.ServerName))
@@ -46,16 +46,16 @@ func (f *YggdrasilKeys) FetchKeys(
 				Key: hexkey,
 			},
 			ExpiredTS:    gomatrixserverlib.PublicKeyNotExpired,
-			ValidUntilTS: spec.AsTimestamp(time.Now().Add(24 * time.Hour * 365)), //nolint:mnd
+			ValidUntilTS: spec.AsTimestamp(time.Now().Add(24 * time.Hour * 365)),
 		}
 	}
 	return res, nil
 }
 
-func (f *YggdrasilKeys) FetcherName() string {
-	return "YggdrasilKeys"
+func (f *testKeys) FetcherName() string {
+	return "testKeys"
 }
 
-func (f *YggdrasilKeys) StoreKeys(ctx context.Context, results map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult) error {
+func (f *testKeys) StoreKeys(ctx context.Context, results map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult) error {
 	return nil
 }
