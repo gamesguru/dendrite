@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -10,7 +11,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
-	"golang.org/x/crypto/ed25519"
 )
 
 type Global struct {

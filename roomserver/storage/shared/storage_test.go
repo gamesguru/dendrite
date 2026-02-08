@@ -9,7 +9,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
-	ed255192 "golang.org/x/crypto/ed25519"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -193,7 +192,7 @@ func TestUserRoomKeys(t *testing.T) {
 		assert.Equal(t, wantKeys, userIDs)
 
 		// insert key that came in over federation
-		var gotPublicKey, key4 ed255192.PublicKey
+		var gotPublicKey, key4 ed25519.PublicKey
 		key4, _, err = ed25519.GenerateKey(nil)
 		assert.NoError(t, err)
 		gotPublicKey, err = db.InsertUserRoomPublicKey(context.Background(), *userID, *doesNotExist, key4) //nolint:contextcheck

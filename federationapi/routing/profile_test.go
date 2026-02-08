@@ -8,6 +8,7 @@ package routing_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"io"
 	"net/http/httptest"
@@ -18,7 +19,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/ed25519"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 	fedAPI "codefloe.com/pat-s/dendrite/federationapi"

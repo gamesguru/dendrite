@@ -9,6 +9,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -23,7 +24,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"golang.org/x/crypto/ed25519"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 

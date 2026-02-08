@@ -7,6 +7,7 @@
 package routing
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/crypto/ed25519"
 
 	clienthttputil "codefloe.com/pat-s/dendrite/clientapi/httputil"
 	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
