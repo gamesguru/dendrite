@@ -1190,7 +1190,7 @@ func (d *Database) GetHistoryVisibilityState(ctx context.Context, roomInfo *type
 	if err != nil {
 		return nil, err
 	}
-	eventIDs, _ := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
+	eventIDs, err := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 	if err != nil {
 		eventIDs = map[types.EventNID]string{}
 	}
@@ -1258,7 +1258,7 @@ func (d *Database) GetStateEvent(ctx context.Context, roomID, evType, stateKey s
 	if err != nil {
 		return nil, err
 	}
-	eventIDs, _ := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
+	eventIDs, err := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 	if err != nil {
 		eventIDs = map[types.EventNID]string{}
 	}
@@ -1319,7 +1319,7 @@ func (d *Database) GetStateEventsWithEventType(ctx context.Context, roomID, evTy
 			eventNIDs = append(eventNIDs, e.EventNID)
 		}
 	}
-	eventIDs, _ := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
+	eventIDs, err := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 	if err != nil {
 		eventIDs = map[types.EventNID]string{}
 	}
@@ -1561,7 +1561,7 @@ func (d *Database) GetBulkStateContent(ctx context.Context, roomIDs []string, tu
 			}
 		}
 	}
-	eventIDs, _ := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
+	eventIDs, err := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 	if err != nil {
 		eventIDs = map[types.EventNID]string{}
 	}
