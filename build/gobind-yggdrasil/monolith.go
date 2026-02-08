@@ -178,7 +178,7 @@ func (m *DendriteMonolith) Start() {
 
 	closer, err := cfg.SetupTracing()
 	if err != nil {
-		logrus.WithError(err).Panicf("failed to start opentracing")
+		logrus.WithError(err).Panicf("failed to start tracing")
 	}
 	defer closer.Close()
 

@@ -353,21 +353,13 @@ user_api:
   # This only needs updating if the "InputDeviceListUpdate" stream keeps growing indefinitely.
   # worker_count: 8
 
-# Configuration for Opentracing.
-# See https://github.com/element-hq/dendrite/tree/master/docs/tracing for information on
-# how this works and how to set it up.
+# Configuration for OpenTelemetry tracing.
+# Traces are exported via OTLP gRPC to the configured endpoint.
+# Any OTLP-compatible backend can be used (e.g. Grafana Tempo, Jaeger, SigNoz).
 tracing:
   enabled: false
-  jaeger:
-    serviceName: ''
-    disabled: false
-    rpc_metrics: false
-    tags: []
-    sampler: null
-    reporter: null
-    headers: null
-    baggage_restrictions: null
-    throttler: null
+  endpoint: localhost:4317
+  insecure: true
 
 # Logging configuration. The "std" logging type controls the logs being sent to
 # stdout. The "file" logging type controls logs being written to a log folder on

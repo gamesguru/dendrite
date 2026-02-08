@@ -8,6 +8,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -19,10 +20,12 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/sirupsen/logrus"
-	jaegerconfig "github.com/uber/jaeger-client-go/config"
-	jaegermetrics "github.com/uber/jaeger-lib/metrics"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/crypto/ed25519"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 )
@@ -62,8 +65,10 @@ type Dendrite struct {
 	Tracing struct {
 		// Set to true to enable tracer hooks. If false, no tracing is set up.
 		Enabled bool `yaml:"enabled"`
-		// The config for the jaeger opentracing reporter.
-		Jaeger jaegerconfig.Configuration `yaml:"jaeger"`
+		// OTLP gRPC endpoint, e.g. "localhost:4317".
+		Endpoint string `yaml:"endpoint"`
+		// Use insecure gRPC connection (no TLS).
+		Insecure bool `yaml:"insecure"`
 	} `yaml:"tracing"`
 
 	// The config for logging informations. Each hook will be added to logrus.
@@ -469,27 +474,40 @@ func readKeyPEM(path string, data []byte, enforceKeyIDFormat bool) (gomatrixserv
 	}
 }
 
-// SetupTracing configures the opentracing using the supplied configuration.
+// SetupTracing configures OpenTelemetry tracing using the supplied configuration.
 func (config *Dendrite) SetupTracing() (closer io.Closer, err error) {
 	if !config.Tracing.Enabled {
 		return io.NopCloser(bytes.NewReader([]byte{})), nil
 	}
-	return config.Tracing.Jaeger.InitGlobalTracer(
-		"Dendrite",
-		jaegerconfig.Logger(logrusLogger{logrus.StandardLogger()}),
-		jaegerconfig.Metrics(jaegermetrics.NullFactory),
+
+	ctx := context.Background()
+
+	dialOpts := []grpc.DialOption{}
+	if config.Tracing.Insecure {
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+
+	exporter, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint(config.Tracing.Endpoint),
+		otlptracegrpc.WithDialOption(dialOpts...),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+	)
+	otel.SetTracerProvider(tp)
+
+	return &tracerProviderCloser{tp: tp}, nil
 }
 
-// logrusLogger is a small wrapper that implements jaeger.Logger using logrus.
-type logrusLogger struct {
-	l *logrus.Logger
+// tracerProviderCloser wraps a TracerProvider so it satisfies io.Closer.
+type tracerProviderCloser struct {
+	tp *sdktrace.TracerProvider
 }
 
-func (l logrusLogger) Error(msg string) {
-	l.l.Error(msg)
-}
-
-func (l logrusLogger) Infof(msg string, args ...any) {
-	l.l.Infof(msg, args...)
+func (c *tracerProviderCloser) Close() error {
+	return c.tp.Shutdown(context.Background())
 }

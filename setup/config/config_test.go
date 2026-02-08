@@ -167,16 +167,8 @@ mscs:
     connection_string: file:mscs.db
 tracing:
   enabled: false
-  jaeger:
-    serviceName: ""
-    disabled: false
-    rpc_metrics: false
-    tags: []
-    sampler: null
-    reporter: null
-    headers: null
-    baggage_restrictions: null
-    throttler: null
+  endpoint: ""
+  insecure: false
 logging:
 - type: file
   level: info
