@@ -125,9 +125,6 @@ func (d DataSource) IsPostgres() bool {
 	return !d.IsSQLite()
 }
 
-// A Topic in kafka.
-type Topic string
-
 // FileSizeBytes is a file size in bytes.
 type FileSizeBytes int64
 

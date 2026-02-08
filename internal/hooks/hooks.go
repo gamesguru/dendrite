@@ -18,15 +18,6 @@ const (
 	// Usage:
 	//   hooks.Attach(hooks.KindNewEventPersisted, func(headeredEvent interface{}) { ... })
 	KindNewEventPersisted = "new_event_persisted"
-	// KindNewEventReceived is a hook which is called with *types.HeaderedEvent
-	// It is run before a new event is processed by the roomserver. This hook can be used
-	// to modify the event before it is persisted by adding data to `unsigned`.
-	// Usage:
-	//   hooks.Attach(hooks.KindNewEventReceived, func(headeredEvent interface{}) {
-	//     ev := headeredEvent.(*types.HeaderedEvent)
-	//     _ = ev.SetUnsignedField("key", "val")
-	//   })
-	KindNewEventReceived = "new_event_received"
 )
 
 var (
