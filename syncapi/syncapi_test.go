@@ -373,7 +373,7 @@ func TestSyncAPICreateRoomSyncEarly(t *testing.T) {
 }
 
 func testSyncAPICreateRoomSyncEarly(t *testing.T, dbType test.DBType) { //nolint:unparam
-	t.Skip("Skipped, possibly fixed")
+	t.Skip("hangs indefinitely on sqlite: sync response never arrives when events are published incrementally")
 	user := test.NewUser(t)
 	room := test.NewRoom(t, user)
 	alice := userapi.Device{

@@ -1133,9 +1133,6 @@ func TestAdminQueryEventReports(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		/*if dbType == test.DBTypeSQLite {
-			t.Skip()
-		}*/
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
