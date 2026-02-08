@@ -8,7 +8,6 @@ package internal
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -312,15 +311,11 @@ func membershipEvents(res *types.Response) (joinUserIDs, leaveUserIDs []string) 
 	for _, room := range res.Rooms.Join {
 		for _, ev := range room.Timeline.Events {
 			if ev.Type == spec.MRoomMember && ev.StateKey != nil {
-				content := string(ev.Content)
-				switch {
-				case strings.Contains(content, `"join"`):
+				membership := gjson.GetBytes(ev.Content, "membership").Str
+				switch membership {
+				case spec.Join, spec.Invite:
 					joinUserIDs = append(joinUserIDs, *ev.StateKey)
-				case strings.Contains(content, `"invite"`):
-					joinUserIDs = append(joinUserIDs, *ev.StateKey)
-				case strings.Contains(content, `"leave"`):
-					leaveUserIDs = append(leaveUserIDs, *ev.StateKey)
-				case strings.Contains(content, `"ban"`):
+				case spec.Leave, spec.Ban:
 					leaveUserIDs = append(leaveUserIDs, *ev.StateKey)
 				}
 			}
