@@ -8,7 +8,7 @@ require (
 	github.com/blevesearch/bleve/v2 v2.5.7
 	github.com/coder/websocket v1.8.14
 	github.com/cretz/bine v0.2.0
-	github.com/dgraph-io/ristretto v0.2.0
+	github.com/dgraph-io/ristretto/v2 v2.4.0
 	github.com/eyedeekay/goSam v0.32.54
 	github.com/getsentry/sentry-go v0.42.0
 	github.com/go-chi/chi/v5 v5.2.5

@@ -12,8 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/dgraph-io/ristretto"
-	"github.com/dgraph-io/ristretto/z"
+	"github.com/dgraph-io/ristretto/v2"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus"
@@ -47,12 +46,11 @@ const (
 )
 
 func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enablePrometheus bool) *Caches {
-	cache, err := ristretto.NewCache(&ristretto.Config{
+	cache, err := ristretto.NewCache(&ristretto.Config[string, any]{
 		NumCounters: int64((maxCost / 1024) * 10), //nolint:mnd // 10 counters per 1KB data, affects bloom filter size
 		BufferItems: 64,                           //nolint:mnd                           // recommended by the ristretto godocs as a sane buffer size value
 		MaxCost:     int64(maxCost),               // max cost is in bytes, as per the Dendrite config
 		Metrics:     true,
-		KeyToHash:   z.KeyToHash,
 	})
 	if err != nil {
 		panic(err)
@@ -176,7 +174,7 @@ func (c *RistrettoCostedCachePartition[K, V]) Set(key K, value V) {
 }
 
 type RistrettoCachePartition[K keyable, V any] struct {
-	cache   *ristretto.Cache
+	cache   *ristretto.Cache[string, any]
 	Prefix  byte
 	Mutable bool
 	MaxAge  time.Duration
