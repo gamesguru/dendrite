@@ -8,12 +8,14 @@ on:
       - '**.go' # only execute on changes to go files
       - 'go.mod' # or dependency updates
       - 'go.sum' # or dependency updates
+      - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**' # or workflow changes
   pull_request:
     paths:
       - '**.go'
       - 'go.mod' # or dependency updates
       - 'go.sum' # or dependency updates
+      - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**'
   workflow_dispatch:
 
