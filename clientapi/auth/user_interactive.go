@@ -193,7 +193,12 @@ func (u *UserInteractive) ResponseWithChallenge(sessionID string, response any) 
 			JSON: spec.InternalServerError{},
 		}
 	}
-	_ = json.Unmarshal(b, &mixedObjects)
+	if err = json.Unmarshal(b, &mixedObjects); err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 	challenge := u.challenge(sessionID)
 	b, err = json.Marshal(challenge.JSON)
 	if err != nil {
@@ -202,7 +207,12 @@ func (u *UserInteractive) ResponseWithChallenge(sessionID string, response any) 
 			JSON: spec.InternalServerError{},
 		}
 	}
-	_ = json.Unmarshal(b, &mixedObjects)
+	if err = json.Unmarshal(b, &mixedObjects); err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 
 	return &util.JSONResponse{
 		Code: 401, //nolint:mnd

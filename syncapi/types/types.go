@@ -539,9 +539,13 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 			if err != nil {
 				return nil, err
 			}
-			_ = json.Unmarshal(updatedInvite, &res.InviteState.Events)
+			if err := json.Unmarshal(updatedInvite, &res.InviteState.Events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal updated invite state: %w", err)
+			}
 		} else {
-			_ = json.Unmarshal([]byte(inviteRoomState.Raw), &res.InviteState.Events)
+			if err := json.Unmarshal([]byte(inviteRoomState.Raw), &res.InviteState.Events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal invite room state: %w", err)
+			}
 		}
 	}
 

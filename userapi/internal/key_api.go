@@ -287,9 +287,13 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 				if queryRes.DeviceInfo[dk.DeviceID].DisplayName != "" {
 					displayName = queryRes.DeviceInfo[dk.DeviceID].DisplayName
 				}
-				dk.KeyJSON, _ = sjson.SetBytes(dk.KeyJSON, "unsigned", struct {
+				var sjsonErr error
+				dk.KeyJSON, sjsonErr = sjson.SetBytes(dk.KeyJSON, "unsigned", struct {
 					DisplayName string `json:"device_display_name,omitempty"`
 				}{displayName})
+				if sjsonErr != nil {
+					logrus.WithError(sjsonErr).WithField("device_id", dk.DeviceID).Warn("failed to inject display name into device key JSON")
+				}
 				res.DeviceKeys[userID][dk.DeviceID] = dk.KeyJSON
 			}
 		} else {
@@ -606,9 +610,13 @@ func (a *UserInternalAPI) populateResponseWithDeviceKeysFromDatabase(
 			continue // ignore deleted keys
 		}
 		// inject the display name
-		key.KeyJSON, _ = sjson.SetBytes(key.KeyJSON, "unsigned", struct {
+		var sjsonErr error
+		key.KeyJSON, sjsonErr = sjson.SetBytes(key.KeyJSON, "unsigned", struct {
 			DisplayName string `json:"device_display_name,omitempty"`
 		}{key.DisplayName})
+		if sjsonErr != nil {
+			logrus.WithError(sjsonErr).WithField("device_id", key.DeviceID).Warn("failed to inject display name into device key JSON")
+		}
 		respMu.Lock()
 		res.DeviceKeys[userID][key.DeviceID] = key.KeyJSON
 		respMu.Unlock()

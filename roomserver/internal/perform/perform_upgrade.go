@@ -451,7 +451,9 @@ func (r *Upgrader) generateInitialEvents(
 	// set the membership to join though, because that is necessary to auth
 	// the events after it.
 	newMembershipContent := map[string]any{}
-	_ = json.Unmarshal(oldMembershipEvent.Content(), &newMembershipContent)
+	if err := json.Unmarshal(oldMembershipEvent.Content(), &newMembershipContent); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("failed to unmarshal old membership event content during room upgrade")
+	}
 	newMembershipContent["membership"] = spec.Join
 	newMembershipEvent := gomatrixserverlib.FledglingEvent{
 		Type:     spec.MRoomMember,
@@ -481,7 +483,9 @@ func (r *Upgrader) generateInitialEvents(
 	newJoinRulesContent := map[string]any{
 		"join_rule": spec.Invite, // sane default
 	}
-	_ = json.Unmarshal(oldJoinRulesEvent.Content(), &newJoinRulesContent)
+	if err := json.Unmarshal(oldJoinRulesEvent.Content(), &newJoinRulesContent); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("failed to unmarshal old join rules event content during room upgrade")
+	}
 	newJoinRulesEvent := gomatrixserverlib.FledglingEvent{
 		Type:     spec.MRoomJoinRules,
 		StateKey: "",

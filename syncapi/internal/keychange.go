@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -26,10 +27,12 @@ import (
 // DeviceOTKCounts adds one-time key counts to the /sync response.
 func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceID string, res *types.Response) error {
 	var queryRes api.QueryOneTimeKeysResponse
-	_ = keyAPI.QueryOneTimeKeys(ctx, &api.QueryOneTimeKeysRequest{
+	if err := keyAPI.QueryOneTimeKeys(ctx, &api.QueryOneTimeKeysRequest{
 		UserID:   userID,
 		DeviceID: deviceID,
-	}, &queryRes)
+	}, &queryRes); err != nil {
+		return fmt.Errorf("keyAPI.QueryOneTimeKeys: %w", err)
+	}
 	if queryRes.Error != nil {
 		return queryRes.Error
 	}
@@ -68,10 +71,13 @@ func DeviceListCatchup(
 		offset = int64(from)
 	}
 	var queryRes api.QueryKeyChangesResponse
-	_ = userAPI.QueryKeyChanges(ctx, &api.QueryKeyChangesRequest{
+	if err := userAPI.QueryKeyChanges(ctx, &api.QueryKeyChangesRequest{
 		Offset:   offset,
 		ToOffset: toOffset,
-	}, &queryRes)
+	}, &queryRes); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryKeyChanges failed")
+		return to, hasNew, nil
+	}
 	if queryRes.Error != nil {
 		// don't fail the catchup because we may have got useful information by tracking membership
 		util.GetLogger(ctx).WithError(queryRes.Error).Error("QueryKeyChanges failed")

@@ -105,7 +105,9 @@ func (a *UserInternalAPI) InputAccountData(ctx context.Context, req *api.InputAc
 	var ignoredUsers *synctypes.IgnoredUsers
 	if req.DataType == "m.ignored_user_list" {
 		ignoredUsers = &synctypes.IgnoredUsers{}
-		_ = json.Unmarshal(req.AccountData, ignoredUsers)
+		if err := json.Unmarshal(req.AccountData, ignoredUsers); err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("failed to unmarshal ignored users account data")
+		}
 	}
 	if req.DataType == "m.fully_read" {
 		if err := a.setFullyRead(ctx, req); err != nil {
