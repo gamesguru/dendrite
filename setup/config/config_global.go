@@ -435,7 +435,7 @@ func (d *DataUnit) UnmarshalText(text []byte) error {
 	case strings.HasSuffix(s, "gb"):
 		s, magnitude = s[:len(s)-2], 1024*1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "mb"):
-		s, magnitude = s[:len(s)-2], 1024
+		s, magnitude = s[:len(s)-2], 1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "kb"):
 		s, magnitude = s[:len(s)-2], 1024
 	default:
