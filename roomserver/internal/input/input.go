@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arceliar/phony"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
@@ -94,15 +93,32 @@ type Inputer struct {
 const inactiveThreshold = time.Hour * 24
 
 type worker struct {
-	phony.Inbox
 	sync.Mutex
 	r            *Inputer
 	roomID       string
 	subscription *nats.Subscription
 	sentryHub    *sentry.Hub
+	ch           chan struct{}
 	ephemeralSeq uint64
 	// last seq we fully processed
 	durableSeq uint64
+}
+
+// notify queues a call to _next in the worker's goroutine.
+func (w *worker) notify() {
+	select {
+	case w.ch <- struct{}{}:
+	default:
+	}
+}
+
+// start launches the worker goroutine that processes events serially.
+func (w *worker) start() {
+	go func() {
+		for range w.ch {
+			w._next()
+		}
+	}()
 }
 
 func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
@@ -110,6 +126,7 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 		r:         r,
 		roomID:    roomID,
 		sentryHub: sentry.CurrentHub().Clone(),
+		ch:        make(chan struct{}, 1),
 	})
 	w, ok := v.(*worker)
 	if !ok {
@@ -216,7 +233,8 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 
 		// Go and start pulling messages off the queue.
 		w.subscription = sub
-		w.Act(nil, w._next)
+		w.start()
+		w.notify()
 	}
 }
 
@@ -263,7 +281,7 @@ func (r *Inputer) Start() error {
 }
 
 // _next is called by the worker for the room. It must only be called
-// by the actor embedded into the worker.
+// by the worker's goroutine.
 func (w *worker) _next() {
 	// Look up what the next event is that's waiting to be processed.
 	ctx, cancel := context.WithTimeout(w.r.ProcessContext.Context(), time.Minute)
@@ -279,8 +297,8 @@ func (w *worker) _next() {
 			return
 		}
 		// Make sure that once we're done here, we queue up another call
-		// to _next in the inbox.
-		defer w.Act(nil, w._next)
+		// to _next in the worker goroutine.
+		defer w.notify()
 	case errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {
@@ -295,7 +313,7 @@ func (w *worker) _next() {
 		// If so, we do have new messages after all, they just came at a bad time.
 		if w.ephemeralSeq > w.durableSeq {
 			w.Unlock()
-			w.Act(nil, w._next)
+			w.notify()
 			return
 		}
 
