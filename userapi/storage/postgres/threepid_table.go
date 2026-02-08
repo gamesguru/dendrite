@@ -72,7 +72,6 @@ func (s *threepidStatements) SelectLocalpartForThreePID(
 	ctx context.Context, txn *sql.Tx, threepid string, medium string,
 ) (localpart string, serverName spec.ServerName, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectLocalpartForThreePIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, threepid, medium).Scan(&localpart, &serverName)
 	if err == sql.ErrNoRows {
 		return "", "", nil
@@ -84,7 +83,7 @@ func (s *threepidStatements) SelectThreePIDsForLocalpart(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
 ) (threepids []authtypes.ThreePID, err error) {
-	rows, err := s.selectThreePIDsForLocalpartStmt.QueryContext(ctx, localpart, serverName) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectThreePIDsForLocalpartStmt.QueryContext(ctx, localpart, serverName)
 	if err != nil {
 		return
 	}
@@ -111,7 +110,6 @@ func (s *threepidStatements) InsertThreePID(
 	localpart string, serverName spec.ServerName,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.insertThreePIDStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, threepid, medium, localpart, serverName)
 	return
 }
@@ -120,7 +118,6 @@ func (s *threepidStatements) DeleteThreePID(
 	ctx context.Context, txn *sql.Tx, threepid string, medium string,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.deleteThreePIDStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, threepid, medium)
 	return
 }

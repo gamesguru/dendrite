@@ -69,7 +69,6 @@ func (s *backwardExtremitiesStatements) InsertsBackwardExtremity(
 	ctx context.Context, txn *sql.Tx, roomID, eventID string, prevEventID string,
 ) (err error) {
 	insertStmt := sqlutil.TxStmt(txn, s.insertBackwardExtremityStmt)
-	defer insertStmt.Close()
 	_, err = insertStmt.ExecContext(ctx, roomID, eventID, prevEventID)
 	return err
 }
@@ -78,8 +77,7 @@ func (s *backwardExtremitiesStatements) SelectBackwardExtremitiesForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (bwExtrems map[string][]string, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectBackwardExtremitiesForRoomStmt)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, roomID)
 	if err != nil {
 		return
 	}
@@ -102,7 +100,6 @@ func (s *backwardExtremitiesStatements) DeleteBackwardExtremity(
 	ctx context.Context, txn *sql.Tx, roomID, knownEventID string,
 ) (err error) {
 	deleteStmt := sqlutil.TxStmt(txn, s.deleteBackwardExtremityStmt)
-	defer deleteStmt.Close()
 	_, err = deleteStmt.ExecContext(ctx, roomID, knownEventID)
 	return err
 }
@@ -111,7 +108,6 @@ func (s *backwardExtremitiesStatements) PurgeBackwardExtremities(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeStmt := sqlutil.TxStmt(txn, s.purgeBackwardExtremitiesStmt)
-	defer purgeStmt.Close()
 	_, err := purgeStmt.ExecContext(ctx, roomID)
 	return err
 }

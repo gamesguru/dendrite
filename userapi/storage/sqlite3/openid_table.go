@@ -63,7 +63,6 @@ func (s *openIDTokenStatements) InsertOpenIDToken(
 	expiresAtMS int64,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.insertTokenStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, token, localpart, serverName, expiresAtMS)
 	return
 }

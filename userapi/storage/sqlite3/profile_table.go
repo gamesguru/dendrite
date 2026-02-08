@@ -84,7 +84,6 @@ func (s *profilesStatements) InsertProfile(
 	localpart string, serverName spec.ServerName,
 ) error {
 	insertProfileStmt := sqlutil.TxStmt(txn, s.insertProfileStmt)
-	defer insertProfileStmt.Close()
 	_, err := insertProfileStmt.ExecContext(ctx, localpart, serverName, "", "")
 	return err
 }
@@ -121,7 +120,6 @@ func (s *profilesStatements) SetAvatarURL(
 		return old, false, nil
 	}
 	stmt := sqlutil.TxStmt(txn, s.setAvatarURLStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, avatarURL, localpart, serverName).Scan(&profile.DisplayName)
 	return profile, true, err
 }
@@ -144,7 +142,6 @@ func (s *profilesStatements) SetDisplayName(
 		return old, false, nil
 	}
 	stmt := sqlutil.TxStmt(txn, s.setDisplayNameStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, displayName, localpart, serverName).Scan(&profile.AvatarURL)
 	return profile, true, err
 }
@@ -156,7 +153,7 @@ func (s *profilesStatements) SelectProfilesBySearch(
 	// The fmt.Sprintf directive below is building a parameter for the
 	// "LIKE" condition in the SQL query. %% escapes the % char, so the
 	// statement in the end will look like "LIKE %searchString%".
-	rows, err := s.selectProfilesBySearchStmt.QueryContext(ctx, fmt.Sprintf("%%%s%%", searchString), limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectProfilesBySearchStmt.QueryContext(ctx, fmt.Sprintf("%%%s%%", searchString), limit)
 	if err != nil {
 		return nil, err
 	}

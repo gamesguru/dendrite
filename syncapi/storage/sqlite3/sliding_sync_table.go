@@ -238,7 +238,6 @@ func (s *slidingSyncStatements) InsertConnection(
 	ctx context.Context, txn *sql.Tx, userID, deviceID, connID string, createdTS int64,
 ) (int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.insertConnectionStmt)
-	defer stmt.Close()
 	var connectionKey int64
 	err := stmt.QueryRowContext(ctx, userID, deviceID, connID, createdTS).Scan(&connectionKey)
 	return connectionKey, err
@@ -248,7 +247,6 @@ func (s *slidingSyncStatements) SelectConnectionByKey(
 	ctx context.Context, txn *sql.Tx, connectionKey int64,
 ) (*tables.SlidingSyncConnection, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionByKeyStmt)
-	defer stmt.Close()
 	var conn tables.SlidingSyncConnection
 	err := stmt.QueryRowContext(ctx, connectionKey).Scan(
 		&conn.ConnectionKey, &conn.UserID, &conn.DeviceID, &conn.ConnID, &conn.CreatedTS,
@@ -263,7 +261,6 @@ func (s *slidingSyncStatements) SelectConnectionByIDs(
 	ctx context.Context, txn *sql.Tx, userID, deviceID, connID string,
 ) (*tables.SlidingSyncConnection, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionByIDsStmt)
-	defer stmt.Close()
 	var conn tables.SlidingSyncConnection
 	err := stmt.QueryRowContext(ctx, userID, deviceID, connID).Scan(
 		&conn.ConnectionKey, &conn.UserID, &conn.DeviceID, &conn.ConnID, &conn.CreatedTS,
@@ -278,7 +275,6 @@ func (s *slidingSyncStatements) DeleteConnection(
 	ctx context.Context, txn *sql.Tx, connectionKey int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteConnectionStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, connectionKey)
 	return err
 }
@@ -287,7 +283,6 @@ func (s *slidingSyncStatements) DeleteOldConnections(
 	ctx context.Context, txn *sql.Tx, olderThanTS int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteOldConnectionsStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, olderThanTS)
 	return err
 }
@@ -298,7 +293,6 @@ func (s *slidingSyncStatements) InsertConnectionPosition(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, createdTS int64,
 ) (int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.insertConnectionPositionStmt)
-	defer stmt.Close()
 	var connectionPosition int64
 	err := stmt.QueryRowContext(ctx, connectionKey, createdTS).Scan(&connectionPosition)
 	return connectionPosition, err
@@ -308,7 +302,6 @@ func (s *slidingSyncStatements) SelectConnectionPosition(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64,
 ) (*tables.SlidingSyncConnectionPosition, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionPositionStmt)
-	defer stmt.Close()
 	var pos tables.SlidingSyncConnectionPosition
 	err := stmt.QueryRowContext(ctx, connectionPosition).Scan(
 		&pos.ConnectionPosition, &pos.ConnectionKey, &pos.CreatedTS,
@@ -323,7 +316,6 @@ func (s *slidingSyncStatements) SelectLatestConnectionPosition(
 	ctx context.Context, txn *sql.Tx, connectionKey int64,
 ) (*tables.SlidingSyncConnectionPosition, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectLatestConnectionPositionStmt)
-	defer stmt.Close()
 	var pos tables.SlidingSyncConnectionPosition
 	err := stmt.QueryRowContext(ctx, connectionKey).Scan(
 		&pos.ConnectionPosition, &pos.ConnectionKey, &pos.CreatedTS,
@@ -340,7 +332,6 @@ func (s *slidingSyncStatements) InsertRequiredState(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, requiredState string,
 ) (int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.insertRequiredStateStmt)
-	defer stmt.Close()
 	var requiredStateID int64
 	err := stmt.QueryRowContext(ctx, connectionKey, requiredState).Scan(&requiredStateID)
 	return requiredStateID, err
@@ -350,7 +341,6 @@ func (s *slidingSyncStatements) SelectRequiredState(
 	ctx context.Context, txn *sql.Tx, requiredStateID int64,
 ) (string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRequiredStateStmt)
-	defer stmt.Close()
 	var requiredState string
 	err := stmt.QueryRowContext(ctx, requiredStateID).Scan(&requiredState)
 	if err == sql.ErrNoRows {
@@ -363,7 +353,6 @@ func (s *slidingSyncStatements) SelectRequiredStateByContent(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, requiredState string,
 ) (int64, bool, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRequiredStateByContentStmt)
-	defer stmt.Close()
 	var requiredStateID int64
 	err := stmt.QueryRowContext(ctx, connectionKey, requiredState).Scan(&requiredStateID)
 	if err == sql.ErrNoRows {
@@ -381,7 +370,6 @@ func (s *slidingSyncStatements) UpsertRoomConfig(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64, roomID string, timelineLimit int, requiredStateID int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertRoomConfigStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, connectionPosition, roomID, timelineLimit, requiredStateID)
 	return err
 }
@@ -390,7 +378,6 @@ func (s *slidingSyncStatements) SelectRoomConfig(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64, roomID string,
 ) (*tables.SlidingSyncRoomConfig, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomConfigStmt)
-	defer stmt.Close()
 	var config tables.SlidingSyncRoomConfig
 	err := stmt.QueryRowContext(ctx, connectionPosition, roomID).Scan(
 		&config.ConnectionPosition, &config.RoomID, &config.TimelineLimit, &config.RequiredStateID,
@@ -405,7 +392,6 @@ func (s *slidingSyncStatements) SelectLatestRoomConfig(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, roomID string,
 ) (*tables.SlidingSyncRoomConfig, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectLatestRoomConfigStmt)
-	defer stmt.Close()
 	var config tables.SlidingSyncRoomConfig
 	err := stmt.QueryRowContext(ctx, connectionKey, roomID).Scan(
 		&config.ConnectionPosition, &config.RoomID, &config.TimelineLimit, &config.RequiredStateID,
@@ -445,8 +431,7 @@ func (s *slidingSyncStatements) SelectRoomConfigsByPosition(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64,
 ) (map[string]*tables.SlidingSyncRoomConfig, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomConfigsByPositionStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, connectionPosition) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, connectionPosition)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +456,6 @@ func (s *slidingSyncStatements) UpsertConnectionStream(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64, roomID, stream, roomStatus, lastToken string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertConnectionStreamStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, connectionPosition, roomID, stream, roomStatus, lastToken)
 	return err
 }
@@ -480,7 +464,6 @@ func (s *slidingSyncStatements) SelectConnectionStream(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64, roomID, stream string,
 ) (*tables.SlidingSyncConnectionStream, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionStreamStmt)
-	defer stmt.Close()
 	var streamData tables.SlidingSyncConnectionStream
 	err := stmt.QueryRowContext(ctx, connectionPosition, roomID, stream).Scan(
 		&streamData.ConnectionPosition, &streamData.RoomID, &streamData.Stream,
@@ -496,7 +479,6 @@ func (s *slidingSyncStatements) SelectLatestConnectionStream(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, stream string,
 ) (*tables.SlidingSyncConnectionStream, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectLatestConnectionStreamStmt)
-	defer stmt.Close()
 	var streamData tables.SlidingSyncConnectionStream
 	err := stmt.QueryRowContext(ctx, connectionKey, roomID, stream).Scan(
 		&streamData.ConnectionPosition, &streamData.RoomID, &streamData.Stream,
@@ -512,8 +494,7 @@ func (s *slidingSyncStatements) SelectAllLatestConnectionStreams(
 	ctx context.Context, txn *sql.Tx, connectionKey int64,
 ) (map[string]map[string]*tables.SlidingSyncConnectionStream, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectAllLatestConnectionStreamsStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, connectionKey) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, connectionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -543,8 +524,7 @@ func (s *slidingSyncStatements) SelectConnectionStreamsByPosition(
 	ctx context.Context, txn *sql.Tx, connectionPosition int64,
 ) (map[string]map[string]*tables.SlidingSyncConnectionStream, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionStreamsByPositionStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, connectionPosition) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, connectionPosition)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +554,6 @@ func (s *slidingSyncStatements) DeleteOtherConnectionPositions(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, keepPosition int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteOtherConnectionPositionsStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, connectionKey, keepPosition)
 	return err
 }
@@ -585,7 +564,6 @@ func (s *slidingSyncStatements) UpsertConnectionList(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, roomIDsJSON string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertConnectionListStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, connectionKey, listName, roomIDsJSON)
 	return err
 }
@@ -594,7 +572,6 @@ func (s *slidingSyncStatements) SelectConnectionList(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string,
 ) (string, bool, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectConnectionListStmt)
-	defer stmt.Close()
 	var roomIDsJSON string
 	err := stmt.QueryRowContext(ctx, connectionKey, listName).Scan(&roomIDsJSON)
 	if err == sql.ErrNoRows {

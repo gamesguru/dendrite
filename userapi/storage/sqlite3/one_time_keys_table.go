@@ -87,7 +87,7 @@ func NewSqliteOneTimeKeysTable(db *sql.DB) (tables.OneTimeKeys, error) {
 }
 
 func (s *oneTimeKeysStatements) SelectOneTimeKeys(ctx context.Context, userID, deviceID string, keyIDsWithAlgorithms []string) (map[string]json.RawMessage, error) {
-	rows, err := s.selectKeysStmt.QueryContext(ctx, userID, deviceID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectKeysStmt.QueryContext(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (s *oneTimeKeysStatements) CountOneTimeKeys(ctx context.Context, userID, de
 		UserID:   userID,
 		KeyCount: make(map[string]int),
 	}
-	rows, err := s.selectKeysCountStmt.QueryContext(ctx, userID, deviceID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectKeysCountStmt.QueryContext(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,6 @@ func (s *oneTimeKeysStatements) InsertOneTimeKeys(
 		KeyCount: make(map[string]int),
 	}
 	upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
-	defer upsertKeysStmt.Close()
 	for keyIDWithAlgo, keyJSON := range keys.KeyJSON {
 		algo, keyID := keys.Split(keyIDWithAlgo)
 		_, err := upsertKeysStmt.ExecContext(
@@ -157,8 +156,7 @@ func (s *oneTimeKeysStatements) InsertOneTimeKeys(
 		}
 	}
 	selectKeysCountStmt := sqlutil.TxStmt(txn, s.selectKeysCountStmt)
-	defer selectKeysCountStmt.Close()
-	rows, err := selectKeysCountStmt.QueryContext(ctx, keys.UserID, keys.DeviceID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectKeysCountStmt.QueryContext(ctx, keys.UserID, keys.DeviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +179,6 @@ func (s *oneTimeKeysStatements) SelectAndDeleteOneTimeKey(
 	var keyID string
 	var keyJSON string
 	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectKeyByAlgorithmStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, userID, deviceID, algorithm).Scan(&keyID, &keyJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -190,7 +187,6 @@ func (s *oneTimeKeysStatements) SelectAndDeleteOneTimeKey(
 		return nil, err
 	}
 	deleteOneTimeKeyStmt := sqlutil.TxStmtContext(ctx, txn, s.deleteOneTimeKeyStmt)
-	defer deleteOneTimeKeyStmt.Close()
 	_, err = deleteOneTimeKeyStmt.ExecContext(ctx, userID, deviceID, algorithm, keyID)
 	if err != nil {
 		return nil, err
@@ -205,7 +201,6 @@ func (s *oneTimeKeysStatements) SelectAndDeleteOneTimeKey(
 
 func (s *oneTimeKeysStatements) DeleteOneTimeKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
 	deleteOneTimeKeysStmt := sqlutil.TxStmt(txn, s.deleteOneTimeKeysStmt)
-	defer deleteOneTimeKeysStmt.Close()
 	_, err := deleteOneTimeKeysStmt.ExecContext(ctx, userID, deviceID)
 	return err
 }

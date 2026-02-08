@@ -71,7 +71,6 @@ func (s *accountDataStatements) InsertAccountData(
 	roomID, dataType string, content json.RawMessage,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
-	defer stmt.Close()
 	// Empty/nil json.RawMessage is not interpreted as "nil", so use *json.RawMessage
 	// when passing the data to trigger "NOT NULL" constraint
 	var data *json.RawMessage
@@ -90,7 +89,7 @@ func (s *accountDataStatements) SelectAccountData(
 	/* rooms */ map[string]map[string]json.RawMessage,
 	error,
 ) {
-	rows, err := s.selectAccountDataStmt.QueryContext(ctx, localpart, serverName) //nolint:sqlclosecheck
+	rows, err := s.selectAccountDataStmt.QueryContext(ctx, localpart, serverName)
 	if err != nil {
 		return nil, nil, err
 	}

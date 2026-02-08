@@ -85,7 +85,6 @@ func (s *relationsStatements) InsertRelation(
 	ctx context.Context, txn *sql.Tx, roomID, eventID, childEventID, childEventType, relType string,
 ) (err error) {
 	insertRelationStmt := sqlutil.TxStmt(txn, s.insertRelationStmt)
-	defer insertRelationStmt.Close()
 	_, err = insertRelationStmt.ExecContext(
 		ctx, roomID, eventID, childEventID, childEventType, relType,
 	)
@@ -96,7 +95,6 @@ func (s *relationsStatements) DeleteRelation(
 	ctx context.Context, txn *sql.Tx, roomID, childEventID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRelationStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx, roomID, childEventID,
 	)
@@ -111,11 +109,11 @@ func (s *relationsStatements) SelectRelationsInRange(
 	var lastPos types.StreamPosition
 	var stmt *sql.Stmt
 	if r.Backwards {
-		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeDescStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeDescStmt)
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeAscStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectRelationsInRangeAscStmt)
 	}
-	rows, err := stmt.QueryContext(ctx, roomID, eventID, relType, eventType, r.Low(), r.High(), limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomID, eventID, relType, eventType, r.Low(), r.High(), limit)
 	if err != nil {
 		return nil, lastPos, err
 	}
@@ -148,7 +146,6 @@ func (s *relationsStatements) SelectMaxRelationID(
 	ctx context.Context, txn *sql.Tx,
 ) (id int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMaxRelationIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&id)
 	return
 }

@@ -98,7 +98,6 @@ func (s *queuePDUsStatements) InsertQueuePDU(
 	nid int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertQueuePDUStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		transactionID, // the transaction ID that we initially attempted
@@ -126,7 +125,6 @@ func (s *queuePDUsStatements) DeleteQueuePDUs(
 	}
 
 	stmt := sqlutil.TxStmt(txn, deleteStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, params...)
 	return err
 }
@@ -136,7 +134,6 @@ func (s *queuePDUsStatements) SelectQueuePDUNextTransactionID(
 ) (gomatrixserverlib.TransactionID, error) {
 	var transactionID gomatrixserverlib.TransactionID
 	stmt := sqlutil.TxStmt(txn, s.selectQueueNextTransactionIDStmt)
-	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, serverName).Scan(&transactionID)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -149,7 +146,6 @@ func (s *queuePDUsStatements) SelectQueuePDUReferenceJSONCount(
 ) (int64, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.selectQueueReferenceJSONCountStmt)
-	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, jsonNID).Scan(&count)
 	if err == sql.ErrNoRows {
 		return -1, nil
@@ -163,8 +159,7 @@ func (s *queuePDUsStatements) SelectQueuePDUs(
 	limit int,
 ) ([]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueuePDUsStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, serverName, limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, serverName, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +180,7 @@ func (s *queuePDUsStatements) SelectQueuePDUServerNames(
 	ctx context.Context, txn *sql.Tx,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectQueueServerNamesStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}

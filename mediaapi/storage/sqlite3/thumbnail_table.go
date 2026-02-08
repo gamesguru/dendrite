@@ -74,7 +74,6 @@ func NewSQLiteThumbnailsTable(db *sql.DB) (tables.Thumbnails, error) {
 func (s *thumbnailStatements) InsertThumbnail(ctx context.Context, txn *sql.Tx, thumbnailMetadata *types.ThumbnailMetadata) error {
 	thumbnailMetadata.MediaMetadata.CreationTimestamp = spec.AsTimestamp(time.Now())
 	insertStmt := sqlutil.TxStmtContext(ctx, txn, s.insertThumbnailStmt)
-	defer insertStmt.Close()
 	_, err := insertStmt.ExecContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
@@ -109,7 +108,6 @@ func (s *thumbnailStatements) SelectThumbnail(
 		},
 	}
 	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
@@ -130,8 +128,7 @@ func (s *thumbnailStatements) SelectThumbnails(
 	mediaOrigin spec.ServerName,
 ) ([]*types.ThumbnailMetadata, error) {
 	selectAllStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailsStmt)
-	defer selectAllStmt.Close()
-	rows, err := selectAllStmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectAllStmt.QueryContext(
 		ctx, mediaID, mediaOrigin,
 	)
 	if err != nil {

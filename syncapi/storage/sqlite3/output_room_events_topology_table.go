@@ -103,7 +103,6 @@ func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
 	depth := depth.Clamp(event.Depth())
 	insertEventInTopologyStmt := sqlutil.TxStmt(txn, s.insertEventInTopologyStmt)
-	defer insertEventInTopologyStmt.Close()
 	_, err := insertEventInTopologyStmt.ExecContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	)
@@ -123,13 +122,13 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 	// is requested or not.
 	var stmt *sql.Stmt
 	if chronologicalOrder {
-		stmt = sqlutil.TxStmt(txn, s.selectEventIDsInRangeASCStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectEventIDsInRangeASCStmt)
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.selectEventIDsInRangeDESCStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectEventIDsInRangeDESCStmt)
 	}
 
 	// Query the event IDs.
-	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, maxDepth, maxStreamPos, limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, maxDepth, maxStreamPos, limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no event matched the request, return an empty slice.
 		return []string{}, start, end, nil
@@ -165,7 +164,6 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionInTopology(
 	ctx context.Context, txn *sql.Tx, eventID string,
 ) (pos types.StreamPosition, spos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectPositionInTopologyStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, eventID).Scan(&pos, &spos)
 	return
 }
@@ -176,9 +174,9 @@ func (s *outputRoomEventsTopologyStatements) SelectStreamToTopologicalPosition(
 	ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition, backwardOrdering bool,
 ) (topoPos types.StreamPosition, err error) {
 	if backwardOrdering {
-		err = sqlutil.TxStmt(txn, s.selectStreamToTopologicalPositionDescStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos) //nolint:sqlclosecheck
+		err = sqlutil.TxStmt(txn, s.selectStreamToTopologicalPositionDescStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos)
 	} else {
-		err = sqlutil.TxStmt(txn, s.selectStreamToTopologicalPositionAscStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos) //nolint:sqlclosecheck
+		err = sqlutil.TxStmt(txn, s.selectStreamToTopologicalPositionAscStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos)
 	}
 	return
 }
@@ -187,7 +185,6 @@ func (s *outputRoomEventsTopologyStatements) PurgeEventsTopology(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeEventsTopologyStmt := sqlutil.TxStmt(txn, s.purgeEventsTopologyStmt)
-	defer purgeEventsTopologyStmt.Close()
 	_, err := purgeEventsTopologyStmt.ExecContext(ctx, roomID)
 	return err
 }

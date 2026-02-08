@@ -112,7 +112,6 @@ func (r *reportedEventsStatements) InsertReportedEvent(
 	score int64,
 ) (int64, error) {
 	stmt := sqlutil.TxStmt(txn, r.insertReportedEventsStmt)
-	defer stmt.Close()
 
 	var reportID int64
 	err := stmt.QueryRowContext(ctx,
@@ -137,9 +136,9 @@ func (r *reportedEventsStatements) SelectReportedEvents(
 ) ([]api.QueryAdminEventReportsResponse, int64, error) {
 	var stmt *sql.Stmt
 	if backwards {
-		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsDescStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsDescStmt)
 	} else {
-		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsAscStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsAscStmt)
 	}
 
 	var qryRoomNID *int64
@@ -153,7 +152,7 @@ func (r *reportedEventsStatements) SelectReportedEvents(
 		qryReportingUser = &v
 	}
 
-	rows, err := stmt.QueryContext(ctx, //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx,
 		qryRoomNID,
 		qryReportingUser,
 		from,
@@ -193,7 +192,6 @@ func (r *reportedEventsStatements) SelectReportedEvent(
 	reportID uint64,
 ) (api.QueryAdminEventReportResponse, error) {
 	stmt := sqlutil.TxStmt(txn, r.selectReportedEventStmt)
-	defer stmt.Close()
 
 	var row api.QueryAdminEventReportResponse
 	if err := stmt.QueryRowContext(ctx, reportID).Scan(
@@ -213,7 +211,6 @@ func (r *reportedEventsStatements) SelectReportedEvent(
 
 func (r *reportedEventsStatements) DeleteReportedEvent(ctx context.Context, txn *sql.Tx, reportID uint64) error {
 	stmt := sqlutil.TxStmt(txn, r.deleteReportedEventStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, reportID)
 	return err
 }

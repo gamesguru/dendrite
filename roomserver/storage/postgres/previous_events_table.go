@@ -87,7 +87,6 @@ func (s *previousEventStatements) InsertPreviousEvent(
 	eventNID types.EventNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertPreviousEventStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx, previousEventID, int64(eventNID),
 	)
@@ -101,6 +100,5 @@ func (s *previousEventStatements) SelectPreviousEventExists(
 ) error {
 	var ok int64
 	stmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
-	defer stmt.Close()
 	return stmt.QueryRowContext(ctx, eventID).Scan(&ok)
 }

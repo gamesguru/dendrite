@@ -281,7 +281,6 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 		return err
 	}
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
-	defer updateEventJSONStmt.Close()
 	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
 	return err
 }
@@ -297,7 +296,6 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 	var err error
 	if stateFilter != nil {
 		stmt := sqlutil.TxStmt(txn, s.selectStateInRangeFilteredStmt)
-		defer stmt.Close()
 		senders, notSenders := getSendersStateFilterFilter(stateFilter)
 		rows, err = stmt.QueryContext(
 			ctx, r.Low(), r.High(), roomIDs,
@@ -309,7 +307,6 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 		)
 	} else {
 		stmt := sqlutil.TxStmt(txn, s.selectStateInRangeStmt)
-		defer stmt.Close()
 		rows, err = stmt.QueryContext(
 			ctx, r.Low(), r.High(), roomIDs,
 		)
@@ -379,7 +376,6 @@ func (s *outputRoomEventsStatements) SelectMaxEventID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxEventIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -416,7 +412,6 @@ func (s *outputRoomEventsStatements) InsertEvent(
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.insertEventStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(
 		ctx,
 		event.RoomID().String(),
@@ -445,13 +440,13 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 ) (map[string]types.RecentEvents, error) {
 	var stmt *sql.Stmt
 	if onlySyncEvents {
-		stmt = sqlutil.TxStmt(txn, s.selectRecentEventsForSyncStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectRecentEventsForSyncStmt)
 	} else {
-		stmt = sqlutil.TxStmt(txn, s.selectRecentEventsStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectRecentEventsStmt)
 	}
 	senders, notSenders := getSendersRoomEventFilter(eventFilter)
 
-	rows, err := stmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(
 		ctx, roomIDs, ra.Low(), ra.High(),
 		senders,
 		notSenders,
@@ -543,8 +538,7 @@ func (s *outputRoomEventsStatements) SelectRoomsWithEventsSince(
 	roomIDs []string, since types.StreamPosition,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithEventsSinceStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, roomIDs, since) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomIDs, since)
 	if err != nil {
 		return nil, err
 	}
@@ -572,11 +566,11 @@ func (s *outputRoomEventsStatements) SelectEvents(
 		err  error
 	)
 	if filter == nil {
-		stmt = sqlutil.TxStmt(txn, s.selectEventsStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectEventsStmt)
 		rows, err = stmt.QueryContext(ctx, eventIDs)
 	} else {
 		senders, notSenders := getSendersRoomEventFilter(filter)
-		stmt = sqlutil.TxStmt(txn, s.selectEventsWitFilterStmt) //nolint:sqlclosecheck
+		stmt = sqlutil.TxStmt(txn, s.selectEventsWitFilterStmt)
 		rows, err = stmt.QueryContext(ctx,
 			eventIDs,
 			senders,
@@ -616,14 +610,12 @@ func (s *outputRoomEventsStatements) DeleteEventsForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
 	deleteEventsForRoomStmt := sqlutil.TxStmt(txn, s.deleteEventsForRoomStmt)
-	defer deleteEventsForRoomStmt.Close()
 	_, err = deleteEventsForRoomStmt.ExecContext(ctx, roomID)
 	return err
 }
 
 func (s *outputRoomEventsStatements) SelectContextEvent(ctx context.Context, txn *sql.Tx, roomID, eventID string) (id int, evt rstypes.HeaderedEvent, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectContextEventStmt)
-	defer selectStmt.Close()
 	row := selectStmt.QueryRowContext(ctx, roomID, eventID)
 
 	var eventAsString string
@@ -644,8 +636,7 @@ func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 ) (evts []*rstypes.HeaderedEvent, err error) {
 	senders, notSenders := getSendersRoomEventFilter(filter)
 	selectContextBeforeEventStmt := sqlutil.TxStmt(txn, s.selectContextBeforeEventStmt)
-	defer selectContextBeforeEventStmt.Close()
-	rows, err := selectContextBeforeEventStmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectContextBeforeEventStmt.QueryContext(
 		ctx, roomID, id, filter.Limit,
 		senders,
 		notSenders,
@@ -681,8 +672,7 @@ func (s *outputRoomEventsStatements) SelectContextAfterEvent(
 ) (lastID int, evts []*rstypes.HeaderedEvent, err error) {
 	senders, notSenders := getSendersRoomEventFilter(filter)
 	selectContextAfterEventStmt := sqlutil.TxStmt(txn, s.selectContextAfterEventStmt)
-	defer selectContextAfterEventStmt.Close()
-	rows, err := selectContextAfterEventStmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectContextAfterEventStmt.QueryContext(
 		ctx, roomID, id, filter.Limit,
 		senders,
 		notSenders,
@@ -756,15 +746,13 @@ func (s *outputRoomEventsStatements) PurgeEvents(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeEventsStmt := sqlutil.TxStmt(txn, s.purgeEventsStmt)
-	defer purgeEventsStmt.Close()
 	_, err := purgeEventsStmt.ExecContext(ctx, roomID)
 	return err
 }
 
 func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, limit, afterID int64, types []string) (map[int64]rstypes.HeaderedEvent, error) {
 	selectSearchStmt := sqlutil.TxStmt(txn, s.selectSearchStmt)
-	defer selectSearchStmt.Close()
-	rows, err := selectSearchStmt.QueryContext(ctx, afterID, types, limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectSearchStmt.QueryContext(ctx, afterID, types, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -810,8 +798,7 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.selectMaxStreamPositionsForRoomsStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, roomIDs, BumpEventTypes) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomIDs, BumpEventTypes)
 	if err != nil {
 		return nil, err
 	}

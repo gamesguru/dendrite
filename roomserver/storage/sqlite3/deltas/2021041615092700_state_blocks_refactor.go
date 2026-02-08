@@ -98,7 +98,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 		}
 		for _, block := range blocks {
 			if err = func() error {
-				blockrows, berr := tx.QueryContext(ctx, `SELECT event_nid FROM _roomserver_state_block WHERE state_block_nid = $1`, block) //nolint:sqlclosecheck // rows closed by defer below
+				blockrows, berr := tx.QueryContext(ctx, `SELECT event_nid FROM _roomserver_state_block WHERE state_block_nid = $1`, block)
 				if berr != nil {
 					return fmt.Errorf("tx.QueryContext (event nids from old block): %w", berr)
 				}

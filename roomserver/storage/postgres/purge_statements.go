@@ -104,7 +104,6 @@ func (s *purgeStatements) PurgeRoom(
 	}
 	for _, stmt := range purgeByRoomID {
 		execStmt := sqlutil.TxStmt(txn, stmt)
-		defer execStmt.Close()
 		_, err := execStmt.ExecContext(ctx, roomID)
 		if err != nil {
 			return err
@@ -126,7 +125,6 @@ func (s *purgeStatements) PurgeRoom(
 	}
 	for _, stmt := range purgeByRoomNID {
 		execStmt := sqlutil.TxStmt(txn, stmt)
-		defer execStmt.Close()
 		_, err := execStmt.ExecContext(ctx, roomNID)
 		if err != nil {
 			return err

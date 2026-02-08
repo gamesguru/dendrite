@@ -92,14 +92,12 @@ func NewSqliteDeviceKeysTable(db *sql.DB) (tables.DeviceKeys, error) {
 
 func (s *deviceKeysStatements) DeleteDeviceKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
 
 func (s *deviceKeysStatements) DeleteAllDeviceKeys(ctx context.Context, txn *sql.Tx, userID string) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, userID)
 	return err
 }
@@ -115,7 +113,7 @@ func (s *deviceKeysStatements) SelectBatchDeviceKeys(ctx context.Context, userID
 	} else {
 		stmt = s.selectBatchDeviceKeysStmt
 	}
-	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +165,6 @@ func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn
 	// nullable if there are no results
 	var nullStream sql.NullInt64
 	maxStmt := sqlutil.TxStmt(txn, s.selectMaxStreamForUserStmt)
-	defer maxStmt.Close()
 	err = maxStmt.QueryRowContext(ctx, userID).Scan(&nullStream)
 	if err == sql.ErrNoRows {
 		err = nil
@@ -199,7 +196,6 @@ func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID
 
 func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx, keys []api.DeviceMessage) error {
 	upsertStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
-	defer upsertStmt.Close()
 	for _, key := range keys {
 		now := time.Now().Unix()
 		_, err := upsertStmt.ExecContext(

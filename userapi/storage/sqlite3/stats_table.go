@@ -250,7 +250,6 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 	}
 	defer internal.CloseAndLogIfError(ctx, queryStmt, "allUsers.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, queryStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx,
 		1, 2, 3, 4, //nolint:mnd
 	).Scan(&result)
@@ -265,7 +264,6 @@ func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (res
 	}
 	defer internal.CloseAndLogIfError(ctx, queryStmt, "nonBridgedUsers.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, queryStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx,
 		1, 2, 3, //nolint:mnd
 	).Scan(&result)
@@ -284,7 +282,6 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 	}
 	defer internal.CloseAndLogIfError(ctx, queryStmt, "registeredUserByType.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, queryStmt)
-	defer stmt.Close()
 	registeredAfter := time.Now().AddDate(0, 0, -30)
 
 	params := make([]any, len(nonGuests)*2+2)
@@ -296,7 +293,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 	params[3] = api.AccountTypeGuest              // $4
 	params[7] = spec.AsTimestamp(registeredAfter) // $8
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +314,6 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 
 func (s *statsStatements) dailyUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUsersLastSeenAfterStmt)
-	defer stmt.Close()
 	lastSeenAfter := time.Now().AddDate(0, 0, -1)
 	err = stmt.QueryRowContext(ctx,
 		spec.AsTimestamp(lastSeenAfter),
@@ -327,7 +323,6 @@ func (s *statsStatements) dailyUsers(ctx context.Context, txn *sql.Tx) (result i
 
 func (s *statsStatements) monthlyUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUsersLastSeenAfterStmt)
-	defer stmt.Close()
 	lastSeenAfter := time.Now().AddDate(0, 0, -30)
 	err = stmt.QueryRowContext(ctx,
 		spec.AsTimestamp(lastSeenAfter),
@@ -341,11 +336,10 @@ func (s *statsStatements) monthlyUsers(ctx context.Context, txn *sql.Tx) (result
 //   - Where account creation and last_seen are > 30 days apart
 func (s *statsStatements) r30Users(ctx context.Context, txn *sql.Tx) (map[string]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.countR30UsersStmt)
-	defer stmt.Close()
 	lastSeenAfter := time.Now().AddDate(0, 0, -30)
 	diff := time.Hour * 24 * 30 //nolint:mnd
 
-	rows, err := stmt.QueryContext(ctx, //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx,
 		spec.AsTimestamp(lastSeenAfter),
 		spec.AsTimestamp(lastSeenAfter),
 		diff.Milliseconds(),
@@ -379,12 +373,11 @@ R30UsersV2 counts the number of 30 day retained users, defined as users that:
 */
 func (s *statsStatements) r30UsersV2(ctx context.Context, txn *sql.Tx) (map[string]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.countR30UsersV2Stmt)
-	defer stmt.Close()
 	sixtyDaysAgo := time.Now().AddDate(0, 0, -60)
 	diff := time.Hour * 24 * 30                //nolint:mnd
 	tomorrow := time.Now().Add(time.Hour * 24) //nolint:mnd
 
-	rows, err := stmt.QueryContext(ctx, //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx,
 		spec.AsTimestamp(sixtyDaysAgo),
 		spec.AsTimestamp(tomorrow),
 		diff.Milliseconds(),
@@ -465,7 +458,6 @@ func (s *statsStatements) UserStatistics(ctx context.Context, txn *sql.Tx) (*typ
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.dbEngineVersionStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&dbEngine.Version)
 	return stats, dbEngine, err
 }
@@ -475,7 +467,6 @@ func (s *statsStatements) UpdateUserDailyVisits(
 	startTime, lastUpdate time.Time,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateUserDailyVisitsStmt)
-	defer stmt.Close()
 	startTime = startTime.Truncate(time.Hour * 24) //nolint:mnd
 
 	// edge case
@@ -499,7 +490,6 @@ func (s *statsStatements) UpsertDailyStats(
 	activeRooms, activeE2EERooms int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertMessagesStmt)
-	defer stmt.Close()
 	timestamp := time.Now().Truncate(time.Hour * 24) //nolint:mnd
 	_, err := stmt.ExecContext(ctx,
 		spec.AsTimestamp(timestamp),
@@ -515,7 +505,6 @@ func (s *statsStatements) DailyRoomsMessages(
 	serverName spec.ServerName,
 ) (msgStats types.MessageStats, activeRooms, activeE2EERooms int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectDailyMessagesStmt)
-	defer stmt.Close()
 	timestamp := time.Now().Truncate(time.Hour * 24) //nolint:mnd
 
 	err = stmt.QueryRowContext(ctx, serverName, spec.AsTimestamp(timestamp)).

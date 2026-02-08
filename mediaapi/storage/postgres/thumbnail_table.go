@@ -86,7 +86,6 @@ func (s *thumbnailStatements) InsertThumbnail(
 ) error {
 	thumbnailMetadata.MediaMetadata.CreationTimestamp = spec.AsTimestamp(time.Now())
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.insertThumbnailStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
@@ -121,7 +120,6 @@ func (s *thumbnailStatements) SelectThumbnail(
 		},
 	}
 	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(
 		ctx,
 		thumbnailMetadata.MediaMetadata.MediaID,
@@ -141,8 +139,7 @@ func (s *thumbnailStatements) SelectThumbnails(
 	ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName,
 ) ([]*types.ThumbnailMetadata, error) {
 	selectsStmt := sqlutil.TxStmtContext(ctx, txn, s.selectThumbnailsStmt)
-	defer selectsStmt.Close()
-	rows, err := selectsStmt.QueryContext( //nolint:sqlclosecheck
+	rows, err := selectsStmt.QueryContext(
 		ctx, mediaID, mediaOrigin,
 	)
 	if err != nil {

@@ -88,7 +88,6 @@ func (s *inviteStatements) InsertInviteEvent(
 ) (bool, error) {
 	var count int64
 	stmt := sqlutil.TxStmt(txn, s.insertInviteEventStmt)
-	defer stmt.Close()
 	result, err := stmt.ExecContext(
 		ctx, inviteEventID, roomNID, targetUserNID, senderUserNID, inviteEventJSON,
 	)
@@ -108,8 +107,7 @@ func (s *inviteStatements) UpdateInviteRetired(
 ) (eventIDs []string, err error) {
 	// gather all the event IDs we will retire
 	stmt := sqlutil.TxStmt(txn, s.selectInvitesAboutToRetireStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID)
 	if err != nil {
 		return
 	}
@@ -125,7 +123,7 @@ func (s *inviteStatements) UpdateInviteRetired(
 		return
 	}
 	// now retire the invites
-	stmt = sqlutil.TxStmt(txn, s.updateInviteRetiredStmt) //nolint:sqlclosecheck
+	stmt = sqlutil.TxStmt(txn, s.updateInviteRetiredStmt)
 	_, err = stmt.ExecContext(ctx, roomNID, targetUserNID)
 	return
 }
@@ -136,8 +134,7 @@ func (s *inviteStatements) SelectInviteActiveForUserInRoom(
 	targetUserNID types.EventStateKeyNID, roomNID types.RoomNID,
 ) ([]types.EventStateKeyNID, []string, []byte, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectInviteActiveForUserInRoomStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(
 		ctx, targetUserNID, roomNID,
 	)
 	if err != nil {

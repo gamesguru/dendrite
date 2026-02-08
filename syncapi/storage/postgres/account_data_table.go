@@ -94,8 +94,7 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 	pos = r.Low()
 
 	stmt := sqlutil.TxStmt(txn, s.selectAccountDataInRangeStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(
 		ctx, userID, r.Low(), r.High(),
 		filterConvertTypeWildcardToSQL(accountDataEventFilter.Types),
 		filterConvertTypeWildcardToSQL(accountDataEventFilter.NotTypes),
@@ -135,7 +134,6 @@ func (s *accountDataStatements) SelectMaxAccountDataID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxAccountDataIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64

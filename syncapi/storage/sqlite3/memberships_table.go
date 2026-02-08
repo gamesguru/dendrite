@@ -103,7 +103,6 @@ func (s *membershipsStatements) UpsertMembership(
 		return fmt.Errorf("event.Membership: %w", err)
 	}
 	upsertMembershipStmt := sqlutil.TxStmt(txn, s.upsertMembershipStmt)
-	defer upsertMembershipStmt.Close()
 	_, err = upsertMembershipStmt.ExecContext(
 		ctx,
 		event.RoomID().String(),
@@ -120,7 +119,6 @@ func (s *membershipsStatements) SelectMembershipCount(
 	ctx context.Context, txn *sql.Tx, roomID, membership string, pos types.StreamPosition,
 ) (count int, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipCountStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, pos, membership).Scan(&count)
 	return
 }
@@ -132,7 +130,6 @@ func (s *membershipsStatements) SelectMembershipForUser(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64,
 ) (membership string, topologyPos int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipForUserStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, userID, pos).Scan(&membership, &topologyPos)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -147,7 +144,6 @@ func (s *membershipsStatements) PurgeMemberships(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeMembershipsStmt := sqlutil.TxStmt(txn, s.purgeMembershipsStmt)
-	defer purgeMembershipsStmt.Close()
 	_, err := purgeMembershipsStmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -158,8 +154,7 @@ func (s *membershipsStatements) SelectMemberships(
 	membership, notMembership *string,
 ) (eventIDs []string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembersStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, membership, notMembership) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, membership, notMembership)
 	if err != nil {
 		return
 	}

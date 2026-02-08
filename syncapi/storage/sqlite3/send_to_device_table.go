@@ -94,7 +94,6 @@ func (s *sendToDeviceStatements) InsertSendToDeviceMessage(
 ) (pos types.StreamPosition, err error) {
 	var result sql.Result
 	insertSendToDeviceMessageStmt := sqlutil.TxStmt(txn, s.insertSendToDeviceMessageStmt)
-	defer insertSendToDeviceMessageStmt.Close()
 	result, err = insertSendToDeviceMessageStmt.ExecContext(ctx, userID, deviceID, content)
 	if p, err := result.LastInsertId(); err != nil {
 		return 0, err
@@ -108,8 +107,7 @@ func (s *sendToDeviceStatements) SelectSendToDeviceMessages(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, from, to types.StreamPosition,
 ) (lastPos types.StreamPosition, events []types.SendToDeviceEvent, err error) {
 	selectSendToDeviceMessagesStmt := sqlutil.TxStmt(txn, s.selectSendToDeviceMessagesStmt)
-	defer selectSendToDeviceMessagesStmt.Close()
-	rows, err := selectSendToDeviceMessagesStmt.QueryContext(ctx, userID, deviceID, from, to) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectSendToDeviceMessagesStmt.QueryContext(ctx, userID, deviceID, from, to)
 	if err != nil {
 		return
 	}
@@ -146,7 +144,6 @@ func (s *sendToDeviceStatements) DeleteSendToDeviceMessages(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, pos types.StreamPosition,
 ) (err error) {
 	deleteSendToDeviceMessagesStmt := sqlutil.TxStmt(txn, s.deleteSendToDeviceMessagesStmt)
-	defer deleteSendToDeviceMessagesStmt.Close()
 	_, err = deleteSendToDeviceMessagesStmt.ExecContext(ctx, userID, deviceID, pos)
 	return
 }
@@ -156,7 +153,6 @@ func (s *sendToDeviceStatements) SelectMaxSendToDeviceMessageID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxSendToDeviceIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64

@@ -61,8 +61,7 @@ func (s *crossSigningKeysStatements) SelectCrossSigningKeysForUser(
 	ctx context.Context, txn *sql.Tx, userID string,
 ) (r types.CrossSigningKeyMap, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectCrossSigningKeysForUserStmt)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +91,6 @@ func (s *crossSigningKeysStatements) UpsertCrossSigningKeysForUser(
 		return fmt.Errorf("unknown key purpose %q", keyType)
 	}
 	upsertStmt := sqlutil.TxStmt(txn, s.upsertCrossSigningKeysForUserStmt)
-	defer upsertStmt.Close()
 	if _, err := upsertStmt.ExecContext(ctx, userID, keyTypeInt, keyData); err != nil {
 		return fmt.Errorf("s.upsertCrossSigningKeysForUserStmt: %w", err)
 	}

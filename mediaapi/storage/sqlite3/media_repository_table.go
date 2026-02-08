@@ -86,7 +86,6 @@ func (s *mediaStatements) InsertMedia(
 ) error {
 	mediaMetadata.CreationTimestamp = spec.AsTimestamp(time.Now())
 	insertStmt := sqlutil.TxStmtContext(ctx, txn, s.insertMediaStmt)
-	defer insertStmt.Close()
 	_, err := insertStmt.ExecContext(
 		ctx,
 		mediaMetadata.MediaID,
@@ -109,7 +108,6 @@ func (s *mediaStatements) SelectMedia(
 		Origin:  mediaOrigin,
 	}
 	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectMediaStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(
 		ctx, mediaMetadata.MediaID, mediaMetadata.Origin,
 	).Scan(
@@ -131,7 +129,6 @@ func (s *mediaStatements) SelectMediaByHash(
 		Origin:     mediaOrigin,
 	}
 	selectByHashStmt := sqlutil.TxStmtContext(ctx, txn, s.selectMediaByHashStmt)
-	defer selectByHashStmt.Close()
 	err := selectByHashStmt.QueryRowContext(
 		ctx, mediaMetadata.Base64Hash, mediaMetadata.Origin,
 	).Scan(

@@ -67,7 +67,6 @@ func (s *queueJSONStatements) InsertQueueJSON(
 	ctx context.Context, txn *sql.Tx, json string,
 ) (int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.insertJSONStmt)
-	defer stmt.Close()
 	var lastid int64
 	if err := stmt.QueryRowContext(ctx, json).Scan(&lastid); err != nil {
 		return 0, err
@@ -79,7 +78,6 @@ func (s *queueJSONStatements) DeleteQueueJSON(
 	ctx context.Context, txn *sql.Tx, nids []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJSONStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, nids)
 	return err
 }
@@ -89,8 +87,7 @@ func (s *queueJSONStatements) SelectQueueJSON(
 ) (map[int64][]byte, error) {
 	blobs := map[int64][]byte{}
 	stmt := sqlutil.TxStmt(txn, s.selectJSONStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, jsonNIDs) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, jsonNIDs)
 	if err != nil {
 		return nil, err
 	}

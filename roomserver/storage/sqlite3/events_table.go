@@ -215,7 +215,6 @@ func (s *eventStatements) InsertEvent(
 	var eventNID int64
 	var stateNID int64
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventStmt)
-	defer insertStmt.Close()
 	err := insertStmt.QueryRowContext(
 		ctx, int64(roomNID), int64(eventTypeNID), int64(eventStateKeyNID),
 		eventID, eventNIDsAsArray(authEventNIDs), depth, isRejected,
@@ -229,7 +228,6 @@ func (s *eventStatements) SelectEvent(
 	var eventNID int64
 	var stateNID int64
 	selectStmt := sqlutil.TxStmt(txn, s.selectEventStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, eventID).Scan(&eventNID, &stateNID)
 	return types.EventNID(eventNID), types.StateSnapshotNID(stateNID), err
 }
@@ -238,7 +236,7 @@ func (s *eventStatements) BulkSelectSnapshotsFromEventIDs(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) (map[types.StateSnapshotNID][]string, error) {
 	qry := strings.Replace(bulkSelectSnapshotsForEventIDsSQL, "($1)", sqlutil.QueryVariadic(len(eventIDs)), 1)
-	stmt, err := s.db.Prepare(qry) //nolint:sqlclosecheck // stmt closed by defer below
+	stmt, err := s.db.Prepare(qry)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +247,7 @@ func (s *eventStatements) BulkSelectSnapshotsFromEventIDs(
 		params[i] = eventIDs[i]
 	}
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -293,10 +291,9 @@ func (s *eventStatements) BulkSelectStateEventByID(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 	///////////////
 
-	rows, err := selectStmt.QueryContext(ctx, iEventIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, iEventIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -367,8 +364,7 @@ func (s *eventStatements) BulkSelectStateEventByNID(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, fmt.Errorf("selectStmt.QueryContext: %w", err)
 	}
@@ -410,9 +406,8 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 	///////////////
-	rows, err := selectStmt.QueryContext(ctx, iEventIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, iEventIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +448,6 @@ func (s *eventStatements) UpdateEventState(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, stateNID types.StateSnapshotNID,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateEventStateStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(stateNID), int64(eventNID))
 	return err
 }
@@ -462,14 +456,12 @@ func (s *eventStatements) SelectEventSentToOutput(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID,
 ) (sentToOutput bool, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectEventSentToOutputStmt)
-	defer selectStmt.Close()
 	err = selectStmt.QueryRowContext(ctx, int64(eventNID)).Scan(&sentToOutput)
 	return
 }
 
 func (s *eventStatements) UpdateEventSentToOutput(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) error {
 	updateStmt := sqlutil.TxStmt(txn, s.updateEventSentToOutputStmt)
-	defer updateStmt.Close()
 	_, err := updateStmt.ExecContext(ctx, int64(eventNID))
 	return err
 }
@@ -478,7 +470,6 @@ func (s *eventStatements) SelectEventID(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID,
 ) (eventID string, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectEventIDStmt)
-	defer selectStmt.Close()
 	err = selectStmt.QueryRowContext(ctx, int64(eventNID)).Scan(&eventID)
 	return
 }
@@ -498,12 +489,10 @@ func (s *eventStatements) BulkSelectStateAtEventAndReference(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 	//////////////
 
 	queryStmt := sqlutil.TxStmt(txn, selectStmt)
-	defer queryStmt.Close()
-	rows, err := queryStmt.QueryContext(ctx, iEventNIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := queryStmt.QueryContext(ctx, iEventNIDs...)
 	if err != nil {
 		return nil, fmt.Errorf("sqlutil.TxStmt.QueryContext: %w", err)
 	}
@@ -553,10 +542,9 @@ func (s *eventStatements) BulkSelectEventID(ctx context.Context, txn *sql.Tx, ev
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 	///////////////
 
-	rows, err := selectStmt.QueryContext(ctx, iEventNIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, iEventNIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -613,9 +601,8 @@ func (s *eventStatements) bulkSelectEventNID(ctx context.Context, txn *sql.Tx, e
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 	///////////////
-	rows, err := selectStmt.QueryContext(ctx, iEventIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, iEventIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -648,7 +635,7 @@ func (s *eventStatements) SelectMaxEventDepth(ctx context.Context, txn *sql.Tx, 
 		return 0, err
 	}
 	defer internal.CloseAndLogIfError(ctx, sqlPrep, "sqlPrep.close() failed")
-	err = sqlutil.TxStmt(txn, sqlPrep).QueryRowContext(ctx, iEventIDs...).Scan(&result) //nolint:sqlclosecheck
+	err = sqlutil.TxStmt(txn, sqlPrep).QueryRowContext(ctx, iEventIDs...).Scan(&result)
 	if err != nil {
 		return 0, fmt.Errorf("sqlutil.TxStmt.QueryRowContext: %w", err)
 	}
@@ -667,12 +654,11 @@ func (s *eventStatements) SelectRoomNIDsForEventNIDs(
 	}
 	defer internal.CloseAndLogIfError(ctx, sqlPrep, "sqlPrep.close() failed")
 	sqlStmt := sqlutil.TxStmt(txn, sqlPrep)
-	defer sqlStmt.Close()
 	iEventNIDs := make([]any, len(eventNIDs))
 	for i, v := range eventNIDs {
 		iEventNIDs[i] = v
 	}
-	rows, err := sqlStmt.QueryContext(ctx, iEventNIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := sqlStmt.QueryContext(ctx, iEventNIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +691,6 @@ func (s *eventStatements) SelectEventRejected(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, eventID string,
 ) (rejected bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectEventRejectedStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomNID, eventID).Scan(&rejected)
 	return
 }
@@ -714,8 +699,7 @@ func (s *eventStatements) SelectRoomsWithEventTypeNID(
 	ctx context.Context, txn *sql.Tx, eventTypeNID types.EventTypeNID,
 ) ([]types.RoomNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithEventTypeNIDStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, eventTypeNID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, eventTypeNID)
 	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomsWithEventTypeNID: rows.close() failed")
 	if err != nil {
 		return nil, err

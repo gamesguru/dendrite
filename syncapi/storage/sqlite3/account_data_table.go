@@ -74,7 +74,6 @@ func (s *accountDataStatements) InsertAccountData(
 		return
 	}
 	insertStmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
-	defer insertStmt.Close()
 	_, err = insertStmt.ExecContext(ctx, pos, userID, roomID, dataType, pos)
 	return
 }
@@ -88,7 +87,7 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 	data = make(map[string][]string)
 	pos = r.Low()
 
-	stmt, params, err := prepareWithFilters( //nolint:sqlclosecheck
+	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectAccountDataInRangeSQL,
 		[]any{
 			userID, r.Low(), r.High(),
@@ -99,7 +98,7 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 	if err != nil {
 		return
 	}
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return
 	}
@@ -134,7 +133,6 @@ func (s *accountDataStatements) SelectMaxAccountDataID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	maxStmt := sqlutil.TxStmt(txn, s.selectMaxAccountDataIDStmt)
-	defer maxStmt.Close()
 	err = maxStmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64

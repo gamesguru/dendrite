@@ -94,7 +94,6 @@ func (s *stateSnapshotStatements) InsertState(
 		return
 	}
 	insertStmt := sqlutil.TxStmt(txn, s.insertStateStmt)
-	defer insertStmt.Close()
 	err = insertStmt.QueryRowContext(ctx, stateBlockNIDs.Hash(), int64(roomNID), string(stateBlockNIDsJSON)).Scan(&stateNID)
 	if err != nil {
 		return 0, err
@@ -116,9 +115,8 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
 
-	rows, err := selectStmt.QueryContext(ctx, nids...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, nids...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +157,7 @@ func (s *stateSnapshotStatements) selectStateBlockNIDsForRoomNID(
 ) ([]types.StateBlockNID, error) {
 	var res []types.StateBlockNID
 	selectStateBlockNIDsStmt := sqlutil.TxStmt(txn, s.selectStateBlockNIDsStmt)
-	defer selectStateBlockNIDsStmt.Close()
-	rows, err := selectStateBlockNIDsStmt.QueryContext(ctx, roomNID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStateBlockNIDsStmt.QueryContext(ctx, roomNID)
 	if err != nil {
 		return res, nil
 	}

@@ -161,8 +161,7 @@ func (s *currentRoomStateStatements) SelectJoinedUsers(
 	ctx context.Context, txn *sql.Tx,
 ) (map[string][]string, error) {
 	selectJoinedUsersStmt := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt)
-	defer selectJoinedUsersStmt.Close()
-	rows, err := selectJoinedUsersStmt.QueryContext(ctx) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectJoinedUsersStmt.QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +197,7 @@ func (s *currentRoomStateStatements) SelectJoinedUsersInRoom(
 	defer internal.CloseAndLogIfError(ctx, stmt, "SelectJoinedUsersInRoom: stmt.close() failed")
 
 	txnStmt := sqlutil.TxStmt(txn, stmt)
-	defer txnStmt.Close()
-	rows, err := txnStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := txnStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +224,7 @@ func (s *currentRoomStateStatements) SelectRoomIDsWithMembership(
 	membership string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomIDsWithMembershipStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, userID, membership) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, userID, membership)
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +249,7 @@ func (s *currentRoomStateStatements) SelectKickedRoomIDs(
 	userID string,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectKickedRoomIDsStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +273,7 @@ func (s *currentRoomStateStatements) SelectRoomIDsWithAnyMembership(
 	userID string,
 ) (map[string]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomIDsWithAnyMembershipStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, userID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +334,6 @@ func (s *currentRoomStateStatements) DeleteRoomStateByEventID(
 	ctx context.Context, txn *sql.Tx, eventID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateByEventIDStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, eventID)
 	return err
 }
@@ -348,7 +342,6 @@ func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateForRoomStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -372,7 +365,6 @@ func (s *currentRoomStateStatements) UpsertRoomState(
 
 	// upsert state event
 	stmt := sqlutil.TxStmt(txn, s.upsertRoomStateStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(
 		ctx,
 		event.RoomID().String(),
@@ -480,7 +472,6 @@ func (s *currentRoomStateStatements) SelectStateEvent(
 	ctx context.Context, txn *sql.Tx, roomID, evType, stateKey string,
 ) (*rstypes.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectStateEventStmt)
-	defer stmt.Close()
 	var res []byte
 	err := stmt.QueryRowContext(ctx, roomID, evType, stateKey).Scan(&res)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -552,7 +543,7 @@ func (s *currentRoomStateStatements) SelectRoomHeroes(ctx context.Context, txn *
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "selectRoomHeroes: stmt.close() failed")
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +562,6 @@ func (s *currentRoomStateStatements) SelectRoomHeroes(ctx context.Context, txn *
 
 func (s *currentRoomStateStatements) SelectMembershipCount(ctx context.Context, txn *sql.Tx, roomID, membership string) (count int, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipCountStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID, membership).Scan(&count)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

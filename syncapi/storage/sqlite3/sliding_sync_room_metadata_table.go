@@ -141,7 +141,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) InsertRoomToRecalculate(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertRoomToRecalculateStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -150,8 +149,7 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectRoomsToRecalculate(
 	ctx context.Context, txn *sql.Tx, limit int,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRoomsToRecalculateStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, limit) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +170,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) DeleteRoomToRecalculate(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomToRecalculateStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -183,7 +180,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) UpsertJoinedRoom(
 	ctx context.Context, txn *sql.Tx, room *tables.SlidingSyncJoinedRoom,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertJoinedRoomStmt)
-	defer stmt.Close()
 	isEncrypted := 0
 	if room.IsEncrypted {
 		isEncrypted = 1
@@ -204,7 +200,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectJoinedRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (*tables.SlidingSyncJoinedRoom, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedRoomStmt)
-	defer stmt.Close()
 	var room tables.SlidingSyncJoinedRoom
 	var roomType, roomName, tombstone sql.NullString
 	var isEncrypted int
@@ -250,7 +245,7 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectJoinedRooms(
 		FROM syncapi_sliding_sync_joined_rooms
 		WHERE room_id IN (` + strings.Join(placeholders, ",") + `)`
 
-	rows, err := s.db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +280,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) DeleteJoinedRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJoinedRoomStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -337,7 +331,7 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectJoinedRoomsByFilters(
 		args = append(args, limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +368,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) UpsertMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, snapshot *tables.SlidingSyncMembershipSnapshot,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertMembershipSnapshotStmt)
-	defer stmt.Close()
 	forgotten := 0
 	if snapshot.Forgotten {
 		forgotten = 1
@@ -408,7 +401,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) (*tables.SlidingSyncMembershipSnapshot, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotStmt)
-	defer stmt.Close()
 	var snapshot tables.SlidingSyncMembershipSnapshot
 	var forgotten, hasKnownState, isEncrypted int
 	var roomType, roomName, tombstone sql.NullString
@@ -449,7 +441,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) SelectMembershipSnapshotsForUs
 
 	if len(memberships) == 0 {
 		stmt := sqlutil.TxStmt(txn, s.selectMembershipSnapshotsForUserStmt)
-		defer stmt.Close()
 		rows, err = stmt.QueryContext(ctx, userID)
 	} else {
 		// Build dynamic query for memberships
@@ -508,7 +499,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) UpdateMembershipForgotten(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, forgotten bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateMembershipForgottenStmt)
-	defer stmt.Close()
 	forgottenInt := 0
 	if forgotten {
 		forgottenInt = 1
@@ -521,7 +511,6 @@ func (s *slidingSyncRoomMetadataStatementsSQLite) DeleteMembershipSnapshot(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteMembershipSnapshotStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, roomID, userID)
 	return err
 }

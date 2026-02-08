@@ -64,7 +64,6 @@ func (s *eventJSONStatements) InsertEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
 ) error {
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
-	defer insertStmt.Close()
 	_, err := insertStmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }

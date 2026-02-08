@@ -80,14 +80,12 @@ func PrepareUserRoomKeysTable(db *sql.DB) (tables.UserRoomKeys, error) {
 
 func (s *userRoomKeysStatements) InsertUserRoomPrivatePublicKey(ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomNID types.RoomNID, key ed25519.PrivateKey) (result ed25519.PrivateKey, err error) {
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.insertUserRoomPrivateKeyStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, userNID, roomNID, key, key.Public()).Scan(&result)
 	return result, err
 }
 
 func (s *userRoomKeysStatements) InsertUserRoomPublicKey(ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomNID types.RoomNID, key ed25519.PublicKey) (result ed25519.PublicKey, err error) {
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.insertUserRoomPublicKeyStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, userNID, roomNID, key).Scan(&result)
 	return result, err
 }
@@ -99,7 +97,6 @@ func (s *userRoomKeysStatements) SelectUserRoomPrivateKey(
 	roomNID types.RoomNID,
 ) (ed25519.PrivateKey, error) {
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.selectUserRoomKeyStmt)
-	defer stmt.Close()
 	var result ed25519.PrivateKey
 	err := stmt.QueryRowContext(ctx, userNID, roomNID).Scan(&result)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -115,7 +112,6 @@ func (s *userRoomKeysStatements) SelectUserRoomPublicKey(
 	roomNID types.RoomNID,
 ) (ed25519.PublicKey, error) {
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.selectUserRoomPublicKeyStmt)
-	defer stmt.Close()
 	var result ed25519.PublicKey
 	err := stmt.QueryRowContext(ctx, userNID, roomNID).Scan(&result)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -148,10 +144,9 @@ func (s *userRoomKeysStatements) BulkSelectUserNIDs(ctx context.Context, txn *sq
 	params = append(params, senders...)
 
 	stmt := sqlutil.TxStmt(txn, selectStmt)
-	defer stmt.Close()
 	defer internal.CloseAndLogIfError(ctx, stmt, "failed to close statement")
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,9 +166,8 @@ func (s *userRoomKeysStatements) BulkSelectUserNIDs(ctx context.Context, txn *sq
 
 func (s *userRoomKeysStatements) SelectAllPublicKeysForUser(ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID) (map[types.RoomNID]ed25519.PublicKey, error) {
 	stmt := sqlutil.TxStmtContext(ctx, txn, s.selectAllUserRoomPublicKeysForUser)
-	defer stmt.Close()
 
-	rows, err := stmt.QueryContext(ctx, userNID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, userNID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

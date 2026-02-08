@@ -83,7 +83,6 @@ func (s *inboundPeeksStatements) InsertInboundPeek(
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	stmt := sqlutil.TxStmt(txn, s.insertInboundPeekStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, roomID, serverName, peekID, nowMilli, nowMilli, renewalInterval)
 	return
 }
@@ -93,7 +92,6 @@ func (s *inboundPeeksStatements) RenewInboundPeek(
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	renewStmt := sqlutil.TxStmt(txn, s.renewInboundPeekStmt)
-	defer renewStmt.Close()
 	_, err = renewStmt.ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
 	return
 }
@@ -102,7 +100,6 @@ func (s *inboundPeeksStatements) SelectInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (*types.InboundPeek, error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
-	defer selectStmt.Close()
 	row := selectStmt.QueryRowContext(ctx, roomID)
 	inboundPeek := types.InboundPeek{}
 	err := row.Scan(
@@ -126,8 +123,7 @@ func (s *inboundPeeksStatements) SelectInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (inboundPeeks []types.InboundPeek, err error) {
 	selectAllStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
-	defer selectAllStmt.Close()
-	rows, err := selectAllStmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectAllStmt.QueryContext(ctx, roomID)
 	if err != nil {
 		return
 	}
@@ -155,7 +151,6 @@ func (s *inboundPeeksStatements) DeleteInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (err error) {
 	deleteStmt := sqlutil.TxStmt(txn, s.deleteInboundPeekStmt)
-	defer deleteStmt.Close()
 	_, err = deleteStmt.ExecContext(ctx, roomID, serverName, peekID)
 	return
 }
@@ -164,7 +159,6 @@ func (s *inboundPeeksStatements) DeleteInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
 	deleteAllStmt := sqlutil.TxStmt(txn, s.deleteInboundPeeksStmt)
-	defer deleteAllStmt.Close()
 	_, err = deleteAllStmt.ExecContext(ctx, roomID)
 	return
 }

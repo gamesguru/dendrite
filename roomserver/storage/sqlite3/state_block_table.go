@@ -85,7 +85,6 @@ func (s *stateBlockStatements) BulkInsertStateData(
 		return 0, fmt.Errorf("json.Marshal: %w", err)
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertStateDataStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(
 		ctx, nids.Hash(), js,
 	).Scan(&id)
@@ -106,8 +105,7 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	}
 	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, intfs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, intfs...)
 	if err != nil {
 		return nil, err
 	}

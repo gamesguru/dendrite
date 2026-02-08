@@ -56,56 +56,48 @@ func (s *StreamIDStatements) Prepare(db *sql.DB) (err error) {
 
 func (s *StreamIDStatements) nextPDUID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "global").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextReceiptID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "receipt").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextInviteID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "invite").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextAccountDataID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "accountdata").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextPresenceID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "presence").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextNotificationID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "notification").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextRelationID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "relation").Scan(&pos)
 	return
 }
 
 func (s *StreamIDStatements) nextUnPartialStatedID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	defer increaseStmt.Close()
 	err = increaseStmt.QueryRowContext(ctx, "unpartialstated").Scan(&pos)
 	return
 }

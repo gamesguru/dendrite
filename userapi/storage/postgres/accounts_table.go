@@ -118,7 +118,6 @@ func (s *accountsStatements) InsertAccount(
 ) (*api.Account, error) {
 	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.insertAccountStmt)
-	defer stmt.Close()
 
 	var err error
 	if accountType != api.AccountTypeAppService {
@@ -188,8 +187,7 @@ func (s *accountsStatements) SelectNewNumericLocalpart(
 ) (id int64, err error) {
 	stmt := s.selectNewNumericLocalpartStmt
 	if txn != nil {
-		stmt = sqlutil.TxStmt(txn, stmt) //nolint:sqlclosecheck
-		defer stmt.Close()
+		stmt = sqlutil.TxStmt(txn, stmt)
 	}
 	err = stmt.QueryRowContext(ctx, serverName).Scan(&id)
 	return id + 1, err

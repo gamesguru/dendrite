@@ -75,7 +75,6 @@ func (s *relayServersStatements) InsertRelayServers(
 ) error {
 	for _, relayServer := range relayServers {
 		stmt := sqlutil.TxStmt(txn, s.insertRelayServersStmt)
-		defer stmt.Close()
 		if _, err := stmt.ExecContext(ctx, serverName, relayServer); err != nil {
 			return err
 		}
@@ -89,8 +88,7 @@ func (s *relayServersStatements) SelectRelayServers(
 	serverName spec.ServerName,
 ) ([]spec.ServerName, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRelayServersStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, serverName) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, serverName)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +112,6 @@ func (s *relayServersStatements) DeleteRelayServers(
 	relayServers []spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRelayServersStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName, relayServers)
 	return err
 }
@@ -125,7 +122,6 @@ func (s *relayServersStatements) DeleteAllRelayServers(
 	serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllRelayServersStmt)
-	defer stmt.Close()
 	if _, err := stmt.ExecContext(ctx, serverName); err != nil {
 		return err
 	}

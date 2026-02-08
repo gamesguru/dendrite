@@ -85,7 +85,6 @@ func (s *eventStateKeyStatements) InsertEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKey string,
 ) (eventStateKeyNID types.EventStateKeyNID, err error) {
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventStateKeyNIDStmt)
-	defer insertStmt.Close()
 	if err := insertStmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID); err != nil {
 		return 0, fmt.Errorf("resultStmt.QueryRowContext.Scan: %w", err)
 	}
@@ -97,7 +96,6 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectEventStateKeyNIDStmt)
-	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -147,8 +145,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	}
 	defer internal.CloseAndLogIfError(ctx, selectPrep, "selectPrep.close() failed")
 	stmt := sqlutil.TxStmt(txn, selectPrep)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, iEventStateKeyNIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, iEventStateKeyNIDs...)
 	if err != nil {
 		return nil, err
 	}

@@ -110,7 +110,6 @@ func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, room
 		return
 	}
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, pos, roomId, receiptType, userId, eventId, timestamp)
 	return
 }
@@ -130,8 +129,7 @@ func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sq
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "SelectRoomReceiptsAfter: prep.close() failed")
 	selectStmt := sqlutil.TxStmt(txn, prep)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return 0, nil, fmt.Errorf("unable to query room receipts: %w", err)
 	}
@@ -157,7 +155,6 @@ func (s *receiptStatements) SelectMaxReceiptID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxReceiptID)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -169,7 +166,6 @@ func (s *receiptStatements) PurgeReceipts(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeReceiptsStmt := sqlutil.TxStmt(txn, s.purgeReceiptsStmt)
-	defer purgeReceiptsStmt.Close()
 	_, err := purgeReceiptsStmt.ExecContext(ctx, roomID)
 	return err
 }

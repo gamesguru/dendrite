@@ -92,7 +92,6 @@ func (s *eventTypeStatements) InsertEventTypeNID(
 	ctx context.Context, txn *sql.Tx, eventType string,
 ) (eventTypeNID types.EventTypeNID, err error) {
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventTypeNIDStmt)
-	defer insertStmt.Close()
 	if err = insertStmt.QueryRowContext(ctx, eventType).Scan(&eventTypeNID); err != nil {
 		return 0, fmt.Errorf("resultStmt.QueryRowContext.Scan: %w", err)
 	}
@@ -104,7 +103,6 @@ func (s *eventTypeStatements) SelectEventTypeNID(
 ) (types.EventTypeNID, error) {
 	var eventTypeNID int64
 	selectStmt := sqlutil.TxStmt(tx, s.selectEventTypeNIDStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, eventType).Scan(&eventTypeNID)
 	return types.EventTypeNID(eventTypeNID), err
 }
@@ -124,10 +122,9 @@ func (s *eventTypeStatements) BulkSelectEventTypeNID(
 	}
 	defer internal.CloseAndLogIfError(ctx, selectPrep, "selectPrep.close() failed")
 	stmt := sqlutil.TxStmt(txn, selectPrep)
-	defer stmt.Close()
 	///////////////
 
-	rows, err := stmt.QueryContext(ctx, iEventTypes...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, iEventTypes...)
 	if err != nil {
 		return nil, err
 	}

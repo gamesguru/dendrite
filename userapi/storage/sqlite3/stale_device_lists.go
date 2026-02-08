@@ -114,7 +114,7 @@ func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 		return err
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
-	stmt = sqlutil.TxStmt(txn, stmt) //nolint:sqlclosecheck
+	stmt = sqlutil.TxStmt(txn, stmt)
 
 	params := make([]any, len(userIDs))
 	for i := range userIDs {

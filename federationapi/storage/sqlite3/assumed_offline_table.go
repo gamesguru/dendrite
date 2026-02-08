@@ -64,7 +64,6 @@ func (s *assumedOfflineStatements) InsertAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertAssumedOfflineStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -73,7 +72,6 @@ func (s *assumedOfflineStatements) SelectAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) (bool, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectAssumedOfflineStmt)
-	defer stmt.Close()
 	res, err := stmt.QueryContext(ctx, serverName)
 	if err != nil {
 		return false, err
@@ -93,7 +91,6 @@ func (s *assumedOfflineStatements) DeleteAssumedOffline(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAssumedOfflineStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -102,7 +99,6 @@ func (s *assumedOfflineStatements) DeleteAllAssumedOffline(
 	ctx context.Context, txn *sql.Tx,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllAssumedOfflineStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx)
 	return err
 }

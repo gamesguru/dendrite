@@ -182,7 +182,7 @@ type StatementList []struct {
 // Prepare the SQL for each statement in the list and assign the result to the prepared statement.
 func (s StatementList) Prepare(db *sql.DB) (err error) {
 	for _, statement := range s {
-		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil { //nolint:sqlclosecheck
+		if *statement.Statement, err = db.Prepare(statement.SQL); err != nil {
 			err = fmt.Errorf("error while preparing statement %s: %w", statement.SQL, err)
 			return
 		}

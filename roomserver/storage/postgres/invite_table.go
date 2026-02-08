@@ -96,7 +96,6 @@ func (s *inviteStatements) InsertInviteEvent(
 	inviteEventJSON []byte,
 ) (bool, error) {
 	insertInviteEventStmt := sqlutil.TxStmt(txn, s.insertInviteEventStmt)
-	defer insertInviteEventStmt.Close()
 	result, err := insertInviteEventStmt.ExecContext(
 		ctx, inviteEventID, roomNID, targetUserNID, senderUserNID, inviteEventJSON,
 	)
@@ -115,8 +114,7 @@ func (s *inviteStatements) UpdateInviteRetired(
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) ([]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.updateInviteRetiredStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, roomNID, targetUserNID)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +137,7 @@ func (s *inviteStatements) SelectInviteActiveForUserInRoom(
 	targetUserNID types.EventStateKeyNID, roomNID types.RoomNID,
 ) ([]types.EventStateKeyNID, []string, []byte, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectInviteActiveForUserInRoomStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext( //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(
 		ctx, targetUserNID, roomNID,
 	)
 	if err != nil {

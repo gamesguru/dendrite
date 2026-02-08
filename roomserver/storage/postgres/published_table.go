@@ -85,7 +85,6 @@ func (s *publishedStatements) UpsertRoomPublished(
 	ctx context.Context, txn *sql.Tx, roomID, appserviceID, networkID string, published bool,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.upsertPublishedStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, roomID, appserviceID, networkID, published)
 	return
 }
@@ -94,7 +93,6 @@ func (s *publishedStatements) SelectPublishedFromRoomID(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (published bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectPublishedStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, roomID).Scan(&published)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -109,11 +107,9 @@ func (s *publishedStatements) SelectAllPublishedRooms(
 	var err error
 	if networkID != "" {
 		stmt := sqlutil.TxStmt(txn, s.selectNetworkPublishedStmt)
-		defer stmt.Close()
 		rows, err = stmt.QueryContext(ctx, published, networkID)
 	} else {
 		stmt := sqlutil.TxStmt(txn, s.selectAllPublishedStmt)
-		defer stmt.Close()
 		rows, err = stmt.QueryContext(ctx, published, includeAllNetworks)
 	}
 	if err != nil {

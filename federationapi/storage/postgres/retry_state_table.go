@@ -69,7 +69,6 @@ func (s *retryStateStatements) UpsertRetryState(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, failureCount uint32, retryUntil spec.Timestamp,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertRetryStateStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName, failureCount, retryUntil)
 	return err
 }
@@ -78,7 +77,6 @@ func (s *retryStateStatements) SelectRetryState(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) (failureCount uint32, retryUntil spec.Timestamp, exists bool, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectRetryStateStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx, serverName).Scan(&failureCount, &retryUntil)
 	if err == sql.ErrNoRows {
 		return 0, 0, false, nil
@@ -93,7 +91,6 @@ func (s *retryStateStatements) SelectAllRetryStates(
 	ctx context.Context, txn *sql.Tx,
 ) (map[spec.ServerName]types.RetryState, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectAllRetryStatesStmt)
-	defer stmt.Close()
 	rows, err := stmt.QueryContext(ctx)
 	if err != nil {
 		return nil, err
@@ -120,7 +117,6 @@ func (s *retryStateStatements) DeleteRetryState(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteRetryStateStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }

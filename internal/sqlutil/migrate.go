@@ -134,7 +134,7 @@ func (m *Migrator) ExecutedMigrations(ctx context.Context) (map[string]struct{},
 	if err != nil {
 		return nil, fmt.Errorf("unable to create db_migrations: %w", err)
 	}
-	rows, err := m.db.QueryContext(ctx, selectDBMigrationsSQL) //nolint:sqlclosecheck
+	rows, err := m.db.QueryContext(ctx, selectDBMigrationsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query db_migrations: %w", err)
 	}

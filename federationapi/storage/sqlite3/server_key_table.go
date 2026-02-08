@@ -130,7 +130,6 @@ func (s *serverSigningKeyStatements) UpsertServerKeys(
 	key gomatrixserverlib.PublicKeyLookupResult,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertServerKeysStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		string(request.ServerName),

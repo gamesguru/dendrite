@@ -69,7 +69,6 @@ func (s *eventJSONStatements) InsertEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }
@@ -78,8 +77,7 @@ func (s *eventJSONStatements) BulkSelectEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 ) ([]tables.EventJSONPair, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventJSONStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs)) //nolint:sqlclosecheck
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs))
 	if err != nil {
 		return nil, err
 	}

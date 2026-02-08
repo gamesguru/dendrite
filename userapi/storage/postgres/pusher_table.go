@@ -93,7 +93,6 @@ func (s *pushersStatements) InsertPusher(
 	localpart string, serverName spec.ServerName,
 ) error {
 	insertPusherStmt := sqlutil.TxStmt(txn, s.insertPusherStmt)
-	defer insertPusherStmt.Close()
 	_, err := insertPusherStmt.ExecContext(ctx, localpart, serverName, session_id, pushkey, pushkeyTS, kind, appid, appdisplayname, devicedisplayname, profiletag, lang, data)
 	return err
 }
@@ -104,8 +103,7 @@ func (s *pushersStatements) SelectPushers(
 ) ([]api.Pusher, error) {
 	pushers := []api.Pusher{}
 	selectPushersStmt := sqlutil.TxStmt(txn, s.selectPushersStmt)
-	defer selectPushersStmt.Close()
-	rows, err := selectPushersStmt.QueryContext(ctx, localpart, serverName) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectPushersStmt.QueryContext(ctx, localpart, serverName)
 	if err != nil {
 		return pushers, err
 	}
@@ -145,7 +143,6 @@ func (s *pushersStatements) DeletePusher(
 	localpart string, serverName spec.ServerName,
 ) error {
 	deletePusherStmt := sqlutil.TxStmt(txn, s.deletePusherStmt)
-	defer deletePusherStmt.Close()
 	_, err := deletePusherStmt.ExecContext(ctx, appid, pushkey, localpart, serverName)
 	return err
 }
@@ -154,7 +151,6 @@ func (s *pushersStatements) DeletePushers(
 	ctx context.Context, txn *sql.Tx, appid, pushkey string,
 ) error {
 	deletePushersByAppIdAndPushKeyStmt := sqlutil.TxStmt(txn, s.deletePushersByAppIdAndPushKeyStmt)
-	defer deletePushersByAppIdAndPushKeyStmt.Close()
 	_, err := deletePushersByAppIdAndPushKeyStmt.ExecContext(ctx, appid, pushkey)
 	return err
 }

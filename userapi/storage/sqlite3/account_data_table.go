@@ -74,7 +74,6 @@ func (s *accountDataStatements) InsertAccountData(
 	roomID, dataType string, content json.RawMessage,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, localpart, serverName, roomID, dataType, content)
 	return err
 }
@@ -87,7 +86,7 @@ func (s *accountDataStatements) SelectAccountData(
 	/* rooms */ map[string]map[string]json.RawMessage,
 	error,
 ) {
-	rows, err := s.selectAccountDataStmt.QueryContext(ctx, localpart, serverName) //nolint:sqlclosecheck
+	rows, err := s.selectAccountDataStmt.QueryContext(ctx, localpart, serverName)
 	if err != nil {
 		return nil, nil, err
 	}

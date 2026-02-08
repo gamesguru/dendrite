@@ -65,7 +65,6 @@ func (s *blacklistStatements) InsertBlacklist(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertBlacklistStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -74,7 +73,6 @@ func (s *blacklistStatements) SelectBlacklist(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) (bool, error) {
 	stmt := sqlutil.TxStmt(txn, s.selectBlacklistStmt)
-	defer stmt.Close()
 	res, err := stmt.QueryContext(ctx, serverName)
 	if err != nil {
 		return false, err
@@ -94,7 +92,6 @@ func (s *blacklistStatements) DeleteBlacklist(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteBlacklistStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, serverName)
 	return err
 }
@@ -103,7 +100,6 @@ func (s *blacklistStatements) DeleteAllBlacklist(
 	ctx context.Context, txn *sql.Tx,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteAllBlacklistStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx)
 	return err
 }

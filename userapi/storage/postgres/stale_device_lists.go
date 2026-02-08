@@ -105,7 +105,6 @@ func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 	ctx context.Context, txn *sql.Tx, userIDs []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteStaleDeviceListsStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, userIDs)
 	return err
 }

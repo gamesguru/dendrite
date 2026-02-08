@@ -73,7 +73,6 @@ func (s *filterStatements) SelectFilter(
 	// Retrieve filter from database (stored as canonical JSON)
 	var filterData []byte
 	selectStmt := sqlutil.TxStmt(txn, s.selectFilterStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, localpart, filterID).Scan(&filterData)
 	if err != nil {
 		return err
@@ -108,7 +107,7 @@ func (s *filterStatements) InsertFilter(
 	// This can result in a race condition when two clients try to insert the
 	// same filter and localpart at the same time, however this is not a
 	// problem as both calls will result in the same filterID
-	err = sqlutil.TxStmt(txn, s.selectFilterIDByContentStmt).QueryRowContext( //nolint:sqlclosecheck
+	err = sqlutil.TxStmt(txn, s.selectFilterIDByContentStmt).QueryRowContext(
 		ctx, localpart, filterJSON,
 	).Scan(&existingFilterID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -121,7 +120,6 @@ func (s *filterStatements) InsertFilter(
 
 	// Otherwise insert the filter and return the new ID
 	insertFilterStmt := sqlutil.TxStmt(txn, s.insertFilterStmt)
-	defer insertFilterStmt.Close()
 	res, err := insertFilterStmt.ExecContext(ctx, filterJSON, localpart)
 	if err != nil {
 		return "", err

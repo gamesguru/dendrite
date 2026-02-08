@@ -82,7 +82,6 @@ func (s *outboundPeeksStatements) InsertOutboundPeek(
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	stmt := sqlutil.TxStmt(txn, s.insertOutboundPeekStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, roomID, serverName, peekID, nowMilli, nowMilli, renewalInterval)
 	return
 }
@@ -92,7 +91,6 @@ func (s *outboundPeeksStatements) RenewOutboundPeek(
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
 	renewOutboundPeekStmt := sqlutil.TxStmt(txn, s.renewOutboundPeekStmt)
-	defer renewOutboundPeekStmt.Close()
 	_, err = renewOutboundPeekStmt.ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
 	return
 }
@@ -101,7 +99,6 @@ func (s *outboundPeeksStatements) SelectOutboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (*types.OutboundPeek, error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectOutboundPeeksStmt)
-	defer selectStmt.Close()
 	row := selectStmt.QueryRowContext(ctx, roomID)
 	outboundPeek := types.OutboundPeek{}
 	err := row.Scan(
@@ -125,8 +122,7 @@ func (s *outboundPeeksStatements) SelectOutboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (outboundPeeks []types.OutboundPeek, err error) {
 	selectOutboundPeeksStmt := sqlutil.TxStmt(txn, s.selectOutboundPeeksStmt)
-	defer selectOutboundPeeksStmt.Close()
-	rows, err := selectOutboundPeeksStmt.QueryContext(ctx, roomID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectOutboundPeeksStmt.QueryContext(ctx, roomID)
 	if err != nil {
 		return
 	}
@@ -154,7 +150,6 @@ func (s *outboundPeeksStatements) DeleteOutboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (err error) {
 	deleteOutboundPeekStmt := sqlutil.TxStmt(txn, s.deleteOutboundPeekStmt)
-	defer deleteOutboundPeekStmt.Close()
 	_, err = deleteOutboundPeekStmt.ExecContext(ctx, roomID, serverName, peekID)
 	return
 }
@@ -163,7 +158,6 @@ func (s *outboundPeeksStatements) DeleteOutboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
 	deleteOutboundPeeksStmt := sqlutil.TxStmt(txn, s.deleteOutboundPeeksStmt)
-	defer deleteOutboundPeeksStmt.Close()
 	_, err = deleteOutboundPeeksStmt.ExecContext(ctx, roomID)
 	return
 }

@@ -94,8 +94,7 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "SelectUserUnreadCountsForRooms: prep.close() failed")
 	selectStmt := sqlutil.TxStmt(txn, prep)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +120,6 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 func (r *notificationDataStatements) SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error) {
 	var id int64
 	selectStmt := sqlutil.TxStmt(txn, r.selectMaxID)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx).Scan(&id)
 	return id, err
 }
@@ -130,7 +128,6 @@ func (s *notificationDataStatements) PurgeNotificationData(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeNotificationData := sqlutil.TxStmt(txn, s.purgeNotificationData)
-	defer purgeNotificationData.Close()
 	_, err := purgeNotificationData.ExecContext(ctx, roomID)
 	return err
 }

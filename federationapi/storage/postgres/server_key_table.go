@@ -80,7 +80,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 		nameAndKeyIDs = append(nameAndKeyIDs, nameAndKeyID(request))
 	}
 	stmt := s.bulkSelectServerKeysStmt
-	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,6 @@ func (s *serverSigningKeyStatements) UpsertServerKeys(
 	key gomatrixserverlib.PublicKeyLookupResult,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertServerKeysStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(
 		ctx,
 		string(request.ServerName),

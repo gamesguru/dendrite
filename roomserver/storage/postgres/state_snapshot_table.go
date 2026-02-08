@@ -132,7 +132,7 @@ func (s *stateSnapshotStatements) InsertState(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, nids types.StateBlockNIDs,
 ) (stateNID types.StateSnapshotNID, err error) {
 	nids = nids[:util.SortAndUnique(nids)]
-	err = sqlutil.TxStmt(txn, s.insertStateStmt).QueryRowContext(ctx, nids.Hash(), int64(roomNID), stateBlockNIDsAsArray(nids)).Scan(&stateNID) //nolint:sqlclosecheck
+	err = sqlutil.TxStmt(txn, s.insertStateStmt).QueryRowContext(ctx, nids.Hash(), int64(roomNID), stateBlockNIDsAsArray(nids)).Scan(&stateNID)
 	if err != nil {
 		return 0, err
 	}
@@ -147,7 +147,6 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 		nids[i] = int64(stateNIDs[i])
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateBlockNIDsStmt)
-	defer stmt.Close()
 	rows, err := stmt.QueryContext(ctx, nids)
 	if err != nil {
 		return nil, err
@@ -179,7 +178,6 @@ func (s *stateSnapshotStatements) BulkSelectStateForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, stateSnapshotNID types.StateSnapshotNID, domain string,
 ) ([]types.EventNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateForHistoryVisibilityStmt)
-	defer stmt.Close()
 	rows, err := stmt.QueryContext(ctx, stateSnapshotNID, domain)
 	if err != nil {
 		return nil, err
@@ -200,7 +198,6 @@ func (s *stateSnapshotStatements) BulkSelectMembershipForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulktSelectMembershipForHistoryVisibilityStmt)
-	defer stmt.Close()
 	rows, err := stmt.QueryContext(ctx, userNID, eventIDs, roomInfo.RoomNID)
 	if err != nil {
 		return nil, err

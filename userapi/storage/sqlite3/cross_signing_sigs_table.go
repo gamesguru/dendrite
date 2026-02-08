@@ -80,8 +80,7 @@ func (s *crossSigningSigsStatements) SelectCrossSigningSigsForTarget(
 	ctx context.Context, txn *sql.Tx, originUserID, targetUserID string, targetKeyID gomatrixserverlib.KeyID,
 ) (r types.CrossSigningSigMap, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectCrossSigningSigsForTargetStmt)
-	defer selectStmt.Close()
-	rows, err := selectStmt.QueryContext(ctx, originUserID, targetUserID, targetUserID, targetKeyID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectStmt.QueryContext(ctx, originUserID, targetUserID, targetUserID, targetKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +109,6 @@ func (s *crossSigningSigsStatements) UpsertCrossSigningSigsForTarget(
 	signature spec.Base64Bytes,
 ) error {
 	upsertStmt := sqlutil.TxStmt(txn, s.upsertCrossSigningSigsForTargetStmt)
-	defer upsertStmt.Close()
 	if _, err := upsertStmt.ExecContext(ctx, originUserID, originKeyID, targetUserID, targetKeyID, signature); err != nil {
 		return fmt.Errorf("s.upsertCrossSigningSigsForTargetStmt: %w", err)
 	}
@@ -122,7 +120,6 @@ func (s *crossSigningSigsStatements) DeleteCrossSigningSigsForTarget(
 	targetUserID string, targetKeyID gomatrixserverlib.KeyID,
 ) error {
 	deleteStmt := sqlutil.TxStmt(txn, s.deleteCrossSigningSigsForTargetStmt)
-	defer deleteStmt.Close()
 	if _, err := deleteStmt.ExecContext(ctx, targetUserID, targetKeyID); err != nil {
 		return fmt.Errorf("s.deleteCrossSigningSigsForTargetStmt: %w", err)
 	}

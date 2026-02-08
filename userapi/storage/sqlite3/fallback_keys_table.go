@@ -79,7 +79,7 @@ func NewSqliteFallbackKeysTable(db *sql.DB) (tables.FallbackKeys, error) {
 }
 
 func (s *fallbackKeysStatements) SelectUnusedFallbackKeyAlgorithms(ctx context.Context, userID, deviceID string) ([]string, error) {
-	rows, err := s.selectUnusedAlgorithmsStmt.QueryContext(ctx, userID, deviceID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectUnusedAlgorithmsStmt.QueryContext(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,6 @@ func (s *fallbackKeysStatements) SelectUnusedFallbackKeyAlgorithms(ctx context.C
 func (s *fallbackKeysStatements) InsertFallbackKeys(ctx context.Context, txn *sql.Tx, keys api.FallbackKeys) ([]string, error) {
 	now := time.Now().Unix()
 	upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
-	defer upsertKeysStmt.Close()
 	for keyIDWithAlgo, keyJSON := range keys.KeyJSON {
 		algo, keyID := keys.Split(keyIDWithAlgo)
 		_, err := upsertKeysStmt.ExecContext(
@@ -113,7 +112,6 @@ func (s *fallbackKeysStatements) InsertFallbackKeys(ctx context.Context, txn *sq
 
 func (s *fallbackKeysStatements) DeleteFallbackKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
 	deleteFallbackKeysStmt := sqlutil.TxStmt(txn, s.deleteFallbackKeysStmt)
-	defer deleteFallbackKeysStmt.Close()
 	_, err := deleteFallbackKeysStmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
@@ -124,7 +122,6 @@ func (s *fallbackKeysStatements) SelectAndUpdateFallbackKey(
 	var keyID string
 	var keyJSON string
 	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectKeyByAlgorithmStmt)
-	defer selectStmt.Close()
 	err := selectStmt.QueryRowContext(ctx, userID, deviceID, algorithm).Scan(&keyID, &keyJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -133,7 +130,6 @@ func (s *fallbackKeysStatements) SelectAndUpdateFallbackKey(
 		return nil, err
 	}
 	updateFallbackKeyUsedStmt := sqlutil.TxStmtContext(ctx, txn, s.updateFallbackKeyUsedStmt)
-	defer updateFallbackKeyUsedStmt.Close()
 	_, err = updateFallbackKeyUsedStmt.ExecContext(ctx, userID, deviceID, algorithm, keyID)
 	return map[string]json.RawMessage{
 		algorithm + ":" + keyID: json.RawMessage(keyJSON),

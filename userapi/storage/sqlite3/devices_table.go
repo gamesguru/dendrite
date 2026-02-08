@@ -135,9 +135,7 @@ func (s *devicesStatements) InsertDevice(
 	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	var sessionID int64
 	countStmt := sqlutil.TxStmt(txn, s.selectDevicesCountStmt)
-	defer countStmt.Close()
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
-	defer insertStmt.Close()
 	if err := countStmt.QueryRowContext(ctx).Scan(&sessionID); err != nil {
 		return nil, err
 	}
@@ -167,7 +165,6 @@ func (s *devicesStatements) InsertDeviceWithSessionID(ctx context.Context, txn *
 ) (*api.Device, error) {
 	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
-	defer insertStmt.Close()
 	if _, err := insertStmt.ExecContext(ctx, id, localpart, serverName, accessToken, createdTimeMS, displayName, sessionID, createdTimeMS, ipAddr, userAgent); err != nil {
 		return nil, err
 	}
@@ -191,7 +188,6 @@ func (s *devicesStatements) DeleteDevice(
 	localpart string, serverName spec.ServerName,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDeviceStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, id, localpart, serverName)
 	return err
 }
@@ -208,7 +204,6 @@ func (s *devicesStatements) DeleteDevices(
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "DeleteDevices.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, prep)
-	defer stmt.Close()
 	params := make([]any, len(devices)+2)
 	params[0] = localpart
 	params[1] = serverName
@@ -225,7 +220,6 @@ func (s *devicesStatements) DeleteDevicesByLocalpart(
 	exceptDeviceID string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteDevicesByLocalpartStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, localpart, serverName, exceptDeviceID)
 	return err
 }
@@ -236,7 +230,6 @@ func (s *devicesStatements) UpdateDeviceName(
 	deviceID string, displayName *string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceNameStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, displayName, localpart, serverName, deviceID)
 	return err
 }
@@ -291,8 +284,7 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 ) ([]api.Device, error) {
 	devices := []api.Device{}
 	selectDevicesByLocalpartStmt := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt)
-	defer selectDevicesByLocalpartStmt.Close()
-	rows, err := selectDevicesByLocalpartStmt.QueryContext(ctx, localpart, serverName, exceptDeviceID) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := selectDevicesByLocalpartStmt.QueryContext(ctx, localpart, serverName, exceptDeviceID)
 	if err != nil {
 		return devices, err
 	}
@@ -336,7 +328,7 @@ func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []s
 		iDeviceIDs[i] = deviceIDs[i]
 	}
 
-	rows, err := s.db.QueryContext(ctx, sqlQuery, iDeviceIDs...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.db.QueryContext(ctx, sqlQuery, iDeviceIDs...)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +358,6 @@ func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []s
 func (s *devicesStatements) UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error {
 	lastSeenTs := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceLastSeenStmt)
-	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx, lastSeenTs, ipAddr, userAgent, localpart, serverName, deviceID)
 	return err
 }

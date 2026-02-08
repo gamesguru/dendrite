@@ -95,7 +95,6 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.insertInviteEventStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(
 		ctx,
 		streamPos,
@@ -115,7 +114,6 @@ func (s *inviteEventsStatements) DeleteInviteEvent(
 		return streamPos, err
 	}
 	stmt := sqlutil.TxStmt(txn, s.deleteInviteEventStmt)
-	defer stmt.Close()
 	_, err = stmt.ExecContext(ctx, streamPos, inviteEventID)
 	return streamPos, err
 }
@@ -127,8 +125,7 @@ func (s *inviteEventsStatements) SelectInviteEventsInRange(
 ) (map[string]*rstypes.HeaderedEvent, map[string]*rstypes.HeaderedEvent, types.StreamPosition, error) {
 	var lastPos types.StreamPosition
 	stmt := sqlutil.TxStmt(txn, s.selectInviteEventsInRangeStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, targetUserID, r.Low(), r.High()) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, targetUserID, r.Low(), r.High())
 	if err != nil {
 		return nil, nil, lastPos, err
 	}
@@ -179,7 +176,6 @@ func (s *inviteEventsStatements) SelectMaxInviteID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxInviteIDStmt)
-	defer stmt.Close()
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
@@ -203,7 +199,7 @@ func (s *inviteEventsStatements) SelectRoomsWithInvitesSince(
 	query := `SELECT DISTINCT room_id FROM syncapi_invite_events
 		WHERE target_user_id = ?  AND id > ?`
 
-	rows, err := txn.QueryContext(ctx, query, targetUserID, since) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := txn.QueryContext(ctx, query, targetUserID, since)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +223,6 @@ func (s *inviteEventsStatements) PurgeInvites(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeInvitesStmt := sqlutil.TxStmt(txn, s.purgeInvitesStmt)
-	defer purgeInvitesStmt.Close()
 	_, err := purgeInvitesStmt.ExecContext(ctx, roomID)
 	return err
 }

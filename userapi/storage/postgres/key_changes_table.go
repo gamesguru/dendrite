@@ -99,7 +99,7 @@ func (s *keyChangesStatements) SelectKeyChanges(
 	ctx context.Context, fromOffset, toOffset int64,
 ) (userIDs []string, latestOffset int64, err error) {
 	latestOffset = fromOffset
-	rows, err := s.selectKeyChangesStmt.QueryContext(ctx, fromOffset, toOffset) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.selectKeyChangesStmt.QueryContext(ctx, fromOffset, toOffset)
 	if err != nil {
 		return nil, 0, err
 	}

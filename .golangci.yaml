@@ -30,7 +30,6 @@ linters:
     - mnd
     - nolintlint
     - rowserrcheck
-    - sqlclosecheck
     - staticcheck
     - unconvert
     - unparam

@@ -165,7 +165,6 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 		return err
 	}
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
-	defer updateEventJSONStmt.Close()
 	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
 	return err
 }
@@ -209,7 +208,7 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "selectStateInRange: stmt.close() failed")
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -279,7 +278,6 @@ func (s *outputRoomEventsStatements) SelectMaxEventID(
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
 	stmt := sqlutil.TxStmt(txn, s.selectMaxEventIDStmt)
-	defer stmt.Close()
 	defer internal.CloseAndLogIfError(ctx, stmt, "SelectMaxEventID: stmt.close() failed")
 	err = stmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
@@ -335,7 +333,6 @@ func (s *outputRoomEventsStatements) InsertEvent(
 		return 0, err
 	}
 	insertStmt := sqlutil.TxStmt(txn, s.insertEventStmt)
-	defer insertStmt.Close()
 	defer internal.CloseAndLogIfError(ctx, insertStmt, "InsertEvent: stmt.close() failed")
 	_, err = insertStmt.ExecContext(
 		ctx,
@@ -371,7 +368,7 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 
 	result := make(map[string]types.RecentEvents, len(roomIDs))
 	for _, roomID := range roomIDs {
-		stmt, params, err := prepareWithFilters( //nolint:sqlclosecheck // stmt closed by defer below
+		stmt, params, err := prepareWithFilters(
 			s.db, txn, query,
 			[]any{
 				roomID, r.Low(), r.High(),
@@ -434,7 +431,7 @@ func (s *outputRoomEventsStatements) SelectEvents(
 	if filter == nil {
 		filter = &synctypes.RoomEventFilter{Limit: 20} //nolint:mnd
 	}
-	stmt, params, err := prepareWithFilters( //nolint:sqlclosecheck // stmt closed by defer below
+	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectSQL, iEventIDs,
 		filter.Senders, filter.NotSenders,
 		filter.Types, filter.NotTypes,
@@ -475,7 +472,6 @@ func (s *outputRoomEventsStatements) DeleteEventsForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
 	deleteEventsForRoomStmt := sqlutil.TxStmt(txn, s.deleteEventsForRoomStmt)
-	defer deleteEventsForRoomStmt.Close()
 	_, err = deleteEventsForRoomStmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -536,7 +532,6 @@ func (s *outputRoomEventsStatements) SelectContextEvent(
 	ctx context.Context, txn *sql.Tx, roomID, eventID string,
 ) (id int, evt rstypes.HeaderedEvent, err error) {
 	selectStmt := sqlutil.TxStmt(txn, s.selectContextEventStmt)
-	defer selectStmt.Close()
 	row := selectStmt.QueryRowContext(ctx, roomID, eventID)
 	var eventAsString string
 	var historyVisibility gomatrixserverlib.HistoryVisibility
@@ -554,7 +549,7 @@ func (s *outputRoomEventsStatements) SelectContextEvent(
 func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 	ctx context.Context, txn *sql.Tx, id int, roomID string, filter *synctypes.RoomEventFilter,
 ) (evts []*rstypes.HeaderedEvent, err error) {
-	stmt, params, err := prepareWithFilters( //nolint:sqlclosecheck // stmt closed by defer below
+	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectContextBeforeEventSQL,
 		[]any{
 			roomID, id,
@@ -568,7 +563,7 @@ func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "SelectContextBeforeEvent: stmt.close() failed")
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return
 	}
@@ -596,7 +591,7 @@ func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 func (s *outputRoomEventsStatements) SelectContextAfterEvent(
 	ctx context.Context, txn *sql.Tx, id int, roomID string, filter *synctypes.RoomEventFilter,
 ) (lastID int, evts []*rstypes.HeaderedEvent, err error) {
-	stmt, params, err := prepareWithFilters( //nolint:sqlclosecheck // stmt closed by defer below
+	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectContextAfterEventSQL,
 		[]any{
 			roomID, id,
@@ -610,7 +605,7 @@ func (s *outputRoomEventsStatements) SelectContextAfterEvent(
 	}
 	defer internal.CloseAndLogIfError(ctx, stmt, "SelectContextAfterEvent: stmt.close() failed")
 
-	rows, err := stmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {
 		return
 	}
@@ -652,7 +647,6 @@ func (s *outputRoomEventsStatements) PurgeEvents(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
 	purgeEventsStmt := sqlutil.TxStmt(txn, s.purgeEventsStmt)
-	defer purgeEventsStmt.Close()
 	_, err := purgeEventsStmt.ExecContext(ctx, roomID)
 	return err
 }
@@ -672,8 +666,7 @@ func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, l
 
 	defer internal.CloseAndLogIfError(ctx, stmt, "selectEvents: stmt.close() failed")
 	queryStmt := sqlutil.TxStmt(txn, stmt)
-	defer queryStmt.Close()
-	rows, err := queryStmt.QueryContext(ctx, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := queryStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -735,7 +728,7 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 		params[len(roomIDs)+i] = eventType
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, params...) //nolint:sqlclosecheck // rows closed by defer below
+	rows, err := s.db.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, err
 	}

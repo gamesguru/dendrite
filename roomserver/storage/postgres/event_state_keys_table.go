@@ -88,7 +88,6 @@ func (s *eventStateKeyStatements) InsertEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.insertEventStateKeyNIDStmt)
-	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -98,7 +97,6 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 ) (types.EventStateKeyNID, error) {
 	var eventStateKeyNID int64
 	stmt := sqlutil.TxStmt(txn, s.selectEventStateKeyNIDStmt)
-	defer stmt.Close()
 	err := stmt.QueryRowContext(ctx, eventStateKey).Scan(&eventStateKeyNID)
 	return types.EventStateKeyNID(eventStateKeyNID), err
 }
@@ -107,8 +105,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKeys []string,
 ) (map[string]types.EventStateKeyNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyNIDStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext( //nolint:sqlclosecheck
+	rows, err := stmt.QueryContext(
 		ctx, eventStateKeys,
 	)
 	if err != nil {
@@ -136,8 +133,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 		nIDs[i] = int64(eventStateKeyNIDs[i])
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyStmt)
-	defer stmt.Close()
-	rows, err := stmt.QueryContext(ctx, nIDs) //nolint:sqlclosecheck
+	rows, err := stmt.QueryContext(ctx, nIDs)
 	if err != nil {
 		return nil, err
 	}
