@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/goccy/go-yaml"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/yaml.v3"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 )

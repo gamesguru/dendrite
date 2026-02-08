@@ -11,10 +11,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/goccy/go-yaml"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v3"
 )
 
 func TestLoadConfigRelative(t *testing.T) {

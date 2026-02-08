@@ -13,6 +13,7 @@ require (
 	github.com/getsentry/sentry-go v0.42.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-i2p/onramp v0.33.92
+	github.com/goccy/go-yaml v1.19.2
 	github.com/gologme/log v1.3.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
@@ -43,7 +44,6 @@ require (
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
 	golang.org/x/sync v0.19.0
 	golang.org/x/term v0.39.0
-	gopkg.in/yaml.v3 v3.0.1
 	gotest.tools/v3 v3.5.2
 	maunium.net/go/mautrix v0.26.2
 	modernc.org/sqlite v1.44.3
@@ -131,6 +131,7 @@ require (
 	golang.org/x/tools v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/macaroon.v2 v2.1.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.67.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

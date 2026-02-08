@@ -16,13 +16,13 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/goccy/go-yaml"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	jaegerconfig "github.com/uber/jaeger-client-go/config"
 	jaegermetrics "github.com/uber/jaeger-lib/metrics"
 	"golang.org/x/crypto/ed25519"
-	"gopkg.in/yaml.v3"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
 )
