@@ -141,10 +141,10 @@ func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID
 }
 
 func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx, keys []api.DeviceMessage) error {
+	upsertDeviceKeysStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
+	defer upsertDeviceKeysStmt.Close()
 	for _, key := range keys {
 		now := time.Now().Unix()
-		upsertDeviceKeysStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
-		defer upsertDeviceKeysStmt.Close()
 		_, err := upsertDeviceKeysStmt.ExecContext(
 			ctx, key.UserID, key.DeviceID, now, string(key.KeyJSON), key.StreamID, key.DisplayName,
 		)

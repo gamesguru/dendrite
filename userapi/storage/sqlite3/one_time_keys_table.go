@@ -145,10 +145,10 @@ func (s *oneTimeKeysStatements) InsertOneTimeKeys(
 		UserID:   keys.UserID,
 		KeyCount: make(map[string]int),
 	}
+	upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
+	defer upsertKeysStmt.Close()
 	for keyIDWithAlgo, keyJSON := range keys.KeyJSON {
 		algo, keyID := keys.Split(keyIDWithAlgo)
-		upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
-		defer upsertKeysStmt.Close()
 		_, err := upsertKeysStmt.ExecContext(
 			ctx, keys.UserID, keys.DeviceID, keyID, algo, now, string(keyJSON),
 		)

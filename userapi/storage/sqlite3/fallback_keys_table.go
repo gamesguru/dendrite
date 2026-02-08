@@ -97,10 +97,10 @@ func (s *fallbackKeysStatements) SelectUnusedFallbackKeyAlgorithms(ctx context.C
 
 func (s *fallbackKeysStatements) InsertFallbackKeys(ctx context.Context, txn *sql.Tx, keys api.FallbackKeys) ([]string, error) {
 	now := time.Now().Unix()
+	upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
+	defer upsertKeysStmt.Close()
 	for keyIDWithAlgo, keyJSON := range keys.KeyJSON {
 		algo, keyID := keys.Split(keyIDWithAlgo)
-		upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
-		defer upsertKeysStmt.Close()
 		_, err := upsertKeysStmt.ExecContext(
 			ctx, keys.UserID, keys.DeviceID, keyID, algo, now, string(keyJSON),
 		)
