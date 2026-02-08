@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -127,19 +126,12 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 		Code: 200, //nolint:mnd
 		JSON: map[string]any{
 			"token":        token,
-			"uses_allowed": getReturnValue(usesAllowed),
+			"uses_allowed": internal.PtrOrNil(usesAllowed),
 			"pending":      pending,
 			"completed":    completed,
-			"expiry_time":  getReturnValue(expiryTime),
+			"expiry_time":  internal.PtrOrNil(expiryTime),
 		},
 	}
-}
-
-func getReturnValue[t cmp.Ordered](in *t) any {
-	if in == nil {
-		return nil
-	}
-	return *in
 }
 
 func AdminListRegistrationTokens(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {

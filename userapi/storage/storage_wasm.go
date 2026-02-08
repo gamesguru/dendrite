@@ -11,10 +11,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrix-org/gomatrixserverlib"
+
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3"
-	"github.com/matrix-org/gomatrixserverlib"
 )
 
 func NewUserDatabase(

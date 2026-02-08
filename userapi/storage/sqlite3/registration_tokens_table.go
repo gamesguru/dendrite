@@ -1,7 +1,6 @@
 package sqlite3
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"time"
@@ -106,21 +105,14 @@ func (s *registrationTokenStatements) InsertRegistrationToken(ctx context.Contex
 	_, err := stmt.ExecContext(
 		ctx,
 		*registrationToken.Token,
-		getInsertValue(registrationToken.UsesAllowed),
-		getInsertValue(registrationToken.ExpiryTime),
+		internal.PtrOrNil(registrationToken.UsesAllowed),
+		internal.PtrOrNil(registrationToken.ExpiryTime),
 		*registrationToken.Pending,
 		*registrationToken.Completed)
 	if err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-func getInsertValue[t cmp.Ordered](in *t) any {
-	if in == nil {
-		return nil
-	}
-	return *in
 }
 
 func (s *registrationTokenStatements) ListRegistrationTokens(ctx context.Context, tx *sql.Tx, returnAll bool, valid bool) ([]api.RegistrationToken, error) {

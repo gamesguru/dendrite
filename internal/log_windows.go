@@ -7,8 +7,9 @@
 package internal
 
 import (
-	"codefloe.com/pat-s/dendrite/setup/config"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/dendrite/setup/config"
 )
 
 // SetupHookLogging configures the logging hooks defined in the configuration.
