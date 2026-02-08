@@ -102,9 +102,13 @@ func callerPrettyfier(f *runtime.Frame) (string, string) {
 
 // SetupPprof starts a pprof listener. We use the DefaultServeMux here because it is
 // simplest, and it gives us the freedom to run pprof on a separate port.
+//
+// WARNING: The pprof endpoint has no authentication and serves over plain HTTP.
+// It exposes sensitive runtime information (goroutine stacks, heap dumps, CPU
+// profiles). Only bind to localhost or a trusted network interface.
 func SetupPprof() {
 	if hostPort := os.Getenv("PPROFLISTEN"); hostPort != "" {
-		logrus.Warn("Starting pprof on ", hostPort)
+		logrus.Warnf("Starting pprof listener on %s — this endpoint has NO authentication, do not expose to untrusted networks", hostPort)
 		go func() {
 			logrus.WithError(http.ListenAndServe(hostPort, nil)).Error("Failed to setup pprof listener")
 		}()
