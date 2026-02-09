@@ -77,6 +77,7 @@ jobs:
       - name: Deploy to pages branch
         run: |
           cd dist
+          apt-get update && apt-get install -y git
           git init -b pages
           git config user.name "pat-s"
           git config user.email "pat-s@mailbox.org"
