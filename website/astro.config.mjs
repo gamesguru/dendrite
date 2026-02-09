@@ -63,6 +63,7 @@ export default defineConfig({
         {
           label: 'Development',
           items: [
+            { label: 'Architecture', slug: 'development/architecture' },
             { label: 'Contributing', slug: 'development/contributing' },
             { label: 'Profiling', slug: 'development/profiling' },
             { label: 'Coverage', slug: 'development/coverage' },
