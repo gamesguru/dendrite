@@ -6,7 +6,7 @@
 
 package eventutil
 
-import "github.com/matrix-org/gomatrixserverlib"
+import "codefloe.com/pat-s/gomatrixserverlib"
 
 // NameContent is the event content for https://matrix.org/docs/spec/client_server/r0.2.0.html#m-room-name
 type NameContent struct {

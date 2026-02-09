@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	log "github.com/sirupsen/logrus"
 )
 

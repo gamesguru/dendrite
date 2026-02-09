@@ -1,6 +1,6 @@
 package caching
 
-import "github.com/matrix-org/gomatrixserverlib/fclient"
+import "codefloe.com/pat-s/gomatrixserverlib/fclient"
 
 // RoomHierarchyCache caches responses to federated room hierarchy requests (A.K.A. 'space summaries').
 type RoomHierarchyCache interface {

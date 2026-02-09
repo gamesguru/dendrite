@@ -3,7 +3,7 @@ title: Architecture
 description: How Dendrite and gomatrixserverlib relate to each other.
 ---
 
-Dendrite is built on top of [gomatrixserverlib](https://github.com/matrix-org/gomatrixserverlib), a Go library that implements the core Matrix protocol.
+Dendrite is built on top of [gomatrixserverlib](https://codefloe.com/pat-s/gomatrixserverlib), a Go library that implements the core Matrix protocol.
 Understanding the boundary between the two is important when contributing or implementing new [MSCs](https://spec.matrix.org/proposals/).
 
 ## gomatrixserverlib (protocol layer)
@@ -62,7 +62,7 @@ Many MSCs require changes in **both** — protocol types in gomatrixserverlib an
 This fork uses a patched version of gomatrixserverlib via a `replace` directive in `go.mod`:
 
 ```go
-replace github.com/matrix-org/gomatrixserverlib => github.com/jackmaninov/gomatrixserverlib ...
+replace codefloe.com/pat-s/gomatrixserverlib => github.com/jackmaninov/gomatrixserverlib ...
 ```
 
 When upstream gomatrixserverlib adds new protocol features (error codes, struct fields, room versions), the fork must be synced to pick them up.

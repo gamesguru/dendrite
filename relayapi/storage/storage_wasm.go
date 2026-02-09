@@ -9,7 +9,7 @@ package storage
 import (
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"

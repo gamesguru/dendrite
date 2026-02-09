@@ -15,9 +15,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
 	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"

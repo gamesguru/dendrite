@@ -6,7 +6,7 @@
 
 package types
 
-import "github.com/matrix-org/gomatrixserverlib/spec"
+import "codefloe.com/pat-s/gomatrixserverlib/spec"
 
 const MSigningKeyUpdate = "m.signing_key_update" // TODO: move to gomatrixserverlib
 

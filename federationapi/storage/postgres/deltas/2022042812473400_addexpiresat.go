@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 func UpAddexpiresat(ctx context.Context, tx *sql.Tx) error {

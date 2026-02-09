@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 type Presence uint8

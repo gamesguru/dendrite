@@ -11,7 +11,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/federationapi/types"
 	"codefloe.com/pat-s/dendrite/internal"

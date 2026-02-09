@@ -1,6 +1,7 @@
 module codefloe.com/pat-s/dendrite
 
 require (
+	codefloe.com/pat-s/gomatrixserverlib v0.0.0-20260209101933-77c358fa5fd9
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.3.9
 	github.com/blevesearch/bleve/v2 v2.5.7
@@ -14,7 +15,6 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/kardianos/minwinsvc v1.0.2
 	github.com/matrix-org/gomatrix v0.0.0-20220926102614-ceba4d9f7530
-	github.com/matrix-org/gomatrixserverlib v0.0.0-20260202113659-20c9de33969e
 	github.com/matrix-org/util v0.0.0-20221111132719-399730281e66
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/nats-io/nats-server/v2 v2.12.4
@@ -107,7 +107,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 // indirect
@@ -120,8 +120,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-go 1.25
+go 1.25.0
 
 toolchain go1.25.7
-
-replace github.com/matrix-org/gomatrixserverlib => github.com/jackmaninov/gomatrixserverlib v0.0.0-20251103190139-eb14008fe6d1

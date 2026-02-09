@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"golang.org/x/crypto/bcrypt"
 
 	"codefloe.com/pat-s/dendrite/setup/config"

@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
 	"codefloe.com/pat-s/dendrite/internal"

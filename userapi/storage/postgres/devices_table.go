@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/clientapi/userutil"
 	"codefloe.com/pat-s/dendrite/internal"

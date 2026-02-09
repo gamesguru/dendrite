@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
 	"codefloe.com/pat-s/dendrite/roomserver/types"

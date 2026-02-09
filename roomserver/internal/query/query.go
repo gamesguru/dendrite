@@ -13,8 +13,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -155,8 +155,8 @@ func (r *Queryer) QueryStateAfterEvents(
 			return fmt.Errorf("getAuthChain: %w", err)
 		}
 
-		stateEvents, err = gomatrixserverlib.ResolveConflicts(
-			info.RoomVersion, gomatrixserverlib.ToPDUs(stateEvents), gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		stateEvents, err = gomatrixserverlib.ResolveConflictsNew(
+			info.RoomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEvents)}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.QueryUserIDForSender(ctx, roomID, senderID)
 			},
 			func(eventID string) bool {
@@ -680,8 +680,8 @@ func (r *Queryer) QueryStateAndAuthChain(
 	}
 
 	if request.ResolveState {
-		stateEvents, err = gomatrixserverlib.ResolveConflicts(
-			info.RoomVersion, gomatrixserverlib.ToPDUs(stateEvents), gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		stateEvents, err = gomatrixserverlib.ResolveConflictsNew(
+			info.RoomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEvents)}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.QueryUserIDForSender(ctx, roomID, senderID)
 			},
 			func(eventID string) bool {

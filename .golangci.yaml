@@ -54,9 +54,6 @@ linters:
         - '^\s*NOTSPEC:'
       capital: true
       period: true
-    gomoddirectives:
-      replace-allow-list:
-        - github.com/matrix-org/gomatrixserverlib
     misspell:
       locale: US
     mnd:

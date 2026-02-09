@@ -10,7 +10,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 
 	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3"
 	"codefloe.com/pat-s/dendrite/internal/caching"

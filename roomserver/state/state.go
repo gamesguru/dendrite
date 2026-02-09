@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -889,7 +889,7 @@ func (v *StateResolution) resolveConflicts(
 	case gomatrixserverlib.StateResV2:
 		fallthrough
 	case gomatrixserverlib.StateResV2_1:
-		return v.resolveConflictsV2(ctx, notConflicted, conflicted)
+		return v.resolveConflictsV2(ctx, stateResAlgo, notConflicted, conflicted)
 	}
 	return nil, fmt.Errorf("unsupported state resolution algorithm %v", stateResAlgo)
 }
@@ -970,6 +970,7 @@ func (v *StateResolution) resolveConflictsV1(
 // Returns an error if there was a problem talking to the database.
 func (v *StateResolution) resolveConflictsV2(
 	ctx context.Context,
+	stateResAlgo gomatrixserverlib.StateResAlgorithm,
 	notConflicted, conflicted []types.StateEntry,
 ) ([]types.StateEntry, error) {
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.resolveConflictsV2")
@@ -1049,13 +1050,24 @@ func (v *StateResolution) resolveConflictsV2(
 	gotAuthEvents = nil
 
 	// Resolve the conflicts.
+	// Reconstruct state sets for the new API: each conflicted event goes
+	// into its own set alongside all non-conflicted events, so the library's
+	// splitConflictedUnconflicted correctly identifies conflicts.
 	resolvedEvents := func() []gomatrixserverlib.PDU {
 		resolvedTrace, _ := internal.StartRegion(ctx, "StateResolution.ResolveStateConflictsV2")
 		defer resolvedTrace.EndRegion()
 
-		return gomatrixserverlib.ResolveStateConflictsV2(
-			conflictedEvents,
-			nonConflictedEvents,
+		stateSets := make([][]gomatrixserverlib.PDU, 0, len(conflictedEvents))
+		for _, e := range conflictedEvents {
+			set := make([]gomatrixserverlib.PDU, len(nonConflictedEvents)+1)
+			copy(set, nonConflictedEvents)
+			set[len(nonConflictedEvents)] = e
+			stateSets = append(stateSets, set)
+		}
+
+		return gomatrixserverlib.ResolveStateConflictsV2New(
+			stateResAlgo,
+			stateSets,
 			authEvents,
 			func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return v.Querier.QueryUserIDForSender(ctx, roomID, senderID)

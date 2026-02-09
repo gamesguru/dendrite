@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
@@ -125,13 +125,9 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 				continue
 			}
 
-			rt := ""
-			if roomType != nil {
-				rt = *roomType
-			}
 			discoveredRooms = append(discoveredRooms, fclient.RoomHierarchyRoom{
 				PublicRoom:     *pubRoom,
-				RoomType:       rt,
+				RoomType:       roomType,
 				ChildrenState:  events,
 				AllowedRoomIDs: allowedRoomIDs,
 			})

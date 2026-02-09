@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -504,8 +504,8 @@ func (t *missingStateReq) resolveStatesAndCheck(ctx context.Context, roomVersion
 		authEventList = append(authEventList, state.AuthEvents...)
 		stateEventList = append(stateEventList, state.StateEvents...)
 	}
-	resolvedStateEvents, err := gomatrixserverlib.ResolveConflicts(
-		roomVersion, gomatrixserverlib.ToPDUs(stateEventList), gomatrixserverlib.ToPDUs(authEventList), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	resolvedStateEvents, err := gomatrixserverlib.ResolveConflictsNew(
+		roomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEventList)}, gomatrixserverlib.ToPDUs(authEventList), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 		func(eventID string) bool {

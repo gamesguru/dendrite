@@ -9,7 +9,7 @@ package types
 import (
 	"sync"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 )

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"

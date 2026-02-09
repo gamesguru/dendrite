@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 )
 

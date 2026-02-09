@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/dendrite/internal/eventutil"

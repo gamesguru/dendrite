@@ -9,8 +9,8 @@ package sync
 import (
 	"context"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"

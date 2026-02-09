@@ -12,8 +12,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/blevesearch/bleve/v2"
 	// Side effect imports to allow all possible languages.
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/blevesearch/bleve/v2"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ar"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/cjk"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ckb"
@@ -36,7 +37,6 @@ import (
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/sv"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/tr"
 	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/setup/config"
 	"codefloe.com/pat-s/dendrite/setup/process"

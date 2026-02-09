@@ -7,8 +7,8 @@
 package relayapi
 
 import (
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/federationapi/producers"

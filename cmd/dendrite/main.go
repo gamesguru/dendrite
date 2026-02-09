@@ -10,8 +10,8 @@ import (
 	"flag"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 

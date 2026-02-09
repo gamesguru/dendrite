@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"

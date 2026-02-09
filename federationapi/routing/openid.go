@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	userapi "codefloe.com/pat-s/dendrite/userapi/api"

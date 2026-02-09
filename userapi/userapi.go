@@ -9,7 +9,7 @@ package userapi
 import (
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 

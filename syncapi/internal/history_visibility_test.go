@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"gotest.tools/v3/assert"
 
 	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"

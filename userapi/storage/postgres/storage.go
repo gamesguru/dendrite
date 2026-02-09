@@ -13,8 +13,8 @@ import (
 	"time"
 
 	// Import the postgres database driver.
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
 	"codefloe.com/pat-s/dendrite/setup/config"

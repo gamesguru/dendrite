@@ -8,7 +8,7 @@ package perform
 import (
 	"context"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/dendrite/roomserver/api"

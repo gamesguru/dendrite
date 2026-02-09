@@ -7,8 +7,8 @@
 package setup
 
 import (
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 
 	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
 	"codefloe.com/pat-s/dendrite/clientapi"

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/roomserver/api"
 	"codefloe.com/pat-s/dendrite/syncapi/storage"

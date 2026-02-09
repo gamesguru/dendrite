@@ -3,7 +3,7 @@ package streams
 import (
 	"context"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/syncapi/storage"
 	"codefloe.com/pat-s/dendrite/syncapi/synctypes"

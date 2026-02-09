@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/dendrite/internal/caching"
 	"codefloe.com/pat-s/dendrite/internal/sqlutil"
@@ -213,8 +213,8 @@ func main() {
 
 	fmt.Println("Resolving state")
 	var resolved Events
-	resolved, err = gomatrixserverlib.ResolveConflicts(
-		gomatrixserverlib.RoomVersion(*roomVersion), events, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	resolved, err = gomatrixserverlib.ResolveConflictsNew(
+		gomatrixserverlib.RoomVersion(*roomVersion), [][]gomatrixserverlib.PDU{events}, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 		func(eventID string) bool {
