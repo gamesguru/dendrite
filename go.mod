@@ -1,7 +1,7 @@
 module codefloe.com/pat-s/dendrite
 
 require (
-	codefloe.com/pat-s/gomatrixserverlib v0.0.0-20260209121610-46dd0f71f792
+	codefloe.com/pat-s/gomatrixserverlib v1.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.3.9
 	github.com/blevesearch/bleve/v2 v2.5.7
