@@ -13,6 +13,9 @@ FROM --platform=${BUILDPLATFORM} base AS build
 WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
+ENV GONOSUMCHECK=codefloe.com/* \
+    GONOSUMDB=codefloe.com/* \
+    GONOPROXY=codefloe.com/*
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
