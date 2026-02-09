@@ -3,15 +3,27 @@ title: Helm Setup
 description: Installing Dendrite on Kubernetes with Helm
 ---
 
-To install Dendrite using the Helm chart, you first have to add the repository using the following commands:
+Install Dendrite using the [devxy/helm-dendrite](https://codefloe.com/devxy/helm-dendrite) Helm chart.
+
+## Installation
+
+Using OCI:
 
 ```bash
-helm repo add dendrite https://matrix-org.github.io/dendrite/
-helm repo update
+helm install dendrite oci://codefloe.com/devxy/dendrite
 ```
 
-Next you'll need to create a `values.yaml` file and configure it to your liking.
-All possible values can be found in `helm/dendrite/values.yaml`, but at least you need to configure a `server_name`, otherwise the chart will complain about it:
+Or using a classic Helm repository:
+
+```bash
+helm repo add codefloe.com https://codefloe.com/api/packages/devxy/helm
+helm install dendrite codefloe.com/dendrite
+```
+
+## Configuration
+
+Create a `values.yaml` file and configure it to your liking.
+All possible values can be found in the [chart README](https://codefloe.com/devxy/helm-dendrite/src/branch/main/charts/dendrite/README.md), but at least you need to configure a `server_name`:
 
 ```yaml
 dendrite_config:
@@ -33,7 +45,7 @@ dendrite_config:
 
 ## Installing with PostgreSQL
 
-The chart comes with a dependency on Postgres, which can be installed alongside Dendrite, this needs to be enabled in the `values.yaml`:
+The chart comes with a dependency on Postgres, which can be installed alongside Dendrite. Enable it in your `values.yaml`:
 
 ```yaml
 postgresql:
