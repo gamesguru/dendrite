@@ -238,7 +238,7 @@ func (r *uploadRequest) doUpload(
 func requestEntityTooLargeJSONResponse(maxFileSizeBytes config.FileSizeBytes) *util.JSONResponse {
 	return &util.JSONResponse{
 		Code: http.StatusRequestEntityTooLarge,
-		JSON: spec.TooLarge(fmt.Sprintf("HTTP Content-Length is greater than the maximum allowed upload size (%v).", maxFileSizeBytes)),
+		JSON: spec.MatrixError{ErrCode: "M_TOO_LARGE", Err: fmt.Sprintf("HTTP Content-Length is greater than the maximum allowed upload size (%v).", maxFileSizeBytes)},
 	}
 }
 

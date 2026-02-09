@@ -125,24 +125,13 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 				continue
 			}
 
-			// MSC3266: Add encryption algorithm if room is encrypted
-			encryptionEv := stateEvent(ctx, querier, queuedRoom.RoomID, spec.MRoomEncryption, "")
-			if encryptionEv != nil {
-				algorithm := gjson.GetBytes(encryptionEv.Content(), "algorithm").String()
-				if algorithm != "" {
-					pubRoom.Encryption = algorithm
-				}
+			rt := ""
+			if roomType != nil {
+				rt = *roomType
 			}
-
-			// MSC3266: Add room version
-			roomVersion, err := querier.QueryRoomVersionForRoom(ctx, queuedRoom.RoomID.String())
-			if err == nil {
-				pubRoom.RoomVersion = string(roomVersion)
-			}
-
 			discoveredRooms = append(discoveredRooms, fclient.RoomHierarchyRoom{
 				PublicRoom:     *pubRoom,
-				RoomType:       roomType,
+				RoomType:       rt,
 				ChildrenState:  events,
 				AllowedRoomIDs: allowedRoomIDs,
 			})

@@ -646,7 +646,7 @@ func errorIfLocalServerNotInRoomWithPartialState(
 	if joinedRes.IsPartialState && !allowPartialState {
 		return &util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: spec.UnableDueToPartialState("Unable to process request; room is in partial state during faster join resynchronization"),
+			JSON: spec.MatrixError{ErrCode: "ORG.MATRIX.MSC3895_UNABLE_DUE_TO_PARTIAL_STATE", Err: "Unable to process request; room is in partial state during faster join resynchronization"},
 		}
 	}
 	return nil

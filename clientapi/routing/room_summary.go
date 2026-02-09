@@ -241,10 +241,6 @@ func fetchRoomSummaryViaFederation(
 
 // convertHierarchyToSummary converts a federation hierarchy room to a room summary response.
 func convertHierarchyToSummary(room fclient.RoomHierarchyRoom) RoomSummaryResponse {
-	var roomType string
-	if room.RoomType != nil {
-		roomType = *room.RoomType
-	}
 	summary := RoomSummaryResponse{
 		RoomID:           room.RoomID,
 		Name:             room.Name,
@@ -255,7 +251,7 @@ func convertHierarchyToSummary(room fclient.RoomHierarchyRoom) RoomSummaryRespon
 		GuestCanJoin:     room.GuestCanJoin,
 		WorldReadable:    room.WorldReadable,
 		JoinRule:         room.JoinRule,
-		RoomType:         roomType,
+		RoomType:         room.RoomType,
 	}
 
 	// Add allowed room IDs for restricted rooms
