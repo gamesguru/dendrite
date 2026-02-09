@@ -95,7 +95,7 @@ func MakeRelayAPI(
 			req, time.Now(), serverName, isLocalServerName, keyRing,
 		)
 		if fedReq == nil {
-			return errResp
+			return util.JSONResponse{Code: errResp.Code, JSON: errResp.JSON, Headers: errResp.Headers}
 		}
 		// add the user to Sentry, if enabled
 		hub := sentry.GetHubFromContext(req.Context())

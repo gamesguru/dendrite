@@ -137,7 +137,7 @@ func Enable(
 				req, time.Now(), cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
 			)
 			if fedReq == nil {
-				return errResp
+				return util.JSONResponse{Code: errResp.Code, JSON: errResp.JSON, Headers: errResp.Headers}
 			}
 			return federatedEventRelationship(req.Context(), fedReq, db, rsAPI, fsAPI)
 		},
