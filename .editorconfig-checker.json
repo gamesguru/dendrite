@@ -22,9 +22,6 @@
     "auth_fallback.go",
     "platform_ios.go",
     "cmd/create-account/main.go",
-    "are-we-synapse-yet.py",
-    "run-sytest.sh",
-    "show-expected-fail-tests.sh",
     "Caddyfile",
     ".gotmpl"
   ]

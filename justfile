@@ -92,3 +92,22 @@ container-stop:
 # Clean up local Dendrite data
 container-clean: container-stop
     rm -rf .dendrite-dev
+
+# Website (docs) commands
+# Run website dev server
+website-dev:
+    cd website && bun run dev
+
+# Build website
+website-build:
+    cd website && bun run build
+
+# Preview website build
+website-preview:
+    cd website && bun run preview
+
+# Check links in website (requires lychee: cargo install lychee)
+website-links:
+    #!/usr/bin/env bash
+    cd website && bun run build
+    lychee --offline --root-dir "$(pwd)/dist" --exclude-path dist/pagefind 'dist/**/*.html'

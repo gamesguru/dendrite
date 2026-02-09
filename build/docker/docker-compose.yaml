@@ -23,7 +23,7 @@ services:
 
   monolith:
     hostname: monolith
-    image: ghcr.io/element-hq/dendrite-monolith:latest
+    image: pats22/dendrite:latest
     ports:
       - 8008:8008
       - 8448:8448

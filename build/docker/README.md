@@ -1,67 +1,49 @@
 # Docker images
 
-These are Docker images for Dendrite!
+Docker images for Dendrite are available from:
 
-They can be found on Docker Hub:
-
-- [matrixdotorg/dendrite-monolith](https://hub.docker.com/r/matrixdotorg/dendrite-monolith) for monolith deployments
+- [Docker Hub](https://hub.docker.com/r/pats22/dendrite): `docker.io/pats22/dendrite`
+- [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/dendrite): `codefloe.com/pat-s/dendrite`
 
 ## Dockerfile
 
-The `Dockerfile` is a multistage file which can build Dendrite. From the root of the Dendrite
-repository, run:
+The `Dockerfile` is a multistage file which can build Dendrite.
+From the root of the Dendrite repository, run:
 
 ```bash
-docker build -t ghcr.io/element-hq/dendrite-monolith:latest .
+docker build -t pats22/dendrite:latest .
 ```
 
 ## Compose file
 
-There is one sample `docker-compose` files:
-
-- `docker-compose.yml` which runs a Dendrite deployment with Postgres
+The `docker-compose.yaml` file runs a Dendrite deployment with Postgres.
 
 ## Configuration
 
-The `docker-compose` files refer to the `/etc/dendrite` volume as where the
-runtime config should come from. The mounted folder must contain:
+The compose file refers to the `./config` volume as where the runtime config should come from.
+The mounted folder must contain:
 
-- `dendrite.yaml` configuration file (based on one of the sample config files)
-- `matrix_key.pem` server key, as generated using `cmd/generate-keys`
-- `server.crt` certificate file
-- `server.key` private key file for the above certificate
+- `dendrite.yaml` configuration file (based on the [`dendrite-sample.yaml`](https://codefloe.com/pat-s/dendrite/src/branch/main/dendrite-sample.yaml))
+- `matrix_key.pem` server key, as generated using `generate-keys`
 
-To generate keys:
+To generate a signing key:
 
 ```bash
-docker run --rm --entrypoint="" \
-  -v $(pwd):/mnt \
-  ghcr.io/element-hq/dendrite-monolith:latest \
-  /usr/bin/generate-keys \
-  -private-key /mnt/matrix_key.pem \
-  -tls-cert /mnt/server.crt \
-  -tls-key /mnt/server.key
+mkdir -p ./config
+docker run --rm --entrypoint="/usr/bin/generate-keys" \
+  -v $(pwd)/config:/mnt \
+  pats22/dendrite:latest \
+  -private-key /mnt/matrix_key.pem
 ```
 
-The key files will now exist in your current working directory, and can be mounted into place.
+The key file will now exist in `./config` and can be mounted into place.
 
 ## Starting Dendrite
 
-Create your config based on the [`dendrite-sample.yaml`](https://github.com/matrix-org/dendrite/blob/main/dendrite-sample.yaml) sample configuration file.
+Create your config based on the [`dendrite-sample.yaml`](https://codefloe.com/pat-s/dendrite/src/branch/main/dendrite-sample.yaml) sample configuration file.
 
 Then start the deployment:
 
 ```bash
-docker-compose -f docker-compose.yml up
+docker compose up
 ```
-
-## Building the images
-
-The `build/docker/images-build.sh` script will build the base image, followed by
-all of the component images.
-
-The `build/docker/images-push.sh` script will push them to Docker Hub (subject
-to permissions).
-
-If you wish to build and push your own images, rename `matrixdotorg/dendrite` to
-the name of another Docker Hub repository in `images-build.sh` and `images-push.sh`.

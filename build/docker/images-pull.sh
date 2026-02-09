@@ -4,4 +4,4 @@ TAG=${1:-latest}
 
 echo "Pulling tag '${TAG}'"
 
-docker pull ghcr.io/element-hq/dendrite-monolith:${TAG}
+docker pull pats22/dendrite:${TAG}
