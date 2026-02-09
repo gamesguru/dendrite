@@ -16,7 +16,6 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -372,9 +371,9 @@ func TestRoomsV3URLEscapeDoNot404(t *testing.T) {
 			t.Errorf("expected an error, got none")
 			continue
 		}
-		var gerr gomatrix.HTTPError
+		var gerr spec.HTTPError
 		if !errors.As(err, &gerr) {
-			t.Errorf("failed to cast response error as gomatrix.HTTPError: %s", err)
+			t.Errorf("failed to cast response error as spec.HTTPError: %s", err)
 			continue
 		}
 		t.Logf("Error: %+v", gerr)
