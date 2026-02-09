@@ -21,6 +21,7 @@ export default defineConfig({
           items: [
             { label: 'Introduction', slug: 'index' },
             { label: 'FAQ', slug: 'faq' },
+            { label: 'MSC Support', slug: 'mscs' },
           ],
         },
         {
