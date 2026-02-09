@@ -213,8 +213,9 @@ func main() {
 
 	fmt.Println("Resolving state")
 	var resolved Events
+	// Duplicate the state set so ResolveConflictsNew has ≥2 sets as required.
 	resolved, err = gomatrixserverlib.ResolveConflictsNew(
-		gomatrixserverlib.RoomVersion(*roomVersion), [][]gomatrixserverlib.PDU{events}, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		gomatrixserverlib.RoomVersion(*roomVersion), [][]gomatrixserverlib.PDU{events, events}, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 		func(eventID string) bool {

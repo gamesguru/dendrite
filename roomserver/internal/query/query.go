@@ -155,8 +155,12 @@ func (r *Queryer) QueryStateAfterEvents(
 			return fmt.Errorf("getAuthChain: %w", err)
 		}
 
+		// Duplicate the state set so ResolveConflictsNew has ≥2 sets as required.
+		// splitConflictedUnconflicted deduplicates by event ID, so unconflicted
+		// events pass the "present in every set" check while events with duplicate
+		// state key tuples are correctly identified as conflicted.
 		stateEvents, err = gomatrixserverlib.ResolveConflictsNew(
-			info.RoomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEvents)}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			info.RoomVersion, [][]gomatrixserverlib.PDU{stateEvents, stateEvents}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.QueryUserIDForSender(ctx, roomID, senderID)
 			},
 			func(eventID string) bool {
@@ -680,8 +684,9 @@ func (r *Queryer) QueryStateAndAuthChain(
 	}
 
 	if request.ResolveState {
+		// Duplicate the state set so ResolveConflictsNew has ≥2 sets as required.
 		stateEvents, err = gomatrixserverlib.ResolveConflictsNew(
-			info.RoomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEvents)}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			info.RoomVersion, [][]gomatrixserverlib.PDU{stateEvents, stateEvents}, gomatrixserverlib.ToPDUs(authEvents), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.QueryUserIDForSender(ctx, roomID, senderID)
 			},
 			func(eventID string) bool {

@@ -499,13 +499,19 @@ func (t *missingStateReq) resolveStatesAndCheck(ctx context.Context, roomVersion
 	defer trace.EndRegion()
 
 	var authEventList []gomatrixserverlib.PDU
-	var stateEventList []gomatrixserverlib.PDU
+	stateSets := make([][]gomatrixserverlib.PDU, 0, len(states))
 	for _, state := range states {
 		authEventList = append(authEventList, state.AuthEvents...)
-		stateEventList = append(stateEventList, state.StateEvents...)
+		stateSets = append(stateSets, state.StateEvents)
+	}
+	// ResolveConflictsNew requires ≥2 state sets. When there's only one state
+	// (e.g. untrusted federation state), duplicate it so internal conflicts
+	// (duplicate state key tuples) are still detected correctly.
+	if len(stateSets) == 1 {
+		stateSets = append(stateSets, stateSets[0])
 	}
 	resolvedStateEvents, err := gomatrixserverlib.ResolveConflictsNew(
-		roomVersion, [][]gomatrixserverlib.PDU{gomatrixserverlib.ToPDUs(stateEventList)}, gomatrixserverlib.ToPDUs(authEventList), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		roomVersion, stateSets, gomatrixserverlib.ToPDUs(authEventList), func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 		func(eventID string) bool {
