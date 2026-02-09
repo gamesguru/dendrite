@@ -83,7 +83,7 @@ jobs:
           git config user.email "pat-s@mailbox.org"
           git add .
           git commit -m "Deploy website from ${GITHUB_SHA::8}"
-          git remote add origin "${GITHUB_SERVER_URL/\/\//\/\/${GH_TOKEN}@}/${GITHUB_REPOSITORY}.git"
+          git remote add origin "${GITHUB_SERVER_URL/\/\//\/\/pat-s:${GH_TOKEN}@}/${GITHUB_REPOSITORY}.git"
           git push --force origin pages
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
