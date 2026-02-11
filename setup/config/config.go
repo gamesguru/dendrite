@@ -356,6 +356,7 @@ func (c *Dendrite) Wiring() {
 	c.ClientAPI.Derived = &c.Derived
 	c.AppServiceAPI.Derived = &c.Derived
 	c.ClientAPI.MSCs = &c.MSCs
+	c.UserAPI.MSCs = &c.MSCs
 }
 
 // Error returns a string detailing how many errors were contained within a

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -46,6 +47,7 @@ type UserInternalAPI struct {
 	SyncProducer      *producers.SyncAPI
 	KeyChangeProducer *producers.KeyChange
 	Config            *config.UserAPI
+	HTTPClient        *http.Client
 
 	DisableTLSValidation bool
 	// AppServices is the list of all registered AS
@@ -554,6 +556,9 @@ func (a *UserInternalAPI) QueryAccountData(ctx context.Context, req *api.QueryAc
 }
 
 func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAccessTokenRequest, res *api.QueryAccessTokenResponse) error {
+	if a.Config.MSCs != nil && a.Config.MSCs.Enabled("msc3861") {
+		return a.queryAccessTokenMSC3861(ctx, req, res)
+	}
 	if req.AppServiceUserID != "" {
 		appServiceDevice, err := a.queryAppServiceToken(ctx, req.AccessToken, req.AppServiceUserID)
 		if err != nil || appServiceDevice != nil {

@@ -7,6 +7,7 @@
 package userapi
 
 import (
+	"net/http"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -88,6 +89,7 @@ func NewInternalAPI(
 		SyncProducer:         syncProducer,
 		KeyChangeProducer:    keyChangeProducer,
 		Config:               &dendriteCfg.UserAPI,
+		HTTPClient:           &http.Client{Timeout: 10 * time.Second}, //nolint:mnd
 		AppServices:          appServices,
 		RSAPI:                rsAPI,
 		DisableTLSValidation: dendriteCfg.UserAPI.PushGatewayDisableTLSValidation,

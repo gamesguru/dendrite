@@ -100,6 +100,13 @@ sync_api:
     language: "en"
 ```
 
+## OIDC delegated authentication (MSC3861)
+
+Dendrite can delegate authentication to an external OIDC provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
+When enabled, Dendrite no longer manages passwords or login sessions directly — all authentication is handled by the OIDC provider via token introspection.
+
+See the [MSC3861 documentation](/mscs#msc3861-oidc-delegated-authentication) for full configuration details.
+
 ## Other sections
 
 There are other options which may be useful so review them all.

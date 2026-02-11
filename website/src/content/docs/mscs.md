@@ -58,7 +58,7 @@ They are listed by their original MSC number for reference.
 | MSC | Title | Status |
 | --- | --- | --- |
 | [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | Implemented |
-| [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | Not implemented |
+| [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | Opt-in (`msc3861`) |
 
 ## VoIP
 
@@ -76,5 +76,45 @@ mscs:
     - msc2836
     - msc2444
     - msc2753
+    - msc3861
     - msc4115
 ```
+
+### MSC3861: OIDC Delegated Authentication
+
+MSC3861 delegates authentication to an external OpenID Connect (OIDC) provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
+When enabled, Dendrite validates access tokens via OAuth 2.0 token introspection instead of managing passwords directly.
+
+**What changes when MSC3861 is enabled:**
+
+- Password-based registration and login are disabled.
+- `GET /login` returns only the `m.login.sso` flow.
+- `POST /login`, `/register`, `/account/password`, `/account/deactivate`, `/logout`, `/logout/all`, `/delete_devices`, and device modification endpoints return `403 M_FORBIDDEN`.
+- `/.well-known/matrix/client` includes an `m.authentication` section with the OIDC issuer.
+- New users are auto-provisioned on first token introspection.
+
+**Configuration:**
+
+```yaml
+mscs:
+  mscs:
+    - msc3861
+  msc3861:
+    issuer: "https://auth.example.com/"
+    client_id: "0000000000000000000DENDRITE"
+    client_secret: "secret"
+    client_auth_method: "client_secret_basic"  # or "client_secret_post"
+    admin_token: ""                            # optional: static token for admin API access
+    account_management_url: ""                 # optional: URL for account management UI
+    introspection_endpoint: ""                 # optional: defaults to {issuer}/oauth2/introspect
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `issuer` | Yes | The OIDC provider URL (e.g. your MAS instance). |
+| `client_id` | Yes | OAuth 2.0 client ID registered with the OIDC provider for introspection. |
+| `client_secret` | Yes | OAuth 2.0 client secret for introspection. |
+| `client_auth_method` | No | Authentication method: `client_secret_basic` (default) or `client_secret_post`. |
+| `admin_token` | No | A static bearer token that grants admin access, bypassing OIDC introspection. Useful for service-to-service calls. |
+| `account_management_url` | No | URL where users can manage their account (shown in well-known response). |
+| `introspection_endpoint` | No | Override the introspection endpoint URL. Defaults to `{issuer}/oauth2/introspect`. |
