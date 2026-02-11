@@ -28,11 +28,14 @@ func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, fun
 }
 
 func TestIsInvitePendingWithoutNID(t *testing.T) {
-	alice := test.NewUser(t)
-	bob := test.NewUser(t)
-	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
-	_ = bob
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create users and room inside each parallel subtest to avoid
+		// data races on shared event objects (eventV2.EventID() lazily
+		// caches the ID, which races when called concurrently).
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+
 		db, close := mustCreateDatabase(t, dbType)
 		defer close()
 

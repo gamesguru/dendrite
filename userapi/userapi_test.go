@@ -521,13 +521,19 @@ func TestDevices(t *testing.T) {
 
 		for _, tc := range creationTests {
 			t.Run(tc.name, func(t *testing.T) {
+				// Copy inputData to avoid a data race: WithAllDatabases runs
+				// sqlite and postgres subtests in parallel, and both iterate
+				// the same creationTests slice. Without copying, concurrent
+				// writes to inputData.DeviceID cause the other goroutine to
+				// query the wrong device ID.
+				inputData := *tc.inputData
 				res := api.PerformDeviceCreationResponse{}
 				deviceID := util.RandomString(8)
-				tc.inputData.DeviceID = &deviceID
+				inputData.DeviceID = &deviceID
 				if tc.wantNewDevID {
-					tc.inputData.DeviceID = nil
+					inputData.DeviceID = nil
 				}
-				err := intAPI.PerformDeviceCreation(ctx, tc.inputData, &res)
+				err := intAPI.PerformDeviceCreation(ctx, &inputData, &res)
 				if tc.wantErr && err == nil {
 					t.Fatalf("expected an error, but got none")
 				}
@@ -555,10 +561,10 @@ func TestDevices(t *testing.T) {
 				}
 
 				newDisplayName := "new name"
-				if tc.inputData.DeviceDisplayName == nil {
+				if inputData.DeviceDisplayName == nil {
 					updateRes := api.PerformDeviceUpdateResponse{}
 					updateReq := api.PerformDeviceUpdateRequest{
-						RequestingUserID: fmt.Sprintf("@%s:%s", tc.inputData.Localpart, "test"),
+						RequestingUserID: fmt.Sprintf("@%s:%s", inputData.Localpart, "test"),
 						DeviceID:         deviceID,
 						DisplayName:      &newDisplayName,
 					}
@@ -569,13 +575,13 @@ func TestDevices(t *testing.T) {
 				}
 
 				queryDeviceInfosRes := api.QueryDeviceInfosResponse{}
-				queryDeviceInfosReq := api.QueryDeviceInfosRequest{DeviceIDs: []string{*tc.inputData.DeviceID}}
+				queryDeviceInfosReq := api.QueryDeviceInfosRequest{DeviceIDs: []string{deviceID}}
 				if err = intAPI.QueryDeviceInfos(ctx, &queryDeviceInfosReq, &queryDeviceInfosRes); err != nil {
 					t.Fatal(err)
 				}
-				gotDisplayName := queryDeviceInfosRes.DeviceInfo[*tc.inputData.DeviceID].DisplayName
-				if tc.inputData.DeviceDisplayName != nil {
-					wantDisplayName := *tc.inputData.DeviceDisplayName
+				gotDisplayName := queryDeviceInfosRes.DeviceInfo[deviceID].DisplayName
+				if inputData.DeviceDisplayName != nil {
+					wantDisplayName := *inputData.DeviceDisplayName
 					if wantDisplayName != gotDisplayName {
 						t.Fatalf("expected displayName to be %s, got %s", wantDisplayName, gotDisplayName)
 					}
