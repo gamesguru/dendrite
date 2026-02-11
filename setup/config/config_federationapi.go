@@ -16,7 +16,7 @@ type FederationAPI struct {
 	// tolerate when sending federation requests to a specific server. The backoff
 	// is exponential with 2**(x+7) seconds, starting at ~4 minutes and capping at ~6 days:
 	// 1 = 256s (~4min), 2 = 512s (~8min), ..., 12+ = 524288s (~6 days).
-	// The default value is 16 if not specified, giving roughly 36 days of retry attempts
+	// The default value is 11 if not specified, giving roughly 2 weeks of retry attempts
 	// before the server is blacklisted.
 	FederationMaxRetries uint32 `yaml:"send_max_retries"`
 
@@ -55,7 +55,7 @@ type FederationAPI struct {
 }
 
 func (c *FederationAPI) Defaults(opts DefaultOpts) {
-	c.FederationMaxRetries = 16
+	c.FederationMaxRetries = 11
 	c.P2PFederationRetriesUntilAssumedOffline = 1
 	c.DisableTLSValidation = false
 	c.DisableHTTPKeepalives = false

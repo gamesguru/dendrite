@@ -222,10 +222,10 @@ client_api:
 # Configuration for the Federation API.
 federation_api:
   # How many times we will try to resend a failed transaction to a specific server. The
-  # backoff is 2**x seconds, so 1 = 2 seconds, 2 = 4 seconds, 3 = 8 seconds etc. Once
-  # the max retries are exceeded, Dendrite will no longer try to send transactions to
-  # that server until it comes back to life and connects to us again.
-  send_max_retries: 16
+  # backoff is exponential starting at ~4 minutes and capping at ~6 days. Once the max
+  # retries are exceeded, the server is blacklisted until it comes back to life.
+  # Default 11 gives roughly 2 weeks of retries before blacklisting.
+  send_max_retries: 11
 
   # Disable the validation of TLS certificates of remote federated homeservers. Do not
   # enable this option in production as it presents a security risk!
