@@ -267,17 +267,18 @@ func (r *Inputer) processRoomEvent(
 		// user leave events where we don't want to block on federation).
 		if len(serverRes.ServerNames) > 0 {
 			missingState := missingStateReq{
-				origin:      input.Origin,
-				virtualHost: virtualHost,
-				inputer:     r,
-				db:          r.DB,
-				roomInfo:    roomInfo,
-				federation:  r.FSAPI,
-				keys:        r.KeyRing,
-				roomsMu:     internal.NewMutexByRoom(),
-				servers:     serverRes.ServerNames,
-				hadEvents:   map[string]bool{},
-				haveEvents:  map[string]gomatrixserverlib.PDU{},
+				origin:           input.Origin,
+				virtualHost:      virtualHost,
+				inputer:          r,
+				db:               r.DB,
+				roomInfo:         roomInfo,
+				federation:       r.FSAPI,
+				keys:             r.KeyRing,
+				roomsMu:          internal.NewMutexByRoom(),
+				servers:          serverRes.ServerNames,
+				hadEvents:        map[string]bool{},
+				haveEvents:       map[string]gomatrixserverlib.PDU{},
+				unfindableEvents: map[string]bool{},
 			}
 			var stateSnapshot *parsedRespState
 			if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {

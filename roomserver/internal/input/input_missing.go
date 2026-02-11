@@ -42,6 +42,12 @@ func (p *parsedRespState) Events() []gomatrixserverlib.PDU {
 		gomatrixserverlib.ToPDUs(allEvents), gomatrixserverlib.TopologicalOrderByAuthEvents)
 }
 
+// maxServersPerEvent is the maximum number of servers to try when fetching
+// a single missing event via /event. The origin and sender servers are
+// prioritized first in the server list, so this cap mostly limits the
+// number of random servers tried after those.
+const maxServersPerEvent = 5
+
 type missingStateReq struct {
 	log             *logrus.Entry
 	virtualHost     spec.ServerName
@@ -57,6 +63,10 @@ type missingStateReq struct {
 	hadEventsMutex  sync.Mutex
 	haveEvents      map[string]gomatrixserverlib.PDU
 	haveEventsMutex sync.Mutex
+	// unfindableEvents tracks event IDs that could not be found from any
+	// server during this request, so we don't waste time retrying them.
+	unfindableEvents   map[string]bool
+	unfindableEventsMu sync.Mutex
 }
 
 // processEventWithMissingState is the entrypoint for a missingStateReq
@@ -266,6 +276,15 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 	var states []*respState
 	var validationError error
 	for _, prevEventID := range e.PrevEventIDs() {
+		// Skip prev_events that are already rejected in the DB. There is no
+		// point asking federation for state after a rejected event — the
+		// event will stay rejected and the federation round-trip is wasted.
+		isRejected, rejErr := t.db.IsEventRejected(ctx, t.roomInfo.RoomNID, prevEventID)
+		if rejErr == nil && isRejected {
+			t.log.Infof("Skipping state lookup for already-rejected prev_event %s", prevEventID)
+			continue
+		}
+
 		// Look up what the state is after the backward extremity. This will either
 		// come from the roomserver, if we know all the required events, or it will
 		// come from a remote server via /state_ids if not.
@@ -911,6 +930,14 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	trace, ctx := internal.StartRegion(ctx, "lookupEvent")
 	defer trace.EndRegion()
 
+	// Check if we already know this event can't be found.
+	t.unfindableEventsMu.Lock()
+	if t.unfindableEvents[missingEventID] {
+		t.unfindableEventsMu.Unlock()
+		return nil, fmt.Errorf("event %s previously unfindable, skipping", missingEventID)
+	}
+	t.unfindableEventsMu.Unlock()
+
 	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
 	if err != nil {
 		return nil, err
@@ -928,8 +955,14 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	var event gomatrixserverlib.PDU
 	found := false
 	var validationError error
+	// Cap the number of servers to try per event to avoid exhaustively
+	// iterating hundreds of servers that don't have the event.
+	serversToTry := t.servers
+	if len(serversToTry) > maxServersPerEvent {
+		serversToTry = serversToTry[:maxServersPerEvent]
+	}
 serverLoop:
-	for _, serverName := range t.servers {
+	for _, serverName := range serversToTry {
 		reqctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 		defer cancel()
 		txn, err := t.federation.GetEvent(reqctx, t.virtualHost, serverName, missingEventID)
@@ -966,8 +999,13 @@ serverLoop:
 		}
 	}
 	if !found {
-		t.log.WithField("missing_event_id", missingEventID).Warnf("Failed to get missing /event for event ID from %d server(s)", len(t.servers))
-		return nil, fmt.Errorf("wasn't able to find event via %d server(s)", len(t.servers))
+		// Remember that this event is unfindable so we don't retry it
+		// within this request.
+		t.unfindableEventsMu.Lock()
+		t.unfindableEvents[missingEventID] = true
+		t.unfindableEventsMu.Unlock()
+		t.log.WithField("missing_event_id", missingEventID).Warnf("Failed to get missing /event for event ID from %d server(s)", len(serversToTry))
+		return nil, fmt.Errorf("wasn't able to find event via %d server(s)", len(serversToTry))
 	}
 	if err := gomatrixserverlib.VerifyEventSignatures(ctx, event, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
