@@ -10,6 +10,7 @@ on:
       - 'go.sum' # or dependency updates
       - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**' # or workflow changes
+      - 'Dockerfile'
   pull_request:
     paths:
       - '**.go'
@@ -17,6 +18,7 @@ on:
       - 'go.sum' # or dependency updates
       - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**'
+      - 'Dockerfile'
   workflow_dispatch:
 
 concurrency:
