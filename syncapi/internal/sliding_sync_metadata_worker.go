@@ -25,6 +25,10 @@ import (
 // to notify the worker when room state changes.
 type RoomMetadataQueuer interface {
 	QueueRoom(roomID string)
+	// QueueMembershipChange handles a single user's membership change without
+	// reprocessing the entire room. This avoids O(N) upserts for large rooms
+	// when only one member changes.
+	QueueMembershipChange(roomID, userID, senderID, membership, eventID string, streamPos int64)
 }
 
 const (
@@ -377,6 +381,44 @@ func (w *SlidingSyncMetadataWorker) extractRoomMetadata(
 	}
 
 	return room, nil
+}
+
+// QueueMembershipChange handles a single user's membership change by upserting
+// only that user's snapshot row, reading room metadata from the joined_rooms cache.
+// This is O(1) per membership event instead of O(members) when using QueueRoom.
+func (w *SlidingSyncMetadataWorker) QueueMembershipChange(roomID, userID, senderID, membership, eventID string, streamPos int64) {
+	ctx := w.process.Context()
+
+	// Read cached room metadata from joined_rooms table
+	roomMeta, err := w.roomMetadata.SelectJoinedRoom(ctx, nil, roomID)
+	if err != nil || roomMeta == nil {
+		// Room metadata not cached yet — fall back to full room processing
+		w.QueueRoom(roomID)
+		return
+	}
+
+	snapshot := &tables.SlidingSyncMembershipSnapshot{
+		RoomID:                   roomID,
+		UserID:                   userID,
+		Sender:                   senderID,
+		MembershipEventID:        eventID,
+		Membership:               membership,
+		Forgotten:                false,
+		EventStreamOrdering:      streamPos,
+		HasKnownState:            true,
+		RoomType:                 roomMeta.RoomType,
+		RoomName:                 roomMeta.RoomName,
+		IsEncrypted:              roomMeta.IsEncrypted,
+		TombstoneSuccessorRoomID: roomMeta.TombstoneSuccessorRoomID,
+	}
+
+	if err := w.roomMetadata.UpsertMembershipSnapshot(ctx, nil, snapshot); err != nil {
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"room_id": roomID,
+			"user_id": userID,
+		}).Warn("[SLIDING_SYNC_METADATA] Failed to upsert single membership snapshot, falling back to full room processing")
+		w.QueueRoom(roomID)
+	}
 }
 
 // updateMembershipSnapshots updates membership snapshots for all members in a room.

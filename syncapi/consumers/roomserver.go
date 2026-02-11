@@ -325,7 +325,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	}
 
 	// Queue room for metadata recalculation if this is a relevant state event
-	s.queueRoomMetadataUpdate(ev)
+	s.queueRoomMetadataUpdate(ev, pduPos)
 
 	// Add tracing for the notification step
 	trace.SetTag("pdu_position", pduPos)
@@ -389,7 +389,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	}
 
 	// Queue room for metadata recalculation if this is a relevant state event
-	s.queueRoomMetadataUpdate(ev)
+	s.queueRoomMetadataUpdate(ev, pduPos)
 
 	s.pduStream.Advance(pduPos)
 	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
@@ -785,7 +785,11 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 
 // queueRoomMetadataUpdate queues a room for sliding sync metadata recalculation
 // when relevant state events are processed. This is part of the Phase 12 optimization.
-func (s *OutputRoomEventConsumer) queueRoomMetadataUpdate(ev *rstypes.HeaderedEvent) {
+//
+// For m.room.member events, only the single affected user's snapshot is updated
+// (O(1) per event). For room-level metadata changes (name, encryption, tombstone),
+// the entire room is reprocessed to update all members' snapshots.
+func (s *OutputRoomEventConsumer) queueRoomMetadataUpdate(ev *rstypes.HeaderedEvent, pduPos types.StreamPosition) {
 	if s.metadataQueuer == nil {
 		return // Worker not configured
 	}
@@ -797,15 +801,37 @@ func (s *OutputRoomEventConsumer) queueRoomMetadataUpdate(ev *rstypes.HeaderedEv
 
 	// Check if this is a relevant event type for metadata
 	switch ev.Type() {
+	case spec.MRoomMember:
+		// Targeted single-user update: only upsert the affected user's snapshot
+		// instead of reprocessing all members in the room.
+		stateKey := *ev.StateKey()
+		var content struct {
+			Membership string `json:"membership"`
+		}
+		if err := json.Unmarshal(ev.Content(), &content); err != nil {
+			// Can't parse membership, fall back to full reprocess
+			s.metadataQueuer.QueueRoom(ev.RoomID().String())
+			return
+		}
+		s.metadataQueuer.QueueMembershipChange(
+			ev.RoomID().String(),
+			stateKey,
+			string(ev.SenderID()),
+			content.Membership,
+			ev.EventID(),
+			int64(pduPos),
+		)
 	case spec.MRoomCreate: // Room type
 	case spec.MRoomName: // Room name
 	case "m.room.encryption": // Encryption status
 	case "m.room.tombstone": // Tombstone successor
-	case spec.MRoomMember: // Membership changes
 	default:
 		return // Not a metadata-relevant event
 	}
 
-	// Queue the room for metadata recalculation
-	s.metadataQueuer.QueueRoom(ev.RoomID().String())
+	// For non-member state events, queue full room reprocessing
+	// to update room metadata across all members' snapshots.
+	if ev.Type() != spec.MRoomMember {
+		s.metadataQueuer.QueueRoom(ev.RoomID().String())
+	}
 }
