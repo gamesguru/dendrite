@@ -53,6 +53,8 @@ type RoomserverFederationAPI interface {
 	gomatrixserverlib.BackfillClient
 	gomatrixserverlib.FederatedStateClient
 	KeyRing() *gomatrixserverlib.KeyRing
+	// IsServerBackingOff returns true if the server is blacklisted or currently backing off.
+	IsServerBackingOff(serverName spec.ServerName) bool
 
 	// PerformDirectoryLookup looks up a remote room ID from a room alias.
 	PerformDirectoryLookup(ctx context.Context, request *PerformDirectoryLookupRequest, response *PerformDirectoryLookupResponse) error

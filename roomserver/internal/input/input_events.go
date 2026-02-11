@@ -211,6 +211,15 @@ func (r *Inputer) processRoomEvent(
 			serverRes.ServerNames = append(serverRes.ServerNames, server)
 			delete(servers, server)
 		}
+		// Filter out servers that are currently backing off or blacklisted.
+		// This avoids iterating hundreds of dead servers in missing-state resolution.
+		filtered := serverRes.ServerNames[:0]
+		for _, server := range serverRes.ServerNames {
+			if !r.FSAPI.IsServerBackingOff(server) {
+				filtered = append(filtered, server)
+			}
+		}
+		serverRes.ServerNames = filtered
 	}
 
 	// Check that the auth events of the event are known.

@@ -123,6 +123,12 @@ func (a *FederationInternalAPI) SetPartialStateWorker(worker *PartialStateWorker
 	a.partialStateWorker = worker
 }
 
+// IsServerBackingOff returns true if the server is blacklisted or currently in a backoff period.
+func (a *FederationInternalAPI) IsServerBackingOff(s spec.ServerName) bool {
+	_, err := a.IsBlacklistedOrBackingOff(s)
+	return err != nil
+}
+
 func (a *FederationInternalAPI) IsBlacklistedOrBackingOff(s spec.ServerName) (*statistics.ServerStatistics, error) {
 	stats := a.statistics.ForServer(s)
 	if stats.Blacklisted() {
