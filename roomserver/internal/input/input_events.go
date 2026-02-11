@@ -260,12 +260,38 @@ func (r *Inputer) processRoomEvent(
 	// typical federated room join) then we won't bother trying to fetch prev events
 	// because we may not be allowed to see them and we have no choice but to trust
 	// the state event IDs provided to us in the join instead.
+	// didStateResolution tracks whether we performed expensive federation
+	// state lookups for this event. Used to set a cooldown if the event is
+	// ultimately rejected, preventing the same expensive work on every
+	// subsequent transaction.
+	didStateResolution := false
+	var stateResolutionRoomID string
+
 	if missingPrev && input.Kind == api.KindNew && !input.SkipMissingEvents {
 		// Don't do this for KindOld events, otherwise old events that we fetch
 		// to satisfy missing prev events/state will end up recursively calling
 		// processRoomEvent. Also skip if SkipMissingEvents is set (e.g. for local
 		// user leave events where we don't want to block on federation).
-		if len(serverRes.ServerNames) > 0 {
+
+		// Check if state resolution recently failed for this room. If so, skip
+		// the expensive federation lookup and reject immediately. This prevents
+		// rooms stuck in a failure loop from consuming unbounded CPU and memory
+		// by loading thousands of state events on every incoming transaction.
+		stateResolutionRoomID = event.RoomID().String()
+		if lastFail, ok := r.missingStateCooldown.Load(stateResolutionRoomID); ok {
+			lastFailTime, _ := lastFail.(time.Time)
+			if time.Since(lastFailTime) < missingStateCooldownDuration {
+				logger.Warnf("Skipping state resolution for room %s (cooldown active after recent failure)", stateResolutionRoomID)
+				isRejected = true
+				rejectionErr = fmt.Errorf("state resolution cooldown active for room %s", stateResolutionRoomID)
+			} else {
+				// Cooldown expired, clear it and retry.
+				r.missingStateCooldown.Delete(stateResolutionRoomID)
+			}
+		}
+
+		if !isRejected && len(serverRes.ServerNames) > 0 {
+			didStateResolution = true
 			missingState := missingStateReq{
 				origin:           input.Origin,
 				virtualHost:      virtualHost,
@@ -318,7 +344,7 @@ func (r *Inputer) processRoomEvent(
 				// state for the event in the normal way.
 				missingPrev = false
 			}
-		} else {
+		} else if !isRejected {
 			// We're missing prev events or state for the event, but for some reason
 			// we don't know any servers to ask. In this case we can't do anything but
 			// reject the event and hope that it gets unrejected later.
@@ -408,6 +434,19 @@ func (r *Inputer) processRoomEvent(
 	eventNID, stateAtEvent, err := r.DB.StoreEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 	if err != nil {
 		return fmt.Errorf("updater.StoreEvent: %w", err)
+	}
+
+	// If we performed expensive state resolution for this event, update the
+	// cooldown based on whether the event was ultimately accepted or rejected.
+	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
+	// and memory on federation state lookups for every incoming transaction.
+	if didStateResolution && stateResolutionRoomID != "" {
+		if isRejected {
+			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
+			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
+		} else {
+			r.missingStateCooldown.Delete(stateResolutionRoomID)
+		}
 	}
 
 	// For outliers we can stop after we've stored the event itself as it

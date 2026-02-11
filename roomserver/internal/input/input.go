@@ -83,7 +83,21 @@ type Inputer struct {
 	Queryer       *query.Queryer
 	UserAPI       userapi.RoomserverUserAPI
 	EnableMetrics bool
+
+	// missingStateCooldown tracks rooms where state resolution recently failed.
+	// When state resolution via federation fails for a room, we record the failure
+	// time and skip further expensive federation lookups until the cooldown expires.
+	// This prevents a broken room from burning CPU and memory on every incoming
+	// transaction by repeatedly loading and discarding thousands of state events.
+	missingStateCooldown sync.Map // room ID (string) -> time.Time
 }
+
+// missingStateCooldownDuration is how long we skip expensive federation state
+// lookups after a failed attempt for a room. This prevents broken rooms (where
+// state resolution always fails) from burning CPU and memory on every incoming
+// transaction. After this duration, the next event will retry the full state
+// resolution.
+const missingStateCooldownDuration = 5 * time.Minute
 
 // If a room consumer is inactive for a while then we will allow NATS
 // to clean it up. This stops us from holding onto durable consumers
