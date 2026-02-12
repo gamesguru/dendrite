@@ -150,6 +150,11 @@ jobs:
       - name: Install dependencies
         run: apk add --no-cache git openssh nodejs
 
+      - name: Add Forgejo SSH host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 10.10.2.1 >> ~/.ssh/known_hosts
+
       - name: Checkout helm-dendrite
         uses: actions/checkout@v6
         with:
