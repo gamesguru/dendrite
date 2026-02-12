@@ -139,3 +139,34 @@ jobs:
           done
 
           echo "Release created: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
+
+  bump-helm:
+    name: Bump Helm chart appVersion
+    runs-on: ubuntu-latest
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
+    needs: release
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache git openssh nodejs
+
+      - name: Checkout helm-dendrite
+        uses: actions/checkout@v6
+        with:
+          repository: devxy/helm-dendrite
+          ssh-key: ${{ secrets.HELM_DEPLOY_KEY }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Update appVersion, tag, and push
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "pat-s"
+          git config user.email "patrick.schratz@gmail.com"
+          sed -i "s/^appVersion: .*/appVersion: ${VERSION}/" charts/dendrite/Chart.yaml
+          git add charts/dendrite/Chart.yaml
+          git commit -m "chore(deps): bump dendrite appVersion to ${VERSION}"
+          git push
+          git-sv tag
+          git push --tags
