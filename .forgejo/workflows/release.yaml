@@ -112,10 +112,23 @@ jobs:
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
+          API_BASE="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
 
-          # Create release via API
+          # Delete existing release for this tag if present
+          EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${API_BASE}/releases/tags/${TAG}" \
+            -H "Authorization: token $ISSUE_TOKEN")
+          if [ "$EXISTING" = "200" ]; then
+            EXISTING_ID=$(curl -sf "${API_BASE}/releases/tags/${TAG}" \
+              -H "Authorization: token $ISSUE_TOKEN" | jq -r '.id')
+            echo "Deleting existing release $EXISTING_ID for tag $TAG"
+            curl -sf -X DELETE "${API_BASE}/releases/${EXISTING_ID}" \
+              -H "Authorization: token $ISSUE_TOKEN"
+          fi
+
+          # Create release
           RELEASE_RESPONSE=$(curl -sf -X POST \
-            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
+            "${API_BASE}/releases" \
             -H "Authorization: token $ISSUE_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
@@ -132,7 +145,7 @@ jobs:
             filename=$(basename "$file")
             echo "Uploading $filename..."
             curl -sf -X POST \
-              "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}" \
+              "${API_BASE}/releases/${RELEASE_ID}/assets?name=${filename}" \
               -H "Authorization: token $ISSUE_TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$file"
