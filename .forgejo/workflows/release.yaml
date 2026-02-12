@@ -159,13 +159,13 @@ jobs:
     # renovate: datasource=docker depName=thegeeklab/git-sv
     container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
     needs: release
+    env:
+      GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
     steps:
       - name: Install dependencies
         run: apk add --no-cache git openssh nodejs
 
       - name: Checkout helm-dendrite
-        env:
-          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
         uses: actions/checkout@v6
         with:
           repository: devxy/helm-dendrite
@@ -174,8 +174,6 @@ jobs:
           fetch-tags: true
 
       - name: Update appVersion, tag, and push
-        env:
-          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
