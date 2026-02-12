@@ -119,15 +119,15 @@ jobs:
             "${API_BASE}/releases/tags/${TAG}" \
             -H "Authorization: token $ISSUE_TOKEN")
           if [ "$EXISTING" = "200" ]; then
-            EXISTING_ID=$(curl -sf "${API_BASE}/releases/tags/${TAG}" \
+            EXISTING_ID=$(curl --fail --show-error -s "${API_BASE}/releases/tags/${TAG}" \
               -H "Authorization: token $ISSUE_TOKEN" | jq -r '.id')
             echo "Deleting existing release $EXISTING_ID for tag $TAG"
-            curl -sf -X DELETE "${API_BASE}/releases/${EXISTING_ID}" \
+            curl --fail --show-error -X DELETE "${API_BASE}/releases/${EXISTING_ID}" \
               -H "Authorization: token $ISSUE_TOKEN"
           fi
 
           # Create release
-          RELEASE_RESPONSE=$(curl -sf -X POST \
+          RELEASE_RESPONSE=$(curl --fail --show-error -X POST \
             "${API_BASE}/releases" \
             -H "Authorization: token $ISSUE_TOKEN" \
             -H "Content-Type: application/json" \
@@ -143,12 +143,13 @@ jobs:
           # Upload assets
           for file in dist/*; do
             filename=$(basename "$file")
-            echo "Uploading $filename..."
-            curl -sf -X POST \
+            echo "Uploading $filename ($(stat -c%s "$file") bytes)..."
+            curl --fail --show-error --retry 3 --retry-delay 5 \
+              -X POST \
               "${API_BASE}/releases/${RELEASE_ID}/assets?name=${filename}" \
               -H "Authorization: token $ISSUE_TOKEN" \
               -H "Content-Type: application/octet-stream" \
-              --data-binary "@$file"
+              -T "$file"
           done
 
           echo "Release created: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
@@ -159,29 +160,44 @@ jobs:
     # renovate: datasource=docker depName=thegeeklab/git-sv
     container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.0.9
     needs: release
-    env:
-      GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
     steps:
       - name: Install dependencies
         run: apk add --no-cache git openssh nodejs
 
-      - name: Checkout helm-dendrite
-        uses: actions/checkout@v6
-        with:
-          repository: devxy/helm-dendrite
-          ssh-key: ${{ secrets.HELM_DEPLOY_KEY }}
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Update appVersion, tag, and push
+      - name: Clone helm-dendrite and bump appVersion
+        env:
+          DEPLOY_KEY: ${{ secrets.HELM_DEPLOY_KEY }}
         run: |
+          set -euo pipefail
+
+          # Setup SSH with deploy key
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
+
+          # Clone
+          REPO_URL="git@10.10.2.1:devxy/helm-dendrite.git"
+          git clone "$REPO_URL" helm-dendrite
+          cd helm-dendrite
+
+          # Update appVersion
           VERSION="${GITHUB_REF_NAME#v}"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "pat-s"
           git config user.email "patrick.schratz@gmail.com"
           sed -i "s/^appVersion: .*/appVersion: ${VERSION}/" charts/dendrite/Chart.yaml
-          git add charts/dendrite/Chart.yaml
-          git commit -m "chore(deps): bump dendrite appVersion to ${VERSION}"
-          git push
-          git-sv tag
-          git push --tags
+
+          # Commit and push only if there are changes
+          if git diff --quiet charts/dendrite/Chart.yaml; then
+            echo "appVersion already set to ${VERSION}, skipping commit"
+          else
+            git add charts/dendrite/Chart.yaml
+            git commit -m "chore(deps): bump dendrite appVersion to ${VERSION}"
+            git push
+          fi
+
+          # Create semver tag via git-sv and push it
+          NEXT_VERSION=$(git-sv nv)
+          echo "Next version: ${NEXT_VERSION}"
+          git tag "v${NEXT_VERSION}"
+          git push origin "v${NEXT_VERSION}"
