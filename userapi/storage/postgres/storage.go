@@ -85,6 +85,10 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresThreePIDTable: %w", err)
 	}
+	externalIDsTable, err := NewPostgresExternalIDsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresExternalIDsTable: %w", err)
+	}
 	pusherTable, err := NewPostgresPusherTable(db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresPusherTable: %w", err)
@@ -119,6 +123,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
 		ThreePIDs:             threePIDTable,
+		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,
 		Notifications:         notificationsTable,
 		RegistrationTokens:    registationTokensTable,

@@ -124,6 +124,11 @@ type ThreePID interface {
 	GetThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 }
 
+type ExternalID interface {
+	GetLocalpartByExternalID(ctx context.Context, providerID, externalID string) (localpart string, serverName spec.ServerName, err error)
+	CreateExternalIDMapping(ctx context.Context, localpart string, serverName spec.ServerName, providerID, externalID string) error
+}
+
 type Notification interface {
 	InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
@@ -138,6 +143,7 @@ type UserDatabase interface {
 	Account
 	AccountData
 	Device
+	ExternalID
 	KeyBackup
 	LoginToken
 	Notification

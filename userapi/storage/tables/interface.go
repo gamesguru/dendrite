@@ -200,3 +200,8 @@ type CrossSigningSigs interface {
 	UpsertCrossSigningSigsForTarget(ctx context.Context, txn *sql.Tx, originUserID string, originKeyID gomatrixserverlib.KeyID, targetUserID string, targetKeyID gomatrixserverlib.KeyID, signature spec.Base64Bytes) error
 	DeleteCrossSigningSigsForTarget(ctx context.Context, txn *sql.Tx, targetUserID string, targetKeyID gomatrixserverlib.KeyID) error
 }
+
+type ExternalIDsTable interface {
+	SelectLocalpartForExternalID(ctx context.Context, txn *sql.Tx, providerID, externalID string) (localpart string, serverName spec.ServerName, err error)
+	InsertExternalID(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, providerID, externalID string) error
+}

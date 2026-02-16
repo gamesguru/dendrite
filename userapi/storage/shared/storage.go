@@ -41,6 +41,7 @@ type Database struct {
 	Profiles              tables.ProfileTable
 	AccountDatas          tables.AccountDataTable
 	ThreePIDs             tables.ThreePIDTable
+	ExternalIDs           tables.ExternalIDsTable
 	OpenIDTokens          tables.OpenIDTable
 	KeyBackups            tables.KeyBackupTable
 	KeyBackupVersions     tables.KeyBackupVersionTable
@@ -384,6 +385,24 @@ func (d *Database) GetThreePIDsForLocalpart(
 	localpart string, serverName spec.ServerName,
 ) (threepids []authtypes.ThreePID, err error) {
 	return d.ThreePIDs.SelectThreePIDsForLocalpart(ctx, localpart, serverName)
+}
+
+// GetLocalpartByExternalID looks up the localpart associated with a given external ID
+// from an OIDC provider.
+func (d *Database) GetLocalpartByExternalID(
+	ctx context.Context, providerID, externalID string,
+) (localpart string, serverName spec.ServerName, err error) {
+	return d.ExternalIDs.SelectLocalpartForExternalID(ctx, nil, providerID, externalID)
+}
+
+// CreateExternalIDMapping creates a mapping between an external OIDC subject identifier
+// and a local Matrix user.
+func (d *Database) CreateExternalIDMapping(
+	ctx context.Context, localpart string, serverName spec.ServerName, providerID, externalID string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.ExternalIDs.InsertExternalID(ctx, txn, localpart, serverName, providerID, externalID)
+	})
 }
 
 // CheckAccountAvailability checks if the username/localpart is already present

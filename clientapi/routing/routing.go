@@ -315,6 +315,10 @@ func Setup(
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
+	if oidcEnabled {
+		setupMASAdminRoutes(synapseAdminRouter, mscCfg, cfg, userAPI)
+	}
+
 	// You can't just do PathPrefix("/(r0|v3)") because regexps only apply when inside named path variables.
 	// So make a named path variable called 'apiversion' (which we will never read in handlers) and then do
 	// (r0|v3) - BUT this is a captured group, which makes no sense because you cannot extract this group

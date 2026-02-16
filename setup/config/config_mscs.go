@@ -1,5 +1,11 @@
 package config
 
+import (
+	"net/url"
+
+	"github.com/sirupsen/logrus"
+)
+
 type MSCs struct {
 	Matrix *Global `yaml:"-"`
 
@@ -71,5 +77,24 @@ func (c *MSCs) Verify(configErrs *ConfigErrors) {
 		checkNotEmpty(configErrs, "mscs.msc3861.issuer", c.MSC3861.Issuer)
 		checkNotEmpty(configErrs, "mscs.msc3861.client_id", c.MSC3861.ClientID)
 		checkNotEmpty(configErrs, "mscs.msc3861.client_secret", c.MSC3861.ClientSecret)
+
+		if c.MSC3861.Issuer != "" {
+			if u, err := url.Parse(c.MSC3861.Issuer); err != nil || u.Scheme == "" || u.Host == "" {
+				configErrs.Add("mscs.msc3861.issuer must be a valid URL with scheme and host")
+			}
+		}
+
+		if c.MSC3861.ClientAuthMethod != "" {
+			switch c.MSC3861.ClientAuthMethod {
+			case "client_secret_basic", "client_secret_post":
+				// valid
+			default:
+				configErrs.Add("mscs.msc3861.client_auth_method must be 'client_secret_basic' or 'client_secret_post'")
+			}
+		}
+
+		if c.MSC3861.AdminToken == "" {
+			logrus.Warn("mscs.msc3861.admin_token is empty; MAS admin API endpoints will reject all requests")
+		}
 	}
 }

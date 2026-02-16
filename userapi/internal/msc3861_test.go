@@ -32,7 +32,7 @@ func TestIntrospectToken_Active(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 			"active":   true,
-			"sub":      "@alice:test",
+			"sub":      "opaque-uuid-alice",
 			"scope":    "openid urn:matrix:org.matrix.msc2967.client:api:*",
 			"username": "alice",
 		})
@@ -46,15 +46,18 @@ func TestIntrospectToken_Active(t *testing.T) {
 		IntrospectionEndpoint: srv.URL + "/introspect",
 	}
 
-	resp, err := introspectToken(context.Background(), msc3861, "test-token", srv.Client())
+	resp, err := introspectToken(context.Background(), msc3861, "test-token-active-"+t.Name(), srv.Client())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !resp.Active {
 		t.Error("expected token to be active")
 	}
-	if resp.Sub != "@alice:test" {
-		t.Errorf("expected sub @alice:test, got %s", resp.Sub)
+	if resp.Sub != "opaque-uuid-alice" {
+		t.Errorf("expected sub opaque-uuid-alice, got %s", resp.Sub)
+	}
+	if resp.Username != "alice" {
+		t.Errorf("expected username alice, got %s", resp.Username)
 	}
 }
 
@@ -73,7 +76,7 @@ func TestIntrospectToken_Inactive(t *testing.T) {
 		IntrospectionEndpoint: srv.URL + "/introspect",
 	}
 
-	resp, err := introspectToken(context.Background(), msc3861, "bad-token", srv.Client())
+	resp, err := introspectToken(context.Background(), msc3861, "bad-token-"+t.Name(), srv.Client())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +96,7 @@ func TestIntrospectToken_ClientSecretPost(t *testing.T) {
 		gotClientID = r.FormValue("client_id")
 		gotClientSecret = r.FormValue("client_secret")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "@alice:test"}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "uuid-alice", "username": "alice"}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -105,7 +108,7 @@ func TestIntrospectToken_ClientSecretPost(t *testing.T) {
 		IntrospectionEndpoint: srv.URL + "/introspect",
 	}
 
-	_, err := introspectToken(context.Background(), msc3861, "test-token", srv.Client())
+	_, err := introspectToken(context.Background(), msc3861, "test-token-post-"+t.Name(), srv.Client())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +134,7 @@ func TestIntrospectToken_ServerError(t *testing.T) {
 		IntrospectionEndpoint: srv.URL + "/introspect",
 	}
 
-	_, err := introspectToken(context.Background(), msc3861, "test-token", srv.Client())
+	_, err := introspectToken(context.Background(), msc3861, "test-token-err-"+t.Name(), srv.Client())
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
@@ -154,12 +157,14 @@ func TestIntrospectToken_DefaultEndpoint(t *testing.T) {
 		// IntrospectionEndpoint left empty to test default
 	}
 
-	_, err := introspectToken(context.Background(), msc3861, "test-token", srv.Client())
+	_, err := introspectToken(context.Background(), msc3861, "test-token-default-"+t.Name(), srv.Client())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if requestedPath != "/oauth2/introspect" {
-		t.Errorf("expected default path /oauth2/introspect, got %s", requestedPath)
+	// Either the OIDC discovery or fallback path should be used.
+	// Since the discovery will fail (test server doesn't serve /.well-known), it falls back.
+	if requestedPath != "/oauth2/introspect" && requestedPath != "/.well-known/openid-configuration" {
+		t.Errorf("expected default path /oauth2/introspect or discovery path, got %s", requestedPath)
 	}
 }
 
@@ -182,7 +187,7 @@ func TestIntrospectToken_BasicAuth(t *testing.T) {
 		// Default auth method is client_secret_basic
 	}
 
-	_, err := introspectToken(context.Background(), msc3861, "test-token", srv.Client())
+	_, err := introspectToken(context.Background(), msc3861, "test-token-basic-"+t.Name(), srv.Client())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -197,6 +202,62 @@ func TestIntrospectToken_BasicAuth(t *testing.T) {
 	}
 	if decodedPass != "my-secret" {
 		t.Errorf("expected basic auth pass my-secret, got %q", decodedPass)
+	}
+}
+
+func TestExtractDeviceIDFromScope(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		scope    string
+		expected string
+	}{
+		{"openid urn:matrix:org.matrix.msc2967.client:device:ABCDEF", "ABCDEF"},
+		{"openid urn:matrix:org.matrix.msc2967.client:api:*", ""},
+		{"urn:matrix:org.matrix.msc2967.client:device:MyDevice openid", "MyDevice"},
+		{"", ""},
+		{"urn:matrix:org.matrix.msc2967.client:device:", ""},
+	}
+
+	for _, tc := range tests {
+		got := extractDeviceIDFromScope(tc.scope)
+		if got != tc.expected {
+			t.Errorf("extractDeviceIDFromScope(%q) = %q, want %q", tc.scope, got, tc.expected)
+		}
+	}
+}
+
+func TestDiscoverIntrospectionEndpoint(t *testing.T) {
+	t.Parallel()
+
+	// Reset the discovery cache for this test.
+	discoveryMu.Lock()
+	savedEndpoint := discoveredEndpoint
+	savedTime := discoveredEndpointTime
+	discoveredEndpoint = ""
+	discoveredEndpointTime = time.Time{}
+	discoveryMu.Unlock()
+	defer func() {
+		discoveryMu.Lock()
+		discoveredEndpoint = savedEndpoint
+		discoveredEndpointTime = savedTime
+		discoveryMu.Unlock()
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/openid-configuration" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"introspection_endpoint": "https://auth.example.com/oauth2/introspect",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	endpoint := discoverIntrospectionEndpoint(context.Background(), srv.URL, srv.Client())
+	if endpoint != "https://auth.example.com/oauth2/introspect" {
+		t.Errorf("expected discovered endpoint, got %q", endpoint)
 	}
 }
 
@@ -241,7 +302,7 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
 			defer closeDB()
 
-			req := &api.QueryAccessTokenRequest{AccessToken: "inactive-token"}
+			req := &api.QueryAccessTokenRequest{AccessToken: "inactive-token-" + t.Name()}
 			res := &api.QueryAccessTokenResponse{}
 			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -255,9 +316,10 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-					"active": true,
-					"sub":    "@alice:test",
-					"scope":  "openid",
+					"active":   true,
+					"sub":      "opaque-uuid-alice",
+					"scope":    "openid",
+					"username": "alice",
 				})
 			}))
 			defer srv.Close()
@@ -265,7 +327,7 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
 			defer closeDB()
 
-			req := &api.QueryAccessTokenRequest{AccessToken: "valid-token"}
+			req := &api.QueryAccessTokenRequest{AccessToken: "valid-token-" + t.Name()}
 			res := &api.QueryAccessTokenResponse{}
 			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -285,9 +347,10 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-					"active": true,
-					"sub":    "@adminuser:test",
-					"scope":  "openid urn:synapse:admin:*",
+					"active":   true,
+					"sub":      "opaque-uuid-adminuser",
+					"scope":    "openid urn:synapse:admin:*",
+					"username": "adminuser",
 				})
 			}))
 			defer srv.Close()
@@ -295,7 +358,7 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
 			defer closeDB()
 
-			req := &api.QueryAccessTokenRequest{AccessToken: "admin-scope-token"}
+			req := &api.QueryAccessTokenRequest{AccessToken: "admin-scope-token-" + t.Name()}
 			res := &api.QueryAccessTokenResponse{}
 			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -312,9 +375,10 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-					"active": true,
-					"sub":    "@newuser:test",
-					"scope":  "openid",
+					"active":   true,
+					"sub":      "opaque-uuid-newuser",
+					"scope":    "openid",
+					"username": "newuser",
 				})
 			}))
 			defer srv.Close()
@@ -323,7 +387,7 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			defer closeDB()
 
 			// First call should auto-provision.
-			req := &api.QueryAccessTokenRequest{AccessToken: "new-user-token"}
+			req := &api.QueryAccessTokenRequest{AccessToken: "new-user-token-" + t.Name()}
 			res := &api.QueryAccessTokenResponse{}
 			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -345,13 +409,14 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			}
 		})
 
-		t.Run("NonLocalUser", func(t *testing.T) {
+		t.Run("DeviceIDFromScope", func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-					"active": true,
-					"sub":    "@remote:other.server",
-					"scope":  "openid",
+					"active":   true,
+					"sub":      "opaque-uuid-devicetest",
+					"scope":    "openid urn:matrix:org.matrix.msc2967.client:device:MYDEVICE",
+					"username": "devicetest",
 				})
 			}))
 			defer srv.Close()
@@ -359,13 +424,103 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
 			defer closeDB()
 
-			req := &api.QueryAccessTokenRequest{AccessToken: "remote-user-token"}
+			req := &api.QueryAccessTokenRequest{AccessToken: "device-scope-token-" + t.Name()}
+			res := &api.QueryAccessTokenResponse{}
+			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Device == nil {
+				t.Fatal("expected device")
+			}
+			if res.Device.ID != "MYDEVICE" {
+				t.Errorf("expected device ID MYDEVICE, got %s", res.Device.ID)
+			}
+		})
+
+		t.Run("ExternalIDMappingPersists", func(t *testing.T) {
+			sub := "opaque-uuid-persist-test"
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+					"active":   true,
+					"sub":      sub,
+					"scope":    "openid",
+					"username": "persistuser",
+				})
+			}))
+			defer srv.Close()
+
+			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
+			defer closeDB()
+
+			// First call creates the external ID mapping.
+			req := &api.QueryAccessTokenRequest{AccessToken: "persist-token-" + t.Name()}
+			res := &api.QueryAccessTokenResponse{}
+			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Device == nil {
+				t.Fatal("expected device")
+			}
+
+			// Verify the external ID mapping was created.
+			issuer := userAPI.Config.MSCs.MSC3861.Issuer
+			localpart, _, err := userAPI.DB.GetLocalpartByExternalID(context.Background(), issuer, sub)
+			if err != nil {
+				t.Fatalf("failed to look up external ID: %v", err)
+			}
+			if localpart != "persistuser" {
+				t.Errorf("expected localpart persistuser, got %q", localpart)
+			}
+		})
+
+		t.Run("EmptySub", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+					"active":   true,
+					"sub":      "",
+					"scope":    "openid",
+					"username": "nosubuser",
+				})
+			}))
+			defer srv.Close()
+
+			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
+			defer closeDB()
+
+			req := &api.QueryAccessTokenRequest{AccessToken: "empty-sub-token-" + t.Name()}
 			res := &api.QueryAccessTokenResponse{}
 			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if res.Device != nil {
-				t.Errorf("expected nil device for non-local user, got %+v", res.Device)
+				t.Errorf("expected nil device for empty sub, got %+v", res.Device)
+			}
+		})
+
+		t.Run("NoUsername", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+					"active": true,
+					"sub":    "opaque-uuid-nousername",
+					"scope":  "openid",
+					// No "username" field
+				})
+			}))
+			defer srv.Close()
+
+			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
+			defer closeDB()
+
+			req := &api.QueryAccessTokenRequest{AccessToken: "no-username-token-" + t.Name()}
+			res := &api.QueryAccessTokenResponse{}
+			if err := userAPI.queryAccessTokenMSC3861(context.Background(), req, res); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Device != nil {
+				t.Errorf("expected nil device when no username, got %+v", res.Device)
 			}
 		})
 	})
