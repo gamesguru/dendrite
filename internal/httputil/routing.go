@@ -102,6 +102,8 @@ func normalisePattern(pattern string) string {
 
 // expandPattern converts gorilla/mux style patterns to chi patterns.
 // It handles regex alternatives like {var:(?:a|b)} by returning multiple patterns.
+// It handles optional trailing slash patterns like {var:[^/]+/?} by returning
+// two patterns: one with and one without the trailing slash.
 // Simple regex patterns like {var:[^/]+} are simplified to {var}.
 func expandPattern(pattern string) []string {
 	// Check for alternative patterns like {var:(?:opt1|opt2)}
@@ -116,6 +118,17 @@ func expandPattern(pattern string) []string {
 			patterns = append(patterns, expandPattern(expanded)...)
 		}
 		return patterns
+	}
+
+	// Check for optional trailing slash patterns like {var:[^/]+/?}
+	// These need two chi routes: one with and one without the trailing slash.
+	optSlashRe := regexp.MustCompile(`\{([^:}]+):[^}]*/\?\}`)
+	if match := optSlashRe.FindStringSubmatch(pattern); match != nil {
+		varName := match[0]
+		normalised := normalisePattern(varName)
+		withoutSlash := optSlashRe.ReplaceAllString(pattern, normalised)
+		withSlash := withoutSlash + "/"
+		return []string{withoutSlash, withSlash}
 	}
 
 	// No alternatives found, just normalise the pattern

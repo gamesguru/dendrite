@@ -141,7 +141,20 @@ func TestIntrospectToken_ServerError(t *testing.T) {
 }
 
 func TestIntrospectToken_DefaultEndpoint(t *testing.T) {
-	t.Parallel()
+	// Not parallel: this test relies on the package-level discovery cache.
+	discoveryMu.Lock()
+	savedEndpoint := discoveredEndpoint
+	savedTime := discoveredEndpointTime
+	discoveredEndpoint = ""
+	discoveredEndpointTime = time.Time{}
+	discoveryMu.Unlock()
+	defer func() {
+		discoveryMu.Lock()
+		discoveredEndpoint = savedEndpoint
+		discoveredEndpointTime = savedTime
+		discoveryMu.Unlock()
+	}()
+
 	var requestedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.Path
@@ -227,9 +240,7 @@ func TestExtractDeviceIDFromScope(t *testing.T) {
 }
 
 func TestDiscoverIntrospectionEndpoint(t *testing.T) {
-	t.Parallel()
-
-	// Reset the discovery cache for this test.
+	// Not parallel: this test relies on the package-level discovery cache.
 	discoveryMu.Lock()
 	savedEndpoint := discoveredEndpoint
 	savedTime := discoveredEndpointTime
