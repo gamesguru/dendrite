@@ -45,7 +45,7 @@ In order to install Zendrite, you will need to satisfy the following dependencie
 
 ### Go
 
-At this time, Zendrite supports being built with Go 1.25 or later.
+At this time, Zendrite supports being built with Go 1.26 or later.
 We do not support building Zendrite with older versions of Go than this.
 If you are installing Go using a package manager, you should check (by running `go version`) that you are using a suitable version before you start.
 

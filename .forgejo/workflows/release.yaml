@@ -31,38 +31,31 @@ jobs:
           apt-get install -y docker-ce docker-ce-cli containerd.io
           docker --version
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install xgo
+        run: go install src.techknowlogick.com/xgo@latest
+
       - name: Build with xgo
         run: |
           set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          xgo \
+            -go go-1.25.x \
+            -out zendrite \
+            -dest dist \
+            -targets 'linux/amd64,linux/arm64,linux/arm-7,darwin/amd64,darwin/arm64,windows/amd64' \
+            -ldflags "-s -w -X codefloe.com/pat-s/zendrite/internal.version=$TAG" \
+            -trimpath \
+            -v \
+            -buildmode default \
+            ./cmd/zendrite
 
-          # Create container with xgo environment variables
-          CONTAINER_ID=$(docker create \
-            -e PACK=./cmd/zendrite \
-            -e OUT=zendrite \
-            -e FLAG_V=true \
-            -e FLAG_LDFLAGS="-s -w -X codefloe.com/pat-s/zendrite/internal.version=${{ github.ref_name }}" \
-            -e FLAG_TRIMPATH=true \
-            -e FLAG_BUILDMODE=default \
-            -e TARGETS="linux/amd64 linux/arm64 linux/arm-7 darwin/amd64 darwin/arm64 windows/amd64" \
-            -e GO111MODULE=on \
-            ghcr.io/crazy-max/xgo:1.25 .)
-
-          # Copy source into container
-          docker cp . "$CONTAINER_ID:/source"
-
-          # Start the container and wait for completion
-          docker start -a "$CONTAINER_ID"
-
-          # Copy built binaries out
-          mkdir -p dist
-          docker cp "$CONTAINER_ID:/build/." dist/
-
-          # Show what was built
           echo "Contents of dist:"
           ls -la dist/
-
-          # Cleanup
-          docker rm "$CONTAINER_ID"
 
       - name: Create archives
         run: |

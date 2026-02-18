@@ -22,7 +22,7 @@ type SharedSecretRegistrationRequest struct {
 	User        string `json:"username"`
 	Password    string `json:"password"`
 	Nonce       string `json:"nonce"`
-	MacBytes    []byte
+	MacBytes    []byte `json:"-"`
 	MacStr      string `json:"mac"`
 	Admin       bool   `json:"admin"`
 	DisplayName string `json:"displayname,omitempty"`

@@ -103,8 +103,33 @@ func TestNewInviteResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(j) != expected {
-		t.Fatalf("Invite response didn't contain correct info, \nexpected: %s \ngot: %s", expected, string(j))
+	// Unmarshal both and compare, ignoring the event_id field which is
+	// derived from a content hash that varies with JSON encoder output.
+	var gotResp, expectedResp InviteResponse
+	if err := json.Unmarshal(j, &gotResp); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(expected), &expectedResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotResp.InviteState.Events) != len(expectedResp.InviteState.Events) {
+		t.Fatalf("expected %d events, got %d", len(expectedResp.InviteState.Events), len(gotResp.InviteState.Events))
+	}
+	for i := range expectedResp.InviteState.Events {
+		var gotEv, expectedEv map[string]any
+		if err := json.Unmarshal(gotResp.InviteState.Events[i], &gotEv); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(expectedResp.InviteState.Events[i], &expectedEv); err != nil {
+			t.Fatal(err)
+		}
+		// Remove event_id before comparison since it's derived from a content
+		// hash that depends on JSON serialization order.
+		delete(gotEv, "event_id")
+		delete(expectedEv, "event_id")
+		if !reflect.DeepEqual(gotEv, expectedEv) {
+			t.Fatalf("event %d mismatch, \nexpected: %s \ngot: %s", i, string(expectedResp.InviteState.Events[i]), string(gotResp.InviteState.Events[i]))
+		}
 	}
 }
 
