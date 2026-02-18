@@ -190,7 +190,7 @@ func MakeOptionalAuthAPI(
 func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse) http.Handler {
 	// TODO: We shouldn't be directly reading env vars here, inject it in instead.
 	// Refactor this when we split out config structs.
-	verbose := os.Getenv("DENDRITE_TRACE_HTTP") == "1"
+	verbose := os.Getenv("ZENDRITE_TRACE_HTTP") == "1" || os.Getenv("DENDRITE_TRACE_HTTP") == "1"
 	h := util.MakeJSONAPI(util.NewJSONRequestHandler(f))
 	withSpan := func(w http.ResponseWriter, req *http.Request) {
 		nextWriter := w

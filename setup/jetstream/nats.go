@@ -102,7 +102,7 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 	if nc == nil {
 		var err error
 		opts := []natsclient.Option{
-			natsclient.Name("Dendrite"),
+			natsclient.Name("Zendrite"),
 			natsclient.MaxReconnects(-1), // Try forever
 			natsclient.ReconnectJitter(time.Second, time.Second),
 			natsclient.ReconnectWait(time.Second * 10), //nolint:mnd

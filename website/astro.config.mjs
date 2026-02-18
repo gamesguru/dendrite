@@ -57,6 +57,7 @@ export default defineConfig({
             { label: 'Presence', slug: 'administration/presence' },
             { label: 'Admin API', slug: 'administration/adminapi' },
             { label: 'Optimisation', slug: 'administration/optimisation' },
+            { label: 'Migration from Dendrite', slug: 'administration/migration-from-dendrite' },
             { label: 'Troubleshooting', slug: 'administration/troubleshooting' },
           ],
         },

@@ -16,6 +16,10 @@ See the [documentation site](https://zendrite.pat-s.me) for installation, admini
 
 The first public release of this fork is v0.15.3.
 
+## Migrating from Dendrite
+
+If you are upgrading from an existing Dendrite installation, see the [migration guide](https://zendrite.pat-s.me/administration/migration-from-dendrite/) for details on config, API endpoint, and JetStream changes.
+
 ## License
 
 Copyright 2017 OpenMarket Ltd  

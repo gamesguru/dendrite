@@ -36,6 +36,17 @@ func ParseFlags(monolith bool) *config.Zendrite {
 		logrus.Fatal("--config must be supplied")
 	}
 
+	// Fall back to the legacy config filename if the default was not
+	// overridden and the new file does not exist.
+	if *configPath == "zendrite.yaml" {
+		if _, err := os.Stat("zendrite.yaml"); os.IsNotExist(err) {
+			if _, err := os.Stat("dendrite.yaml"); err == nil {
+				logrus.Warn("Using legacy config file dendrite.yaml — consider renaming it to zendrite.yaml")
+				*configPath = "dendrite.yaml"
+			}
+		}
+	}
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logrus.Fatalf("Invalid config file: %s", err)

@@ -25,6 +25,9 @@ const createDBMigrationsSQL = "" +
 	" zendrite_version TEXT NOT NULL" +
 	");"
 
+const renameDBMigrationsColumnSQL = "" +
+	"ALTER TABLE db_migrations RENAME COLUMN dendrite_version TO zendrite_version"
+
 const insertVersionSQL = "" +
 	"INSERT INTO db_migrations (version, time, zendrite_version)" +
 	" VALUES ($1, $2, $3)"
@@ -130,6 +133,11 @@ func (m *Migrator) insertMigration(ctx context.Context, txn *sql.Tx, migrationNa
 // migrations table, if it doesn't exist.
 func (m *Migrator) ExecutedMigrations(ctx context.Context) (map[string]struct{}, error) {
 	result := make(map[string]struct{})
+	// Attempt to rename the legacy "dendrite_version" column. This handles
+	// existing databases created by Dendrite. The rename is idempotent: it
+	// silently fails on fresh databases (column doesn't exist) and on
+	// databases that have already been migrated.
+	_, _ = m.db.ExecContext(ctx, renameDBMigrationsColumnSQL)
 	_, err := m.db.ExecContext(ctx, createDBMigrationsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create db_migrations: %w", err)
