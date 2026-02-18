@@ -11,7 +11,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
 )
 
 // Statistics contains information about all of the remote federated

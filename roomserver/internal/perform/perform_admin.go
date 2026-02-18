@@ -19,13 +19,13 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/query"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Admin struct {
@@ -292,7 +292,7 @@ func (r *Admin) PerformAdminDownloadState(
 		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
 	}
 	proto := &gomatrixserverlib.ProtoEvent{
-		Type:     "org.matrix.dendrite.state_download",
+		Type:     "org.matrix.zendrite.state_download",
 		SenderID: string(*senderID),
 		RoomID:   roomID,
 		Content:  spec.RawJSON("{}"),

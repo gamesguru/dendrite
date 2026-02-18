@@ -21,8 +21,8 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // GetPathFromBase64Hash evaluates the path to a media file from its Base64Hash

@@ -213,7 +213,7 @@ type Routers struct {
 	Media         *Router
 	WellKnown     *Router
 	Static        *Router
-	DendriteAdmin *Router
+	ZendriteAdmin *Router
 	SynapseAdmin  *Router
 }
 
@@ -226,7 +226,7 @@ func NewRouters() Routers {
 		Media:         NewRouter(PublicMediaPathPrefix),
 		WellKnown:     NewRouter(PublicWellKnownPrefix),
 		Static:        NewRouter(PublicStaticPath),
-		DendriteAdmin: NewRouter(DendriteAdminPathPrefix),
+		ZendriteAdmin: NewRouter(ZendriteAdminPathPrefix),
 		SynapseAdmin:  NewRouter(SynapseAdminPathPrefix),
 	}
 }

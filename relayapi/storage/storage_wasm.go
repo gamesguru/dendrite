@@ -11,10 +11,10 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // NewDatabase opens a new database

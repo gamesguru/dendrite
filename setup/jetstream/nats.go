@@ -13,8 +13,8 @@ import (
 	natsclient "github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type NATSInstance struct {
@@ -76,7 +76,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 		}()
 		if !s.ReadyForConnections(time.Second * 60) { //nolint:mnd
 			logrus.Fatalln("NATS did not start in time, shutting down")
-			process.ShutdownDendrite()
+			process.ShutdownZendrite()
 			s.Shutdown()
 			s.WaitForShutdown()
 			process.ComponentFinished()

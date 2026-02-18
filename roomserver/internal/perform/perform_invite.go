@@ -16,15 +16,15 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
-	"codefloe.com/pat-s/dendrite/roomserver/state"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type QueryState struct {

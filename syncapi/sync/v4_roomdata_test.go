@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // TestMatchesPattern tests the event type pattern matching logic.

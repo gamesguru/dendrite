@@ -14,7 +14,7 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 func UpDropEventReferenceSHA(ctx context.Context, tx *sql.Tx) error {

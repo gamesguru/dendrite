@@ -9,9 +9,9 @@ package storage
 import (
 	"fmt"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Open opens a postgres database.

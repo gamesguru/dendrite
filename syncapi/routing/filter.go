@@ -16,10 +16,10 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/sync"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/sync"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // GetFilter implements GET /_matrix/client/r0/user/{userId}/filter/{filterId}.

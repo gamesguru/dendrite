@@ -11,9 +11,9 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const ignoresSchema = `

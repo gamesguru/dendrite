@@ -37,7 +37,7 @@ type FederationAPI struct {
 	// on remote federation endpoints. This is not recommended in production!
 	DisableTLSValidation bool `yaml:"disable_tls_validation"`
 
-	// DisableHTTPKeepalives prevents Dendrite from keeping HTTP connections
+	// DisableHTTPKeepalives prevents Zendrite from keeping HTTP connections
 	// open for reuse for future requests. Connections will be closed quicker
 	// but we may spend more time on TLS handshakes instead.
 	DisableHTTPKeepalives bool `yaml:"disable_http_keepalives"`

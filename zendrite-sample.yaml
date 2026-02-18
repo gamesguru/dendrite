@@ -1,6 +1,6 @@
-# This is the Dendrite configuration file.
+# This is the Zendrite configuration file.
 #
-# The configuration is split up into sections - each Dendrite component has a
+# The configuration is split up into sections - each Zendrite component has a
 # configuration section, in addition to the "global" section which applies to
 # all components.
 
@@ -41,7 +41,7 @@ global:
   # sections. For monolith deployments using SQLite databases,
   # you must configure the "database" block for each component instead.
   database:
-    connection_string: postgresql://username:password@hostname/dendrite?sslmode=disable
+    connection_string: postgresql://username:password@hostname/zendrite?sslmode=disable
     max_open_conns: 90
     max_idle_conns: 5
     conn_max_lifetime: -1
@@ -82,7 +82,7 @@ global:
     - matrix.org
     - vector.im
 
-  # Disables federation. Dendrite will not be able to communicate with other servers
+  # Disables federation. Zendrite will not be able to communicate with other servers
   # in the Matrix federation and the federation API will not be exposed.
   disable_federation: false
 
@@ -95,7 +95,7 @@ global:
 
   # Configures phone-home statistics reporting. These statistics contain the server
   # name, number of active users and some information on your deployment config.
-  # We use this information to understand how Dendrite is being used in the wild.
+  # We use this information to understand how Zendrite is being used in the wild.
   report_stats:
     enabled: false
     endpoint: https://panopticon.matrix.org/push
@@ -115,7 +115,7 @@ global:
   # Configuration for NATS JetStream
   jetstream:
     # A list of NATS Server addresses to connect to. If none are specified, an
-    # internal NATS server will be started automatically when running Dendrite in
+    # internal NATS server will be started automatically when running Zendrite in
     # monolith mode.
     addresses:
     # - localhost:4222
@@ -126,12 +126,12 @@ global:
     disable_tls_validation: false
 
     # Persistent directory to store JetStream streams in. This directory should be
-    # preserved across Dendrite restarts.
+    # preserved across Zendrite restarts.
     storage_path: ./
 
     # The prefix to use for stream names for this homeserver - really only useful
-    # if you are running more than one Dendrite server on the same NATS deployment.
-    topic_prefix: Dendrite
+    # if you are running more than one Zendrite server on the same NATS deployment.
+    topic_prefix: Zendrite
 
   # Configuration for Prometheus metric collection.
   metrics:
@@ -231,7 +231,7 @@ federation_api:
   # enable this option in production as it presents a security risk!
   disable_tls_validation: false
 
-  # Disable HTTP keepalives, which also prevents connection reuse. Dendrite will typically
+  # Disable HTTP keepalives, which also prevents connection reuse. Zendrite will typically
   # keep HTTP connections open to remote hosts for 5 minutes as they can be reused much
   # more quickly than opening new connections each time. Disabling keepalives will close
   # HTTP connections immediately after a successful request but may result in more CPU and
@@ -249,7 +249,7 @@ federation_api:
         - key_id: ed25519:a_RXGa
           public_key: l8Hft5qXKn1vfHrg3p4+W8gELQVo8N13JkluMfmn2sQ
 
-  # This option will control whether Dendrite will prefer to look up keys directly
+  # This option will control whether Zendrite will prefer to look up keys directly
   # or whether it should try perspective servers first, using direct fetches as a
   # last resort.
   prefer_direct_fetch: false
@@ -320,7 +320,7 @@ mscs:
 # Configuration for the Sync API.
 sync_api:
   # This option controls which HTTP header to inspect to find the real remote IP
-  # address of the client. This is likely required if Dendrite is running behind
+  # address of the client. This is likely required if Zendrite is running behind
   # a reverse proxy server.
   # real_ip_header: X-Real-IP
 
@@ -344,7 +344,7 @@ user_api:
   # Setting this lower makes registration/login consume less CPU resources at the cost
   # of security should the database be compromised. Setting this higher makes registration/login
   # consume more CPU resources but makes it harder to brute force password hashes. This value
-  # can be lowered if performing tests or on embedded Dendrite instances (e.g WASM builds).
+  # can be lowered if performing tests or on embedded Zendrite instances (e.g WASM builds).
   bcrypt_cost: 10
 
   # The length of time that a token issued for a relying party from

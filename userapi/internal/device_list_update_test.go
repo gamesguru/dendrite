@@ -23,16 +23,16 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	api2 "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
+	api2 "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
 var ctx = context.Background()

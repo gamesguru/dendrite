@@ -14,9 +14,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/relayapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/relayapi/api"
 )
 
 // SetRelayingEnabled implements api.RelayInternalAPI.

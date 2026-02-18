@@ -13,8 +13,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // FederationAPIPresenceProducer produces events for the federation API server to consume.

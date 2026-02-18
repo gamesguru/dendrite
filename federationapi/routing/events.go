@@ -16,7 +16,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 // GetEvent returns the requested event.

@@ -5,15 +5,15 @@ import starlightThemeNova from 'starlight-theme-nova';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://dendrite.pat-s.me',
+  site: 'https://zendrite.pat-s.me',
   integrations: [
     starlight({
       customCss: ['./src/styles/custom.css'],
       plugins: [starlightThemeNova()],
-      title: 'Dendrite',
+      title: 'Zendrite',
       description: 'A second-generation Matrix homeserver written in Go',
       // social: [
-      //   { icon: 'matrix', label: 'Matrix', href: 'https://matrix.to/#/#dendrite:matrix.org' },
+      //   { icon: 'matrix', label: 'Matrix', href: 'https://matrix.to/#/#zendrite:matrix.org' },
       // ],
       sidebar: [
         {
@@ -36,7 +36,7 @@ export default defineConfig({
                 { label: 'Database', slug: 'installation/manual/database' },
                 { label: 'Signing Keys', slug: 'installation/manual/signingkey' },
                 { label: 'Configuration', slug: 'installation/manual/configuration' },
-                { label: 'Starting Dendrite', slug: 'installation/manual/starting' },
+                { label: 'Starting Zendrite', slug: 'installation/manual/starting' },
               ],
             },
             {

@@ -9,8 +9,8 @@ package perform
 import (
 	"context"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
 )
 
 type Forgetter struct {

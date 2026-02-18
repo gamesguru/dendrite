@@ -3,23 +3,23 @@ title: Profiling
 description: CPU and memory profiling with pprof
 ---
 
-If you are running into problems with Dendrite using excessive resources (e.g. CPU or RAM) then you can use the profiler to work out what is happening.
+If you are running into problems with Zendrite using excessive resources (e.g. CPU or RAM) then you can use the profiler to work out what is happening.
 
-Dendrite contains an embedded profiler called `pprof`, which is a part of the standard Go toolchain.
+Zendrite contains an embedded profiler called `pprof`, which is a part of the standard Go toolchain.
 
 ## Enable the profiler
 
-To enable the profiler, start Dendrite with the `PPROFLISTEN` environment variable.
+To enable the profiler, start Zendrite with the `PPROFLISTEN` environment variable.
 This variable specifies which address and port to listen on, e.g.
 
 ```bash
-PPROFLISTEN=localhost:65432 ./bin/dendrite ...
+PPROFLISTEN=localhost:65432 ./bin/zendrite ...
 ```
 
 If pprof has been enabled successfully, a log line at startup will show that pprof is listening:
 
 ```text
-WARN[2020-12-03T13:32:33.669405000Z] [/Users/neilalexander/Desktop/dendrite/internal/log.go:87] SetupPprof
+WARN[2020-12-03T13:32:33.669405000Z] [/Users/neilalexander/Desktop/zendrite/internal/log.go:87] SetupPprof
   Starting pprof on localhost:65432
 ```
 
@@ -55,7 +55,7 @@ If you don't have the Go tools installed but just want to capture the profile to
 curl -O http://localhost:65432/debug/pprof/profile?seconds=30
 ```
 
-This will block for the specified number of seconds, capturing information about what Dendrite is doing, and then produces a `profile` file, which you can send onward.
+This will block for the specified number of seconds, capturing information about what Zendrite is doing, and then produces a `profile` file, which you can send onward.
 
 ## Profiling memory usage
 

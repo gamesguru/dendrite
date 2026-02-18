@@ -1,6 +1,6 @@
 # Client API
 
-This component roughly corresponds to "Client Room Send" and "Client Sync" on [the WIRING diagram](https://codefloe.com/pat-s/dendrite/src/branch/main/WIRING.md).
+This component roughly corresponds to "Client Room Send" and "Client Sync" on [the WIRING diagram](https://codefloe.com/pat-s/zendrite/src/branch/main/WIRING.md).
 This component produces multiple binaries.
 
 ## Internals

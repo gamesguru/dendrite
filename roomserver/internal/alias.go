@@ -19,11 +19,11 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	asAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/helpers"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	asAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // SetRoomAlias implements alias.RoomserverInternalAPI.

@@ -10,30 +10,30 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi"
-	"codefloe.com/pat-s/dendrite/clientapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi"
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/internal/transactions"
-	"codefloe.com/pat-s/dendrite/mediaapi"
-	"codefloe.com/pat-s/dendrite/relayapi"
-	relayAPI "codefloe.com/pat-s/dendrite/relayapi/api"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/syncapi"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi"
+	"codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	"codefloe.com/pat-s/zendrite/mediaapi"
+	"codefloe.com/pat-s/zendrite/relayapi"
+	relayAPI "codefloe.com/pat-s/zendrite/relayapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Monolith represents an instantiation of all dependencies required to build
-// all components of Dendrite, for use in monolith mode.
+// all components of Zendrite, for use in monolith mode.
 type Monolith struct {
-	Config    *config.Dendrite
+	Config    *config.Zendrite
 	KeyRing   *gomatrixserverlib.KeyRing
 	Client    *fclient.Client
 	FedClient fclient.FederationClient
@@ -52,7 +52,7 @@ type Monolith struct {
 // AddAllPublicRoutes attaches all public paths to the given router.
 func (m *Monolith) AddAllPublicRoutes(
 	processCtx *process.ProcessContext,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	routers httputil.Routers,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,

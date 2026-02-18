@@ -5,9 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 )
 
 func TestUpDropEventReferenceSHAPrevEvents(t *testing.T) {

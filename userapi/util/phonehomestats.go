@@ -19,9 +19,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
 type phoneHomeStats struct {
@@ -29,7 +29,7 @@ type phoneHomeStats struct {
 	stats      map[string]any
 	serverName spec.ServerName
 	startTime  time.Time
-	cfg        *config.Dendrite
+	cfg        *config.Zendrite
 	db         storage.Statistics
 	isMonolith bool
 	client     *http.Client
@@ -40,7 +40,7 @@ type timestampToRUUsage struct {
 	usage     syscall.Rusage
 }
 
-func StartPhoneHomeCollector(startTime time.Time, cfg *config.Dendrite, statsDB storage.Statistics) {
+func StartPhoneHomeCollector(startTime time.Time, cfg *config.Zendrite, statsDB storage.Statistics) {
 	p := phoneHomeStats{
 		startTime:  startTime,
 		serverName: cfg.Global.ServerName,
@@ -147,7 +147,7 @@ func (p *phoneHomeStats) collect() {
 		logrus.WithError(err).Error("Unable to create phone-home statistics request")
 		return
 	}
-	request.Header.Set("User-Agent", "Dendrite/"+internal.VersionString())
+	request.Header.Set("User-Agent", "Zendrite/"+internal.VersionString())
 
 	resp, err := p.client.Do(request)
 	if resp != nil {

@@ -14,7 +14,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // GetNotifications handles /_matrix/client/r0/notifications.

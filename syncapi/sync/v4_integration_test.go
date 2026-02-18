@@ -13,8 +13,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // TestDetermineRoomStreamState tests the room stream state determination logic

@@ -18,11 +18,11 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (

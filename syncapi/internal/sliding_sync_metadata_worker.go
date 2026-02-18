@@ -14,10 +14,10 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/storage/shared"
-	"codefloe.com/pat-s/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 )
 
 // RoomMetadataQueuer is an interface for queuing rooms for metadata recalculation.

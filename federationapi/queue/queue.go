@@ -19,11 +19,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // OutgoingQueues is a collection of queues for sending transactions to other
@@ -49,7 +49,7 @@ func init() { //nolint:gochecknoinits
 
 var destinationQueueTotal = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_total",
 	},
@@ -57,7 +57,7 @@ var destinationQueueTotal = prometheus.NewGauge(
 
 var destinationQueueRunning = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_running",
 	},
@@ -65,7 +65,7 @@ var destinationQueueRunning = prometheus.NewGauge(
 
 var destinationQueueBackingOff = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_backing_off",
 	},

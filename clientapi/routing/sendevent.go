@@ -22,14 +22,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	"codefloe.com/pat-s/dendrite/internal/transactions"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // http://matrix.org/docs/spec/client_server/r0.2.0.html#put-matrix-client-r0-rooms-roomid-send-eventtype-txnid
@@ -42,7 +42,7 @@ var userRoomSendMutexes sync.Map // (roomID+userID) -> mutex. mutexes to ensure 
 
 var sendEventDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "clientapi",
 		Name:      "sendevent_duration_millis",
 		Help:      "How long it takes to build and submit a new event from the client API to the roomserver",

@@ -15,12 +15,12 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3/deltas"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // A Database is used to store room events and stream offsets.

@@ -24,9 +24,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth"
-	"codefloe.com/pat-s/dendrite/internal"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/internal"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // BasicAuth is used for authorization on /metrics handlers.
@@ -287,7 +287,7 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 			prometheus.CounterOpts{
 				Name:      metricsName,
 				Help:      "Total number of http requests for HTML resources",
-				Namespace: "dendrite",
+				Namespace: "zendrite",
 			},
 			[]string{"code"},
 		),

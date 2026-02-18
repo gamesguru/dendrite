@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"os"
 
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 const usage = `Usage: %s
 
-Generate key files which are required by dendrite.
+Generate key files which are required by zendrite.
 
 Arguments:
 

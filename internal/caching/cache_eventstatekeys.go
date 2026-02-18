@@ -1,6 +1,6 @@
 package caching
 
-import "codefloe.com/pat-s/dendrite/roomserver/types"
+import "codefloe.com/pat-s/zendrite/roomserver/types"
 
 // EventStateKeyCache contains the subset of functions needed for
 // a room event state key cache.

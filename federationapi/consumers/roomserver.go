@@ -20,14 +20,14 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/queue"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"codefloe.com/pat-s/dendrite/federationapi/types"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	syncAPITypes "codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	syncAPITypes "codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -213,7 +213,7 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if oldJoinedHosts == nil {
 		// This means that there is nothing to update as this is a duplicate
 		// message.
-		// This can happen if dendrite crashed between reading the message and
+		// This can happen if zendrite crashed between reading the message and
 		// persisting the stream position.
 		return nil
 	}

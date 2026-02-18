@@ -3,8 +3,8 @@ package streams
 import (
 	"context"
 
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 type StreamProvider interface {

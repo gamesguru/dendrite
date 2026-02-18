@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Package hooks exposes places in Dendrite where custom code can be executed, useful for MSCs.
+// Package hooks exposes places in Zendrite where custom code can be executed, useful for MSCs.
 // Hooks can only be run in monolith mode.
 package hooks
 

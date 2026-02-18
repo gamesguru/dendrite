@@ -10,16 +10,16 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/appservice"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/appservice"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {

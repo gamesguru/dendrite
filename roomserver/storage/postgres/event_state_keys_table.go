@@ -11,10 +11,10 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventStateKeysSchema = `

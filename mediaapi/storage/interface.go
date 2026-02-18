@@ -11,7 +11,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 type Database interface {

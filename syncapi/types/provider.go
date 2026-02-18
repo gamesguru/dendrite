@@ -7,8 +7,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type SyncRequest struct {

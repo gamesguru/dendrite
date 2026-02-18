@@ -19,11 +19,11 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // mustAwaitFullState checks if a required_state configuration requires full room state.
@@ -1074,7 +1074,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// (via cascade delete), we lose the stream state for rooms that had no changes.
 		// This causes those rooms to incorrectly appear as "never sent" on the next request,
 		// even though they were sent before.
-		// See: https://codefloe.com/pat-s/dendrite/issues/XXXX
+		// See: https://codefloe.com/pat-s/zendrite/issues/XXXX
 		if since != nil && connState.PreviousStreamStates != nil {
 			copiedCount := 0
 			for roomID, streams := range connState.PreviousStreamStates {

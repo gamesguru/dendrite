@@ -3,7 +3,7 @@
 Relay Servers function similar to the way physical mail drop boxes do.
 A node can have many associated relay servers. Matrix events can be sent to them instead of to the destination node, and the destination node will eventually retrieve them from the relay server.
 Nodes that want to send events to an offline node need to know what relay servers are associated with their intended destination.
-Currently this is manually configured in the dendrite database. In the future this information could be configurable in the app and shared automatically via other means.
+Currently this is manually configured in the zendrite database. In the future this information could be configurable in the app and shared automatically via other means.
 
 Currently events are sent as complete Matrix Transactions.
 Transactions include a list of PDUs, (which contain, among other things, lists of authorization events, previous events, and signatures) a list of EDUs, and other information about the transaction.

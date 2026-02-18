@@ -9,7 +9,7 @@ package helpers
 import (
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 func benchmarkStateEntryMapLookup(entries, lookups int64, b *testing.B) {

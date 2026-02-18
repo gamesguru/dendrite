@@ -9,7 +9,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 var serverNamesTables = []string{

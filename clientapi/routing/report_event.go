@@ -12,9 +12,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type reportEventRequest struct {

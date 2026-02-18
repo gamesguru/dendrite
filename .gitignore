@@ -22,6 +22,7 @@
 /logs
 **/jetstream/
 **/jetstream*/
+!setup/jetstream/
 
 # Architecture specific extensions/prefixes
 *.[568vq]
@@ -50,7 +51,7 @@ _testmain.go
 *.crt
 
 # Default configuration file
-dendrite.yaml
+zendrite.yaml
 
 # Database files
 *.db
@@ -72,7 +73,7 @@ build
 go.work*
 
 # helm chart
-helm/dendrite/charts/
+helm/zendrite/charts/
 vendor/
-.dendrite-dev/
-dendrite
+.zendrite-dev/
+zendrite

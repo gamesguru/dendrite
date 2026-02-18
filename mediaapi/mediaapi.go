@@ -11,19 +11,19 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/mediaapi/routing"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/routing"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the MediaAPI component.
 func AddPublicRoutes(
 	routers httputil.Routers,
 	cm *sqlutil.Connections,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	userAPI userapi.MediaUserAPI,
 	client *fclient.Client,
 	fedClient fclient.FederationClient,

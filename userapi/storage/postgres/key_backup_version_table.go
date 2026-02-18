@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const keyBackupVersionTableSchema = `

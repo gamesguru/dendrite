@@ -8,9 +8,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/pushgateway"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 // NotifyUserCountsAsync sends notifications to a local user's

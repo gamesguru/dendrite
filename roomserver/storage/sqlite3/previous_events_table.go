@@ -14,10 +14,10 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/sqlite3/deltas"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // TODO: previous_reference_sha256 was NOT NULL before but it broke sytest because

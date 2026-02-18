@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
-func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.ProcessContext, func()) {
-	var cfg config.Dendrite
+func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.ProcessContext, func()) {
+	var cfg config.Zendrite
 	cfg.Defaults(config.DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -53,7 +53,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 			ConnMaxLifetimeSeconds: 60, //nolint:mnd
 		}
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForComponentsToFinish()
 			closeDb()
 		}
@@ -81,11 +81,11 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		cfg.RelayAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "relayapi.db"))
 
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForComponentsToFinish()
 		}
 	default:
 		t.Fatalf("unknown db type: %v", dbType)
 	}
-	return &config.Dendrite{}, nil, func() {}
+	return &config.Zendrite{}, nil, func() {}
 }

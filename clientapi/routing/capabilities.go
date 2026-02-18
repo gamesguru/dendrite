@@ -12,8 +12,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/version"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/version"
 )
 
 // GetCapabilities returns information about the server's supported feature set

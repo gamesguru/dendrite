@@ -17,14 +17,14 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/queue"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	fedTypes "codefloe.com/pat-s/dendrite/federationapi/types"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	fedTypes "codefloe.com/pat-s/zendrite/federationapi/types"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputReceiptConsumer consumes events that originate in the clientapi.

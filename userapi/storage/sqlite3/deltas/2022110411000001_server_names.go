@@ -7,7 +7,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 // I know what you're thinking: you're wondering "why doesn't this use $1

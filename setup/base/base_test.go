@@ -14,11 +14,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	basepkg "codefloe.com/pat-s/dendrite/setup/base"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	basepkg "codefloe.com/pat-s/zendrite/setup/base"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 //go:embed static/*.gotmpl
@@ -35,7 +35,7 @@ func TestLandingPage_Tcp(t *testing.T) {
 
 	processCtx := process.NewProcessContext()
 	routers := httputil.NewRouters()
-	cfg := config.Dendrite{}
+	cfg := config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
 
 	// hack: create a server and close it immediately, just to get a random port assigned
@@ -78,7 +78,7 @@ func TestLandingPage_UnixSocket(t *testing.T) {
 
 	processCtx := process.NewProcessContext()
 	routers := httputil.NewRouters()
-	cfg := config.Dendrite{}
+	cfg := config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
 
 	tempDir := t.TempDir()

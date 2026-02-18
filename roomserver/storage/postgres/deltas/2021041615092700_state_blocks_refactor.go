@@ -15,8 +15,8 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type stateSnapshotData struct {
@@ -214,7 +214,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// By this point we should have no more state_snapshot_nids below maxsnapshotid in either roomserver_rooms or roomserver_events
-	// If we do, this is a problem if Dendrite tries to load the snapshot as it will not exist
+	// If we do, this is a problem if Zendrite tries to load the snapshot as it will not exist
 	// in roomserver_state_snapshots
 	var count int64
 
@@ -287,7 +287,7 @@ func readSnapshotRows(snapshotrows *sql.Rows) ([]stateBlockData, []stateBlockDat
 		if nulStateBlockNID.Valid {
 			snapshot.StateBlockNID = types.StateBlockNID(nulStateBlockNID.Int64)
 		}
-		// Dendrite v0.1.0 would not make a state block for the create event, resulting in [NULL] from the query above.
+		// Zendrite v0.1.0 would not make a state block for the create event, resulting in [NULL] from the query above.
 		// Remember the snapshot and we'll fill it in after we close this cursor as we can't have 2 queries running at the same time
 		if len(eventsarray) == 1 && !eventsarray[0].Valid {
 			badCreateSnapshots = append(badCreateSnapshots, snapshot)

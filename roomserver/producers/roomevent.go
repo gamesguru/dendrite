@@ -13,10 +13,10 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/roomserver/acls"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/roomserver/acls"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 )
 
 var keyContentFields = map[string]string{

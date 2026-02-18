@@ -102,7 +102,7 @@ func currentUser() string {
 func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, close func()) {
 	if dbType == DBTypeSQLite {
 		// this will be made in the t.TempDir, which is unique per test
-		dbname := filepath.Join(t.TempDir(), "dendrite_test.db")
+		dbname := filepath.Join(t.TempDir(), "zendrite_test.db")
 		return fmt.Sprintf("file:%s", dbname), func() {
 			t.Cleanup(func() {}) // removes the t.TempDir
 		}
@@ -130,8 +130,8 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 
 	// superuser database
 	postgresDB := os.Getenv("POSTGRES_DB")
-	// we cannot use 'dendrite_test' here else 2x concurrently running packages will try to use the same db.
-	// instead, hash the current working directory, snaffle the first 16 bytes and append that to dendrite_test
+	// we cannot use 'zendrite_test' here else 2x concurrently running packages will try to use the same db.
+	// instead, hash the current working directory, snaffle the first 16 bytes and append that to zendrite_test
 	// and use that as the unique db name. We do this because packages are per-directory hence by hashing the
 	// working (test) directory we ensure we get a consistent hash and don't hash against concurrent packages.
 	wd, err := os.Getwd()
@@ -139,7 +139,7 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 		t.Fatalf("cannot get working directory: %s", err)
 	}
 	hash := sha256.Sum256([]byte(wd))
-	dbName := fmt.Sprintf("dendrite_test_%s", hex.EncodeToString(hash[:16]))
+	dbName := fmt.Sprintf("zendrite_test_%s", hex.EncodeToString(hash[:16]))
 	if postgresDB == "" { // local server, use createdb
 		createLocalDB(t, dbName)
 	} else { // remote server, shell into the postgres user and CREATE DATABASE

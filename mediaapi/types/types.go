@@ -11,7 +11,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // FileSizeBytes is a file size in bytes.

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"reflect"
 	"regexp"
@@ -21,25 +22,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/appservice"
-	"codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/appservice/consumers"
-	"codefloe.com/pat-s/dendrite/clientapi"
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/syncapi"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/appservice"
+	"codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/appservice/consumers"
+	"codefloe.com/pat-s/zendrite/clientapi"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -148,7 +149,7 @@ func TestAppserviceInternalAPI(t *testing.T) {
 		as.CreateHTTPClient(cfg.AppServiceAPI.DisableTLSValidation)
 		cfg.AppServiceAPI.Derived.ApplicationServices = []config.ApplicationService{*as}
 		t.Cleanup(func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForShutdown()
 		})
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
@@ -213,8 +214,10 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 		}
 	}))
 
-	tmpDir := t.TempDir()
-	socket := path.Join(tmpDir, "socket")
+	tmpDir, err := os.MkdirTemp("/tmp", "as-sock-") //nolint:usetesting // t.TempDir() path exceeds macOS Unix socket limit
+	assert.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	socket := path.Join(tmpDir, "s")
 	l, err := net.Listen("unix", socket)
 	assert.NoError(t, err)
 	_ = srv.Listener.Close()
@@ -242,7 +245,7 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 	cfg.AppServiceAPI.Derived.ApplicationServices = []config.ApplicationService{*as}
 
 	t.Cleanup(func() {
-		ctx.ShutdownDendrite()
+		ctx.ShutdownZendrite()
 		ctx.WaitForShutdown()
 	})
 	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
@@ -414,7 +417,7 @@ func TestRoomserverConsumerOneInvite(t *testing.T) {
 }
 
 // Note: If this test panics, it is because we timed out waiting for the
-// join event to come through to the appservice and we close the DB/shutdown Dendrite. This makes the
+// join event to come through to the appservice and we close the DB/shutdown Zendrite. This makes the
 // syncAPI unhappy, as it is unable to write to the database.
 func TestOutputAppserviceEvent(t *testing.T) {
 	alice := test.NewUser(t)

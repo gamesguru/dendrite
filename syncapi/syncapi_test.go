@@ -17,22 +17,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/clientapi/producers"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/syncapi/routing"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi/routing"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type syncRoomserverAPI struct {
@@ -1039,11 +1039,11 @@ func testSendToDevice(t *testing.T, dbType test.DBType) {
 
 	ctx := context.Background()
 	for _, tc := range testCases {
-		// Send to-device messages of type "m.dendrite.test" with content `{"dummy":"message $counter"}`
+		// Send to-device messages of type "m.zendrite.test" with content `{"dummy":"message $counter"}`
 		for i := 0; i < tc.sendMessagesCount; i++ {
 			msgCounter++
 			msg := json.RawMessage(fmt.Sprintf(`{"dummy":"message %d"}`, msgCounter))
-			if err := producer.SendToDevice(ctx, user.ID, user.ID, alice.ID, "m.dendrite.test", msg); err != nil {
+			if err := producer.SendToDevice(ctx, user.ID, user.ID, alice.ID, "m.zendrite.test", msg); err != nil {
 				t.Fatalf("unable to send to device message: %v", err)
 			}
 		}
@@ -1463,7 +1463,7 @@ func syncUntil(t *testing.T,
 	}
 }
 
-func toNATSMsgs(t *testing.T, cfg *config.Dendrite, input ...*rstypes.HeaderedEvent) []*nats.Msg {
+func toNATSMsgs(t *testing.T, cfg *config.Zendrite, input ...*rstypes.HeaderedEvent) []*nats.Msg {
 	result := make([]*nats.Msg, len(input))
 	for i, ev := range input {
 		var addsStateIDs []string

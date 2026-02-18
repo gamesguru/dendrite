@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // TestFindRelevantRoomIDsForExtension tests the extension room filtering logic

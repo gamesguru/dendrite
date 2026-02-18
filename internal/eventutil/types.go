@@ -9,7 +9,7 @@ package eventutil
 import (
 	"strconv"
 
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // AccountData represents account data sent from the client API server to the

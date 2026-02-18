@@ -9,14 +9,14 @@ package roomserver
 import (
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // NewInternalAPI returns a concrete implementation of the internal API.
@@ -25,7 +25,7 @@ import (
 // you may wish to call `SetFederationAPI` on the returned struct to avoid nil-dereference errors.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
 	caches caching.RoomServerCaches,

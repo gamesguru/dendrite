@@ -19,9 +19,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/clientapi/userutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func TestLoginFromJSONReader(t *testing.T) {

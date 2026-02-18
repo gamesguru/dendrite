@@ -1,29 +1,29 @@
 ---
 title: Planning your installation
-description: Database choices, system requirements, and dependencies for Dendrite
+description: Database choices, system requirements, and dependencies for Zendrite
 ---
 
 ## Database
 
-Dendrite can run with either a PostgreSQL or a SQLite backend.
+Zendrite can run with either a PostgreSQL or a SQLite backend.
 There are considerable tradeoffs to consider:
 
-- **PostgreSQL**: Needs to run separately to Dendrite, needs to be installed and configured separately and will use more resources over all, but will be **considerably faster** than SQLite.
-  PostgreSQL has much better write concurrency which will allow Dendrite to process more tasks in parallel.
+- **PostgreSQL**: Needs to run separately to Zendrite, needs to be installed and configured separately and will use more resources over all, but will be **considerably faster** than SQLite.
+  PostgreSQL has much better write concurrency which will allow Zendrite to process more tasks in parallel.
   This will be necessary for federated deployments to perform adequately.
 
-- **SQLite**: Built into Dendrite, therefore no separate database engine is necessary and is quite a bit easier to set up, but will be much slower than PostgreSQL in most cases.
-  SQLite only allows a single writer on a database at a given time, which will significantly restrict Dendrite's ability to process multiple tasks in parallel.
+- **SQLite**: Built into Zendrite, therefore no separate database engine is necessary and is quite a bit easier to set up, but will be much slower than PostgreSQL in most cases.
+  SQLite only allows a single writer on a database at a given time, which will significantly restrict Zendrite's ability to process multiple tasks in parallel.
 
 At this time, we **recommend the PostgreSQL database engine** for all production deployments.
 
 ## Requirements
 
-Dendrite will run on Linux, macOS and Windows Server.
+Zendrite will run on Linux, macOS and Windows Server.
 It should also run fine on variants of BSD such as FreeBSD and OpenBSD.
-We have not tested Dendrite on AIX, Solaris, Plan 9 or z/OS — your mileage may vary with these platforms.
+We have not tested Zendrite on AIX, Solaris, Plan 9 or z/OS — your mileage may vary with these platforms.
 
-It is difficult to state explicitly the amount of CPU, RAM or disk space that a Dendrite installation will need, as this varies considerably based on a number of factors.
+It is difficult to state explicitly the amount of CPU, RAM or disk space that a Zendrite installation will need, as this varies considerably based on a number of factors.
 In particular:
 
 - The number of users using the server;
@@ -33,7 +33,7 @@ In particular:
 Some tasks are more expensive than others, such as joining rooms over federation, running state resolution or sending messages into very large federated rooms with lots of remote users.
 Therefore you should plan accordingly and ensure that you have enough resources available to endure spikes in CPU or RAM usage, as these may be considerably higher than the idle resource usage.
 
-At an absolute minimum, Dendrite will expect 1GB RAM.
+At an absolute minimum, Zendrite will expect 1GB RAM.
 For a comfortable day-to-day deployment which can participate in federated rooms for a number of local users, be prepared to assign 2-4 CPU cores and 8GB RAM — more if your user count increases.
 
 If you are running PostgreSQL on the same machine, allow extra headroom for this too, as the database engine will also have CPU and RAM requirements of its own.
@@ -41,12 +41,12 @@ Running too many heavy services on the same machine may result in resource starv
 
 ## Dependencies
 
-In order to install Dendrite, you will need to satisfy the following dependencies.
+In order to install Zendrite, you will need to satisfy the following dependencies.
 
 ### Go
 
-At this time, Dendrite supports being built with Go 1.25 or later.
-We do not support building Dendrite with older versions of Go than this.
+At this time, Zendrite supports being built with Go 1.25 or later.
+We do not support building Zendrite with older versions of Go than this.
 If you are installing Go using a package manager, you should check (by running `go version`) that you are using a suitable version before you start.
 
 ### PostgreSQL
@@ -55,7 +55,7 @@ If using the PostgreSQL database engine, you should install PostgreSQL 12 or lat
 
 ### NATS Server
 
-Dendrite comes with a built-in [NATS Server](https://github.com/nats-io/nats-server) and therefore does not need this to be manually installed.
+Zendrite comes with a built-in [NATS Server](https://github.com/nats-io/nats-server) and therefore does not need this to be manually installed.
 
 ### Reverse proxy
 
@@ -64,5 +64,5 @@ Configuring these is not covered in this documentation.
 
 ### Windows
 
-Finally, if you want to build Dendrite on Windows, you will need `gcc` in the path.
-The best way to achieve this is by installing and building Dendrite under [MinGW-w64](https://www.mingw-w64.org/).
+Finally, if you want to build Zendrite on Windows, you will need `gcc` in the path.
+The best way to achieve this is by installing and building Zendrite under [MinGW-w64](https://www.mingw-w64.org/).

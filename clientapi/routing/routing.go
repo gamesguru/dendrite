@@ -19,20 +19,20 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/api"
-	"codefloe.com/pat-s/dendrite/clientapi/auth"
-	clientutil "codefloe.com/pat-s/dendrite/clientapi/httputil"
-	"codefloe.com/pat-s/dendrite/clientapi/producers"
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/transactions"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/base"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	clientutil "codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/base"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type WellKnownClientHomeserver struct {
@@ -63,7 +63,7 @@ type WellKnownClientResponse struct {
 //nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	rsAPI roomserverAPI.ClientRoomserverAPI,
 	asAPI appserviceAPI.AppServiceInternalAPI,
 	userAPI userapi.ClientUserAPI,
@@ -76,12 +76,12 @@ func Setup(
 	caches *caching.Caches,
 	natsClient *nats.Conn, enableMetrics bool,
 ) {
-	cfg := &dendriteCfg.ClientAPI
-	mscCfg := &dendriteCfg.MSCs
+	cfg := &zendriteCfg.ClientAPI
+	mscCfg := &zendriteCfg.MSCs
 	publicAPIMux := routers.Client
 	wkMux := routers.WellKnown
 	synapseAdminRouter := routers.SynapseAdmin
-	dendriteAdminRouter := routers.DendriteAdmin
+	zendriteAdminRouter := routers.ZendriteAdmin
 
 	if enableMetrics {
 		prometheus.MustRegister(amtRegUsers, sendEventDuration)
@@ -191,19 +191,19 @@ func Setup(
 			}),
 		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
 	}
-	dendriteAdminRouter.Handle("/admin/registrationTokens/new",
+	zendriteAdminRouter.Handle("/admin/registrationTokens/new",
 		httputil.MakeAdminAPI("admin_registration_tokens_new", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminCreateNewRegistrationToken(req, cfg, userAPI)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/registrationTokens",
+	zendriteAdminRouter.Handle("/admin/registrationTokens",
 		httputil.MakeAdminAPI("admin_list_registration_tokens", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminListRegistrationTokens(req, cfg, userAPI)
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/registrationTokens/{token}",
+	zendriteAdminRouter.Handle("/admin/registrationTokens/{token}",
 		httputil.MakeAdminAPI("admin_get_registration_token", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			switch req.Method {
 			case http.MethodGet:
@@ -222,49 +222,49 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/evacuateRoom/{roomID}",
+	zendriteAdminRouter.Handle("/admin/evacuateRoom/{roomID}",
 		httputil.MakeAdminAPI("admin_evacuate_room", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminEvacuateRoom(req, rsAPI)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/evacuateUser/{userID}",
+	zendriteAdminRouter.Handle("/admin/evacuateUser/{userID}",
 		httputil.MakeAdminAPI("admin_evacuate_user", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminEvacuateUser(req, rsAPI)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/purgeRoom/{roomID}",
+	zendriteAdminRouter.Handle("/admin/purgeRoom/{roomID}",
 		httputil.MakeAdminAPI("admin_purge_room", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminPurgeRoom(req, rsAPI)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
 	if oidcEnabled {
-		dendriteAdminRouter.Handle("/admin/resetPassword/{userID}",
+		zendriteAdminRouter.Handle("/admin/resetPassword/{userID}",
 			msc3861ForbiddenHandler("admin_reset_password"),
 		).Methods(http.MethodPost, http.MethodOptions)
 	} else {
-		dendriteAdminRouter.Handle("/admin/resetPassword/{userID}",
+		zendriteAdminRouter.Handle("/admin/resetPassword/{userID}",
 			httputil.MakeAdminAPI("admin_reset_password", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 				return AdminResetPassword(req, cfg, device, userAPI)
 			}),
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
-	dendriteAdminRouter.Handle("/admin/downloadState/{serverName}/{roomID}",
+	zendriteAdminRouter.Handle("/admin/downloadState/{serverName}/{roomID}",
 		httputil.MakeAdminAPI("admin_download_state", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminDownloadState(req, device, rsAPI)
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/fulltext/reindex",
+	zendriteAdminRouter.Handle("/admin/fulltext/reindex",
 		httputil.MakeAdminAPI("admin_fultext_reindex", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminReindex(req, cfg, device, natsClient)
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
-	dendriteAdminRouter.Handle("/admin/refreshDevices/{userID}",
+	zendriteAdminRouter.Handle("/admin/refreshDevices/{userID}",
 		httputil.MakeAdminAPI("admin_refresh_devices", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminMarkAsStale(req, cfg, userAPI)
 		}),
@@ -349,7 +349,7 @@ func Setup(
 					JSON: spec.InternalServerError{},
 				}
 			}
-			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, dendriteCfg.Global.ServerName, caches)
+			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, zendriteCfg.Global.ServerName, caches)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 	// Legacy path for compatibility with Element X and other existing implementations
@@ -367,7 +367,7 @@ func Setup(
 					JSON: spec.InternalServerError{},
 				}
 			}
-			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, dendriteCfg.Global.ServerName, caches)
+			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, zendriteCfg.Global.ServerName, caches)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
@@ -1039,7 +1039,7 @@ func Setup(
 	// Browsers use the OPTIONS HTTP method to check if the CORS policy allows
 	// PUT requests, so we need to allow this method
 
-	threePIDClient := base.CreateClient(dendriteCfg, nil) // TODO: Move this somewhere else, e.g. pass in as parameter
+	threePIDClient := base.CreateClient(zendriteCfg, nil) // TODO: Move this somewhere else, e.g. pass in as parameter
 
 	v3mux.Handle("/account/3pid",
 		httputil.MakeAuthAPI("account_3pid", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

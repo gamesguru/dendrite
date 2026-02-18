@@ -18,9 +18,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
 )
 
 //nolint:gochecknoinits
@@ -32,7 +32,7 @@ func init() {
 // calculate the history visibility.
 var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "syncapi",
 		Name:      "calculateHistoryVisibility_duration_millis",
 		Help:      "How long it takes to calculate the history visibility",

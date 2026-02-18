@@ -23,7 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func (a *UserInternalAPI) QueryKeyChanges(ctx context.Context, req *api.QueryKeyChangesRequest, res *api.QueryKeyChangesResponse) error {

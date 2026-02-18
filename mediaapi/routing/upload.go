@@ -23,12 +23,12 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/fileutils"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage"
-	"codefloe.com/pat-s/dendrite/mediaapi/thumbnailer"
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/mediaapi/fileutils"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // uploadRequest metadata included in or derivable from an upload request

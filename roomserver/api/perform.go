@@ -8,7 +8,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type PerformCreateRoomRequest struct {
@@ -95,13 +95,13 @@ type PerformBackfillRequest struct {
 const limitPrevEventIDs = 100
 
 // PrevEventIDs returns the prev_event IDs of either 100 backwards extremities or
-// len(r.BackwardsExtremities). Limited to 100, due to Synapse/Dendrite stopping after reaching
+// len(r.BackwardsExtremities). Limited to 100, due to Synapse/Zendrite stopping after reaching
 // this limit. (which sounds sane).
 func (r *PerformBackfillRequest) PrevEventIDs() []string {
 	var uniqueIDs map[string]struct{}
 
 	// Create a unique eventID map of either 100 or len(r.BackwardsExtremities).
-	// 100 since Synapse/Dendrite stops after reaching 100 events.
+	// 100 since Synapse/Zendrite stops after reaching 100 events.
 	if len(r.BackwardsExtremities) > limitPrevEventIDs {
 		uniqueIDs = make(map[string]struct{}, limitPrevEventIDs)
 	} else {

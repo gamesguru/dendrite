@@ -1,7 +1,7 @@
 package caching
 
 import (
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // RoomServerEventsCache contains the subset of functions needed for

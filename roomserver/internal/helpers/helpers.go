@@ -11,13 +11,13 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/auth"
-	"codefloe.com/pat-s/dendrite/roomserver/state"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/shared"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/auth"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // TODO: temporary package which has helper functions used by both internal/perform packages.

@@ -16,9 +16,9 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateDataSchema = `
@@ -26,7 +26,7 @@ const stateDataSchema = `
 	-- The state snapshot NID that identifies this snapshot.
     state_block_nid INTEGER PRIMARY KEY AUTOINCREMENT,
 	-- The hash of the state block, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_block_hash BLOB UNIQUE,
 	-- The event NIDs contained within the state block, encoded as JSON.

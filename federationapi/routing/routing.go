@@ -22,13 +22,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	fedInternal "codefloe.com/pat-s/dendrite/federationapi/internal"
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	fedInternal "codefloe.com/pat-s/zendrite/federationapi/internal"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (
@@ -48,7 +48,7 @@ const (
 //nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	rsAPI roomserverAPI.FederationRoomserverAPI,
 	fsAPI *fedInternal.FederationInternalAPI,
 	keys gomatrixserverlib.JSONVerifier,
@@ -60,7 +60,7 @@ func Setup(
 	fedMux := routers.Federation
 	keyMux := routers.Keys
 	wkMux := routers.WellKnown
-	cfg := &dendriteCfg.FederationAPI
+	cfg := &zendriteCfg.FederationAPI
 
 	if enableMetrics {
 		prometheus.MustRegister(

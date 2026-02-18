@@ -13,9 +13,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
-	"codefloe.com/pat-s/dendrite/federationapi/types"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type Database interface {

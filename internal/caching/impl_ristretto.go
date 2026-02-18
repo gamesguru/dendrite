@@ -18,8 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 const (
@@ -49,7 +49,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 	cache, err := ristretto.NewCache(&ristretto.Config[string, any]{
 		NumCounters: int64((maxCost / 1024) * 10), //nolint:mnd // 10 counters per 1KB data, affects bloom filter size
 		BufferItems: 64,                           //nolint:mnd                           // recommended by the ristretto godocs as a sane buffer size value
-		MaxCost:     int64(maxCost),               // max cost is in bytes, as per the Dendrite config
+		MaxCost:     int64(maxCost),               // max cost is in bytes, as per the Zendrite config
 		Metrics:     true,
 	})
 	if err != nil {
@@ -57,14 +57,14 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 	}
 	if enablePrometheus {
 		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "caching_ristretto",
 			Name:      "ratio",
 		}, func() float64 {
 			return float64(cache.Metrics.Ratio())
 		})
 		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "caching_ristretto",
 			Name:      "cost",
 		}, func() float64 {

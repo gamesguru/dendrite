@@ -93,7 +93,7 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(codefloe.com/pat-s/dendrite)
+        - prefix(codefloe.com/pat-s/zendrite)
       custom-order: true
     gofmt:
       simplify: true

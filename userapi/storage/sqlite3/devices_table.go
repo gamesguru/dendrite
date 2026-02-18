@@ -14,12 +14,12 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/clientapi/userutil"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3/deltas"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const devicesSchema = `

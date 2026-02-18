@@ -13,7 +13,7 @@ type JetStream struct {
 	// internal NATS server will be used when running in monolith mode only.
 	Addresses []string `yaml:"addresses"`
 	// The prefix to use for stream names for this homeserver - really only
-	// useful if running more than one Dendrite on the same NATS deployment.
+	// useful if running more than one Zendrite on the same NATS deployment.
 	TopicPrefix string `yaml:"topic_prefix"`
 	// The JetStream domain, if needed.
 	JetStreamDomain string `yaml:"js_domain"`
@@ -38,7 +38,7 @@ func (c *JetStream) Durable(name string) string {
 
 func (c *JetStream) Defaults(opts DefaultOpts) {
 	c.Addresses = []string{}
-	c.TopicPrefix = "Dendrite"
+	c.TopicPrefix = "Zendrite"
 	if opts.Generate {
 		c.StoragePath = Path("./")
 		c.NoLog = true

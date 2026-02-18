@@ -21,16 +21,16 @@ import (
 	"github.com/nats-io/nats.go"
 	"golang.org/x/crypto/bcrypt"
 
-	api2 "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/internal"
-	"codefloe.com/pat-s/dendrite/userapi/producers"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
+	api2 "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/internal"
+	"codefloe.com/pat-s/zendrite/userapi/producers"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
 const (
@@ -167,7 +167,7 @@ func TestQueryProfile(t *testing.T) {
 
 // TestPasswordlessLoginFails ensures that a passwordless account cannot
 // be logged into using an arbitrary password (effectively a regression test
-// for https://codefloe.com/pat-s/dendrite/issues/2780).
+// for https://codefloe.com/pat-s/zendrite/issues/2780).
 func TestPasswordlessLoginFails(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

@@ -13,8 +13,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const notaryServerKeysJSONSchema = `

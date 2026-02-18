@@ -71,8 +71,8 @@ func ListenAndServe(t *testing.T, router http.Handler, withTLS bool) (apiURL str
 		srv.Handler = router
 		var err error
 		if withTLS {
-			certFile := filepath.Join(t.TempDir(), "dendrite.cert")
-			keyFile := filepath.Join(t.TempDir(), "dendrite.key")
+			certFile := filepath.Join(t.TempDir(), "zendrite.cert")
+			keyFile := filepath.Join(t.TempDir(), "zendrite.key")
 			err = NewTLSKey(keyFile, certFile, 1024) //nolint:mnd
 			if err != nil {
 				t.Errorf("failed to make TLS key: %s", err)

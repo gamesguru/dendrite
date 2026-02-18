@@ -24,17 +24,17 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Registration Flows that the server allows.
@@ -192,7 +192,7 @@ func TestValidationOfApplicationServices(t *testing.T) {
 	}
 
 	// Set up a config
-	fakeConfig := &config.Dendrite{}
+	fakeConfig := &config.Zendrite{}
 	fakeConfig.Defaults(config.DefaultOpts{
 		Generate:       true,
 		SingleDatabase: true,
@@ -624,7 +624,7 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		defer close()
 		natsInstance := jetstream.NATSInstance{}
 		cfg.Global.ServerName = "server"
-		sharedSecret := "dendritetest"
+		sharedSecret := "zendritetest"
 		cfg.ClientAPI.RegistrationSharedSecret = sharedSecret
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)

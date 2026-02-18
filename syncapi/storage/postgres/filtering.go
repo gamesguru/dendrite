@@ -9,7 +9,7 @@ package postgres
 import (
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // filterConvertWildcardToSQL converts wildcards as defined in
@@ -30,7 +30,7 @@ func filterConvertTypeWildcardToSQL(values *[]string) []string {
 	return ret
 }
 
-// TODO: Replace when Dendrite uses Go 1.18
+// TODO: Replace when Zendrite uses Go 1.18
 func getSendersRoomEventFilter(filter *synctypes.RoomEventFilter) (senders []string, notSenders []string) {
 	if filter.Senders != nil {
 		senders = *filter.Senders

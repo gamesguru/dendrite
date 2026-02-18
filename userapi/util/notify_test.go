@@ -13,14 +13,14 @@ import (
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/bcrypt"
 
-	"codefloe.com/pat-s/dendrite/internal/pushgateway"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/storage"
-	userUtil "codefloe.com/pat-s/dendrite/userapi/util"
+	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	userUtil "codefloe.com/pat-s/zendrite/userapi/util"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
@@ -84,7 +84,7 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		// Create DB and Dendrite base
+		// Create DB and Zendrite base
 		connStr, close := test.PrepareDBConnectionString(t, dbType)
 		defer close()
 		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})

@@ -11,7 +11,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func Test_validatePassword(t *testing.T) {
@@ -236,7 +236,7 @@ func TestValidateApplicationServiceRequest(t *testing.T) {
 	}
 
 	// Set up a config
-	fakeConfig := &config.Dendrite{}
+	fakeConfig := &config.Zendrite{}
 	fakeConfig.Defaults(config.DefaultOpts{
 		Generate: true,
 	})

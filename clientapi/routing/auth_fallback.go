@@ -14,8 +14,8 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // recaptchaTemplate is an HTML webpage template for recaptcha auth.

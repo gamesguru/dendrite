@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 )
 
 // keyIDRegexp defines allowable characters in Key IDs.
@@ -37,11 +37,11 @@ var keyIDRegexp = regexp.MustCompile("^ed25519:[a-zA-Z0-9_]+$")
 // This will change whenever we make breaking changes to the config format.
 const Version = 2
 
-// Dendrite contains all the config used by a dendrite process.
+// Zendrite contains all the config used by a zendrite process.
 // Relative paths are resolved relative to the current working directory.
-type Dendrite struct {
+type Zendrite struct {
 	// The version of the configuration file.
-	// If the version in a file doesn't match the current dendrite config
+	// If the version in a file doesn't match the current zendrite config
 	// version then we can give a clear error message telling the user
 	// to update their config file to the current version.
 	// The version of the file should only be different if there has
@@ -61,7 +61,7 @@ type Dendrite struct {
 
 	MSCs MSCs `yaml:"mscs"`
 
-	// The config for tracing the dendrite servers.
+	// The config for tracing the zendrite servers.
 	Tracing struct {
 		// Set to true to enable tracer hooks. If false, no tracing is set up.
 		Enabled bool `yaml:"enabled"`
@@ -160,7 +160,7 @@ type ConfigErrors []string
 
 // Load a yaml config file for a server run as multiple processes or as a monolith.
 // Checks the config to ensure that it is valid.
-func Load(configPath string) (*Dendrite, error) {
+func Load(configPath string) (*Zendrite, error) {
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -178,8 +178,8 @@ func loadConfig(
 	basePath string,
 	configData []byte,
 	readFile func(string) ([]byte, error),
-) (*Dendrite, error) {
-	var c Dendrite
+) (*Zendrite, error) {
+	var c Zendrite
 	c.Defaults(DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -276,7 +276,7 @@ func LoadMatrixKey(privateKeyPath string, readFile func(string) ([]byte, error))
 
 // Derive generates data that is derived from various values provided in
 // the config file.
-func (config *Dendrite) Derive() error {
+func (config *Zendrite) Derive() error {
 	// Determine registrations flows based off config values
 
 	config.Derived.Registration.Params = make(map[string]any)
@@ -309,7 +309,7 @@ type DefaultOpts struct {
 }
 
 // SetDefaults sets default config values if they are not explicitly set.
-func (c *Dendrite) Defaults(opts DefaultOpts) {
+func (c *Zendrite) Defaults(opts DefaultOpts) {
 	c.Version = Version
 
 	c.Global.Defaults(opts)
@@ -326,7 +326,7 @@ func (c *Dendrite) Defaults(opts DefaultOpts) {
 	c.Wiring()
 }
 
-func (c *Dendrite) Verify(configErrs *ConfigErrors) {
+func (c *Zendrite) Verify(configErrs *ConfigErrors) {
 	type verifiable interface {
 		Verify(configErrs *ConfigErrors)
 	}
@@ -340,7 +340,7 @@ func (c *Dendrite) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-func (c *Dendrite) Wiring() {
+func (c *Zendrite) Wiring() {
 	c.Global.JetStream.Matrix = &c.Global
 	c.ClientAPI.Matrix = &c.Global
 	c.FederationAPI.Matrix = &c.Global
@@ -396,7 +396,7 @@ func checkPositive(configErrs *ConfigErrors, key string, value int64) {
 }
 
 // checkLogging verifies the parameters logging.* are valid.
-func (config *Dendrite) checkLogging(configErrs *ConfigErrors) {
+func (config *Zendrite) checkLogging(configErrs *ConfigErrors) {
 	for _, logrusHook := range config.Logging {
 		checkNotEmpty(configErrs, "logging.type", logrusHook.Type)
 		checkNotEmpty(configErrs, "logging.level", logrusHook.Level)
@@ -405,7 +405,7 @@ func (config *Dendrite) checkLogging(configErrs *ConfigErrors) {
 
 // check returns an error type containing all errors found within the config
 // file.
-func (config *Dendrite) check() error { // monolithic
+func (config *Zendrite) check() error { // monolithic
 	var configErrs ConfigErrors
 
 	if config.Version != Version {
@@ -473,7 +473,7 @@ func readKeyPEM(path string, data []byte, enforceKeyIDFormat bool) (gomatrixserv
 }
 
 // SetupTracing configures OpenTelemetry tracing using the supplied configuration.
-func (config *Dendrite) SetupTracing() (closer io.Closer, err error) {
+func (config *Zendrite) SetupTracing() (closer io.Closer, err error) {
 	if !config.Tracing.Enabled {
 		return io.NopCloser(bytes.NewReader([]byte{})), nil
 	}

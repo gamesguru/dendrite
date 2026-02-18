@@ -13,8 +13,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Protocols implements

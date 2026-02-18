@@ -10,7 +10,7 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal"
 )
 
 type version struct {
@@ -28,7 +28,7 @@ func Version() util.JSONResponse {
 		Code: http.StatusOK,
 		JSON: &version{
 			server{
-				Name:    "Dendrite",
+				Name:    "Zendrite",
 				Version: internal.VersionString(),
 			},
 		},

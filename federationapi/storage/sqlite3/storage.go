@@ -12,11 +12,11 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared"
-	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3/deltas"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Database stores information needed by the federation sender.

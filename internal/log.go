@@ -22,7 +22,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // logrus is using a global variable when we're using `logrus.AddHook`
@@ -43,7 +43,7 @@ func (f utcFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 }
 
 // Logrus hook which wraps another hook and filters log entries according to their level.
-// (Note that we cannot use solely logrus.SetLevel, because Dendrite supports multiple
+// (Note that we cannot use solely logrus.SetLevel, because Zendrite supports multiple
 // levels of logging at the same time.)
 type logLevelHook struct {
 	level logrus.Level
@@ -147,7 +147,7 @@ func setupFileHook(hook config.LogrusHook, level logrus.Level) {
 	if !ok {
 		logrus.Fatal("log hook 'path' param is not a string")
 	}
-	fullPath := filepath.Join(dirPath, "dendrite.log")
+	fullPath := filepath.Join(dirPath, "zendrite.log")
 
 	if err := os.MkdirAll(path.Dir(fullPath), os.ModePerm); err != nil {
 		logrus.Fatalf("Couldn't create directory %s: %q", path.Dir(fullPath), err)

@@ -15,11 +15,11 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type roomDirectoryResponse struct {
@@ -151,7 +151,7 @@ func SetLocalAlias(
 	}
 	for _, appservice := range cfg.Derived.ApplicationServices {
 		// Don't prevent AS from creating aliases in its own namespace
-		// Note that Dendrite uses SenderLocalpart as UserID for AS users
+		// Note that Zendrite uses SenderLocalpart as UserID for AS users
 		if reqUserID != appservice.SenderLocalpart {
 			if aliasNamespaces, ok := appservice.NamespaceMap["aliases"]; ok {
 				for _, namespace := range aliasNamespaces {

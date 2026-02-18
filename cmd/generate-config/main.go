@@ -9,7 +9,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"golang.org/x/crypto/bcrypt"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func main() {
@@ -20,9 +20,9 @@ func main() {
 	normalise := flag.String("normalise", "", "Normalise an existing configuration file by adding new/missing options and defaults")
 	flag.Parse()
 
-	var cfg *config.Dendrite
+	var cfg *config.Zendrite
 	if *normalise == "" {
-		cfg = &config.Dendrite{
+		cfg = &config.Zendrite{
 			Version: config.Version,
 		}
 		cfg.Defaults(config.DefaultOpts{
@@ -45,7 +45,7 @@ func main() {
 				"relayapi":      &cfg.RelayAPI.Database,
 			} {
 				if uri == "" {
-					path := filepath.Join(*dirPath, fmt.Sprintf("dendrite_%s.db", name))
+					path := filepath.Join(*dirPath, fmt.Sprintf("zendrite_%s.db", name))
 					db.ConnectionString = config.DataSource(fmt.Sprintf("file:%s", path))
 				} else {
 					db.ConnectionString = uri

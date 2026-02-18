@@ -18,8 +18,8 @@ import (
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // RequestTurnServer implements:

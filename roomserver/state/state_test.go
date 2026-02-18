@@ -11,7 +11,7 @@ package state
 import (
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 func TestFindDuplicateStateKeys(t *testing.T) {

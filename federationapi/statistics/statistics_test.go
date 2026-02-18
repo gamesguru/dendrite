@@ -8,7 +8,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 const (

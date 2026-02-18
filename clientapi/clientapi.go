@@ -9,26 +9,26 @@ package clientapi
 import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/api"
-	"codefloe.com/pat-s/dendrite/clientapi/producers"
-	"codefloe.com/pat-s/dendrite/clientapi/routing"
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/transactions"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	"codefloe.com/pat-s/zendrite/clientapi/routing"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the ClientAPI component.
 func AddPublicRoutes(
 	processContext *process.ProcessContext,
 	routers httputil.Routers,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	natsInstance *jetstream.NATSInstance,
 	federation fclient.FederationClient,
 	rsAPI roomserverAPI.ClientRoomserverAPI,

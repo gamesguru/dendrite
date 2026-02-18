@@ -20,18 +20,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/federationapi/types"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	syncTypes "codefloe.com/pat-s/dendrite/syncapi/types"
-	userAPI "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	syncTypes "codefloe.com/pat-s/zendrite/syncapi/types"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var (
 	PDUCountTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "federationapi",
 			Name:      "recv_pdus",
 			Help:      "Number of incoming PDUs from remote servers with labels for success",
@@ -40,7 +40,7 @@ var (
 	)
 	EDUCountTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "federationapi",
 			Name:      "recv_edus",
 			Help:      "Number of incoming EDUs from remote servers",

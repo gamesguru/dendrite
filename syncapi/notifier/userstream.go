@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // UserDeviceStream represents a communication mechanism between the /sync request goroutine

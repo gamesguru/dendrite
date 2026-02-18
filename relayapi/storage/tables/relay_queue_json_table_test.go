@@ -16,12 +16,12 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/postgres"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 const (

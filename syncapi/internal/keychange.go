@@ -16,12 +16,12 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	keytypes "codefloe.com/pat-s/dendrite/userapi/types"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	keytypes "codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 // DeviceOTKCounts adds one-time key counts to the /sync response.

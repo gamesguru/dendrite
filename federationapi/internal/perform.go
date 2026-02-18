@@ -15,12 +15,12 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/consumers"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/consumers"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/version"
 )
 
 // PerformLeaveRequest implements api.FederationInternalAPI.
@@ -743,7 +743,7 @@ func (r *FederationInternalAPI) PerformBroadcastEDU(
 	logrus.WithContext(ctx).Infof("Sending wake-up EDU to %d destination(s)", len(destinations))
 
 	edu := &gomatrixserverlib.EDU{
-		Type:   "org.matrix.dendrite.wakeup",
+		Type:   "org.matrix.zendrite.wakeup",
 		Origin: string(r.cfg.Matrix.ServerName),
 	}
 	if err = r.queues.SendEDU(edu, r.cfg.Matrix.ServerName, destinations); err != nil { //nolint:contextcheck

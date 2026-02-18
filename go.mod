@@ -1,4 +1,4 @@
-module codefloe.com/pat-s/dendrite
+module codefloe.com/pat-s/zendrite
 
 require (
 	codefloe.com/pat-s/gomatrixserverlib v1.0.4

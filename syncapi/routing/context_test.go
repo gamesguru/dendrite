@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 func Test_parseContextParams(t *testing.T) {

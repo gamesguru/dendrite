@@ -16,7 +16,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
-const testKeyID = "ed25519:dendrite-demo-yggdrasil"
+const testKeyID = "ed25519:zendrite-demo-yggdrasil"
 
 type testKeys struct{}
 

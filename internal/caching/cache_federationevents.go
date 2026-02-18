@@ -3,7 +3,7 @@ package caching
 import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // FederationCache contains the subset of functions needed for

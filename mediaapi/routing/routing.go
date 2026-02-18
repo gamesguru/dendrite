@@ -19,12 +19,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"codefloe.com/pat-s/dendrite/federationapi/routing"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage"
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // configResponse is the response to GET /_matrix/media/r0/config
@@ -41,7 +41,7 @@ type configResponse struct {
 //nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	db storage.Database,
 	userAPI userapi.MediaUserAPI,
 	client *fclient.Client,
@@ -118,7 +118,7 @@ func Setup(
 
 var thumbnailCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "thumbnail",
 		Help:      "Total number of media_api requests for thumbnails",
@@ -128,7 +128,7 @@ var thumbnailCounter = promauto.NewCounterVec(
 
 var thumbnailSize = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "thumbnail_size_bytes",
 		Help:      "Total size of media_api requests for thumbnails",
@@ -139,7 +139,7 @@ var thumbnailSize = promauto.NewHistogramVec(
 
 var downloadCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "download",
 		Help:      "Total size of media_api requests for full downloads",
@@ -149,7 +149,7 @@ var downloadCounter = promauto.NewCounterVec(
 
 var downloadSize = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "download_size_bytes",
 		Help:      "Total size of media_api requests for full downloads",

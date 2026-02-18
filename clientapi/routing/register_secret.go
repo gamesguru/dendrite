@@ -15,7 +15,7 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal"
 )
 
 type SharedSecretRegistrationRequest struct {

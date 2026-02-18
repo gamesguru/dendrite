@@ -11,7 +11,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 // TODO: This logic should live in gomatrixserverlib

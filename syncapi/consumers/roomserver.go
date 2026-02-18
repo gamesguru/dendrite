@@ -20,21 +20,21 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	dendriteInternal "codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/fulltext"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/syncapi/internal"
-	"codefloe.com/pat-s/dendrite/syncapi/notifier"
-	"codefloe.com/pat-s/dendrite/syncapi/producers"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/streams"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	zendriteInternal "codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/producers"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -200,7 +200,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	ev := msg.Event
 
 	// Create a root span for tracing message handling
-	trace, ctx := dendriteInternal.StartTask(ctx, "SyncAPI.onNewRoomEvent")
+	trace, ctx := zendriteInternal.StartTask(ctx, "SyncAPI.onNewRoomEvent")
 	defer trace.EndTask()
 	trace.SetTag("room_id", ev.RoomID().String())
 	trace.SetTag("event_id", ev.EventID())
@@ -329,7 +329,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	// Add tracing for the notification step
 	trace.SetTag("pdu_position", pduPos)
-	notifyRegion, _ := dendriteInternal.StartRegion(ctx, "NotifySyncClients")
+	notifyRegion, _ := zendriteInternal.StartRegion(ctx, "NotifySyncClients")
 	notifyRegion.SetTag("pdu_position", pduPos)
 	s.pduStream.Advance(pduPos)
 	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
@@ -569,7 +569,7 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	ctx context.Context, msg api.OutputUnPartialStatedRoom,
 ) error {
 	// Create a root span for tracing the entire un-partial-stated handling
-	trace, ctx := dendriteInternal.StartTask(ctx, "SyncAPI.onUnPartialStatedRoom")
+	trace, ctx := zendriteInternal.StartTask(ctx, "SyncAPI.onUnPartialStatedRoom")
 	defer trace.EndTask()
 	trace.SetTag("room_id", msg.RoomID)
 	trace.SetTag("user_count", len(msg.JoinedUserIDs))
@@ -584,7 +584,7 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	// Query roomserver for current state - this includes all state events that were
 	// fetched during the partial state resync (including member events).
 	// StateToFetch being empty/nil means "return ALL current state events"
-	queryStateRegion, _ := dendriteInternal.StartRegion(ctx, "QueryLatestEventsAndState")
+	queryStateRegion, _ := zendriteInternal.StartRegion(ctx, "QueryLatestEventsAndState")
 	stateReq := &api.QueryLatestEventsAndStateRequest{
 		RoomID:       msg.RoomID,
 		StateToFetch: nil, // Return all state
@@ -636,7 +636,7 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 				}
 			}
 
-			populateRegion, _ := dendriteInternal.StartRegion(ctx, "PopulateRoomStateAfterResync")
+			populateRegion, _ := zendriteInternal.StartRegion(ctx, "PopulateRoomStateAfterResync")
 			populateRegion.SetTag("event_count", len(stateRes.StateEvents))
 			populateRegion.SetTag("member_events", memberEventCount)
 			if _, err := s.db.PopulateRoomStateAfterResync(ctx, stateRes.StateEvents); err != nil {
@@ -664,7 +664,7 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	// Wake up any waiting sync requests for users in this room
 	// The room will appear as "newly joined" in their next sync response
 	if lastPos > 0 {
-		notifyRegion, _ := dendriteInternal.StartRegion(ctx, "NotifySyncClients")
+		notifyRegion, _ := zendriteInternal.StartRegion(ctx, "NotifySyncClients")
 		notifyRegion.SetTag("pdu_position", lastPos)
 		s.pduStream.Advance(lastPos)
 		s.notifier.OnNewEvent(nil, msg.RoomID, nil, types.StreamingToken{PDUPosition: lastPos}) //nolint:contextcheck

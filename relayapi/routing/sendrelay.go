@@ -16,7 +16,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/relayapi/api"
+	"codefloe.com/pat-s/zendrite/relayapi/api"
 )
 
 // SendTransactionToRelay implements PUT /_matrix/federation/v1/send_relay/{txnID}/{userID}

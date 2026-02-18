@@ -9,7 +9,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
 )
 
 // QueryJoinedHostServerNamesInRoom implements api.FederationInternalAPI.

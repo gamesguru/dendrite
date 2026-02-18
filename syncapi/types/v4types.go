@@ -14,17 +14,17 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // SlidingSyncStreamToken represents a position in the sliding sync stream.
-// It combines a per-connection position with Dendrite's existing stream token.
+// It combines a per-connection position with Zendrite's existing stream token.
 // Format: "{connection_position}/{stream_token}"
 // Example: "5/s478_0_100_50_0_13_0_0_0".
 type SlidingSyncStreamToken struct {
 	// Per-connection incremental position counter
 	ConnectionPosition int64
-	// Dendrite's existing stream token for global position tracking
+	// Zendrite's existing stream token for global position tracking
 	StreamToken StreamingToken
 }
 

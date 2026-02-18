@@ -4,10 +4,10 @@ import (
 	"reflect"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func TestConnectionManager(t *testing.T) {
@@ -119,7 +119,7 @@ func TestConnectionManager(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			processCtx.ShutdownDendrite()
+			processCtx.ShutdownZendrite()
 			processCtx.WaitForComponentsToFinish()
 		})
 	})

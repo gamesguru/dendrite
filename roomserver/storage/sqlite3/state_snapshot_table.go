@@ -16,10 +16,10 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateSnapshotSchema = `
@@ -27,7 +27,7 @@ const stateSnapshotSchema = `
 	-- The state snapshot NID that identifies this snapshot.
     state_snapshot_nid INTEGER PRIMARY KEY AUTOINCREMENT,
 	-- The hash of the state snapshot, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_snapshot_hash BLOB UNIQUE,
 	-- The room NID that the snapshot belongs to.

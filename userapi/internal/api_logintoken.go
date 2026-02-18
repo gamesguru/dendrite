@@ -15,7 +15,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // PerformLoginTokenCreation creates a new login token and associates it with the provided data.

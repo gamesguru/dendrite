@@ -15,7 +15,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // GetUserDevices for the given user id.

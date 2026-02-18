@@ -1,41 +1,41 @@
 ---
 title: FAQ
-description: Frequently asked questions about Dendrite
+description: Frequently asked questions about Zendrite
 ---
 
 {% aside type="caution" title="Important" %}
-Most of the content originated from [element-hq/dendrite](https://github.com/element-hq/dendrite) and might not be up-to-date anymore with respect to the many changes of this fork.
+Most of the content originated from [element-hq/zendrite](https://github.com/element-hq/zendrite) and might not be up-to-date anymore with respect to the many changes of this fork.
 Please use with caution and/or report drifts in an issue/Pull Request.
 {% /aside %}
 
-## Why does Dendrite exist?
+## Why does Zendrite exist?
 
-Dendrite aims to provide a matrix compatible server that has low resource usage compared to [Synapse](https://github.com/matrix-org/synapse).
+Zendrite aims to provide a matrix compatible server that has low resource usage compared to [Synapse](https://github.com/matrix-org/synapse).
 It also aims to provide more flexibility when scaling either up or down.
-Dendrite's code is also very easy to hack on which makes it suitable for experimenting with new matrix features such as peer-to-peer.
+Zendrite's code is also very easy to hack on which makes it suitable for experimenting with new matrix features such as peer-to-peer.
 
-## Is Dendrite stable?
+## Is Zendrite stable?
 
 Mostly, although there are still bugs and missing features.
-If you are a confident power user and you are happy to spend some time debugging things when they go wrong, then please try out Dendrite.
+If you are a confident power user and you are happy to spend some time debugging things when they go wrong, then please try out Zendrite.
 
-## Is Dendrite feature-complete?
+## Is Zendrite feature-complete?
 
 No, although a good portion of the Matrix specification has been implemented.
 
-## Is there a migration path from Synapse to Dendrite?
+## Is there a migration path from Synapse to Zendrite?
 
 No, not at present.
 
-## Can I use Dendrite with an existing Synapse database?
+## Can I use Zendrite with an existing Synapse database?
 
-No, Dendrite has a very different database schema to Synapse and the two are not interchangeable.
+No, Zendrite has a very different database schema to Synapse and the two are not interchangeable.
 
-## Can I configure which port Dendrite listens on?
+## Can I configure which port Zendrite listens on?
 
 Yes, use the cli flag `-http-bind-address`.
 
-## I've installed Dendrite but federation isn't working
+## I've installed Zendrite but federation isn't working
 
 Check the [Federation Tester](https://federationtester.matrix.org).
 You need at least:
@@ -46,29 +46,29 @@ You need at least:
 
 ## Whenever I try to connect from Element it says unable to connect to homeserver
 
-Check that your dendrite instance is running.
+Check that your zendrite instance is running.
 Otherwise this is most likely due to a reverse proxy misconfiguration.
 
-## Does Dendrite work with my favourite client?
+## Does Zendrite work with my favourite client?
 
 It should do, although we are aware of some minor issues:
 
 - **Element Android**: registration does not work, but logging in with an existing account does.
 - **Hydrogen**: occasionally sync can fail due to gaps in the `since` parameter, but clearing the cache fixes this.
 
-## Is there a public instance of Dendrite I can try out?
+## Is there a public instance of Zendrite I can try out?
 
-The Matrix.org Foundation runs [dendrite.matrix.org](https://dendrite.matrix.org).
+The Matrix.org Foundation runs [zendrite.matrix.org](https://zendrite.matrix.org).
 
 {% aside type="caution" title="Important" %}
-This instance is based on [element-hq/dendrite](https://github.com/element-hq/dendrite) and is not a valid test instance for this fork!
+This instance is based on [element-hq/zendrite](https://github.com/element-hq/zendrite) and is not a valid test instance for this fork!
 {% /aside %}
 
-## Does Dendrite support Space Summaries?
+## Does Zendrite support Space Summaries?
 
 Yes
 
-## Does Dendrite support Threads?
+## Does Zendrite support Threads?
 
 Yes, to enable them [msc2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) would need to be added to mscs configuration in order to support Threading.
 Other MSCs are not currently supported.
@@ -82,14 +82,14 @@ mscs:
 Please note that MSCs should be considered experimental and can result in significant usability issues when enabled.
 If you'd like more details on how MSCs are ratified or the current status of MSCs, please see the [Matrix specification documentation](https://spec.matrix.org/proposals/) on the subject.
 
-## Does Dendrite support push notifications?
+## Does Zendrite support push notifications?
 
-Yes, Dendrite supports push notifications.
+Yes, Zendrite supports push notifications.
 Configure them in the usual way in your Matrix client.
 
-## Does Dendrite support application services/bridges?
+## Does Zendrite support application services/bridges?
 
-Possibly - Dendrite does have some application service support but it is not well tested.
+Possibly - Zendrite does have some application service support but it is not well tested.
 Please let us know by raising a issue if you try it and run into problems.
 
 Bridges known to work:
@@ -103,7 +103,7 @@ Remember to add the config file(s) to the `app_service_api` section of the confi
 
 ## Is it possible to prevent communication with the outside world?
 
-Yes, you can do this by disabling federation - set `disable_federation` to `true` in the `global` section of the Dendrite configuration file.
+Yes, you can do this by disabling federation - set `disable_federation` to `true` in the `global` section of the Zendrite configuration file.
 
 ## How can I migrate a room in order to change the internal ID?
 
@@ -112,18 +112,18 @@ Use the command `/upgraderoom <version>` in Element to do this.
 
 ## How do I reset somebody's password on my server?
 
-Use the admin endpoint [resetpassword](/administration/adminapi#post-_dendriteadminresetpassworduserid)
+Use the admin endpoint [resetpassword](/administration/adminapi#post-_zendriteadminresetpassworduserid)
 
 ## Should I use PostgreSQL or SQLite for my databases?
 
 Please use PostgreSQL wherever possible, especially if you are planning to run a homeserver that caters to more than a couple of users.
 
-## What data needs to be kept if transferring/backing up Dendrite?
+## What data needs to be kept if transferring/backing up Zendrite?
 
 The list of files that need to be stored is:
 
 - `matrix-key.pem`
-- `dendrite.yaml`
+- `zendrite.yaml`
 - the postgres or sqlite DB
 - the jetstream directory
 - the media store
@@ -137,28 +137,28 @@ We don't officially maintain instructions for migrations like this.
 This might be what you want: [matrix-media-repo](https://github.com/turt2live/matrix-media-repo)
 We don't officially support this or any other dedicated media storage solutions.
 
-## Dendrite is using a lot of CPU
+## Zendrite is using a lot of CPU
 
 Generally speaking, you should expect to see some CPU spikes, particularly if you are joining or participating in large rooms.
 However, constant/sustained high CPU usage is not expected - if you are experiencing that, please open an issue and let us know what you were doing when the CPU usage shot up.
 If you can take a [CPU profile](/development/profiling) then that would be a huge help too, as that will help us to understand where the CPU time is going.
 
-## Dendrite is using a lot of RAM
+## Zendrite is using a lot of RAM
 
-As above with CPU usage, some memory spikes are expected if Dendrite is doing particularly heavy work at a given instance.
+As above with CPU usage, some memory spikes are expected if Zendrite is doing particularly heavy work at a given instance.
 However, if it is using more RAM than you expect for a long time, that's probably not expected.
 If you can take a [memory profile](/development/profiling) then that would be a huge help too, as that will help us to understand where the memory usage is happening.
 
 ## Do I need to generate the self-signed certificate if I'm going to use a reverse proxy?
 
-No, if you already have a proper certificate from some provider, like Let's Encrypt, and use that on your reverse proxy, and the reverse proxy does TLS termination, then you're good and can use HTTP to the dendrite process.
+No, if you already have a proper certificate from some provider, like Let's Encrypt, and use that on your reverse proxy, and the reverse proxy does TLS termination, then you're good and can use HTTP to the zendrite process.
 
-## Dendrite is running out of PostgreSQL database connections
+## Zendrite is running out of PostgreSQL database connections
 
-You may need to revisit the connection limit of your PostgreSQL server and/or make changes to the `max_connections` lines in your Dendrite configuration.
-Be aware that each Dendrite component opens its own database connections and has its own connection limit, even in monolith mode!
+You may need to revisit the connection limit of your PostgreSQL server and/or make changes to the `max_connections` lines in your Zendrite configuration.
+Be aware that each Zendrite component opens its own database connections and has its own connection limit, even in monolith mode!
 
-## VOIP and Video Calls don't appear to work on Dendrite
+## VOIP and Video Calls don't appear to work on Zendrite
 
 There is likely an issue with your STUN/TURN configuration on the server.
 If you believe your configuration to be correct, please see the [troubleshooting](/administration/troubleshooting) for troubleshooting recommendations.
@@ -166,7 +166,7 @@ If you believe your configuration to be correct, please see the [troubleshooting
 ## What is being reported when enabling phone-home statistics?
 
 Phone-home statistics contain your server's domain name, some configuration information about your deployment and aggregated information about active users on your deployment.
-They are sent to the endpoint URL configured in your Dendrite configuration file only.
+They are sent to the endpoint URL configured in your Zendrite configuration file only.
 The following is an example of the data that is sent:
 
 ```json

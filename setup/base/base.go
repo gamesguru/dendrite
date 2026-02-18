@@ -30,10 +30,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 //go:embed static/*.gotmpl
@@ -47,7 +47,7 @@ const HTTPServerTimeout = time.Minute * 5
 
 // CreateClient creates a new client (normally used for media fetch requests).
 // Should only be called once per component.
-func CreateClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) *fclient.Client {
+func CreateClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) *fclient.Client {
 	if cfg.Global.DisableFederation {
 		return fclient.NewClient(
 			fclient.WithTransport(noOpHTTPTransport),
@@ -61,13 +61,13 @@ func CreateClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) *fclient.Cli
 		opts = append(opts, fclient.WithDNSCache(dnsCache))
 	}
 	client := fclient.NewClient(opts...)
-	client.SetUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString()))
+	client.SetUserAgent(fmt.Sprintf("Zendrite/%s", internal.VersionString()))
 	return client
 }
 
 // CreateFederationClient creates a new federation client. Should only be called
 // once per component.
-func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fclient.FederationClient {
+func CreateFederationClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) fclient.FederationClient {
 	identities := cfg.Global.SigningIdentities()
 	if cfg.Global.DisableFederation {
 		return fclient.NewFederationClient(
@@ -78,7 +78,7 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 		fclient.WithTimeout(time.Minute * 5), //nolint:mnd
 		fclient.WithSkipVerify(cfg.FederationAPI.DisableTLSValidation),
 		fclient.WithKeepAlives(!cfg.FederationAPI.DisableHTTPKeepalives),
-		fclient.WithUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString())),
+		fclient.WithUserAgent(fmt.Sprintf("Zendrite/%s", internal.VersionString())),
 		fclient.WithAllowDenyNetworks(cfg.FederationAPI.AllowNetworkCIDRs, cfg.FederationAPI.DenyNetworkCIDRs),
 	}
 	if cfg.Global.DNSCache.Enabled {
@@ -91,10 +91,10 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 }
 
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
-	routers.DendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
+	routers.ZendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
-	routers.DendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
+	routers.ZendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(struct {
@@ -109,10 +109,10 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 }
 
 // SetupAndServeHTTP sets up the HTTP server to serve client & federation APIs
-// and adds a prometheus handler under /_dendrite/metrics.
+// and adds a prometheus handler under /_zendrite/metrics.
 func SetupAndServeHTTP(
 	processContext *process.ProcessContext,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	routers httputil.Routers,
 	externalHTTPAddr config.ServerAddress,
 	certFile, keyFile *string,
@@ -176,7 +176,7 @@ func SetupAndServeHTTP(
 		})
 		federationHandler = sentryHandler.Handle(routers.Federation)
 	}
-	externalRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(routers.DendriteAdmin)
+	externalRouter.PathPrefix(httputil.ZendriteAdminPathPrefix).Handler(routers.ZendriteAdmin)
 	externalRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(clientHandler)
 	if !cfg.Global.DisableFederation {
 		externalRouter.PathPrefix(httputil.PublicKeyPathPrefix).Handler(routers.Keys)
@@ -235,7 +235,7 @@ func SetupAndServeHTTP(
 		}()
 	}
 
-	minwinsvc.SetOnExit(processContext.ShutdownDendrite)
+	minwinsvc.SetOnExit(processContext.ShutdownZendrite)
 	<-processContext.WaitForShutdown()
 
 	logrus.Infof("Stopping HTTP listeners")
@@ -254,8 +254,8 @@ func WaitForShutdown(processCtx *process.ProcessContext) {
 
 	logrus.Warnf("Shutdown signal received")
 
-	processCtx.ShutdownDendrite()
+	processCtx.ShutdownZendrite()
 	processCtx.WaitForComponentsToFinish()
 
-	logrus.Warnf("Dendrite is exiting now")
+	logrus.Warnf("Zendrite is exiting now")
 }

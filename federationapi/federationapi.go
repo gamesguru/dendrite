@@ -13,29 +13,29 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/consumers"
-	"codefloe.com/pat-s/dendrite/federationapi/internal"
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/federationapi/queue"
-	"codefloe.com/pat-s/dendrite/federationapi/routing"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/consumers"
+	"codefloe.com/pat-s/zendrite/federationapi/internal"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.
 func AddPublicRoutes(
 	processContext *process.ProcessContext,
 	routers httputil.Routers,
-	dendriteConfig *config.Dendrite,
+	zendriteConfig *config.Zendrite,
 	natsInstance *jetstream.NATSInstance,
 	userAPI userapi.FederationUserAPI,
 	federation fclient.FederationClient,
@@ -44,8 +44,8 @@ func AddPublicRoutes(
 	fedAPI federationAPI.FederationInternalAPI,
 	enableMetrics bool,
 ) {
-	cfg := &dendriteConfig.FederationAPI
-	mscCfg := &dendriteConfig.MSCs
+	cfg := &zendriteConfig.FederationAPI
+	mscCfg := &zendriteConfig.MSCs
 	js, _ := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 	producer := &producers.SyncAPIProducer{
 		JetStream:              js,
@@ -72,7 +72,7 @@ func AddPublicRoutes(
 
 	routing.Setup(
 		routers,
-		dendriteConfig,
+		zendriteConfig,
 		rsAPI, f, keyRing,
 		federation, userAPI, mscCfg,
 		producer, enableMetrics,
@@ -83,7 +83,7 @@ func AddPublicRoutes(
 // can call functions directly on the returned API or via an HTTP interface using AddInternalRoutes.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
 	federation fclient.FederationClient,
@@ -92,9 +92,9 @@ func NewInternalAPI(
 	keyRing *gomatrixserverlib.KeyRing,
 	resetBlacklist bool,
 ) *internal.FederationInternalAPI {
-	cfg := &dendriteCfg.FederationAPI
+	cfg := &zendriteCfg.FederationAPI
 
-	federationDB, err := storage.NewDatabase(processContext.Context(), cm, &cfg.Database, caches, dendriteCfg.Global.IsLocalServerName)
+	federationDB, err := storage.NewDatabase(processContext.Context(), cm, &cfg.Database, caches, zendriteCfg.Global.IsLocalServerName)
 	if err != nil {
 		logrus.WithError(err).Panic("failed to connect to federation sender db")
 	}
@@ -107,7 +107,7 @@ func NewInternalAPI(
 
 	js, nats := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 
-	signingInfo := dendriteCfg.Global.SigningIdentities()
+	signingInfo := zendriteCfg.Global.SigningIdentities()
 
 	queues := queue.NewOutgoingQueues(
 		federationDB, processContext,
@@ -142,7 +142,7 @@ func NewInternalAPI(
 		logrus.WithError(err).Panic("failed to start typing consumer")
 	}
 	keyConsumer := consumers.NewKeyChangeConsumer(
-		processContext, &dendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
+		processContext, &zendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
 	)
 	if err = keyConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start key server consumer")

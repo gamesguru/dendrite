@@ -1,12 +1,12 @@
 ---
-title: Configuring Dendrite
-description: YAML configuration options for Dendrite
+title: Configuring Zendrite
+description: YAML configuration options for Zendrite
 ---
 
-A YAML configuration file is used to configure Dendrite.
-A sample configuration file (`dendrite-sample.yaml`) is present in the top level of the Dendrite repository.
+A YAML configuration file is used to configure Zendrite.
+A sample configuration file (`zendrite-sample.yaml`) is present in the top level of the Zendrite repository.
 
-You will need to duplicate the sample, calling it `dendrite.yaml` for example, and then tailor it to your installation.
+You will need to duplicate the sample, calling it `zendrite.yaml` for example, and then tailor it to your installation.
 At a minimum, you will need to populate the following sections:
 
 ## Server name
@@ -24,7 +24,7 @@ global:
 
 ## Server signing keys
 
-Next, you should tell Dendrite where to find your [server signing keys](/installation/manual/signingkey).
+Next, you should tell Zendrite where to find your [server signing keys](/installation/manual/signingkey).
 
 In the `global` section, set the `private_key` to the path to your server signing key:
 
@@ -36,7 +36,7 @@ global:
 
 ## JetStream configuration
 
-Dendrite deployments can use the built-in NATS Server rather than running a standalone server.
+Zendrite deployments can use the built-in NATS Server rather than running a standalone server.
 If you want to use a standalone NATS Server anyway, you can also configure that too.
 
 ### Built-in NATS Server
@@ -48,7 +48,7 @@ global:
   # ...
   jetstream:
     storage_path: /path/to/storage/folder
-    topic_prefix: Dendrite
+    topic_prefix: Zendrite
 ```
 
 ### Standalone NATS Server
@@ -61,7 +61,7 @@ global:
   jetstream:
     addresses:
       - localhost:4222
-    topic_prefix: Dendrite
+    topic_prefix: Zendrite
 ```
 
 You do not need to configure the `storage_path` when using a standalone NATS Server instance.
@@ -85,7 +85,7 @@ global:
 
 ## Full-text search
 
-Dendrite supports full-text indexing using [Bleve](https://github.com/blevesearch/bleve).
+Zendrite supports full-text indexing using [Bleve](https://github.com/blevesearch/bleve).
 It is configured in the `sync_api` section as follows.
 
 Depending on the language most likely to be used on the server, it might make sense to change the `language` used when indexing, to ensure the returned results match the expectations.
@@ -102,12 +102,12 @@ sync_api:
 
 ## OIDC delegated authentication (MSC3861)
 
-Dendrite can delegate authentication to an external OIDC provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
-When enabled, Dendrite no longer manages passwords or login sessions directly — all authentication is handled by the OIDC provider via token introspection.
+Zendrite can delegate authentication to an external OIDC provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
+When enabled, Zendrite no longer manages passwords or login sessions directly — all authentication is handled by the OIDC provider via token introspection.
 
 See the [MSC3861 documentation](/mscs#msc3861-oidc-delegated-authentication) for full configuration details.
 
 ## Other sections
 
 There are other options which may be useful so review them all.
-In particular, if you are trying to federate from your Dendrite instance into public rooms then configuring the `key_perspectives` (like `matrix.org` in the sample) can help to improve reliability considerably by allowing your homeserver to fetch public keys for dead homeservers from another living server.
+In particular, if you are trying to federate from your Zendrite instance into public rooms then configuring the `key_perspectives` (like `matrix.org` in the sample) can help to improve reliability considerably by allowing your homeserver to fetch public keys for dead homeservers from another living server.

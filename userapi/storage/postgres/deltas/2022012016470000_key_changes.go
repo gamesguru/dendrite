@@ -15,7 +15,7 @@ import (
 func UpRefactorKeyChanges(ctx context.Context, tx *sql.Tx) error {
 	// start counting from the last max offset, else 0. We need to do a count(*) first to see if there
 	// even are entries in this table to know if we can query for log_offset. Without the count then
-	// the query to SELECT the max log offset fails on new Dendrite instances as log_offset doesn't
+	// the query to SELECT the max log offset fails on new Zendrite instances as log_offset doesn't
 	// exist on that table. Even though we discard the error, the txn is tainted and gets aborted :/
 	var count int
 	_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM keyserver_key_changes`).Scan(&count)

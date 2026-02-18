@@ -14,14 +14,14 @@ import (
 	"github.com/matrix-org/gomatrix"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/queue"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"codefloe.com/pat-s/dendrite/federationapi/storage/cache"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/cache"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // FederationInternalAPI is an implementation of api.FederationInternalAPI.

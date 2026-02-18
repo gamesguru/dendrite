@@ -16,14 +16,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing.
 func TestPartialStateWorkerQueueRoom(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	worker := &PartialStateWorker{
 		process:  processCtx,
@@ -46,7 +46,7 @@ func TestPartialStateWorkerQueueRoom(t *testing.T) {
 // TestPartialStateWorkerQueueRoomFullChannel tests fallback to retry map when channel is full.
 func TestPartialStateWorkerQueueRoomFullChannel(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	// Create worker with tiny channel
 	worker := &PartialStateWorker{
@@ -72,7 +72,7 @@ func TestPartialStateWorkerQueueRoomFullChannel(t *testing.T) {
 // TestPartialStateWorkerDuplicateQueue tests that duplicate queue requests don't overwrite retry times.
 func TestPartialStateWorkerDuplicateQueue(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	worker := &PartialStateWorker{
 		process:  processCtx,
@@ -106,7 +106,7 @@ func TestPartialStateWorkerDuplicateQueue(t *testing.T) {
 // TestPartialStateWorkerRetryMapCleanup tests that retry map entries are properly moved to the queue.
 func TestPartialStateWorkerRetryMapCleanup(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	worker := &PartialStateWorker{
 		process:  processCtx,
@@ -210,7 +210,7 @@ func (m *mockPartialStateRoomserverAPI) RoomIDFromNID(ctx context.Context, roomN
 // TestPartialStateWorkerSkipsNonPartialRooms tests that non-partial rooms are skipped.
 func TestPartialStateWorkerSkipsNonPartialRooms(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	mockAPI := newMockPartialStateRoomserverAPI()
 	// Room 1 is NOT in partial state
@@ -253,7 +253,7 @@ func TestPartialStateJoinClientTracking(t *testing.T) {
 // TestPartialStateWorkerConcurrency tests concurrent queue operations.
 func TestPartialStateWorkerConcurrency(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	worker := &PartialStateWorker{
 		process:  processCtx,
@@ -286,7 +286,7 @@ func TestPartialStateWorkerConcurrency(t *testing.T) {
 // TestPartialStateWorkerRaceConditions tests for data races in concurrent operations.
 func TestPartialStateWorkerRaceConditions(t *testing.T) {
 	processCtx := process.NewProcessContext()
-	defer processCtx.ShutdownDendrite()
+	defer processCtx.ShutdownZendrite()
 
 	worker := &PartialStateWorker{
 		process:  processCtx,
@@ -388,7 +388,7 @@ func TestPartialStateWorkerContextCancellation(t *testing.T) {
 	}()
 
 	// Cancel context
-	processCtx.ShutdownDendrite()
+	processCtx.ShutdownZendrite()
 
 	// Should exit quickly
 	select {

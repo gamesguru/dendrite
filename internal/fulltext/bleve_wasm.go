@@ -9,7 +9,7 @@ package fulltext
 import (
 	"time"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type (

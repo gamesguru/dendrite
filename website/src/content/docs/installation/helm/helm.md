@@ -1,32 +1,32 @@
 ---
 title: Helm Setup
-description: Installing Dendrite on Kubernetes with Helm
+description: Installing Zendrite on Kubernetes with Helm
 ---
 
-Install Dendrite using the [devxy/helm-dendrite](https://codefloe.com/devxy/helm-dendrite) Helm chart.
+Install Zendrite using the [devxy/helm-zendrite](https://codefloe.com/devxy/helm-zendrite) Helm chart.
 
 ## Installation
 
 Using OCI:
 
 ```bash
-helm install dendrite oci://codefloe.com/devxy/dendrite
+helm install zendrite oci://codefloe.com/devxy/zendrite
 ```
 
 Or using a classic Helm repository:
 
 ```bash
 helm repo add codefloe.com https://codefloe.com/api/packages/devxy/helm
-helm install dendrite codefloe.com/dendrite
+helm install zendrite codefloe.com/zendrite
 ```
 
 ## Configuration
 
 Create a `values.yaml` file and configure it to your liking.
-All possible values can be found in the [chart README](https://codefloe.com/devxy/helm-dendrite/src/branch/main/charts/dendrite/README.md), but at least you need to configure a `server_name`:
+All possible values can be found in the [chart README](https://codefloe.com/devxy/helm-zendrite/src/branch/main/charts/zendrite/README.md), but at least you need to configure a `server_name`:
 
 ```yaml
-dendrite_config:
+zendrite_config:
   global:
     server_name: "localhost"
 ```
@@ -34,10 +34,10 @@ dendrite_config:
 If you are going to use an existing Postgres database, you'll also need to configure this connection:
 
 ```yaml
-dendrite_config:
+zendrite_config:
   global:
     database:
-      connection_string: "postgresql://PostgresUser:PostgresPassword@PostgresHostName/DendriteDatabaseName"
+      connection_string: "postgresql://PostgresUser:PostgresPassword@PostgresHostName/ZendriteDatabaseName"
       max_open_conns: 90
       max_idle_conns: 5
       conn_max_lifetime: -1
@@ -45,7 +45,7 @@ dendrite_config:
 
 ## Installing with PostgreSQL
 
-The chart comes with a dependency on Postgres, which can be installed alongside Dendrite. Enable it in your `values.yaml`:
+The chart comes with a dependency on Postgres, which can be installed alongside Zendrite. Enable it in your `values.yaml`:
 
 ```yaml
 postgresql:
@@ -54,7 +54,7 @@ postgresql:
     persistence:
       size: 1Gi # defines the size for $PGDATA
 
-dendrite_config:
+zendrite_config:
   global:
     server_name: "localhost"
 ```

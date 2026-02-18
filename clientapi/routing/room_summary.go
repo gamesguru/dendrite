@@ -16,10 +16,10 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // RoomSummaryResponse represents the response for MSC3266 room summary API.

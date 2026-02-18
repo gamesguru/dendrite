@@ -16,21 +16,21 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	capi "codefloe.com/pat-s/dendrite/clientapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	basepkg "codefloe.com/pat-s/dendrite/setup/base"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/syncapi"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
+	capi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	basepkg "codefloe.com/pat-s/zendrite/setup/base"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func TestAdminCreateToken(t *testing.T) {
@@ -166,15 +166,15 @@ func TestAdminCreateToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/registrationTokens/new")
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/registrationTokens/new")
 				if tc.requestOpt != nil {
-					req = test.NewRequest(t, http.MethodPost, "/_dendrite/admin/registrationTokens/new", tc.requestOpt)
+					req = test.NewRequest(t, http.MethodPost, "/_zendrite/admin/registrationTokens/new", tc.requestOpt)
 				}
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -286,16 +286,16 @@ func TestAdminListRegistrationTokens(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				var path string
 				if tc.isValidSpecified {
-					path = fmt.Sprintf("/_dendrite/admin/registrationTokens?valid=%v", tc.valid)
+					path = fmt.Sprintf("/_zendrite/admin/registrationTokens?valid=%v", tc.valid)
 				} else {
-					path = "/_dendrite/admin/registrationTokens"
+					path = "/_zendrite/admin/registrationTokens"
 				}
 				req := test.NewRequest(t, http.MethodGet, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -393,13 +393,13 @@ func TestAdminGetRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodGet, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -490,13 +490,13 @@ func TestAdminDeleteRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodDelete, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -663,7 +663,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodPut, path)
 				if tc.requestOpt != nil {
 					req = test.NewRequest(t, http.MethodPut, path, tc.requestOpt)
@@ -672,7 +672,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -755,9 +755,9 @@ func TestAdminResetPassword(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc // ensure we don't accidentally only test the last test case
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/resetPassword/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/resetPassword/"+tc.userID)
 				if tc.requestOpt != nil {
-					req = test.NewRequest(t, http.MethodPost, "/_dendrite/admin/resetPassword/"+tc.userID, tc.requestOpt)
+					req = test.NewRequest(t, http.MethodPost, "/_zendrite/admin/resetPassword/"+tc.userID, tc.requestOpt)
 				}
 
 				if tc.withHeader {
@@ -765,7 +765,7 @@ func TestAdminResetPassword(t *testing.T) {
 				}
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -835,12 +835,12 @@ func TestPurgeRoom(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc // ensure we don't accidentally only test the last test case
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/purgeRoom/"+tc.roomID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/purgeRoom/"+tc.roomID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -904,12 +904,12 @@ func TestAdminEvacuateRoom(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/evacuateRoom/"+tc.roomID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/evacuateRoom/"+tc.roomID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1010,12 +1010,12 @@ func TestAdminEvacuateUser(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/evacuateUser/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/evacuateUser/"+tc.userID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1090,12 +1090,12 @@ func TestAdminMarkAsStale(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/refreshDevices/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/refreshDevices/"+tc.userID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())

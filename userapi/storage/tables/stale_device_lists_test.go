@@ -6,12 +6,12 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/userapi/storage/postgres"
-	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 func mustCreateTable(t *testing.T, dbType test.DBType) (tab tables.StaleDeviceLists, close func()) {

@@ -9,7 +9,7 @@ cover.out
 .forgejo
 .idea
 .vscode
-.dendrite-dev
+.zendrite-dev
 complement
 website
 helm

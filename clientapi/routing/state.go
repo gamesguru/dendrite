@@ -17,10 +17,10 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type stateEventInStateResp struct {

@@ -18,9 +18,9 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	relayInternal "codefloe.com/pat-s/dendrite/relayapi/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	relayInternal "codefloe.com/pat-s/zendrite/relayapi/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Setup registers HTTP handlers with the given ServeMux.

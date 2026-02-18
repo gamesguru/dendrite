@@ -9,9 +9,9 @@ package sqlite3
 
 import (
 	// Import the postgres database driver.
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage/shared"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // NewDatabase opens a SQLIte database.

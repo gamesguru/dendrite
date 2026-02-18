@@ -16,13 +16,13 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/routing"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type server struct {
@@ -77,9 +77,9 @@ func TestMain(m *testing.M) {
 			}
 			defer os.RemoveAll(d)
 
-			// Draw up just enough Dendrite config for the server key
+			// Draw up just enough Zendrite config for the server key
 			// API to work.
-			cfg := &config.Dendrite{}
+			cfg := &config.Zendrite{}
 			cfg.Defaults(config.DefaultOpts{
 				Generate:       true,
 				SingleDatabase: false,

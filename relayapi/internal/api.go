@@ -13,9 +13,9 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	"codefloe.com/pat-s/dendrite/relayapi/storage"
-	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/relayapi/storage"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 type RelayInternalAPI struct {

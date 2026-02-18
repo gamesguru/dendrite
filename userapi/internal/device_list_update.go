@@ -25,16 +25,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	fedsenderapi "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	fedsenderapi "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var deviceListUpdateCount = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "keyserver",
 		Name:      "device_list_update",
 		Help:      "Number of times we have attempted to update device lists from this server",
@@ -137,7 +137,7 @@ type KeyChangeProducer interface {
 
 var deviceListUpdaterBackpressure = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "keyserver",
 		Name:      "worker_backpressure",
 		Help:      "How many device list updater requests are queued",
@@ -147,7 +147,7 @@ var deviceListUpdaterBackpressure = prometheus.NewGaugeVec(
 
 var deviceListUpdaterServersRetrying = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "keyserver",
 		Name:      "worker_servers_retrying",
 		Help:      "How many servers are queued for retry",

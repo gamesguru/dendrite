@@ -21,8 +21,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/curve25519"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 func sanityCheckKey(key fclient.CrossSigningKey, userID string, purpose fclient.CrossSigningKeyPurpose) error {

@@ -10,8 +10,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 
-	"codefloe.com/pat-s/dendrite/federationapi/types"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // FederationInternalAPI is used to query information from the federation sender.

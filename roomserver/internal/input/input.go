@@ -23,17 +23,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	fedapi "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/roomserver/acls"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/query"
-	"codefloe.com/pat-s/dendrite/roomserver/producers"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/acls"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/producers"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Inputer is responsible for consuming from the roomserver input
@@ -423,7 +423,7 @@ func (w *worker) _next() {
 				"type":     inputRoomEvent.Event.Type(),
 			}).Warn("Roomserver failed to process event")
 		}
-		// Even though we failed to process this message (e.g. due to Dendrite restarting and receiving a context canceled),
+		// Even though we failed to process this message (e.g. due to Zendrite restarting and receiving a context canceled),
 		// the message may already have been queued for redelivery or will be, so this makes sure that we still reprocess the msg
 		// after restarting. We only Ack if the context was not yet canceled.
 		if w.r.ProcessContext.Context().Err() == nil {
@@ -551,7 +551,7 @@ func (r *Inputer) InputRoomEvents(
 
 var roomserverInputBackpressure = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "input_backpressure",
 		Help:      "How many events are queued for input for a given room",

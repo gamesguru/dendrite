@@ -9,12 +9,12 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/postgres"
-	"codefloe.com/pat-s/dendrite/federationapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/federationapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateOutboundpeeksTable(t *testing.T, dbType test.DBType) (tables.FederationOutboundPeeks, func()) {

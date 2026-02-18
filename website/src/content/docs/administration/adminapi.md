@@ -1,9 +1,9 @@
 ---
 title: Supported admin APIs
-description: Administrative API endpoints for Dendrite
+description: Administrative API endpoints for Zendrite
 ---
 
-Dendrite supports, at present, a very small number of endpoints that allow admin users to perform administrative functions.
+Zendrite supports, at present, a very small number of endpoints that allow admin users to perform administrative functions.
 Please note that there is no API stability guarantee on these endpoints at present — they may change shape without warning.
 
 More endpoints will be added in the future.
@@ -27,20 +27,20 @@ UPDATE userapi_accounts SET account_type = 3 WHERE localpart = '$localpart';
 
 Where `$localpart` is the username only (e.g. `alice`).
 
-## POST `/_dendrite/admin/evacuateRoom/{roomID}`
+## POST `/_zendrite/admin/evacuateRoom/{roomID}`
 
-This endpoint will instruct Dendrite to part all local users from the given `roomID` in the URL.
+This endpoint will instruct Zendrite to part all local users from the given `roomID` in the URL.
 It may take some time to complete.
 A JSON body will be returned containing the user IDs of all affected users.
 
 If the room has an alias set (e.g. is published), the room's ID will not be visible in the URL, but it can be found as the room's "internal ID" in Element Web (Settings -> Advanced)
 
-## POST `/_dendrite/admin/evacuateUser/{userID}`
+## POST `/_zendrite/admin/evacuateUser/{userID}`
 
-This endpoint will instruct Dendrite to part the given local `userID` in the URL from all rooms which they are currently joined.
+This endpoint will instruct Zendrite to part the given local `userID` in the URL from all rooms which they are currently joined.
 A JSON body will be returned containing the room IDs of all affected rooms.
 
-## POST `/_dendrite/admin/resetPassword/{userID}`
+## POST `/_zendrite/admin/resetPassword/{userID}`
 
 Reset the password of a local user.
 
@@ -55,27 +55,27 @@ Request body format:
 }
 ```
 
-## GET `/_dendrite/admin/fulltext/reindex`
+## GET `/_zendrite/admin/fulltext/reindex`
 
-This endpoint instructs Dendrite to reindex all searchable events (`m.room.message`, `m.room.topic` and `m.room.name`).
+This endpoint instructs Zendrite to reindex all searchable events (`m.room.message`, `m.room.topic` and `m.room.name`).
 An empty JSON body will be returned immediately.
 Indexing is done in the background, the server logs every 1000 events (or below) when they are being indexed.
 Once reindexing is done, you'll see something along the lines `Indexed 69586 events in 53.68223182s` in your debug logs.
 
-## POST `/_dendrite/admin/refreshDevices/{userID}`
+## POST `/_zendrite/admin/refreshDevices/{userID}`
 
-This endpoint instructs Dendrite to immediately query `/devices/{userID}` on a federated server.
+This endpoint instructs Zendrite to immediately query `/devices/{userID}` on a federated server.
 An empty JSON body will be returned on success, updating all locally stored user devices/keys.
 This can be used to possibly resolve E2EE issues, where the remote user can't decrypt messages.
 
-## POST `/_dendrite/admin/purgeRoom/{roomID}`
+## POST `/_zendrite/admin/purgeRoom/{roomID}`
 
-This endpoint instructs Dendrite to remove the given room from its database.
+This endpoint instructs Zendrite to remove the given room from its database.
 It does **NOT** remove media files.
 Depending on the size of the room, this may take a while.
 Will return an empty JSON once other components were instructed to delete the room.
 
-## GET `/_dendrite/admin/emptyRooms`
+## GET `/_zendrite/admin/emptyRooms`
 
 Returns a list of all rooms which have zero (locally) joined members.
 Response format:

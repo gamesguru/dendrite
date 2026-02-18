@@ -19,12 +19,12 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
-	appserviceAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/clientapi/httputil"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	roomserverVersion "codefloe.com/pat-s/dendrite/roomserver/version"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	roomserverVersion "codefloe.com/pat-s/zendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-createroom

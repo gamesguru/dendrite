@@ -1,6 +1,6 @@
 ---
 title: Setting up the domain
-description: Domain name configuration, TLS certificates, and delegation for Dendrite
+description: Domain name configuration, TLS certificates, and delegation for Zendrite
 ---
 
 Every Matrix server deployment requires a server name which uniquely identifies it.
@@ -25,9 +25,9 @@ You must obtain certificates from a publicly-trusted certificate authority (CA).
 
 Automating the renewal of TLS certificates is best practice.
 There are many tools for this, but the simplest way to achieve TLS automation is to have your reverse proxy do it for you.
-[Caddy](https://caddyserver.com) is recommended as a production-grade reverse proxy with automatic TLS which is commonly used in front of Dendrite.
+[Caddy](https://caddyserver.com) is recommended as a production-grade reverse proxy with automatic TLS which is commonly used in front of Zendrite.
 It obtains and renews TLS certificates automatically and by default as long as your domain name is pointed at your server first.
-Although the finer details of [configuring Caddy](https://caddyserver.com/docs/) is not described here, in general, you must reverse proxy all `/_matrix` paths to your Dendrite server.
+Although the finer details of [configuring Caddy](https://caddyserver.com/docs/) is not described here, in general, you must reverse proxy all `/_matrix` paths to your Zendrite server.
 For example, with Caddy:
 
 ```text
@@ -38,22 +38,22 @@ It is possible for the reverse proxy to listen on the standard HTTPS port TCP/44
 
 ## Delegation
 
-Delegation allows you to specify the server name and port that your Dendrite installation is reachable at, or to host the Dendrite server at a different server name to the domain that is being delegated.
+Delegation allows you to specify the server name and port that your Zendrite installation is reachable at, or to host the Zendrite server at a different server name to the domain that is being delegated.
 
-For example, if your Dendrite installation is actually reachable at `matrix.example.com` port 8448, you will be able to delegate from `example.com` to `matrix.example.com` so that your users will have `@user:example.com` user names instead of `@user:matrix.example.com` usernames.
+For example, if your Zendrite installation is actually reachable at `matrix.example.com` port 8448, you will be able to delegate from `example.com` to `matrix.example.com` so that your users will have `@user:example.com` user names instead of `@user:matrix.example.com` usernames.
 
 Delegation can be performed in one of two ways:
 
 - **Well-known delegation (preferred)**: A well-known text file is served over HTTPS on the domain name that you want to use, pointing to your server on `matrix.example.com` port 8448;
 - **DNS SRV delegation (not recommended)**: See the SRV delegation section below for details.
 
-If you are using a reverse proxy to forward `/_matrix` to Dendrite, your well-known or delegation must refer to the hostname and port that the reverse proxy is listening on instead.
+If you are using a reverse proxy to forward `/_matrix` to Zendrite, your well-known or delegation must refer to the hostname and port that the reverse proxy is listening on instead.
 
 ## Well-known delegation
 
 Using well-known delegation requires that you are running a web server at `example.com` which is listening on the standard HTTPS port TCP/443.
 
-Assuming that your Dendrite installation is listening for HTTPS connections at `matrix.example.com` on port 8448, the delegation file must be served at `https://example.com/.well-known/matrix/server` and contain the following JSON document:
+Assuming that your Zendrite installation is listening for HTTPS connections at `matrix.example.com` on port 8448, the delegation file must be served at `https://example.com/.well-known/matrix/server` and contain the following JSON document:
 
 ```json
 {
@@ -77,8 +77,8 @@ handle /.well-known/matrix/client {
 }
 ```
 
-You can also serve `.well-known` with Dendrite itself by setting the `well_known_server_name` config option to the value you want for `m.server`.
-This is primarily useful if Dendrite is exposed on `example.com:443` and you don't want to set up a separate webserver just for serving the `.well-known` file.
+You can also serve `.well-known` with Zendrite itself by setting the `well_known_server_name` config option to the value you want for `m.server`.
+This is primarily useful if Zendrite is exposed on `example.com:443` and you don't want to set up a separate webserver just for serving the `.well-known` file.
 
 ```yaml
 global:

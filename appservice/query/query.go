@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Package query handles requests from other internal dendrite components when
+// Package query handles requests from other internal zendrite components when
 // they interact with the AppServiceQueryAPI.
 package query
 
@@ -18,9 +18,9 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/appservice/api"
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // AppServiceQueryAPI is an implementation of api.AppServiceQueryAPI.

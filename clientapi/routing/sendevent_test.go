@@ -14,10 +14,10 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"gotest.tools/v3/assert"
 
-	rsapi "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	uapi "codefloe.com/pat-s/dendrite/userapi/api"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Mock roomserver API for testing

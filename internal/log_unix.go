@@ -16,7 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	lSyslog "github.com/sirupsen/logrus/hooks/syslog"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // stdDemuxerHook demuxes log entries by severity:
@@ -111,7 +111,7 @@ func setupStdLogHook(level logrus.Level) {
 func setupSyslogHook(hook config.LogrusHook, level logrus.Level) {
 	protocol, _ := hook.Params["protocol"].(string)
 	address, _ := hook.Params["address"].(string)
-	syslogHook, err := lSyslog.NewSyslogHook(protocol, address, syslog.LOG_INFO, "dendrite")
+	syslogHook, err := lSyslog.NewSyslogHook(protocol, address, syslog.LOG_INFO, "zendrite")
 	if err == nil {
 		logrus.AddHook(&logLevelHook{level, syslogHook})
 	}

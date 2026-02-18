@@ -25,33 +25,33 @@ RUN --mount=target=. \
     go build -tags goolm -v -trimpath -o /out/ ./cmd/...'
 
 #
-# Builds the Dendrite image containing all required binaries
+# Builds the Zendrite image containing all required binaries
 #
 FROM alpine:3.23
 
 # Install runtime dependencies
 RUN apk --update --no-cache add ca-certificates curl tzdata \
-    && addgroup -g 1000 dendrite \
-    && adduser -u 1000 -G dendrite -h /etc/dendrite -D dendrite
+    && addgroup -g 1000 zendrite \
+    && adduser -u 1000 -G zendrite -h /etc/zendrite -D zendrite
 
-LABEL org.opencontainers.image.title="Dendrite"
+LABEL org.opencontainers.image.title="Zendrite"
 LABEL org.opencontainers.image.description="Next-generation Matrix homeserver written in Go"
-LABEL org.opencontainers.image.source="https://codefloe.com/pat-s/dendrite"
+LABEL org.opencontainers.image.source="https://codefloe.com/pat-s/zendrite"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only OR LicenseRef-Element-Commercial"
 
 COPY --from=build /out/create-account /usr/bin/create-account
 COPY --from=build /out/generate-config /usr/bin/generate-config
 COPY --from=build /out/generate-keys /usr/bin/generate-keys
-COPY --from=build /out/dendrite /usr/bin/dendrite
+COPY --from=build /out/zendrite /usr/bin/zendrite
 
-VOLUME /etc/dendrite
-WORKDIR /etc/dendrite
+VOLUME /etc/zendrite
+WORKDIR /etc/zendrite
 
 # Run as non-root user
-USER dendrite
+USER zendrite
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -fSs http://localhost:8008/_matrix/client/versions || exit 1
 
-ENTRYPOINT ["/usr/bin/dendrite"]
+ENTRYPOINT ["/usr/bin/zendrite"]
 EXPOSE 8008 8448

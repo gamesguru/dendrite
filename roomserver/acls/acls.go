@@ -19,7 +19,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 )
 
 const MRoomServerACL = "m.room.server_acl"

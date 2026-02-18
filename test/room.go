@@ -16,8 +16,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/eventutil"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type Preset int

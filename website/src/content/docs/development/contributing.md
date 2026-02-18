@@ -1,9 +1,9 @@
 ---
 title: Contributing
-description: Guidelines for contributing to Dendrite development
+description: Guidelines for contributing to Zendrite development
 ---
 
-Everyone is welcome to contribute to Dendrite!
+Everyone is welcome to contribute to Zendrite!
 We aim to make it as easy as possible to get started.
 
 ## Contribution types
@@ -25,7 +25,7 @@ The following items are at risk of not being accepted:
 
 ## Getting up and running
 
-See the [Installation](/installation/planning) section for information on how to build an instance of Dendrite.
+See the [Installation](/installation/planning) section for information on how to build an instance of Zendrite.
 You will likely need this in order to test your changes.
 
 ## Pre-commit hooks
@@ -55,7 +55,7 @@ Import ordering follows the `gci` convention configured in `.golangci.yaml`:
 
 1. Standard library
 2. Third-party packages
-3. `codefloe.com/pat-s/dendrite` (local packages)
+3. `codefloe.com/pat-s/zendrite` (local packages)
 
 ## Comments
 

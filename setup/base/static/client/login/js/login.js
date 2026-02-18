@@ -9,7 +9,7 @@ const TITLE_PRE_AUTH = 'Log in with one of the following methods';
 const TITLE_POST_AUTH = 'Logging in...';
 
 // The cookie used to store the original query parameters when using SSO.
-const COOKIE_KEY = 'dendrite_login_fallback_qs';
+const COOKIE_KEY = 'zendrite_login_fallback_qs';
 
 /*
  * Submit a login request.

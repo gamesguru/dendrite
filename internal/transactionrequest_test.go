@@ -21,15 +21,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gotest.tools/v3/poll"
 
-	"codefloe.com/pat-s/dendrite/federationapi/producers"
-	rsAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
-	"codefloe.com/pat-s/dendrite/test"
-	keyAPI "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
+	keyAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (
@@ -175,8 +175,8 @@ func TestProcessTransactionRequestPDUInvalidSignature(t *testing.T) {
 	}
 }
 
-func createTransactionWithEDU(ctx *process.ProcessContext, edus []gomatrixserverlib.EDU) (TxnReq, nats.JetStreamContext, *config.Dendrite) {
-	cfg := &config.Dendrite{}
+func createTransactionWithEDU(ctx *process.ProcessContext, edus []gomatrixserverlib.EDU) (TxnReq, nats.JetStreamContext, *config.Zendrite) {
+	cfg := &config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{
 		Generate:       true,
 		SingleDatabase: true,
@@ -218,7 +218,7 @@ func TestProcessTransactionRequestEDUTyping(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -260,7 +260,7 @@ func TestProcessTransactionRequestEDUToDevice(t *testing.T) {
 	var err error
 	sender := "@userid:kaer.morhen"
 	messageID := "$x4MKEPRSF6OGlo0qpnsP3BfSmYX5HhVlykOsQH3ECyg"
-	msgType := "m.dendrite.test"
+	msgType := "m.zendrite.test"
 	edu := gomatrixserverlib.EDU{Type: "m.direct_to_device"}
 	if edu.Content, err = json.Marshal(map[string]any{
 		"sender":     sender,
@@ -284,7 +284,7 @@ func TestProcessTransactionRequestEDUToDevice(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -361,7 +361,7 @@ func TestProcessTransactionRequestEDUDeviceListUpdate(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -458,7 +458,7 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, badUser, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -502,7 +502,7 @@ func TestProcessTransactionRequestEDUSigningKeyUpdate(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -559,7 +559,7 @@ func TestProcessTransactionRequestEDUPresence(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -601,7 +601,7 @@ func TestProcessTransactionRequestEDUUnhandled(t *testing.T) {
 	}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, _, _ := createTransactionWithEDU(ctx, []gomatrixserverlib.EDU{edu})
 	txnRes, jsonRes := txn.ProcessTransaction(ctx.Context())
 

@@ -1,15 +1,15 @@
 ---
 title: Docker Setup
-description: Installing and running Dendrite with Docker
+description: Installing and running Zendrite with Docker
 ---
 
-Dendrite provides an example Docker compose file in `build/docker/docker-compose.yaml`, which needs some preparation to start successfully.
+Zendrite provides an example Docker compose file in `build/docker/docker-compose.yaml`, which needs some preparation to start successfully.
 Please note that this compose file only has Postgres as a dependency, and you need to configure a [reverse proxy](/installation/planning#reverse-proxy).
 
 Docker images are available from:
 
-- [Docker Hub](https://hub.docker.com/r/pats22/dendrite): `pats22/dendrite`
-- [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/dendrite): `codefloe.com/pat-s/dendrite`
+- [Docker Hub](https://hub.docker.com/r/pats22/zendrite): `pats22/zendrite`
+- [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/zendrite): `codefloe.com/pat-s/zendrite`
 
 ## Preparations
 
@@ -22,7 +22,7 @@ The following will create one in `./config`:
 mkdir -p ./config
 docker run --rm --entrypoint="/usr/bin/generate-keys" \
   -v $(pwd)/config:/mnt \
-  pats22/dendrite:latest \
+  pats22/zendrite:latest \
   -private-key /mnt/matrix_key.pem
 ```
 
@@ -37,18 +37,18 @@ Change `server` to your domain and `db` according to your changes to the docker-
 mkdir -p ./config
 docker run --rm --entrypoint="/bin/sh" \
   -v $(pwd)/config:/mnt \
-  pats22/dendrite:latest \
+  pats22/zendrite:latest \
   -c "/usr/bin/generate-config \
-    -dir /var/dendrite/ \
-    -db postgres://dendrite:itsasecret@postgres/dendrite?sslmode=disable \
-    -server YourDomainHere > /mnt/dendrite.yaml"
+    -dir /var/zendrite/ \
+    -db postgres://zendrite:itsasecret@postgres/zendrite?sslmode=disable \
+    -server YourDomainHere > /mnt/zendrite.yaml"
 ```
 
-You can then change `config/dendrite.yaml` to your liking.
+You can then change `config/zendrite.yaml` to your liking.
 
-## Starting Dendrite
+## Starting Zendrite
 
-Once you're done changing the config, you can now start up Dendrite with
+Once you're done changing the config, you can now start up Zendrite with
 
 ```bash
 docker compose up

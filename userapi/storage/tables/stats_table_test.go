@@ -11,14 +11,14 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/storage/postgres"
-	"codefloe.com/pat-s/dendrite/userapi/storage/sqlite3"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/userapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 func mustMakeDBs(t *testing.T, dbType test.DBType) (

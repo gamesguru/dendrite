@@ -1,10 +1,10 @@
 ---
 title: MSC Support
-description: Implementation status of Matrix Spec Changes (MSCs) in Dendrite.
+description: Implementation status of Matrix Spec Changes (MSCs) in Zendrite.
 ---
 
 [MSCs](https://spec.matrix.org/proposals/) (Matrix Spec Changes) are proposals to extend or modify the Matrix protocol.
-This page tracks the implementation status of notable MSCs in Dendrite.
+This page tracks the implementation status of notable MSCs in Zendrite.
 
 Many MSCs listed here have since been merged into the [Matrix specification](https://spec.matrix.org/) proper.
 They are listed by their original MSC number for reference.
@@ -83,7 +83,7 @@ mscs:
 ### MSC3861: OIDC Delegated Authentication
 
 MSC3861 delegates authentication to an external OpenID Connect (OIDC) provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
-When enabled, Dendrite validates access tokens via OAuth 2.0 token introspection instead of managing passwords directly.
+When enabled, Zendrite validates access tokens via OAuth 2.0 token introspection instead of managing passwords directly.
 
 **What changes when MSC3861 is enabled:**
 

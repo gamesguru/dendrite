@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const queueJSONSchema = `

@@ -20,8 +20,8 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // IntrospectionResponse represents the response from an RFC 7662 token introspection endpoint.

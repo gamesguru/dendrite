@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/syncapi/types"
+	"github.com/element-hq/zendrite/syncapi/types"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

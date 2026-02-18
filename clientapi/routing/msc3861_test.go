@@ -13,15 +13,15 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/httputil"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
-	"codefloe.com/pat-s/dendrite/userapi"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
 )
 
 // setupMSC3861Routers creates a full router stack with MSC3861 enabled for testing.
@@ -29,7 +29,7 @@ import (
 // not database semantics, so we always use SQLite to avoid the shared-postgres
 // schema race that occurs when multiple parallel subtests DROP SCHEMA on the
 // same CI database.
-func setupMSC3861Routers(t *testing.T) (httputil.Routers, *config.Dendrite, func()) {
+func setupMSC3861Routers(t *testing.T) (httputil.Routers, *config.Zendrite, func()) {
 	t.Helper()
 	cfg, processCtx, closeDB := testrig.CreateConfig(t, test.DBTypeSQLite)
 	cfg.ClientAPI.RateLimiting.Enabled = false

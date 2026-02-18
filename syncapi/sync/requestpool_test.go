@@ -8,9 +8,9 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/syncapi/synctypes"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 type dummyPublisher struct {
@@ -119,7 +119,7 @@ func TestRequestPool_updatePresence(t *testing.T) {
 		cfg: &config.SyncAPI{
 			Matrix: &config.Global{
 				JetStream: config.JetStream{
-					TopicPrefix: "Dendrite",
+					TopicPrefix: "Zendrite",
 				},
 				Presence: config.PresenceOptions{
 					EnableInbound:  true,

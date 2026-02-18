@@ -6,7 +6,7 @@ import (
 )
 
 // Version can be set at build time using:
-// -ldflags "-X codefloe.com/pat-s/dendrite/internal.version=1.0.0".
+// -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=1.0.0".
 var version = "dev"
 
 const (
@@ -22,8 +22,8 @@ func init() {
 	// If version was set via ldflags, use it as-is but append git revision
 	parts := []string{}
 
-	// Try to get the revision Dendrite was built from.
-	// If we can't, e.g. Dendrite wasn't built (go run) or no VCS version is present,
+	// Try to get the revision Zendrite was built from.
+	// If we can't, e.g. Zendrite wasn't built (go run) or no VCS version is present,
 	// we just use the provided version above.
 	info, ok := debug.ReadBuildInfo()
 	if ok {

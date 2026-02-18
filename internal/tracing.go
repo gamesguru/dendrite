@@ -25,7 +25,7 @@ type Trace struct {
 
 func StartTask(inCtx context.Context, name string) (Trace, context.Context) {
 	ctx, task := trace.NewTask(inCtx, name)
-	ctx, span := otel.Tracer("dendrite").Start(ctx, name)
+	ctx, span := otel.Tracer("zendrite").Start(ctx, name)
 	return Trace{
 		span: span,
 		task: task,
@@ -34,7 +34,7 @@ func StartTask(inCtx context.Context, name string) (Trace, context.Context) {
 
 func StartRegion(inCtx context.Context, name string) (Trace, context.Context) {
 	region := trace.StartRegion(inCtx, name)
-	ctx, span := otel.Tracer("dendrite").Start(inCtx, name)
+	ctx, span := otel.Tracer("zendrite").Start(inCtx, name)
 	return Trace{
 		span:   span,
 		region: region,

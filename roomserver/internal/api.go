@@ -12,21 +12,21 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
-	asAPI "codefloe.com/pat-s/dendrite/appservice/api"
-	fsAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/roomserver/acls"
-	"codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/input"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/perform"
-	"codefloe.com/pat-s/dendrite/roomserver/internal/query"
-	"codefloe.com/pat-s/dendrite/roomserver/producers"
-	"codefloe.com/pat-s/dendrite/roomserver/storage"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/jetstream"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	asAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/roomserver/acls"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/perform"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/producers"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI.
@@ -47,7 +47,7 @@ type RoomserverInternalAPI struct {
 	*perform.Creator
 	ProcessContext         *process.ProcessContext
 	DB                     storage.Database
-	Cfg                    *config.Dendrite
+	Cfg                    *config.Zendrite
 	Cache                  caching.RoomServerCaches
 	ServerName             spec.ServerName
 	KeyRing                gomatrixserverlib.JSONVerifier
@@ -66,35 +66,35 @@ type RoomserverInternalAPI struct {
 }
 
 func NewRoomserverAPI(
-	processContext *process.ProcessContext, dendriteCfg *config.Dendrite, roomserverDB storage.Database,
+	processContext *process.ProcessContext, zendriteCfg *config.Zendrite, roomserverDB storage.Database,
 	js nats.JetStreamContext, nc *nats.Conn, caches caching.RoomServerCaches, enableMetrics bool,
 ) *RoomserverInternalAPI {
 	var perspectiveServerNames []spec.ServerName
-	for _, kp := range dendriteCfg.FederationAPI.KeyPerspectives {
+	for _, kp := range zendriteCfg.FederationAPI.KeyPerspectives {
 		perspectiveServerNames = append(perspectiveServerNames, kp.ServerName)
 	}
 
 	serverACLs := acls.NewServerACLs(roomserverDB)
 	producer := &producers.RoomEventProducer{
-		Topic:     dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent),
+		Topic:     zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent),
 		JetStream: js,
 		ACLs:      serverACLs,
 	}
 	a := &RoomserverInternalAPI{
 		ProcessContext:         processContext,
 		DB:                     roomserverDB,
-		Cfg:                    dendriteCfg,
+		Cfg:                    zendriteCfg,
 		Cache:                  caches,
-		ServerName:             dendriteCfg.Global.ServerName,
+		ServerName:             zendriteCfg.Global.ServerName,
 		PerspectiveServerNames: perspectiveServerNames,
-		InputRoomEventTopic:    dendriteCfg.Global.JetStream.Prefixed(jetstream.InputRoomEvent),
+		InputRoomEventTopic:    zendriteCfg.Global.JetStream.Prefixed(jetstream.InputRoomEvent),
 		OutputProducer:         producer,
 		JetStream:              js,
 		NATSClient:             nc,
-		Durable:                dendriteCfg.Global.JetStream.Durable("RoomserverInputConsumer"),
+		Durable:                zendriteCfg.Global.JetStream.Durable("RoomserverInputConsumer"),
 		ServerACLs:             serverACLs,
 		enableMetrics:          enableMetrics,
-		defaultRoomVersion:     dendriteCfg.RoomServer.DefaultRoomVersion,
+		defaultRoomVersion:     zendriteCfg.RoomServer.DefaultRoomVersion,
 		PartialStateTracker:    NewPartialStateTracker(),
 		// perform-er structs + queryer struct get initialized when we have a federation sender to use
 	}

@@ -1,4 +1,4 @@
-# Justfile for Dendrite development
+# Justfile for Zendrite development
 
 # Default recipe
 default:
@@ -15,7 +15,7 @@ fmt: install-dev-deps
 		prettier -w .
 		gofumpt -w .
 		golangci-lint run --fix
-		gci write --skip-vendor --skip-generated -s standard -s default -s "prefix(codefloe.com/pat-s/dendrite)" --custom-order .
+		gci write --skip-vendor --skip-generated -s standard -s default -s "prefix(codefloe.com/pat-s/zendrite)" --custom-order .
 
 # Run golangci-lint
 lint:
@@ -70,28 +70,28 @@ vendor:
     go mod vendor
 
 # Build multi-arch container image (default: load to local docker)
-container tag="dendrite:dev":
+container tag="zendrite:dev":
     docker buildx build --platform linux/amd64,linux/arm64 -t {{tag}} .
 
 # Build container image and load to local docker (current arch only)
-container-local tag="dendrite:dev":
+container-local tag="zendrite:dev":
     docker buildx build --load -t {{tag}} .
 
 # Build and push container image to registry
 container-push tag:
     docker buildx build --platform linux/amd64,linux/arm64 --push -t {{tag}} .
 
-# Run local Dendrite container to verify image works
-container-run tag="codefloe.com/pat-s/dendrite:dev":
+# Run local Zendrite container to verify image works
+container-run tag="codefloe.com/pat-s/zendrite:dev":
     ./scripts/container-run.sh {{tag}}
 
-# Stop local Dendrite container
+# Stop local Zendrite container
 container-stop:
-    docker stop dendrite-dev 2>/dev/null || echo "Container not running"
+    docker stop zendrite-dev 2>/dev/null || echo "Container not running"
 
-# Clean up local Dendrite data
+# Clean up local Zendrite data
 container-clean: container-stop
-    rm -rf .dendrite-dev
+    rm -rf .zendrite-dev
 
 # Website (docs) commands
 # Run website dev server

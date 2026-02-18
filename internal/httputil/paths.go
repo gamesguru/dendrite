@@ -13,6 +13,6 @@ const (
 	PublicMediaPathPrefix      = "/_matrix/media/"
 	PublicStaticPath           = "/_matrix/static/"
 	PublicWellKnownPrefix      = "/.well-known/matrix/"
-	DendriteAdminPathPrefix    = "/_dendrite/"
+	ZendriteAdminPathPrefix    = "/_zendrite/"
 	SynapseAdminPathPrefix     = "/_synapse/"
 )

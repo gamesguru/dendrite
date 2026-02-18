@@ -1,7 +1,7 @@
 package caching
 
 import (
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type lazyLoadingCacheKey struct {

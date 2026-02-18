@@ -7,7 +7,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/caching"
 )
 
 // A Database implements gomatrixserverlib.KeyDatabase and is used to store

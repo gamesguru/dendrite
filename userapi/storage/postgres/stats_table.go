@@ -14,11 +14,11 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/userapi/api"
-	"codefloe.com/pat-s/dendrite/userapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/userapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 const userDailyVisitsSchema = `
@@ -71,7 +71,7 @@ const countUsersLastSeenAfterSQL = "" +
 	" ) u"
 
 // Note on the following countR30UsersSQL and countR30UsersV2SQL: The different checks are intentional.
-// This is to ensure the values reported by Dendrite are the same as by Synapse.
+// This is to ensure the values reported by Zendrite are the same as by Synapse.
 // Queries are taken from: https://github.com/matrix-org/synapse/blob/9ce51a47f6e37abd0a1275281806399d874eb026/synapse/storage/databases/main/stats.py
 
 /*

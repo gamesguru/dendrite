@@ -14,7 +14,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 )
 
 func TestOpenACLsWithBlacklist(t *testing.T) {

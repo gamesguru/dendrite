@@ -20,15 +20,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gotest.tools/v3/poll"
 
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
-	"codefloe.com/pat-s/dendrite/federationapi/storage"
-	"codefloe.com/pat-s/dendrite/internal/caching"
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/setup/process"
-	"codefloe.com/pat-s/dendrite/test"
-	"codefloe.com/pat-s/dendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 )
 
 func mustCreateFederationDatabase(t *testing.T, dbType test.DBType, realDatabase bool) (storage.Database, *process.ProcessContext, func()) {
@@ -130,7 +130,7 @@ func TestSendPDUOnSuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -159,7 +159,7 @@ func TestSendEDUOnSuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -188,7 +188,7 @@ func TestSendPDUOnFailStoredInDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -218,7 +218,7 @@ func TestSendEDUOnFailStoredInDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -248,7 +248,7 @@ func TestSendPDUAgainDoesntInterruptBackoff(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -299,7 +299,7 @@ func TestSendEDUAgainDoesntInterruptBackoff(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -350,7 +350,7 @@ func TestSendPDUMultipleFailuresBlacklisted(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -382,7 +382,7 @@ func TestSendEDUMultipleFailuresBlacklisted(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -414,7 +414,7 @@ func TestSendPDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -451,7 +451,7 @@ func TestSendEDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -488,7 +488,7 @@ func TestRetryServerSendsPDUSuccessfully(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -539,7 +539,7 @@ func TestRetryServerSendsEDUSuccessfully(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -593,7 +593,7 @@ func TestSendPDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -638,7 +638,7 @@ func TestSendEDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -683,7 +683,7 @@ func TestSendPDUAndEDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -736,7 +736,7 @@ func TestExternalFailureBackoffDoesntStartQueue(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -776,7 +776,7 @@ func TestQueueInteractsWithRealDatabasePDUAndEDU(t *testing.T) {
 		// NOTE : These defers aren't called if go test is killed so the dbs may not get cleaned up.
 		defer close()
 		defer func() {
-			pc.ShutdownDendrite()
+			pc.ShutdownZendrite()
 			<-pc.WaitForShutdown()
 		}()
 
@@ -841,7 +841,7 @@ func TestSendPDUMultipleFailuresAssumedOffline(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -874,7 +874,7 @@ func TestSendEDUMultipleFailuresAssumedOffline(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -907,7 +907,7 @@ func TestSendPDUOnRelaySuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, true, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -946,7 +946,7 @@ func TestSendEDUOnRelaySuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, true, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 

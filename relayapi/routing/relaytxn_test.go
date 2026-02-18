@@ -16,11 +16,11 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/relayapi/internal"
-	"codefloe.com/pat-s/dendrite/relayapi/routing"
-	"codefloe.com/pat-s/dendrite/relayapi/storage/shared"
-	"codefloe.com/pat-s/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/internal"
+	"codefloe.com/pat-s/zendrite/relayapi/routing"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func createQuery(

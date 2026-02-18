@@ -24,8 +24,8 @@ import (
 	"github.com/tidwall/gjson"
 	"golang.org/x/term"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/setup"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup"
 )
 
 const usage = `Usage: %s
@@ -35,14 +35,14 @@ Creates a new user account on the homeserver.
 Example:
 
 	# provide password by parameter
-  	%s --config dendrite.yaml -username alice -password foobarbaz
+  	%s --config zendrite.yaml -username alice -password foobarbaz
 	# use password from file
-  	%s --config dendrite.yaml -username alice -passwordfile my.pass
+  	%s --config zendrite.yaml -username alice -passwordfile my.pass
 	# ask user to provide password
-	%s --config dendrite.yaml -username alice
+	%s --config zendrite.yaml -username alice
 	# read password from stdin
-	%s --config dendrite.yaml -username alice -passwordstdin < my.pass
-	cat my.pass | %s --config dendrite.yaml -username alice -passwordstdin
+	%s --config zendrite.yaml -username alice -passwordstdin < my.pass
+	cat my.pass | %s --config zendrite.yaml -username alice -passwordstdin
 
 Arguments:
 
@@ -73,7 +73,7 @@ func main() {
 	cfg := setup.ParseFlags(true)
 
 	if *resetPassword {
-		logrus.Fatalf("The reset-password flag has been replaced by the POST /_dendrite/admin/resetPassword/{localpart} admin API.")
+		logrus.Fatalf("The reset-password flag has been replaced by the POST /_zendrite/admin/resetPassword/{localpart} admin API.")
 	}
 
 	if cfg.ClientAPI.RegistrationSharedSecret == "" {

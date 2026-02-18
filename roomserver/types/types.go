@@ -19,7 +19,7 @@ import (
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/blake2b"
 
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // EventTypeNID is a numeric ID for an event type.

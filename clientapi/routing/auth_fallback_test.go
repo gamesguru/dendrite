@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func Test_AuthFallback(t *testing.T) {
-	cfg := config.Dendrite{}
+	cfg := config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
 	for _, useHCaptcha := range []bool{false, true} {
 		for _, recaptchaEnabled := range []bool{false, true} {

@@ -15,18 +15,18 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal"
 )
 
 const createDBMigrationsSQL = "" +
 	"CREATE TABLE IF NOT EXISTS db_migrations (" +
 	" version TEXT PRIMARY KEY NOT NULL," +
 	" time TEXT NOT NULL," +
-	" dendrite_version TEXT NOT NULL" +
+	" zendrite_version TEXT NOT NULL" +
 	");"
 
 const insertVersionSQL = "" +
-	"INSERT INTO db_migrations (version, time, dendrite_version)" +
+	"INSERT INTO db_migrations (version, time, zendrite_version)" +
 	" VALUES ($1, $2, $3)"
 
 const selectDBMigrationsSQL = "SELECT version FROM db_migrations"

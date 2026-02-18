@@ -1,18 +1,18 @@
-# Dendrite
+# Zendrite
 
-Dendrite is a second-generation Matrix homeserver written in Go, designed to be efficient, reliable, and scalable.
+Zendrite is a second-generation Matrix homeserver written in Go, designed to be efficient, reliable, and scalable.
 Forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in February 2026.
 
 ## Getting Started
 
-See the [documentation site](https://dendrite.pat-s.me) for installation, administration, and development guides.
+See the [documentation site](https://zendrite.pat-s.me) for installation, administration, and development guides.
 
 ## Downloads
 
 - **Container images:**
-  - [Docker Hub](https://hub.docker.com/r/pats22/dendrite)
-  - [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/dendrite)
-- **Binaries:** [Releases](https://codefloe.com/pat-s/dendrite/releases)
+  - [Docker Hub](https://hub.docker.com/r/pats22/zendrite)
+  - [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/zendrite)
+- **Binaries:** [Releases](https://codefloe.com/pat-s/zendrite/releases)
 
 The first public release of this fork is v0.15.3.
 

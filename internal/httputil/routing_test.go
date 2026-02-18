@@ -114,7 +114,7 @@ func TestOptionalTrailingSlashRouting(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Register routes matching the real Dendrite patterns
+	// Register routes matching the real Zendrite patterns
 	router.Handle("/rooms/{roomID}/state/{eventType:[^/]+/?}", handler).
 		Methods(http.MethodGet, http.MethodPut, http.MethodOptions)
 	router.Handle("/rooms/{roomID}/state/{eventType}/{stateKey}", handler).
@@ -322,13 +322,13 @@ func TestRoutersError(t *testing.T) {
 	}
 
 	// not allowed test
-	r.DendriteAdmin.
+	r.ZendriteAdmin.
 		Handle("/test", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {})).
 		Methods(http.MethodPost)
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, filepath.Join(DendriteAdminPathPrefix, "test"), nil)
-	r.DendriteAdmin.ServeHTTP(rec, req)
+	req = httptest.NewRequest(http.MethodGet, filepath.Join(ZendriteAdminPathPrefix, "test"), nil)
+	r.ZendriteAdmin.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("unexpected status code: %d - %s", rec.Code, rec.Body.String())
 	}

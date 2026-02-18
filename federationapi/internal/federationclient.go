@@ -9,7 +9,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 )
 
 const defaultTimeout = time.Second * 30

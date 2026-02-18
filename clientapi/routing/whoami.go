@@ -10,7 +10,7 @@ import (
 
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // whoamiResponse represents an response for a `whoami` request.

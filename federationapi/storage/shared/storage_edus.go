@@ -17,7 +17,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
 )
 
 // defaultExpiry for EDUs if not listed below.

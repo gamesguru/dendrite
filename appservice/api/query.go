@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Package api contains methods used by dendrite components in multi-process
+// Package api contains methods used by zendrite components in multi-process
 // mode to send requests to the appservice component, typically in order to ask
 // an application service for some information.
 package api
@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"codefloe.com/pat-s/dendrite/clientapi/auth/authtypes"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AppServiceInternalAPI is used to query user and room alias data from application

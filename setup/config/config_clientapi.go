@@ -99,8 +99,8 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 				"(such as reCAPTCHA). By enabling open registration, you are SIGNIFICANTLY " +
 				"increasing the risk that your server will be used to send spam or abuse, and may result in " +
 				"your server being banned from some rooms. If you are ABSOLUTELY CERTAIN you want to do this, " +
-				"start Dendrite with the -really-enable-open-registration command line flag. Otherwise, you " +
-				"should set the registration_disabled option in your Dendrite config.",
+				"start Zendrite with the -really-enable-open-registration command line flag. Otherwise, you " +
+				"should set the registration_disabled option in your Zendrite config.",
 		)
 	}
 }

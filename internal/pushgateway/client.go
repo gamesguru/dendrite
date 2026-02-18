@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/dendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal"
 )
 
 type httpClient struct {

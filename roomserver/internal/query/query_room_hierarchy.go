@@ -19,10 +19,10 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	fs "codefloe.com/pat-s/dendrite/federationapi/api"
-	roomserver "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	fs "codefloe.com/pat-s/zendrite/federationapi/api"
+	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Traverse the room hierarchy using the provided walker up to the provided limit,

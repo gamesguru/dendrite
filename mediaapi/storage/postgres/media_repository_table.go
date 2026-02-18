@@ -14,9 +14,9 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/mediaapi/storage/tables"
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 const mediaSchema = `

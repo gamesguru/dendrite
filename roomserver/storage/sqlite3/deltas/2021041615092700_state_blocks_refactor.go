@@ -16,8 +16,8 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 //nolint:gocyclo
@@ -167,7 +167,7 @@ func UpStateBlocksRefactor(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// By this point we should have no more state_snapshot_nids below oldMaxSnapshotID in either roomserver_rooms or roomserver_events
-	// If we do, this is a problem if Dendrite tries to load the snapshot as it will not exist
+	// If we do, this is a problem if Zendrite tries to load the snapshot as it will not exist
 	// in roomserver_state_snapshots
 	var count int64
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM roomserver_events WHERE state_snapshot_nid < $1 AND state_snapshot_nid != 0`, oldMaxSnapshotID).Scan(&count); err != nil {

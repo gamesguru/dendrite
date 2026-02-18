@@ -15,8 +15,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateSnapshotSchema = `
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS roomserver_state_snapshots (
 	-- The state snapshot NID that identifies this snapshot.
 	state_snapshot_nid bigint PRIMARY KEY DEFAULT nextval('roomserver_state_snapshot_nid_seq'),
 	-- The hash of the state snapshot, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_snapshot_hash BYTEA UNIQUE,
 	-- The room NID that the snapshot belongs to.
@@ -70,8 +70,8 @@ const bulkSelectStateBlockNIDsSQL = "" +
 // TODO: There's a sequence scan here because of the hash join strategy, which is
 // probably O(n) on state key entries, so there must be a way to avoid that somehow.
 // Event type NIDs are:
-// - 5: m.room.member as per https://codefloe.com/pat-s/dendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L40
-// - 7: m.room.history_visibility as per https://codefloe.com/pat-s/dendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L42
+// - 5: m.room.member as per https://codefloe.com/pat-s/zendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L40
+// - 7: m.room.history_visibility as per https://codefloe.com/pat-s/zendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L42
 const bulkSelectStateForHistoryVisibilitySQL = `
 	SELECT event_nid FROM (
 	  SELECT event_nid, event_type_nid, event_state_key_nid FROM roomserver_events

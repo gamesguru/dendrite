@@ -33,10 +33,10 @@ jobs:
         run: |
           # Create container with xgo environment variables
           CONTAINER_ID=$(docker create \
-            -e PACK=./cmd/dendrite \
-            -e OUT=dendrite \
+            -e PACK=./cmd/zendrite \
+            -e OUT=zendrite \
             -e FLAG_V=true \
-            -e FLAG_LDFLAGS="-s -w -X codefloe.com/pat-s/dendrite/internal.version=${{ github.ref_name }}" \
+            -e FLAG_LDFLAGS="-s -w -X codefloe.com/pat-s/zendrite/internal.version=${{ github.ref_name }}" \
             -e FLAG_TRIMPATH=true \
             -e FLAG_BUILDMODE=default \
             -e TARGETS="linux/amd64 linux/arm64 linux/arm-7 darwin/amd64 darwin/arm64 windows/amd64" \
@@ -63,7 +63,7 @@ jobs:
       - name: Create archives
         run: |
           cd dist
-          for file in dendrite-*; do
+          for file in zendrite-*; do
             if [[ "$file" == *.exe ]]; then
               zip "${file%.exe}.zip" "$file"
               rm "$file"
@@ -164,7 +164,7 @@ jobs:
       - name: Install dependencies
         run: apk add --no-cache git openssh nodejs
 
-      - name: Clone helm-dendrite and bump appVersion
+      - name: Clone helm-zendrite and bump appVersion
         env:
           DEPLOY_KEY: ${{ secrets.HELM_DEPLOY_KEY }}
         run: |
@@ -177,22 +177,22 @@ jobs:
           printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
 
           # Clone
-          REPO_URL="git@10.10.2.1:devxy/helm-dendrite.git"
-          git clone "$REPO_URL" helm-dendrite
-          cd helm-dendrite
+          REPO_URL="git@10.10.2.1:devxy/helm-zendrite.git"
+          git clone "$REPO_URL" helm-zendrite
+          cd helm-zendrite
 
           # Update appVersion
           VERSION="${GITHUB_REF_NAME#v}"
           git config user.name "pat-s"
           git config user.email "patrick.schratz@gmail.com"
-          sed -i "s/^appVersion: .*/appVersion: ${VERSION}/" charts/dendrite/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: ${VERSION}/" charts/zendrite/Chart.yaml
 
           # Commit and push only if there are changes
-          if git diff --quiet charts/dendrite/Chart.yaml; then
+          if git diff --quiet charts/zendrite/Chart.yaml; then
             echo "appVersion already set to ${VERSION}, skipping commit"
           else
-            git add charts/dendrite/Chart.yaml
-            git commit -m "chore(deps): bump dendrite appVersion to ${VERSION}"
+            git add charts/zendrite/Chart.yaml
+            git commit -m "chore(deps): bump zendrite appVersion to ${VERSION}"
             git push
           fi
 

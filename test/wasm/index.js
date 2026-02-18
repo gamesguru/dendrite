@@ -19,7 +19,7 @@ const childProcess = require('child_process');
     global._go_sqlite = SQL;
     console.log('Loaded sqlite');
   });
-  // dendritejs expects to write to `/idb` so we create that here
+  // zendritejs expects to write to `/idb` so we create that here
   // Since this is testing only, we use the default in-memory FS
   global._go_sqlite.FS.mkdir('/idb');
 

@@ -54,7 +54,7 @@ global:
   kafka:
     addresses:
     - localhost:2181
-    topic_prefix: Dendrite
+    topic_prefix: Zendrite
     use_naffka: true
     naffka_database:
       connection_string: file:naffka.db
@@ -173,7 +173,7 @@ logging:
 - type: file
   level: info
   params:
-    path: /var/log/dendrite
+    path: /var/log/zendrite
 `
 
 type mockReadFile map[string]string

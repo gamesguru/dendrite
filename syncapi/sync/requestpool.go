@@ -23,15 +23,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/dendrite/internal/sqlutil"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/setup/config"
-	"codefloe.com/pat-s/dendrite/syncapi/internal"
-	"codefloe.com/pat-s/dendrite/syncapi/notifier"
-	"codefloe.com/pat-s/dendrite/syncapi/storage"
-	"codefloe.com/pat-s/dendrite/syncapi/streams"
-	"codefloe.com/pat-s/dendrite/syncapi/types"
-	userapi "codefloe.com/pat-s/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // RequestPool manages HTTP long-poll connections for /sync.
@@ -264,7 +264,7 @@ func (rp *RequestPool) updateLastSeen(req *http.Request, device *userapi.Device)
 
 var activeSyncRequests = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "syncapi",
 		Name:      "active_sync_requests",
 		Help:      "The number of sync requests that are active right now",
@@ -273,7 +273,7 @@ var activeSyncRequests = prometheus.NewGauge(
 
 var waitingSyncRequests = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "syncapi",
 		Name:      "waiting_sync_requests",
 		Help:      "The number of sync requests that are waiting to be woken by a notifier",

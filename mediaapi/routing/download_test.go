@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"codefloe.com/pat-s/dendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 func Test_dispositionFor(t *testing.T) {

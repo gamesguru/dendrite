@@ -17,10 +17,10 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
-	federationAPI "codefloe.com/pat-s/dendrite/federationapi/api"
-	roomserverAPI "codefloe.com/pat-s/dendrite/roomserver/api"
-	"codefloe.com/pat-s/dendrite/roomserver/types"
-	"codefloe.com/pat-s/dendrite/setup/config"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // RoomAliasToID converts the queried alias into a room ID and returns it.
