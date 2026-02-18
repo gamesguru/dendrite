@@ -37,7 +37,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install xgo
-        run: go install src.techknowlogick.com/xgo@latest
+        run: CGO_ENABLED=0 go install src.techknowlogick.com/xgo@latest
 
       - name: Build with xgo
         run: |
