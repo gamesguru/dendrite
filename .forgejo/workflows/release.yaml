@@ -31,6 +31,8 @@ jobs:
 
       - name: Build with xgo
         run: |
+          set -euo pipefail
+
           # Create container with xgo environment variables
           CONTAINER_ID=$(docker create \
             -e PACK=./cmd/zendrite \
@@ -47,15 +49,15 @@ jobs:
           docker cp . "$CONTAINER_ID:/source"
 
           # Start the container and wait for completion
-          docker start -a "$CONTAINER_ID" || true
+          docker start -a "$CONTAINER_ID"
 
           # Copy built binaries out
           mkdir -p dist
-          docker cp "$CONTAINER_ID:/build/." dist/ || echo "No binaries in /build"
+          docker cp "$CONTAINER_ID:/build/." dist/
 
           # Show what was built
           echo "Contents of dist:"
-          ls -la dist/ || echo "dist is empty"
+          ls -la dist/
 
           # Cleanup
           docker rm "$CONTAINER_ID"
