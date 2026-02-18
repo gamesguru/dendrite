@@ -77,3 +77,4 @@ helm/zendrite/charts/
 vendor/
 .zendrite-dev/
 zendrite
+!cmd/zendrite
