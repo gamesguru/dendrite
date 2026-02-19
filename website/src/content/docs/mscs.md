@@ -101,7 +101,7 @@ mscs:
     - msc3861
   msc3861:
     issuer: "https://auth.example.com/"
-    client_id: "0000000000000000000DENDRITE"
+    client_id: "0000000000000000000ZENDRITE"
     client_secret: "secret"
     client_auth_method: "client_secret_basic"  # or "client_secret_post"
     admin_token: ""                            # optional: static token for admin API access

@@ -46,7 +46,7 @@ jobs:
         with:
           images: |
             codefloe.com/${{ github.repository }}
-            docker.io/pats22/dendrite
+            docker.io/pats22/zendrite
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

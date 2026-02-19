@@ -119,7 +119,7 @@ func main() {
 			Environment:      cfg.Global.Sentry.Environment,
 			Debug:            true,
 			ServerName:       string(cfg.Global.ServerName),
-			Release:          "dendrite@" + internal.VersionString(),
+			Release:          "zendrite@" + internal.VersionString(),
 			AttachStacktrace: true,
 		})
 		if err != nil {
@@ -184,7 +184,7 @@ func main() {
 	}
 
 	upCounter := prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Name:      "up",
 		ConstLabels: map[string]string{
 			"version": internal.VersionString(),

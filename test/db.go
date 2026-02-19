@@ -31,7 +31,7 @@ var (
 
 var (
 	Quiet    = false
-	Required = os.Getenv("DENDRITE_TEST_SKIP_NODB") == ""
+	Required = os.Getenv("ZENDRITE_TEST_SKIP_NODB") == ""
 )
 
 func fatalErrorf(t *testing.T, format string, args ...any) {

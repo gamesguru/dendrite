@@ -9,8 +9,8 @@ import (
 )
 
 // This is an instrumented main, used when running integration tests (sytest) with code coverage.
-// Compile: go test -c -race -cover -covermode=atomic -o monolith.debug -coverpkg "github.com/matrix-org/..." ./cmd/dendrite
-// Run the monolith: ./monolith.debug -test.coverprofile=/somewhere/to/dump/integrationcover.out DEVEL --config dendrite.yaml
+// Compile: go test -c -race -cover -covermode=atomic -o monolith.debug -coverpkg "github.com/matrix-org/..." ./cmd/zendrite
+// Run the monolith: ./monolith.debug -test.coverprofile=/somewhere/to/dump/integrationcover.out DEVEL --config zendrite.yaml
 // Generate HTML with coverage: go tool cover -html=/somewhere/where/there/is/integrationcover.out -o cover.html
 // Source: https://dzone.com/articles/measuring-integration-test-coverage-rate-in-pouchc
 func TestMain(_ *testing.T) {

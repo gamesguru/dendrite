@@ -210,7 +210,7 @@ func checkAndConfigureStreams(process *process.ProcessContext, cfg *config.JetSt
 				}
 
 				// The stream was supposed to be on disk. Let's try starting
-				// Dendrite with the stream in-memory instead. That'll mean that
+				// Zendrite with the stream in-memory instead. That'll mean that
 				// we can't recover anything that was queued on the disk but we
 				// will still be able to start and run hopefully in the meantime.
 				logger.WithError(err).Error("Unable to add stream")
