@@ -52,7 +52,8 @@ jobs:
             -trimpath \
             -v \
             -buildmode default \
-            ./cmd/zendrite
+            -pkg cmd/zendrite \
+            .
 
           echo "Contents of dist:"
           ls -la dist/
