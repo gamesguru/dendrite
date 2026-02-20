@@ -23,6 +23,7 @@ type MediaRepository interface {
 	StoreMediaMetadata(ctx context.Context, mediaMetadata *types.MediaMetadata) error
 	GetMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) (*types.MediaMetadata, error)
 	GetMediaMetadataByHash(ctx context.Context, mediaHash types.Base64Hash, mediaOrigin spec.ServerName) (*types.MediaMetadata, error)
+	DeleteMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) error
 }
 
 type Thumbnails interface {

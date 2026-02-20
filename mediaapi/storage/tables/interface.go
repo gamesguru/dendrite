@@ -36,4 +36,5 @@ type MediaRepository interface {
 		ctx context.Context, txn *sql.Tx,
 		mediaHash types.Base64Hash, mediaOrigin spec.ServerName,
 	) (*types.MediaMetadata, error)
+	DeleteMedia(ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName) error
 }

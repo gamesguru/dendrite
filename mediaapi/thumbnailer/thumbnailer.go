@@ -141,6 +141,12 @@ func isThumbnailExists(
 		return false, err
 	}
 	if thumbnailMetadata != nil {
+		// Verify the thumbnail file actually exists on disk.
+		// The DB may have stale records if the media storage was wiped.
+		if _, statErr := os.Stat(string(dst)); os.IsNotExist(statErr) {
+			logger.Warnf("Thumbnail metadata exists in DB but file is missing on disk for %q, will regenerate", dst)
+			return false, nil
+		}
 		return true, nil
 	}
 	// Note: The double-negative is intentional as os.IsExist(err) != !os.IsNotExist(err).

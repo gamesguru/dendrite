@@ -44,6 +44,13 @@ func (d *Database) GetMediaMetadata(ctx context.Context, mediaID types.MediaID, 
 	return mediaMetadata, err
 }
 
+// DeleteMediaMetadata removes the metadata for the given media from the database.
+func (d *Database) DeleteMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.MediaRepository.DeleteMedia(ctx, txn, mediaID, mediaOrigin)
+	})
+}
+
 // GetMediaMetadataByHash returns metadata about media stored on this server.
 // The media could have been uploaded to this server or fetched from another server and cached here.
 // Returns nil metadata if there is no metadata associated with this media.

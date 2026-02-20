@@ -58,11 +58,16 @@ const selectMediaByHashSQL = `
 SELECT content_type, file_size_bytes, creation_ts, upload_name, media_id, user_id FROM mediaapi_media_repository WHERE base64hash = $1 AND media_origin = $2
 `
 
+const deleteMediaSQL = `
+DELETE FROM mediaapi_media_repository WHERE media_id = $1 AND media_origin = $2
+`
+
 type mediaStatements struct {
 	db                    *sql.DB
 	insertMediaStmt       *sql.Stmt
 	selectMediaStmt       *sql.Stmt
 	selectMediaByHashStmt *sql.Stmt
+	deleteMediaStmt       *sql.Stmt
 }
 
 func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
@@ -78,6 +83,7 @@ func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
 		{&s.insertMediaStmt, insertMediaSQL},
 		{&s.selectMediaStmt, selectMediaSQL},
 		{&s.selectMediaByHashStmt, selectMediaByHashSQL},
+		{&s.deleteMediaStmt, deleteMediaSQL},
 	}.Prepare(db)
 }
 
@@ -119,6 +125,14 @@ func (s *mediaStatements) SelectMedia(
 		&mediaMetadata.UserID,
 	)
 	return &mediaMetadata, err
+}
+
+func (s *mediaStatements) DeleteMedia(
+	ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName,
+) error {
+	stmt := sqlutil.TxStmtContext(ctx, txn, s.deleteMediaStmt)
+	_, err := stmt.ExecContext(ctx, mediaID, mediaOrigin)
+	return err
 }
 
 func (s *mediaStatements) SelectMediaByHash(

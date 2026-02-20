@@ -290,11 +290,34 @@ func (r *downloadRequest) doDownload(
 		// If we have a record, we can respond from the local file
 		r.MediaMetadata = mediaMetadata
 	}
-	return r.respondFromLocalFile(
+	metadata, err := r.respondFromLocalFile(
 		ctx, w, cfg.AbsBasePath, activeThumbnailGeneration,
 		cfg.MaxThumbnailGenerators, db,
 		cfg.DynamicThumbnails, cfg.ThumbnailSizes,
 	)
+	// If the local file is missing but we have DB metadata for a remote origin,
+	// delete the stale DB record and re-fetch from the remote server.
+	// This handles the case where the media storage was wiped but the database
+	// still has stale records.
+	var perr *fs.PathError
+	if errors.As(err, &perr) && r.MediaMetadata.Origin != cfg.Matrix.ServerName {
+		r.Logger.WithError(err).Warn("Local file missing for remote media, re-fetching from remote server")
+		if delErr := db.DeleteMediaMetadata(ctx, r.MediaMetadata.MediaID, r.MediaMetadata.Origin); delErr != nil {
+			r.Logger.WithError(delErr).Error("Failed to delete stale media metadata")
+			return nil, delErr
+		}
+		if resErr := r.getRemoteFile(
+			ctx, client, cfg, db, activeRemoteRequests, activeThumbnailGeneration,
+		); resErr != nil {
+			return nil, resErr
+		}
+		return r.respondFromLocalFile(
+			ctx, w, cfg.AbsBasePath, activeThumbnailGeneration,
+			cfg.MaxThumbnailGenerators, db,
+			cfg.DynamicThumbnails, cfg.ThumbnailSizes,
+		)
+	}
+	return metadata, err
 }
 
 // respondFromLocalFile reads a file from local storage and writes it to the http.ResponseWriter
@@ -559,8 +582,31 @@ func (r *downloadRequest) getThumbnailFile(
 	thumbPath := thumbnailer.GetThumbnailPath(filePath, thumbnail.ThumbnailSize)
 	thumbFile, err := os.Open(string(thumbPath))
 	if err != nil {
-		thumbFile.Close()
-		return nil, nil, fmt.Errorf("os.Open: %w", err)
+		// If the thumbnail file is missing (e.g. media storage was wiped),
+		// try to regenerate it from the base file.
+		var perr *fs.PathError
+		if errors.As(err, &perr) {
+			r.Logger.WithError(err).Warn("Thumbnail file missing on disk, attempting to regenerate")
+			regenerated, genErr := r.generateThumbnail(
+				ctx, filePath, thumbnail.ThumbnailSize, activeThumbnailGeneration,
+				maxThumbnailGenerators, db,
+			)
+			if genErr != nil {
+				return nil, nil, fmt.Errorf("failed to regenerate thumbnail: %w", genErr)
+			}
+			if regenerated == nil {
+				// Could not regenerate (e.g. too busy), fall back to original file
+				return nil, nil, nil
+			}
+			thumbnail = regenerated
+			thumbPath = thumbnailer.GetThumbnailPath(filePath, thumbnail.ThumbnailSize)
+			thumbFile, err = os.Open(string(thumbPath))
+			if err != nil {
+				return nil, nil, fmt.Errorf("os.Open after regeneration: %w", err)
+			}
+		} else {
+			return nil, nil, fmt.Errorf("os.Open: %w", err)
+		}
 	}
 	thumbStat, err := thumbFile.Stat()
 	if err != nil {

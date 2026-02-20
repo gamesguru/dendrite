@@ -49,6 +49,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS mediaapi_thumbnail_index ON mediaapi_thumbnail
 const insertThumbnailSQL = `
 INSERT INTO mediaapi_thumbnail (media_id, media_origin, content_type, file_size_bytes, creation_ts, width, height, resize_method)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (media_id, media_origin, width, height, resize_method)
+    DO UPDATE SET content_type = $3, file_size_bytes = $4, creation_ts = $5
 `
 
 // Note: this selects one specific thumbnail.
