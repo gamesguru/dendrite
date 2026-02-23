@@ -16,9 +16,9 @@ require (
 	github.com/kardianos/minwinsvc v1.0.2
 	github.com/matrix-org/gomatrix v0.0.0-20220926102614-ceba4d9f7530
 	github.com/matrix-org/util v0.0.0-20221111132719-399730281e66
-	github.com/mattn/go-sqlite3 v1.14.33
+	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/nats-io/nats-server/v2 v2.12.4
-	github.com/nats-io/nats.go v1.48.0
+	github.com/nats-io/nats.go v1.49.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
@@ -32,10 +32,10 @@ require (
 	golang.org/x/image v0.36.0
 	golang.org/x/sync v0.19.0
 	golang.org/x/term v0.40.0
-	google.golang.org/grpc v1.78.0
+	google.golang.org/grpc v1.79.1
 	gotest.tools/v3 v3.5.2
-	maunium.net/go/mautrix v0.26.2
-	modernc.org/sqlite v1.45.0
+	maunium.net/go/mautrix v0.26.3
+	modernc.org/sqlite v1.46.1
 )
 
 require (
@@ -99,13 +99,13 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
-	go.mau.fi/util v0.9.5 // indirect
+	go.mau.fi/util v0.9.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.40.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
+	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
