@@ -3,10 +3,8 @@ title: FAQ
 description: Frequently asked questions about Zendrite
 ---
 
-{% aside type="caution" title="Important" %}
-Most of the content originated from [element-hq/zendrite](https://github.com/element-hq/zendrite) and might not be up-to-date anymore with respect to the many changes of this fork.
+Most of the content originated from [element-hq/dendrite](https://github.com/element-hq/dendrite) and might not be up-to-date anymore with respect to the many changes of this fork.
 Please use with caution and/or report drifts in an issue/Pull Request.
-{% /aside %}
 
 ## Why does Zendrite exist?
 
@@ -58,11 +56,9 @@ It should do, although we are aware of some minor issues:
 
 ## Is there a public instance of Zendrite I can try out?
 
-The Matrix.org Foundation runs [zendrite.matrix.org](https://zendrite.matrix.org).
+The Matrix.org Foundation runs [dendrite.matrix.org](https://dendrite.matrix.org).
 
-{% aside type="caution" title="Important" %}
-This instance is based on [element-hq/zendrite](https://github.com/element-hq/zendrite) and is not a valid test instance for this fork!
-{% /aside %}
+This instance is based on [element-hq/dendrite](https://github.com/element-hq/dendrite) and is not a valid test instance for this fork!
 
 ## Does Zendrite support Space Summaries?
 
