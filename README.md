@@ -1,7 +1,10 @@
 # Zendrite
 
+<img src="website/public/favicon.svg" width="120" align="right" alt="Zendrite logo">
+
 Zendrite is a second-generation Matrix homeserver written in Go, designed to be efficient, reliable, and scalable.
-Forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in February 2026.
+
+> Forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in February 2026
 
 ## Getting Started
 

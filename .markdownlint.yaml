@@ -104,7 +104,7 @@ MD030:
 # MD033/no-inline-html - Inline HTML
 MD033:
   # Allowed elements
-  allowed_elements: [details, summary, img, a, br, p]
+  allowed_elements: [details, summary, img, a, br, p, sub]
 
 # MD035/hr-style - Horizontal rule style
 MD035:

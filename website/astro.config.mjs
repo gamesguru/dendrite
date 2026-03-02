@@ -11,6 +11,11 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       plugins: [starlightThemeNova()],
       title: 'Zendrite',
+      logo: {
+        light: './src/assets/logo-light.svg',
+        dark: './src/assets/logo-dark.svg',
+        alt: 'Zendrite logo',
+      },
       description: 'A second-generation Matrix homeserver written in Go',
       // social: [
       //   { icon: 'matrix', label: 'Matrix', href: 'https://matrix.to/#/#zendrite:matrix.org' },
