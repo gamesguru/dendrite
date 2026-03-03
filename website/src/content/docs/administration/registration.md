@@ -10,8 +10,7 @@ Registration is controlled by the `registration_disabled` field in the `client_a
 By default, `registration_disabled` is set to `true`, disabling registration.
 If you want to enable registration, you should change this setting to `false`.
 
-Currently Zendrite supports secondary verification using [reCAPTCHA](https://www.google.com/recaptcha/about/).
-Other methods will be supported in the future.
+Zendrite supports several CAPTCHA providers for secondary verification: [reCAPTCHA](https://www.google.com/recaptcha/about/), [hCaptcha](https://www.hcaptcha.com/), and [ALTCHA](https://altcha.org/) (a self-hosted proof-of-work solution).
 
 ## reCAPTCHA verification
 
@@ -32,6 +31,33 @@ client_api:
   captcha_bypass_secret: ""
   recaptcha_siteverify_api: "https://www.google.com/recaptcha/api/siteverify"
 ```
+
+## ALTCHA verification
+
+[ALTCHA](https://altcha.org/) is an open-source, self-hosted CAPTCHA that uses proof-of-work instead of external API calls.
+The server generates a cryptographic challenge, the client solves it by brute-force hashing, and the server verifies the solution locally using HMAC.
+This means there are no third-party dependencies or privacy concerns.
+
+First, generate a random HMAC key (at least 32 characters):
+
+```bash
+openssl rand -hex 32
+```
+
+Then configure the `client_api` section:
+
+```yaml
+client_api:
+  # ...
+  registration_disabled: false
+  enable_registration_captcha: true
+  captcha_provider: altcha
+  altcha_hmac_key: "your-generated-hmac-key"
+  altcha_max_number: 50000    # proof-of-work difficulty (default 50000)
+  altcha_expiry: "5m"         # how long a challenge is valid (default 5m)
+```
+
+When using ALTCHA, you do not need to set `recaptcha_public_key`, `recaptcha_private_key`, or `recaptcha_siteverify_api`.
 
 ## Open registration
 

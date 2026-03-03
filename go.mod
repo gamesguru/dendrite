@@ -4,6 +4,7 @@ require (
 	codefloe.com/pat-s/gomatrixserverlib v1.0.4
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.3.9
+	github.com/altcha-org/altcha-lib-go v1.0.0
 	github.com/blevesearch/bleve/v2 v2.5.7
 	github.com/dgraph-io/ristretto/v2 v2.4.0
 	github.com/getsentry/sentry-go v0.42.0

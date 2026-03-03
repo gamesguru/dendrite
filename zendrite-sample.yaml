@@ -195,6 +195,14 @@ client_api:
   # recaptcha_form_field: "h-captcha-response"
   # recaptcha_sitekey_class: "h-captcha"
 
+  # To use ALTCHA (self-hosted proof-of-work CAPTCHA) instead of reCAPTCHA/hCaptcha,
+  # set captcha_provider to "altcha" and provide an HMAC key. No external API calls
+  # are needed — challenges are generated and verified locally.
+  # captcha_provider: altcha
+  # altcha_hmac_key: "generate-a-random-secret-here"
+  # altcha_max_number: 50000
+  # altcha_expiry: "5m"
+
   # TURN server information that this homeserver should send to clients.
   turn:
     turn_user_lifetime: '5m'

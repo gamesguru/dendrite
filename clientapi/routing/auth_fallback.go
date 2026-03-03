@@ -58,6 +58,43 @@ function captchaDone() {
 </html>
 `
 
+// altchaTemplate is an HTML webpage template for ALTCHA proof-of-work auth.
+const altchaTemplate = `
+<html>
+<head>
+<title>Authentication</title>
+<meta name='viewport' content='width=device-width, initial-scale=1,
+    user-scalable=no, minimum-scale=1.0, maximum-scale=1.0'>
+<script async defer src="https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js" type="module"></script>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+</style>
+</head>
+<body>
+<form id="registrationForm" method="post" action="{{.myUrl}}">
+    <div>
+        <p>
+        Hello! We need to prevent computer programs and other automated
+        things from creating accounts on this server.
+        </p>
+        <p>
+        Please complete the verification below.
+        </p>
+        <input type="hidden" name="session" value="{{.session}}" />
+        <altcha-widget challengeurl="{{.challengeUrl}}" auto="onload"></altcha-widget>
+    </div>
+</form>
+<script>
+document.querySelector('altcha-widget').addEventListener('statechange', function(ev) {
+    if (ev.detail && ev.detail.state === 'verified') {
+        document.getElementById('registrationForm').submit();
+    }
+});
+</script>
+</body>
+</html>
+`
+
 // successTemplate is an HTML template presented to the user after successful
 // recaptcha completion.
 const successTemplate = `
@@ -131,6 +168,23 @@ func AuthFallback(
 		serveTemplate(w, recaptchaTemplate, data)
 	}
 
+	serveAltcha := func() {
+		data := map[string]string{
+			"myUrl":        req.URL.String(),
+			"session":      sessionID,
+			"challengeUrl": "/_zendrite/altcha/challenge",
+		}
+		serveTemplate(w, altchaTemplate, data)
+	}
+
+	serveCaptchaPage := func() {
+		if cfg.CaptchaProvider == "altcha" {
+			serveAltcha()
+		} else {
+			serveRecaptcha()
+		}
+	}
+
 	serveSuccess := func() {
 		data := map[string]string{}
 		serveTemplate(w, successTemplate, data)
@@ -138,39 +192,44 @@ func AuthFallback(
 
 	switch req.Method {
 	case http.MethodGet:
-		// Handle Recaptcha
-		serveRecaptcha()
+		serveCaptchaPage()
 		return
 	case http.MethodPost:
-		// Handle Recaptcha
-		clientIP := req.RemoteAddr
 		err := req.ParseForm()
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("req.ParseForm failed")
 			w.WriteHeader(http.StatusBadRequest)
-			serveRecaptcha()
+			serveCaptchaPage()
 			return
 		}
 
-		response := req.Form.Get(cfg.RecaptchaFormField)
-		err = validateRecaptcha(cfg, response, clientIP)
+		var captchaErr error
+		if cfg.CaptchaProvider == "altcha" {
+			response := req.Form.Get("altcha")
+			captchaErr = validateAltcha(cfg, response)
+		} else {
+			clientIP := req.RemoteAddr
+			response := req.Form.Get(cfg.RecaptchaFormField)
+			captchaErr = validateRecaptcha(cfg, response, clientIP)
+		}
+
 		switch {
-		case errors.Is(err, ErrMissingResponse):
+		case errors.Is(captchaErr, ErrMissingResponse):
 			w.WriteHeader(http.StatusBadRequest)
-			serveRecaptcha() // serve the initial page again, instead of nothing
+			serveCaptchaPage()
 			return
-		case errors.Is(err, ErrInvalidCaptcha):
+		case errors.Is(captchaErr, ErrInvalidCaptcha):
 			w.WriteHeader(http.StatusUnauthorized)
-			serveRecaptcha()
+			serveCaptchaPage()
 			return
-		case err == nil:
-		default: // something else failed
-			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
-			serveRecaptcha()
+		case captchaErr == nil:
+		default:
+			util.GetLogger(req.Context()).WithError(captchaErr).Error("failed to validate captcha")
+			serveCaptchaPage()
 			return
 		}
 
-		// Success. Add recaptcha as a completed login flow
+		// Success. Add recaptcha as a completed login flow.
 		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRecaptcha)
 
 		serveSuccess()

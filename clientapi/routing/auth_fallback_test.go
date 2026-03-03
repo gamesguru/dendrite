@@ -1,12 +1,16 @@
 package routing
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	altcha "github.com/altcha-org/altcha-lib-go"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -140,6 +144,113 @@ func Test_AuthFallback(t *testing.T) {
 		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg.ClientAPI)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("unexpected http status: %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func Test_AuthFallback_Altcha(t *testing.T) {
+	const hmacKey = "test-hmac-secret"
+
+	newAltchaCfg := func() config.ClientAPI {
+		var c config.ClientAPI
+		c.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+		c.RecaptchaEnabled = true
+		c.CaptchaProvider = "altcha"
+		c.AltchaHMACKey = hmacKey
+		c.AltchaMaxNumber = 1000
+		c.AltchaExpiry = "5m"
+		return c
+	}
+
+	// solveChallenge creates a challenge and solves it, returning the
+	// Base64-encoded payload that the client would submit.
+	solveChallenge := func(t *testing.T, cfg *config.ClientAPI) string {
+		t.Helper()
+		challenge, err := altcha.CreateChallenge(altcha.ChallengeOptions{
+			HMACKey:   cfg.AltchaHMACKey,
+			MaxNumber: cfg.AltchaMaxNumber,
+		})
+		if err != nil {
+			t.Fatalf("CreateChallenge: %v", err)
+		}
+		solution, err := altcha.SolveChallenge(
+			challenge.Challenge, challenge.Salt,
+			altcha.Algorithm(challenge.Algorithm),
+			int(challenge.MaxNumber), 0, nil,
+		)
+		if err != nil {
+			t.Fatalf("SolveChallenge: %v", err)
+		}
+		if solution == nil {
+			t.Fatal("SolveChallenge returned nil")
+		}
+		payload := altcha.Payload{
+			Algorithm: challenge.Algorithm,
+			Challenge: challenge.Challenge,
+			Number:    int64(solution.Number),
+			Salt:      challenge.Salt,
+			Signature: challenge.Signature,
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return base64.StdEncoding.EncodeToString(payloadJSON)
+	}
+
+	t.Run("GET serves ALTCHA widget template", func(t *testing.T) {
+		cfg := newAltchaCfg()
+		req := httptest.NewRequest(http.MethodGet, "/?session=1337", nil)
+		rec := httptest.NewRecorder()
+		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusOK)
+		}
+		if !strings.Contains(rec.Body.String(), "altcha-widget") {
+			t.Fatalf("expected ALTCHA widget in body, got: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("POST with valid solution succeeds", func(t *testing.T) {
+		cfg := newAltchaCfg()
+		encoded := solveChallenge(t, &cfg)
+
+		req := httptest.NewRequest(http.MethodPost, "/?session=1337", nil)
+		req.Form = url.Values{}
+		req.Form.Add("altcha", encoded)
+		rec := httptest.NewRecorder()
+		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.Body.String() != successTemplate {
+			t.Fatalf("unexpected response body: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("POST with invalid solution returns 401", func(t *testing.T) {
+		cfg := newAltchaCfg()
+		// Submit garbage as the ALTCHA payload.
+		bogus := base64.StdEncoding.EncodeToString([]byte(`{"algorithm":"SHA-256","challenge":"bad","number":0,"salt":"bad","signature":"bad"}`))
+
+		req := httptest.NewRequest(http.MethodPost, "/?session=1337", nil)
+		req.Form = url.Values{}
+		req.Form.Add("altcha", bogus)
+		rec := httptest.NewRecorder()
+		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("POST with empty response returns 400", func(t *testing.T) {
+		cfg := newAltchaCfg()
+		req := httptest.NewRequest(http.MethodPost, "/?session=1337", nil)
+		req.Form = url.Values{}
+		rec := httptest.NewRecorder()
+		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusBadRequest)
 		}
 	})
 }

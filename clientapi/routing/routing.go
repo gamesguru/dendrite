@@ -847,6 +847,13 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
 
+	// ALTCHA challenge endpoint (unauthenticated, vendor-prefixed).
+	zendriteAdminRouter.Handle("/altcha/challenge",
+		httputil.MakeHTTPAPI("altcha_challenge", userAPI, enableMetrics, func(w http.ResponseWriter, req *http.Request) {
+			ServeAltchaChallenge(w, req, cfg)
+		}),
+	).Methods(http.MethodGet, http.MethodOptions)
+
 	// Push rules
 
 	v3mux.Handle("/pushrules",

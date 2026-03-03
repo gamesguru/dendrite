@@ -699,8 +699,13 @@ func handleRegistrationFlow(
 
 	switch r.Auth.Type {
 	case authtypes.LoginTypeRecaptcha:
-		// Check given captcha response
-		err := validateRecaptcha(cfg, r.Auth.Response, req.RemoteAddr)
+		// Check given captcha response using the configured provider.
+		var err error
+		if cfg.CaptchaProvider == "altcha" {
+			err = validateAltcha(cfg, r.Auth.Response)
+		} else {
+			err = validateRecaptcha(cfg, r.Auth.Response, req.RemoteAddr)
+		}
 		switch {
 		case errors.Is(err, ErrCaptchaDisabled):
 			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Unknown(err.Error())}
@@ -709,7 +714,7 @@ func handleRegistrationFlow(
 		case errors.Is(err, ErrInvalidCaptcha):
 			return util.JSONResponse{Code: http.StatusUnauthorized, JSON: spec.BadJSON(err.Error())}
 		case err != nil:
-			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
+			util.GetLogger(req.Context()).WithError(err).Error("failed to validate captcha")
 			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 
