@@ -79,3 +79,4 @@ vendor/
 zendrite
 !cmd/zendrite
 !.forgejo/**/zendrite.yaml
+CLAUDE.md

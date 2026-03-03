@@ -13,6 +13,7 @@ FROM --platform=${BUILDPLATFORM} base AS build
 WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 ENV GONOSUMCHECK=codefloe.com/* \
     GONOSUMDB=codefloe.com/* \
     GONOPROXY=codefloe.com/*
@@ -22,7 +23,9 @@ RUN --mount=target=. \
     sh -c 'USERARCH=$(go env GOARCH); \
     if [ "$TARGETARCH" = "$USERARCH" ]; then CGO=1; else CGO=0; fi; \
     GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED="$CGO" \
-    go build -tags goolm -v -trimpath -o /out/ ./cmd/...'
+    go build -tags goolm -v -trimpath \
+    -ldflags "-X codefloe.com/pat-s/zendrite/internal.version='"$VERSION"'" \
+    -o /out/ ./cmd/...'
 
 #
 # Builds the Zendrite image containing all required binaries
