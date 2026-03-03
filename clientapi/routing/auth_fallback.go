@@ -133,16 +133,16 @@ func AuthFallback(
 	w http.ResponseWriter, req *http.Request, authType string,
 	cfg *config.ClientAPI,
 ) {
-	// We currently only support "m.login.recaptcha", so fail early if that's not requested
-	if authType == authtypes.LoginTypeRecaptcha {
+	switch authType {
+	case authtypes.LoginTypeRecaptcha, authtypes.LoginTypeAltcha:
 		if !cfg.RecaptchaEnabled {
 			writeHTTPMessage(w, req,
-				"Recaptcha login is disabled on this Homeserver",
+				"Captcha login is disabled on this Homeserver",
 				http.StatusBadRequest,
 			)
 			return
 		}
-	} else {
+	default:
 		writeHTTPMessage(w, req, fmt.Sprintf("Unknown authtype %q", authType), http.StatusNotImplemented)
 		return
 	}
@@ -178,7 +178,7 @@ func AuthFallback(
 	}
 
 	serveCaptchaPage := func() {
-		if cfg.CaptchaProvider == "altcha" {
+		if authType == authtypes.LoginTypeAltcha {
 			serveAltcha()
 		} else {
 			serveRecaptcha()
@@ -204,7 +204,7 @@ func AuthFallback(
 		}
 
 		var captchaErr error
-		if cfg.CaptchaProvider == "altcha" {
+		if authType == authtypes.LoginTypeAltcha {
 			response := req.Form.Get("altcha")
 			captchaErr = validateAltcha(cfg, response)
 		} else {
@@ -229,8 +229,8 @@ func AuthFallback(
 			return
 		}
 
-		// Success. Add recaptcha as a completed login flow.
-		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRecaptcha)
+		// Success. Mark this auth stage as completed.
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginType(authType))
 
 		serveSuccess()
 		return

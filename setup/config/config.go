@@ -285,9 +285,19 @@ func (config *Zendrite) Derive() error {
 	// TODO: Add MSISDN auth type
 
 	if config.ClientAPI.RecaptchaEnabled {
-		config.Derived.Registration.Params[authtypes.LoginTypeRecaptcha] = map[string]string{"public_key": config.ClientAPI.RecaptchaPublicKey}
-		config.Derived.Registration.Flows = []authtypes.Flow{
-			{Stages: []authtypes.LoginType{authtypes.LoginTypeRecaptcha}},
+		if config.ClientAPI.CaptchaProvider == "altcha" {
+			// Use a vendor-specific login type so Matrix clients that
+			// handle m.login.recaptcha natively (e.g. Element) don't try
+			// to render a Google reCAPTCHA widget and instead open the
+			// auth fallback page.
+			config.Derived.Registration.Flows = []authtypes.Flow{
+				{Stages: []authtypes.LoginType{authtypes.LoginTypeAltcha}},
+			}
+		} else {
+			config.Derived.Registration.Params[authtypes.LoginTypeRecaptcha] = map[string]string{"public_key": config.ClientAPI.RecaptchaPublicKey}
+			config.Derived.Registration.Flows = []authtypes.Flow{
+				{Stages: []authtypes.LoginType{authtypes.LoginTypeRecaptcha}},
+			}
 		}
 	} else {
 		config.Derived.Registration.Flows = []authtypes.Flow{

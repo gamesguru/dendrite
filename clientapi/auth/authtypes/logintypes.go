@@ -9,6 +9,7 @@ const (
 	LoginTypeDummy              = "m.login.dummy"
 	LoginTypeSharedSecret       = "org.matrix.login.shared_secret"
 	LoginTypeRecaptcha          = "m.login.recaptcha"
+	LoginTypeAltcha             = "org.codefloe.altcha"
 	LoginTypeApplicationService = "m.login.application_service"
 	LoginTypeToken              = "m.login.token"
 )

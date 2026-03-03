@@ -48,7 +48,7 @@ func Test_AuthFallback(t *testing.T) {
 						if rec.Code != http.StatusBadRequest {
 							t.Fatalf("unexpected response code: %d, want %d", rec.Code, http.StatusBadRequest)
 						}
-						if rec.Body.String() != "Recaptcha login is disabled on this Homeserver" {
+						if rec.Body.String() != "Captcha login is disabled on this Homeserver" {
 							t.Fatalf("unexpected response body: %s", rec.Body.String())
 						}
 					} else if !strings.Contains(rec.Body.String(), cfg.ClientAPI.RecaptchaSitekeyClass) {
@@ -93,7 +93,7 @@ func Test_AuthFallback(t *testing.T) {
 						if rec.Code != http.StatusBadRequest {
 							t.Fatalf("unexpected response code: %d, want %d", rec.Code, http.StatusBadRequest)
 						}
-						if rec.Body.String() != "Recaptcha login is disabled on this Homeserver" {
+						if rec.Body.String() != "Captcha login is disabled on this Homeserver" {
 							t.Fatalf("unexpected response: %s, want %s", rec.Body.String(), "successTemplate")
 						}
 					}
@@ -202,7 +202,7 @@ func Test_AuthFallback_Altcha(t *testing.T) {
 		cfg := newAltchaCfg()
 		req := httptest.NewRequest(http.MethodGet, "/?session=1337", nil)
 		rec := httptest.NewRecorder()
-		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		AuthFallback(rec, req, authtypes.LoginTypeAltcha, &cfg)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusOK)
 		}
@@ -219,7 +219,7 @@ func Test_AuthFallback_Altcha(t *testing.T) {
 		req.Form = url.Values{}
 		req.Form.Add("altcha", encoded)
 		rec := httptest.NewRecorder()
-		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		AuthFallback(rec, req, authtypes.LoginTypeAltcha, &cfg)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusOK)
 		}
@@ -237,7 +237,7 @@ func Test_AuthFallback_Altcha(t *testing.T) {
 		req.Form = url.Values{}
 		req.Form.Add("altcha", bogus)
 		rec := httptest.NewRecorder()
-		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		AuthFallback(rec, req, authtypes.LoginTypeAltcha, &cfg)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusUnauthorized)
 		}
@@ -248,7 +248,7 @@ func Test_AuthFallback_Altcha(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/?session=1337", nil)
 		req.Form = url.Values{}
 		rec := httptest.NewRecorder()
-		AuthFallback(rec, req, authtypes.LoginTypeRecaptcha, &cfg)
+		AuthFallback(rec, req, authtypes.LoginTypeAltcha, &cfg)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("unexpected status: %d, want %d", rec.Code, http.StatusBadRequest)
 		}
