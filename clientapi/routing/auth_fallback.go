@@ -81,14 +81,22 @@ const altchaTemplate = `
         Please complete the verification below.
         </p>
         <input type="hidden" name="session" value="{{.session}}" />
+        <input type="hidden" name="altcha" id="altchaPayload" />
         <altcha-widget challengeurl="{{.challengeUrl}}" auto="onload"></altcha-widget>
     </div>
 </form>
 <script>
-document.querySelector('altcha-widget').addEventListener('statechange', function(ev) {
-    if (ev.detail && ev.detail.state === 'verified') {
-        document.getElementById('registrationForm').submit();
-    }
+// Wait for the ALTCHA web component to be defined before adding listeners.
+customElements.whenDefined('altcha-widget').then(function() {
+    document.querySelector('altcha-widget').addEventListener('statechange', function(ev) {
+        if (ev.detail && ev.detail.state === 'verified') {
+            // Copy the payload from the widget into our hidden input
+            // since Shadow DOM ElementInternals may not be included
+            // in traditional form submissions.
+            document.getElementById('altchaPayload').value = ev.detail.payload || '';
+            document.getElementById('registrationForm').submit();
+        }
+    });
 });
 </script>
 </body>
