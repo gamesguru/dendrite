@@ -312,6 +312,7 @@ media_api:
 mscs:
   mscs:
   #  - msc2836  # (Threading, see https://github.com/matrix-org/matrix-doc/pull/2836)
+  #  - msc3814  # (Dehydrated devices v2, see https://github.com/matrix-org/matrix-spec-proposals/pull/3814)
   #  - msc3861  # (OIDC delegated auth, see https://github.com/matrix-org/matrix-spec-proposals/pull/3861)
 
   # MSC3861: OIDC delegated authentication configuration.

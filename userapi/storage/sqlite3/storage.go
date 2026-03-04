@@ -98,6 +98,10 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteStatsTable: %w", err)
 	}
+	dehydratedDevicesTable, err := NewSQLiteDehydratedDevicesTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteDehydratedDevicesTable: %w", err)
+	}
 
 	m = sqlutil.NewMigrator(db)
 	m.AddMigrations(sqlutil.Migration{
@@ -124,6 +128,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 		Pushers:               pusherTable,
 		Notifications:         notificationsTable,
 		Stats:                 statsTable,
+		DehydratedDevices:     dehydratedDevicesTable,
 		ServerName:            serverName,
 		DB:                    db,
 		Writer:                writer,

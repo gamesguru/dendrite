@@ -19,6 +19,7 @@ import (
 	"codefloe.com/pat-s/zendrite/setup"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/mscs/msc2836"
+	"codefloe.com/pat-s/zendrite/setup/mscs/msc3814"
 )
 
 // Enable MSCs - returns an error on unknown MSCs.
@@ -36,6 +37,8 @@ func EnableMSC(cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.R
 	switch msc {
 	case "msc2836":
 		return msc2836.Enable(cfg, cm, routers, monolith.RoomserverAPI, monolith.FederationAPI, monolith.UserAPI, monolith.KeyRing)
+	case "msc3814":
+		return msc3814.Enable(cfg, cm, routers, monolith.UserAPI)
 	case "msc2444": // enabled inside federationapi
 	case "msc2753": // enabled inside clientapi
 	case "msc3861": // enabled inside clientapi routing and userapi

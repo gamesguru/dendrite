@@ -976,4 +976,97 @@ func (a *UserInternalAPI) PerformSaveThreePIDAssociation(ctx context.Context, re
 	return a.DB.SaveThreePIDAssociation(ctx, req.ThreePID, req.Localpart, req.ServerName, req.Medium)
 }
 
+// PerformStoreDehydratedDevice atomically stores a dehydrated device: it deletes any existing
+// dehydrated device, creates a new real device, uploads keys, and stores the dehydrated metadata.
+func (a *UserInternalAPI) PerformStoreDehydratedDevice(ctx context.Context, req *api.PerformStoreDehydratedDeviceRequest, res *api.PerformStoreDehydratedDeviceResponse) error {
+	// Delete existing dehydrated device if any.
+	oldDeviceID, _, err := a.DB.GetDehydratedDevice(ctx, req.UserID)
+	if err == nil && oldDeviceID != "" {
+		delReq := &api.PerformDeviceDeletionRequest{UserID: req.UserID, DeviceIDs: []string{oldDeviceID}}
+		if err = a.PerformDeviceDeletion(ctx, delReq, &api.PerformDeviceDeletionResponse{}); err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("Failed to delete old dehydrated device")
+		}
+	}
+
+	local, domain, err := gomatrixserverlib.SplitID('@', req.UserID)
+	if err != nil {
+		return err
+	}
+
+	// Create the new device (without an access token — dehydrated devices don't have sessions).
+	deviceID := req.DeviceID
+	createReq := &api.PerformDeviceCreationRequest{
+		Localpart:          local,
+		ServerName:         domain,
+		DeviceID:           &deviceID,
+		NoDeviceListUpdate: true,
+	}
+	createRes := &api.PerformDeviceCreationResponse{}
+	if err = a.PerformDeviceCreation(ctx, createReq, createRes); err != nil {
+		return fmt.Errorf("failed to create dehydrated device: %w", err)
+	}
+
+	// Upload device keys if provided.
+	uploadReq := &api.PerformUploadKeysRequest{
+		UserID:   req.UserID,
+		DeviceID: deviceID,
+	}
+	if req.DeviceKeys != nil {
+		uploadReq.DeviceKeys = []api.DeviceKeys{*req.DeviceKeys}
+	}
+	if req.OneTimeKeys != nil {
+		uploadReq.OneTimeKeys = []api.OneTimeKeys{*req.OneTimeKeys}
+	}
+	if req.FallbackKeys != nil {
+		uploadReq.FallbackKeys = []api.FallbackKeys{*req.FallbackKeys}
+	}
+	uploadRes := &api.PerformUploadKeysResponse{}
+	if err = a.PerformUploadKeys(ctx, uploadReq, uploadRes); err != nil {
+		return fmt.Errorf("failed to upload keys for dehydrated device: %w", err)
+	}
+	if uploadRes.Error != nil {
+		return fmt.Errorf("key upload error: %s", uploadRes.Error.Err)
+	}
+
+	// Store the dehydrated device metadata.
+	if err = a.DB.StoreDehydratedDevice(ctx, req.UserID, deviceID, req.DeviceData); err != nil {
+		return fmt.Errorf("failed to store dehydrated device: %w", err)
+	}
+
+	res.DeviceID = deviceID
+	return nil
+}
+
+// QueryDehydratedDevice returns the dehydrated device for the given user.
+func (a *UserInternalAPI) QueryDehydratedDevice(ctx context.Context, req *api.QueryDehydratedDeviceRequest, res *api.QueryDehydratedDeviceResponse) error {
+	deviceID, deviceData, err := a.DB.GetDehydratedDevice(ctx, req.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			res.Found = false
+			return nil
+		}
+		return err
+	}
+	res.Found = true
+	res.DeviceID = deviceID
+	res.DeviceData = deviceData
+	return nil
+}
+
+// PerformDeleteDehydratedDevice removes the dehydrated device for the given user.
+func (a *UserInternalAPI) PerformDeleteDehydratedDevice(ctx context.Context, req *api.PerformDeleteDehydratedDeviceRequest, res *api.PerformDeleteDehydratedDeviceResponse) error {
+	deviceID, err := a.DB.DeleteDehydratedDevice(ctx, req.UserID)
+	if err != nil {
+		return err
+	}
+	res.DeviceID = deviceID
+	if deviceID != "" {
+		delReq := &api.PerformDeviceDeletionRequest{UserID: req.UserID, DeviceIDs: []string{deviceID}}
+		if err = a.PerformDeviceDeletion(ctx, delReq, &api.PerformDeviceDeletionResponse{}); err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("Failed to delete dehydrated device")
+		}
+	}
+	return nil
+}
+
 const pushRulesAccountDataType = "m.push_rules"

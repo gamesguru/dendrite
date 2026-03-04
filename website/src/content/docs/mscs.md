@@ -43,6 +43,7 @@ They are listed by their original MSC number for reference.
 | --- | --- | --- |
 | [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | Implemented |
 | [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | Implemented |
+| [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | Opt-in (`msc3814`) |
 | [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | Opt-in (`msc4115`) |
 
 ## Federation
@@ -76,9 +77,32 @@ mscs:
     - msc2836
     - msc2444
     - msc2753
+    - msc3814
     - msc3861
     - msc4115
 ```
+
+### MSC3814: Dehydrated Devices v2
+
+MSC3814 allows clients to store a "dehydrated" device on the server so that encrypted to-device messages (e.g. key shares) can be delivered while the user is offline.
+When the user signs in again, the client rehydrates the device and retrieves messages it missed.
+
+**What changes when MSC3814 is enabled:**
+
+- `PUT /_matrix/client/unstable/org.matrix.msc3814.v1/dehydrated_device` — store a dehydrated device with its keys.
+- `GET /_matrix/client/unstable/org.matrix.msc3814.v1/dehydrated_device` — retrieve the current dehydrated device metadata.
+- `DELETE /_matrix/client/unstable/org.matrix.msc3814.v1/dehydrated_device` — remove the dehydrated device.
+- `POST /_matrix/client/unstable/org.matrix.msc3814.v1/dehydrated_device/{deviceID}/events` — retrieve to-device events addressed to the dehydrated device.
+
+**Configuration:**
+
+```yaml
+mscs:
+  mscs:
+    - msc3814
+```
+
+No additional configuration is needed beyond enabling the MSC.
 
 ### MSC3861: OIDC Delegated Authentication
 

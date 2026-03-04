@@ -73,6 +73,13 @@ type SyncUserAPI interface {
 	QueryDeviceInfos(ctx context.Context, req *QueryDeviceInfosRequest, res *QueryDeviceInfosResponse) error
 }
 
+// DehydratedDeviceAPI is the API for managing dehydrated devices (MSC3814).
+type DehydratedDeviceAPI interface {
+	PerformStoreDehydratedDevice(ctx context.Context, req *PerformStoreDehydratedDeviceRequest, res *PerformStoreDehydratedDeviceResponse) error
+	QueryDehydratedDevice(ctx context.Context, req *QueryDehydratedDeviceRequest, res *QueryDehydratedDeviceResponse) error
+	PerformDeleteDehydratedDevice(ctx context.Context, req *PerformDeleteDehydratedDeviceRequest, res *PerformDeleteDehydratedDeviceResponse) error
+}
+
 // api functions required by the client api.
 type ClientUserAPI interface {
 	QueryAcccessTokenAPI
@@ -81,6 +88,7 @@ type ClientUserAPI interface {
 	ClientKeyAPI
 	ProfileAPI
 	KeyBackupAPI
+	DehydratedDeviceAPI
 	QueryNumericLocalpart(ctx context.Context, req *QueryNumericLocalpartRequest, res *QueryNumericLocalpartResponse) error
 	QueryDevices(ctx context.Context, req *QueryDevicesRequest, res *QueryDevicesResponse) error
 	QueryAccountData(ctx context.Context, req *QueryAccountDataRequest, res *QueryAccountDataResponse) error
@@ -972,5 +980,42 @@ type QuerySignaturesResponse struct {
 type PerformMarkAsStaleRequest struct {
 	UserID   string
 	Domain   spec.ServerName
+	DeviceID string
+}
+
+// PerformStoreDehydratedDeviceRequest is the request for PerformStoreDehydratedDevice.
+type PerformStoreDehydratedDeviceRequest struct {
+	UserID       string
+	DeviceID     string
+	DeviceData   json.RawMessage
+	DeviceKeys   *DeviceKeys
+	OneTimeKeys  *OneTimeKeys
+	FallbackKeys *FallbackKeys
+}
+
+// PerformStoreDehydratedDeviceResponse is the response for PerformStoreDehydratedDevice.
+type PerformStoreDehydratedDeviceResponse struct {
+	DeviceID string
+}
+
+// QueryDehydratedDeviceRequest is the request for QueryDehydratedDevice.
+type QueryDehydratedDeviceRequest struct {
+	UserID string
+}
+
+// QueryDehydratedDeviceResponse is the response for QueryDehydratedDevice.
+type QueryDehydratedDeviceResponse struct {
+	Found      bool
+	DeviceID   string
+	DeviceData json.RawMessage
+}
+
+// PerformDeleteDehydratedDeviceRequest is the request for PerformDeleteDehydratedDevice.
+type PerformDeleteDehydratedDeviceRequest struct {
+	UserID string
+}
+
+// PerformDeleteDehydratedDeviceResponse is the response for PerformDeleteDehydratedDevice.
+type PerformDeleteDehydratedDeviceResponse struct {
 	DeviceID string
 }

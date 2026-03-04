@@ -8,6 +8,7 @@ package userapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
@@ -659,5 +660,136 @@ func TestDeviceIDReuse(t *testing.T) {
 			}
 			return true
 		})
+	})
+}
+
+func TestDehydratedDevice(t *testing.T) {
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		intAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
+		defer close()
+
+		// Create the user.
+		_, err := accountDB.CreateAccount(ctx, "dehydrated_user", serverName, "", "", api.AccountTypeUser)
+		if err != nil {
+			t.Fatalf("failed to create account: %s", err)
+		}
+		userID := fmt.Sprintf("@dehydrated_user:%s", serverName)
+
+		// Query should return not found initially.
+		var queryRes api.QueryDehydratedDeviceResponse
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if queryRes.Found {
+			t.Fatal("expected no dehydrated device initially")
+		}
+
+		// Store a dehydrated device.
+		deviceData := json.RawMessage(`{"algorithm":"m.dehydration.v1.olm"}`)
+		var storeRes api.PerformStoreDehydratedDeviceResponse
+		if err = intAPI.PerformStoreDehydratedDevice(ctx, &api.PerformStoreDehydratedDeviceRequest{
+			UserID:     userID,
+			DeviceID:   "DEHYDRATED_1",
+			DeviceData: deviceData,
+		}, &storeRes); err != nil {
+			t.Fatalf("PerformStoreDehydratedDevice failed: %s", err)
+		}
+		if storeRes.DeviceID != "DEHYDRATED_1" {
+			t.Fatalf("expected device ID DEHYDRATED_1, got %q", storeRes.DeviceID)
+		}
+
+		// Query should now return the device.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if !queryRes.Found {
+			t.Fatal("expected dehydrated device to be found")
+		}
+		if queryRes.DeviceID != "DEHYDRATED_1" {
+			t.Fatalf("expected device ID DEHYDRATED_1, got %q", queryRes.DeviceID)
+		}
+		if string(queryRes.DeviceData) != string(deviceData) {
+			t.Fatalf("expected device data %s, got %s", deviceData, queryRes.DeviceData)
+		}
+
+		// The device should exist as a real device.
+		var devicesRes api.QueryDevicesResponse
+		if err = intAPI.QueryDevices(ctx, &api.QueryDevicesRequest{UserID: userID}, &devicesRes); err != nil {
+			t.Fatalf("QueryDevices failed: %s", err)
+		}
+		foundDevice := false
+		for _, d := range devicesRes.Devices {
+			if d.ID == "DEHYDRATED_1" {
+				foundDevice = true
+				break
+			}
+		}
+		if !foundDevice {
+			t.Fatal("dehydrated device should appear in the device list")
+		}
+
+		// Storing a new dehydrated device should replace the old one.
+		storeRes = api.PerformStoreDehydratedDeviceResponse{}
+		if err = intAPI.PerformStoreDehydratedDevice(ctx, &api.PerformStoreDehydratedDeviceRequest{
+			UserID:     userID,
+			DeviceID:   "DEHYDRATED_2",
+			DeviceData: deviceData,
+		}, &storeRes); err != nil {
+			t.Fatalf("PerformStoreDehydratedDevice (replace) failed: %s", err)
+		}
+		if storeRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected device ID DEHYDRATED_2, got %q", storeRes.DeviceID)
+		}
+
+		// Old device should be deleted.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if queryRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected device ID DEHYDRATED_2 after replacement, got %q", queryRes.DeviceID)
+		}
+
+		// Delete the dehydrated device.
+		var deleteRes api.PerformDeleteDehydratedDeviceResponse
+		if err = intAPI.PerformDeleteDehydratedDevice(ctx, &api.PerformDeleteDehydratedDeviceRequest{
+			UserID: userID,
+		}, &deleteRes); err != nil {
+			t.Fatalf("PerformDeleteDehydratedDevice failed: %s", err)
+		}
+		if deleteRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected deleted device ID DEHYDRATED_2, got %q", deleteRes.DeviceID)
+		}
+
+		// Query should return not found after deletion.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice after delete failed: %s", err)
+		}
+		if queryRes.Found {
+			t.Fatal("expected no dehydrated device after deletion")
+		}
+
+		// Deleting when nothing exists should succeed with empty device ID.
+		deleteRes = api.PerformDeleteDehydratedDeviceResponse{}
+		if err = intAPI.PerformDeleteDehydratedDevice(ctx, &api.PerformDeleteDehydratedDeviceRequest{
+			UserID: userID,
+		}, &deleteRes); err != nil {
+			t.Fatalf("PerformDeleteDehydratedDevice (no-op) failed: %s", err)
+		}
+		if deleteRes.DeviceID != "" {
+			t.Fatalf("expected empty device ID on no-op delete, got %q", deleteRes.DeviceID)
+		}
 	})
 }

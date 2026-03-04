@@ -139,9 +139,16 @@ type Notification interface {
 	DeleteOldNotifications(ctx context.Context) error
 }
 
+type DehydratedDevice interface {
+	StoreDehydratedDevice(ctx context.Context, userID, deviceID string, deviceData json.RawMessage) error
+	GetDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error)
+	DeleteDehydratedDevice(ctx context.Context, userID string) (deviceID string, err error)
+}
+
 type UserDatabase interface {
 	Account
 	AccountData
+	DehydratedDevice
 	Device
 	ExternalID
 	KeyBackup

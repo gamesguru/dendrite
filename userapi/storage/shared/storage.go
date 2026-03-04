@@ -50,6 +50,7 @@ type Database struct {
 	Notifications         tables.NotificationTable
 	Pushers               tables.PusherTable
 	Stats                 tables.StatsTable
+	DehydratedDevices     tables.DehydratedDevicesTable
 	LoginTokenLifetime    time.Duration
 	ServerName            spec.ServerName
 	BcryptCost            int
@@ -937,6 +938,27 @@ func (d *Database) DailyRoomsMessages(
 	ctx context.Context, serverName spec.ServerName,
 ) (stats types.MessageStats, activeRooms, activeE2EERooms int64, err error) {
 	return d.Stats.DailyRoomsMessages(ctx, nil, serverName)
+}
+
+// StoreDehydratedDevice stores a dehydrated device for the given user.
+func (d *Database) StoreDehydratedDevice(ctx context.Context, userID, deviceID string, deviceData json.RawMessage) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.DehydratedDevices.InsertDehydratedDevice(ctx, txn, userID, deviceID, deviceData)
+	})
+}
+
+// GetDehydratedDevice returns the dehydrated device for the given user.
+func (d *Database) GetDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error) {
+	return d.DehydratedDevices.SelectDehydratedDevice(ctx, userID)
+}
+
+// DeleteDehydratedDevice removes the dehydrated device for the given user and returns the device ID.
+func (d *Database) DeleteDehydratedDevice(ctx context.Context, userID string) (deviceID string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		deviceID, err = d.DehydratedDevices.DeleteDehydratedDevice(ctx, txn, userID)
+		return err
+	})
+	return
 }
 
 //

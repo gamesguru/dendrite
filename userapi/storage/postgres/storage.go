@@ -101,6 +101,10 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresStatsTable: %w", err)
 	}
+	dehydratedDevicesTable, err := NewPostgresDehydratedDevicesTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresDehydratedDevicesTable: %w", err)
+	}
 
 	m = sqlutil.NewMigrator(db)
 	m.AddMigrations(sqlutil.Migration{
@@ -128,6 +132,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		Notifications:         notificationsTable,
 		RegistrationTokens:    registationTokensTable,
 		Stats:                 statsTable,
+		DehydratedDevices:     dehydratedDevicesTable,
 		ServerName:            serverName,
 		DB:                    db,
 		Writer:                writer,

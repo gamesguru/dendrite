@@ -38,6 +38,12 @@ func TestSearch(t *testing.T) {
 	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world3!"})
 	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "context after"})
 
+	// Pre-compute event IDs so the lazy cache in eventV2.EventID() is populated
+	// before the parallel sqlite/postgres subtests race on the shared events.
+	for _, ev := range room.Events() {
+		ev.EventID()
+	}
+
 	roomsFilter := []string{room.ID}
 	roomsFilterUnknown := []string{"!unknown"}
 

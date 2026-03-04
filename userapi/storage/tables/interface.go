@@ -205,3 +205,9 @@ type ExternalIDsTable interface {
 	SelectLocalpartForExternalID(ctx context.Context, txn *sql.Tx, providerID, externalID string) (localpart string, serverName spec.ServerName, err error)
 	InsertExternalID(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, providerID, externalID string) error
 }
+
+type DehydratedDevicesTable interface {
+	InsertDehydratedDevice(ctx context.Context, txn *sql.Tx, userID, deviceID string, deviceData json.RawMessage) error
+	SelectDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error)
+	DeleteDehydratedDevice(ctx context.Context, txn *sql.Tx, userID string) (deviceID string, err error)
+}
