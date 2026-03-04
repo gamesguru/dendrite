@@ -1439,14 +1439,14 @@ func Setup(
 
 	v3mux.Handle("/room_keys/version/{version}", getBackupKeysVersion).Methods(http.MethodGet, http.MethodOptions)
 	v3mux.Handle("/room_keys/version", getLatestBackupKeysVersion).Methods(http.MethodGet, http.MethodOptions)
-	v3mux.Handle("/room_keys/version/{version}", putBackupKeysVersion).Methods(http.MethodPut)
-	v3mux.Handle("/room_keys/version/{version}", deleteBackupKeysVersion).Methods(http.MethodDelete)
+	v3mux.Handle("/room_keys/version/{version}", putBackupKeysVersion).Methods(http.MethodPut, http.MethodOptions)
+	v3mux.Handle("/room_keys/version/{version}", deleteBackupKeysVersion).Methods(http.MethodDelete, http.MethodOptions)
 	v3mux.Handle("/room_keys/version", postNewBackupKeysVersion).Methods(http.MethodPost, http.MethodOptions)
 
 	unstableMux.Handle("/room_keys/version/{version}", getBackupKeysVersion).Methods(http.MethodGet, http.MethodOptions)
 	unstableMux.Handle("/room_keys/version", getLatestBackupKeysVersion).Methods(http.MethodGet, http.MethodOptions)
-	unstableMux.Handle("/room_keys/version/{version}", putBackupKeysVersion).Methods(http.MethodPut)
-	unstableMux.Handle("/room_keys/version/{version}", deleteBackupKeysVersion).Methods(http.MethodDelete)
+	unstableMux.Handle("/room_keys/version/{version}", putBackupKeysVersion).Methods(http.MethodPut, http.MethodOptions)
+	unstableMux.Handle("/room_keys/version/{version}", deleteBackupKeysVersion).Methods(http.MethodDelete, http.MethodOptions)
 	unstableMux.Handle("/room_keys/version", postNewBackupKeysVersion).Methods(http.MethodPost, http.MethodOptions)
 
 	// Inserting E2E Backup Keys
@@ -1533,13 +1533,13 @@ func Setup(
 		return UploadBackupKeys(req, userAPI, device, version, &keyReq)
 	})
 
-	v3mux.Handle("/room_keys/keys", putBackupKeys).Methods(http.MethodPut)
-	v3mux.Handle("/room_keys/keys/{roomID}", putBackupKeysRoom).Methods(http.MethodPut)
-	v3mux.Handle("/room_keys/keys/{roomID}/{sessionID}", putBackupKeysRoomSession).Methods(http.MethodPut)
+	v3mux.Handle("/room_keys/keys", putBackupKeys).Methods(http.MethodPut, http.MethodOptions)
+	v3mux.Handle("/room_keys/keys/{roomID}", putBackupKeysRoom).Methods(http.MethodPut, http.MethodOptions)
+	v3mux.Handle("/room_keys/keys/{roomID}/{sessionID}", putBackupKeysRoomSession).Methods(http.MethodPut, http.MethodOptions)
 
-	unstableMux.Handle("/room_keys/keys", putBackupKeys).Methods(http.MethodPut)
-	unstableMux.Handle("/room_keys/keys/{roomID}", putBackupKeysRoom).Methods(http.MethodPut)
-	unstableMux.Handle("/room_keys/keys/{roomID}/{sessionID}", putBackupKeysRoomSession).Methods(http.MethodPut)
+	unstableMux.Handle("/room_keys/keys", putBackupKeys).Methods(http.MethodPut, http.MethodOptions)
+	unstableMux.Handle("/room_keys/keys/{roomID}", putBackupKeysRoom).Methods(http.MethodPut, http.MethodOptions)
+	unstableMux.Handle("/room_keys/keys/{roomID}/{sessionID}", putBackupKeysRoomSession).Methods(http.MethodPut, http.MethodOptions)
 
 	// Querying E2E Backup Keys
 
