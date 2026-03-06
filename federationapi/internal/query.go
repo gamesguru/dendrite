@@ -30,9 +30,9 @@ func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, serverName spec.ServerName) (*gomatrixserverlib.ServerKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 	defer cancel()
-	ires, err := a.doRequestIfNotBackingOffOrBlacklisted(serverName, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(serverName, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetServerKeys(ctx, serverName)
-	})
+	}, true)
 	if err != nil {
 		return nil, err
 	}

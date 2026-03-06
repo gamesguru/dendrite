@@ -165,63 +165,50 @@ func failBlacklistableError(err error, stats *statistics.ServerStatistics) (unti
 	return
 }
 
-func (a *FederationInternalAPI) doRequestIfNotBackingOffOrBlacklisted(
-	s spec.ServerName, request func() (any, error),
-) (any, error) {
-	stats, err := a.IsBlacklistedOrBackingOff(s)
-	if err != nil {
-		return nil, err
-	}
-	res, err := request()
-	if err != nil {
-		until, blacklisted := failBlacklistableError(err, stats)
-		now := time.Now()
-		var retryAfter time.Duration
-		if until.After(now) {
-			retryAfter = time.Until(until)
-		}
-		return res, &api.FederationClientError{
-			Err:         err.Error(),
-			Blacklisted: blacklisted,
-			RetryAfter:  retryAfter,
-		}
-	}
-	stats.Success(statistics.SendDirect)
-	return res, nil
-}
-
-func (a *FederationInternalAPI) doRequestIfNotBlacklisted(
-	s spec.ServerName, request func() (any, error),
+// doFederationRequest makes a federation request, refusing if the server is blacklisted.
+// When checkBackoff is true, also refuses if the server is currently in a backoff period.
+// Set checkBackoff to false for read-only, user-triggered queries (like room hierarchy)
+// where blocking on backoff from unrelated failures is counterproductive.
+// Failures still contribute to backoff/blacklist statistics via failBlacklistableError.
+func (a *FederationInternalAPI) doFederationRequest(
+	s spec.ServerName, request func() (any, error), checkBackoff bool,
 ) (any, error) {
 	stats := a.statistics.ForServer(s)
-	if blacklisted := stats.Blacklisted(); blacklisted {
-		return stats, &api.FederationClientError{
+	if stats.Blacklisted() {
+		return nil, &api.FederationClientError{
 			Err:         fmt.Sprintf("server %q is blacklisted", s),
 			Blacklisted: true,
 		}
 	}
-	// Also check if we're backing off from this server
-	now := time.Now()
-	until := stats.BackoffInfo()
-	if until != nil && now.Before(*until) {
-		return nil, &api.FederationClientError{
-			Err:        fmt.Sprintf("server %q is backing off", s),
-			RetryAfter: time.Until(*until),
+	if checkBackoff {
+		now := time.Now()
+		until := stats.BackoffInfo()
+		if until != nil && now.Before(*until) {
+			return nil, &api.FederationClientError{
+				Err:        fmt.Sprintf("server %q is backing off", s),
+				RetryAfter: time.Until(*until),
+			}
 		}
 	}
 
 	res, err := request()
 	if err != nil {
-		// Record the failure for backoff/blacklisting
 		failUntil, blacklisted := failBlacklistableError(err, stats)
+		now := time.Now()
 		var retryAfter time.Duration
 		if failUntil.After(now) {
 			retryAfter = time.Until(failUntil)
+		}
+		var httpCode int
+		var mxErr gomatrix.HTTPError
+		if errors.As(err, &mxErr) {
+			httpCode = mxErr.Code
 		}
 		return res, &api.FederationClientError{
 			Err:         err.Error(),
 			Blacklisted: blacklisted,
 			RetryAfter:  retryAfter,
+			Code:        httpCode,
 		}
 	}
 	stats.Success(statistics.SendDirect)

@@ -95,9 +95,9 @@ func (a *FederationInternalAPI) GetEventAuth(
 ) (res fclient.RespEventAuth, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetEventAuth(ctx, origin, s, roomVersion, roomID, eventID)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespEventAuth{}, err
 	}
@@ -113,9 +113,9 @@ func (a *FederationInternalAPI) GetUserDevices(
 ) (fclient.RespUserDevices, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetUserDevices(ctx, origin, s, userID)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespUserDevices{}, err
 	}
@@ -131,9 +131,9 @@ func (a *FederationInternalAPI) ClaimKeys(
 ) (fclient.RespClaimKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.ClaimKeys(ctx, origin, s, oneTimeKeys)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespClaimKeys{}, err
 	}
@@ -147,9 +147,9 @@ func (a *FederationInternalAPI) ClaimKeys(
 func (a *FederationInternalAPI) QueryKeys(
 	ctx context.Context, origin, s spec.ServerName, keys map[string][]string,
 ) (fclient.RespQueryKeys, error) {
-	ires, err := a.doRequestIfNotBackingOffOrBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.QueryKeys(ctx, origin, s, keys)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespQueryKeys{}, err
 	}
@@ -165,9 +165,9 @@ func (a *FederationInternalAPI) Backfill(
 ) (res gomatrixserverlib.Transaction, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.Backfill(ctx, origin, s, roomID, limit, eventIDs)
-	})
+	}, true)
 	if err != nil {
 		return gomatrixserverlib.Transaction{}, err
 	}
@@ -183,9 +183,9 @@ func (a *FederationInternalAPI) LookupState(
 ) (res gomatrixserverlib.StateResponse, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupState(ctx, origin, s, roomID, eventID, roomVersion)
-	})
+	}, true)
 	if err != nil {
 		return &fclient.RespState{}, err
 	}
@@ -201,9 +201,9 @@ func (a *FederationInternalAPI) LookupStateIDs(
 ) (res gomatrixserverlib.StateIDResponse, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupStateIDs(ctx, origin, s, roomID, eventID)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespStateIDs{}, err
 	}
@@ -220,9 +220,9 @@ func (a *FederationInternalAPI) LookupMissingEvents(
 ) (res fclient.RespMissingEvents, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupMissingEvents(ctx, origin, s, roomID, missing, roomVersion)
-	})
+	}, true)
 	if err != nil {
 		return fclient.RespMissingEvents{}, err
 	}
@@ -238,9 +238,9 @@ func (a *FederationInternalAPI) GetEvent(
 ) (res gomatrixserverlib.Transaction, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetEvent(ctx, origin, s, eventID)
-	})
+	}, true)
 	if err != nil {
 		return gomatrixserverlib.Transaction{}, err
 	}
@@ -256,9 +256,9 @@ func (a *FederationInternalAPI) LookupServerKeys(
 ) ([]gomatrixserverlib.ServerKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupServerKeys(ctx, s, keyRequests)
-	})
+	}, true)
 	if err != nil {
 		return []gomatrixserverlib.ServerKeys{}, err
 	}
@@ -275,9 +275,9 @@ func (a *FederationInternalAPI) MSC2836EventRelationships(
 ) (res fclient.MSC2836EventRelationshipsResponse, err error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.MSC2836EventRelationships(ctx, origin, s, r, roomVersion)
-	})
+	}, true)
 	if err != nil {
 		return res, err
 	}
@@ -293,9 +293,9 @@ func (a *FederationInternalAPI) RoomHierarchies(
 ) (res fclient.RoomHierarchyResponse, err error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	ires, err := a.doRequestIfNotBlacklisted(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.RoomHierarchy(ctx, origin, s, roomID, suggestedOnly)
-	})
+	}, false)
 	if err != nil {
 		return res, err
 	}

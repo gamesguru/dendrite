@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -459,7 +460,12 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		}
 		res, err := querier.FSAPI.RoomHierarchies(innerCtx, querier.Cfg.Global.ServerName, spec.ServerName(serverName), roomIDStr, suggestedOnly) //nolint:contextcheck
 		if err != nil {
-			util.GetLogger(ctx).WithError(err).Warnf("failed to call RoomHierarchies on server %s", serverName)
+			var fedErr *fs.FederationClientError
+			if errors.As(err, &fedErr) && fedErr.Code == http.StatusNotFound {
+				util.GetLogger(ctx).WithError(err).Debugf("room %s not available via server %s", roomIDStr, serverName)
+			} else {
+				util.GetLogger(ctx).WithError(err).Warnf("failed to call RoomHierarchies on server %s", serverName)
+			}
 			continue
 		}
 		// ensure nil slices are empty as we send this to the client sometimes
