@@ -134,6 +134,7 @@ global:
     topic_prefix: Zendrite
 
   # Configuration for Prometheus metric collection.
+  # Exposed at /metrics
   metrics:
     enabled: false
     basic_auth:

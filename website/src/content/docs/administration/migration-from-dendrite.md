@@ -35,11 +35,6 @@ For example:
 - `/_dendrite/admin/evacuateRoom/{roomID}` → `/_zendrite/admin/evacuateRoom/{roomID}`
 - `/_dendrite/admin/registrationTokens` → `/_zendrite/admin/registrationTokens`
 
-## Metrics endpoint
-
-The Prometheus metrics endpoint moved from `/_dendrite/metrics` to `/_zendrite/metrics`.
-Update your Prometheus scrape config or monitoring dashboards accordingly.
-
 ## JetStream topic prefix
 
 The default `topic_prefix` in the JetStream config changed from `Dendrite` to `Zendrite`.
