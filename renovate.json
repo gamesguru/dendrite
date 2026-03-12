@@ -6,17 +6,17 @@
     {
       "matchManagers": ["gomod"],
       "groupName": "go dependencies",
-      "schedule": ["every month"]
+      "schedule": ["* * 1 * *"]
     },
     {
       "matchManagers": ["dockerfile", "docker-compose"],
       "matchPackageNames": ["golang"],
       "groupName": "go dependencies",
-      "schedule": ["every month"]
+      "schedule": ["* * 1 * *"]
     },
     {
       "matchManagers": ["pre-commit", "custom.regex"],
-      "schedule": ["every week"]
+      "schedule": ["* * * * 1"]
     },
     {
       "matchPackageNames": ["forgejo/upload-artifact"],
