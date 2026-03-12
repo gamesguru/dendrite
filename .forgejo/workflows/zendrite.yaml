@@ -11,6 +11,7 @@ on:
       - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**' # or workflow changes
       - 'Dockerfile'
+      - 'website/bun.lock'
   pull_request:
     paths:
       - '**.go'
