@@ -85,6 +85,10 @@ type InputRoomEvent struct {
 	// for this event. This is used for local user leave events where we don't
 	// want to block on federation to process missing events.
 	SkipMissingEvents bool `json:"skip_missing_events,omitempty"`
+	// SkipEventAuth, if true, will skip the auth and soft-fail checks for this
+	// event. This is used by admin endpoints (e.g. downloadState) that need to
+	// inject events into rooms where the sender may lack the necessary power level.
+	SkipEventAuth bool `json:"skip_event_auth,omitempty"`
 }
 
 // TransactionID contains the transaction ID sent by a client when sending an

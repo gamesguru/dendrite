@@ -242,6 +242,14 @@ func (r *Admin) PerformAdminDownloadState(
 		return err
 	}
 
+	// Resolve forward extremities: replace any local-only
+	// org.matrix.zendrite.state_download events (from previous runs) with
+	// their prev events, which the remote server will actually know about.
+	fwdExtremities, err = r.resolveLocalExtremities(ctx, roomInfo, fwdExtremities)
+	if err != nil {
+		return fmt.Errorf("resolveLocalExtremities: %w", err)
+	}
+
 	authEventMap := map[string]gomatrixserverlib.PDU{}
 	stateEventMap := map[string]gomatrixserverlib.PDU{}
 
@@ -288,12 +296,16 @@ func (r *Admin) PerformAdminDownloadState(
 	senderID, err := r.Queryer.QuerySenderIDForUser(ctx, *validRoomID, *fullUserID)
 	if err != nil {
 		return err
-	} else if senderID == nil {
-		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
+	}
+	// Fall back to the user ID as sender if no sender ID mapping exists
+	// (e.g. admin is not a member of the room).
+	senderIDStr := userID
+	if senderID != nil {
+		senderIDStr = string(*senderID)
 	}
 	proto := &gomatrixserverlib.ProtoEvent{
 		Type:     "org.matrix.zendrite.state_download",
-		SenderID: string(*senderID),
+		SenderID: senderIDStr,
 		RoomID:   roomID,
 		Content:  spec.RawJSON("{}"),
 	}
@@ -339,7 +351,8 @@ func (r *Admin) PerformAdminDownloadState(
 		Origin:        r.Cfg.Matrix.ServerName,
 		HasState:      true,
 		StateEventIDs: stateIDs,
-		SendAsServer:  string(r.Cfg.Matrix.ServerName),
+		SendAsServer:  api.DoNotSendToOtherServers,
+		SkipEventAuth: true,
 	})
 
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
@@ -349,6 +362,31 @@ func (r *Admin) PerformAdminDownloadState(
 	}
 
 	return nil
+}
+
+// resolveLocalExtremities replaces any org.matrix.zendrite.state_download
+// forward extremities with their prev events. These marker events are
+// local-only and unknown to remote servers, so we need to look through them
+// to find the real events that remote servers can provide state for.
+func (r *Admin) resolveLocalExtremities(ctx context.Context, roomInfo *types.RoomInfo, extremities []string) ([]string, error) {
+	events, err := r.DB.EventsFromIDs(ctx, roomInfo, extremities)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]string, 0, len(extremities))
+	for _, ev := range events {
+		if ev.Type() == "org.matrix.zendrite.state_download" {
+			resolved = append(resolved, ev.PrevEventIDs()...)
+		} else {
+			resolved = append(resolved, ev.EventID())
+		}
+	}
+
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("no usable forward extremities found in room %d", roomInfo.RoomNID)
+	}
+	return resolved, nil
 }
 
 func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error {
