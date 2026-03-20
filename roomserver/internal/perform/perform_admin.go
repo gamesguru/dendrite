@@ -364,10 +364,10 @@ func (r *Admin) PerformAdminDownloadState(
 	return nil
 }
 
-// resolveLocalExtremities replaces any org.matrix.zendrite.state_download
-// forward extremities with their prev events. These marker events are
-// local-only and unknown to remote servers, so we need to look through them
-// to find the real events that remote servers can provide state for.
+// resolveLocalExtremities replaces forward extremities that remote servers
+// won't know about with their prev events. This includes:
+//   - org.matrix.zendrite.state_download marker events (local-only)
+//   - Rejected events (stored locally but not accepted by remote servers)
 func (r *Admin) resolveLocalExtremities(ctx context.Context, roomInfo *types.RoomInfo, extremities []string) ([]string, error) {
 	events, err := r.DB.EventsFromIDs(ctx, roomInfo, extremities)
 	if err != nil {
@@ -378,9 +378,15 @@ func (r *Admin) resolveLocalExtremities(ctx context.Context, roomInfo *types.Roo
 	for _, ev := range events {
 		if ev.Type() == "org.matrix.zendrite.state_download" {
 			resolved = append(resolved, ev.PrevEventIDs()...)
-		} else {
-			resolved = append(resolved, ev.EventID())
+			continue
 		}
+		isRejected, rejErr := r.DB.IsEventRejected(ctx, roomInfo.RoomNID, ev.EventID())
+		if rejErr == nil && isRejected {
+			logrus.WithField("event_id", ev.EventID()).Info("Replacing rejected forward extremity with its prev_events")
+			resolved = append(resolved, ev.PrevEventIDs()...)
+			continue
+		}
+		resolved = append(resolved, ev.EventID())
 	}
 
 	if len(resolved) == 0 {
