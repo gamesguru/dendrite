@@ -305,6 +305,21 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 		states = append(states, &respState{trustworthy, prevState})
 	}
 
+	// If all prev_events were rejected, we have no state to work with.
+	// Rather than rejecting this event too (which creates an unbounded
+	// rejection chain), fall back to fetching state at this event directly
+	// from federation. This breaks the cycle by getting fresh state that
+	// doesn't depend on the rejected chain.
+	if len(states) == 0 && len(e.PrevEventIDs()) > 0 {
+		t.log.Warnf("All %d prev_events were rejected, falling back to federation state lookup for event %s", len(e.PrevEventIDs()), e.EventID())
+		fallbackState, trustworthy, err := t.lookupStateAfterEvent(ctx, roomVersion, e.RoomID().String(), e.EventID())
+		if err == nil {
+			states = append(states, &respState{trustworthy, fallbackState})
+		} else {
+			t.log.WithError(err).Warnf("Federation state fallback also failed for event %s", e.EventID())
+		}
+	}
+
 	// Now that we have collected all of the state from the prev_events, we'll
 	// run the state through the appropriate state resolution algorithm for the
 	// room if needed. This does a couple of things:
