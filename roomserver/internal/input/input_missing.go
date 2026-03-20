@@ -307,14 +307,21 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 
 	// If all prev_events were rejected, we have no state to work with.
 	// Rather than rejecting this event too (which creates an unbounded
-	// rejection chain), fall back to fetching state at this event directly
-	// from federation. This breaks the cycle by getting fresh state that
-	// doesn't depend on the rejected chain.
+	// rejection chain), fall back to fetching state before this event
+	// directly from federation via /state_ids. This breaks the cycle by
+	// getting fresh state that doesn't depend on the broken local chain.
+	// We use lookupStateBeforeEvent (not lookupStateAfterEvent) because
+	// the latter also tries to fetch the event via /event, which may fail
+	// if servers are backing off. We already have the event itself.
 	if len(states) == 0 && len(e.PrevEventIDs()) > 0 {
-		t.log.Warnf("All %d prev_events were rejected, falling back to federation state lookup for event %s", len(e.PrevEventIDs()), e.EventID())
-		fallbackState, trustworthy, err := t.lookupStateAfterEvent(ctx, roomVersion, e.RoomID().String(), e.EventID())
+		t.log.Warnf("All %d prev_events were rejected, falling back to federation /state_ids for event %s", len(e.PrevEventIDs()), e.EventID())
+		fallbackState, err := t.lookupStateBeforeEvent(ctx, roomVersion, e.RoomID().String(), e.EventID())
 		if err == nil {
-			states = append(states, &respState{trustworthy, fallbackState})
+			// If the event itself is a state event, add it to the state.
+			if e.StateKey() != nil {
+				fallbackState.StateEvents = append(fallbackState.StateEvents, e)
+			}
+			states = append(states, &respState{false, fallbackState})
 		} else {
 			t.log.WithError(err).Warnf("Federation state fallback also failed for event %s", e.EventID())
 		}
