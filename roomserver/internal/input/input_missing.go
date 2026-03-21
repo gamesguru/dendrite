@@ -24,6 +24,12 @@ import (
 type parsedRespState struct {
 	AuthEvents  []gomatrixserverlib.PDU
 	StateEvents []gomatrixserverlib.PDU
+	// When OutliersStored is true, the state events have already been
+	// stored in the database as outliers during a chunked fetch. The
+	// StateEvents and AuthEvents slices will be empty to keep memory
+	// bounded; only the StateEventIDs are populated.
+	OutliersStored bool
+	StateEventIDs  []string
 }
 
 func (p *parsedRespState) Events() []gomatrixserverlib.PDU {
@@ -159,8 +165,14 @@ func (t *missingStateReq) processEventWithMissingState(
 	}
 	t.hadEventsMutex.Unlock()
 
-	sendOutliers := func(resolvedState *parsedRespState) error {
-		outliers := resolvedState.Events()
+	// sendOutliers stores the state events in the database as outliers.
+	// When OutliersStored is set, the events were already stored during
+	// a chunked fetch, so this is a no-op.
+	sendOutliers := func(rs *parsedRespState) error {
+		if rs.OutliersStored {
+			return nil
+		}
+		outliers := rs.Events()
 		outlierRoomEvents := make([]api.InputRoomEvent, 0, len(outliers))
 		for _, outlier := range outliers {
 			if hadEvents[outlier.EventID()] {
@@ -183,19 +195,26 @@ func (t *missingStateReq) processEventWithMissingState(
 		return nil
 	}
 
+	// stateEventIDs extracts the state event IDs from the resolved state.
+	// When OutliersStored is set, returns the pre-computed IDs.
+	stateEventIDs := func(rs *parsedRespState) []string {
+		if rs.OutliersStored {
+			return rs.StateEventIDs
+		}
+		ids := make([]string, 0, len(rs.StateEvents))
+		for _, event := range rs.StateEvents {
+			ids = append(ids, event.EventID())
+		}
+		return ids
+	}
+
 	// Send outliers first so we can send the state along with the new backwards
 	// extremity without any missing auth events.
 	if err = sendOutliers(resolvedState); err != nil {
 		return nil, fmt.Errorf("sendOutliers: %w", err)
 	}
 
-	// Now send the backward extremity into the roomserver with the
-	// newly resolved state. This marks the "oldest" point in the backfill and
-	// sets the baseline state for any new events after this.
-	stateIDs := make([]string, 0, len(resolvedState.StateEvents))
-	for _, event := range resolvedState.StateEvents {
-		stateIDs = append(stateIDs, event.EventID())
-	}
+	stateIDs := stateEventIDs(resolvedState)
 
 	err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 		Kind:          api.KindOld,
@@ -319,7 +338,11 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 		if err == nil {
 			// If the event itself is a state event, add it to the state.
 			if e.StateKey() != nil {
-				fallbackState.StateEvents = append(fallbackState.StateEvents, e)
+				if fallbackState.OutliersStored {
+					fallbackState.StateEventIDs = append(fallbackState.StateEventIDs, e.EventID())
+				} else {
+					fallbackState.StateEvents = append(fallbackState.StateEvents, e)
+				}
 			}
 			states = append(states, &respState{false, fallbackState})
 		} else {
@@ -343,6 +366,13 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			return nil, fmt.Errorf("expected %d states but got %d", len(e.PrevEventIDs()), len(states))
 		}
 	case 1:
+		// If outliers were already stored in chunks, skip state resolution
+		// entirely. The state came from a single /state_ids response and
+		// has already been persisted — there's nothing to resolve.
+		if states[0].OutliersStored {
+			resolvedState = states[0].parsedRespState
+			break
+		}
 		// There's only one previous state - if it's trustworthy (came from a
 		// local state snapshot which will already have been through state res),
 		// use it as-is. There's no point in resolving it again. Only trust a
@@ -767,6 +797,101 @@ func (t *missingStateReq) lookupMissingStateViaState(
 	}, nil
 }
 
+// fetchAndStoreStateInChunks fetches missing state events in batches via
+// /event, storing each batch as outliers before moving to the next. This
+// keeps peak memory bounded regardless of the total number of state events
+// in the room, avoiding OOM for very large rooms (e.g. 30K+ state events).
+func (t *missingStateReq) fetchAndStoreStateInChunks(
+	ctx context.Context,
+	roomID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	stateIDs gomatrixserverlib.StateIDResponse,
+	missing map[string]bool,
+) (*parsedRespState, error) {
+	const batchSize = 1000
+	concurrentRequests := 8
+
+	missingList := make([]string, 0, len(missing))
+	for id := range missing {
+		missingList = append(missingList, id)
+	}
+
+	t.log.Infof("Fetching and storing %d missing state events in chunks of %d (total state: %d)",
+		len(missingList), batchSize, len(stateIDs.GetStateEventIDs()))
+
+	for start := 0; start < len(missingList); start += batchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context canceled during chunked state fetch: %w", err)
+		}
+		end := start + batchSize
+		if end > len(missingList) {
+			end = len(missingList)
+		}
+		batch := missingList[start:end]
+
+		t.log.Infof("Fetching state chunk %d-%d of %d", start+1, end, len(missingList))
+
+		// Fetch this batch concurrently.
+		workers := concurrentRequests
+		if len(batch) < workers {
+			workers = len(batch)
+		}
+		pending := make(chan string, len(batch))
+		for _, id := range batch {
+			pending <- id
+		}
+		close(pending)
+
+		var batchEvents []gomatrixserverlib.PDU
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				for id := range pending {
+					h, herr := t.lookupEvent(ctx, roomVersion, roomID, id, false)
+					if herr != nil {
+						continue
+					}
+					mu.Lock()
+					batchEvents = append(batchEvents, h)
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+
+		// Store this batch as outliers immediately.
+		for _, ev := range batchEvents {
+			if serr := t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
+				Kind:   api.KindOutlier,
+				Event:  &types.HeaderedEvent{PDU: ev},
+				Origin: t.origin,
+			}); serr != nil {
+				var rejErr types.RejectedError
+				if !errors.As(serr, &rejErr) {
+					t.log.WithError(serr).Warnf("Failed to store outlier %s", ev.EventID())
+				}
+			}
+		}
+
+		// Release this batch from the in-memory cache to free memory
+		// before the next batch. The events are now in the database.
+		t.haveEventsMutex.Lock()
+		for _, ev := range batchEvents {
+			delete(t.haveEvents, ev.EventID())
+		}
+		t.haveEventsMutex.Unlock()
+		batchEvents = nil
+	}
+
+	return &parsedRespState{
+		OutliersStored: true,
+		StateEventIDs:  stateIDs.GetStateEventIDs(),
+	}, nil
+}
+
 func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roomID, eventID string, roomVersion gomatrixserverlib.RoomVersion) (
 	*parsedRespState, error,
 ) {
@@ -826,15 +951,22 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 	t.log.WithField("event_id", eventID).Debugf("lookupMissingStateViaStateIDs missing %d/%d events", missingCount, len(wantIDs))
 
 	// If over 50% of the auth/state events from /state_ids are missing
-	// then we'll just call /state instead, otherwise we'll just end up
-	// hammering the remote side with /event requests unnecessarily.
+	// then we need to fetch them from federation. For rooms with a large
+	// number of state events, downloading everything at once via /state
+	// would consume too much memory and risk OOM. Instead, fetch and store
+	// the events in chunks via /event, keeping memory bounded.
 	if missingCount > concurrentRequests && missingCount > len(wantIDs)/2 {
+		totalState := len(stateIDs.GetStateEventIDs())
 		t.log.WithFields(logrus.Fields{
 			"missing":           missingCount,
 			"event_id":          eventID,
-			"total_state":       len(stateIDs.GetStateEventIDs()),
+			"total_state":       totalState,
 			"total_auth_events": len(stateIDs.GetAuthEventIDs()),
-		}).Debug("Fetching all state at event")
+		}).Debug("Fetching missing state at event")
+		const chunkedStateThreshold = 10_000
+		if totalState > chunkedStateThreshold {
+			return t.fetchAndStoreStateInChunks(ctx, roomID, roomVersion, stateIDs, missing)
+		}
 		return t.lookupMissingStateViaState(ctx, roomID, eventID, roomVersion)
 	}
 

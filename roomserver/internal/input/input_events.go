@@ -330,10 +330,7 @@ func (r *Inputer) processRoomEvent(
 						// the state snapshot with the newly resolved state.
 						missingPrev = false
 						input.HasState = true
-						input.StateEventIDs = make([]string, 0, len(stateSnapshot.StateEvents))
-						for _, se := range stateSnapshot.StateEvents {
-							input.StateEventIDs = append(input.StateEventIDs, se.EventID())
-						}
+						input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
 					}
 				}
 			} else if stateSnapshot != nil {
@@ -343,10 +340,7 @@ func (r *Inputer) processRoomEvent(
 				// the state snapshot with the newly resolved state.
 				missingPrev = false
 				input.HasState = true
-				input.StateEventIDs = make([]string, 0, len(stateSnapshot.StateEvents))
-				for _, e := range stateSnapshot.StateEvents {
-					input.StateEventIDs = append(input.StateEventIDs, e.EventID())
-				}
+				input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
 			} else {
 				// We retrieved some state and it would appear that rolling forward the
 				// state did everything we needed it to do, so we can just resolve the
@@ -1203,4 +1197,17 @@ func (r *Inputer) kickGuests(ctx context.Context, event gomatrixserverlib.PDU, r
 	inputRes := &api.InputRoomEventsResponse{}
 	r.InputRoomEvents(ctx, inputReq, inputRes)
 	return nil
+}
+
+// stateSnapshotEventIDs extracts state event IDs from a parsedRespState,
+// using the pre-computed StateEventIDs when outliers were stored in chunks.
+func stateSnapshotEventIDs(s *parsedRespState) []string {
+	if s.OutliersStored {
+		return s.StateEventIDs
+	}
+	ids := make([]string, 0, len(s.StateEvents))
+	for _, e := range s.StateEvents {
+		ids = append(ids, e.EventID())
+	}
+	return ids
 }
