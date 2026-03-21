@@ -466,23 +466,31 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 			JSON: spec.MissingParam("Expecting remote server name."),
 		}
 	}
-	if err = rsAPI.PerformAdminDownloadState(req.Context(), roomID, device.UserID, spec.ServerName(serverName)); err != nil {
-		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
-			return util.JSONResponse{
-				Code: 200, //nolint:mnd
-				JSON: spec.NotFound(err.Error()),
-			}
+	// Run the state download in a background context so that it
+	// continues even if the HTTP client disconnects. Downloading
+	// and processing state for large rooms can take many minutes,
+	// easily exceeding typical HTTP client timeouts.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) //nolint:mnd
+		defer cancel()
+		if err := rsAPI.PerformAdminDownloadState(ctx, roomID, device.UserID, spec.ServerName(serverName)); err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"userID":     device.UserID,
+				"serverName": serverName,
+				"roomID":     roomID,
+			}).Error("failed to download state")
+		} else {
+			logrus.WithFields(logrus.Fields{
+				"serverName": serverName,
+				"roomID":     roomID,
+			}).Info("successfully downloaded state")
 		}
-		logrus.WithError(err).WithFields(logrus.Fields{
-			"userID":     device.UserID,
-			"serverName": serverName,
-			"roomID":     roomID,
-		}).Error("failed to download state")
-		return util.ErrorResponse(err)
-	}
+	}()
 	return util.JSONResponse{
 		Code: 200, //nolint:mnd
-		JSON: struct{}{},
+		JSON: struct {
+			Status string `json:"status"`
+		}{Status: "processing"},
 	}
 }
 
