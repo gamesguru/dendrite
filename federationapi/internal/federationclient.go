@@ -14,6 +14,17 @@ import (
 
 const defaultTimeout = time.Second * 30
 
+// applyDefaultTimeout applies defaultTimeout to the context only if the
+// caller hasn't already set a longer deadline. This allows callers like
+// the admin downloadState endpoint to use longer timeouts for operations
+// that may take minutes (e.g. /state for rooms with 30K+ state events).
+func applyDefaultTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) > defaultTimeout {
+		return ctx, func() {} // caller's deadline is longer, keep it
+	}
+	return context.WithTimeout(ctx, defaultTimeout)
+}
+
 // Functions here are "proxying" calls to the gomatrixserverlib federation
 // client.
 
@@ -181,7 +192,9 @@ func (a *FederationInternalAPI) Backfill(
 func (a *FederationInternalAPI) LookupState(
 	ctx context.Context, origin, s spec.ServerName, roomID, eventID string, roomVersion gomatrixserverlib.RoomVersion,
 ) (res gomatrixserverlib.StateResponse, err error) {
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	// Only apply the default timeout if the caller hasn't set a longer
+	// deadline. The /state response for large rooms can take minutes.
+	ctx, cancel := applyDefaultTimeout(ctx)
 	defer cancel()
 	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupState(ctx, origin, s, roomID, eventID, roomVersion)
