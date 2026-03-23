@@ -63,6 +63,7 @@ export default defineConfig({
             { label: 'Admin API', slug: 'administration/adminapi' },
             { label: 'Optimisation', slug: 'administration/optimisation' },
             { label: 'Migration from Dendrite', slug: 'administration/migration-from-dendrite' },
+            { label: 'Backups', slug: 'administration/backups' },
             { label: 'Troubleshooting', slug: 'administration/troubleshooting' },
           ],
         },
