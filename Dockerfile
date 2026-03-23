@@ -47,7 +47,10 @@ COPY --from=build /out/generate-config /usr/bin/generate-config
 COPY --from=build /out/generate-keys /usr/bin/generate-keys
 COPY --from=build /out/zendrite /usr/bin/zendrite
 
+RUN mkdir -p /var/lib/zendrite && chown zendrite:zendrite /var/lib/zendrite
+
 VOLUME /etc/zendrite
+VOLUME /var/lib/zendrite
 WORKDIR /etc/zendrite
 
 # Run as non-root user
