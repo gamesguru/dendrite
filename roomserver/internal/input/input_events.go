@@ -217,11 +217,39 @@ func (r *Inputer) processRoomEvent(
 			serverRes.ServerNames = append(serverRes.ServerNames, server)
 			delete(servers, server)
 		}
+		// If the room has partial state, add the join server to the list as a
+		// privileged entry. It processed our join recently and is known alive.
+		if hasPartialState && roomInfo != nil {
+			if joinServer, jsErr := r.DB.GetPartialStateJoinServer(ctx, roomInfo.RoomNID); jsErr == nil && joinServer != "" {
+				jsName := spec.ServerName(joinServer)
+				if jsName != r.Cfg.Matrix.ServerName {
+					// Prepend so it's tried first, even if backing off.
+					found := false
+					for _, s := range serverRes.ServerNames {
+						if s == jsName {
+							found = true
+							break
+						}
+					}
+					if !found {
+						serverRes.ServerNames = append([]spec.ServerName{jsName}, serverRes.ServerNames...)
+					}
+				}
+			}
+		}
 		// Filter out servers that are currently backing off or blacklisted.
 		// This avoids iterating hundreds of dead servers in missing-state resolution.
+		// The join server (first in list for partial state rooms) is exempt from
+		// this filter since it recently processed our join.
 		filtered := serverRes.ServerNames[:0]
+		var joinServerName spec.ServerName
+		if hasPartialState && roomInfo != nil {
+			if joinServer, jsErr := r.DB.GetPartialStateJoinServer(ctx, roomInfo.RoomNID); jsErr == nil && joinServer != "" {
+				joinServerName = spec.ServerName(joinServer)
+			}
+		}
 		for _, server := range serverRes.ServerNames {
-			if !r.FSAPI.IsServerBackingOff(server) {
+			if server == joinServerName || !r.FSAPI.IsServerBackingOff(server) {
 				filtered = append(filtered, server)
 			}
 		}
@@ -230,9 +258,16 @@ func (r *Inputer) processRoomEvent(
 
 	// Check that the auth events of the event are known.
 	// If they aren't then we will ask the federation API for them.
+	// During partial state download (MSC3706), skip federation auth fetching for
+	// outlier events. The partial state worker fetches auth events as part of the
+	// /state_ids response and stores them alongside state events. Fetching auth
+	// per-event here causes rate-limiting storms against the origin server, leading
+	// to multi-minute stalls between batch processing.
 	authEvents, _ := gomatrixserverlib.NewAuthEvents(nil)
 	knownEvents := map[string]*types.Event{}
-	if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
+	if hasPartialState && input.Kind == api.KindOutlier {
+		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
+	} else if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
 		return fmt.Errorf("r.fetchAuthEvents: %w", err)
 	}
 
@@ -282,20 +317,34 @@ func (r *Inputer) processRoomEvent(
 		// processRoomEvent. Also skip if SkipMissingEvents is set (e.g. for local
 		// user leave events where we don't want to block on federation).
 
+		stateResolutionRoomID = event.RoomID().String()
+
+		// For rooms in partial state (MSC3706), skip expensive federation state
+		// resolution. The partial state worker is handling full state download
+		// in the background. Attempting state resolution here would likely fail
+		// (we're missing most state) and could trigger cooldowns that block
+		// future events from being processed.
+		if hasPartialState {
+			logger.Debugf("Skipping state resolution for room %s (partial state active, background worker will handle)", stateResolutionRoomID)
+			isRejected = true
+			rejectionErr = fmt.Errorf("room %s is in partial state, awaiting background state sync", stateResolutionRoomID)
+		}
+
 		// Check if state resolution recently failed for this room. If so, skip
 		// the expensive federation lookup and reject immediately. This prevents
 		// rooms stuck in a failure loop from consuming unbounded CPU and memory
 		// by loading thousands of state events on every incoming transaction.
-		stateResolutionRoomID = event.RoomID().String()
-		if lastFail, ok := r.missingStateCooldown.Load(stateResolutionRoomID); ok {
-			lastFailTime, _ := lastFail.(time.Time)
-			if time.Since(lastFailTime) < missingStateCooldownDuration {
-				logger.Warnf("Skipping state resolution for room %s (cooldown active after recent failure)", stateResolutionRoomID)
-				isRejected = true
-				rejectionErr = fmt.Errorf("state resolution cooldown active for room %s", stateResolutionRoomID)
-			} else {
-				// Cooldown expired, clear it and retry.
-				r.missingStateCooldown.Delete(stateResolutionRoomID)
+		if !isRejected {
+			if lastFail, ok := r.missingStateCooldown.Load(stateResolutionRoomID); ok {
+				lastFailTime, _ := lastFail.(time.Time)
+				if time.Since(lastFailTime) < missingStateCooldownDuration {
+					logger.Warnf("Skipping state resolution for room %s (cooldown active after recent failure)", stateResolutionRoomID)
+					isRejected = true
+					rejectionErr = fmt.Errorf("state resolution cooldown active for room %s", stateResolutionRoomID)
+				} else {
+					// Cooldown expired, clear it and retry.
+					r.missingStateCooldown.Delete(stateResolutionRoomID)
+				}
 			}
 		}
 

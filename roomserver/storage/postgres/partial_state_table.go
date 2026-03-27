@@ -62,6 +62,9 @@ const selectPartialStateServersSQL = "" +
 const selectAllPartialStateRoomsSQL = "" +
 	"SELECT room_nid FROM roomserver_partial_state_rooms ORDER BY created_at ASC"
 
+const selectPartialStateJoinedViaSQL = "" +
+	"SELECT joined_via FROM roomserver_partial_state_rooms WHERE room_nid = $1"
+
 const selectDeviceListStreamIDSQL = "" +
 	"SELECT device_lists_stream_id FROM roomserver_partial_state_rooms WHERE room_nid = $1"
 
@@ -73,6 +76,7 @@ type partialStateStatements struct {
 	insertPartialStateRoomServersStmt *sql.Stmt
 	selectPartialStateRoomStmt        *sql.Stmt
 	selectPartialStateServersStmt     *sql.Stmt
+	selectPartialStateJoinedViaStmt   *sql.Stmt
 	selectAllPartialStateRoomsStmt    *sql.Stmt
 	selectDeviceListStreamIDStmt      *sql.Stmt
 	deletePartialStateRoomStmt        *sql.Stmt
@@ -99,6 +103,7 @@ func PreparePartialStateTable(db *sql.DB) (tables.PartialState, error) {
 		{&s.insertPartialStateRoomServersStmt, insertPartialStateRoomServersSQL},
 		{&s.selectPartialStateRoomStmt, selectPartialStateRoomSQL},
 		{&s.selectPartialStateServersStmt, selectPartialStateServersSQL},
+		{&s.selectPartialStateJoinedViaStmt, selectPartialStateJoinedViaSQL},
 		{&s.selectAllPartialStateRoomsStmt, selectAllPartialStateRoomsSQL},
 		{&s.selectDeviceListStreamIDStmt, selectDeviceListStreamIDSQL},
 		{&s.deletePartialStateRoomStmt, deletePartialStateRoomSQL},
@@ -163,6 +168,21 @@ func (s *partialStateStatements) SelectPartialStateServers(
 		servers = append(servers, server)
 	}
 	return servers, rows.Err()
+}
+
+func (s *partialStateStatements) SelectPartialStateJoinedVia(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (string, error) {
+	var joinedVia string
+	stmt := sqlutil.TxStmt(txn, s.selectPartialStateJoinedViaStmt)
+	err := stmt.QueryRowContext(ctx, roomNID).Scan(&joinedVia)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return joinedVia, nil
 }
 
 func (s *partialStateStatements) SelectAllPartialStateRooms(

@@ -178,6 +178,10 @@ func (m *mockPartialStateRoomserverAPI) GetPartialStateServers(ctx context.Conte
 	return m.partialServers[roomNID], nil
 }
 
+func (m *mockPartialStateRoomserverAPI) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	return "", nil
+}
+
 func (m *mockPartialStateRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

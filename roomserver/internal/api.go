@@ -374,6 +374,11 @@ func (r *RoomserverInternalAPI) GetPartialStateServers(ctx context.Context, room
 	return r.DB.GetPartialStateServers(ctx, roomNID)
 }
 
+// GetPartialStateJoinServer returns the server we joined through for a partial state room.
+func (r *RoomserverInternalAPI) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	return r.DB.GetPartialStateJoinServer(ctx, roomNID)
+}
+
 // GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room.
 func (r *RoomserverInternalAPI) GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	return r.DB.GetPartialStateDeviceListStreamID(ctx, roomNID)

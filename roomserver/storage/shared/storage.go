@@ -2202,6 +2202,11 @@ func (d *Database) GetPartialStateServers(ctx context.Context, roomNID types.Roo
 	return d.PartialStateTable.SelectPartialStateServers(ctx, nil, roomNID)
 }
 
+// GetPartialStateJoinServer returns the server we joined through for a partial state room.
+func (d *Database) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	return d.PartialStateTable.SelectPartialStateJoinedVia(ctx, nil, roomNID)
+}
+
 // SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {

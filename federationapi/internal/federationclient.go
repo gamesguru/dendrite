@@ -227,6 +227,47 @@ func (a *FederationInternalAPI) LookupStateIDs(
 	return resp, nil
 }
 
+// LookupStateIDsBypassBackoff is like LookupStateIDs but skips the backoff
+// check for the target server. This is used by the partial state worker when
+// contacting the join server, which is known to be alive from the recent join.
+func (a *FederationInternalAPI) LookupStateIDsBypassBackoff(
+	ctx context.Context, origin, s spec.ServerName, roomID, eventID string,
+) (res gomatrixserverlib.StateIDResponse, err error) {
+	ctx, cancel := applyDefaultTimeout(ctx)
+	defer cancel()
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
+		return a.federation.LookupStateIDs(ctx, origin, s, roomID, eventID)
+	}, false)
+	if err != nil {
+		return fclient.RespStateIDs{}, err
+	}
+	resp, ok := ires.(fclient.RespStateIDs)
+	if !ok {
+		return fclient.RespStateIDs{}, fmt.Errorf("unexpected response type for LookupStateIDs")
+	}
+	return resp, nil
+}
+
+// GetEventBypassBackoff is like GetEvent but skips the backoff check.
+// Used by the partial state worker when fetching events from the join server.
+func (a *FederationInternalAPI) GetEventBypassBackoff(
+	ctx context.Context, origin, s spec.ServerName, eventID string,
+) (res gomatrixserverlib.Transaction, err error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
+		return a.federation.GetEvent(ctx, origin, s, eventID)
+	}, false)
+	if err != nil {
+		return gomatrixserverlib.Transaction{}, err
+	}
+	r, ok := ires.(gomatrixserverlib.Transaction)
+	if !ok {
+		return gomatrixserverlib.Transaction{}, fmt.Errorf("unexpected response type for GetEvent")
+	}
+	return r, nil
+}
+
 func (a *FederationInternalAPI) LookupMissingEvents(
 	ctx context.Context, origin, s spec.ServerName, roomID string,
 	missing fclient.MissingEvents, roomVersion gomatrixserverlib.RoomVersion,

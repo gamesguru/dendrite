@@ -348,6 +348,8 @@ type FederationRoomserverAPI interface {
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
 	// GetPartialStateServers returns servers known to be in a partial state room
 	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
+	// GetPartialStateJoinServer returns the server we joined through for a partial state room
+	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
 	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
 	// GetAllPartialStateRooms returns all rooms with partial state

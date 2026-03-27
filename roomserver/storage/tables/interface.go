@@ -233,6 +233,8 @@ type PartialState interface {
 	SelectAllPartialStateRooms(ctx context.Context, txn *sql.Tx) ([]types.RoomNID, error)
 	// SelectDeviceListStreamID returns the device list stream ID stored when the room entered partial state
 	SelectDeviceListStreamID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
+	// SelectPartialStateJoinedVia returns the server we joined through for a partial state room
+	SelectPartialStateJoinedVia(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (string, error)
 	// DeletePartialStateRoom removes a room from partial state tracking and returns the stored device list stream ID
 	DeletePartialStateRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
 }

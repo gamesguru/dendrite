@@ -1050,24 +1050,46 @@ func (v *StateResolution) resolveConflictsV2(
 	gotAuthEvents = nil
 
 	// Resolve the conflicts.
-	// Reconstruct state sets for the new API: each conflicted event goes
-	// into its own set alongside all non-conflicted events, so the library's
-	// splitConflictedUnconflicted correctly identifies conflicts.
+	// Build exactly 2 state sets for the library's splitConflictedUnconflicted.
+	// Both sets contain all non-conflicted events (so they appear in every set
+	// and are correctly identified as unconflicted). Conflicted events are split
+	// across the two sets by state key tuple: the first event per tuple goes in
+	// set 1, the rest in set 2. This ensures the library detects the conflict
+	// (different event IDs for the same tuple across sets) while using O(2N)
+	// memory instead of O(N×C) where C is the number of conflicts.
 	resolvedEvents := func() []gomatrixserverlib.PDU {
 		resolvedTrace, _ := internal.StartRegion(ctx, "StateResolution.ResolveStateConflictsV2")
 		defer resolvedTrace.EndRegion()
 
-		stateSets := make([][]gomatrixserverlib.PDU, 0, len(conflictedEvents))
+		type stateKeyTuple struct {
+			evType   string
+			stateKey string
+		}
+
+		set1 := make([]gomatrixserverlib.PDU, 0, len(nonConflictedEvents)+len(conflictedEvents))
+		set2 := make([]gomatrixserverlib.PDU, 0, len(nonConflictedEvents)+len(conflictedEvents))
+		set1 = append(set1, nonConflictedEvents...)
+		set2 = append(set2, nonConflictedEvents...)
+
+		// Split conflicted events by tuple: first seen goes in set1, rest in set2.
+		seenTuples := make(map[stateKeyTuple]bool, len(conflictedEvents))
 		for _, e := range conflictedEvents {
-			set := make([]gomatrixserverlib.PDU, len(nonConflictedEvents)+1)
-			copy(set, nonConflictedEvents)
-			set[len(nonConflictedEvents)] = e
-			stateSets = append(stateSets, set)
+			sk := ""
+			if e.StateKey() != nil {
+				sk = *e.StateKey()
+			}
+			tuple := stateKeyTuple{e.Type(), sk}
+			if !seenTuples[tuple] {
+				seenTuples[tuple] = true
+				set1 = append(set1, e)
+			} else {
+				set2 = append(set2, e)
+			}
 		}
 
 		return gomatrixserverlib.ResolveStateConflictsV2New(
 			stateResAlgo,
-			stateSets,
+			[][]gomatrixserverlib.PDU{set1, set2},
 			authEvents,
 			func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return v.Querier.QueryUserIDForSender(ctx, roomID, senderID)
