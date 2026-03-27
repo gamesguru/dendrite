@@ -432,51 +432,52 @@ func (rp *RequestPool) getRequiredState(
 	config *types.RequiredStateConfig,
 	timeline []synctypes.ClientEvent,
 ) ([]synctypes.ClientEvent, error) {
-	// Create a trace region for the getRequiredState operation
 	reqStateRegion, _ := internal.StartRegion(ctx, "SlidingSync.getRequiredState")
 	defer reqStateRegion.EndRegion()
 	reqStateRegion.SetTag("room_id", roomID)
 
-	// Phase 5: Extract lazy member senders if $LAZY is specified
 	lazySenders := rp.extractLazySenders(config, timeline)
 
-	// Get all current state events for the room
-	// Pass empty filter to get all state
-	emptyFilter := synctypes.StateFilter{}
-	allState, err := snapshot.GetStateEventsForRoom(ctx, roomID, &emptyFilter)
-	if err != nil {
-		return nil, err
-	}
-
-	// Count member events in allState for debugging
-	memberEventCount := 0
-	for _, ev := range allState {
-		if ev.Type() == "m.room.member" {
-			memberEventCount++
-		}
-	}
-	reqStateRegion.SetTag("total_state_events", len(allState))
-	reqStateRegion.SetTag("member_events_in_db", memberEventCount)
-
-	// Filter based on include/exclude patterns
+	// Analyze the include patterns to determine if we can use targeted queries
+	// instead of loading all state and filtering in Go.
 	var filtered []*rstypes.HeaderedEvent
-	for _, event := range allState {
-		if rp.matchesRequiredState(event, userID, config, lazySenders) {
-			filtered = append(filtered, event)
+	if rp.canUseTargetedStateQueries(config) {
+		var err error
+		filtered, err = rp.fetchTargetedState(ctx, snapshot, roomID, userID, config, lazySenders)
+		if err != nil {
+			return nil, err
+		}
+		reqStateRegion.SetTag("query_mode", "targeted")
+	} else {
+		// Fallback: wildcard patterns require loading all state
+		emptyFilter := synctypes.StateFilter{}
+		allState, err := snapshot.GetStateEventsForRoom(ctx, roomID, &emptyFilter)
+		if err != nil {
+			return nil, err
+		}
+		reqStateRegion.SetTag("query_mode", "full")
+		reqStateRegion.SetTag("total_state_events", len(allState))
+
+		for _, event := range allState {
+			if rp.matchesRequiredState(event, userID, config, lazySenders) {
+				filtered = append(filtered, event)
+			}
 		}
 	}
 
-	// Count member events that passed filtering
-	filteredMemberCount := 0
-	for _, event := range filtered {
-		if event.Type() == "m.room.member" {
-			filteredMemberCount++
+	// Apply exclude patterns
+	if len(config.Exclude) > 0 {
+		var kept []*rstypes.HeaderedEvent
+		for _, event := range filtered {
+			if !rp.matchesExcludePatterns(event, userID, config, lazySenders) {
+				kept = append(kept, event)
+			}
 		}
+		filtered = kept
 	}
+
 	reqStateRegion.SetTag("filtered_state_events", len(filtered))
-	reqStateRegion.SetTag("member_events_returned", filteredMemberCount)
 
-	// Convert to ClientEvents
 	clientEvents := make([]synctypes.ClientEvent, 0, len(filtered))
 	for _, event := range filtered {
 		clientEvent, err := synctypes.ToClientEvent(event, synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -490,6 +491,167 @@ func (rp *RequestPool) getRequiredState(
 	}
 
 	return clientEvents, nil
+}
+
+// canUseTargetedStateQueries checks whether the required_state patterns can be
+// satisfied with targeted DB queries instead of loading all state. Returns false
+// if any pattern uses a wildcard type (e.g. ["*", "*"] or ["*", ""]), which
+// requires loading all state to evaluate.
+func (rp *RequestPool) canUseTargetedStateQueries(config *types.RequiredStateConfig) bool {
+	for _, pattern := range config.Include {
+		if len(pattern) != 2 { //nolint:mnd
+			continue
+		}
+		if pattern[0] == "*" {
+			return false // Wildcard type — must load all state
+		}
+	}
+	return true
+}
+
+// fetchTargetedState fetches only the specific state events matching the
+// required_state patterns using targeted DB queries. For non-member types,
+// it uses a single filtered query. For member events, it uses point queries
+// for each specific state_key ($ME, $LAZY senders, or literal keys).
+// This avoids loading all 27k member events for large rooms when the client
+// only needs a handful.
+func (rp *RequestPool) fetchTargetedState(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	roomID string,
+	userID string,
+	config *types.RequiredStateConfig,
+	lazySenders map[string]bool,
+) ([]*rstypes.HeaderedEvent, error) {
+	// Collect non-member types and member state_keys separately.
+	nonMemberTypes := map[string]bool{}
+	// memberKeys tracks specific state_keys for m.room.member point queries.
+	// nil means "not requested", empty means "requested but no keys resolved yet".
+	var memberKeys map[string]bool
+	needAllMembers := false
+
+	for _, pattern := range config.Include {
+		if len(pattern) != 2 { //nolint:mnd
+			continue
+		}
+		evType, stateKeyPattern := pattern[0], pattern[1]
+
+		if evType == "m.room.member" {
+			if memberKeys == nil {
+				memberKeys = map[string]bool{}
+			}
+			switch stateKeyPattern {
+			case "*":
+				needAllMembers = true
+			case "$ME":
+				memberKeys[userID] = true
+			case "$LAZY":
+				for sender := range lazySenders {
+					memberKeys[sender] = true
+				}
+			default:
+				// Literal state_key
+				memberKeys[stateKeyPattern] = true
+			}
+		} else {
+			// For non-member types with a specific state_key, we still collect
+			// the type and fetch via the type filter. The state_key filtering
+			// happens in Go since the SQL doesn't support state_key filtering,
+			// but non-member types are few so this is fine.
+			nonMemberTypes[evType] = true
+		}
+	}
+
+	var result []*rstypes.HeaderedEvent
+
+	// Fetch non-member state events using a type filter.
+	if len(nonMemberTypes) > 0 {
+		types := make([]string, 0, len(nonMemberTypes))
+		for t := range nonMemberTypes {
+			types = append(types, t)
+		}
+		filter := synctypes.StateFilter{Types: &types}
+		events, err := snapshot.GetStateEventsForRoom(ctx, roomID, &filter)
+		if err != nil {
+			return nil, err
+		}
+		// Apply state_key matching for non-member events (since SQL only filters by type).
+		for _, ev := range events {
+			stateKey := ""
+			if ev.StateKey() != nil {
+				stateKey = *ev.StateKey()
+			}
+			if rp.stateKeyMatchesInclude(ev.Type(), stateKey, userID, config, lazySenders) {
+				result = append(result, ev)
+			}
+		}
+	}
+
+	// Fetch member events.
+	if needAllMembers {
+		// Client wants all members — use type filter for m.room.member.
+		memberType := []string{"m.room.member"}
+		filter := synctypes.StateFilter{Types: &memberType}
+		events, err := snapshot.GetStateEventsForRoom(ctx, roomID, &filter)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, events...)
+	} else if len(memberKeys) > 0 {
+		// Point queries for specific members — O(timeline_limit) queries, each
+		// an indexed lookup on (room_id, type, state_key).
+		for stateKey := range memberKeys {
+			ev, err := snapshot.GetStateEvent(ctx, roomID, "m.room.member", stateKey)
+			if err != nil {
+				return nil, err
+			}
+			if ev != nil {
+				result = append(result, ev)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// stateKeyMatchesInclude checks if an event's type+state_key matches any
+// include pattern. Used for non-member events after type-filtered DB query.
+func (rp *RequestPool) stateKeyMatchesInclude(
+	evType, stateKey, userID string,
+	config *types.RequiredStateConfig,
+	lazySenders map[string]bool,
+) bool {
+	for _, pattern := range config.Include {
+		if len(pattern) != 2 { //nolint:mnd
+			continue
+		}
+		if matchesPattern(evType, pattern[0]) && matchesStateKeyPattern(stateKey, pattern[1], userID, lazySenders) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesExcludePatterns checks if an event matches any exclude pattern.
+func (rp *RequestPool) matchesExcludePatterns(
+	event *rstypes.HeaderedEvent,
+	userID string,
+	config *types.RequiredStateConfig,
+	lazySenders map[string]bool,
+) bool {
+	eventType := event.Type()
+	stateKey := ""
+	if event.StateKey() != nil {
+		stateKey = *event.StateKey()
+	}
+	for _, pattern := range config.Exclude {
+		if len(pattern) == 2 { //nolint:mnd
+			if matchesPattern(eventType, pattern[0]) && matchesStateKeyPattern(stateKey, pattern[1], userID, lazySenders) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matchesRequiredState checks if an event matches the required_state configuration
