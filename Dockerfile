@@ -1,4 +1,4 @@
-#syntax=docker/dockerfile:1.22
+#syntax=docker/dockerfile:1.23
 
 #
 # base installs required dependencies and runs go mod download to cache dependencies
