@@ -122,7 +122,7 @@ func MakeRelayAPI(
 		jsonRes := f(req, fedReq, vars)
 		// do not log 4xx as errors as they are client fails, not server fails
 		if hub != nil && jsonRes.Code >= 500 {
-			hub.Scope().SetExtra("response", jsonRes)
+			hub.Scope().SetContext("response", map[string]any{"json_response": jsonRes})
 			hub.CaptureException(fmt.Errorf("%s returned HTTP %d", req.URL.Path, jsonRes.Code))
 		}
 		return jsonRes
