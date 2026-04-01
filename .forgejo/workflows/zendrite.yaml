@@ -20,6 +20,7 @@ on:
       - '.pre-commit-config.yaml'
       - '.forgejo/workflows/**'
       - 'Dockerfile'
+      - 'website/bun.lock'
   workflow_dispatch:
 
 concurrency:
