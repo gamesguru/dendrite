@@ -200,8 +200,11 @@ func (a *FederationInternalAPI) doFederationRequest(
 			retryAfter = time.Until(failUntil)
 		}
 		var httpCode int
+		var specErr spec.HTTPError
 		var mxErr gomatrix.HTTPError
-		if errors.As(err, &mxErr) {
+		if errors.As(err, &specErr) {
+			httpCode = specErr.Code
+		} else if errors.As(err, &mxErr) {
 			httpCode = mxErr.Code
 		}
 		return res, &api.FederationClientError{
