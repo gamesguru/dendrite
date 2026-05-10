@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"path"
 	"sort"
 	"time"
 
@@ -215,8 +216,6 @@ func OnIncomingMessagesRequest(
 		wasToProvided = false
 	}
 
-	// TODO: Implement filtering (#587)
-
 	// If the user already left the room, grep events from before that
 	if membershipResp.Membership == spec.Leave {
 		var token types.TopologyToken
@@ -256,9 +255,10 @@ func OnIncomingMessagesRequest(
 		}
 	}
 
-	// If start and end are equal, we either reached the beginning or something else
-	// is wrong. If we have nothing to return set end to 0.
-	if start == end || len(clientEvents) == 0 {
+	// If start and end are equal we've reached the beginning of the room or are stuck.
+	// A filtered-empty page (len==0 but valid end) must preserve its end token so the
+	// client can continue paginating; retrieveEvents returns emptyToken for true end-of-history.
+	if start == end {
 		end = types.TopologyToken{}
 	}
 
@@ -330,12 +330,19 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 ) {
 	emptyToken := types.TopologyToken{}
 	// Retrieve the events from the local database.
-	streamEvents, _, end, err := r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
+	// streamEvents has already been filtered by the client's sender/type filter (SelectEvents).
+	// topologyStart/end come from the unfiltered topology range, so end remains valid for
+	// pagination even when the filter removes all events from a page.
+	streamEvents, topologyStart, end, err := r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
 	if err != nil {
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 	}
 	end.Decrement()
+
+	// topologyHadEvents distinguishes "no events in topology range" (true end of history
+	// or backward extremity) from "events existed but the filter removed all of them".
+	topologyHadEvents := topologyStart != emptyToken
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
@@ -344,22 +351,29 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		"backwards": r.backwardOrdering,
 	}).Infof("Fetched %d events locally", len(streamEvents))
 
-	// There can be two reasons for streamEvents to be empty: either we've
-	// reached the oldest event in the room (or the most recent one, depending
-	// on the ordering), or we've reached a backward extremity.
-	if len(streamEvents) == 0 {
+	if len(streamEvents) == 0 && !topologyHadEvents {
+		// The topology query itself found no events: we are at a backward extremity or the
+		// beginning of the room. Check for backfill opportunities.
 		if events, err = r.handleEmptyEventsSlice(); err != nil { //nolint:contextcheck
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
-	} else {
+	} else if len(streamEvents) > 0 {
 		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil { //nolint:contextcheck
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
 	}
+	// If topologyHadEvents && len(streamEvents) == 0: all events in this page were removed
+	// by the sender/type filter. events stays empty. We return the topology end token below
+	// so the client can paginate past this range and find matching events further back.
 
 	// If we didn't get any event, we don't need to proceed any further.
 	if len(events) == 0 {
-		return []synctypes.ClientEvent{}, *r.from, emptyToken, nil
+		if !topologyHadEvents {
+			// True end of history (or backfill returned nothing): signal client to stop.
+			return []synctypes.ClientEvent{}, *r.from, emptyToken, nil
+		}
+		// Filtered-empty page: return the topology end token so the client continues.
+		return []synctypes.ClientEvent{}, *r.from, end, nil
 	}
 
 	// Apply room history visibility filter
@@ -375,9 +389,10 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		"events_after":  len(filteredEvents),
 	}).Debug("applied history visibility (messages)")
 
-	// No events left after applying history visibility
+	// No events left after applying history visibility; return the topology end token
+	// so the client can continue paginating (same logic as the sender/type filter case above).
 	if len(filteredEvents) == 0 {
-		return []synctypes.ClientEvent{}, *r.from, emptyToken, nil
+		return []synctypes.ClientEvent{}, *r.from, end, nil
 	}
 
 	// If we backfilled in the process of getting events, we need
@@ -466,6 +481,9 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			return
 		}
 		r.didBackfill = true
+		// Backfilled events come from federation and are not pre-filtered by the
+		// database query; apply the client's sender/type filter here.
+		events = filterHeaderedEvents(events, r.filter)
 	} else {
 		// If not, it means the slice was empty because we reached the room's
 		// creation, so return an empty slice.
@@ -516,6 +534,9 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 			return
 		}
 		r.didBackfill = true
+		// Backfilled events come from federation and are not pre-filtered by the
+		// database query; apply the client's sender/type filter here.
+		pdus = filterHeaderedEvents(pdus, r.filter)
 		// Append the PDUs to the list to send back to the client.
 		events = append(events, pdus...)
 	}
@@ -539,6 +560,89 @@ func (e eventsByDepth) Swap(i, j int) {
 
 func (e eventsByDepth) Less(i, j int) bool {
 	return e[i].Depth() < e[j].Depth()
+}
+
+// matchesGlob reports whether name matches the glob pattern, where * matches
+// any sequence of characters. This implements Matrix filter wildcards per the
+// client-server API spec. Event types contain no '/' so path.Match's path
+// separator does not interfere with the match.
+func matchesGlob(pattern, name string) bool {
+	ok, _ := path.Match(pattern, name)
+	return ok
+}
+
+// filterHeaderedEvents filters events by the sender and type constraints in
+// filter, mirroring the SQL filtering applied to locally stored events.
+// Used to apply client-specified filters to backfilled events from federation,
+// which bypass the database query.
+func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.RoomEventFilter) []*rstypes.HeaderedEvent {
+	if filter == nil {
+		return events
+	}
+	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil {
+		return events
+	}
+	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
+	for _, ev := range events {
+		sender := ev.UserID.String()
+
+		if filter.Senders != nil {
+			found := false
+			for _, s := range *filter.Senders {
+				if s == sender {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		if filter.NotSenders != nil {
+			excluded := false
+			for _, s := range *filter.NotSenders {
+				if s == sender {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
+
+		eventType := ev.Type()
+
+		if filter.Types != nil {
+			matched := false
+			for _, pattern := range *filter.Types {
+				if matchesGlob(pattern, eventType) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		if filter.NotTypes != nil {
+			excluded := false
+			for _, pattern := range *filter.NotTypes {
+				if matchesGlob(pattern, eventType) {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
+
+		filtered = append(filtered, ev)
+	}
+	return filtered
 }
 
 // backfill performs a backfill request over the federation on another
