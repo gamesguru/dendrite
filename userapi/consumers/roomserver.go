@@ -657,7 +657,7 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 				for _, dev := range devices {
 					// Give each HTTP request its own context.
 					httpCtx, httpCancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd
-					rej, err := s.notifyHTTP(httpCtx, event, url, format, []*pushgateway.Device{dev}, mem.Localpart, roomName, int(userNumUnreadNotifs))
+					rej, err := s.notifyHTTP(httpCtx, event, url, format, []*pushgateway.Device{dev}, mem.Localpart, roomName, int(userNumUnreadNotifs), tweaks)
 					httpCancel()
 					if err != nil {
 						log.WithFields(log.Fields{
@@ -815,13 +815,19 @@ func (s *OutputRoomEventConsumer) localPushDevices(ctx context.Context, localpar
 }
 
 // notifyHTTP performs a notificatation to a Push Gateway.
-func (s *OutputRoomEventConsumer) notifyHTTP(ctx context.Context, event *rstypes.HeaderedEvent, url, format string, devices []*pushgateway.Device, localpart, roomName string, userNumUnreadNotifs int) ([]*pushgateway.Device, error) {
+func (s *OutputRoomEventConsumer) notifyHTTP(ctx context.Context, event *rstypes.HeaderedEvent, url, format string, devices []*pushgateway.Device, localpart, roomName string, userNumUnreadNotifs int, tweaks map[string]any) ([]*pushgateway.Device, error) {
 	logger := log.WithFields(log.Fields{
 		"event_id":    event.EventID(),
 		"url":         url,
 		"localpart":   localpart,
 		"num_devices": len(devices),
 	})
+
+	// Set high priority so push gateways wake the device immediately
+	prio := pushgateway.LowPrio
+	if event.Type() == "m.room.encrypted" || tweaks["highlight"] == true || tweaks["sound"] != nil {
+		prio = pushgateway.HighPrio
+	}
 
 	var req pushgateway.NotifyRequest
 	switch format {
@@ -833,6 +839,7 @@ func (s *OutputRoomEventConsumer) notifyHTTP(ctx context.Context, event *rstypes
 				},
 				Devices: devices,
 				EventID: event.EventID(),
+				Prio:    prio,
 				RoomID:  event.RoomID().String(),
 			},
 		}
@@ -852,6 +859,7 @@ func (s *OutputRoomEventConsumer) notifyHTTP(ctx context.Context, event *rstypes
 				Devices:  devices,
 				EventID:  event.EventID(),
 				ID:       event.EventID(),
+				Prio:     prio,
 				RoomID:   event.RoomID().String(),
 				RoomName: roomName,
 				Sender:   sender.String(),

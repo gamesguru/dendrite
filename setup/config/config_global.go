@@ -1,3 +1,9 @@
+// Copyright 2026 The Zendrite Authors
+// Copyright 2024 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+// Please see LICENSE files in the repository root for full details.
+
 package config
 
 import (
@@ -51,6 +57,10 @@ type Global struct {
 	// The server name to delegate sliding sync communications to, with optional port.
 	// Requires `well_known_client_name` to also be configured.
 	WellKnownSlidingSyncProxy string `yaml:"well_known_sliding_sync_proxy"`
+
+	// MatrixRTC focus servers for VoIP/video calls (MSC4143).
+	// Advertised in .well-known/matrix/client as org.matrix.msc4143.rtc_foci
+	RTCFoci []RTCFocus `yaml:"rtc_foci,omitempty"`
 
 	// Disables federation. Zendrite will not be able to make any outbound HTTP requests
 	// to other servers and the federation API will not be exposed.
@@ -121,6 +131,15 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 
 	for _, v := range c.VirtualHosts {
 		v.Verify(configErrs)
+	}
+
+	for i, focus := range c.RTCFoci {
+		if focus.Type == "" {
+			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].type is required", i))
+		}
+		if focus.Type == "livekit" && (focus.LiveKit == nil || focus.LiveKit.ServiceURL == "") {
+			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].livekit.service_url is required for type \"livekit\"", i))
+		}
 	}
 
 	c.JetStream.Verify(configErrs)
@@ -422,6 +441,20 @@ type PresenceOptions struct {
 	EnableInbound bool `yaml:"enable_inbound"`
 	// Whether outbound presence events are allowed
 	EnableOutbound bool `yaml:"enable_outbound"`
+}
+
+// RTCFocus represents a MatrixRTC focus server configuration (MSC4143).
+type RTCFocus struct {
+	// Type of focus server (e.g., "livekit")
+	Type string `json:"type" yaml:"type"`
+	// LiveKit focus configuration
+	LiveKit *LiveKitFocus `json:"livekit,omitempty" yaml:"livekit,omitempty"`
+}
+
+// LiveKitFocus represents LiveKit-specific focus configuration.
+type LiveKitFocus struct {
+	// ServiceURL is the lk-jwt-service URL (not LiveKit SFU URL)
+	ServiceURL string `json:"service_url" yaml:"service_url"`
 }
 
 type DataUnit int64

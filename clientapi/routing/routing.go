@@ -1,3 +1,4 @@
+// Copyright 2026 The Zendrite Authors
 // Copyright 2024 New Vector Ltd.
 // Copyright 2020 The Matrix.org Foundation C.I.C.
 //
@@ -52,6 +53,7 @@ type WellKnownClientResponse struct {
 	Homeserver       WellKnownClientHomeserver  `json:"m.homeserver"`
 	SlidingSyncProxy *WellKnownSlidingSyncProxy `json:"org.matrix.msc3575.proxy,omitempty"`
 	Authentication   *WellKnownAuthentication   `json:"m.authentication,omitempty"`
+	RTCFoci          []config.RTCFocus          `json:"org.matrix.msc4143.rtc_foci,omitempty"`
 }
 
 // Setup registers HTTP handlers with the given ServeMux. It also supplies the given http.Client
@@ -97,6 +99,7 @@ func Setup(
 		"org.matrix.msc2285.stable":     true,
 		"org.matrix.msc3916.stable":     true,
 		"org.matrix.simplified_msc3575": true, // MSC4186: Simplified Sliding Sync
+		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
 	}
 	for _, msc := range cfg.MSCs.MSCs {
 		unstableFeatures["org.matrix."+msc] = true
@@ -110,7 +113,7 @@ func Setup(
 	// 		 possibly other ways that can result in a stat reset.
 	sf := singleflight.Group{}
 
-	if cfg.Matrix.WellKnownClientName != "" || oidcEnabled {
+	if cfg.Matrix.WellKnownClientName != "" || oidcEnabled || len(cfg.Matrix.RTCFoci) > 0 {
 		if cfg.Matrix.WellKnownClientName != "" {
 			logrus.Infof("Setting m.homeserver base_url as %s at /.well-known/matrix/client", cfg.Matrix.WellKnownClientName)
 		}
@@ -119,6 +122,9 @@ func Setup(
 		}
 		if oidcEnabled {
 			logrus.Infof("Setting m.authentication issuer as %s at /.well-known/matrix/client", mscCfg.MSC3861.Issuer)
+		}
+		if len(cfg.Matrix.RTCFoci) > 0 {
+			logrus.Infof("Setting org.matrix.msc4143.rtc_foci at /.well-known/matrix/client with %d focus server(s)", len(cfg.Matrix.RTCFoci))
 		}
 		wkMux.Handle("/client", httputil.MakeExternalAPI("wellknown", func(r *http.Request) util.JSONResponse {
 			response := WellKnownClientResponse{
@@ -134,6 +140,9 @@ func Setup(
 					Issuer:  mscCfg.MSC3861.Issuer,
 					Account: mscCfg.MSC3861.AccountManagementURL,
 				}
+			}
+			if len(cfg.Matrix.RTCFoci) > 0 {
+				response.RTCFoci = cfg.Matrix.RTCFoci
 			}
 
 			return util.JSONResponse{
@@ -336,6 +345,13 @@ func Setup(
 	v1mux := publicAPIMux.PathPrefix("/v1/").Subrouter()
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
+
+	// MSC4143: MatrixRTC transports
+	unstableMux.Handle("/org.matrix.msc4143/rtc/transports",
+		httputil.MakeAuthAPI("rtc_transports", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return GetRTCTransports(cfg.Matrix.RTCFoci)
+		}),
+	).Methods(http.MethodGet, http.MethodOptions)
 
 	// MSC3266: Room Summary API
 	// Supports both authenticated and unauthenticated requests (Phase 4)

@@ -65,7 +65,7 @@ They are listed by their original MSC number for reference.
 
 | MSC | Title | Status |
 | --- | --- | --- |
-| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC | Not implemented |
+| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | Implemented |
 
 ## Opt-in MSCs
 
