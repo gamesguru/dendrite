@@ -1,0 +1,27 @@
+when:
+  - event: cron
+    cron: auto-release
+  - event: manual
+
+clone:
+  git:
+    image: codefloe.com/crow-plugins/clone:1.0.3
+    settings:
+      tags: true
+
+steps:
+  auto-release:
+    image: codefloe.com/crow-plugins/auto-releaser:0.1.0
+    settings:
+      tag_after: 30d
+      ssh_key:
+        from_secret: zendrite-deploy-key
+      smtp_host: smtp_host
+      smtp_port: 587
+      smtp_username: smtp_username
+      smtp_password:
+        from_secret: smtp_password
+      smtp_from: smtp_username
+      smtp_to:
+        from_secret: auto-releaser-smtp-to
+      notify_on: tag_created,error
