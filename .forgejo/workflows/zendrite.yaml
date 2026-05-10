@@ -95,6 +95,8 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
+          # pgx forwards PGOPTIONS to every connection; caps per-session memory to avoid OOMs under parallel test load.
+          PGOPTIONS: '-c work_mem=2MB -c maintenance_work_mem=32MB'
 
   tests-done:
     name: Tests passed
