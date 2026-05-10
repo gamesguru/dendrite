@@ -16,7 +16,8 @@ steps:
       tag_after: 30d
       ssh_key:
         from_secret: zendrite-deploy-key
-      smtp_host: smtp_host
+      smtp_host: 
+        from_secret: smtp_host
       smtp_port: 587
       smtp_username: smtp_username
       smtp_password:
