@@ -1054,12 +1054,24 @@ func (d *EventDatabase) MaybeRedactEvent(
 		}
 
 		// TODO HYDRA: we need to load the create event here
+		senderLevel := powerlevels.UserLevel(redactionEvent.SenderID())
 		switch {
-		case powerlevels.UserLevel(redactionEvent.SenderID()) >= powerlevels.Redact:
+		case senderLevel >= powerlevels.Redact:
 			// 1. The power level of the redaction event’s sender is greater than or equal to the redact level.
 		case sender1Domain != "" && sender2Domain != "" && sender1Domain == sender2Domain:
 			// 2. The domain of the redaction event’s sender matches that of the original event’s sender.
 		default:
+			logrus.WithFields(logrus.Fields{
+				"room_id":            redactionEvent.RoomID().String(),
+				"redaction_event_id": redactionEvent.EventID(),
+				"redacted_event_id":  redactedEvent.EventID(),
+				"redaction_sender":   redactionEvent.SenderID(),
+				"redacted_sender":    redactedEvent.SenderID(),
+				"redaction_domain":   sender2Domain,
+				"redacted_domain":    sender1Domain,
+				"sender_power_level": senderLevel,
+				"required_redact_pl": powerlevels.Redact,
+			}).Warn("Ignoring redaction: sender lacks redact power level and is not on the same domain as the redacted event's sender")
 			ignoreRedaction = true
 			return nil
 		}
