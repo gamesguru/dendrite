@@ -47,4 +47,11 @@ func (c *JetStream) Defaults(opts DefaultOpts) {
 	}
 }
 
-func (c *JetStream) Verify(configErrs *ConfigErrors) {}
+func (c *JetStream) Verify(configErrs *ConfigErrors) {
+	// Without an explicit storage_path, NATS Server falls back to os.TempDir(),
+	// which on Windows + Go 1.26+ can latch JetStream into a permanent
+	// "Critical write error" state via ERROR_INVALID_PARAMETER in os.RemoveAll.
+	if len(c.Addresses) == 0 && c.StoragePath == "" {
+		configErrs.Add("global.jetstream.storage_path must not be empty when using the built-in NATS server")
+	}
+}
