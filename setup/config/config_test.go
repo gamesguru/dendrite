@@ -258,6 +258,41 @@ func TestUnmarshalDataUnit(t *testing.T) {
 	}
 }
 
+func TestJetStreamVerify(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects empty storage_path for the built-in server", func(t *testing.T) {
+		t.Parallel()
+		js := JetStream{StoragePath: "", Addresses: nil}
+		errs := &ConfigErrors{}
+		js.Verify(errs)
+		if len(*errs) == 0 {
+			t.Fatal("expected an error for empty StoragePath with no Addresses")
+		}
+	})
+
+	t.Run("allows empty storage_path with external addresses", func(t *testing.T) {
+		t.Parallel()
+		js := JetStream{StoragePath: "", Addresses: []string{"nats://example:4222"}}
+		errs := &ConfigErrors{}
+		js.Verify(errs)
+		if len(*errs) > 0 {
+			t.Fatalf("unexpected errors when using external NATS: %v", *errs)
+		}
+	})
+
+	t.Run("generate-config sets a usable default", func(t *testing.T) {
+		t.Parallel()
+		var js JetStream
+		js.Defaults(DefaultOpts{Generate: true})
+		errs := &ConfigErrors{}
+		js.Verify(errs)
+		if len(*errs) > 0 {
+			t.Fatalf("generated config failed verification: %v", *errs)
+		}
+	})
+}
+
 func Test_SigningIdentityFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
