@@ -199,7 +199,15 @@ func (s *inviteEventsStatements) SelectRoomsWithInvitesSince(
 	query := `SELECT DISTINCT room_id FROM syncapi_invite_events
 		WHERE target_user_id = ?  AND id > ?`
 
-	rows, err := txn.QueryContext(ctx, query, targetUserID, since)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if txn == nil {
+		rows, err = s.db.QueryContext(ctx, query, targetUserID, since)
+	} else {
+		rows, err = txn.QueryContext(ctx, query, targetUserID, since)
+	}
 	if err != nil {
 		return nil, err
 	}

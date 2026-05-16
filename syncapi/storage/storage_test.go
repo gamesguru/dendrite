@@ -659,6 +659,69 @@ func TestSendToDeviceBehaviour(t *testing.T) {
 	})
 }
 
+func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		if dbType != test.DBTypeSQLite {
+			t.Skip("SQLite-specific regression test")
+		}
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		charlie := test.NewUser(t)
+		aliceUserID, err := spec.NewUserID(alice.ID, true)
+		if err != nil {
+			t.Fatalf("failed to parse alice user ID: %s", err)
+		}
+		charlieUserID, err := spec.NewUserID(charlie.ID, true)
+		if err != nil {
+			t.Fatalf("failed to parse charlie user ID: %s", err)
+		}
+
+		room1 := test.NewRoom(t, bob)
+		room2 := test.NewRoom(t, bob)
+		room3 := test.NewRoom(t, bob)
+
+		invite1 := room1.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		invite1.UserID = *aliceUserID
+		pos1, err := db.AddInviteEvent(ctx, invite1)
+		if err != nil {
+			t.Fatalf("failed to AddInviteEvent for room1: %s", err)
+		}
+
+		invite2 := room2.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		invite2.UserID = *aliceUserID
+		_, err = db.AddInviteEvent(ctx, invite2)
+		if err != nil {
+			t.Fatalf("failed to AddInviteEvent for room2: %s", err)
+		}
+
+		// Different target user and different room: must not appear in results for alice.
+		invite3 := room3.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(charlie.ID))
+		invite3.UserID = *charlieUserID
+		_, err = db.AddInviteEvent(ctx, invite3)
+		if err != nil {
+			t.Fatalf("failed to AddInviteEvent for room3: %s", err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			got, err := snapshot.RoomsWithInvitesSince(ctx, alice.ID, []string{room1.ID, room2.ID, room3.ID}, pos1)
+			if err != nil {
+				t.Fatalf("RoomsWithInvitesSince returned error: %s", err)
+			}
+			assert.ElementsMatch(t, []string{room2.ID}, got)
+		})
+	})
+}
+
 /* TestInviteBehaviour is currently disabled.
 Func TestInviteBehaviour(t *testing.T) {
 	db := MustCreateDatabase(t)
