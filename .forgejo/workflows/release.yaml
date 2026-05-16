@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     # renovate: datasource=docker depName=thegeeklab/git-sv
-    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.0
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.1
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq git nodejs
@@ -154,7 +154,7 @@ jobs:
     name: Bump Helm chart appVersion
     runs-on: ubuntu-latest
     # renovate: datasource=docker depName=thegeeklab/git-sv
-    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.0
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.1
     needs: release
     steps:
       - name: Install dependencies
