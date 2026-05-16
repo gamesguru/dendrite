@@ -1,4 +1,4 @@
-#syntax=docker/dockerfile:1.23
+#syntax=docker/dockerfile:1.24
 
 # A local development Complement dockerfile, to be used with host mounts
 # /cache -> Contains the entire dendrite code at Dockerfile build time. Builds binaries but only keeps the generate-* ones. Pre-compilation saves time.
