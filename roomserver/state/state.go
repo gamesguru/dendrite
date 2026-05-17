@@ -58,6 +58,10 @@ func NewStateResolution(db StateResolutionStorage, roomInfo *types.RoomInfo, que
 
 type PowerLevelResolver interface {
 	Resolve(ctx context.Context, eventID string) (*gomatrixserverlib.PowerLevelContent, error)
+	// CreateEvent returns the m.room.create event from the state at eventID.
+	// Callers need this to evaluate privileged-creator power on v12+ rooms,
+	// where creators have implicit power but are not in m.room.power_levels.
+	CreateEvent(ctx context.Context, eventID string) (gomatrixserverlib.PDU, error)
 }
 
 func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatrixserverlib.PowerLevelContent, error) {
@@ -98,6 +102,41 @@ func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatri
 	}
 
 	return powerlevels, nil
+}
+
+func (p *StateResolution) CreateEvent(ctx context.Context, eventID string) (gomatrixserverlib.PDU, error) {
+	stateEntries, err := p.LoadStateAtEvent(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+
+	wantTuple := types.StateKeyTuple{
+		EventTypeNID:     types.MRoomCreateNID,
+		EventStateKeyNID: types.EmptyStateKeyNID,
+	}
+
+	var createNID types.EventNID
+	for _, entry := range stateEntries {
+		if entry.StateKeyTuple == wantTuple {
+			createNID = entry.EventNID
+			break
+		}
+	}
+	if createNID == 0 {
+		return nil, fmt.Errorf("unable to find create event")
+	}
+
+	if p.roomInfo == nil {
+		return nil, types.ErrorInvalidRoomInfo
+	}
+	events, err := p.db.Events(ctx, p.roomInfo.RoomVersion, []types.EventNID{createNID})
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("unable to find create event")
+	}
+	return events[0].PDU, nil
 }
 
 // LoadStateAtSnapshot loads the full state of a room at a particular snapshot.

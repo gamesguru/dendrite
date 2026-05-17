@@ -404,20 +404,24 @@ func TestPurgeRoom(t *testing.T) {
 }
 
 type fledglingEvent struct {
-	Type       string
-	StateKey   *string
-	SenderID   string
-	RoomID     string
-	Redacts    string
-	Depth      int64
-	PrevEvents []any
-	AuthEvents []any
-	Content    map[string]any
+	Type        string
+	StateKey    *string
+	SenderID    string
+	RoomID      string
+	Redacts     string
+	Depth       int64
+	PrevEvents  []any
+	AuthEvents  []any
+	Content     map[string]any
+	RoomVersion gomatrixserverlib.RoomVersion
 }
 
 func mustCreateEvent(t *testing.T, ev fledglingEvent) (result *types.HeaderedEvent) {
 	t.Helper()
-	roomVer := gomatrixserverlib.RoomVersionV9
+	roomVer := ev.RoomVersion
+	if roomVer == "" {
+		roomVer = gomatrixserverlib.RoomVersionV9
+	}
 	seed := make([]byte, ed25519.SeedSize) // zero seed
 	key := ed25519.NewKeyFromSeed(seed)
 	eb := gomatrixserverlib.MustGetRoomVersion(roomVer).NewEventBuilderFromProtoEvent(&gomatrixserverlib.ProtoEvent{
@@ -457,6 +461,7 @@ func TestRedaction(t *testing.T) {
 		name             string
 		additionalEvents func(t *testing.T, room *test.Room)
 		wantRedacted     bool
+		roomVersion      gomatrixserverlib.RoomVersion
 	}{
 		{
 			name:         "can redact own message",
@@ -525,6 +530,54 @@ func TestRedaction(t *testing.T) {
 				room.InsertEvent(t, builderEv)
 			},
 		},
+		{
+			// Issue #138: in v12 the room creator has implicit infinite power
+			// and is not listed in m.room.power_levels.users, so the redaction
+			// must be accepted via the privileged-creator check rather than the
+			// power-level lookup. Redacted event is from a different server so
+			// the same-domain auth path does not apply.
+			name:         "v12 creator can redact remote user's message",
+			wantRedacted: true,
+			roomVersion:  gomatrixserverlib.RoomVersionV12,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, charlie, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:        spec.MRoomRedaction,
+					SenderID:    alice.ID,
+					RoomID:      room.ID,
+					Redacts:     redactedEvent.EventID(),
+					Depth:       redactedEvent.Depth() + 1,
+					PrevEvents:  []any{redactedEvent.EventID()},
+					Content:     map[string]any{"redacts": redactedEvent.EventID()},
+					RoomVersion: gomatrixserverlib.RoomVersionV12,
+				})
+				room.InsertEvent(t, builderEv)
+			},
+		},
+		{
+			// Sanity check the negative case in v12: a non-creator on a
+			// different server, with no power-level entry, must still be
+			// denied.
+			name:         "v12 non-creator on different server cannot redact",
+			wantRedacted: false,
+			roomVersion:  gomatrixserverlib.RoomVersionV12,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:        spec.MRoomRedaction,
+					SenderID:    charlie.ID,
+					RoomID:      room.ID,
+					Redacts:     redactedEvent.EventID(),
+					Depth:       redactedEvent.Depth() + 1,
+					PrevEvents:  []any{redactedEvent.EventID()},
+					Content:     map[string]any{"redacts": redactedEvent.EventID()},
+					RoomVersion: gomatrixserverlib.RoomVersionV12,
+				})
+				room.InsertEvent(t, builderEv)
+			},
+		},
 	}
 
 	ctx := context.Background()
@@ -547,7 +600,11 @@ func TestRedaction(t *testing.T) {
 				var roomInfo *types.RoomInfo
 				var err error
 
-				room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+				roomModifiers := []test.RoomModifier{test.RoomPreset(test.PresetPublicChat)}
+				if tc.roomVersion != "" {
+					roomModifiers = append(roomModifiers, test.RoomVersion(tc.roomVersion))
+				}
+				room := test.NewRoom(t, alice, roomModifiers...)
 				room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 					"membership": "join",
 				}, test.WithStateKey(bob.ID))

@@ -49,7 +49,7 @@ type Room struct {
 }
 
 // Create a new test room. Automatically creates the initial create events.
-func NewRoom(t *testing.T, creator *User, modifiers ...roomModifier) *Room {
+func NewRoom(t *testing.T, creator *User, modifiers ...RoomModifier) *Room {
 	t.Helper()
 	counter := atomic.AddInt64(&roomIDCounter, 1)
 	if creator.srvName == "" {
@@ -67,6 +67,11 @@ func NewRoom(t *testing.T, creator *User, modifiers ...roomModifier) *Room {
 	}
 	for _, m := range modifiers {
 		m(t, r)
+	}
+	// Domainless room IDs (v12+) are derived from the create event ID,
+	// so the create event must be built with an empty room ID.
+	if gomatrixserverlib.MustGetRoomVersion(r.Version).DomainlessRoomIDs() {
+		r.ID = ""
 	}
 	r.insertCreateEvents(t)
 	return r
@@ -94,7 +99,8 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 	t.Helper()
 	var joinRule gomatrixserverlib.JoinRuleContent
 	var hisVis gomatrixserverlib.HistoryVisibilityContent
-	plContent := eventutil.InitialPowerLevelsContent(gomatrixserverlib.MustGetRoomVersion(r.Version), r.creator.ID)
+	verImpl := gomatrixserverlib.MustGetRoomVersion(r.Version)
+	plContent := eventutil.InitialPowerLevelsContent(verImpl, r.creator.ID)
 	switch r.preset {
 	case PresetTrustedPrivateChat:
 		fallthrough
@@ -110,10 +116,19 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 		hisVis.HistoryVisibility = r.visibility
 	}
 
-	r.CreateAndInsert(t, r.creator, spec.MRoomCreate, map[string]any{
-		"creator":      r.creator.ID,
+	createContent := map[string]any{
 		"room_version": r.Version,
-	}, WithStateKey(""))
+	}
+	// v11+ removed the creator field from create event content
+	// (the sender is the implicit creator).
+	if !verImpl.PrivilegedCreators() {
+		createContent["creator"] = r.creator.ID
+	}
+	createEv := r.CreateAndInsert(t, r.creator, spec.MRoomCreate, createContent, WithStateKey(""))
+	// For domainless room IDs (v12+), derive the room ID from the create event.
+	if verImpl.DomainlessRoomIDs() {
+		r.ID = createEv.RoomID().String()
+	}
 	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, WithStateKey(r.creator.ID))
@@ -238,9 +253,9 @@ func (r *Room) CreateAndInsert(t *testing.T, creator *User, eventType string, co
 
 // All room modifiers are below.
 
-type roomModifier func(t *testing.T, r *Room)
+type RoomModifier func(t *testing.T, r *Room)
 
-func RoomPreset(p Preset) roomModifier {
+func RoomPreset(p Preset) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		switch p {
 		case PresetPrivateChat:
@@ -257,19 +272,19 @@ func RoomPreset(p Preset) roomModifier {
 	}
 }
 
-func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) roomModifier {
+func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.visibility = vis
 	}
 }
 
-func RoomVersion(ver gomatrixserverlib.RoomVersion) roomModifier {
+func RoomVersion(ver gomatrixserverlib.RoomVersion) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.Version = ver
 	}
 }
 
-func GuestsCanJoin(canJoin bool) roomModifier {
+func GuestsCanJoin(canJoin bool) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.guestCanJoin = canJoin
 	}

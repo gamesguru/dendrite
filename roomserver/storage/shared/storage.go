@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -1053,9 +1054,22 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return err
 		}
 
-		// TODO HYDRA: we need to load the create event here
+		// On v12+ rooms the room creator (and any additional_creators) has
+		// implicit infinite power and is not listed in m.room.power_levels.
+		isPrivilegedCreator := false
+		createEvent, createErr := plResolver.CreateEvent(ctx, redactionEvent.EventID())
+		if createErr == nil && createEvent != nil {
+			verImpl, verErr := gomatrixserverlib.GetRoomVersion(createEvent.Version())
+			if verErr == nil && verImpl.PrivilegedCreators() &&
+				slices.Contains(gomatrixserverlib.CreatorsFromCreateEvent(createEvent), string(redactionEvent.SenderID())) {
+				isPrivilegedCreator = true
+			}
+		}
+
 		senderLevel := powerlevels.UserLevel(redactionEvent.SenderID())
 		switch {
+		case isPrivilegedCreator:
+			// The sender is a privileged creator (v12+); they have implicit power to redact.
 		case senderLevel >= powerlevels.Redact:
 			// 1. The power level of the redaction event’s sender is greater than or equal to the redact level.
 		case sender1Domain != "" && sender2Domain != "" && sender1Domain == sender2Domain:
