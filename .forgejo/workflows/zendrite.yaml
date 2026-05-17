@@ -89,7 +89,10 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
       - name: Run tests
-        run: go test -race -v ${{ matrix.packages }}
+        # -p 4 caps the number of concurrent test binaries; with -race each binary
+        # uses ~5-10x normal memory, so the default (GOMAXPROCS) can OOM the runner
+        # under groups with many packages (e.g. userapi has 6).
+        run: go test -race -v -p 4 ${{ matrix.packages }}
         env:
           POSTGRES_HOST: postgres
           POSTGRES_USER: postgres
