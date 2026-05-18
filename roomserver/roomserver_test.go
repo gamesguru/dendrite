@@ -664,6 +664,144 @@ func TestRedaction(t *testing.T) {
 	})
 }
 
+// TestRedactionNoPowerLevels covers the no-m.room.power_levels case for
+// v1-v11 rooms. Per the Matrix spec, the room creator has implicit power
+// 100 in such rooms (see https://matrix.org/docs/spec-guides/creator-power-level/),
+// which lets them send the initial PL event - and, by extension, redact.
+//
+// Before fixing #152, (*StateResolution).Resolve errored with "unable to
+// find power level event" in MaybeRedactEvent, silently dropping creator-
+// sent redactions locally even though the redaction was federated.
+func TestRedactionNoPowerLevels(t *testing.T) {
+	alice := test.NewUser(t)
+	charlie := test.NewUser(t, test.WithSigningServer("notlocalhost", "abc", test.PrivateKeyB))
+
+	testCases := []struct {
+		name             string
+		additionalEvents func(t *testing.T, room *test.Room)
+		wantRedacted     bool
+	}{
+		{
+			// Issue #152: alice (v9 creator, no PL event in the room) must
+			// be able to redact charlie's (different server) message via
+			// the spec's implicit creator-power-100 rule.
+			name:         "v9 creator can redact remote user's message in a room with no power_levels event",
+			wantRedacted: true,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, charlie, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:       spec.MRoomRedaction,
+					SenderID:   alice.ID,
+					RoomID:     room.ID,
+					Redacts:    redactedEvent.EventID(),
+					Depth:      redactedEvent.Depth() + 1,
+					PrevEvents: []any{redactedEvent.EventID()},
+				})
+				room.InsertEvent(t, builderEv)
+			},
+		},
+		{
+			// Sanity check the negative case: charlie (non-creator, different
+			// server, no PL entry) must still be denied in a no-PL room.
+			// Without our fix, this case errored out the same way as the
+			// positive one - this assertion locks in that the fix does not
+			// over-grant power to non-creators.
+			name:         "non-creator on different server cannot redact in a room with no power_levels event",
+			wantRedacted: false,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:       spec.MRoomRedaction,
+					SenderID:   charlie.ID,
+					RoomID:     room.ID,
+					Redacts:    redactedEvent.EventID(),
+					Depth:      redactedEvent.Depth() + 1,
+					PrevEvents: []any{redactedEvent.EventID()},
+				})
+				room.InsertEvent(t, builderEv)
+			},
+		},
+	}
+
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches) //nolint:contextcheck
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		natsInstance := &jetstream.NATSInstance{}
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				authEvents := []types.EventNID{}
+				var roomInfo *types.RoomInfo
+				var err error
+
+				// Public chat with no m.room.power_levels event - the bug
+				// scenario from #152.
+				room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat), test.WithoutPowerLevels())
+				room.CreateAndInsert(t, charlie, spec.MRoomMember, map[string]any{
+					"membership": "join",
+				}, test.WithStateKey(charlie.ID))
+
+				if tc.additionalEvents != nil {
+					tc.additionalEvents(t, room)
+				}
+
+				for _, ev := range room.Events() {
+					roomInfo, err = db.GetOrCreateRoomInfo(ctx, ev.PDU)
+					assert.NoError(t, err)
+					assert.NotNil(t, roomInfo)
+					evTypeNID, err := db.GetOrCreateEventTypeNID(ctx, ev.Type())
+					assert.NoError(t, err)
+
+					stateKeyNID, err := db.GetOrCreateEventStateKeyNID(ctx, ev.StateKey())
+					assert.NoError(t, err)
+
+					eventNID, stateAtEvent, err := db.StoreEvent(ctx, ev.PDU, roomInfo, evTypeNID, stateKeyNID, authEvents, false)
+					assert.NoError(t, err)
+					if ev.StateKey() != nil {
+						authEvents = append(authEvents, eventNID)
+					}
+
+					plResolver := state.NewStateResolution(db, roomInfo, rsAPI)
+					stateAtEvent.BeforeStateSnapshotNID, err = plResolver.CalculateAndStoreStateBeforeEvent(ctx, ev.PDU, false)
+					assert.NoError(t, err)
+
+					updater, err := db.GetRoomUpdater(ctx, roomInfo)
+					assert.NoError(t, err)
+					err = updater.SetState(ctx, eventNID, stateAtEvent.BeforeStateSnapshotNID)
+					assert.NoError(t, err)
+					err = updater.Commit()
+					assert.NoError(t, err)
+
+					_, redactedEvent, err := db.MaybeRedactEvent(ctx, roomInfo, eventNID, ev.PDU, &plResolver, &FakeQuerier{})
+					assert.NoError(t, err)
+					if redactedEvent != nil {
+						assert.Equal(t, ev.Redacts(), redactedEvent.EventID())
+					}
+					if ev.Type() == spec.MRoomRedaction {
+						nids, err := db.EventNIDs(ctx, []string{ev.Redacts()})
+						assert.NoError(t, err)
+						evs, err := db.Events(ctx, roomInfo.RoomVersion, []types.EventNID{nids[ev.Redacts()].EventNID})
+						assert.NoError(t, err)
+						assert.Equal(t, 1, len(evs))
+						assert.Equal(t, tc.wantRedacted, evs[0].Redacted())
+					}
+				}
+			})
+		}
+	})
+}
+
 func TestQueryRestrictedJoinAllowed(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)

@@ -83,7 +83,46 @@ func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatri
 		}
 	}
 	if plNID == 0 {
-		return nil, fmt.Errorf("unable to find power level event")
+		// No m.room.power_levels event in state. Per spec, the room creator
+		// has implicit power 100 in v1-v11 rooms (see issue #152 /
+		// https://matrix.org/docs/spec-guides/creator-power-level/), so
+		// return defaults with the creator entry populated rather than
+		// erroring out and silently dropping legitimate creator actions
+		// like redactions.
+		var createNID types.EventNID
+		wantCreateTuple := types.StateKeyTuple{
+			EventTypeNID:     types.MRoomCreateNID,
+			EventStateKeyNID: types.EmptyStateKeyNID,
+		}
+		for _, entry := range stateEntries {
+			if entry.StateKeyTuple == wantCreateTuple {
+				createNID = entry.EventNID
+				break
+			}
+		}
+		if createNID == 0 {
+			return nil, fmt.Errorf("no power_levels or create event in state at %s", eventID)
+		}
+		if p.roomInfo == nil {
+			return nil, types.ErrorInvalidRoomInfo
+		}
+		createEvents, err := p.db.Events(ctx, p.roomInfo.RoomVersion, []types.EventNID{createNID})
+		if err != nil {
+			return nil, err
+		}
+		if len(createEvents) == 0 {
+			return nil, fmt.Errorf("create event NID %d not found in events table at %s", createNID, eventID)
+		}
+		createEvent := createEvents[0].PDU
+		auth, err := gomatrixserverlib.NewAuthEvents([]gomatrixserverlib.PDU{createEvent})
+		if err != nil {
+			return nil, err
+		}
+		pl, err := gomatrixserverlib.NewPowerLevelContentFromAuthEvents(auth, string(createEvent.SenderID()))
+		if err != nil {
+			return nil, err
+		}
+		return &pl, nil
 	}
 
 	if p.roomInfo == nil {

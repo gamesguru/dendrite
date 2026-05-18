@@ -36,12 +36,13 @@ func UserIDForSender(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, 
 }
 
 type Room struct {
-	ID           string
-	Version      gomatrixserverlib.RoomVersion
-	preset       Preset
-	guestCanJoin bool
-	visibility   gomatrixserverlib.HistoryVisibility
-	creator      *User
+	ID            string
+	Version       gomatrixserverlib.RoomVersion
+	preset        Preset
+	guestCanJoin  bool
+	noPowerLevels bool
+	visibility    gomatrixserverlib.HistoryVisibility
+	creator       *User
 
 	authEvents   *gomatrixserverlib.AuthEvents
 	currentState map[string]*rstypes.HeaderedEvent
@@ -132,7 +133,9 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, WithStateKey(r.creator.ID))
-	r.CreateAndInsert(t, r.creator, spec.MRoomPowerLevels, plContent, WithStateKey(""))
+	if !r.noPowerLevels {
+		r.CreateAndInsert(t, r.creator, spec.MRoomPowerLevels, plContent, WithStateKey(""))
+	}
 	r.CreateAndInsert(t, r.creator, spec.MRoomJoinRules, joinRule, WithStateKey(""))
 	r.CreateAndInsert(t, r.creator, spec.MRoomHistoryVisibility, hisVis, WithStateKey(""))
 	if r.guestCanJoin {
@@ -287,5 +290,14 @@ func RoomVersion(ver gomatrixserverlib.RoomVersion) RoomModifier {
 func GuestsCanJoin(canJoin bool) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.guestCanJoin = canJoin
+	}
+}
+
+// WithoutPowerLevels suppresses the initial m.room.power_levels event during
+// room construction. Used to simulate the spec-allowed but rare state of a
+// v1-v11 room whose creator has implicit power 100 because no PL event exists.
+func WithoutPowerLevels() roomModifier {
+	return func(t *testing.T, r *Room) {
+		r.noPowerLevels = true
 	}
 }
