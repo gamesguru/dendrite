@@ -296,7 +296,7 @@ func GuestsCanJoin(canJoin bool) RoomModifier {
 // WithoutPowerLevels suppresses the initial m.room.power_levels event during
 // room construction. Used to simulate the spec-allowed but rare state of a
 // v1-v11 room whose creator has implicit power 100 because no PL event exists.
-func WithoutPowerLevels() roomModifier {
+func WithoutPowerLevels() RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.noPowerLevels = true
 	}
