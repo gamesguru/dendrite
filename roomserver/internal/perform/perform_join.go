@@ -417,14 +417,11 @@ func (r *Joiner) performJoinRoomByID(
 	case errors.As(err, new(eventutil.ErrRoomNoExists)):
 		// The room doesn't exist locally. If the room ID looks like it should
 		// be ours then this probably means that we've nuked our database at
-		// some point.
-		if r.Cfg.Matrix.IsLocalServerName(roomID.Domain()) {
-			// If there are no more server names to try then give up here.
-			// Otherwise we'll try a federated join as normal, since it's quite
-			// possible that the room still exists on other servers.
-			if len(req.ServerNames) == 0 {
-				return "", "", eventutil.ErrRoomNoExists{}
-			}
+		// some point. Either way, without via servers there is nothing to try
+		// over federation, so surface the not-found state directly instead of
+		// letting the federation API fail with a generic "Unknown HTTP error".
+		if len(req.ServerNames) == 0 {
+			return "", "", eventutil.ErrRoomNoExists{}
 		}
 
 		// Perform a federated room join.

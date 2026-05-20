@@ -123,11 +123,11 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 
 	case api.OutputTypePurgeRoom:
-		log.WithField("room_id", output.PurgeRoom.RoomID).Warn("Purging room from federation API")
+		log.WithField("room_id", output.PurgeRoom.RoomID).Info("Purging room from federation API")
 		if err := s.db.PurgeRoom(ctx, output.PurgeRoom.RoomID); err != nil {
 			log.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from federation API")
 		} else {
-			log.WithField("room_id", output.PurgeRoom.RoomID).Warn("Room purged from federation API")
+			log.WithField("room_id", output.PurgeRoom.RoomID).Info("Room purged from federation API")
 		}
 
 	default:

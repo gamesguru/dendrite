@@ -71,6 +71,7 @@ This can be used to possibly resolve E2EE issues, where the remote user can't de
 ## POST `/_zendrite/admin/purgeRoom/{roomID}`
 
 This endpoint instructs Zendrite to remove the given room from its database.
+Before doing so, it attempts to evacuate all local users from the room.
 It does **NOT** remove media files.
 Depending on the size of the room, this may take a while.
 Will return an empty JSON once other components were instructed to delete the room.

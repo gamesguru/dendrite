@@ -551,13 +551,13 @@ func (s *OutputRoomEventConsumer) onRetirePeek(
 func (s *OutputRoomEventConsumer) onPurgeRoom(
 	ctx context.Context, req api.OutputPurgeRoom,
 ) error {
-	log.WithField("room_id", req.RoomID).Warn("Purging room from sync API")
+	log.WithField("room_id", req.RoomID).Info("Purging room from sync API")
 
 	if err := s.db.PurgeRoom(ctx, req.RoomID); err != nil {
 		log.WithField("room_id", req.RoomID).WithError(err).Error("Failed to purge room from sync API")
 		return err
 	} else {
-		log.WithField("room_id", req.RoomID).Warn("Room purged from sync API")
+		log.WithField("room_id", req.RoomID).Info("Room purged from sync API")
 		return nil
 	}
 }

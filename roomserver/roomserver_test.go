@@ -337,6 +337,12 @@ func TestPurgeRoom(t *testing.T) {
 			t.Fatalf("expected invite event ID %s, got %s", inviteEvent.EventID(), inviteEventIDs[0])
 		}
 
+		// The earlier db.RoomInfo call should have warmed the room ID -> NID
+		// cache; confirm so the post-purge assertion below is meaningful.
+		if nid, ok := caches.GetRoomServerRoomNID(room.ID); !ok || nid != existingRoomInfo.RoomNID {
+			t.Fatalf("expected RoomServerRoomNID cache to be warm before purge: got (%d, %v)", nid, ok)
+		}
+
 		// purge the room from the database
 		if err = rsAPI.PerformAdminPurgeRoom(ctx, room.ID); err != nil {
 			t.Fatal(err)
@@ -369,6 +375,14 @@ func TestPurgeRoom(t *testing.T) {
 		roomInfo2, err = db.RoomInfoByNID(ctx, existingRoomInfo.RoomNID)
 		if err == nil {
 			t.Fatalf("expected room to not exist, but it does: %#v", roomInfo2)
+		}
+
+		// The room ID -> NID mapping must be cleared so a rejoin of the same
+		// room ID re-binds to a freshly-allocated NID instead of the dead one.
+		// Other room-keyed caches (RoomVersion, NID -> roomID) hold spec-
+		// immutable values, so they're left to expire via TTL.
+		if nid, ok := caches.GetRoomServerRoomNID(room.ID); ok {
+			t.Fatalf("RoomServerRoomNID cache should be cleared after purge, got %d", nid)
 		}
 
 		// validation below

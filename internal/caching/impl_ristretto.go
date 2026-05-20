@@ -84,9 +84,10 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 			MaxAge:  maxAge,
 		},
 		RoomServerRoomNIDs: &RistrettoCachePartition[string, types.RoomNID]{ // room ID -> room NID
-			cache:  cache,
-			Prefix: roomNIDsCache,
-			MaxAge: maxAge,
+			cache:   cache,
+			Prefix:  roomNIDsCache,
+			Mutable: true, // must be unsettable on PurgeRoom so a rejoin can re-bind the room ID to a new NID
+			MaxAge:  maxAge,
 		},
 		RoomServerRoomIDs: &RistrettoCachePartition[types.RoomNID, string]{ // room NID -> room ID
 			cache:  cache,

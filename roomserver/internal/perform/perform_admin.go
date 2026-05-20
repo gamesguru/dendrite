@@ -139,6 +139,10 @@ func (r *Admin) PerformAdminEvacuateRoom(
 	}
 	inputRes := &api.InputRoomEventsResponse{}
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
+	if inputRes.ErrMsg != "" {
+		return nil, inputRes.Err()
+	}
+
 	return affected, nil
 }
 
@@ -200,13 +204,25 @@ func (r *Admin) PerformAdminPurgeRoom(
 		return err
 	}
 
-	logrus.WithField("room_id", roomID).Warn("Purging room from roomserver")
+	// Evacuate the room before purging it from the database
+	evacAffected, err := r.PerformAdminEvacuateRoom(ctx, roomID)
+	if err != nil {
+		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to evacuate room before purging")
+		// Continue with deleting the room (it's probably broken)
+	} else {
+		logrus.WithFields(logrus.Fields{
+			"room_id":         roomID,
+			"evacuated_users": evacAffected,
+		}).Infof("Evacuated %d users from room before purging", len(evacAffected))
+	}
+
+	logrus.WithField("room_id", roomID).Info("Purging room from roomserver")
 	if err := r.DB.PurgeRoom(ctx, roomID); err != nil {
-		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to purge room from roomserver")
+		logrus.WithField("room_id", roomID).WithError(err).Error("Failed to purge room from roomserver")
 		return err
 	}
 
-	logrus.WithField("room_id", roomID).Warn("Room purged from roomserver, informing other components")
+	logrus.WithField("room_id", roomID).Info("Room purged from roomserver, informing other components")
 
 	return r.Inputer.OutputProducer.ProduceRoomEvents(roomID, []api.OutputEvent{
 		{

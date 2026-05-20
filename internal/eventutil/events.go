@@ -61,13 +61,18 @@ func QueryAndBuildEvent(
 }
 
 // BuildEvent builds a Matrix event from the builder and QueryLatestEventsAndStateResponse
-// provided.
+// provided. Returns ErrRoomNoExists if queryRes indicates the room is not known
+// locally; without this check, an empty RoomVersion would surface as a confusing
+// unsupported-room-version error from gomatrixserverlib.GetRoomVersion.
 func BuildEvent(
 	ctx context.Context,
 	proto *gomatrixserverlib.ProtoEvent,
 	identity *fclient.SigningIdentity, evTime time.Time,
 	eventsNeeded *gomatrixserverlib.StateNeeded, queryRes *api.QueryLatestEventsAndStateResponse,
 ) (*types.HeaderedEvent, error) {
+	if !queryRes.RoomExists {
+		return nil, ErrRoomNoExists{}
+	}
 	verImpl, err := gomatrixserverlib.GetRoomVersion(queryRes.RoomVersion)
 	if err != nil {
 		return nil, err
