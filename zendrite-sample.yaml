@@ -279,7 +279,8 @@ federation_api:
     - 'fe80::/64'
     - 'fc00::/7'
   allow_networks:
-    - '0.0.0.0/0' # "Everything". The deny list will help limit this.
+    - '0.0.0.0/0' # Every ipv4 address. The deny list will help limit this.
+    - '::/0' # Every ipv6 address. The deny list will help limit this.
 
 # Configuration for the Media API.
 media_api:

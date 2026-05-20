@@ -72,6 +72,7 @@ func (c *FederationAPI) Defaults(opts DefaultOpts) {
 	}
 	c.AllowNetworkCIDRs = []string{
 		"0.0.0.0/0",
+		"::/0",
 	}
 	if opts.Generate {
 		c.KeyPerspectives = KeyPerspectives{
