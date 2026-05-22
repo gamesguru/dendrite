@@ -4,23 +4,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '**.go' # only execute on changes to go files
-      - 'go.mod' # or dependency updates
-      - 'go.sum' # or dependency updates
-      - '.pre-commit-config.yaml'
-      - '.forgejo/workflows/**' # or workflow changes
-      - 'Dockerfile'
-      - 'website/bun.lock'
   pull_request:
-    paths:
-      - '**.go'
-      - 'go.mod' # or dependency updates
-      - 'go.sum' # or dependency updates
-      - '.pre-commit-config.yaml'
-      - '.forgejo/workflows/**'
-      - 'Dockerfile'
-      - 'website/bun.lock'
   workflow_dispatch:
 
 concurrency:
@@ -28,8 +12,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Detect whether Go-related files changed. Lint/test are gated on this so
+  # they appear as skipped (rather than missing) status checks on PRs that
+  # only touch unrelated paths like website/, which avoids blocking merges
+  # on required checks that would otherwise never run.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: https://github.com/dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.pre-commit-config.yaml'
+              - '.forgejo/workflows/**'
+              - 'Dockerfile'
+
   # Run golangci-lint
   lint:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     timeout-minutes: 5
     name: Linting
     runs-on: ubuntu-latest
@@ -48,6 +56,8 @@ jobs:
 
   # Run tests split by package groups for parallelism
   test:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     timeout-minutes: 15
     name: Tests (${{ matrix.group }})
     runs-on: ubuntu-latest
