@@ -52,6 +52,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.
 			MaxIdleConnections:     2,  //nolint:mnd
 			ConnMaxLifetimeSeconds: 60, //nolint:mnd
 		}
+		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {
 			ctx.ShutdownZendrite()
 			ctx.WaitForComponentsToFinish()
@@ -80,6 +81,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.
 		cfg.UserAPI.AccountDatabase.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "userapi.db"))
 		cfg.RelayAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "relayapi.db"))
 
+		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {
 			ctx.ShutdownZendrite()
 			ctx.WaitForComponentsToFinish()
@@ -88,4 +90,15 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.
 		t.Fatalf("unknown db type: %v", dbType)
 	}
 	return &config.Zendrite{}, nil, func() {}
+}
+
+// applyTestOverrides applies overrides that diverge from the production
+// defaults to keep tests deterministic. Called after the dbType-specific
+// cfg.Defaults() calls in CreateConfig.
+func applyTestOverrides(cfg *config.Zendrite) {
+	// Disable automatic empty-room purging. Many tests have a local user
+	// leave a room and then continue to act in or observe it, which is
+	// incompatible with auto-purging. Tests that exercise the feature
+	// explicitly opt in by setting cfg.RoomServer.AutoPurgeEmptyRooms = true.
+	cfg.RoomServer.AutoPurgeEmptyRooms = false
 }

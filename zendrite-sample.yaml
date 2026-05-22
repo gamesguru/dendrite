@@ -282,6 +282,17 @@ federation_api:
     - '0.0.0.0/0' # Every ipv4 address. The deny list will help limit this.
     - '::/0' # Every ipv6 address. The deny list will help limit this.
 
+# Configuration for the Room Server.
+room_server:
+  # Automatically purge empty rooms. When enabled (the default), two
+  # behaviours fire together:
+  #   - at startup, a one-shot sweep purges any rooms which currently have
+  #     no local members; and
+  #   - at runtime, whenever the last local member leaves a room, the room
+  #     is scheduled for an asynchronous purge.
+  # Set to false to disable both behaviours.
+  auto_purge_empty_rooms: true
+
 # Configuration for the Media API.
 media_api:
   # Storage path for uploaded media. May be relative or absolute.

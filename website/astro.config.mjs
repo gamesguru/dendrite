@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'Registration', slug: 'administration/registration' },
             { label: 'Presence', slug: 'administration/presence' },
             { label: 'Admin API', slug: 'administration/adminapi' },
+            { label: 'Auto-purging empty rooms', slug: 'administration/auto-purge-empty-rooms' },
             { label: 'Optimisation', slug: 'administration/optimisation' },
             { label: 'Migration from Dendrite', slug: 'administration/migration-from-dendrite' },
             { label: 'Backups', slug: 'administration/backups' },

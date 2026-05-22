@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -28,6 +29,10 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// defaultPurgeWaitTimeout is the maximum time a rejoin attempt will wait for
+// an in-flight auto-purge to complete before proceeding.
+const defaultPurgeWaitTimeout = 30 * time.Second
 
 // RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI.
 type RoomserverInternalAPI struct {
@@ -63,6 +68,7 @@ type RoomserverInternalAPI struct {
 	enableMetrics          bool
 	defaultRoomVersion     gomatrixserverlib.RoomVersion
 	PartialStateTracker    *PartialStateTracker
+	PurgeTracker           *perform.PurgeTracker
 }
 
 func NewRoomserverAPI(
@@ -96,6 +102,7 @@ func NewRoomserverAPI(
 		enableMetrics:          enableMetrics,
 		defaultRoomVersion:     zendriteCfg.RoomServer.DefaultRoomVersion,
 		PartialStateTracker:    NewPartialStateTracker(),
+		PurgeTracker:           perform.NewPurgeTracker(),
 		// perform-er structs + queryer struct get initialized when we have a federation sender to use
 	}
 	return a
@@ -143,12 +150,14 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		Inputer: r.Inputer,
 	}
 	r.Joiner = &perform.Joiner{
-		Cfg:     &r.Cfg.RoomServer,
-		DB:      r.DB,
-		FSAPI:   r.fsAPI,
-		RSAPI:   r,
-		Inputer: r.Inputer,
-		Queryer: r.Queryer,
+		Cfg:              &r.Cfg.RoomServer,
+		DB:               r.DB,
+		FSAPI:            r.fsAPI,
+		RSAPI:            r,
+		Inputer:          r.Inputer,
+		Queryer:          r.Queryer,
+		PurgeTracker:     r.PurgeTracker,
+		PurgeWaitTimeout: defaultPurgeWaitTimeout,
 	}
 	r.Peeker = &perform.Peeker{
 		ServerName: r.ServerName,
@@ -196,11 +205,12 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		URSAPI: r,
 	}
 	r.Admin = &perform.Admin{
-		DB:      r.DB,
-		Cfg:     &r.Cfg.RoomServer,
-		Inputer: r.Inputer,
-		Queryer: r.Queryer,
-		Leaver:  r.Leaver,
+		DB:           r.DB,
+		Cfg:          &r.Cfg.RoomServer,
+		Inputer:      r.Inputer,
+		Queryer:      r.Queryer,
+		Leaver:       r.Leaver,
+		PurgeTracker: r.PurgeTracker,
 	}
 	r.Creator = &perform.Creator{
 		DB:    r.DB,
@@ -211,6 +221,34 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 	if err := r.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start roomserver input API")
 	}
+
+	// When auto-purge is enabled, sweep any rooms that are already empty of
+	// local members at startup (e.g. left over from a previous run, or from
+	// a crash mid-purge during the previous shutdown).
+	if r.Cfg.RoomServer.AutoPurgeEmptyRooms {
+		go func() {
+			if _, err := r.RunEmptyRoomsSweep(r.ProcessContext.Context()); err != nil {
+				logrus.WithError(err).Warn("startup empty-rooms sweep failed")
+			}
+		}()
+	}
+}
+
+// RunEmptyRoomsSweep enumerates all rooms with no local server membership
+// and schedules an async auto-purge for each. Returns the number of rooms
+// scheduled. Safe to call multiple times; AutoPurgeRoom coalesces duplicates.
+func (r *RoomserverInternalAPI) RunEmptyRoomsSweep(ctx context.Context) (int, error) {
+	rooms, err := r.DB.EmptyRooms(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, roomID := range rooms {
+		r.AutoPurgeRoom(ctx, roomID, "startup_sweep")
+	}
+	if len(rooms) > 0 {
+		logrus.WithField("count", len(rooms)).Info("startup empty-rooms sweep scheduled purges")
+	}
+	return len(rooms), nil
 }
 
 func (r *RoomserverInternalAPI) SetUserAPI(userAPI userapi.RoomserverUserAPI) {
@@ -483,5 +521,14 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
 func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {
-	return r.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
+	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
+	if err != nil {
+		return err
+	}
+	// ScheduleAutoPurgeIfEmpty is called here, after UpdateStateAfterResync's
+	// deferred EndTransactionWithCheck has committed the membership changes.
+	if localLeftJoin {
+		r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
+	}
+	return nil
 }

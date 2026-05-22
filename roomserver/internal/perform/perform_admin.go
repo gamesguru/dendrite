@@ -29,11 +29,12 @@ import (
 )
 
 type Admin struct {
-	DB      storage.Database
-	Cfg     *config.RoomServer
-	Queryer *query.Queryer
-	Inputer *input.Inputer
-	Leaver  *Leaver
+	DB           storage.Database
+	Cfg          *config.RoomServer
+	Queryer      *query.Queryer
+	Inputer      *input.Inputer
+	Leaver       *Leaver
+	PurgeTracker *PurgeTracker
 }
 
 // PerformAdminEvacuateRoom will remove all local users from the given room.
@@ -232,6 +233,37 @@ func (r *Admin) PerformAdminPurgeRoom(
 			},
 		},
 	})
+}
+
+// AutoPurgeRoom asynchronously purges roomID via PerformAdminPurgeRoom,
+// tracking it in the PurgeTracker so that concurrent rejoin attempts can
+// wait for the purge to complete. Coalesces concurrent calls for the same
+// roomID. The flag check is the caller's responsibility — see
+// ScheduleAutoPurgeIfEmpty and the startup sweep.
+//
+// The ctx parameter exists for the api.RoomserverInternalAPI interface;
+// the spawned goroutine intentionally uses context.Background() so the
+// purge cannot be canceled by a short-lived caller (e.g. a NATS message
+// handler whose context is canceled when the handler returns).
+func (r *Admin) AutoPurgeRoom(ctx context.Context, roomID, reason string) {
+	_, owner := r.PurgeTracker.BeginPurge(roomID)
+	if !owner {
+		return
+	}
+	go func() { //nolint:contextcheck
+		defer r.PurgeTracker.FinishPurge(roomID)
+		// Detach from the caller's context: the caller may be a short-lived
+		// handler (e.g. NATS message dispatch) whose ctx is canceled as soon
+		// as the handler returns. The purge itself is an autonomous, in-flight
+		// operation and must run to completion.
+		ctx := context.Background()
+		fields := logrus.Fields{"room_id": roomID, "reason": reason}
+		if err := r.PerformAdminPurgeRoom(ctx, roomID); err != nil {
+			logrus.WithError(err).WithFields(fields).Warn("Auto-purge of empty room failed")
+			return
+		}
+		logrus.WithFields(fields).Info("Auto-purged empty room")
+	}()
 }
 
 func (r *Admin) PerformAdminDownloadState(

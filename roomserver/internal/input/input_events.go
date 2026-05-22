@@ -585,7 +585,7 @@ func (r *Inputer) processRoomEvent(
 
 	switch input.Kind {
 	case api.KindNew:
-		if err = r.updateLatestEvents(
+		localLeftJoin, err := r.updateLatestEvents(
 			ctx,                 // context
 			roomInfo,            // room info for the room being updated
 			stateAtEvent,        // state at event (below)
@@ -594,8 +594,12 @@ func (r *Inputer) processRoomEvent(
 			input.TransactionID, // transaction ID
 			input.HasState,      // rewrites state?
 			historyVisibility,   // the history visibility before the event
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("r.updateLatestEvents: %w", err)
+		}
+		if localLeftJoin {
+			r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
 		}
 	case api.KindOld:
 		err = r.OutputProducer.ProduceRoomEvents(event.RoomID().String(), []api.OutputEvent{

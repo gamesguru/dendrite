@@ -50,14 +50,14 @@ func (r *Inputer) updateLatestEvents(
 	transactionID *api.TransactionID,
 	rewritesState bool,
 	historyVisibility gomatrixserverlib.HistoryVisibility,
-) (err error) {
+) (localLeftJoin bool, err error) {
 	trace, ctx := internal.StartRegion(ctx, "updateLatestEvents")
 	defer trace.EndRegion()
 
 	var succeeded bool
 	updater, err := r.DB.GetRoomUpdater(ctx, roomInfo)
 	if err != nil {
-		return fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
+		return false, fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
 	}
 
 	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
@@ -76,11 +76,11 @@ func (r *Inputer) updateLatestEvents(
 	}
 
 	if err = u.doUpdateLatestEvents(); err != nil { //nolint:contextcheck
-		return fmt.Errorf("u.doUpdateLatestEvents: %w", err)
+		return false, fmt.Errorf("u.doUpdateLatestEvents: %w", err)
 	}
 
 	succeeded = true
-	return
+	return u.localLeftJoin, nil
 }
 
 // latestEventsUpdater tracks the state used to update the latest events in the
@@ -116,6 +116,10 @@ type latestEventsUpdater struct {
 	newStateNID types.StateSnapshotNID
 	// The history visibility of the event itself (from the state before the event).
 	historyVisibility gomatrixserverlib.HistoryVisibility
+	// localLeftJoin is set true when updateMemberships detects at least one
+	// local user transitioning out of join. The auto-purge schedule is fired
+	// by updateLatestEvents's caller AFTER the deferred commit completes.
+	localLeftJoin bool
 }
 
 func (u *latestEventsUpdater) doUpdateLatestEvents() error {
@@ -164,8 +168,12 @@ func (u *latestEventsUpdater) doUpdateLatestEvents() error {
 
 		// If we need to generate any output events then here's where we do it.
 		// TODO: Move this!
-		if updates, err = u.api.updateMemberships(u.ctx, u.updater, u.removed, u.added); err != nil {
+		var localLeft bool
+		if updates, localLeft, err = u.api.updateMemberships(u.ctx, u.updater, u.removed, u.added); err != nil {
 			return fmt.Errorf("u.api.updateMemberships: %w", err)
+		}
+		if localLeft {
+			u.localLeftJoin = true
 		}
 	} else {
 		u.newStateNID = u.oldStateNID

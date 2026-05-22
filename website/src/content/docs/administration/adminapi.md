@@ -76,6 +76,8 @@ It does **NOT** remove media files.
 Depending on the size of the room, this may take a while.
 Will return an empty JSON once other components were instructed to delete the room.
 
+Zendrite can also purge empty rooms automatically — see [Auto-purging empty rooms](/administration/auto-purge-empty-rooms/).
+
 ## GET `/_zendrite/admin/emptyRooms`
 
 Returns a list of all rooms which have zero (locally) joined members.

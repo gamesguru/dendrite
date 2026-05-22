@@ -42,6 +42,9 @@ type Joiner struct {
 
 	Inputer *input.Inputer
 	Queryer *query.Queryer
+
+	PurgeTracker     *PurgeTracker
+	PurgeWaitTimeout time.Duration
 }
 
 // PerformJoin handles joining matrix rooms, including over federation by talking to the federationapi.
@@ -177,6 +180,18 @@ func (r *Joiner) performJoinRoomByID(
 	roomID, err := spec.NewRoomID(req.RoomIDOrAlias)
 	if err != nil {
 		return "", "", rsAPI.ErrInvalidID{Err: fmt.Errorf("room ID %q is invalid: %w", req.RoomIDOrAlias, err)}
+	}
+
+	// Hold off if the room is currently being purged so the join doesn't
+	// race the per-component purge fanout. NATS message order guarantees
+	// downstream consumers see the purge before any subsequent rejoin
+	// events; we just need to wait until the purge fanout message has been
+	// produced.
+	if err := r.PurgeTracker.WaitFor(ctx, roomID.String(), r.PurgeWaitTimeout); err != nil {
+		return "", "", &spec.MatrixError{
+			ErrCode: spec.ErrorUnknown,
+			Err:     fmt.Sprintf("room %q is being purged; please retry shortly", roomID.String()),
+		}
 	}
 
 	// Force a federated join if we aren't in the room and we've been

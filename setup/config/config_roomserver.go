@@ -12,11 +12,21 @@ type RoomServer struct {
 
 	DefaultRoomVersion gomatrixserverlib.RoomVersion `yaml:"default_room_version,omitempty"`
 
+	// AutoPurgeEmptyRooms enables automatic purging of empty rooms.
+	// When true (the default), two behaviors fire together:
+	//   - at startup, a one-shot sweep purges any rooms which currently have
+	//     no local members; and
+	//   - at runtime, whenever the last local member leaves a room, the room
+	//     is scheduled for an asynchronous purge.
+	// Set to false to disable both behaviors.
+	AutoPurgeEmptyRooms bool `yaml:"auto_purge_empty_rooms"`
+
 	Database DatabaseOptions `yaml:"database,omitempty"`
 }
 
 func (c *RoomServer) Defaults(opts DefaultOpts) {
 	c.DefaultRoomVersion = gomatrixserverlib.RoomVersionV12
+	c.AutoPurgeEmptyRooms = true
 	if opts.Generate {
 		if !opts.SingleDatabase {
 			c.Database.ConnectionString = "file:roomserver.db"

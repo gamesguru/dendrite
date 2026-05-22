@@ -91,6 +91,11 @@ type RoomserverInternalAPI interface {
 	RoomsWithACLs(ctx context.Context) ([]string, error)
 	// EmptyRooms returns all rooms that the local server has left.
 	EmptyRooms(ctx context.Context) ([]string, error)
+	// AutoPurgeRoom asynchronously purges the given room and tracks it as
+	// in-flight in the PurgeTracker. Idempotent: subsequent calls for the
+	// same room while a purge is running are coalesced. reason is a short
+	// label included in log lines (e.g. "event", "startup_sweep").
+	AutoPurgeRoom(ctx context.Context, roomID, reason string)
 }
 
 type UserRoomPrivateKeyCreator interface {

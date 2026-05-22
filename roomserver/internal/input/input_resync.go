@@ -15,6 +15,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
@@ -25,8 +26,12 @@ import (
 //
 // StateEventIDs are the event IDs of the state events that were fetched during resync.
 //
+// Returns localLeftJoin=true if at least one local user transitioned out of join
+// during this resync. The caller should invoke scheduleAutoPurgeIfEmpty after
+// the transaction has committed (i.e. after this function returns successfully).
+//
 //nolint:gocyclo
-func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {
+func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) (localLeftJoin bool, roomInfo *types.RoomInfo, err error) {
 	logger := logrus.WithFields(logrus.Fields{
 		"room_id":           roomID,
 		"state_event_count": len(stateEventIDs),
@@ -34,19 +39,20 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	})
 	logger.Info("Updating current state after partial state resync")
 
-	// Get room info
-	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	// Get room info — assign into named return so the caller can use it.
+	roomInfo, err = r.DB.RoomInfo(ctx, roomID)
 	if err != nil {
-		return fmt.Errorf("r.DB.RoomInfo: %w", err)
+		return false, nil, fmt.Errorf("r.DB.RoomInfo: %w", err)
 	}
 	if roomInfo == nil {
-		return fmt.Errorf("room %s not found", roomID)
+		return false, nil, fmt.Errorf("room %s not found", roomID)
 	}
 
 	// Convert state event IDs to StateEntry array
-	stateEntries, err := r.DB.StateEntriesForEventIDs(ctx, stateEventIDs, true)
+	var stateEntries []types.StateEntry
+	stateEntries, err = r.DB.StateEntriesForEventIDs(ctx, stateEventIDs, true)
 	if err != nil {
-		return fmt.Errorf("r.DB.StateEntriesForEventIDs: %w", err)
+		return false, nil, fmt.Errorf("r.DB.StateEntriesForEventIDs: %w", err)
 	}
 
 	// Debug: Count EventTypeNIDs in loaded state entries
@@ -67,7 +73,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 
 	if len(stateEntries) == 0 {
 		logger.Warn("No state entries found for resync, skipping state update")
-		return nil
+		return false, roomInfo, nil
 	}
 
 	// Deduplicate state entries (in case of duplicates)
@@ -75,9 +81,10 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 
 	// Get the room updater (for transaction and locking)
 	var succeeded bool
-	updater, err := r.DB.GetRoomUpdater(ctx, roomInfo)
+	var updater *shared.RoomUpdater
+	updater, err = r.DB.GetRoomUpdater(ctx, roomInfo)
 	if err != nil {
-		return fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
+		return false, nil, fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
 	}
 	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
 
@@ -91,9 +98,10 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// so we need to merge it into the new state snapshot. Without this, the local user's
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
-	oldStateEntries, err := roomState.LoadStateAtSnapshot(ctx, oldStateNID)
+	var oldStateEntries []types.StateEntry
+	oldStateEntries, err = roomState.LoadStateAtSnapshot(ctx, oldStateNID)
 	if err != nil {
-		return fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
+		return false, nil, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
 	}
 
 	// Build a map of state keys in the new state (from remote server) for quick lookup
@@ -131,18 +139,20 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	stateEntries = types.DeduplicateStateEntries(stateEntries)
 
 	// Create a new state snapshot from the merged state entries
-	newStateNID, err := updater.AddState(ctx, roomInfo.RoomNID, nil, stateEntries)
+	var newStateNID types.StateSnapshotNID
+	newStateNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, stateEntries)
 	if err != nil {
-		return fmt.Errorf("updater.AddState: %w", err)
+		return false, nil, fmt.Errorf("updater.AddState: %w", err)
 	}
 
 	logger.WithField("new_state_nid", newStateNID).Debug("Created new state snapshot")
 
 	// Calculate the state delta between old and new snapshots
 	// Note: roomState was already created above for LoadStateAtSnapshot
-	removed, added, err := roomState.DifferenceBetweeenStateSnapshots(ctx, oldStateNID, newStateNID)
+	var removed, added []types.StateEntry
+	removed, added, err = roomState.DifferenceBetweeenStateSnapshots(ctx, oldStateNID, newStateNID)
 	if err != nil {
-		return fmt.Errorf("roomState.DifferenceBetweeenStateSnapshots: %w", err)
+		return false, nil, fmt.Errorf("roomState.DifferenceBetweeenStateSnapshots: %w", err)
 	}
 
 	// Debug: Count EventTypeNIDs in added slice
@@ -210,9 +220,13 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		}
 		logger.WithField("member_changes_to_process", memberChanges).Debug("About to update memberships")
 
-		outputEvents, err = r.updateMemberships(ctx, updater, removed, added)
+		var resyncLeft bool
+		outputEvents, resyncLeft, err = r.updateMemberships(ctx, updater, removed, added)
 		if err != nil {
-			return fmt.Errorf("r.updateMemberships: %w", err)
+			return false, nil, fmt.Errorf("r.updateMemberships: %w", err)
+		}
+		if resyncLeft {
+			localLeftJoin = true
 		}
 		logger.WithFields(logrus.Fields{
 			"output_events":  len(outputEvents),
@@ -228,7 +242,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		// This shouldn't happen for a room with events, but handle gracefully
 		logger.Warn("No latest events found for room, skipping state snapshot update")
 		succeeded = true
-		return nil
+		return localLeftJoin, roomInfo, nil
 	}
 
 	// Get the last event NID that was sent
@@ -241,7 +255,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 
 	// Update the latest events with the new state snapshot
 	if err = updater.SetLatestEvents(roomInfo.RoomNID, latestEvents, lastEventNID, newStateNID); err != nil {
-		return fmt.Errorf("updater.SetLatestEvents: %w", err)
+		return false, nil, fmt.Errorf("updater.SetLatestEvents: %w", err)
 	}
 
 	// MSC3706 State Epoch Fix: Record the state snapshot NID after resync completes.
@@ -249,7 +263,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// When processing events later, we use this to detect and suppress state regressions
 	// caused by out-of-order events that reference older positions in the DAG.
 	if err = updater.UpdateResyncStateNID(roomInfo.RoomNID, newStateNID); err != nil {
-		return fmt.Errorf("updater.UpdateResyncStateNID: %w", err)
+		return false, nil, fmt.Errorf("updater.UpdateResyncStateNID: %w", err)
 	}
 
 	logger.WithField("resync_state_nid", newStateNID).Debug("Recorded resync state NID to prevent state regressions")
@@ -257,7 +271,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// Emit output events to notify downstream components about membership changes
 	if len(outputEvents) > 0 {
 		if err = r.OutputProducer.ProduceRoomEvents(roomID, outputEvents); err != nil {
-			return fmt.Errorf("r.OutputProducer.ProduceRoomEvents: %w", err)
+			return false, nil, fmt.Errorf("r.OutputProducer.ProduceRoomEvents: %w", err)
 		}
 		logger.WithField("output_events", len(outputEvents)).Debug("Produced output events for membership changes")
 	}
@@ -271,5 +285,5 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		"added":         len(added),
 	}).Info("Successfully updated current state after partial state resync")
 
-	return nil
+	return localLeftJoin, roomInfo, nil
 }
