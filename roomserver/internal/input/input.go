@@ -113,6 +113,8 @@ type worker struct {
 	subscription *nats.Subscription
 	sentryHub    *sentry.Hub
 	ch           chan struct{}
+	ctx          context.Context
+	cancel       context.CancelCauseFunc
 	ephemeralSeq uint64
 	// last seq we fully processed
 	durableSeq uint64
@@ -127,10 +129,29 @@ func (w *worker) notify() {
 }
 
 // start launches the worker goroutine that processes events serially.
+// The caller should take a lock before calling start.
 func (w *worker) start() {
+	// Worker is already running
+	if w.ctx != nil {
+		return
+	}
+
+	w.ctx, w.cancel = context.WithCancelCause(context.Background())
+
 	go func() {
-		for range w.ch {
-			w._next()
+		logrus.Debugf("worker for room %q started", w.roomID)
+		for {
+			select {
+			case <-w.ctx.Done():
+				// Cleanup after the context is canceled, so we still can log the reason for cancellation.
+				logrus.WithError(w.ctx.Err()).Debugf("worker for room %q stopped", w.roomID)
+				w.Lock()
+				w.ctx = nil
+				w.Unlock()
+				return
+			case <-w.ch:
+				w._next()
+			}
 		}
 	}()
 }
@@ -150,7 +171,7 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 	defer w.Unlock()
 
 	w.ephemeralSeq = seq
-
+	logrus.Debugf("loaded worker for room %q at seq %d (loaded=%t, subscription=%v)", roomID, seq, loaded, w.subscription)
 	if !loaded || w.subscription == nil {
 		streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
 		consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
@@ -334,6 +355,7 @@ func (w *worker) _next() {
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(errors.New("inactivity timeout"))
 		w.subscription = nil
 		w.Unlock()
 		return
@@ -347,6 +369,7 @@ func (w *worker) _next() {
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(errors.New("consumer deleted by NATS due to inactivity"))
 		w.subscription = nil
 		return
 	default:
@@ -361,6 +384,7 @@ func (w *worker) _next() {
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.subscription = nil
 		w.Unlock()
 		return
