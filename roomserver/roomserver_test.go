@@ -1795,3 +1795,35 @@ func TestAutoPurgeConcurrentRooms(t *testing.T) {
 		}
 	})
 }
+
+// TestForgetRoomIdempotentForUnknownRoom confirms that PerformForget on a
+// room the server does not know about (e.g. one that was just auto-purged
+// after the last local member left, but whose client still has it in its
+// room list and tries to forget it) is a no-op rather than a panic.
+//
+// Per the Matrix spec, /forget on a room the user is no longer a member of
+// is valid — the user is, by definition, not a member of a non-existent
+// room. The implementation must therefore tolerate the missing row.
+func TestForgetRoomIdempotentForUnknownRoom(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		req := &api.PerformForgetRequest{
+			RoomID: "!nonexistent:test",
+			UserID: alice.ID,
+		}
+		res := &api.PerformForgetResponse{}
+		assert.NoError(t, rsAPI.PerformForget(ctx, req, res),
+			"PerformForget on an unknown room must be a no-op, not panic or error")
+	})
+}

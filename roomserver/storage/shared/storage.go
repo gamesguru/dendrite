@@ -1758,11 +1758,18 @@ func (d *Database) EmptyRooms(ctx context.Context) ([]string, error) {
 	return d.RoomsTable.BulkSelectRoomIDs(ctx, nil, leftRoomsNIDs)
 }
 
-// ForgetRoom sets a users room to forgotten.
+// ForgetRoom sets a users room to forgotten. If the room is not known
+// (e.g. it was purged by the auto-purge feature or an admin call to
+// /admin/purgeRoom), ForgetRoom is a no-op: the user is, by definition,
+// not still a member of a room that does not exist, so the operation is
+// idempotent.
 func (d *Database) ForgetRoom(ctx context.Context, userID, roomID string, forget bool) error {
 	roomNIDs, err := d.RoomsTable.BulkSelectRoomNIDs(ctx, nil, []string{roomID})
 	if err != nil {
 		return err
+	}
+	if len(roomNIDs) == 0 {
+		return nil
 	}
 	if len(roomNIDs) > 1 {
 		return fmt.Errorf("expected one room, got %d", len(roomNIDs))
