@@ -7,65 +7,65 @@ description: Implementation status of Matrix Spec Changes (MSCs) in Zendrite.
 This page tracks the implementation status of notable MSCs in Zendrite.
 
 Many MSCs listed here have since been merged into the [Matrix specification](https://spec.matrix.org/) proper.
-They are listed by their original MSC number for reference.
+They are listed by their original MSC number and the first spec version which includes them.
 
 ## Sync
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC4186](https://github.com/matrix-org/matrix-spec-proposals/pull/4186) | Simplified Sliding Sync | Implemented (native, no proxy needed) |
-| [MSC3575](https://github.com/matrix-org/matrix-spec-proposals/pull/3575) | Sliding Sync (v1) | Implemented (legacy, superseded by MSC4186) |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC4186](https://github.com/matrix-org/matrix-spec-proposals/pull/4186) | Simplified Sliding Sync | N/A | Implemented (native, no proxy needed) |
+| [MSC3575](https://github.com/matrix-org/matrix-spec-proposals/pull/3575) | Sliding Sync (v1) | N/A | Implemented (legacy, superseded by MSC4186) |
 
 ## Messaging
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC2675](https://github.com/matrix-org/matrix-spec-proposals/pull/2675) | Serverside aggregations of message relationships | Implemented |
-| [MSC2676](https://github.com/matrix-org/matrix-spec-proposals/pull/2676) | Message editing | Implemented |
-| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | Implemented |
-| [MSC2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) | Threading | Opt-in (`msc2836`) |
-| [MSC2285](https://github.com/matrix-org/matrix-spec-proposals/pull/2285) | Private read receipts | Implemented |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC2675](https://github.com/matrix-org/matrix-spec-proposals/pull/2675) | Serverside aggregations of message relationships | 1.3 | Implemented |
+| [MSC2676](https://github.com/matrix-org/matrix-spec-proposals/pull/2676) | Message editing | 1.4 | Implemented |
+| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | 1.7 | Implemented |
+| [MSC2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) | Threading | N/A | Opt-in (`msc2836`) |
+| [MSC2285](https://github.com/matrix-org/matrix-spec-proposals/pull/2285) | Private read receipts | 1.4 | Implemented |
 
 ## Rooms & Spaces
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC1772](https://github.com/matrix-org/matrix-spec-proposals/pull/1772) | Spaces | Implemented |
-| [MSC2946](https://github.com/matrix-org/matrix-spec-proposals/pull/2946) | Spaces summary / room hierarchy | Implemented |
-| [MSC3083](https://github.com/matrix-org/matrix-spec-proposals/pull/3083) | Restricted rooms (space-based membership) | Implemented |
-| [MSC2403](https://github.com/matrix-org/matrix-spec-proposals/pull/2403) | Knocking | Implemented |
-| [MSC3266](https://github.com/matrix-org/matrix-spec-proposals/pull/3266) | Room summary API | Implemented |
-| [MSC3765](https://github.com/matrix-org/matrix-spec-proposals/pull/3765) | Rich text in room topics | Not implemented |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC1772](https://github.com/matrix-org/matrix-spec-proposals/pull/1772) | Spaces | 1.2 | Implemented |
+| [MSC2946](https://github.com/matrix-org/matrix-spec-proposals/pull/2946) | Spaces summary / room hierarchy | 1.2 | Implemented |
+| [MSC3083](https://github.com/matrix-org/matrix-spec-proposals/pull/3083) | Restricted rooms (space-based membership) | 1.2 | Implemented |
+| [MSC2403](https://github.com/matrix-org/matrix-spec-proposals/pull/2403) | Knocking | 1.1 | Implemented |
+| [MSC3266](https://github.com/matrix-org/matrix-spec-proposals/pull/3266) | Room summary API | 1.15 | Implemented |
+| [MSC3765](https://github.com/matrix-org/matrix-spec-proposals/pull/3765) | Rich text in room topics | 1.15 | Not implemented |
 
 ## Encryption & Security
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | Implemented |
-| [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | Implemented |
-| [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | Opt-in (`msc3814`) |
-| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | Opt-in (`msc4115`) |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented |
+| [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | 1.2 | Implemented |
+| [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | N/A | Opt-in (`msc3814`) |
+| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Opt-in (`msc4115`) |
 
 ## Federation
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC3706](https://github.com/matrix-org/matrix-spec-proposals/pull/3706) | Partial state in `/send_join` (faster joins) | Implemented |
-| [MSC2444](https://github.com/matrix-org/matrix-spec-proposals/pull/2444) | Peeking over federation | Opt-in (`msc2444`) |
-| [MSC2753](https://github.com/matrix-org/matrix-spec-proposals/pull/2753) | Peeking via `/sync` | Opt-in (`msc2753`) |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC3706](https://github.com/matrix-org/matrix-spec-proposals/pull/3706) | Partial state in `/send_join` (faster joins) | 1.6 | Implemented |
+| [MSC2444](https://github.com/matrix-org/matrix-spec-proposals/pull/2444) | Peeking over federation | N/A | Opt-in (`msc2444`) |
+| [MSC2753](https://github.com/matrix-org/matrix-spec-proposals/pull/2753) | Peeking via `/sync` | N/A | Opt-in (`msc2753`) |
 
 ## Authentication
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | Implemented |
-| [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | Opt-in (`msc3861`) |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Implemented |
+| [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | 1.15 | Opt-in (`msc3861`) |
 
 ## VoIP
 
-| MSC | Title | Status |
-| --- | --- | --- |
-| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | Implemented |
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | N/A | Implemented |
 
 ## Opt-in MSCs
 
