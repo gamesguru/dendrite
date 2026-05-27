@@ -25,6 +25,10 @@ Zendrite has a `max_open_conns` configuration item in each `database` block to c
 You may wish to raise the `max_connections` limit on your PostgreSQL server to accommodate additional connections, in which case you should also update the `max_open_conns` in your Zendrite configuration accordingly.
 However be aware that this is only advisable on particularly powerful servers that can handle the concurrent load of additional queries running at one time.
 
+## PostgreSQL optimisation
+
+By default PostgreSQL is quite conservative of system resources, it can perform better if allowed to use more. Example configs could be generated using the https://pgtune.leopard.in.ua/ tool. Please consider the specific requirements of your setup (such as other software sharing the machine or PostgreSQL instance) before optimising settings.
+
 ## File descriptor limit
 
 Most platforms have a limit on how many file descriptors a single process can open.

@@ -36,6 +36,9 @@ Example supported connection strings take the format:
 
 If you need to disable SSL/TLS on the database connection, you may need to append `?sslmode=disable` to the end of the connection string.
 
+If Zendrite and PostgreSQL run on the same Linux machine, and the system username matches the PostgreSQL username, you can connect more efficiently (no need for SSL) and securely (no need for a password) via UNIX socket, for example if your DB is called `zendritedb`:
+- `postgresql:///zendritedb?host=/run/postgresql`
+
 ### Role creation
 
 Create a role which Zendrite can use to connect to the database, choosing a new password when prompted.

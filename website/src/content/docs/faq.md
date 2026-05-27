@@ -11,19 +11,24 @@ Please use with caution and/or report drifts in an issue/Pull Request.
 Zendrite aims to provide a matrix compatible server that has low resource usage compared to [Synapse](https://github.com/matrix-org/synapse).
 It also aims to provide more flexibility when scaling either up or down.
 Zendrite's code is also very easy to hack on which makes it suitable for experimenting with new matrix features such as peer-to-peer.
+It was forked from Dendrite to add [significant features](/mscs), optimisations and fixes.
 
 ## Is Zendrite stable?
 
-Mostly, although there are still bugs and missing features.
-If you are a confident power user and you are happy to spend some time debugging things when they go wrong, then please try out Zendrite.
+Mostly, although there are still missing features (newer spec versions aren't advertised yet) it's much more stable than Dendrite used to be.
+If you are a confident power user then please try out Zendrite.
 
 ## Is Zendrite feature-complete?
 
 No, although a good portion of the Matrix specification has been implemented.
 
+## Is there a migration path from Dendrite to Zendrite?
+
+Yes, please see [Migration from Dendrite](/administration/migration-from-dendrite)
+
 ## Is there a migration path from Synapse to Zendrite?
 
-No, not at present.
+There's [a migration script](https://github.com/Saimo/synapse-dendrite-migration) but it's unsupported and may be in need of maintenance, so take backups and test carefully first if considering it.
 
 ## Can I use Zendrite with an existing Synapse database?
 
@@ -40,7 +45,7 @@ You need at least:
 
 - A valid DNS name
 - A valid TLS certificate for that DNS name
-- Either DNS SRV records or well-known files
+- Either DNS SRV records or well-known files, see [Well-known delegation](/installation/domainname/#well-known-delegation)
 
 ## Whenever I try to connect from Element it says unable to connect to homeserver
 

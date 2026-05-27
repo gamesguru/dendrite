@@ -6,6 +6,12 @@ Zendrite is a second-generation Matrix homeserver written in Go, designed to be 
 
 > Forked from [element-hq/dendrite](https://github.com/element-hq/dendrite) in February 2026
 
+The existing Dendrite Matrix rooms are used for chatting:
+- [![#dendrite:matrix.org](https://img.shields.io/matrix/dendrite%3Amatrix.org?fetchMode=summary&logo=matrix&label=%23dendrite%3Amatrix.org&color=orange
+)](https://matrix.to/#/#dendrite:matrix.org) for general project discussion and support
+- [![#dendrite-dev:matrix.org](https://img.shields.io/matrix/dendrite-dev%3Amatrix.org?fetchMode=summary&logo=matrix&label=%23dendrite-dev%3Amatrix.org&color=orange
+)](https://matrix.to/#/#dendrite-dev:matrix.org) for chat about development specifically
+
 ## Getting Started
 
 See the [documentation site](https://zendrite.pat-s.me) for installation, administration, and development guides.

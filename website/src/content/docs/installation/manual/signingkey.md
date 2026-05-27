@@ -48,7 +48,7 @@ Key-ID: ed25519:<Key ID>
 
 ## Converting Synapse keys
 
-If you have signing keys from a previous Synapse installation, you should ideally configure them as `old_private_keys` in your Zendrite config file.
+If you have signing keys from a previous Synapse installation on the same domain name, you should ideally configure them as `old_private_keys` in your Zendrite config file.
 Synapse stores signing keys in the following format:
 
 ```text

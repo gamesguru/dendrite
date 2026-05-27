@@ -69,7 +69,7 @@ In the case that you are connecting to a multi-node NATS cluster, you can config
 
 ## Database connection using a global connection pool
 
-If you want to use a single connection pool to a single PostgreSQL database, then you must uncomment and configure the `database` section within the `global` section:
+If you want to use a single connection pool to a single PostgreSQL database, then you must configure the `database` section within the `global` section:
 
 ```yaml
 global:
@@ -81,7 +81,9 @@ global:
     conn_max_lifetime: -1
 ```
 
-**You must then remove or comment out** the `database` sections from other areas of the configuration file, e.g. under the `app_service_api`, `federation_api`, `key_server`, `media_api`, `mscs`, `relay_api`, `room_server`, `sync_api` and `user_api` blocks, otherwise these will override the `global` database configuration.
+See also [Connection strings](/installation/manual/database/#connection-strings)
+
+It's possible to configure per-component `database` sections in other areas of the configuration file, e.g. under the `app_service_api`, `federation_api`, `key_server`, `media_api`, `mscs`, `relay_api`, `room_server`, `sync_api` and `user_api` blocks, these will override the `global` database configuration.
 
 ## Full-text search
 
@@ -99,6 +101,8 @@ sync_api:
     index_path: "./searchindex"
     language: "en"
 ```
+
+If you enable this later you can [reindex existing rooms via the admin API](/administration/adminapi/#get-_zendriteadminfulltextreindex).
 
 ## OIDC delegated authentication (MSC3861)
 
