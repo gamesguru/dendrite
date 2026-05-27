@@ -119,7 +119,7 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 		}
 	}
 	// Ensure there is any spam counter measure when enabling registration
-	if !c.RegistrationDisabled && !c.OpenRegistrationWithoutVerificationEnabled && !c.RecaptchaEnabled {
+	if !c.RegistrationDisabled && !c.OpenRegistrationWithoutVerificationEnabled && !c.RecaptchaEnabled && !c.RegistrationRequiresToken {
 		configErrs.Add(
 			"You have tried to enable open registration without any secondary verification methods " +
 				"(such as reCAPTCHA). By enabling open registration, you are SIGNIFICANTLY " +

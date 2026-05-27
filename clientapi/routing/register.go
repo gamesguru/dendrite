@@ -62,6 +62,9 @@ type sessionsDict struct {
 	// If a UIA session is started by trying to delete device1, and then UIA is completed by deleting device2,
 	// the delete request will fail for device2 since the UIA was initiated by trying to delete device1.
 	deleteSessionToDeviceID map[string]string
+	// pendingTokens records the registration token (if any) whose pending counter is
+	// currently held for a session, so it can be reconciled when the flow finishes.
+	pendingTokens map[string]string
 }
 
 // defaultTimeout is the timeout used to clean up sessions.
@@ -103,6 +106,7 @@ func (d *sessionsDict) deleteSession(sessionID string) {
 	delete(d.sessions, sessionID)
 	delete(d.deleteSessionToDeviceID, sessionID)
 	delete(d.sessionCompletedResult, sessionID)
+	delete(d.pendingTokens, sessionID)
 	// stop the timer, e.g. because the registration was completed
 	if t, ok := d.timer[sessionID]; ok {
 		if !t.Stop() {
@@ -122,7 +126,30 @@ func newSessionsDict() *sessionsDict {
 		params:                  make(map[string]registerRequest),
 		timer:                   make(map[string]*time.Timer),
 		deleteSessionToDeviceID: make(map[string]string),
+		pendingTokens:           make(map[string]string),
 	}
+}
+
+// setPendingToken records that this session has incremented the `pending` counter
+// for the given registration token. It must be paired with takePendingToken once
+// the registration flow finishes so the counter is reconciled.
+func (d *sessionsDict) setPendingToken(sessionID, token string) {
+	d.startTimer(defaultTimeOut, sessionID)
+	d.Lock()
+	defer d.Unlock()
+	d.pendingTokens[sessionID] = token
+}
+
+// takePendingToken returns and clears any registration token whose pending counter
+// is held by this session.
+func (d *sessionsDict) takePendingToken(sessionID string) (string, bool) {
+	d.Lock()
+	defer d.Unlock()
+	token, ok := d.pendingTokens[sessionID]
+	if ok {
+		delete(d.pendingTokens, sessionID)
+	}
+	return token, ok
 }
 
 func (d *sessionsDict) startTimer(duration time.Duration, sessionID string) {
@@ -220,6 +247,7 @@ type authDict struct {
 	// Recaptcha
 	Response string `json:"response"`
 	// TODO: Lots of custom keys depending on the type
+	Token string `json:"token"`
 }
 
 // https://spec.matrix.org/v1.7/client-server-api/#user-interactive-authentication-api
@@ -676,7 +704,7 @@ func handleRegistrationFlow(
 	if v := cfg.Matrix.VirtualHost(r.ServerName); v != nil {
 		registrationEnabled, _ = v.RegistrationAllowed()
 	}
-	if !registrationEnabled && r.Auth.Type != authtypes.LoginTypeSharedSecret {
+	if !registrationEnabled && r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(
@@ -736,6 +764,12 @@ func handleRegistrationFlow(
 		// there is nothing to do
 		// Add Dummy to the list of completed registration stages
 		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeDummy)
+
+	case authtypes.LoginTypeRegistrationToken:
+		if resp, ok := claimRegistrationToken(req, userAPI, r.Auth.Token, sessionID); !ok {
+			return resp
+		}
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRegistrationToken)
 
 	case "":
 		// An empty auth type means that we want to fetch the available
@@ -812,11 +846,13 @@ func checkAndCompleteFlow(
 ) util.JSONResponse {
 	if checkFlowCompleted(flow, cfg.Derived.Registration.Flows) {
 		// This flow was completed, registration can continue
-		return completeRegistration(
+		resp := completeRegistration(
 			req.Context(), userAPI, r.Username, r.ServerName, "", r.Password, "", req.RemoteAddr,
 			req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
 			userapi.AccountTypeUser,
 		)
+		finaliseRegistrationToken(req, userAPI, sessionID, resp.Code == http.StatusOK)
+		return resp
 	}
 	sessions.addParams(sessionID, r)
 	// There are still more stages to complete.
@@ -825,6 +861,84 @@ func checkAndCompleteFlow(
 		Code: http.StatusUnauthorized,
 		JSON: newUserInteractiveResponse(sessionID,
 			cfg.Derived.Registration.Flows, cfg.Derived.Registration.Params),
+	}
+}
+
+// claimRegistrationToken validates a registration token submitted as part of a
+// UIA stage and, if it is acceptable, increments its `pending` counter. The
+// session is updated so the pending hold can be reconciled (markUsed or
+// decrementPending) once the wider registration flow finishes.
+//
+// On rejection the returned response describes the failure and ok is false.
+func claimRegistrationToken(
+	req *http.Request,
+	userAPI userapi.ClientUserAPI,
+	tokenString, sessionID string,
+) (util.JSONResponse, bool) {
+	if tokenString == "" {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.MissingParam("missing registration token"),
+		}, false
+	}
+	token, err := userAPI.PerformAdminGetRegistrationToken(req.Context(), tokenString)
+	if err != nil {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("unknown registration token"),
+		}, false
+	}
+	if token.ExpiryTime != nil && !time.UnixMilli(*token.ExpiryTime).After(time.Now()) {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("token expired"),
+		}, false
+	}
+	var pending, completed int32
+	if token.Pending != nil {
+		pending = *token.Pending
+	}
+	if token.Completed != nil {
+		completed = *token.Completed
+	}
+	if token.UsesAllowed != nil && *token.UsesAllowed <= pending+completed {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("token used up"),
+		}, false
+	}
+	if _, err := userAPI.PerformAdminUpdateRegistrationToken(req.Context(), tokenString, map[string]any{"incrementPending": true}); err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("failed to reserve registration token")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}, false
+	}
+	sessions.setPendingToken(sessionID, tokenString)
+	return util.JSONResponse{}, true
+}
+
+// finaliseRegistrationToken reconciles the pending counter held by this session
+// once the registration flow has finished: on success the token is marked used
+// (pending--, completed++); on any other outcome the pending counter is rolled
+// back. It is a no-op when the session did not hold a token.
+func finaliseRegistrationToken(
+	req *http.Request,
+	userAPI userapi.ClientUserAPI,
+	sessionID string,
+	success bool,
+) {
+	tokenString, ok := sessions.takePendingToken(sessionID)
+	if !ok {
+		return
+	}
+	attr := map[string]any{"decrementPending": true}
+	if success {
+		attr = map[string]any{"markUsed": true}
+	}
+	if _, err := userAPI.PerformAdminUpdateRegistrationToken(req.Context(), tokenString, attr); err != nil {
+		util.GetLogger(req.Context()).WithError(err).WithField("success", success).
+			Error("failed to finalize registration token")
 	}
 }
 

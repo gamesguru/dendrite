@@ -284,22 +284,25 @@ func (config *Zendrite) Derive() error {
 	// TODO: Add email auth type
 	// TODO: Add MSISDN auth type
 
-	if config.ClientAPI.RecaptchaEnabled {
-		if config.ClientAPI.CaptchaProvider == "altcha" {
-			// Use a vendor-specific login type so Matrix clients that
-			// handle m.login.recaptcha natively (e.g. Element) don't try
-			// to render a Google reCAPTCHA widget and instead open the
-			// auth fallback page.
-			config.Derived.Registration.Flows = []authtypes.Flow{
-				{Stages: []authtypes.LoginType{authtypes.LoginTypeAltcha}},
-			}
-		} else {
-			config.Derived.Registration.Params[authtypes.LoginTypeRecaptcha] = map[string]string{"public_key": config.ClientAPI.RecaptchaPublicKey}
-			config.Derived.Registration.Flows = []authtypes.Flow{
-				{Stages: []authtypes.LoginType{authtypes.LoginTypeRecaptcha}},
-			}
+	switch {
+	case config.ClientAPI.RecaptchaEnabled && config.ClientAPI.CaptchaProvider == "altcha":
+		// Use a vendor-specific login type so Matrix clients that
+		// handle m.login.recaptcha natively (e.g. Element) don't try
+		// to render a Google reCAPTCHA widget and instead open the
+		// auth fallback page.
+		config.Derived.Registration.Flows = []authtypes.Flow{
+			{Stages: []authtypes.LoginType{authtypes.LoginTypeAltcha}},
 		}
-	} else {
+	case config.ClientAPI.RecaptchaEnabled:
+		config.Derived.Registration.Params[authtypes.LoginTypeRecaptcha] = map[string]string{"public_key": config.ClientAPI.RecaptchaPublicKey}
+		config.Derived.Registration.Flows = []authtypes.Flow{
+			{Stages: []authtypes.LoginType{authtypes.LoginTypeRecaptcha}},
+		}
+	case config.ClientAPI.RegistrationRequiresToken:
+		config.Derived.Registration.Flows = []authtypes.Flow{
+			{Stages: []authtypes.LoginType{authtypes.LoginTypeRegistrationToken}},
+		}
+	default:
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}},
 		}
