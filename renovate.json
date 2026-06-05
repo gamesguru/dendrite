@@ -2,6 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["local>codefloe/renovate-config"],
   "automergeType": "pr",
+  "automergeStrategy": "squash",
   "packageRules": [
     {
       "matchManagers": ["gomod"],
