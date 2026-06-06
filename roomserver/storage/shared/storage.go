@@ -1854,6 +1854,12 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 			}
 			return fmt.Errorf("failed to lock the room: %w", err)
 		}
+		// Drop any partial-state bookkeeping for the room; the generic purge
+		// below doesn't cover the roomserver_partial_state_rooms tables, so a
+		// room purged mid-resync would otherwise leave orphaned rows behind.
+		if _, err = d.PartialStateTable.DeletePartialStateRoom(ctx, txn, roomNID); err != nil {
+			return fmt.Errorf("failed to purge partial state: %w", err)
+		}
 		return d.Purge.PurgeRoom(ctx, txn, roomNID, roomID)
 	})
 	if err != nil {

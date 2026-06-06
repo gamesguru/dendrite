@@ -319,6 +319,17 @@ func TestPurgeRoom(t *testing.T) {
 		// remember the roomInfo before purging
 		existingRoomInfo := roomInfo
 
+		// Mark the room as partial-stated so we can verify the purge clears the
+		// partial-state bookkeeping. The generic purge doesn't touch the
+		// roomserver_partial_state_rooms tables, so a room purged mid-resync
+		// would otherwise leave orphaned rows behind.
+		if err = db.SetRoomPartialState(ctx, existingRoomInfo.RoomNID, types.EventNID(1), "example.com", []string{"example.com"}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if partial, perr := db.IsRoomPartialState(ctx, existingRoomInfo.RoomNID); perr != nil || !partial {
+			t.Fatalf("room should be partial-stated before purge (partial=%v, err=%v)", partial, perr)
+		}
+
 		// validate there is an invite for bob
 		nids, err := db.EventStateKeyNIDs(ctx, []string{bob.ID})
 		if err != nil {
@@ -417,6 +428,13 @@ func TestPurgeRoom(t *testing.T) {
 		}
 		if isPublished {
 			t.Fatalf("room should not be published after purging")
+		}
+
+		// partial-state bookkeeping should be cleared after purging
+		if partial, perr := db.IsRoomPartialState(ctx, existingRoomInfo.RoomNID); perr != nil {
+			t.Fatal(perr)
+		} else if partial {
+			t.Fatalf("partial state should be cleared after purging")
 		}
 	})
 }
