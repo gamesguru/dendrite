@@ -37,6 +37,9 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse 
 				"default":   rsAPI.DefaultRoomVersion(),
 				"available": versionsMap,
 			},
+			"m.forget_forced_upon_leave": map[string]bool{
+				"enabled": rsAPI.AutoForgetOnLeaveEnabled(),
+			},
 		},
 	}
 

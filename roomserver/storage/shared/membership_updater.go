@@ -98,7 +98,10 @@ func (u *MembershipUpdater) Delete() error {
 	return u.d.MembershipTable.DeleteMembership(u.ctx, u.txn, u.roomNID, u.targetUserNID)
 }
 
-func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *types.Event) (bool, []string, error) {
+// Update applies the given membership transition. If forget is true the
+// membership row is also marked as forgotten in the same transaction. The
+// caller decides whether to set forget; the storage layer doesn't gate it.
+func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *types.Event, forget bool) (bool, []string, error) {
 	var inserted bool    // Did the query result in a membership change?
 	var retired []string // Did we retire any updates in the process?
 	return inserted, retired, u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
@@ -106,7 +109,7 @@ func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *
 		if err != nil {
 			return fmt.Errorf("u.d.AssignStateKeyNID: %w", err)
 		}
-		inserted, err = u.d.MembershipTable.UpdateMembership(u.ctx, u.txn, u.roomNID, u.targetUserNID, senderUserNID, newMembership, event.EventNID, false)
+		inserted, err = u.d.MembershipTable.UpdateMembership(u.ctx, u.txn, u.roomNID, u.targetUserNID, senderUserNID, newMembership, event.EventNID, forget)
 		if err != nil {
 			return fmt.Errorf("u.d.MembershipTable.UpdateMembership: %w", err)
 		}

@@ -347,3 +347,55 @@ func Test_SigningIdentityFor(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoPurgeMode_BackwardsCompat(t *testing.T) {
+	t.Parallel()
+	type target struct {
+		Mode AutoPurgeMode `yaml:"auto_purge_empty_rooms"`
+	}
+	cases := []struct {
+		name   string
+		input  string
+		expect AutoPurgeMode
+	}{
+		{name: "legacy bool true", input: "auto_purge_empty_rooms: true", expect: AutoPurgeOnAllForgotten},
+		{name: "legacy bool false", input: "auto_purge_empty_rooms: false", expect: AutoPurgeNever},
+		{name: "tri-state never", input: "auto_purge_empty_rooms: never", expect: AutoPurgeNever},
+		{name: "tri-state on_empty", input: "auto_purge_empty_rooms: on_empty", expect: AutoPurgeOnEmpty},
+		{name: "tri-state on_all_forgotten", input: "auto_purge_empty_rooms: on_all_forgotten", expect: AutoPurgeOnAllForgotten},
+		{name: "quoted string", input: `auto_purge_empty_rooms: "on_empty"`, expect: AutoPurgeOnEmpty},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got target
+			if err := yaml.Unmarshal([]byte(tc.input), &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got.Mode != tc.expect {
+				t.Fatalf("input %q: got %q, want %q", tc.input, got.Mode, tc.expect)
+			}
+		})
+	}
+
+	t.Run("unset leaves zero value", func(t *testing.T) {
+		t.Parallel()
+		var got target
+		if err := yaml.Unmarshal([]byte("other: 1\n"), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.Mode != "" {
+			t.Fatalf("expected empty mode, got %q", got.Mode)
+		}
+	})
+
+	t.Run("rejects unknown string", func(t *testing.T) {
+		t.Parallel()
+		var got target
+		err := yaml.Unmarshal([]byte("auto_purge_empty_rooms: maybe\n"), &got)
+		if err == nil {
+			t.Fatalf("expected error for unknown mode, got nil")
+		}
+	})
+}

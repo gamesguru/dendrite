@@ -31,7 +31,7 @@ func UpdateToInviteMembership(
 	// reprocessing this event, or because the we received this invite from a
 	// remote server via the federation invite API. In those cases we don't need
 	// to send the event.
-	needsSending, retired, err := mu.Update(tables.MembershipStateInvite, add)
+	needsSending, retired, err := mu.Update(tables.MembershipStateInvite, add, false)
 	if err != nil {
 		return nil, err
 	}

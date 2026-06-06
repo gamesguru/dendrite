@@ -198,7 +198,8 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		PreferServers: r.PerspectiveServerNames,
 	}
 	r.Forgetter = &perform.Forgetter{
-		DB: r.DB,
+		DB:    r.DB,
+		RSAPI: r,
 	}
 	r.Upgrader = &perform.Upgrader{
 		Cfg:    &r.Cfg.RoomServer,
@@ -222,10 +223,10 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		logrus.WithError(err).Panic("failed to start roomserver input API")
 	}
 
-	// When auto-purge is enabled, sweep any rooms that are already empty of
-	// local members at startup (e.g. left over from a previous run, or from
-	// a crash mid-purge during the previous shutdown).
-	if r.Cfg.RoomServer.AutoPurgeEmptyRooms {
+	// When auto-purge is enabled, sweep any rooms that are already eligible
+	// at startup (e.g. left over from a previous run, or from a crash
+	// mid-purge during the previous shutdown).
+	if r.Cfg.RoomServer.AutoPurgeEnabled() {
 		go func() {
 			if _, err := r.RunEmptyRoomsSweep(r.ProcessContext.Context()); err != nil {
 				logrus.WithError(err).Warn("startup empty-rooms sweep failed")
@@ -234,11 +235,12 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 	}
 }
 
-// RunEmptyRoomsSweep enumerates all rooms with no local server membership
-// and schedules an async auto-purge for each. Returns the number of rooms
-// scheduled. Safe to call multiple times; AutoPurgeRoom coalesces duplicates.
+// RunEmptyRoomsSweep enumerates all rooms eligible for auto-purge under
+// the configured mode and schedules an async auto-purge for each. Returns
+// the number of rooms scheduled. Safe to call multiple times;
+// AutoPurgeRoom coalesces duplicates. Returns 0 for AutoPurgeNever.
 func (r *RoomserverInternalAPI) RunEmptyRoomsSweep(ctx context.Context) (int, error) {
-	rooms, err := r.DB.EmptyRooms(ctx)
+	rooms, err := r.DB.PurgeableRooms(ctx, r.Cfg.RoomServer.AutoPurgeMode)
 	if err != nil {
 		return 0, err
 	}
@@ -249,6 +251,25 @@ func (r *RoomserverInternalAPI) RunEmptyRoomsSweep(ctx context.Context) (int, er
 		logrus.WithField("count", len(rooms)).Info("startup empty-rooms sweep scheduled purges")
 	}
 	return len(rooms), nil
+}
+
+// ScheduleAutoPurgeIfEligible looks up the roomInfo for the given roomID
+// and dispatches to Inputer.ScheduleAutoPurgeIfEmpty which respects the
+// configured AutoPurgeMode. This is the entry point used from non-event
+// code paths such as /forget where there is no roomInfo on hand.
+func (r *RoomserverInternalAPI) ScheduleAutoPurgeIfEligible(ctx context.Context, roomID string) {
+	if !r.Cfg.RoomServer.AutoPurgeEnabled() {
+		return
+	}
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		logrus.WithError(err).WithField("room_id", roomID).Warn("auto-purge: failed to fetch room info")
+		return
+	}
+	if roomInfo == nil {
+		return
+	}
+	r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
 }
 
 func (r *RoomserverInternalAPI) SetUserAPI(userAPI userapi.RoomserverUserAPI) {
@@ -262,6 +283,14 @@ func (r *RoomserverInternalAPI) SetAppserviceAPI(asAPI asAPI.AppServiceInternalA
 
 func (r *RoomserverInternalAPI) DefaultRoomVersion() gomatrixserverlib.RoomVersion {
 	return r.defaultRoomVersion
+}
+
+// AutoForgetOnLeaveEnabled reports whether the server is configured to
+// automatically forget rooms when a local user transitions to leave or
+// ban. Used by the /capabilities endpoint to advertise
+// m.forget_forced_upon_leave.
+func (r *RoomserverInternalAPI) AutoForgetOnLeaveEnabled() bool {
+	return r.Cfg.RoomServer.AutoForgetOnLeave
 }
 
 func (r *RoomserverInternalAPI) IsKnownRoom(ctx context.Context, roomID spec.RoomID) (bool, error) {

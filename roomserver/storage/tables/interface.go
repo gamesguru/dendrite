@@ -184,6 +184,11 @@ type Membership interface {
 	UpdateForgetMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, forget bool) error
 	SelectLocalServerInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	SelectServerInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
+	// SelectAnyLocalMemberNotForgotten reports whether the given room has
+	// at least one local membership row where forgotten = false. Any
+	// membership state (join, invite, knock, leave, ban) counts as long as
+	// the user has not forgotten it.
+	SelectAnyLocalMemberNotForgotten(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	DeleteMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID) error
 	SelectJoinedUsers(ctx context.Context, txn *sql.Tx, targetUserNIDs []types.EventStateKeyNID) ([]types.EventStateKeyNID, error)
 }

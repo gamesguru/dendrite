@@ -155,6 +155,11 @@ FROM roomserver_membership m
 WHERE membership_nid > $1 AND target_nid = ANY($2)
 `
 
+const selectAnyLocalMemberNotForgottenSQL = "" +
+	"SELECT 1 FROM roomserver_membership" +
+	" WHERE room_nid = $1 AND target_local = TRUE AND forgotten = FALSE" +
+	" LIMIT 1"
+
 type membershipStatements struct {
 	insertMembershipStmt                            *sql.Stmt
 	selectMembershipForUpdateStmt                   *sql.Stmt
@@ -171,6 +176,7 @@ type membershipStatements struct {
 	updateMembershipForgetRoomStmt                  *sql.Stmt
 	selectLocalServerInRoomStmt                     *sql.Stmt
 	selectServerInRoomStmt                          *sql.Stmt
+	selectAnyLocalMemberNotForgottenStmt            *sql.Stmt
 	deleteMembershipStmt                            *sql.Stmt
 	selectJoinedUsersStmt                           *sql.Stmt
 }
@@ -207,6 +213,7 @@ func PrepareMembershipTable(db *sql.DB) (tables.Membership, error) {
 		{&s.updateMembershipForgetRoomStmt, updateMembershipForgetRoom},
 		{&s.selectLocalServerInRoomStmt, selectLocalServerInRoomSQL},
 		{&s.selectServerInRoomStmt, selectServerInRoomSQL},
+		{&s.selectAnyLocalMemberNotForgottenStmt, selectAnyLocalMemberNotForgottenSQL},
 		{&s.deleteMembershipStmt, deleteMembershipSQL},
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 	}.Prepare(db)
@@ -466,4 +473,19 @@ func (s *membershipStatements) DeleteMembership(
 		ctx, roomNID, targetUserNID,
 	)
 	return err
+}
+
+func (s *membershipStatements) SelectAnyLocalMemberNotForgotten(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (bool, error) {
+	var found int
+	stmt := sqlutil.TxStmt(txn, s.selectAnyLocalMemberNotForgottenStmt)
+	err := stmt.QueryRowContext(ctx, roomNID).Scan(&found)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

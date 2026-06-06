@@ -18,6 +18,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Database interface {
@@ -159,6 +160,10 @@ type Database interface {
 	JoinedUsersSetInRooms(ctx context.Context, roomIDs, userIDs []string, localOnly bool) (map[string]int, error)
 	// GetLocalServerInRoom returns true if we think we're in a given room or false otherwise.
 	GetLocalServerInRoom(ctx context.Context, roomNID types.RoomNID) (bool, error)
+	// AnyLocalMemberNotForgotten reports whether the given room has at least one
+	// local membership row with forgotten = false. Used by auto-purge in
+	// on_all_forgotten mode.
+	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetServerInRoom returns true if we think a server is in a given room or false otherwise.
 	GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
 	// GetKnownUsers searches all users that userID knows about.
@@ -190,6 +195,9 @@ type Database interface {
 
 	// EmptyRooms returns all rooms that the local server has left.
 	EmptyRooms(ctx context.Context) ([]string, error)
+	// PurgeableRooms returns the room IDs eligible for auto-purge under the
+	// given mode. Returns nil for AutoPurgeNever.
+	PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode) ([]string, error)
 	// GetBulkStateACLs returns all server ACLs for the given rooms.
 	GetBulkStateACLs(ctx context.Context, roomIDs []string) ([]tables.StrippedEvent, error)
 	QueryAdminEventReports(ctx context.Context, from uint64, limit uint64, backwards bool, userID string, roomID string) ([]api.QueryAdminEventReportsResponse, int64, error)
@@ -247,6 +255,7 @@ type RoomDatabase interface {
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
 	GetRoomUpdater(ctx context.Context, roomInfo *types.RoomInfo) (*shared.RoomUpdater, error)
 	GetMembershipEventNIDsForRoom(ctx context.Context, roomNID types.RoomNID, joinOnly bool, localOnly bool) ([]types.EventNID, error)
+	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	StateBlockNIDs(ctx context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)

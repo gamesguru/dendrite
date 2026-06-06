@@ -19,6 +19,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // updateMemberships updates the current membership and the invites for each
@@ -100,21 +101,35 @@ func (r *Inputer) isLocalLeavingJoin(ctx context.Context, re, ae *types.Event) b
 	return newMembership != spec.Join
 }
 
-// ScheduleAutoPurgeIfEmpty checks whether the room has any local joined
-// users left; if not, it asks the API to start an async auto-purge.
-// Safe to call regardless of AutoPurgeEmptyRooms — it returns early if the
-// flag is off. Should be called AFTER the parent transaction commits, so
-// that the membership query sees the leave event.
+// ScheduleAutoPurgeIfEmpty evaluates the room against the configured
+// AutoPurgeMode and, if it is eligible, asks the API to start an async
+// auto-purge. Safe to call regardless of mode — it returns early when the
+// mode is "never". Should be called AFTER the parent transaction commits,
+// so that the membership query sees the latest event.
 func (r *Inputer) ScheduleAutoPurgeIfEmpty(ctx context.Context, roomInfo *types.RoomInfo) {
-	if !r.Cfg.AutoPurgeEmptyRooms || roomInfo == nil {
+	if roomInfo == nil {
 		return
 	}
-	members, err := r.DB.GetMembershipEventNIDsForRoom(ctx, roomInfo.RoomNID, true, true)
-	if err != nil {
-		logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to query local members")
-		return
-	}
-	if len(members) != 0 {
+	switch r.Cfg.AutoPurgeMode {
+	case config.AutoPurgeOnEmpty:
+		members, err := r.DB.GetMembershipEventNIDsForRoom(ctx, roomInfo.RoomNID, true, true)
+		if err != nil {
+			logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to query local members")
+			return
+		}
+		if len(members) != 0 {
+			return
+		}
+	case config.AutoPurgeOnAllForgotten:
+		anyMember, err := r.DB.AnyLocalMemberNotForgotten(ctx, roomInfo.RoomNID)
+		if err != nil {
+			logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to query non-forgotten local members")
+			return
+		}
+		if anyMember {
+			return
+		}
+	default:
 		return
 	}
 	roomID, err := r.RSAPI.RoomIDFromNID(ctx, roomInfo.RoomNID)
@@ -173,7 +188,11 @@ func (r *Inputer) updateMembership(
 	case spec.Join:
 		return updateToJoinMembership(mu, add, updates)
 	case spec.Leave, spec.Ban:
-		return updateToLeaveMembership(mu, add, newMembership, updates)
+		// Auto-forget transitions to leave/ban for local users when the
+		// feature is on (matches the Matrix 1.18 m.forget_forced_upon_leave
+		// capability that the /capabilities endpoint advertises).
+		forget := r.Cfg.AutoForgetOnLeave && targetLocal
+		return updateToLeaveMembership(mu, add, newMembership, updates, forget)
 	case spec.Knock:
 		return updateToKnockMembership(mu, add, updates)
 	default:
@@ -202,7 +221,7 @@ func updateToJoinMembership(
 	// are active for that user. We notify the consumers that the invites have
 	// been retired using a special event, even though they could infer this
 	// by studying the state changes in the room event stream.
-	_, retired, err := mu.Update(tables.MembershipStateJoin, add)
+	_, retired, err := mu.Update(tables.MembershipStateJoin, add, false)
 	if err != nil {
 		return nil, err
 	}
@@ -223,13 +242,13 @@ func updateToJoinMembership(
 
 func updateToLeaveMembership(
 	mu *shared.MembershipUpdater, add *types.Event,
-	newMembership string, updates []api.OutputEvent,
+	newMembership string, updates []api.OutputEvent, forget bool,
 ) ([]api.OutputEvent, error) {
 	// When we mark a user as having left we will invalidate any invites that
 	// are active for that user. We notify the consumers that the invites have
 	// been retired using a special event, even though they could infer this
 	// by studying the state changes in the room event stream.
-	_, retired, err := mu.Update(tables.MembershipStateLeaveOrBan, add)
+	_, retired, err := mu.Update(tables.MembershipStateLeaveOrBan, add, forget)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +270,7 @@ func updateToLeaveMembership(
 func updateToKnockMembership(
 	mu *shared.MembershipUpdater, add *types.Event, updates []api.OutputEvent,
 ) ([]api.OutputEvent, error) {
-	if _, _, err := mu.Update(tables.MembershipStateKnock, add); err != nil {
+	if _, _, err := mu.Update(tables.MembershipStateKnock, add, false); err != nil {
 		return nil, err
 	}
 	return updates, nil

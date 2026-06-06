@@ -29,6 +29,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/syncapi"
 	"codefloe.com/pat-s/zendrite/test"
@@ -1576,7 +1577,7 @@ func waitForRoomGone(t *testing.T, ctx context.Context, rsAPI api.RoomserverInte
 	t.Fatalf("room %s was not purged within %s", roomID, timeout)
 }
 
-func TestAutoPurgeOnLastLocalLeave(t *testing.T) {
+func TestAutoPurgeOnLastLocalLeave_OnEmptyMode(t *testing.T) {
 	ctx := context.Background()
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -1585,7 +1586,7 @@ func TestAutoPurgeOnLastLocalLeave(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
-		cfg.RoomServer.AutoPurgeEmptyRooms = true
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnEmpty
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
@@ -1611,7 +1612,7 @@ func TestAutoPurgeDisabledKeepsEmptyRoom(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
-		cfg.RoomServer.AutoPurgeEmptyRooms = false
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
@@ -1627,7 +1628,7 @@ func TestAutoPurgeDisabledKeepsEmptyRoom(t *testing.T) {
 
 		empty, err := rsAPI.EmptyRooms(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, []string{room.ID}, empty, "room should remain listed as empty when AutoPurgeEmptyRooms is off")
+		assert.Equal(t, []string{room.ID}, empty, "room should remain listed as empty when AutoPurgeMode is never")
 	})
 }
 
@@ -1687,7 +1688,9 @@ func TestStartupSweepPurgesEmptyRooms(t *testing.T) {
 		defer closeDB()
 		// Disable the auto-trigger so the explicit sweep below is the only
 		// thing driving the purge — keeps the assertions deterministic.
-		cfg.RoomServer.AutoPurgeEmptyRooms = false
+		// The sweep itself reads cfg.RoomServer.AutoPurgeMode, so flip it
+		// to AutoPurgeOnEmpty just before invoking RunEmptyRoomsSweep.
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
@@ -1707,11 +1710,13 @@ func TestStartupSweepPurgesEmptyRooms(t *testing.T) {
 		assert.Equal(t, []string{room.ID}, empty)
 
 		// Invoke the sweep directly. (In production this is also kicked off
-		// from a goroutine in SetFederationAPI.)
+		// from a goroutine in SetFederationAPI.) Flip the mode so the sweep
+		// has something to do.
 		concrete, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
 		if !ok {
 			t.Fatalf("expected *rsinternal.RoomserverInternalAPI, got %T", rsAPI)
 		}
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnEmpty
 		n, err := concrete.RunEmptyRoomsSweep(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, n)
@@ -1733,7 +1738,7 @@ func TestAutoPurgeRoomInfoNilAfterPurge(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
-		cfg.RoomServer.AutoPurgeEmptyRooms = true
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnEmpty
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
@@ -1777,7 +1782,7 @@ func TestAutoPurgeConcurrentRooms(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
-		cfg.RoomServer.AutoPurgeEmptyRooms = true
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnEmpty
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
@@ -1793,6 +1798,82 @@ func TestAutoPurgeConcurrentRooms(t *testing.T) {
 		for _, r := range rooms {
 			waitForRoomGone(t, ctx, rsAPI, r.ID, 10*time.Second)
 		}
+	})
+}
+
+// TestAutoPurgeOnAllForgotten_WaitsForForget confirms that under
+// AutoPurgeOnAllForgotten the room is NOT purged when a local user leaves
+// but has not yet forgotten — auto-purge waits for the explicit /forget.
+func TestAutoPurgeOnAllForgotten_WaitsForForget(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnAllForgotten
+		cfg.RoomServer.AutoForgetOnLeave = false
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false)
+		assert.NoError(t, err)
+
+		// Allow time for any purge to fire if it were going to.
+		time.Sleep(200 * time.Millisecond)
+
+		// The room should still exist (and be listed as empty per the local
+		// joined-member check that EmptyRooms uses), because alice's leave
+		// row is not forgotten yet.
+		empty, err := rsAPI.EmptyRooms(ctx)
+		assert.NoError(t, err)
+		assert.Contains(t, empty, room.ID, "room should not be purged while alice has a non-forgotten leave row")
+	})
+}
+
+// TestAutoPurgeOnAllForgotten_FiresOnLastForget confirms that under
+// AutoPurgeOnAllForgotten an explicit /forget by the last remaining local
+// user triggers the auto-purge.
+func TestAutoPurgeOnAllForgotten_FiresOnLastForget(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnAllForgotten
+		cfg.RoomServer.AutoForgetOnLeave = false
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false)
+		assert.NoError(t, err)
+
+		// Sanity check: the room is still around — only the leave has happened.
+		time.Sleep(100 * time.Millisecond)
+		empty, err := rsAPI.EmptyRooms(ctx)
+		assert.NoError(t, err)
+		assert.Contains(t, empty, room.ID, "pre-forget: room should still exist")
+
+		// Now alice forgets. With no other local members holding a non-
+		// forgotten row, this should trigger the auto-purge.
+		req := &api.PerformForgetRequest{RoomID: room.ID, UserID: alice.ID}
+		res := &api.PerformForgetResponse{}
+		assert.NoError(t, rsAPI.PerformForget(ctx, req, res))
+
+		waitForRoomGone(t, ctx, rsAPI, room.ID, 5*time.Second)
 	})
 }
 
@@ -1825,5 +1906,95 @@ func TestForgetRoomIdempotentForUnknownRoom(t *testing.T) {
 		res := &api.PerformForgetResponse{}
 		assert.NoError(t, rsAPI.PerformForget(ctx, req, res),
 			"PerformForget on an unknown room must be a no-op, not panic or error")
+	})
+}
+
+// queryMembershipForUser is a small helper used by the auto-forget tests.
+func queryMembershipForUser(t *testing.T, ctx context.Context, rsAPI api.RoomserverInternalAPI, roomID, userID string) api.QueryMembershipForUserResponse {
+	t.Helper()
+	uid, err := spec.NewUserID(userID, true)
+	if err != nil {
+		t.Fatalf("NewUserID: %v", err)
+	}
+	req := &api.QueryMembershipForUserRequest{RoomID: roomID, UserID: *uid}
+	res := api.QueryMembershipForUserResponse{}
+	if err := rsAPI.QueryMembershipForUser(ctx, req, &res); err != nil {
+		t.Fatalf("QueryMembershipForUser: %v", err)
+	}
+	return res
+}
+
+func TestAutoForgetOnLeaveMarksRoomForgotten(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoForgetOnLeave = true
+		// Disable auto-purge so the room persists and we can inspect the
+		// membership row.
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false)
+		assert.NoError(t, err)
+
+		got := queryMembershipForUser(t, ctx, rsAPI, room.ID, alice.ID)
+		assert.Equal(t, spec.Leave, got.Membership, "alice should be in leave state")
+		assert.True(t, got.IsRoomForgotten, "auto-forget should mark the room as forgotten for alice")
+	})
+}
+
+func TestAutoForgetOnLeaveDisabledKeepsMembership(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoForgetOnLeave = false
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false)
+		assert.NoError(t, err)
+
+		got := queryMembershipForUser(t, ctx, rsAPI, room.ID, alice.ID)
+		assert.Equal(t, spec.Leave, got.Membership)
+		assert.False(t, got.IsRoomForgotten, "with the flag off, alice's membership should not be marked as forgotten")
+	})
+}
+
+func TestAutoForgetOnLeaveEnabled_ReflectsConfig(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoForgetOnLeave = true
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		assert.True(t, rsAPI.AutoForgetOnLeaveEnabled())
+
+		cfg.RoomServer.AutoForgetOnLeave = false
+		assert.False(t, rsAPI.AutoForgetOnLeaveEnabled())
 	})
 }

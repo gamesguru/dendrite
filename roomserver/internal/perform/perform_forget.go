@@ -14,7 +14,8 @@ import (
 )
 
 type Forgetter struct {
-	DB storage.Database
+	DB    storage.Database
+	RSAPI api.RoomserverInternalAPI
 }
 
 // PerformForget implements api.RoomServerQueryAPI.
@@ -23,5 +24,15 @@ func (f *Forgetter) PerformForget(
 	request *api.PerformForgetRequest,
 	response *api.PerformForgetResponse,
 ) error {
-	return f.DB.ForgetRoom(ctx, request.UserID, request.RoomID, true)
+	if err := f.DB.ForgetRoom(ctx, request.UserID, request.RoomID, true); err != nil {
+		return err
+	}
+	// Under AutoPurgeOnAllForgotten this /forget may have been the last
+	// non-forgotten membership row, so re-evaluate auto-purge. The schedule
+	// helper is a no-op under modes where forget is not a trigger
+	// (never, on_empty).
+	if f.RSAPI != nil {
+		f.RSAPI.ScheduleAutoPurgeIfEligible(ctx, request.RoomID)
+	}
+	return nil
 }

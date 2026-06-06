@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Ideally, when we have both events we should redact the event JSON and forget about the redaction, but we currently
@@ -1699,6 +1700,14 @@ func (d *Database) GetLocalServerInRoom(ctx context.Context, roomNID types.RoomN
 	return d.MembershipTable.SelectLocalServerInRoom(ctx, nil, roomNID)
 }
 
+// AnyLocalMemberNotForgotten reports whether the given room has at least
+// one local membership row with forgotten = false. Used by auto-purge
+// in the on_all_forgotten mode to keep the room around until every local
+// user has explicitly forgotten it.
+func (d *Database) AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error) {
+	return d.MembershipTable.SelectAnyLocalMemberNotForgotten(ctx, nil, roomNID)
+}
+
 // GetServerInRoom returns true if we think a server is in a given room or false otherwise.
 func (d *Database) GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error) {
 	return d.MembershipTable.SelectServerInRoom(ctx, nil, roomNID, serverName)
@@ -1733,6 +1742,12 @@ func (d *Database) RoomsWithACLs(ctx context.Context) ([]string, error) {
 }
 
 // EmptyRooms returns all rooms that the local server has left.
+//
+// Semantics: a room is "empty" when no local user has a joined membership.
+// This intentionally ignores the auto-purge mode — callers like the
+// /admin/emptyRooms endpoint want to see that specific case regardless of
+// what auto-purge is configured to do. For the auto-purge sweep, use
+// PurgeableRooms which respects the mode.
 func (d *Database) EmptyRooms(ctx context.Context) ([]string, error) {
 	eventTypeNID := types.EventTypeNID(5) //nolint:mnd
 
@@ -1756,6 +1771,50 @@ func (d *Database) EmptyRooms(ctx context.Context) ([]string, error) {
 	}
 
 	return d.RoomsTable.BulkSelectRoomIDs(ctx, nil, leftRoomsNIDs)
+}
+
+// PurgeableRooms returns the room IDs eligible for auto-purge under the
+// given mode. Returns nil (no rooms, no error) when mode is AutoPurgeNever
+// so callers can call it unconditionally.
+func (d *Database) PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode) ([]string, error) {
+	if mode == config.AutoPurgeNever {
+		return nil, nil
+	}
+	eventTypeNID := types.EventTypeNID(5) //nolint:mnd
+
+	roomNIDs, err := d.EventsTable.SelectRoomsWithEventTypeNID(ctx, nil, eventTypeNID)
+	if err != nil {
+		return nil, err
+	}
+
+	purgeable := make([]types.RoomNID, 0, len(roomNIDs))
+	for i := range roomNIDs {
+		var keep bool
+		switch mode {
+		case config.AutoPurgeOnEmpty:
+			inRoom, err := d.GetLocalServerInRoom(ctx, roomNIDs[i])
+			if err != nil {
+				return nil, err
+			}
+			keep = inRoom
+		case config.AutoPurgeOnAllForgotten:
+			anyMember, err := d.AnyLocalMemberNotForgotten(ctx, roomNIDs[i])
+			if err != nil {
+				return nil, err
+			}
+			keep = anyMember
+		default:
+			// AutoPurgeNever is handled above; an unknown value is treated
+			// the same as "do nothing" rather than purging optimistically.
+			return nil, nil
+		}
+		if keep {
+			continue
+		}
+		purgeable = append(purgeable, roomNIDs[i])
+	}
+
+	return d.RoomsTable.BulkSelectRoomIDs(ctx, nil, purgeable)
 }
 
 // ForgetRoom sets a users room to forgotten. If the room is not known

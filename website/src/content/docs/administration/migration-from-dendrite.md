@@ -68,9 +68,9 @@ Zendrite renames the internal `dendrite_version` column in the `db_migrations` t
 
 ## Empty rooms are purged automatically
 
-Zendrite automatically purges rooms which have no local members, both on startup and whenever a local user leaves a room and was the last local member.
-The feature is **enabled by default**.
+Zendrite automatically purges rooms once no local user has any non-forgotten membership row.
+The trigger is the `room_server.auto_purge_empty_rooms` setting, which defaults to `on_all_forgotten`.
 
-After upgrading from Dendrite, expect any pre-existing empty rooms in your database to be purged on the first restart.
-Use [`GET /_zendrite/admin/emptyRooms`](/administration/adminapi/#get-_zendriteadminemptyrooms) before restart if you want to inspect them first, or set `room_server.auto_purge_empty_rooms: false` in your config to opt out.
-See [Auto-purging empty rooms](/administration/auto-purge-empty-rooms/) for the full picture.
+After upgrading from Dendrite, expect any rooms in your database where every local user has either left and forgotten, or never had a row at all, to be purged on the first restart.
+Use [`GET /_zendrite/admin/emptyRooms`](/administration/adminapi/#get-_zendriteadminemptyrooms) before restart if you want to inspect candidates first, or set `room_server.auto_purge_empty_rooms: never` (or the legacy `false`) in your config to opt out.
+See [Auto-purging empty rooms](/administration/auto-purge-empty-rooms/) for the full picture, including the more aggressive `on_empty` mode.

@@ -284,14 +284,36 @@ federation_api:
 
 # Configuration for the Room Server.
 room_server:
-  # Automatically purge empty rooms. When enabled (the default), two
-  # behaviours fire together:
-  #   - at startup, a one-shot sweep purges any rooms which currently have
-  #     no local members; and
-  #   - at runtime, whenever the last local member leaves a room, the room
-  #     is scheduled for an asynchronous purge.
-  # Set to false to disable both behaviours.
-  auto_purge_empty_rooms: true
+  # Automatically purge rooms once no local user is interested in them.
+  # Three modes are accepted:
+  #   - "never": disable auto-purge entirely; rooms persist until an admin
+  #     calls /admin/purgeRoom.
+  #   - "on_empty": purge as soon as no local user has a *joined*
+  #     membership in the room. Users who have left (but not /forget'ed)
+  #     lose their pre-leave /messages access along with the room.
+  #   - "on_all_forgotten" (the default): purge once no local user has any
+  #     non-forgotten membership row. Users who left but did not /forget
+  #     keep their pre-leave history access until they explicitly forget.
+  #
+  # Both purge modes share two triggers: a one-shot sweep at startup, and
+  # a runtime check after each membership change (and after /forget for
+  # the on_all_forgotten mode).
+  #
+  # For backwards compatibility a boolean is also accepted: true is
+  # equivalent to on_all_forgotten and false is equivalent to never.
+  auto_purge_empty_rooms: on_all_forgotten
+
+  # Automatically mark a room as forgotten for a local user whenever their
+  # membership transitions to leave or ban. Matches the Matrix 1.18
+  # m.forget_forced_upon_leave capability advertised via
+  # /_matrix/client/v3/capabilities.
+  #
+  # Defaults to false. Forgetting a room hides it from the leaving user's
+  # archived-rooms UI and drops their /messages access to pre-leave
+  # history. Enable this if you prefer the "leaving the room cleans up
+  # client UI" behaviour over the "user can browse rooms they have left"
+  # behaviour.
+  auto_forget_on_leave: false
 
 # Configuration for the Media API.
 media_api:

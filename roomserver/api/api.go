@@ -60,6 +60,14 @@ type DefaultRoomVersionAPI interface {
 	DefaultRoomVersion() gomatrixserverlib.RoomVersion
 }
 
+// CapabilitiesAPI exposes server-configured Matrix capabilities to clients.
+type CapabilitiesAPI interface {
+	// AutoForgetOnLeaveEnabled reports whether the server automatically
+	// marks rooms as forgotten when a local user transitions to leave or
+	// ban. Backs the m.forget_forced_upon_leave capability.
+	AutoForgetOnLeaveEnabled() bool
+}
+
 // RoomserverInputAPI is used to write events to the room server.
 type RoomserverInternalAPI interface {
 	SyncRoomserverAPI
@@ -96,6 +104,11 @@ type RoomserverInternalAPI interface {
 	// same room while a purge is running are coalesced. reason is a short
 	// label included in log lines (e.g. "event", "startup_sweep").
 	AutoPurgeRoom(ctx context.Context, roomID, reason string)
+	// ScheduleAutoPurgeIfEligible evaluates the given room against the
+	// configured AutoPurgeMode and schedules an async purge if eligible.
+	// Used by /forget to fire a check after the last non-forgotten
+	// membership disappears under on_all_forgotten.
+	ScheduleAutoPurgeIfEligible(ctx context.Context, roomID string)
 }
 
 type UserRoomPrivateKeyCreator interface {
@@ -239,6 +252,7 @@ type ClientRoomserverAPI interface {
 	UserRoomPrivateKeyCreator
 	QueryRoomHierarchyAPI
 	DefaultRoomVersionAPI
+	CapabilitiesAPI
 
 	QueryMembershipForUser(ctx context.Context, req *QueryMembershipForUserRequest, res *QueryMembershipForUserResponse) error
 	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error

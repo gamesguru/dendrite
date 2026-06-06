@@ -99,6 +99,6 @@ func applyTestOverrides(cfg *config.Zendrite) {
 	// Disable automatic empty-room purging. Many tests have a local user
 	// leave a room and then continue to act in or observe it, which is
 	// incompatible with auto-purging. Tests that exercise the feature
-	// explicitly opt in by setting cfg.RoomServer.AutoPurgeEmptyRooms = true.
-	cfg.RoomServer.AutoPurgeEmptyRooms = false
+	// explicitly opt in by setting cfg.RoomServer.AutoPurgeMode.
+	cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
 }
