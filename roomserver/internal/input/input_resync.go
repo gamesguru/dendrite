@@ -14,6 +14,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -104,34 +105,33 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		return false, nil, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
 	}
 
-	// Build a map of state keys in the new state (from remote server) for quick lookup
-	newStateKeys := make(map[types.StateKeyTuple]bool)
-	for _, entry := range stateEntries {
-		newStateKeys[entry.StateKeyTuple] = true
-	}
-
-	// Find local member events in the old state that aren't in the new state
-	// These are membership events for local users (like our join event) that the
-	// remote server doesn't know about
-	localMemberCount := 0
-	for _, entry := range oldStateEntries {
-		if entry.EventTypeNID == types.MRoomMemberNID {
-			// Check if this member event is already in the new state
-			if !newStateKeys[entry.StateKeyTuple] {
-				// This is a local member event not in the remote state - preserve it
-				stateEntries = append(stateEntries, entry)
-				newStateKeys[entry.StateKeyTuple] = true
-				localMemberCount++
-				logger.WithFields(logrus.Fields{
-					"event_nid":       entry.EventNID,
-					"event_state_key": entry.EventStateKeyNID,
-				}).Debug("Preserving local member event not in remote state")
+	// The remote /state response reflects the room *before* our join, so for our
+	// own (local) users it can only carry a stale membership (e.g. our pre-join
+	// invite). Resolve which overlapping old-state member events target local
+	// users; those must override the remote state rather than be regressed by it.
+	overlapping := overlappingOldMembers(stateEntries, oldStateEntries)
+	localOldMemberNIDs := make(map[types.EventNID]bool)
+	if len(overlapping) > 0 {
+		nids := make([]types.EventNID, len(overlapping))
+		for i := range overlapping {
+			nids[i] = overlapping[i].EventNID
+		}
+		var events []types.Event
+		events, err = r.DB.Events(ctx, roomInfo.RoomVersion, nids)
+		if err != nil {
+			return false, nil, fmt.Errorf("r.DB.Events: %w", err)
+		}
+		for i := range overlapping {
+			if ev, ok := helpers.EventMap(events).Lookup(overlapping[i].EventNID); ok && r.isLocalTarget(ctx, ev) {
+				localOldMemberNIDs[overlapping[i].EventNID] = true
 			}
 		}
 	}
 
-	if localMemberCount > 0 {
-		logger.WithField("preserved_local_members", localMemberCount).
+	var keptLocalMembers int
+	stateEntries, keptLocalMembers = reconcileResyncMembers(stateEntries, oldStateEntries, localOldMemberNIDs)
+	if keptLocalMembers > 0 {
+		logger.WithField("preserved_local_members", keptLocalMembers).
 			Info("Preserved local member events in new state snapshot")
 	}
 
@@ -286,4 +286,69 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	}).Info("Successfully updated current state after partial state resync")
 
 	return localLeftJoin, roomInfo, nil
+}
+
+// overlappingOldMembers returns the member events from oldState whose state key
+// is also present as a *different* member event in remoteState. These are the
+// candidates whose target locality must be resolved before deciding whether the
+// remote /state's (older) version may replace ours.
+func overlappingOldMembers(remoteState, oldState []types.StateEntry) []types.StateEntry {
+	remoteMembers := make(map[types.StateKeyTuple]types.EventNID)
+	for _, e := range remoteState {
+		if e.EventTypeNID == types.MRoomMemberNID {
+			remoteMembers[e.StateKeyTuple] = e.EventNID
+		}
+	}
+	var out []types.StateEntry
+	for _, e := range oldState {
+		if e.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+		if nid, ok := remoteMembers[e.StateKeyTuple]; ok && nid != e.EventNID {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// reconcileResyncMembers merges membership state for a partial-state resync.
+// RemoteState is the state fetched from the remote server (which reflects the
+// room *before* our join); oldState is our current state. It returns remoteState
+// adjusted so that:
+//   - member events present in oldState but absent from remoteState are kept, and
+//   - member events present in both but differing are taken from oldState when the
+//     old event's NID is in localOldMemberNIDs (a local user, whose membership the
+//     remote /state must not be allowed to regress, e.g. join -> stale invite).
+//
+// The second return value is the number of member events taken from oldState.
+func reconcileResyncMembers(
+	remoteState, oldState []types.StateEntry,
+	localOldMemberNIDs map[types.EventNID]bool,
+) ([]types.StateEntry, int) {
+	memberPos := make(map[types.StateKeyTuple]int)
+	for i, e := range remoteState {
+		if e.EventTypeNID == types.MRoomMemberNID {
+			memberPos[e.StateKeyTuple] = i
+		}
+	}
+
+	kept := 0
+	for _, e := range oldState {
+		if e.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+		pos, ok := memberPos[e.StateKeyTuple]
+		if !ok {
+			// Absent from the remote state - keep ours.
+			remoteState = append(remoteState, e)
+			memberPos[e.StateKeyTuple] = len(remoteState) - 1
+			kept++
+			continue
+		}
+		if remoteState[pos].EventNID != e.EventNID && localOldMemberNIDs[e.EventNID] {
+			remoteState[pos] = e
+			kept++
+		}
+	}
+	return remoteState, kept
 }
