@@ -223,31 +223,31 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 		return nil
 	}
 
-	// MSC3706: Check if the room is in partial state before sending
-	// If it's a remote event (not from us), skip sending during partial state
-	// to avoid forwarding events with incomplete context
+	// MSC3706: While a room is in partial state our joined_hosts table only holds
+	// the subset of servers from the partial /send_join response. Remote events
+	// are not forwarded with this incomplete context; local events are still sent
+	// but must also reach every server the resident server reported was in the
+	// room, otherwise leaves never propagate and other servers keep us listed as
+	// joined (issue #186).
 	isLocalEvent := spec.ServerName(ore.SendAsServer) == s.cfg.Matrix.ServerName
-	roomID, err := spec.NewRoomID(ore.Event.RoomID().String())
-	if err == nil {
-		roomInfo, infoErr := s.rsAPI.QueryRoomInfo(s.ctx, *roomID)
-		if infoErr == nil && roomInfo != nil {
-			isPartialState, partialErr := s.rsAPI.IsRoomPartialState(s.ctx, roomInfo.RoomNID)
-			if partialErr == nil && isPartialState {
-				if !isLocalEvent {
-					// Skip sending remote events during partial state
-					log.WithFields(log.Fields{
-						"event_id": ore.Event.EventID(),
-						"room_id":  ore.Event.RoomID().String(),
-						"origin":   ore.SendAsServer,
-					}).Debug("Skipping federation send for remote event in partial state room")
-					return nil
-				}
-				// Local events proceed but with warning about potentially incomplete server list
-				log.WithFields(log.Fields{
-					"event_id": ore.Event.EventID(),
-					"room_id":  ore.Event.RoomID().String(),
-				}).Debug("Sending local event from partial state room (server list may be incomplete)")
-			}
+	var partialStateServers []spec.ServerName
+	if roomID, roomIDErr := spec.NewRoomID(ore.Event.RoomID().String()); roomIDErr == nil {
+		servers, skip, psErr := s.partialStateServersForEvent(*roomID, isLocalEvent)
+		switch {
+		case psErr != nil:
+			log.WithError(psErr).WithFields(log.Fields{
+				"event_id": ore.Event.EventID(),
+				"room_id":  ore.Event.RoomID().String(),
+			}).Warn("Failed to determine partial state servers for outbound event")
+		case skip:
+			log.WithFields(log.Fields{
+				"event_id": ore.Event.EventID(),
+				"room_id":  ore.Event.RoomID().String(),
+				"origin":   ore.SendAsServer,
+			}).Debug("Skipping federation send for remote event in partial state room")
+			return nil
+		default:
+			partialStateServers = servers
 		}
 	}
 
@@ -256,6 +256,11 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if err != nil {
 		return err
 	}
+
+	// During a partial state join joinedHostsAtEvent is derived from the
+	// incomplete joined_hosts table, so also target the servers reported by the
+	// partial join. SendEvent deduplicates and drops our own server name.
+	joinedHostsAtEvent = append(joinedHostsAtEvent, partialStateServers...)
 
 	// TODO: do housekeeping to evict unrenewed peeking hosts
 
@@ -335,6 +340,37 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 	if err := s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, joined); err != nil {
 		log.WithError(err).Error("failed to send EDU")
 	}
+}
+
+// partialStateServersForEvent reports the additional servers an outbound event
+// must be sent to because the room is still in partial state (MSC3706 faster
+// join). While a room is in partial state our federation joined_hosts table
+// only holds the subset of servers from the partial /send_join response, so the
+// returned servers are the ones the resident server reported were in the room.
+// Remote events are not forwarded during partial state, signaled by skip=true.
+func (s *OutputRoomEventConsumer) partialStateServersForEvent(
+	roomID spec.RoomID, isLocalEvent bool,
+) (servers []spec.ServerName, skip bool, err error) {
+	roomInfo, err := s.rsAPI.QueryRoomInfo(s.ctx, roomID)
+	if err != nil || roomInfo == nil {
+		return nil, false, err
+	}
+	isPartialState, err := s.rsAPI.IsRoomPartialState(s.ctx, roomInfo.RoomNID)
+	if err != nil || !isPartialState {
+		return nil, false, err
+	}
+	if !isLocalEvent {
+		return nil, true, nil
+	}
+	knownServers, err := s.rsAPI.GetPartialStateServers(s.ctx, roomInfo.RoomNID)
+	if err != nil {
+		return nil, false, err
+	}
+	servers = make([]spec.ServerName, 0, len(knownServers))
+	for _, server := range knownServers {
+		servers = append(servers, spec.ServerName(server))
+	}
+	return servers, false, nil
 }
 
 // joinedHostsAtEvent works out a list of matrix servers that were joined to
