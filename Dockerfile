@@ -30,7 +30,7 @@ RUN --mount=target=. \
 #
 # Builds the Zendrite image containing all required binaries
 #
-FROM alpine:3.23
+FROM alpine:3.24
 
 # Install runtime dependencies
 RUN apk --update --no-cache add ca-certificates curl tzdata \
