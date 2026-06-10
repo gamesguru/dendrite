@@ -168,8 +168,9 @@ type Database interface {
 	GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
 	// GetKnownUsers searches all users that userID knows about.
 	GetKnownUsers(ctx context.Context, userID, searchString string, limit int) ([]string, error)
-	// ForgetRoom sets a flag in the membership table, that the user wishes to forget a specific room
-	ForgetRoom(ctx context.Context, userID, roomID string, forget bool) error
+	// ForgetRoom sets a flag in the membership table, that the user wishes to forget a specific room.
+	// senderID is the room-specific sender ID of the user (equal to the user ID except in pseudo-ID rooms).
+	ForgetRoom(ctx context.Context, senderID, roomID string, forget bool) error
 
 	GetHistoryVisibilityState(ctx context.Context, roomInfo *types.RoomInfo, eventID string, domain string) ([]gomatrixserverlib.PDU, error)
 	GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error)

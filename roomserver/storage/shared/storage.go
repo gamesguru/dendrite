@@ -1822,7 +1822,7 @@ func (d *Database) PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode
 // /admin/purgeRoom), ForgetRoom is a no-op: the user is, by definition,
 // not still a member of a room that does not exist, so the operation is
 // idempotent.
-func (d *Database) ForgetRoom(ctx context.Context, userID, roomID string, forget bool) error {
+func (d *Database) ForgetRoom(ctx context.Context, senderID, roomID string, forget bool) error {
 	roomNIDs, err := d.RoomsTable.BulkSelectRoomNIDs(ctx, nil, []string{roomID})
 	if err != nil {
 		return err
@@ -1833,7 +1833,7 @@ func (d *Database) ForgetRoom(ctx context.Context, userID, roomID string, forget
 	if len(roomNIDs) > 1 {
 		return fmt.Errorf("expected one room, got %d", len(roomNIDs))
 	}
-	stateKeyNID, err := d.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, userID)
+	stateKeyNID, err := d.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, senderID)
 	if err != nil {
 		return err
 	}
