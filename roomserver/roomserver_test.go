@@ -29,6 +29,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/base"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/syncapi"
@@ -261,8 +262,10 @@ func TestPurgeRoom(t *testing.T) {
 
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 
-		// this starts the JetStream consumers
-		fsAPI := federationapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, nil, rsAPI, caches, nil, true)
+		// this starts the JetStream consumers. A real federation client is
+		// required (rather than nil) because purging a partial-state room
+		// federates the evacuation leave events to the partial-state servers.
+		fsAPI := federationapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, base.CreateFederationClient(cfg, nil), rsAPI, caches, nil, true)
 		rsAPI.SetFederationAPI(fsAPI, nil)
 
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, fsAPI.IsBlacklistedOrBackingOff)

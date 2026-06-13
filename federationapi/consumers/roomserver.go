@@ -103,6 +103,19 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
 		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
+			// A room purge evacuates the room (producing leave events) and then
+			// deletes the room's state, all before the OutputTypePurgeRoom message
+			// reaches us. Those leave events can therefore arrive here after the
+			// state they reference has already been deleted, making processMessage
+			// fail. That is expected for a purged room, not the database
+			// inconsistency the panic below guards against, so skip the event.
+			if s.roomPurged(ctx, ev.RoomID().String()) {
+				log.WithFields(log.Fields{
+					"event_id": ev.EventID(),
+					"room_id":  ev.RoomID().String(),
+				}).Warn("Skipping federation output for purged room")
+				return true
+			}
 			// panic rather than continue with an inconsistent database
 			log.WithFields(log.Fields{
 				"event_id":   ev.EventID(),
@@ -340,6 +353,20 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 	if err := s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, joined); err != nil {
 		log.WithError(err).Error("failed to send EDU")
 	}
+}
+
+// roomPurged reports whether the roomserver no longer knows about roomID, which
+// is the case once the room has been purged. It is used to distinguish an
+// expected missing-state failure (the room was purged out from under a queued
+// event) from genuine database inconsistency. On any error determining room
+// existence it returns false so the caller falls back to its default handling.
+func (s *OutputRoomEventConsumer) roomPurged(ctx context.Context, roomIDStr string) bool {
+	roomID, err := spec.NewRoomID(roomIDStr)
+	if err != nil {
+		return false
+	}
+	roomInfo, err := s.rsAPI.QueryRoomInfo(ctx, *roomID)
+	return err == nil && roomInfo == nil
 }
 
 // partialStateServersForEvent reports the additional servers an outbound event

@@ -7,6 +7,7 @@ package consumers
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -20,14 +21,22 @@ import (
 // api.FederationRoomserverAPI to exercise partialStateServersForEvent.
 type fakePartialStateRoomserverAPI struct {
 	api.FederationRoomserverAPI
-	roomNID         rstypes.RoomNID
-	partialState    bool
-	partialStateErr error
-	servers         []string
-	serversErr      error
+	roomNID          rstypes.RoomNID
+	partialState     bool
+	partialStateErr  error
+	servers          []string
+	serversErr       error
+	roomInfoNil      bool
+	queryRoomInfoErr error
 }
 
 func (f *fakePartialStateRoomserverAPI) QueryRoomInfo(ctx context.Context, roomID spec.RoomID) (*rstypes.RoomInfo, error) {
+	if f.queryRoomInfoErr != nil {
+		return nil, f.queryRoomInfoErr
+	}
+	if f.roomInfoNil {
+		return nil, nil
+	}
 	return &rstypes.RoomInfo{RoomNID: f.roomNID}, nil
 }
 
@@ -103,6 +112,38 @@ func TestPartialStateServersForEvent(t *testing.T) {
 		}
 		if len(servers) != 0 {
 			t.Fatalf("expected no extra servers for a fully joined room, got %v", servers)
+		}
+	})
+}
+
+func TestRoomPurged(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("purged room reports true", func(t *testing.T) {
+		s := &OutputRoomEventConsumer{rsAPI: &fakePartialStateRoomserverAPI{roomInfoNil: true}}
+		if !s.roomPurged(ctx, "!room:example.com") {
+			t.Fatal("expected a room with no roomInfo to be reported as purged")
+		}
+	})
+
+	t.Run("existing room reports false", func(t *testing.T) {
+		s := &OutputRoomEventConsumer{rsAPI: &fakePartialStateRoomserverAPI{roomNID: 1}}
+		if s.roomPurged(ctx, "!room:example.com") {
+			t.Fatal("expected an existing room not to be reported as purged")
+		}
+	})
+
+	t.Run("query error reports false", func(t *testing.T) {
+		s := &OutputRoomEventConsumer{rsAPI: &fakePartialStateRoomserverAPI{queryRoomInfoErr: errors.New("boom")}}
+		if s.roomPurged(ctx, "!room:example.com") {
+			t.Fatal("expected a query error to fall back to not purged")
+		}
+	})
+
+	t.Run("invalid room id reports false", func(t *testing.T) {
+		s := &OutputRoomEventConsumer{rsAPI: &fakePartialStateRoomserverAPI{roomInfoNil: true}}
+		if s.roomPurged(ctx, "not-a-room-id") {
+			t.Fatal("expected an invalid room id to fall back to not purged")
 		}
 	})
 }
