@@ -11,7 +11,7 @@ jobs:
     name: Update changelog issue
     runs-on: ubuntu-latest
     # renovate: datasource=docker depName=thegeeklab/git-sv
-    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.1
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:2.1.2
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq nodejs
