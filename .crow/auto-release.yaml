@@ -11,7 +11,7 @@ clone:
 
 steps:
   auto-release:
-    image: codefloe.com/crow-plugins/auto-releaser:0.1.0
+    image: codefloe.com/crow-plugins/auto-releaser:0.1.1
     settings:
       tag_after: 30d
       ssh_key:
