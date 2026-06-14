@@ -13,6 +13,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/matrix-org/gomatrix"
 	"github.com/stretchr/testify/assert"
 
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
@@ -21,6 +22,44 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
 )
+
+// TestFailBlacklistableError verifies that only transport-level failures
+// (connection errors, timeouts, malformed responses, 401 signature failures
+// and 5xx) contribute to a destination's backoff, while well-formed 4xx
+// application responses (e.g. 403 M_FORBIDDEN from /backfill) do not.
+func TestFailBlacklistableError(t *testing.T) {
+	newStats := func() *statistics.ServerStatistics {
+		testDB := test.NewInMemoryFederationDatabase()
+		stats := statistics.NewStatistics(testDB, FailuresUntilBlacklist, FailuresUntilAssumedOffline, false)
+		return stats.ForServer("matrix.org")
+	}
+
+	cases := []struct {
+		name        string
+		err         error
+		wantBackoff bool
+	}{
+		{"nil error", nil, false},
+		{"403 spec M_FORBIDDEN", spec.HTTPError{Code: 403, WrappedError: spec.RespError{ErrCode: "M_FORBIDDEN", Err: "Host not in room."}}, false},
+		{"404 spec not found", spec.HTTPError{Code: 404}, false},
+		{"403 gomatrix", gomatrix.HTTPError{Code: 403}, false},
+		{"401 spec signature failure", spec.HTTPError{Code: 401}, true},
+		{"500 spec server error", spec.HTTPError{Code: 500}, true},
+		{"502 spec bad gateway", spec.HTTPError{Code: 502}, true},
+		{"transport error", fmt.Errorf("connection refused"), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := newStats()
+			until, _ := failBlacklistableError(tc.err, stats)
+			assert.Equal(t, tc.wantBackoff, !until.IsZero(),
+				"backoff state mismatch for %s", tc.name)
+			assert.Equal(t, tc.wantBackoff, stats.BackoffInfo() != nil,
+				"persisted backoff mismatch for %s", tc.name)
+		})
+	}
+}
 
 const (
 	FailuresUntilAssumedOffline = 3

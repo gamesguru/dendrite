@@ -148,20 +148,39 @@ func (a *FederationInternalAPI) IsBlacklistedOrBackingOff(s spec.ServerName) (*s
 	return stats, nil
 }
 
+// federationHTTPCode returns the HTTP status code carried by err, or 0 if err
+// is not an HTTP error. The federation client returns spec.HTTPError, while
+// some lower-level paths surface gomatrix.HTTPError, so both are checked.
+func federationHTTPCode(err error) int {
+	var specErr spec.HTTPError
+	if errors.As(err, &specErr) {
+		return specErr.Code
+	}
+	var mxErr gomatrix.HTTPError
+	if errors.As(err, &mxErr) {
+		return mxErr.Code
+	}
+	return 0
+}
+
 func failBlacklistableError(err error, stats *statistics.ServerStatistics) (until time.Time, blacklisted bool) {
 	if err == nil {
 		return
 	}
-	var mxerr gomatrix.HTTPError
-	if !errors.As(err, &mxerr) {
+	code := federationHTTPCode(err)
+	switch {
+	case code == 0:
+		// Not an HTTP error: a transport-level failure (connection refused,
+		// timeout, malformed response). These count toward backoff.
+		return stats.Failure()
+	case code == 401: //nolint:mnd // invalid signature in X-Matrix header
+		return stats.Failure()
+	case code >= 500 && code < 600: // remote internal server errors
 		return stats.Failure()
 	}
-	if mxerr.Code == 401 { //nolint:mnd // invalid signature in X-Matrix header
-		return stats.Failure()
-	}
-	if mxerr.Code >= 500 && mxerr.Code < 600 { // internal server errors
-		return stats.Failure()
-	}
+	// A well-formed 4xx (e.g. 403 M_FORBIDDEN "Host not in room") means the
+	// request reached the remote and was answered. It must not penalize the
+	// destination's transport backoff state.
 	return
 }
 
@@ -199,14 +218,7 @@ func (a *FederationInternalAPI) doFederationRequest(
 		if failUntil.After(now) {
 			retryAfter = time.Until(failUntil)
 		}
-		var httpCode int
-		var specErr spec.HTTPError
-		var mxErr gomatrix.HTTPError
-		if errors.As(err, &specErr) {
-			httpCode = specErr.Code
-		} else if errors.As(err, &mxErr) {
-			httpCode = mxErr.Code
-		}
+		httpCode := federationHTTPCode(err)
 		return res, &api.FederationClientError{
 			Err:         err.Error(),
 			Blacklisted: blacklisted,
