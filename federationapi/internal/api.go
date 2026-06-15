@@ -229,3 +229,34 @@ func (a *FederationInternalAPI) doFederationRequest(
 	stats.Success(statistics.SendDirect)
 	return res, nil
 }
+
+// doFederationRequestNoStats makes a federation request that neither checks nor
+// updates the destination's backoff statistics (it still honors the blacklist).
+//
+// It is for background bulk operations — notably the partial-state resync, which
+// fetches thousands of events one-by-one from the join server. Under that load
+// the remote is often slow, so individual requests time out. If those transient
+// failures were recorded, a single background resync would back off the server
+// for ALL traffic, blocking unrelated foreground requests (client backfill, key
+// queries) to the same destination. Decoupling bulk-resync requests from the
+// shared backoff accounting keeps that contained.
+func (a *FederationInternalAPI) doFederationRequestNoStats(
+	s spec.ServerName, request func() (any, error),
+) (any, error) {
+	stats := a.statistics.ForServer(s)
+	if stats.Blacklisted() {
+		return nil, &api.FederationClientError{
+			Err:         fmt.Sprintf("server %q is blacklisted", s),
+			Blacklisted: true,
+		}
+	}
+
+	res, err := request()
+	if err != nil {
+		return res, &api.FederationClientError{
+			Err:  err.Error(),
+			Code: federationHTTPCode(err),
+		}
+	}
+	return res, nil
+}

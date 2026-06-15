@@ -82,6 +82,45 @@ func (t *testFedClient) ClaimKeys(ctx context.Context, origin, s spec.ServerName
 	return fclient.RespClaimKeys{}, nil
 }
 
+// TestBypassBackoffDoesNotRecordStats verifies that the bulk-resync bypass path
+// (GetEventBypassBackoff) does not record failures against the destination's
+// shared backoff state, while the regular path (GetEvent) still does. This keeps
+// a background partial-state resync's transient timeouts from backing off a
+// server for unrelated foreground traffic.
+func TestBypassBackoffDoesNotRecordStats(t *testing.T) {
+	newAPI := func() (*FederationInternalAPI, *statistics.Statistics) {
+		testDB := test.NewInMemoryFederationDatabase()
+		cfg := config.FederationAPI{
+			Matrix: &config.Global{
+				SigningIdentity: fclient.SigningIdentity{ServerName: "server"},
+			},
+		}
+		fedClient := &testFedClient{shouldFail: true}
+		stats := statistics.NewStatistics(testDB, FailuresUntilBlacklist, FailuresUntilAssumedOffline, false)
+		queues := queue.NewOutgoingQueues(
+			testDB, process.NewProcessContext(), false,
+			cfg.Matrix.ServerName, fedClient, &stats, nil,
+		)
+		return &FederationInternalAPI{
+			db: testDB, cfg: &cfg, statistics: &stats, federation: fedClient, queues: queues,
+		}, &stats
+	}
+
+	t.Run("bypass path does not back off on failure", func(t *testing.T) {
+		fedapi, stats := newAPI()
+		_, err := fedapi.GetEventBypassBackoff(context.Background(), "origin", "matrix.org", "$evt")
+		assert.Error(t, err)
+		assert.Nil(t, stats.ForServer("matrix.org").BackoffInfo(), "bypass path must not record backoff")
+	})
+
+	t.Run("regular path backs off on failure", func(t *testing.T) {
+		fedapi, stats := newAPI()
+		_, err := fedapi.GetEvent(context.Background(), "origin", "matrix.org", "$evt")
+		assert.Error(t, err)
+		assert.NotNil(t, stats.ForServer("matrix.org").BackoffInfo(), "regular path should record backoff")
+	})
+}
+
 func TestFederationClientQueryKeys(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
 

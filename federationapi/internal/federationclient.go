@@ -227,17 +227,18 @@ func (a *FederationInternalAPI) LookupStateIDs(
 	return resp, nil
 }
 
-// LookupStateIDsBypassBackoff is like LookupStateIDs but skips the backoff
-// check for the target server. This is used by the partial state worker when
-// contacting the join server, which is known to be alive from the recent join.
+// LookupStateIDsBypassBackoff is like LookupStateIDs but neither checks nor
+// updates the target server's backoff statistics. This is used by the partial
+// state worker during bulk resync, so its transient transport failures don't
+// back off the server for unrelated foreground traffic.
 func (a *FederationInternalAPI) LookupStateIDsBypassBackoff(
 	ctx context.Context, origin, s spec.ServerName, roomID, eventID string,
 ) (res gomatrixserverlib.StateIDResponse, err error) {
 	ctx, cancel := applyDefaultTimeout(ctx)
 	defer cancel()
-	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequestNoStats(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.LookupStateIDs(ctx, origin, s, roomID, eventID)
-	}, false)
+	})
 	if err != nil {
 		return fclient.RespStateIDs{}, err
 	}
@@ -248,16 +249,18 @@ func (a *FederationInternalAPI) LookupStateIDsBypassBackoff(
 	return resp, nil
 }
 
-// GetEventBypassBackoff is like GetEvent but skips the backoff check.
-// Used by the partial state worker when fetching events from the join server.
+// GetEventBypassBackoff is like GetEvent but neither checks nor updates the
+// target server's backoff statistics. Used by the partial state worker during
+// bulk resync so its transient transport failures don't back off the server for
+// unrelated foreground traffic.
 func (a *FederationInternalAPI) GetEventBypassBackoff(
 	ctx context.Context, origin, s spec.ServerName, eventID string,
 ) (res gomatrixserverlib.Transaction, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
+	ires, err := a.doFederationRequestNoStats(s, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetEvent(ctx, origin, s, eventID)
-	}, false)
+	})
 	if err != nil {
 		return gomatrixserverlib.Transaction{}, err
 	}

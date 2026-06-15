@@ -9,8 +9,10 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"testing"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +34,13 @@ type testFedClient struct {
 
 func (t *testFedClient) LookupRoomAlias(ctx context.Context, origin, s spec.ServerName, roomAlias string) (res fclient.RespDirectory, err error) {
 	return fclient.RespDirectory{}, nil
+}
+
+func (t *testFedClient) GetEvent(ctx context.Context, origin, s spec.ServerName, eventID string) (gomatrixserverlib.Transaction, error) {
+	if t.shouldFail {
+		return gomatrixserverlib.Transaction{}, fmt.Errorf("Failure")
+	}
+	return gomatrixserverlib.Transaction{}, nil
 }
 
 func TestPerformWakeupServers(t *testing.T) {
