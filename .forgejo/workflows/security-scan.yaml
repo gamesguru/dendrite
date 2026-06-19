@@ -10,7 +10,7 @@ jobs:
     name: Trivy Vulnerability Scan
     runs-on: ubuntu-latest
     container:
-      image: cr.codefloe.com/docker.io/aquasec/trivy:0.71.0
+      image: cr.codefloe.com/docker.io/aquasec/trivy:0.71.1
     steps:
       - name: Install dependencies
         run: apk add --no-cache nodejs jq curl
