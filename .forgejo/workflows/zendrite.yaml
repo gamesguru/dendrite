@@ -21,7 +21,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: https://github.com/dorny/paths-filter@v4
         id: filter
         with:
@@ -42,7 +42,7 @@ jobs:
     name: Linting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install dependencies
         run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Install Go
@@ -90,7 +90,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install dependencies
         run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Setup go
