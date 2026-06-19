@@ -56,9 +56,9 @@ jobs:
         uses: https://github.com/lycheeverse/lychee-action@v2
         with:
           args: >-
-            --offline
             --root-dir ${{ github.workspace }}/dist
             --exclude-path ${{ github.workspace }}/dist/pagefind
+            --exclude '^https://zendrite\.pat-s\.me/404/$'
             --no-progress
             '${{ github.workspace }}/dist/**/*.html'
           fail: true

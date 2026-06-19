@@ -17,7 +17,7 @@ room_server:
 
 The default is `false`.
 
-When enabled, Zendrite advertises the Matrix 1.18 [`m.forget_forced_upon_leave`](https://spec.matrix.org/v1.18/client-server-api/#mforget_forced_upon_leave-capability) capability (introduced by [MSC4267](https://github.com/matrix-org/matrix-spec-proposals/blob/main/proposals/4267-forget-room-on-leave.md)) via [`/_matrix/client/v3/capabilities`](https://spec.matrix.org/v1.18/client-server-api/#get_matrixclientv3capabilities) so compliant clients know to skip the "Forget room?" prompt.
+When enabled, Zendrite advertises the Matrix 1.18 [`m.forget_forced_upon_leave`](https://spec.matrix.org/v1.18/client-server-api/#mforget_forced_upon_leave-capability) capability (introduced by [MSC4267](https://github.com/matrix-org/matrix-spec-proposals/pull/4267)) via [`/_matrix/client/v3/capabilities`](https://spec.matrix.org/v1.18/client-server-api/#get_matrixclientv3capabilities) so compliant clients know to skip the "Forget room?" prompt.
 
 ## Why default off
 

@@ -9,7 +9,7 @@ Please note that this compose file only has Postgres as a dependency, and you ne
 Docker images are available from:
 
 - [Docker Hub](https://hub.docker.com/r/pats22/zendrite): `pats22/zendrite`
-- [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/pat-s/zendrite): `codefloe.com/pat-s/zendrite`
+- [Codefloe Registry](https://codefloe.com/pat-s/-/packages/container/zendrite): `codefloe.com/pat-s/zendrite`
 
 ## Preparations
 

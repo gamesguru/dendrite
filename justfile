@@ -110,4 +110,8 @@ website-preview:
 website-links:
     #!/usr/bin/env bash
     cd website && bun run build
-    lychee --offline --root-dir "$(pwd)/dist" --exclude-path dist/pagefind 'dist/**/*.html'
+    lychee \
+        --root-dir "$(pwd)/dist" \
+        --exclude-path dist/pagefind \
+        --exclude '^https://zendrite\.pat-s\.me/404/$' \
+        'dist/**/*.html'
