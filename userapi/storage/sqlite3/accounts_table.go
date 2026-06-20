@@ -62,9 +62,12 @@ const selectPasswordHashSQL = "" +
 const selectNewNumericLocalpartSQL = "" +
 	"SELECT COALESCE(MAX(CAST(localpart AS INT)), 0) FROM userapi_accounts WHERE CAST(localpart AS INT) <> 0 AND server_name = $1"
 
+const countAccountsSQL = "SELECT COUNT(*) FROM userapi_accounts"
+
 type accountsStatements struct {
 	db                            *sql.DB
 	insertAccountStmt             *sql.Stmt
+	countAccountsStmt             *sql.Stmt
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
@@ -101,12 +104,19 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertAccountStmt, insertAccountSQL},
+		{&s.countAccountsStmt, countAccountsSQL},
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
 	}.Prepare(db)
+}
+
+func (s *accountsStatements) CountAccounts(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.countAccountsStmt.QueryRowContext(ctx).Scan(&count)
+	return count, err
 }
 
 // insertAccount creates a new account. 'hash' should be the password hash for this account. If it is missing,

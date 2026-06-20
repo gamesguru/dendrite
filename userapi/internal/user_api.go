@@ -19,6 +19,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 
@@ -56,6 +57,8 @@ type UserInternalAPI struct {
 	PgClient    pushgateway.Client
 	FedClient   fedsenderapi.KeyserverFederationAPI
 	Updater     *DeviceListUpdater
+
+	RegisteredUsersGauge prometheus.Gauge
 }
 
 func (a *UserInternalAPI) PerformAdminCreateRegistrationToken(ctx context.Context, registrationToken *clientapi.RegistrationToken) (bool, error) {
@@ -234,6 +237,14 @@ func (a *UserInternalAPI) PerformAccountCreation(ctx context.Context, req *api.P
 			AccountType:  req.AccountType,
 		}
 		return nil
+	}
+	if a.RegisteredUsersGauge != nil {
+		count, countErr := a.DB.CountAccounts(ctx)
+		if countErr != nil {
+			util.GetLogger(ctx).WithError(countErr).Error("failed to update registered users Prometheus metric")
+		} else {
+			a.RegisteredUsersGauge.Set(float64(count))
+		}
 	}
 
 	// Inform the SyncAPI about the newly created push_rules

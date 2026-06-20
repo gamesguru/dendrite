@@ -7,10 +7,12 @@
 package userapi
 
 import (
+	"math"
 	"net/http"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	fedsenderapi "codefloe.com/pat-s/zendrite/federationapi/api"
@@ -62,6 +64,18 @@ func NewInternalAPI(
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to connect to accounts db")
 	}
+	var registeredUsersGauge prometheus.Gauge
+	if enableMetrics {
+		registeredUsersGauge = newRegisteredUsersGauge()
+		count, countErr := db.CountAccounts(processContext.Context())
+		if countErr != nil {
+			logrus.WithError(countErr).Error("failed to count registered users for Prometheus")
+			registeredUsersGauge.Set(math.NaN())
+		} else {
+			registeredUsersGauge.Set(float64(count))
+		}
+		prometheus.MustRegister(registeredUsersGauge)
+	}
 
 	keyDB, err := storage.NewKeyDatabase(cm, &zendriteCfg.KeyServer.Database)
 	if err != nil {
@@ -95,6 +109,7 @@ func NewInternalAPI(
 		DisableTLSValidation: zendriteCfg.UserAPI.PushGatewayDisableTLSValidation,
 		PgClient:             pgClient,
 		FedClient:            fedClient,
+		RegisteredUsersGauge: registeredUsersGauge,
 	}
 
 	updater := internal.NewDeviceListUpdater(processContext, keyDB, userAPI, keyChangeProducer, fedClient, zendriteCfg.UserAPI.WorkerCount, rsAPI, zendriteCfg.Global.ServerName, enableMetrics, blacklistedOrBackingOffFn)
@@ -153,4 +168,13 @@ func NewInternalAPI(
 	}
 
 	return userAPI
+}
+
+func newRegisteredUsersGauge() prometheus.Gauge {
+	return prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "zendrite_clientapi_reg_users_total",
+			Help: "Total number of registered users",
+		},
+	)
 }

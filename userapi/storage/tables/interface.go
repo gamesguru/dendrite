@@ -39,6 +39,7 @@ type AccountDataTable interface {
 
 type AccountsTable interface {
 	InsertAccount(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, hash, appserviceID string, accountType api.AccountType) (*api.Account, error)
+	CountAccounts(ctx context.Context) (int64, error)
 	UpdatePassword(ctx context.Context, localpart string, serverName spec.ServerName, passwordHash string) (err error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SelectPasswordHash(ctx context.Context, localpart string, serverName spec.ServerName) (hash string, err error)

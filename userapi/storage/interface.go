@@ -44,6 +44,7 @@ type Account interface {
 	// for this account. If no password is supplied, the account will be a passwordless account. If the
 	// account already exists, it will return nil, ErrUserExists.
 	CreateAccount(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string, appserviceID string, accountType api.AccountType) (*api.Account, error)
+	CountAccounts(ctx context.Context) (int64, error)
 	GetAccountByPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) (*api.Account, error)
 	GetNewNumericLocalpart(ctx context.Context, serverName spec.ServerName) (int64, error)
 	CheckAccountAvailability(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)

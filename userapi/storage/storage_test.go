@@ -86,12 +86,19 @@ func Test_Accounts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
+		count, err := db.CountAccounts(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+
 		alice := test.NewUser(t)
 		aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
 		assert.NoError(t, err)
 
 		accAlice, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
 		assert.NoError(t, err, "failed to create account")
+		count, err = db.CountAccounts(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), count)
 		// verify the newly create account is the same as returned by CreateAccount
 		var accGet *api.Account
 		accGet, err = db.GetAccountByPassword(ctx, aliceLocalpart, aliceDomain, "testing")
@@ -535,8 +542,8 @@ func Test_Notification(t *testing.T) {
 				RoomID: roomID,
 				TS:     spec.AsTimestamp(ts),
 			}
-			err = db.InsertNotification(ctx, aliceLocalpart, aliceDomain, eventID, uint64(i+1), nil, notification)
-			assert.NoError(t, err, "unable to insert notification")
+			insertErr := db.InsertNotification(ctx, aliceLocalpart, aliceDomain, eventID, uint64(i+1), nil, notification)
+			assert.NoError(t, insertErr, "unable to insert notification")
 		}
 
 		// get notifications

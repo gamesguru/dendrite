@@ -86,7 +86,7 @@ func Setup(
 	zendriteAdminRouter := routers.ZendriteAdmin
 
 	if enableMetrics {
-		prometheus.MustRegister(amtRegUsers, sendEventDuration)
+		prometheus.MustRegister(sendEventDuration)
 	}
 
 	oidcEnabled := mscCfg.Enabled("msc3861")

@@ -26,7 +26,6 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"codefloe.com/pat-s/gomatrixserverlib/tokens"
 	"github.com/matrix-org/util"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
@@ -38,14 +37,6 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
-)
-
-// Prometheus metrics.
-var amtRegUsers = prometheus.NewCounter(
-	prometheus.CounterOpts{
-		Name: "zendrite_clientapi_reg_users_total",
-		Help: "Total number of registered users",
-	},
 )
 
 const sessionIDLength = 24
@@ -992,9 +983,6 @@ func completeRegistration(
 			JSON: spec.Unknown("failed to create account: " + err.Error()),
 		}
 	}
-
-	// Increment prometheus counter for created users
-	amtRegUsers.Inc()
 
 	// Check whether inhibit_login option is set. If so, don't create an access
 	// token or a device for this user

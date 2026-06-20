@@ -63,8 +63,11 @@ const selectPasswordHashSQL = "" +
 const selectNewNumericLocalpartSQL = "" +
 	"SELECT COALESCE(MAX(localpart::bigint), 0) FROM userapi_accounts WHERE localpart ~ '^[0-9]{1,}$' AND server_name = $1"
 
+const countAccountsSQL = "SELECT COUNT(*) FROM userapi_accounts"
+
 type accountsStatements struct {
 	insertAccountStmt             *sql.Stmt
+	countAccountsStmt             *sql.Stmt
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
@@ -100,12 +103,19 @@ func NewPostgresAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Ac
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertAccountStmt, insertAccountSQL},
+		{&s.countAccountsStmt, countAccountsSQL},
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
 	}.Prepare(db)
+}
+
+func (s *accountsStatements) CountAccounts(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.countAccountsStmt.QueryRowContext(ctx).Scan(&count)
+	return count, err
 }
 
 // insertAccount creates a new account. 'hash' should be the password hash for this account. If it is missing,

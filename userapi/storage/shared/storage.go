@@ -206,6 +206,11 @@ func (d *Database) CreateAccount(
 	return
 }
 
+// CountAccounts returns the number of persisted local accounts.
+func (d *Database) CountAccounts(ctx context.Context) (int64, error) {
+	return d.Accounts.CountAccounts(ctx)
+}
+
 // WARNING! This function assumes that the relevant mutexes have already
 // been taken out by the caller (e.g. CreateAccount or CreateGuestAccount).
 func (d *Database) createAccount(
