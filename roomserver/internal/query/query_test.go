@@ -151,6 +151,29 @@ func TestGetAuthChainMultiple(t *testing.T) {
 	}
 }
 
+func TestMissingEventsResponseWithUnloadedFilterEvents(t *testing.T) {
+	db := createEventDB()
+	if err := db.addFakeEvent("loaded", nil); err != nil {
+		t.Fatalf("failed to create event: %v", err)
+	}
+
+	events := missingEventsResponse(
+		[]gomatrixserverlib.PDU{db.eventMap["loaded"]},
+		map[string]bool{
+			"unloaded-1": true,
+			"unloaded-2": true,
+		},
+		nil,
+	)
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].EventID() != "loaded" {
+		t.Fatalf("got event %q, want %q", events[0].EventID(), "loaded")
+	}
+}
+
 func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, func()) {
 	conStr, close := test.PrepareDBConnectionString(t, dbType)
 	caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)

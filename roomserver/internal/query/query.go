@@ -617,17 +617,28 @@ func (r *Queryer) QueryMissingEvents(
 		return err
 	}
 
-	response.Events = make([]*types.HeaderedEvent, 0, len(loadedEvents)-len(eventsToFilter))
+	response.Events = missingEventsResponse(loadedEvents, eventsToFilter, redactEventIDs)
+	return err
+}
+
+func missingEventsResponse(
+	loadedEvents []gomatrixserverlib.PDU,
+	eventsToFilter map[string]bool,
+	redactEventIDs map[string]struct{},
+) []*types.HeaderedEvent {
+	// Not every event in eventsToFilter is guaranteed to have been loaded.
+	// Using the difference as a capacity can therefore become negative and
+	// panic for otherwise valid federation requests.
+	events := make([]*types.HeaderedEvent, 0, len(loadedEvents))
 	for _, event := range loadedEvents {
 		if !eventsToFilter[event.EventID()] {
 			if _, ok := redactEventIDs[event.EventID()]; ok {
 				event.Redact()
 			}
-			response.Events = append(response.Events, &types.HeaderedEvent{PDU: event})
+			events = append(events, &types.HeaderedEvent{PDU: event})
 		}
 	}
-
-	return err
+	return events
 }
 
 // QueryStateAndAuthChain implements api.RoomserverInternalAPI.
