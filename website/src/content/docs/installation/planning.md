@@ -42,6 +42,7 @@ Running too many heavy services on the same machine may result in resource starv
 ### Saving memory
 
 If necessary for your environment you could save some RAM at the cost of greater database CPU load by disabling the cache in zendrite.yaml
+
 ```yaml
 global:
   cache:
@@ -61,7 +62,7 @@ If you are installing Go using a package manager, you should check (by running `
 
 ### PostgreSQL
 
-If using the PostgreSQL database engine, you should install PostgreSQL 12 or later.
+If using the PostgreSQL database engine, you should install PostgreSQL 17 or later.
 
 ### NATS Server
 

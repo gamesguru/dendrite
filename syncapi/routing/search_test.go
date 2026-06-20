@@ -218,6 +218,14 @@ func TestSearch(t *testing.T) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
 
+		// WriteEvent mutates HeaderedEvent metadata. The database subtests run in
+		// parallel, so each backend needs its own wrappers around the shared PDUs.
+		events := make([]*rstypes.HeaderedEvent, len(room.Events()))
+		for i, event := range room.Events() {
+			eventCopy := *event
+			events[i] = &eventCopy
+		}
+
 		// create requisites
 		fts, err := fulltext.New(processCtx, cfg.SyncAPI.Fulltext)
 		assert.NoError(t, err)
@@ -230,7 +238,7 @@ func TestSearch(t *testing.T) {
 		elements := []fulltext.IndexElement{}
 		// store the events in the database
 		var sp types.StreamPosition
-		for _, x := range room.Events() {
+		for _, x := range events {
 			var stateEvents []*rstypes.HeaderedEvent
 			var stateEventIDs []string
 			if x.Type() == spec.MRoomMember {
