@@ -1161,13 +1161,29 @@ serverLoop:
 		t.log.WithField("missing_event_id", missingEventID).Warnf("Failed to get missing /event for event ID from %d server(s)", len(serversToTry))
 		return nil, fmt.Errorf("wasn't able to find event via %d server(s)", len(serversToTry))
 	}
-	if err := gomatrixserverlib.VerifyEventSignatures(ctx, event, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	if err := verifyFetchedEventSignatures(ctx, event, missingEventID, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
-		t.log.WithError(err).Warnf("Couldn't validate signature of event %q from /event", event.EventID())
-		return nil, verifySigError{event.EventID(), err}
+		t.log.WithError(err).Warnf("Couldn't validate signature of event %q from /event", missingEventID)
+		return nil, err
 	}
 	return t.cacheAndReturn(event), validationError
+}
+
+func verifyFetchedEventSignatures(
+	ctx context.Context,
+	event gomatrixserverlib.PDU,
+	expectedEventID string,
+	keys gomatrixserverlib.JSONVerifier,
+	userIDForSender spec.UserIDForSender,
+) error {
+	if err := gomatrixserverlib.VerifyEventSignatures(ctx, event, keys, userIDForSender); err != nil {
+		// Do not call event.EventID() here. Signature verification can fail because
+		// malformed event JSON cannot be redacted, and EventID() redacts the same
+		// JSON when calculating reference-hash event IDs.
+		return verifySigError{expectedEventID, err}
+	}
+	return nil
 }
 
 func checkAllowedByState(e gomatrixserverlib.PDU, stateEvents []gomatrixserverlib.PDU, userIDForSender spec.UserIDForSender) error {

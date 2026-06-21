@@ -1,7 +1,7 @@
 module codefloe.com/pat-s/zendrite
 
 require (
-	codefloe.com/pat-s/gomatrixserverlib v1.0.6
+	codefloe.com/pat-s/gomatrixserverlib v1.0.7
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.4.5
 	github.com/altcha-org/altcha-lib-go v1.0.0
@@ -29,10 +29,10 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.41.0
-	golang.org/x/sync v0.20.0
-	golang.org/x/term v0.43.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/term v0.44.0
 	google.golang.org/grpc v1.81.1
 	gotest.tools/v3 v3.5.2
 	maunium.net/go/mautrix v0.28.0
@@ -109,8 +109,8 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
