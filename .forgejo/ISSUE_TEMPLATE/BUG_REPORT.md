@@ -10,8 +10,7 @@ Text between <!-- and --​> marks will be invisible in the report.
 
 IF YOUR ISSUE IS CONSIDERED A SECURITY VULNERABILITY THEN PLEASE STOP
 AND DO NOT POST IT AS A GITHUB ISSUE! Please report the issue responsibly by
-disclosing in private by email to security@matrix.org instead. For more details, please
-see: https://www.matrix.org/security-disclosure-policy/
+sending a PM to pat-s@devxy.io via Matrix.
 -->
 
 ## Background information
