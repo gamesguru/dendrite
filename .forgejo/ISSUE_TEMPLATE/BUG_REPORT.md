@@ -17,18 +17,19 @@ sending a PM to pat-s@devxy.io via Matrix.
 
 <!-- Please include versions of all software when known e.g database versions, docker versions, client versions -->
 
-- **Zendrite version or git SHA**:
-- **SQLite3 or Postgres?**:
-- **Running in Docker?**:
-- **`go version`**:
-- **Client used (if applicable)**:
+- **Zendrite version or git SHA**: 
+- **SQLite3 or Postgres?**: 
+- **Running in Docker?**: 
+- **`go version`**: 
+- **External NATS jetstream version (if any): 
+- **Client used (if applicable)**: 
 
 ### Description
 
-- **What** is the problem:
-- **Who** is affected:
-- **How** is this bug manifesting:
-- **When** did this first appear:
+- **What** is the problem: 
+- **Who** is affected: 
+- **How** is this bug manifesting: 
+- **When** did this first appear: 
 
 <!--
 Examples of good descriptions:
@@ -63,7 +64,4 @@ Describe how what happens differs from what you expected.
 If you can identify any relevant log snippets from server logs, please include
 those (please be careful to remove any personal or private data). Please surround them with
 ``` (three backticks, on a line on their own), so that they are formatted legibly.
-
-Alternatively, please send logs to @kegan:matrix.org, @s7evink:matrix.org or @devonh:one.ems.host
-with a link to the respective Github issue, thanks!
 -->
