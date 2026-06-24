@@ -208,6 +208,39 @@ func (u *latestEventsUpdater) doUpdateLatestEvents() error {
 	return nil
 }
 
+// reconcileStateEpoch decides which part of an out-of-order state delta to
+// apply when the MSC3706 partial-state-resync epoch guard fires.
+//
+// The guard protects authoritative membership fetched by a partial-state resync
+// from being collaterally dropped by an event whose base state predates the
+// resync. But when that event is itself a state event authoring one of the
+// changes in the delta — e.g. a remote kick carrying its own m.room.member
+// transition — that change is a legitimate progression and must still be
+// applied, otherwise the membership row stays frozen at join (issue #181).
+//
+// It returns the subset of removed/added entries that should still be applied:
+// only the triggering event's own (type, state-key) tuple. Everything else is
+// suppressed, so resync-authoritative state for unrelated keys is preserved.
+// When both returned slices are empty the whole delta is suppressed, matching
+// the original guard behavior (genuine out-of-order events that do not author
+// any of the dropped state).
+func reconcileStateEpoch(ownKey types.StateKeyTuple, eventIsStateEvent bool, removed, added []types.StateEntry) (keepRemoved, keepAdded []types.StateEntry) {
+	if !eventIsStateEvent {
+		return nil, nil
+	}
+	for _, e := range removed {
+		if e.StateKeyTuple == ownKey {
+			keepRemoved = append(keepRemoved, e)
+		}
+	}
+	for _, e := range added {
+		if e.StateKeyTuple == ownKey {
+			keepAdded = append(keepAdded, e)
+		}
+	}
+	return keepRemoved, keepAdded
+}
+
 func (u *latestEventsUpdater) latestState() error {
 	trace, ctx := internal.StartRegion(u.ctx, "processEventWithMissingState")
 	defer trace.EndRegion()
@@ -298,6 +331,18 @@ func (u *latestEventsUpdater) latestState() error {
 				// This event's state is from before the resync - it's out of order
 				// Check if applying this would cause a state regression
 				if len(u.removed) > len(u.added) {
+					// The event references pre-resync state and removes more than
+					// it adds, so applying the full delta would collaterally drop
+					// membership the resync authoritatively fetched. Keep the
+					// resync state instead - but if this event is itself a state
+					// event authoring one of the dropped keys (e.g. a remote kick
+					// carrying its own m.room.member transition), still apply that
+					// own-key change, otherwise the membership row stays frozen at
+					// join (#181).
+					keepRemoved, keepAdded := reconcileStateEpoch(
+						u.stateAtEvent.StateKeyTuple, u.stateAtEvent.IsStateEvent(), u.removed, u.added,
+					)
+
 					// Count membership events being removed for logging
 					memberRemoved := 0
 					for _, entry := range u.removed {
@@ -316,13 +361,17 @@ func (u *latestEventsUpdater) latestState() error {
 						"would_remove":           len(u.removed),
 						"would_add":              len(u.added),
 						"would_remove_members":   memberRemoved,
+						"applied_own_remove":     len(keepRemoved),
+						"applied_own_add":        len(keepAdded),
 						"trace":                  "msc3706_state_epoch",
 					}).Warn("Suppressing state regression from out-of-order event after partial state resync")
 
-					// Keep the current state instead of regressing
+					// Keep the current (resync-authoritative) state snapshot, but
+					// still apply the triggering event's own state-key change so
+					// its membership row is not left frozen.
 					u.newStateNID = u.oldStateNID
-					u.removed = nil
-					u.added = nil
+					u.removed = keepRemoved
+					u.added = keepAdded
 					return nil
 				}
 			}
