@@ -3,6 +3,7 @@ package shared
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -17,6 +18,13 @@ type MembershipUpdater struct {
 	roomNID       types.RoomNID
 	targetUserNID types.EventStateKeyNID
 	oldMembership tables.MembershipState
+	// oldEventNID is the membership event NID currently recorded for the
+	// target, or 0 if the row was only just inserted and is not backed by a
+	// real membership event yet (i.e. the user has no prior membership in this
+	// room incarnation).
+	oldEventNID types.EventNID
+	// oldForgotten is the forgotten flag currently recorded for the target.
+	oldForgotten bool
 }
 
 func NewMembershipUpdater(
@@ -66,8 +74,18 @@ func (d *Database) membershipUpdaterTxn(
 		return nil, err
 	}
 
+	// Also load the event NID and forgotten flag backing the current row.
+	// SelectMembershipFromRoomAndTarget filters out rows with event_nid 0, so
+	// ErrNoRows here means the row was only just inserted and has no prior
+	// membership event — callers use this to tell a genuine local membership
+	// from a "ghost" learned purely from federated state.
+	oldEventNID, _, oldForgotten, err := d.MembershipTable.SelectMembershipFromRoomAndTarget(ctx, txn, roomNID, targetUserNID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
 	return &MembershipUpdater{
-		transaction{ctx, txn}, d, roomNID, targetUserNID, membership,
+		transaction{ctx, txn}, d, roomNID, targetUserNID, membership, oldEventNID, oldForgotten,
 	}, nil
 }
 
@@ -89,6 +107,19 @@ func (u *MembershipUpdater) IsLeave() bool {
 // IsKnock implements types.MembershipUpdater.
 func (u *MembershipUpdater) IsKnock() bool {
 	return u.oldMembership == tables.MembershipStateKnock
+}
+
+// HasMembershipEvent reports whether the target already has a membership row
+// backed by a real membership event in this room. It is false for a row that
+// was only just inserted (and so has no prior local membership), which is how
+// a "ghost" membership learned purely from federated state is recognized.
+func (u *MembershipUpdater) HasMembershipEvent() bool {
+	return u.oldEventNID != 0
+}
+
+// OldForgotten returns the forgotten flag currently recorded for the target.
+func (u *MembershipUpdater) OldForgotten() bool {
+	return u.oldForgotten
 }
 
 func (u *MembershipUpdater) Delete() error {

@@ -1898,6 +1898,54 @@ func TestAutoPurgeOnAllForgotten_FiresOnLastForget(t *testing.T) {
 	})
 }
 
+// TestAutoPurgeOnAllForgotten_IgnoresGhostLeaveRow reproduces issue #225:
+// under AutoPurgeOnAllForgotten the auto-purge must still fire when the only
+// other local membership row belongs to a user who never locally joined this
+// room incarnation and is present purely in leave/ban state.
+//
+// This is what the roomserver sees after a federated room is purged and then
+// re-learned: the re-learn applies the current state (a leave/ban for the
+// previously-departed local user) and creates a fresh membership row for them
+// with forgotten = false. That ghost row carries no local history, so it must
+// not block auto-purge forever.
+//
+// Here bob is banned by alice without ever having joined, which produces the
+// same DB shape: a fresh local leave/ban row with no prior membership event.
+func TestAutoPurgeOnAllForgotten_IgnoresGhostLeaveRow(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	// bob never joined: he appears only as a ban, i.e. a fresh leave/ban row.
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Ban}, test.WithStateKey(bob.ID))
+	// alice leaves so the room has no local joined members.
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeOnAllForgotten
+		cfg.RoomServer.AutoForgetOnLeave = false
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false)
+		assert.NoError(t, err)
+
+		// alice forgets. bob's ghost ban row must not keep the room alive, so
+		// this should trigger the auto-purge.
+		req := &api.PerformForgetRequest{RoomID: room.ID, UserID: alice.ID}
+		res := &api.PerformForgetResponse{}
+		assert.NoError(t, rsAPI.PerformForget(ctx, req, res))
+
+		waitForRoomGone(t, ctx, rsAPI, room.ID, 5*time.Second)
+	})
+}
+
 // TestForgetRoomIdempotentForUnknownRoom confirms that PerformForget on a
 // room the server does not know about (e.g. one that was just auto-purged
 // after the last local member left, but whose client still has it in its

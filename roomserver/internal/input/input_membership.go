@@ -188,10 +188,29 @@ func (r *Inputer) updateMembership(
 	case spec.Join:
 		return updateToJoinMembership(mu, add, updates)
 	case spec.Leave, spec.Ban:
-		// Auto-forget transitions to leave/ban for local users when the
-		// feature is on (matches the Matrix 1.18 m.forget_forced_upon_leave
-		// capability that the /capabilities endpoint advertises).
-		forget := r.Cfg.AutoForgetOnLeave && targetLocal
+		// Decide whether the leave/ban row should be marked forgotten. Only
+		// local users matter here, since auto-purge and history visibility key
+		// off local membership rows.
+		//
+		//   - AutoForgetOnLeave forgets on every local leave/ban (matches the
+		//     Matrix 1.18 m.forget_forced_upon_leave capability advertised by
+		//     /capabilities).
+		//   - A row with no prior membership event is a "ghost": a local user
+		//     learned purely from federated state as already left/banned (e.g.
+		//     after the room was purged and re-learned, per issue #225). They
+		//     hold no local history, so forget the row; otherwise it would
+		//     block on_all_forgotten auto-purge forever.
+		//   - Otherwise preserve the existing forgotten flag so that
+		//     re-processing an unchanged leave during a state resync neither
+		//     resurrects a room the user already forgot nor drops the pre-leave
+		//     history of a user who genuinely left without forgetting.
+		forget := false
+		if targetLocal {
+			forget = mu.OldForgotten()
+			if r.Cfg.AutoForgetOnLeave || !mu.HasMembershipEvent() {
+				forget = true
+			}
+		}
 		return updateToLeaveMembership(mu, add, newMembership, updates, forget)
 	case spec.Knock:
 		return updateToKnockMembership(mu, add, updates)
