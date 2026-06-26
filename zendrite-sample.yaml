@@ -324,7 +324,26 @@ room_server:
 
 # Configuration for the Media API.
 media_api:
-  # Storage path for uploaded media. May be relative or absolute.
+  # Storage backend for uploaded media. Supported values are "local" (default)
+  # and "s3". When omitted, "local" is used and base_path is honoured.
+  storage:
+    type: local
+    local:
+      # Storage path for uploaded media. May be relative or absolute.
+      base_path: ./media_store
+    # s3:
+    #   endpoint: "https://s3.amazonaws.com"
+    #   region: "us-east-1"
+    #   bucket: "zendrite-media"
+    #   access_key_id: ""
+    #   secret_access_key: ""
+    #   session_token: ""
+    #   path_style: false
+    #   prefix: ""
+
+  # Deprecated: use storage.local.base_path instead. Kept for backwards
+  # compatibility; used when storage.type is "local" and storage.local.base_path
+  # is not set.
   base_path: ./media_store
 
   # The maximum allowed file size (in bytes) for media uploads to this homeserver

@@ -254,7 +254,17 @@ func loadConfig(
 		}
 	}
 
-	c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.BasePath))
+	if c.MediaAPI.Storage.Type == "" {
+		c.MediaAPI.Storage.Type = "local"
+	}
+	if c.MediaAPI.StorageType() == "local" {
+		if c.MediaAPI.Storage.Local.BasePath == "" {
+			c.MediaAPI.Storage.Local.BasePath = c.MediaAPI.BasePath
+		}
+		c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.Storage.Local.BasePath))
+	} else {
+		c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.BasePath))
+	}
 
 	// Generate data from config options
 	err = c.Derive()
@@ -498,7 +508,8 @@ func (config *Zendrite) SetupTracing() (closer io.Closer, err error) {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	exporter, err := otlptracegrpc.New(ctx,
+	exporter, err := otlptracegrpc.New(
+		ctx,
 		otlptracegrpc.WithEndpoint(config.Tracing.Endpoint),
 		otlptracegrpc.WithDialOption(dialOpts...),
 	)

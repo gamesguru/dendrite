@@ -54,7 +54,8 @@ func main() {
 		} else {
 			cfg.Global.DatabaseOptions.ConnectionString = uri
 		}
-		cfg.MediaAPI.BasePath = config.Path(filepath.Join(*dirPath, "media"))
+		cfg.MediaAPI.Storage.Type = "local"
+		cfg.MediaAPI.Storage.Local.BasePath = config.Path(filepath.Join(*dirPath, "media"))
 		cfg.Global.JetStream.StoragePath = config.Path(*dirPath)
 		cfg.SyncAPI.Fulltext.IndexPath = config.Path(filepath.Join(*dirPath, "searchindex"))
 		cfg.Logging = []config.LogrusHook{
@@ -77,7 +78,8 @@ func main() {
 			cfg.FederationAPI.AllowNetworkCIDRs = []string{}
 			// don't hit matrix.org when running tests!!!
 			cfg.FederationAPI.KeyPerspectives = config.KeyPerspectives{}
-			cfg.MediaAPI.BasePath = config.Path(filepath.Join(*dirPath, "media"))
+			cfg.MediaAPI.Storage.Type = "local"
+			cfg.MediaAPI.Storage.Local.BasePath = config.Path(filepath.Join(*dirPath, "media"))
 			cfg.MSCs.MSCs = []string{"msc2836", "msc2444", "msc2753"}
 			cfg.Logging[0].Level = "trace"
 			cfg.Logging[0].Type = "std"

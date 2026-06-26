@@ -7,6 +7,8 @@
 package mediaapi
 
 import (
+	"context"
+
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
@@ -15,6 +17,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/mediaapi/routing"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -34,7 +37,12 @@ func AddPublicRoutes(
 		logrus.WithError(err).Panicf("failed to connect to media db")
 	}
 
+	fileStore, err := filestore.NewFileStore(context.Background(), &cfg.MediaAPI)
+	if err != nil {
+		logrus.WithError(err).Panicf("failed to create media file store")
+	}
+
 	routing.Setup(
-		routers, cfg, mediaDB, userAPI, client, fedClient, keyRing,
+		routers, cfg, mediaDB, fileStore, userAPI, client, fedClient, keyRing,
 	)
 }

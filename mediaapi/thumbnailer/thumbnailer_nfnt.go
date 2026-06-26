@@ -8,6 +8,7 @@ package thumbnailer
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/draw"
 	// Imported for gif codec.
@@ -16,6 +17,7 @@ import (
 	// Imported for png codec.
 	_ "image/png"
 	"os"
+	"path/filepath"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -24,6 +26,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
@@ -31,27 +34,35 @@ import (
 // GenerateThumbnails generates the configured thumbnail sizes for the source file.
 func GenerateThumbnails(
 	ctx context.Context,
-	src types.Path,
+	mediaHash types.Base64Hash,
 	configs []config.ThumbnailSize,
 	mediaMetadata *types.MediaMetadata,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 	maxThumbnailGenerators int,
+	fileStore filestore.FileStore,
 	db storage.Database,
 	logger *log.Entry,
 ) (busy bool, errorReturn error) {
-	img, err := readFile(string(src))
+	localPath, cleanup, err := fileStore.LocalPath(ctx, mediaHash)
 	if err != nil {
-		logger.WithError(err).WithField("src", src).Error("Failed to read src file")
+		logger.WithError(err).WithField("mediaHash", mediaHash).Error("Failed to get local path for src file")
+		return false, err
+	}
+	defer cleanup()
+
+	img, err := readFile(localPath)
+	if err != nil {
+		logger.WithError(err).WithField("mediaHash", mediaHash).Error("Failed to read src file")
 		return false, err
 	}
 	for _, singleConfig := range configs {
 		// Note: createThumbnail does locking based on activeThumbnailGeneration
 		busy, err = createThumbnail(
-			ctx, src, img, types.ThumbnailSize(singleConfig), mediaMetadata,
-			activeThumbnailGeneration, maxThumbnailGenerators, db, logger,
+			ctx, mediaHash, img, types.ThumbnailSize(singleConfig), mediaMetadata,
+			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, logger,
 		)
 		if err != nil {
-			logger.WithError(err).WithField("src", src).Error("Failed to generate thumbnails")
+			logger.WithError(err).WithField("mediaHash", mediaHash).Error("Failed to generate thumbnails")
 			return false, err
 		}
 		if busy {
@@ -64,29 +75,37 @@ func GenerateThumbnails(
 // GenerateThumbnail generates the configured thumbnail size for the source file.
 func GenerateThumbnail(
 	ctx context.Context,
-	src types.Path,
+	mediaHash types.Base64Hash,
 	config types.ThumbnailSize,
 	mediaMetadata *types.MediaMetadata,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 	maxThumbnailGenerators int,
+	fileStore filestore.FileStore,
 	db storage.Database,
 	logger *log.Entry,
 ) (busy bool, errorReturn error) {
-	img, err := readFile(string(src))
+	localPath, cleanup, err := fileStore.LocalPath(ctx, mediaHash)
+	if err != nil {
+		logger.WithError(err).WithField("mediaHash", mediaHash).Error("Failed to get local path for src file")
+		return false, err
+	}
+	defer cleanup()
+
+	img, err := readFile(localPath)
 	if err != nil {
 		logger.WithError(err).WithFields(log.Fields{
-			"src": src,
+			"mediaHash": mediaHash,
 		}).Error("Failed to read src file")
 		return false, err
 	}
 	// Note: createThumbnail does locking based on activeThumbnailGeneration
 	busy, err = createThumbnail(
-		ctx, src, img, config, mediaMetadata, activeThumbnailGeneration,
-		maxThumbnailGenerators, db, logger,
+		ctx, mediaHash, img, config, mediaMetadata, activeThumbnailGeneration,
+		maxThumbnailGenerators, fileStore, db, logger,
 	)
 	if err != nil {
 		logger.WithError(err).WithFields(log.Fields{
-			"src": src,
+			"mediaHash": mediaHash,
 		}).Error("Failed to generate thumbnails")
 		return false, err
 	}
@@ -116,23 +135,29 @@ func writeFile(img image.Image, dst string) (err error) {
 	if err != nil {
 		return err
 	}
-	defer (func() { err = out.Close() })()
+	defer func() { err = out.Close() }()
 
 	return jpeg.Encode(out, img, &jpeg.Options{
 		Quality: 85, //nolint:mnd
 	})
 }
 
+// thumbnailKey returns a unique string key for the active thumbnail generation lock.
+func thumbnailKey(mediaHash types.Base64Hash, config types.ThumbnailSize) string {
+	return string(mediaHash) + "/" + fmt.Sprintf("%dx%d-%s", config.Width, config.Height, config.ResizeMethod)
+}
+
 // createThumbnail checks if the thumbnail exists, and if not, generates it
 // Thumbnail generation is only done once for each non-existing thumbnail.
 func createThumbnail(
 	ctx context.Context,
-	src types.Path,
+	mediaHash types.Base64Hash,
 	img image.Image,
 	config types.ThumbnailSize,
 	mediaMetadata *types.MediaMetadata,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 	maxThumbnailGenerators int,
+	fileStore filestore.FileStore,
 	db storage.Database,
 	logger *log.Entry,
 ) (busy bool, errorReturn error) {
@@ -147,10 +172,10 @@ func createThumbnail(
 		return false, nil
 	}
 
-	dst := GetThumbnailPath(src, config)
+	key := thumbnailKey(mediaHash, config)
 
 	// Note: getActiveThumbnailGeneration uses mutexes and conditions from activeThumbnailGeneration
-	isActive, busy, err := getActiveThumbnailGeneration(dst, config, activeThumbnailGeneration, maxThumbnailGenerators, logger)
+	isActive, busy, err := getActiveThumbnailGeneration(key, activeThumbnailGeneration, maxThumbnailGenerators, logger)
 	if err != nil {
 		return false, err
 	}
@@ -164,17 +189,25 @@ func createThumbnail(
 		defer func() {
 			// Note: errorReturn is the named return variable so we wrap this in a closure to re-evaluate the arguments at defer-time
 			// if err := recover(); err != nil {
-			// 	broadcastGeneration(dst, activeThumbnailGeneration, config, err.(error), logger)
+			// 	broadcastGeneration(key, activeThumbnailGeneration, config, err.(error), logger)
 			// 	panic(err)
 			// }
-			broadcastGeneration(dst, activeThumbnailGeneration, config, errorReturn, logger)
+			broadcastGeneration(key, activeThumbnailGeneration, config, errorReturn, logger)
 		}()
 	}
 
-	exists, err := isThumbnailExists(ctx, dst, config, mediaMetadata, db, logger)
+	exists, err := isThumbnailExists(ctx, mediaHash, config, mediaMetadata, db, fileStore, logger)
 	if err != nil || exists {
 		return false, err
 	}
+
+	tmpDir, err := os.MkdirTemp("", "zendrite-thumbnail-")
+	if err != nil {
+		return false, fmt.Errorf("failed to create thumbnail temp dir: %w", err)
+	}
+	defer filestore.RemoveDir(types.Path(tmpDir))
+
+	dst := types.Path(filepath.Join(tmpDir, "content"))
 
 	start := time.Now()
 	width, height, err := adjustSize(dst, img, config.Width, config.Height, config.ResizeMethod == types.Crop, logger)
@@ -185,10 +218,16 @@ func createThumbnail(
 		"ActualWidth":  width,
 		"ActualHeight": height,
 		"processTime":  time.Since(start),
-	}).Debugf("Generated thumbnail %q", dst)
+	}).Debugf("Generated thumbnail %s", key)
 
 	stat, err := os.Stat(string(dst))
 	if err != nil {
+		return false, err
+	}
+	fileSize := types.FileSizeBytes(stat.Size())
+
+	if err := fileStore.StoreThumbnail(ctx, mediaHash, config, types.Path(tmpDir), fileSize); err != nil {
+		logger.WithError(err).Error("Failed to store thumbnail in file store")
 		return false, err
 	}
 
@@ -198,7 +237,7 @@ func createThumbnail(
 			Origin:  mediaMetadata.Origin,
 			// Note: the code currently always creates a JPEG thumbnail
 			ContentType:   types.ContentType("image/jpeg"),
-			FileSizeBytes: types.FileSizeBytes(stat.Size()),
+			FileSizeBytes: fileSize,
 		},
 		ThumbnailSize: types.ThumbnailSize{
 			Width:        config.Width,

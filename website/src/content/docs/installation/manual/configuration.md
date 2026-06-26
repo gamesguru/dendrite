@@ -135,6 +135,46 @@ sync_api:
 
 If you enable this later you can [reindex existing rooms via the admin API](/administration/adminapi/#get-_zendriteadminfulltextreindex).
 
+## Media storage
+
+By default, media uploads and generated thumbnails are stored on the local filesystem.
+You can switch to an S3-compatible object store by changing the `storage` block under `media_api`.
+
+### Local filesystem
+
+```yaml
+media_api:
+  storage:
+    type: local
+    local:
+      base_path: /path/to/media_store
+```
+
+The legacy `base_path` option still works for backwards compatibility.
+If `storage.local.base_path` is not set, Zendrite falls back to `media_api.base_path`.
+
+### S3-compatible object storage
+
+```yaml
+media_api:
+  storage:
+    type: s3
+    s3:
+      endpoint: "https://s3.amazonaws.com"
+      region: "us-east-1"
+      bucket: "zendrite-media"
+      access_key_id: ""
+      secret_access_key: ""
+      session_token: ""
+      path_style: false
+      prefix: ""
+```
+
+- `endpoint` must include the scheme, e.g. `https://s3.amazonaws.com` or `http://localhost:9000`.
+- `path_style` forces path-style addressing (`https://example.com/bucket-name/key`) instead of virtual-hosted style (`https://bucket-name.example.com/key`). Path-style is usually required for MinIO and other self-hosted S3-compatible services.
+- If `access_key_id` and `secret_access_key` are omitted, Zendrite uses the AWS SDK default credential chain (environment variables, IAM roles, shared credential files, etc.).
+- `prefix` is optional and is prepended to every object key.
+
 ## OIDC delegated authentication (MSC3861)
 
 Zendrite can delegate authentication to an external OIDC provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
