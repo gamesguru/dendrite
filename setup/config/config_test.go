@@ -19,7 +19,8 @@ import (
 
 func TestLoadConfigRelative(t *testing.T) {
 	t.Parallel()
-	cfg, err := loadConfig("/my/config/dir", []byte(testConfig),
+	cfg, err := loadConfig(
+		"/my/config/dir", []byte(testConfig),
 		mockReadFile{
 			"/my/config/dir/matrix_key.pem": testKey,
 			"/my/config/dir/tls_cert.pem":   testCert,
@@ -289,6 +290,19 @@ func TestJetStreamVerify(t *testing.T) {
 		js.Verify(errs)
 		if len(*errs) > 0 {
 			t.Fatalf("generated config failed verification: %v", *errs)
+		}
+	})
+
+	t.Run("rejects a missing credentials_path", func(t *testing.T) {
+		t.Parallel()
+		js := JetStream{
+			Addresses:   []string{"nats://example:4222"},
+			Credentials: Path("/does/not/exist.creds"),
+		}
+		errs := &ConfigErrors{}
+		js.Verify(errs)
+		if len(*errs) == 0 {
+			t.Fatal("expected an error for missing credentials_path")
 		}
 	})
 }

@@ -125,6 +125,13 @@ global:
     # to be sent to an insecure endpoint.
     disable_tls_validation: false
 
+    # Path to a NATS .creds file for authenticating to an external NATS server.
+    # The file is re-read on every reconnect, so credentials can be rotated
+    # without restarting Zendrite. This also works with NATS auth callout.
+    # Leave empty when using the built-in NATS server or when authentication
+    # is provided via the URL.
+    # credentials_path: /path/to/zendrite.creds
+
     # Persistent directory to store JetStream streams in. This directory should be
     # preserved across Zendrite restarts.
     storage_path: ./

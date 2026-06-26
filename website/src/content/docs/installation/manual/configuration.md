@@ -67,6 +67,37 @@ global:
 You do not need to configure the `storage_path` when using a standalone NATS Server instance.
 In the case that you are connecting to a multi-node NATS cluster, you can configure more than one address in the `addresses` field.
 
+### Authenticating to NATS
+
+If your NATS deployment requires authentication, Zendrite supports the following methods:
+
+- **NATS credentials file** — set `credentials_path` to a `.creds` file. The file is re-read on every reconnect, so you can rotate credentials without restarting Zendrite:
+
+  ```yaml
+  global:
+    # ...
+    jetstream:
+      addresses:
+        - nats://nats.example.com:4222
+      credentials_path: /etc/zendrite/nats.creds
+      topic_prefix: Zendrite
+  ```
+
+- **Username and password in the URL** — include the credentials directly in the `addresses` entry:
+
+  ```yaml
+  global:
+    # ...
+    jetstream:
+      addresses:
+        - nats://user:password@nats.example.com:4222
+      topic_prefix: Zendrite
+  ```
+
+Both methods also work when NATS is configured to use [auth callout](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/auth_callout), because the client-side authentication is unchanged: Zendrite presents the configured credentials on every connect/reconnect, and the auth callout service decides whether to accept them.
+
+If the configured credentials are missing or rejected, Zendrite logs a clear authentication error and exits with a non-zero status instead of hanging.
+
 ## Database connection using a global connection pool
 
 If you want to use a single connection pool to a single PostgreSQL database, then you must configure the `database` section within the `global` section:

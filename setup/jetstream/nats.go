@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -92,7 +93,6 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 	return s.js, s.nc
 }
 
-//nolint:gocyclo
 func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsclient.Conn) (natsclient.JetStreamContext, *natsclient.Conn) {
 	jsOpts := []natsclient.JSOpt{}
 	if cfg.JetStreamDomain != "" {
@@ -100,43 +100,97 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 	}
 
 	if nc == nil {
-		var err error
-		opts := []natsclient.Option{
-			natsclient.Name("Zendrite"),
-			natsclient.MaxReconnects(-1), // Try forever
-			natsclient.ReconnectJitter(time.Second, time.Second),
-			natsclient.ReconnectWait(time.Second * 10), //nolint:mnd
-			natsclient.ReconnectHandler(func(c *natsclient.Conn) {
-				js, jerr := c.JetStream(jsOpts...)
-				if jerr != nil {
-					logrus.WithError(jerr).Panic("Unable to get JetStream context in reconnect handler")
-					return
-				}
-				checkAndConfigureStreams(process, cfg, js)
-			}),
+		opts, err := natsConnectOptions(process, cfg, jsOpts)
+		if err != nil {
+			logrus.WithError(err).Fatal("Unable to configure NATS connection")
 		}
-		if cfg.DisableTLSValidation {
-			opts = append(opts, natsclient.Secure(&tls.Config{
-				InsecureSkipVerify: true,
-			}))
-		}
-		if string(cfg.Credentials) != "" {
-			opts = append(opts, natsclient.UserCredentials(string(cfg.Credentials)))
-		}
+
 		nc, err = natsclient.Connect(strings.Join(cfg.Addresses, ","), opts...)
 		if err != nil {
+			if isAuthError(err) {
+				logrus.WithError(err).Fatal("NATS authentication failed")
+			}
 			logrus.WithError(err).Panic("Unable to connect to NATS")
-			return nil, nil
 		}
 	}
 
 	js, err := nc.JetStream(jsOpts...)
 	if err != nil {
 		logrus.WithError(err).Panic("Unable to get JetStream context")
-		return nil, nil
 	}
 	checkAndConfigureStreams(process, cfg, js)
 	return js, nc
+}
+
+// natsConnectOptions builds the NATS client options used for external
+// JetStream connections. When a credentials file is configured, the file is
+// validated upfront so that missing or malformed credentials produce a clear
+// error at startup. The NATS client re-reads the credentials file on each
+// reconnect, so rotating the file contents does not require a process restart.
+func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, jsOpts []natsclient.JSOpt) ([]natsclient.Option, error) {
+	opts := []natsclient.Option{
+		natsclient.Name("Zendrite"),
+		natsclient.MaxReconnects(-1), // Try forever
+		natsclient.ReconnectJitter(time.Second, time.Second),
+		natsclient.ReconnectWait(time.Second * 10), //nolint:mnd
+		natsclient.ReconnectHandler(func(c *natsclient.Conn) {
+			js, jerr := c.JetStream(jsOpts...)
+			if jerr != nil {
+				logrus.WithError(jerr).Panic("Unable to get JetStream context in reconnect handler")
+				return
+			}
+			checkAndConfigureStreams(process, cfg, js)
+		}),
+	}
+
+	if cfg.DisableTLSValidation {
+		opts = append(opts, natsclient.Secure(&tls.Config{
+			InsecureSkipVerify: true,
+		}))
+	}
+
+	if string(cfg.Credentials) != "" {
+		if err := validateCredentials(string(cfg.Credentials)); err != nil {
+			return nil, err
+		}
+		opts = append(opts, natsclient.UserCredentials(string(cfg.Credentials)))
+	}
+
+	return opts, nil
+}
+
+// validateCredentials checks that the supplied NATS .creds file can be read
+// and that both the JWT and the nkey seed can be used. This mirrors the
+// validation performed by nats.UserCredentials and additionally exercises the
+// signature callback so that malformed seeds are caught at startup.
+func validateCredentials(path string) error {
+	opt := natsclient.UserCredentials(path)
+	var opts natsclient.Options
+	if err := opt(&opts); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("NATS credentials file not found: %w", err)
+		}
+		return fmt.Errorf("NATS credentials file %q is invalid: %w", path, err)
+	}
+	// The UserCredentials option only smoke-tests the user JWT callback. Also
+	// exercise the signature callback so that a missing or corrupt nkey seed
+	// fails fast rather than during the first NATS reconnect.
+	if _, err := opts.SignatureCB([]byte("zendrite-credential-check")); err != nil {
+		return fmt.Errorf("NATS credentials file %q is invalid: %w", path, err)
+	}
+	return nil
+}
+
+// isAuthError reports whether a NATS connection error is an authentication or
+// authorization failure.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, natsclient.ErrAuthorization) ||
+		errors.Is(err, natsclient.ErrAuthExpired) ||
+		errors.Is(err, natsclient.ErrAuthRevoked) ||
+		errors.Is(err, natsclient.ErrAccountAuthExpired)
 }
 
 func checkAndConfigureStreams(process *process.ProcessContext, cfg *config.JetStream, js natsclient.JetStreamContext) {
