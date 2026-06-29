@@ -129,6 +129,18 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// but other servers could provide the missing event.
 	logrus.WithError(err).WithField("room_id", req.RoomID).Infof("backfilled %d events", len(events))
 
+	// Requesting events from federation can take a while, during which the room
+	// may have been purged. Re-check before persisting so we neither resurrect
+	// the room locally nor hand the events back to the caller (e.g. the sync API)
+	// to store into the purged room (#224).
+	if info, err = r.DB.RoomInfo(ctx, req.RoomID); err != nil {
+		return err
+	}
+	if info == nil || info.IsStub() {
+		logrus.WithField("room_id", req.RoomID).Warn("Discarding backfilled events: room no longer exists, it was likely purged")
+		return nil
+	}
+
 	// persist these new events - auth checks have already been done
 	roomNID, storedEvents := persistEvents(ctx, r.DB, r.Querier, events)
 
@@ -613,9 +625,18 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 			i++
 		}
 
-		roomInfo, err := db.GetOrCreateRoomInfo(ctx, ev)
+		// Look the room up rather than creating it: backfill only ever adds
+		// historical events to a room we already have. If the room is missing
+		// (e.g. it was purged while this backfill was in flight) we must not
+		// re-create it, otherwise the purged room is silently resurrected (#224).
+		roomInfo, err := db.RoomInfo(ctx, ev.RoomID().String())
 		if err != nil {
-			logrus.WithError(err).Error("failed to get or create roomNID")
+			logrus.WithError(err).Error("failed to look up roomNID")
+			continue
+		}
+		if roomInfo == nil || roomInfo.IsStub() {
+			logrus.WithField("room_id", ev.RoomID().String()).WithField("event_id", ev.EventID()).
+				Warn("Refusing to persist backfilled event into a missing room; it was likely purged")
 			continue
 		}
 		roomNID = roomInfo.RoomNID
