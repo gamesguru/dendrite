@@ -4,8 +4,10 @@
     "type-enum": [
       2,
       "always",
-      ["feat", "fix", "chore", "enh", "docs", "style", "refactor", "test", "perf", "ci", "WIP"]
+      ["build", "chore", "ci", "docs", "enh", "feat", "fix", "perf", "refactor", "revert", "style", "test", "WIP"]
     ],
-    "type-case": [0, "always", "lower-case"]
+    "type-case": [0, "always", "lower-case"],
+    "scope-empty": [2, "never"],
+    "scope-case": [2, "always", "lower-case"]
   }
 }

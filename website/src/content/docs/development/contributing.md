@@ -45,6 +45,25 @@ The hooks run automatically on `git commit` and include:
 - **yamllint** — YAML validation
 - **hadolint** — Dockerfile linting
 - **editorconfig-checker** — Consistent editor settings
+- **commitlint** — Conventional Commit message validation (see below)
+
+`commitlint` runs at the `commit-msg` stage, which `pre-commit install` wires up automatically thanks to `default_install_hook_types` in the config.
+
+## Commit and pull request titles
+
+Commit messages and pull request titles must follow [Conventional Commits](https://www.conventionalcommits.org/) and **must include a scope**:
+
+```text
+<type>(<scope>): <subject>
+```
+
+The scope names the affected package so changes group cleanly in the changelog, for example `fix(clientapi/routing): time out federated join requests`.
+Nested scopes such as `clientapi/routing` are allowed; use the package closest to the change.
+
+Allowed types are `build`, `chore`, `ci`, `docs`, `enh`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, and `test`.
+`WIP` is additionally allowed on local commits but never on a mergeable pull request title, since PRs are squash-merged and the title becomes the changelog entry.
+
+Both rules are enforced locally by the `commitlint` pre-commit hook and in CI by the `Commitlint` workflow, which validates the pull request title.
 
 ## Code style
 

@@ -1,4 +1,7 @@
-# cSpell:ignore checkmake hadolint autofix autoupdate
+# cSpell:ignore checkmake hadolint autofix autoupdate commitlint
+# Wire the commit-msg stage so `pre-commit install` also installs the
+# commitlint hook (which validates the commit title, not the staged files).
+default_install_hook_types: [pre-commit, commit-msg]
 repos:
   - repo: meta
     hooks:
@@ -44,3 +47,12 @@ repos:
     rev: v3.8.0
     hooks:
       - id: editorconfig-checker
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.26.0
+    hooks:
+      # Enforce Conventional Commits with a mandatory package scope; rules live
+      # in .commitlintrc.json. Runs on the commit message, so it needs the
+      # commit-msg stage (see default_install_hook_types above).
+      - id: commitlint
+        stages: [commit-msg]
+        additional_dependencies: ['@commitlint/config-conventional']
