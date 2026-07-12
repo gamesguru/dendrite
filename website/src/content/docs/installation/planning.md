@@ -71,7 +71,7 @@ Zendrite comes with a built-in [NATS Server](https://github.com/nats-io/nats-ser
 ### Reverse proxy
 
 A reverse proxy such as [Caddy](https://caddyserver.com), [NGINX](https://www.nginx.com) or [HAProxy](http://www.haproxy.org) is useful for deployments.
-Configuring these is not covered in this documentation.
+Configuring these is not covered in this documentation, but please be aware default request timeouts and POST payload limits may need to be disabled or increased. Matrix clients expect to control when (or if) a request times out, and homeservers expect to control the media file size limits. Caddy has no timeouts or payload limits by default.
 
 ### Windows
 
