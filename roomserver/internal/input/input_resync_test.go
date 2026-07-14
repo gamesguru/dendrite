@@ -5,6 +5,7 @@
 package input
 
 import (
+	"fmt"
 	"testing"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -108,4 +109,78 @@ func TestOverlappingOldMembers(t *testing.T) {
 	if overlap[0].EventStateKeyNID != localKey || overlap[0].EventNID != 20 {
 		t.Fatalf("unexpected overlap entry: %+v", overlap[0])
 	}
+}
+
+func TestResyncStateIncomplete(t *testing.T) {
+	cases := []struct {
+		name           string
+		requestedIDs   []string
+		loaded         int
+		wantDistinct   int
+		wantIncomplete bool
+	}{
+		{
+			name:           "all requested events loaded",
+			requestedIDs:   []string{"$a", "$b", "$c"},
+			loaded:         3,
+			wantDistinct:   3,
+			wantIncomplete: false,
+		},
+		{
+			name:           "shortfall is incomplete",
+			requestedIDs:   []string{"$a", "$b", "$c"},
+			loaded:         2,
+			wantDistinct:   3,
+			wantIncomplete: true,
+		},
+		{
+			name:           "catastrophic shortfall (issue #247: 35 of ~1.2k)",
+			requestedIDs:   makeIDs(1200),
+			loaded:         35,
+			wantDistinct:   1200,
+			wantIncomplete: true,
+		},
+		{
+			name:           "zero loaded with requested is incomplete",
+			requestedIDs:   []string{"$a"},
+			loaded:         0,
+			wantDistinct:   1,
+			wantIncomplete: true,
+		},
+		{
+			name: "duplicate requested IDs are deduplicated, not a shortfall",
+			// /state_ids repeats an ID; loaded matches the distinct count.
+			requestedIDs:   []string{"$a", "$b", "$a"},
+			loaded:         2,
+			wantDistinct:   2,
+			wantIncomplete: false,
+		},
+		{
+			name:           "nothing requested is a genuine no-op",
+			requestedIDs:   nil,
+			loaded:         0,
+			wantDistinct:   0,
+			wantIncomplete: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			distinct, incomplete := resyncStateIncomplete(tc.requestedIDs, tc.loaded)
+			if distinct != tc.wantDistinct {
+				t.Fatalf("distinct = %d, want %d", distinct, tc.wantDistinct)
+			}
+			if incomplete != tc.wantIncomplete {
+				t.Fatalf("incomplete = %v, want %v", incomplete, tc.wantIncomplete)
+			}
+		})
+	}
+}
+
+func makeIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("$event%d", i)
+	}
+	return ids
 }

@@ -52,6 +52,52 @@ func TestReconcileStateEpoch_AppliesKickOwnKeyKeepsCollateral(t *testing.T) {
 	}
 }
 
+// removesCollateralMembers is the NID-independent trigger for the resync epoch
+// guard: it must fire only when a member event for someone OTHER than the
+// triggering event's own state key is being dropped.
+func TestRemovesCollateralMembers(t *testing.T) {
+	const own types.EventStateKeyNID = 7
+	const other types.EventStateKeyNID = 9
+
+	t.Run("collateral member drop is detected", func(t *testing.T) {
+		removed := []types.StateEntry{memberEntry(own, 100), memberEntry(other, 101)}
+		if !removesCollateralMembers(memberKey(own), removed) {
+			t.Fatal("expected collateral member removal to be detected")
+		}
+	})
+
+	t.Run("only own membership removed is not collateral", func(t *testing.T) {
+		// A user's own leave/kick removes only their own membership row.
+		removed := []types.StateEntry{memberEntry(own, 100)}
+		if removesCollateralMembers(memberKey(own), removed) {
+			t.Fatal("dropping only the event's own membership must not count as collateral")
+		}
+	})
+
+	t.Run("non-member state churn is not collateral", func(t *testing.T) {
+		// e.g. a topic/name/power-level replacement, no membership involved.
+		removed := []types.StateEntry{nonMemberEntry(2, 100), nonMemberEntry(3, 101)}
+		if removesCollateralMembers(memberKey(own), removed) {
+			t.Fatal("non-member removals must not count as collateral member drop")
+		}
+	})
+
+	t.Run("non-state triggering event with member drop is collateral", func(t *testing.T) {
+		// A message event (zero-value own key) whose out-of-order base state would
+		// evict members: every dropped member differs from the zero key.
+		removed := []types.StateEntry{memberEntry(own, 100), memberEntry(other, 101)}
+		if !removesCollateralMembers(types.StateKeyTuple{}, removed) {
+			t.Fatal("member drops under a non-state triggering event must be collateral")
+		}
+	})
+
+	t.Run("empty delta is not collateral", func(t *testing.T) {
+		if removesCollateralMembers(memberKey(own), nil) {
+			t.Fatal("empty removed set must not be collateral")
+		}
+	})
+}
+
 // A genuinely out-of-order non-state event whose stale base would collaterally
 // drop membership must be fully suppressed (the original guard behavior).
 func TestReconcileStateEpoch_NonStateEventFullySuppressed(t *testing.T) {

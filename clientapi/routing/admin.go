@@ -466,13 +466,14 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 			JSON: spec.MissingParam("Expecting remote server name."),
 		}
 	}
-	// Run the state download in a background context so that it
-	// continues even if the HTTP client disconnects. Downloading
-	// and processing state for large rooms can take many minutes,
-	// easily exceeding typical HTTP client timeouts.
+	// Run the state download in a detached background context so that it
+	// continues even if the HTTP client disconnects. Downloading and processing
+	// state for large rooms can take a long time (there is always a bigger room),
+	// so we deliberately do not impose a timeout: a genuinely stuck download is
+	// cleared by a server restart, whereas a premature cancellation would leave
+	// the room only partially repaired.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) //nolint:mnd
-		defer cancel()
+		ctx := context.Background()
 		if err := rsAPI.PerformAdminDownloadState(ctx, roomID, device.UserID, spec.ServerName(serverName)); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"userID":     device.UserID,

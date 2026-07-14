@@ -280,6 +280,27 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	}
 
 	if msg.RewritesState {
+		// A RewritesState event replaces the room's entire current state in the
+		// sync API: purge, then repopulate from AddsStateEventIDs below. This is
+		// legitimate for federated joins, partial-state joins (which carry the
+		// small partial member set until the background resync repopulates the
+		// full one) and admin state downloads. Log it at debug with the resulting
+		// member count so a suspicious rewrite (e.g. a stale small state landing
+		// after a resync) remains traceable without adding noise (issue #247).
+		memberAdds := 0
+		for _, se := range addsStateEvents {
+			if se.Type() == "m.room.member" {
+				memberAdds++
+			}
+		}
+		log.WithFields(log.Fields{
+			"room_id":     ev.RoomID().String(),
+			"event_id":    ev.EventID(),
+			"event_type":  ev.Type(),
+			"adds_state":  len(msg.AddsStateEventIDs),
+			"member_adds": memberAdds,
+			"trace":       "current_state_rewrite",
+		}).Debug("Rewriting sync API current room state (purge + repopulate)")
 		if err = s.db.PurgeRoomState(ctx, ev.RoomID().String()); err != nil {
 			return fmt.Errorf("s.db.PurgeRoom: %w", err)
 		}

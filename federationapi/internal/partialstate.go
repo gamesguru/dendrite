@@ -424,6 +424,25 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		return nil, fmt.Errorf("fetchMissingEventsParallel: %w", err)
 	}
 
+	// Step 4: Verify every wanted state event is now stored locally before we
+	// declare the resync complete. Individual fetches can fail silently:
+	// fetchSingleEvent drops events it cannot retrieve from any server, and
+	// InputRoomEvents batch-store errors are only logged. Without this gate a
+	// resync could "complete" with only a fraction of the room's state (e.g. 35
+	// of ~1.2k members), after which applyState clears the partial-state flag and
+	// the low member count is never retried or corrected (issue #247). Failing
+	// here lets processRoom try another server and retry with backoff instead.
+	wantSet := make(map[string]bool, len(wantIDs))
+	for _, id := range wantIDs {
+		wantSet[id] = true
+	}
+	if stillMissing := w.findMissingEvents(ctx, logger, roomID, roomVersion, wantSet); len(stillMissing) > 0 {
+		return nil, fmt.Errorf(
+			"resync incomplete: %d of %d state events still missing after fetch",
+			len(stillMissing), len(wantIDs),
+		)
+	}
+
 	return wantIDs, nil
 }
 

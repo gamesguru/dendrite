@@ -241,6 +241,22 @@ func reconcileStateEpoch(ownKey types.StateKeyTuple, eventIsStateEvent bool, rem
 	return keepRemoved, keepAdded
 }
 
+// removesCollateralMembers reports whether the removed state delta drops a
+// membership event for a state key other than ownKey (the triggering event's
+// own state-key tuple). After a partial-state resync a single event never
+// legitimately evicts other users from the current state, so a collateral
+// member removal reliably signals that an out-of-order event is regressing
+// resync-authoritative membership, which the content-addressed snapshot-NID
+// heuristic can miss (issue #247).
+func removesCollateralMembers(ownKey types.StateKeyTuple, removed []types.StateEntry) bool {
+	for _, e := range removed {
+		if e.EventTypeNID == types.MRoomMemberNID && e.StateKeyTuple != ownKey {
+			return true
+		}
+	}
+	return false
+}
+
 func (u *latestEventsUpdater) latestState() error {
 	trace, ctx := internal.StartRegion(u.ctx, "processEventWithMissingState")
 	defer trace.EndRegion()
@@ -324,56 +340,68 @@ func (u *latestEventsUpdater) latestState() error {
 		// If this event references state from before the resync completed,
 		// it could cause us to lose the authoritative state we fetched.
 		resyncStateNID, resyncErr := u.updater.SelectResyncStateNID(u.roomInfo.RoomNID)
-		if resyncErr == nil && resyncStateNID > 0 {
-			// Room has completed a partial state resync
-			// Check if this event references state from before the resync completed
-			if u.stateAtEvent.BeforeStateSnapshotNID > 0 && u.stateAtEvent.BeforeStateSnapshotNID < resyncStateNID {
-				// This event's state is from before the resync - it's out of order
-				// Check if applying this would cause a state regression
-				if len(u.removed) > len(u.added) {
-					// The event references pre-resync state and removes more than
-					// it adds, so applying the full delta would collaterally drop
-					// membership the resync authoritatively fetched. Keep the
-					// resync state instead - but if this event is itself a state
-					// event authoring one of the dropped keys (e.g. a remote kick
-					// carrying its own m.room.member transition), still apply that
-					// own-key change, otherwise the membership row stays frozen at
-					// join (#181).
-					keepRemoved, keepAdded := reconcileStateEpoch(
-						u.stateAtEvent.StateKeyTuple, u.stateAtEvent.IsStateEvent(), u.removed, u.added,
-					)
+		if resyncErr == nil && resyncStateNID > 0 && len(u.removed) > len(u.added) {
+			// Room has completed a partial state resync and this event's delta
+			// removes more state than it adds. Two independent signals mark it as
+			// a regression of resync-authoritative state:
+			//
+			//   - byNID: the event's base state predates the resync snapshot. This
+			//     is a heuristic — state snapshot NIDs are content-addressed
+			//     (deduplicated by hash), so an out-of-order event whose base state
+			//     dedups to a pre-resync snapshot gets a NID below resyncStateNID.
+			//     But an out-of-order event whose base state is a *new* block
+			//     combination gets a fresh NID above resyncStateNID and slips past
+			//     this check (issue #247).
+			//   - collateralMembers: the delta would drop m.room.member events for
+			//     users *other* than the one this event is about. After a resync a
+			//     single event never legitimately evicts other users from the
+			//     current state, so this reliably catches the regressions the NID
+			//     heuristic misses, regardless of snapshot NID ordering.
+			byNID := u.stateAtEvent.BeforeStateSnapshotNID > 0 && u.stateAtEvent.BeforeStateSnapshotNID < resyncStateNID
+			collateralMembers := removesCollateralMembers(u.stateAtEvent.StateKeyTuple, u.removed)
+			if byNID || collateralMembers {
+				// Applying the full delta would collaterally drop membership the
+				// resync authoritatively fetched. Keep the resync state instead -
+				// but if this event is itself a state event authoring one of the
+				// dropped keys (e.g. a remote kick carrying its own m.room.member
+				// transition), still apply that own-key change, otherwise the
+				// membership row stays frozen at join (#181).
+				keepRemoved, keepAdded := reconcileStateEpoch(
+					u.stateAtEvent.StateKeyTuple, u.stateAtEvent.IsStateEvent(), u.removed, u.added,
+				)
 
-					// Count membership events being removed for logging
-					memberRemoved := 0
-					for _, entry := range u.removed {
-						if entry.EventTypeNID == types.MRoomMemberNID {
-							memberRemoved++
-						}
+				// Count membership events being removed for logging
+				memberRemoved := 0
+				for _, entry := range u.removed {
+					if entry.EventTypeNID == types.MRoomMemberNID {
+						memberRemoved++
 					}
-
-					logrus.WithFields(logrus.Fields{
-						"event_id":               u.event.EventID(),
-						"room_id":                u.event.RoomID().String(),
-						"event_before_state_nid": u.stateAtEvent.BeforeStateSnapshotNID,
-						"resync_state_nid":       resyncStateNID,
-						"old_state_nid":          u.oldStateNID,
-						"new_state_nid":          u.newStateNID,
-						"would_remove":           len(u.removed),
-						"would_add":              len(u.added),
-						"would_remove_members":   memberRemoved,
-						"applied_own_remove":     len(keepRemoved),
-						"applied_own_add":        len(keepAdded),
-						"trace":                  "msc3706_state_epoch",
-					}).Warn("Suppressing state regression from out-of-order event after partial state resync")
-
-					// Keep the current (resync-authoritative) state snapshot, but
-					// still apply the triggering event's own state-key change so
-					// its membership row is not left frozen.
-					u.newStateNID = u.oldStateNID
-					u.removed = keepRemoved
-					u.added = keepAdded
-					return nil
 				}
+
+				logrus.WithFields(logrus.Fields{
+					"event_id":               u.event.EventID(),
+					"room_id":                u.event.RoomID().String(),
+					"event_before_state_nid": u.stateAtEvent.BeforeStateSnapshotNID,
+					"resync_state_nid":       resyncStateNID,
+					"old_state_nid":          u.oldStateNID,
+					"new_state_nid":          u.newStateNID,
+					"would_remove":           len(u.removed),
+					"would_add":              len(u.added),
+					"would_remove_members":   memberRemoved,
+					"applied_own_remove":     len(keepRemoved),
+					"applied_own_add":        len(keepAdded),
+					"trigger_by_nid":         byNID,
+					"trigger_collateral":     collateralMembers,
+					"trace":                  "msc3706_state_epoch",
+				}).Warn("Suppressing state regression from out-of-order event after partial state resync")
+
+				// Keep the current (resync-authoritative) state snapshot, but
+				// still apply the triggering event's own state-key change so
+				// its membership row is not left frozen.
+				u.newStateNID = u.oldStateNID
+				u.removed = keepRemoved
+				u.added = keepAdded
+				return nil
 			}
 		}
 	}
