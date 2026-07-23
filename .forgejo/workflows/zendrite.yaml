@@ -46,7 +46,7 @@ jobs:
       - name: Install dependencies
         run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
       - name: golangci-lint
@@ -94,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
       - name: Setup go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
