@@ -88,6 +88,12 @@ type QueryEventsByIDRequest struct {
 	RoomID string `json:"room_id"`
 	// The event IDs to look up.
 	EventIDs []string `json:"event_ids"`
+	// ExcludeRejected, when true, omits events that are stored but marked
+	// rejected. The partial-state resync sets this so that rejected state
+	// events are treated as missing and re-fetched, which lets the input path
+	// re-verify their signatures and clear the rejection once a valid signing
+	// key can be fetched (e.g. after a notary stops rate-limiting us).
+	ExcludeRejected bool `json:"exclude_rejected"`
 }
 
 // QueryEventsByIDResponse is a response to QueryEventsByID.

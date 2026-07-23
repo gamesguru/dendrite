@@ -408,8 +408,11 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		"server":       serverName,
 	}).Info("Fetched state IDs for partial state resync")
 
-	// Step 2: Figure out which events we already have locally.
-	missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, allIDs)
+	// Step 2: Figure out which events we already have locally. Treat rejected
+	// events as missing so we re-fetch them and give the input path another
+	// chance to verify and un-reject them (their signing key may be fetchable
+	// now even if it wasn't when the event first arrived).
+	missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, allIDs, true)
 	logger.WithFields(logrus.Fields{
 		"missing": len(missing),
 		"total":   len(allIDs),
@@ -432,11 +435,18 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	// of ~1.2k members), after which applyState clears the partial-state flag and
 	// the low member count is never retried or corrected (issue #247). Failing
 	// here lets processRoom try another server and retry with backoff instead.
+	//
+	// Completeness is measured by presence, not verification: an event that is
+	// stored but rejected (a signature we still cannot verify because its key is
+	// unavailable) is as complete as it will ever get, so counting it as missing
+	// here would loop forever. Step 2 already re-fetched rejected events to give
+	// verification another attempt; anything still rejected is tolerated by the
+	// snapshot builder in UpdateStateAfterResync.
 	wantSet := make(map[string]bool, len(wantIDs))
 	for _, id := range wantIDs {
 		wantSet[id] = true
 	}
-	if stillMissing := w.findMissingEvents(ctx, logger, roomID, roomVersion, wantSet); len(stillMissing) > 0 {
+	if stillMissing := w.findMissingEvents(ctx, logger, roomID, roomVersion, wantSet, false); len(stillMissing) > 0 {
 		return nil, fmt.Errorf(
 			"resync incomplete: %d of %d state events still missing after fetch",
 			len(stillMissing), len(wantIDs),
@@ -447,13 +457,20 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 }
 
 // findMissingEvents checks which of the wanted event IDs are not yet stored
-// locally and returns the missing ones.
+// locally and returns the missing ones. When excludeRejected is true, events
+// that are stored but rejected count as missing, so the resync re-fetches them
+// and the input path gets another chance to verify and un-reject them (e.g.
+// after a signing key that was previously unavailable can be fetched). When
+// false, any stored copy (rejected or not) counts as present, which is what the
+// final completeness gate wants: an event we can never verify must not keep the
+// resync retrying forever.
 func (w *PartialStateWorker) findMissingEvents(
 	ctx context.Context,
 	logger *logrus.Entry,
 	roomID string,
 	_ gomatrixserverlib.RoomVersion,
 	wantIDs map[string]bool,
+	excludeRejected bool,
 ) []string {
 	idList := make([]string, 0, len(wantIDs))
 	for id := range wantIDs {
@@ -462,8 +479,9 @@ func (w *PartialStateWorker) findMissingEvents(
 
 	var res roomserverAPI.QueryEventsByIDResponse
 	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
-		RoomID:   roomID,
-		EventIDs: idList,
+		RoomID:          roomID,
+		EventIDs:        idList,
+		ExcludeRejected: excludeRejected,
 	}, &res); err != nil {
 		logger.WithError(err).Warn("Failed to query existing events, treating all as missing")
 		return idList

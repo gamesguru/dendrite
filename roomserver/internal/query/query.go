@@ -221,11 +221,42 @@ func (r *Queryer) QueryEventsByID(
 		return err
 	}
 
+	if request.ExcludeRejected {
+		events, err = r.filterRejectedEvents(ctx, request.EventIDs, events)
+		if err != nil {
+			return err
+		}
+	}
+
 	for _, event := range events {
 		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU})
 	}
 
 	return nil
+}
+
+// filterRejectedEvents drops events that are stored but marked rejected.
+// StateEntriesForEventIDs(excludeRejected=true) returns one entry per present,
+// non-rejected event ID, so its NID set identifies exactly the events that must
+// be kept; anything loaded but absent from that set is a stored-rejected event.
+func (r *Queryer) filterRejectedEvents(
+	ctx context.Context, eventIDs []string, events []types.Event,
+) ([]types.Event, error) {
+	nonRejected, err := r.DB.StateEntriesForEventIDs(ctx, eventIDs, true)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[types.EventNID]struct{}, len(nonRejected))
+	for i := range nonRejected {
+		allowed[nonRejected[i].EventNID] = struct{}{}
+	}
+	filtered := events[:0]
+	for _, ev := range events {
+		if _, ok := allowed[ev.EventNID]; ok {
+			filtered = append(filtered, ev)
+		}
+	}
+	return filtered, nil
 }
 
 // QueryMembershipForSenderID implements api.RoomserverInternalAPI.
