@@ -16,7 +16,7 @@
     },
   },
   "patchedDependencies": {
-    "starlight-theme-nova@0.12.1": "patches/starlight-theme-nova@0.12.1.patch",
+    "starlight-theme-nova@0.12.2": "patches/starlight-theme-nova@0.12.2.patch",
   },
   "packages": {
     "@aria-ui/core": ["@aria-ui/core@0.2.1", "", { "dependencies": { "@ocavue/utils": "^1.6.0", "@zag-js/dom-query": "^1.40.0", "alien-signals": "^3.2.1", "server-dom-shim": "^1.1.0" } }, "sha512-EEh2mIHL4HnfjIgZocxhCCqPRU6EE5eLFQcGw4FOfomil11jIBKtmqCQkz8qJ9Ni3IBoh/5DvUFaY206X0oY6A=="],

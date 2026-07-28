@@ -19,6 +19,6 @@
     "typescript": "^7.0.0"
   },
   "patchedDependencies": {
-    "starlight-theme-nova@0.12.1": "patches/starlight-theme-nova@0.12.1.patch"
+    "starlight-theme-nova@0.12.2": "patches/starlight-theme-nova@0.12.2.patch"
   }
 }
