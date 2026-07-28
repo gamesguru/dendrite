@@ -21,9 +21,11 @@ import (
 )
 
 type loginResponse struct {
-	UserID      string `json:"user_id"`
-	AccessToken string `json:"access_token"`
-	DeviceID    string `json:"device_id"`
+	UserID       string `json:"user_id"`
+	AccessToken  string `json:"access_token"`
+	DeviceID     string `json:"device_id"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresInMs  int    `json:"expires_in_ms,omitempty"`
 }
 
 type flows struct {
@@ -32,6 +34,9 @@ type flows struct {
 
 type flow struct {
 	Type string `json:"type"`
+	// OAuthAwarePreferred indicates the m.login.sso flow is preferred over
+	// other flows, as defined for OAuth 2.0 aware clients (spec v1.18).
+	OAuthAwarePreferred bool `json:"oauth_aware_preferred,omitempty"`
 }
 
 // Login implements GET and POST /login.

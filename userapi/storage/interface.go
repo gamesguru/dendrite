@@ -49,6 +49,7 @@ type Account interface {
 	GetNewNumericLocalpart(ctx context.Context, serverName spec.ServerName) (int64, error)
 	CheckAccountAvailability(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	GetAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
+	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SetPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) error
 }
@@ -77,6 +78,10 @@ type Device interface {
 	// Returns the device on success.
 	CreateDevice(ctx context.Context, localpart string, serverName spec.ServerName, deviceID *string, accessToken string, displayName *string, ipAddr, userAgent string) (dev *api.Device, returnErr error)
 	UpdateDevice(ctx context.Context, localpart string, serverName spec.ServerName, deviceID string, displayName *string) error
+	// UpdateDeviceAccessToken replaces the access token of an existing device without
+	// recreating it, so the session ID and display name are preserved. Used for OIDC
+	// access token rotation, where the device is unchanged but the token is not.
+	UpdateDeviceAccessToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, accessToken string) error
 	UpdateDeviceLastSeen(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
 	RemoveDevices(ctx context.Context, localpart string, serverName spec.ServerName, devices []string) error
 	// RemoveAllDevices deleted all devices for this user. Returns the devices deleted.

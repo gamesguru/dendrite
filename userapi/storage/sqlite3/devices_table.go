@@ -62,6 +62,9 @@ const selectDevicesByLocalpartSQL = "" +
 const updateDeviceNameSQL = "" +
 	"UPDATE userapi_devices SET display_name = $1 WHERE localpart = $2 AND server_name = $3 AND device_id = $4"
 
+const updateDeviceAccessTokenSQL = "" +
+	"UPDATE userapi_devices SET access_token = $1 WHERE localpart = $2 AND server_name = $3 AND device_id = $4"
+
 const deleteDeviceSQL = "" +
 	"DELETE FROM userapi_devices WHERE device_id = $1 AND localpart = $2 AND server_name = $3"
 
@@ -86,6 +89,7 @@ type devicesStatements struct {
 	selectDevicesByIDStmt        *sql.Stmt
 	selectDevicesByLocalpartStmt *sql.Stmt
 	updateDeviceNameStmt         *sql.Stmt
+	updateDeviceAccessTokenStmt  *sql.Stmt
 	updateDeviceLastSeenStmt     *sql.Stmt
 	deleteDeviceStmt             *sql.Stmt
 	deleteDevicesByLocalpartStmt *sql.Stmt
@@ -117,6 +121,7 @@ func NewSQLiteDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Devic
 		{&s.selectDeviceByIDStmt, selectDeviceByIDSQL},
 		{&s.selectDevicesByLocalpartStmt, selectDevicesByLocalpartSQL},
 		{&s.updateDeviceNameStmt, updateDeviceNameSQL},
+		{&s.updateDeviceAccessTokenStmt, updateDeviceAccessTokenSQL},
 		{&s.deleteDeviceStmt, deleteDeviceSQL},
 		{&s.deleteDevicesByLocalpartStmt, deleteDevicesByLocalpartSQL},
 		{&s.selectDevicesByIDStmt, selectDevicesByIDSQL},
@@ -231,6 +236,18 @@ func (s *devicesStatements) UpdateDeviceName(
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceNameStmt)
 	_, err := stmt.ExecContext(ctx, displayName, localpart, serverName, deviceID)
+	return err
+}
+
+// UpdateDeviceAccessToken swaps the access token of an existing device in
+// place, leaving the session ID, display name and creation time untouched.
+func (s *devicesStatements) UpdateDeviceAccessToken(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	deviceID, accessToken string,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateDeviceAccessTokenStmt)
+	_, err := stmt.ExecContext(ctx, accessToken, localpart, serverName, deviceID)
 	return err
 }
 

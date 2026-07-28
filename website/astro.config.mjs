@@ -59,6 +59,7 @@ export default defineConfig({
           items: [
             { label: 'Creating Users', slug: 'administration/createusers' },
             { label: 'Registration', slug: 'administration/registration' },
+            { label: 'Delegated auth (OIDC)', slug: 'administration/oidc' },
             { label: 'Presence', slug: 'administration/presence' },
             { label: 'Admin API', slug: 'administration/adminapi' },
             { label: 'Auto-purging empty rooms', slug: 'administration/auto-purge-empty-rooms' },

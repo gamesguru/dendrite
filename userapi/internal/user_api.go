@@ -610,6 +610,11 @@ func (a *UserInternalAPI) QueryAccountByLocalpart(ctx context.Context, req *api.
 	return
 }
 
+// IsAccountDeactivated reports whether the given local account is deactivated.
+func (a *UserInternalAPI) IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error) {
+	return a.DB.IsAccountDeactivated(ctx, localpart, serverName)
+}
+
 // Return the appservice 'device' or nil if the token is not an appservice. Returns an error if there was a problem
 // creating a 'device'.
 func (a *UserInternalAPI) queryAppServiceToken(ctx context.Context, token, appServiceUserID string) (*api.Device, error) {

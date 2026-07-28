@@ -56,6 +56,11 @@ type sessionsDict struct {
 	// pendingTokens records the registration token (if any) whose pending counter is
 	// currently held for a session, so it can be reconciled when the flow finishes.
 	pendingTokens map[string]string
+	// oauthSessions records server-issued m.oauth UIA challenges, mapping the
+	// session ID to the user ID the challenge was issued for. This prevents
+	// clients from completing the m.oauth stage with a session ID that was
+	// never issued, or one issued for a different user.
+	oauthSessions map[string]string
 }
 
 // defaultTimeout is the timeout used to clean up sessions.
@@ -98,6 +103,7 @@ func (d *sessionsDict) deleteSession(sessionID string) {
 	delete(d.deleteSessionToDeviceID, sessionID)
 	delete(d.sessionCompletedResult, sessionID)
 	delete(d.pendingTokens, sessionID)
+	delete(d.oauthSessions, sessionID)
 	// stop the timer, e.g. because the registration was completed
 	if t, ok := d.timer[sessionID]; ok {
 		if !t.Stop() {
@@ -118,6 +124,7 @@ func newSessionsDict() *sessionsDict {
 		timer:                   make(map[string]*time.Timer),
 		deleteSessionToDeviceID: make(map[string]string),
 		pendingTokens:           make(map[string]string),
+		oauthSessions:           make(map[string]string),
 	}
 }
 
@@ -171,6 +178,28 @@ func (d *sessionsDict) addCompletedSessionStage(sessionID string, stage authtype
 		}
 	}
 	d.sessions[sessionID] = append(d.sessions[sessionID], stage)
+}
+
+// addOAuthSession records a server-issued m.oauth UIA challenge, binding the
+// session to the user it was issued for.
+func (d *sessionsDict) addOAuthSession(sessionID, userID string) {
+	d.startTimer(defaultTimeOut, sessionID)
+	d.Lock()
+	defer d.Unlock()
+	d.oauthSessions[sessionID] = userID
+}
+
+// completeOAuthSession consumes a server-issued m.oauth challenge, returning
+// true only if the session was issued by this server for the given user.
+func (d *sessionsDict) completeOAuthSession(sessionID, userID string) bool {
+	d.Lock()
+	defer d.Unlock()
+	issuedFor, ok := d.oauthSessions[sessionID]
+	if !ok || issuedFor != userID {
+		return false
+	}
+	delete(d.oauthSessions, sessionID)
+	return true
 }
 
 func (d *sessionsDict) addDeviceToDelete(sessionID, deviceID string) {

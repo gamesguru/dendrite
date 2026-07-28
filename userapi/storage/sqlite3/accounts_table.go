@@ -56,6 +56,9 @@ const deactivateAccountSQL = "" +
 const selectAccountByLocalpartSQL = "" +
 	"SELECT localpart, server_name, appservice_id, account_type FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
 
+const selectIsDeactivatedSQL = "" +
+	"SELECT is_deactivated FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+
 const selectPasswordHashSQL = "" +
 	"SELECT password_hash FROM userapi_accounts WHERE localpart = $1 AND server_name = $2 AND is_deactivated = 0"
 
@@ -71,6 +74,7 @@ type accountsStatements struct {
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
+	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
 	serverName                    spec.ServerName
@@ -108,6 +112,7 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
+		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
 	}.Prepare(db)
@@ -191,6 +196,14 @@ func (s *accountsStatements) SelectAccountByLocalpart(
 
 	acc.UserID = userutil.MakeUserID(acc.Localpart, acc.ServerName)
 	return &acc, nil
+}
+
+func (s *accountsStatements) SelectIsDeactivated(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+) (bool, error) {
+	var deactivated bool
+	err := s.selectIsDeactivatedStmt.QueryRowContext(ctx, localpart, serverName).Scan(&deactivated)
+	return deactivated, err
 }
 
 func (s *accountsStatements) SelectNewNumericLocalpart(

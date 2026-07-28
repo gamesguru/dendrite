@@ -104,6 +104,11 @@ func Setup(
 	for _, msc := range cfg.MSCs.MSCs {
 		unstableFeatures["org.matrix."+msc] = true
 	}
+	if oidcEnabled {
+		// MSC3861 implies the MSC2965 auth_metadata / MSC2967 scopes family.
+		unstableFeatures["org.matrix.msc2965"] = true
+		unstableFeatures["org.matrix.msc2967"] = true
+	}
 
 	// singleflight protects /join endpoints from being invoked
 	// multiple times from the same user and room, otherwise
@@ -149,7 +154,7 @@ func Setup(
 				Code: http.StatusOK,
 				JSON: response,
 			}
-		})).Methods(http.MethodGet, http.MethodOptions)
+		})).Methods(http.MethodGet, http.MethodHead, http.MethodOptions)
 	}
 
 	publicAPIMux.Handle("/versions",
@@ -330,8 +335,8 @@ func Setup(
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
-	if oidcEnabled {
-		setupMASAdminRoutes(synapseAdminRouter, mscCfg, cfg, userAPI)
+	if oidcEnabled && mscCfg.MSC3861.AdminToken != "" {
+		setupMASAdminRoutes(synapseAdminRouter, mscCfg, cfg, userAPI, rateLimits)
 	}
 
 	// You can't just do PathPrefix("/(r0|v3)") because regexps only apply when inside named path variables.
@@ -630,7 +635,7 @@ func Setup(
 	).Methods(http.MethodGet, http.MethodOptions)
 
 	if oidcEnabled {
-		v3mux.Handle("/register", msc3861ForbiddenHandler("register")).Methods(http.MethodPost, http.MethodOptions)
+		v3mux.Handle("/register", msc3861RegisterHandler(cfg, userAPI, rateLimits)).Methods(http.MethodPost, http.MethodOptions)
 	} else {
 		v3mux.Handle("/register", httputil.MakeExternalAPI("register", func(req *http.Request) util.JSONResponse {
 			if r := rateLimits.Limit(req, nil); r != nil {
@@ -640,12 +645,16 @@ func Setup(
 		})).Methods(http.MethodPost, http.MethodOptions)
 	}
 
-	v3mux.Handle("/register/available", httputil.MakeExternalAPI("registerAvailable", func(req *http.Request) util.JSONResponse {
-		if r := rateLimits.Limit(req, nil); r != nil {
-			return *r
-		}
-		return RegisterAvailable(req, cfg, userAPI)
-	})).Methods(http.MethodGet, http.MethodOptions)
+	if oidcEnabled {
+		v3mux.Handle("/register/available", msc3861ForbiddenHandler("register_available")).Methods(http.MethodGet, http.MethodOptions)
+	} else {
+		v3mux.Handle("/register/available", httputil.MakeExternalAPI("registerAvailable", func(req *http.Request) util.JSONResponse {
+			if r := rateLimits.Limit(req, nil); r != nil {
+				return *r
+			}
+			return RegisterAvailable(req, cfg, userAPI)
+		})).Methods(http.MethodGet, http.MethodOptions)
+	}
 
 	v3mux.Handle("/directory/room/{roomAlias}",
 		httputil.MakeExternalAPI("directory_room", func(req *http.Request) util.JSONResponse {
@@ -834,17 +843,73 @@ func Setup(
 	// Stub endpoints required by Element
 
 	if oidcEnabled {
+		ssoHandler := newSSOCompatHandler(&mscCfg.MSC3861, userAPI, http.DefaultClient, rateLimits)
+
 		v3mux.Handle("/login",
-			httputil.MakeExternalAPI("login", func(req *http.Request) util.JSONResponse {
-				if req.Method == http.MethodGet || req.Method == http.MethodOptions {
-					return msc3861LoginFlows(mscCfg)
-				}
-				return util.JSONResponse{
-					Code: http.StatusForbidden,
-					JSON: spec.Forbidden("Login is delegated to the OIDC provider via MSC3861."),
-				}
-			}),
+			ssoHandler.serveLogin(),
 		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
+
+		v3mux.Handle(
+			"/refresh",
+			httputil.MakeExternalAPI("refresh", ssoHandler.serveRefresh),
+		).Methods(http.MethodPost, http.MethodOptions)
+
+		v3mux.Handle(
+			"/login/sso/redirect",
+			httputil.MakeExternalAPI("sso_redirect", ssoHandler.serveRedirect),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		v3mux.Handle(
+			"/login/sso/redirect/{idpId}",
+			httputil.MakeExternalAPI("sso_redirect_idp", ssoHandler.serveRedirect),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		v3mux.Handle(
+			"/login/sso/callback",
+			httputil.MakeExternalAPI("sso_callback", ssoHandler.serveCallback),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		v1mux.Handle(
+			"/auth_metadata",
+			httputil.MakeExternalAPI("auth_metadata", func(req *http.Request) util.JSONResponse {
+				return msc3861AuthMetadata(req, mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		v1mux.Handle(
+			"/auth_metadata/jwks",
+			httputil.MakeExternalAPI("auth_metadata_jwks", func(req *http.Request) util.JSONResponse {
+				return msc3861JWKSProxy(req, mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		v1mux.Handle(
+			"/auth_issuer",
+			httputil.MakeExternalAPI("auth_issuer", func(req *http.Request) util.JSONResponse {
+				return msc3861AuthIssuer(mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		unstableMux.Handle(
+			"/org.matrix.msc2965/auth_metadata",
+			httputil.MakeExternalAPI("auth_metadata_unstable", func(req *http.Request) util.JSONResponse {
+				return msc3861AuthMetadata(req, mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		unstableMux.Handle(
+			"/org.matrix.msc2965/auth_metadata/jwks",
+			httputil.MakeExternalAPI("auth_metadata_jwks_unstable", func(req *http.Request) util.JSONResponse {
+				return msc3861JWKSProxy(req, mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
+
+		unstableMux.Handle(
+			"/org.matrix.msc2965/auth_issuer",
+			httputil.MakeExternalAPI("auth_issuer_unstable", func(req *http.Request) util.JSONResponse {
+				return msc3861AuthIssuer(mscCfg)
+			}),
+		).Methods(http.MethodGet, http.MethodOptions)
 	} else {
 		v3mux.Handle("/login",
 			httputil.MakeExternalAPI("login", func(req *http.Request) util.JSONResponse {
@@ -856,12 +921,20 @@ func Setup(
 		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
 	}
 
-	v3mux.Handle("/auth/{authType}/fallback/web",
-		httputil.MakeHTTPAPI("auth_fallback", userAPI, enableMetrics, func(w http.ResponseWriter, req *http.Request) {
-			vars := httputil.Vars(req)
-			AuthFallback(w, req, vars["authType"], cfg)
-		}),
-	).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
+	if oidcEnabled {
+		v3mux.Handle(
+			"/auth/{authType}/fallback/web",
+			msc3861ForbiddenHandler("auth_fallback"),
+		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
+	} else {
+		v3mux.Handle(
+			"/auth/{authType}/fallback/web",
+			httputil.MakeHTTPAPI("auth_fallback", userAPI, enableMetrics, func(w http.ResponseWriter, req *http.Request) {
+				vars := httputil.Vars(req)
+				AuthFallback(w, req, vars["authType"], cfg)
+			}),
+		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
+	}
 
 	// ALTCHA challenge endpoint (unauthenticated, vendor-prefixed).
 	zendriteAdminRouter.Handle("/altcha/challenge",
@@ -1088,17 +1161,31 @@ func Setup(
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
-	v3mux.Handle("/account/3pid/delete",
-		httputil.MakeAuthAPI("account_3pid", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			return Forget3PID(req, userAPI)
-		}),
-	).Methods(http.MethodPost, http.MethodOptions)
+	if oidcEnabled {
+		v3mux.Handle(
+			"/account/3pid/delete",
+			msc3861ForbiddenHandler("account_3pid_delete"),
+		).Methods(http.MethodPost, http.MethodOptions)
 
-	v3mux.Handle("/{path:(?:account/3pid|register)}/email/requestToken",
-		httputil.MakeExternalAPI("account_3pid_request_token", func(req *http.Request) util.JSONResponse {
-			return RequestEmailToken(req, userAPI, cfg, threePIDClient)
-		}),
-	).Methods(http.MethodPost, http.MethodOptions)
+		v3mux.Handle(
+			"/{path:(?:account/3pid|register)}/email/requestToken",
+			msc3861ForbiddenHandler("account_3pid_request_token"),
+		).Methods(http.MethodPost, http.MethodOptions)
+	} else {
+		v3mux.Handle(
+			"/account/3pid/delete",
+			httputil.MakeAuthAPI("account_3pid", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+				return Forget3PID(req, userAPI)
+			}),
+		).Methods(http.MethodPost, http.MethodOptions)
+
+		v3mux.Handle(
+			"/{path:(?:account/3pid|register)}/email/requestToken",
+			httputil.MakeExternalAPI("account_3pid_request_token", func(req *http.Request) util.JSONResponse {
+				return RequestEmailToken(req, userAPI, cfg, threePIDClient)
+			}),
+		).Methods(http.MethodPost, http.MethodOptions)
+	}
 
 	v3mux.Handle("/voip/turnServer",
 		httputil.MakeAuthAPI("turn_server", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
@@ -1415,7 +1502,7 @@ func Setup(
 			if r := rateLimits.Limit(req, device); r != nil {
 				return *r
 			}
-			return GetCapabilities(rsAPI)
+			return GetCapabilities(rsAPI, oidcEnabled)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
@@ -1592,7 +1679,7 @@ func Setup(
 	// Cross-signing device keys
 
 	postDeviceSigningKeys := httputil.MakeAuthAPI("post_device_signing_keys", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-		return UploadCrossSigningDeviceKeys(req, userAPI, device, userAPI.QueryAccountByPassword, cfg)
+		return UploadCrossSigningDeviceKeys(req, userAPI, device, userAPI.QueryAccountByPassword, cfg, mscCfg)
 	})
 
 	postDeviceSigningSignatures := httputil.MakeAuthAPI("post_device_signing_signatures", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

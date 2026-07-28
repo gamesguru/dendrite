@@ -108,15 +108,9 @@ No additional configuration is needed beyond enabling the MSC.
 ### MSC3861: OIDC Delegated Authentication
 
 MSC3861 delegates authentication to an external OpenID Connect (OIDC) provider such as [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service).
-When enabled, Zendrite validates access tokens via OAuth 2.0 token introspection instead of managing passwords directly.
+When enabled, Zendrite validates access tokens via OAuth 2.0 token introspection instead of managing passwords directly, and provisions accounts and devices on demand.
 
-**What changes when MSC3861 is enabled:**
-
-- Password-based registration and login are disabled.
-- `GET /login` returns only the `m.login.sso` flow.
-- `POST /login`, `/register`, `/account/password`, `/account/deactivate`, `/logout`, `/logout/all`, `/delete_devices`, and device modification endpoints return `403 M_FORBIDDEN`.
-- `/.well-known/matrix/client` includes an `m.authentication` section with the OIDC issuer.
-- New users are auto-provisioned on first token introspection.
+This changes the behaviour of a large part of the client-server API: password login and registration are disabled, session management moves to the provider, and clients without native OIDC support go through a legacy SSO compatibility layer.
 
 **Configuration:**
 
@@ -128,18 +122,6 @@ mscs:
     issuer: "https://auth.example.com/"
     client_id: "0000000000000000000ZENDRITE"
     client_secret: "secret"
-    client_auth_method: "client_secret_basic"  # or "client_secret_post"
-    admin_token: ""                            # optional: static token for admin API access
-    account_management_url: ""                 # optional: URL for account management UI
-    introspection_endpoint: ""                 # optional: defaults to {issuer}/oauth2/introspect
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `issuer` | Yes | The OIDC provider URL (e.g. your MAS instance). |
-| `client_id` | Yes | OAuth 2.0 client ID registered with the OIDC provider for introspection. |
-| `client_secret` | Yes | OAuth 2.0 client secret for introspection. |
-| `client_auth_method` | No | Authentication method: `client_secret_basic` (default) or `client_secret_post`. |
-| `admin_token` | No | A static bearer token that grants admin access, bypassing OIDC introspection. Useful for service-to-service calls. |
-| `account_management_url` | No | URL where users can manage their account (shown in well-known response). |
-| `introspection_endpoint` | No | Override the introspection endpoint URL. Defaults to `{issuer}/oauth2/introspect`. |
+See [Delegated authentication (OIDC)](/administration/oidc/) for the full setup guide, the complete configuration reference, client support, account provisioning rules, migration caveats and troubleshooting.

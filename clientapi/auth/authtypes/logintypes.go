@@ -12,5 +12,9 @@ const (
 	LoginTypeAltcha             = "org.codefloe.altcha"
 	LoginTypeApplicationService = "m.login.application_service"
 	LoginTypeToken              = "m.login.token"
+	LoginTypeSSO                = "m.login.sso"
 	LoginTypeRegistrationToken  = "m.login.registration_token"
+	// LoginTypeOAuth is the m.oauth UIA type used with the OAuth 2.0 API,
+	// currently only valid on /keys/device_signing/upload.
+	LoginTypeOAuth = "m.oauth"
 )

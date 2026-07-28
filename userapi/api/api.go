@@ -278,6 +278,10 @@ type QueryAccessTokenRequest struct {
 type QueryAccessTokenResponse struct {
 	Device *Device
 	Err    string // e.g ErrorForbidden
+	// SoftLogout is true when the token was rejected because it expired and the
+	// client may refresh it, rather than the session being destroyed. Only set
+	// when MSC3861 delegated authentication is in use.
+	SoftLogout bool
 }
 
 // QueryAccountDataRequest is the request for QueryAccountData.

@@ -75,6 +75,22 @@ func VerifyUserFromRequest(
 		}
 	}
 	if res.Device == nil {
+		if res.SoftLogout {
+			// The token expired but the session is intact; the client should
+			// refresh its token (OAuth 2.0 API) instead of logging out.
+			return nil, &util.JSONResponse{
+				Code: http.StatusUnauthorized,
+				JSON: struct {
+					ErrCode    string `json:"errcode"`
+					Err        string `json:"error"`
+					SoftLogout bool   `json:"soft_logout"`
+				}{
+					ErrCode:    "M_UNKNOWN_TOKEN",
+					Err:        "Access token expired",
+					SoftLogout: true,
+				},
+			}
+		}
 		return nil, &util.JSONResponse{
 			Code: http.StatusUnauthorized,
 			JSON: spec.UnknownToken("Unknown token"),
