@@ -53,12 +53,17 @@ jobs:
           path: dist
 
       - name: Check links
+        # Skip the site's own origin. Every page carries a rel="canonical" and
+        # an og:url pointing at its deployed URL, which does not exist yet for a
+        # page added in a pull request, so checking those would fail every PR
+        # that adds a page. Navigation between pages is root-relative and is
+        # still resolved against --root-dir, so this loses no coverage.
         uses: https://github.com/lycheeverse/lychee-action@v2
         with:
           args: >-
             --root-dir ${{ github.workspace }}/dist
             --exclude-path ${{ github.workspace }}/dist/pagefind
-            --exclude '^https://zendrite\.pat-s\.me/404/$'
+            --exclude '^https://zendrite\.pat-s\.me/'
             --no-progress
             '${{ github.workspace }}/dist/**/*.html'
           fail: true
