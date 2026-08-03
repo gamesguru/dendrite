@@ -38,7 +38,10 @@ jobs:
   lint:
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    timeout-minutes: 5
+    # Dependency bumps invalidate the golangci-lint cache key (it hashes go.mod
+    # and go.sum), so those PRs always lint from cold and can exceed a 5 minute
+    # budget even though warm runs finish in ~3 minutes.
+    timeout-minutes: 15
     name: Linting
     runs-on: ubuntu-latest
     steps:

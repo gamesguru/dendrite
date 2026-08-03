@@ -216,12 +216,26 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 	headeredEvent := &rstypes.HeaderedEvent{PDU: ev}
 	headeredEvent.Visibility = r.visibility
 	headeredEvent.StateKeyResolved = ev.StateKey()
+	materialiseEventID(headeredEvent)
 	return headeredEvent
+}
+
+// materialiseEventID forces the lazily generated event ID to be computed.
+//
+// PDU.EventID() memoises the ID into the event on first call, which is an
+// unsynchronised read-then-write. Tests routinely build a room once and then
+// share its events across the parallel subtests of WithAllDatabases, so leaving
+// that first call to the subtests makes them race. Doing it while the event is
+// still owned by a single goroutine leaves the subtests with reads only.
+func materialiseEventID(he *rstypes.HeaderedEvent) {
+	_ = he.EventID()
 }
 
 // Add a new event to this room DAG. Not thread-safe.
 func (r *Room) InsertEvent(t *testing.T, he *rstypes.HeaderedEvent) {
 	t.Helper()
+	// Events built outside CreateEvent reach us with the ID still unset.
+	materialiseEventID(he)
 	// Add the event to the list of auth/state events
 	r.events = append(r.events, he)
 	if he.StateKey() != nil {
