@@ -122,15 +122,27 @@ func (r *Inviter) PerformInvite(
 	ctx context.Context,
 	req *api.PerformInviteRequest,
 ) error {
+	info, err := r.DB.RoomInfo(ctx, req.InviteInput.RoomID.String())
+	if err != nil {
+		return err
+	}
+
+	signingKey := req.InviteInput.PrivateKey
+	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
+		signingKey, err = r.RSAPI.GetOrCreateUserRoomPrivateKey(ctx, req.InviteInput.Inviter, req.InviteInput.RoomID)
+		if err != nil {
+			return err
+		}
+		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
+			return err
+		}
+	}
+
 	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
 	if err != nil {
 		return err
 	} else if senderID == nil {
 		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
-	}
-	info, err := r.DB.RoomInfo(ctx, req.InviteInput.RoomID.String())
-	if err != nil {
-		return err
 	}
 
 	proto := gomatrixserverlib.ProtoEvent{
@@ -144,6 +156,16 @@ func (r *Inviter) PerformInvite(
 		Reason:     req.InviteInput.Reason,
 		IsDirect:   req.InviteInput.IsDirect,
 	}
+	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
+		mapping := &gomatrixserverlib.MXIDMapping{
+			UserRoomKey: spec.SenderIDFromPseudoIDKey(signingKey),
+			UserID:      req.InviteInput.Inviter.String(),
+		}
+		if err = mapping.Sign(req.InviteInput.Inviter.Domain(), req.InviteInput.KeyID, req.InviteInput.PrivateKey); err != nil {
+			return err
+		}
+		content.MXIDMapping = mapping
+	}
 
 	if err = proto.SetContent(content); err != nil {
 		return err
@@ -154,14 +176,6 @@ func (r *Inviter) PerformInvite(
 	}
 
 	isTargetLocal := r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Invitee.Domain())
-
-	signingKey := req.InviteInput.PrivateKey
-	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
-		signingKey, err = r.RSAPI.GetOrCreateUserRoomPrivateKey(ctx, req.InviteInput.Inviter, req.InviteInput.RoomID)
-		if err != nil {
-			return err
-		}
-	}
 
 	input := gomatrixserverlib.PerformInviteInput{
 		RoomID:            req.InviteInput.RoomID,
