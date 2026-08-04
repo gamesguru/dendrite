@@ -38,6 +38,36 @@ func TestLoadConfigRelative(t *testing.T) {
 	}
 }
 
+func TestGlobalKeyPerspectivesAreWiredToFederationAPI(t *testing.T) {
+	var cfg Dendrite
+	cfg.Defaults(DefaultOpts{
+		Generate:       false,
+		SingleDatabase: true,
+	})
+	if err := yaml.Unmarshal([]byte(`
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+  prefer_direct_fetch: false
+`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Wiring()
+
+	if got := len(cfg.FederationAPI.KeyPerspectives); got != 1 {
+		t.Fatalf("expected 1 federation key perspective, got %d", got)
+	}
+	if got := cfg.FederationAPI.KeyPerspectives[0].ServerName; got != "matrix.org" {
+		t.Fatalf("expected matrix.org perspective, got %q", got)
+	}
+	if cfg.FederationAPI.PreferDirectFetch {
+		t.Fatal("expected prefer_direct_fetch to be copied as false")
+	}
+}
+
 const testConfig = `
 version: 2
 global:

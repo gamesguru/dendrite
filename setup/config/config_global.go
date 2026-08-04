@@ -56,6 +56,13 @@ type Global struct {
 	// to other servers and the federation API will not be exposed.
 	DisableFederation bool `yaml:"disable_federation"`
 
+	// Deprecated: key_perspectives belongs under federation_api. This is kept so
+	// older or misplaced configs do not silently disable perspective key fetching.
+	KeyPerspectives KeyPerspectives `yaml:"key_perspectives"`
+
+	// Deprecated: prefer_direct_fetch belongs under federation_api.
+	PreferDirectFetch bool `yaml:"prefer_direct_fetch"`
+
 	// Configures the handling of presence events.
 	Presence PresenceOptions `yaml:"presence"`
 

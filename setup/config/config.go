@@ -335,6 +335,11 @@ func (c *Dendrite) Verify(configErrs *ConfigErrors) {
 }
 
 func (c *Dendrite) Wiring() {
+	if len(c.FederationAPI.KeyPerspectives) == 0 && len(c.Global.KeyPerspectives) > 0 {
+		c.FederationAPI.KeyPerspectives = c.Global.KeyPerspectives
+		c.FederationAPI.PreferDirectFetch = c.Global.PreferDirectFetch
+	}
+
 	c.Global.JetStream.Matrix = &c.Global
 	c.ClientAPI.Matrix = &c.Global
 	c.FederationAPI.Matrix = &c.Global

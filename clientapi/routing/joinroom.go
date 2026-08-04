@@ -127,13 +127,20 @@ func JoinRoomByIDOrAlias(
 	}()
 
 	// Wait either for the join to finish, or for us to hit a reasonable
-	// timeout, at which point we'll just return a 200 to placate clients.
+	// timeout, at which point we'll tell the client that the join is still
+	// running asynchronously.
 	timer := time.NewTimer(time.Second * 20)
 	select {
 	case <-timer.C:
 		return util.JSONResponse{
 			Code: http.StatusAccepted,
-			JSON: spec.Unknown("The room join will continue in the background."),
+			JSON: struct {
+				RoomID  string `json:"room_id"`
+				Joining bool   `json:"joining"`
+			}{
+				RoomID:  roomIDOrAlias,
+				Joining: true,
+			},
 		}
 	case result := <-done:
 		// Stop and drain the timer
