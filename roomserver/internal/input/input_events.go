@@ -576,20 +576,23 @@ func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.Inpu
 	if err != nil {
 		return nil, fmt.Errorf("r.DB.Events: %w", err)
 	}
+	var roomInfo *types.RoomInfo
 	for _, stateEvent := range stateEvents {
+		if stateEvent.PDU.RoomID() != input.Event.RoomID() {
+			return nil, fmt.Errorf(
+				"supplied state event %s is for room %s, not %s",
+				stateEvent.PDU.EventID(), stateEvent.PDU.RoomID().String(), input.Event.RoomID().String(),
+			)
+		}
 		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
-			if stateEvent.PDU.RoomID() != input.Event.RoomID() {
-				return nil, fmt.Errorf(
-					"supplied create event %s is for room %s, not %s",
-					stateEvent.PDU.EventID(), stateEvent.PDU.RoomID().String(), input.Event.RoomID().String(),
-				)
-			}
-			roomInfo, err := r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
+			roomInfo, err = r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
 			if err != nil {
 				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)
 			}
-			return roomInfo, nil
 		}
+	}
+	if roomInfo != nil {
+		return roomInfo, nil
 	}
 	return nil, fmt.Errorf("supplied state for event %s does not include an m.room.create event", input.Event.EventID())
 }

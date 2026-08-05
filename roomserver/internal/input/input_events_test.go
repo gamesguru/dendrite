@@ -1,8 +1,17 @@
 package input
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/element-hq/dendrite/internal/caching"
+	"github.com/element-hq/dendrite/internal/sqlutil"
+	"github.com/element-hq/dendrite/roomserver/api"
+	"github.com/element-hq/dendrite/roomserver/storage"
+	rstypes "github.com/element-hq/dendrite/roomserver/types"
+	"github.com/element-hq/dendrite/test/testrig"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
@@ -62,5 +71,80 @@ func Test_EventAuth(t *testing.T) {
 		return spec.NewUserID(string(senderID), true)
 	}); err == nil {
 		t.Fatalf("event should not be allowed, but it was")
+	}
+}
+
+func TestRoomInfoFromSuppliedStateRejectsForeignStateEvents(t *testing.T) {
+	alice := test.NewUser(t)
+	room1 := test.NewRoom(t, alice)
+	room2 := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
+		defer cancel()
+
+		create1 := stateEventOfType(t, room1, spec.MRoomCreate)
+		foreignMember := stateEventOfType(t, room2, spec.MRoomMember)
+		storeEventForSuppliedState(t, ctx, db, create1)
+		storeEventForSuppliedState(t, ctx, db, foreignMember)
+
+		inputer := &Inputer{DB: db}
+		event := room1.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
+			"membership": spec.Join,
+		}, test.WithStateKey(alice.ID))
+		_, err = inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
+			Event: &rstypes.HeaderedEvent{PDU: event.PDU},
+			StateEventIDs: []string{
+				create1.EventID(),
+				foreignMember.EventID(),
+			},
+		})
+		if err == nil {
+			t.Fatal("expected foreign supplied state event to be rejected")
+		}
+		for _, want := range []string{foreignMember.EventID(), room2.ID, room1.ID} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("expected error %q to contain %q", err.Error(), want)
+			}
+		}
+	})
+}
+
+func stateEventOfType(t *testing.T, room *test.Room, eventType string) *rstypes.HeaderedEvent {
+	t.Helper()
+	for _, ev := range room.Events() {
+		if ev.Type() == eventType && ev.StateKey() != nil {
+			return ev
+		}
+	}
+	t.Fatalf("room %s has no state event of type %s", room.ID, eventType)
+	return nil
+}
+
+func storeEventForSuppliedState(t *testing.T, ctx context.Context, db storage.Database, ev *rstypes.HeaderedEvent) {
+	t.Helper()
+	roomInfo, err := db.GetOrCreateRoomInfo(ctx, ev.PDU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventTypeNID, err := db.GetOrCreateEventTypeNID(ctx, ev.Type())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStateKeyNID, err := db.GetOrCreateEventStateKeyNID(ctx, ev.StateKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = db.StoreEvent(ctx, ev.PDU, roomInfo, eventTypeNID, eventStateKeyNID, nil, false); err != nil {
+		t.Fatal(err)
 	}
 }
