@@ -105,7 +105,10 @@ func JoinRoomByIDOrAlias(
 func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []spec.ServerName) {
 	content := map[string]interface{}{}
 	_ = httputil.UnmarshalJSONRequest(req, &content)
+	return content, joinRequestServerNames(req)
+}
 
+func joinRequestServerNames(req *http.Request) []spec.ServerName {
 	var serverNames []spec.ServerName
 	if via, ok := req.URL.Query()["via"]; ok {
 		for _, serverName := range via {
@@ -117,7 +120,7 @@ func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []
 		}
 	}
 
-	return content, serverNames
+	return serverNames
 }
 
 func asyncJoinResponse(roomIDOrAlias string) util.JSONResponse {
