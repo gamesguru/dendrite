@@ -32,6 +32,8 @@ type QueryState struct {
 
 const pseudoIDRoomKeyID = gomatrixserverlib.KeyID("ed25519:1")
 
+// signedMXIDMapping signs the pseudo-ID to MXID mapping with the user's
+// federation key, not the per-room pseudo-ID signing key.
 func signedMXIDMapping(inviter spec.UserID, senderID spec.SenderID, keyID gomatrixserverlib.KeyID, privateKey ed25519.PrivateKey) (*gomatrixserverlib.MXIDMapping, error) {
 	mapping := &gomatrixserverlib.MXIDMapping{
 		UserRoomKey: senderID,
@@ -178,7 +180,8 @@ func (r *Inviter) PerformInvite(
 		IsDirect:   req.InviteInput.IsDirect,
 	}
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
-		mapping, err := signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
 		if err != nil {
 			return err
 		}

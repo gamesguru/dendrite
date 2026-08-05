@@ -10,6 +10,8 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
+// TestPseudoIDInviteSignatureKeyIDs verifies that pseudo-ID invites sign the
+// MXID mapping with the federation key while signing the event with the room key.
 func TestPseudoIDInviteSignatureKeyIDs(t *testing.T) {
 	federationKey := ed25519.NewKeyFromSeed([]byte{
 		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
