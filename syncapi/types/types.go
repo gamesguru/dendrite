@@ -442,7 +442,7 @@ type UnreadNotifications struct {
 }
 
 type ClientEvents struct {
-	Events []synctypes.ClientEvent `json:"events,omitempty"`
+	Events []synctypes.ClientEvent `json:"events"`
 }
 
 type Timeline struct {
@@ -473,12 +473,12 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	if jr.State != nil && len(jr.State.Events) == 0 {
 		a.State = nil
 	}
-	if jr.Ephemeral != nil && len(jr.Ephemeral.Events) == 0 {
-		a.Ephemeral = nil
-	}
 	if jr.Ephemeral != nil {
 		// Remove the room_id from EDUs, as this seems to cause Element Web
 		// to trigger notifications - https://github.com/vector-im/element-web/issues/17263
+		if jr.Ephemeral.Events == nil {
+			jr.Ephemeral.Events = []synctypes.ClientEvent{}
+		}
 		for i := range jr.Ephemeral.Events {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}

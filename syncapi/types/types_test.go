@@ -135,11 +135,11 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 			want: []byte("{}"),
 		},
 		{
-			name: "empty ephemeral is removed",
+			name: "empty ephemeral is kept",
 			fields: fields{
 				Ephemeral: &ClientEvents{},
 			},
-			want: []byte("{}"),
+			want: []byte(`{"ephemeral":{"events":[]}}`),
 		},
 		{
 			name: "empty timeline is removed",
