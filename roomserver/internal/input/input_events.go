@@ -121,7 +121,10 @@ func (r *Inputer) processRoomEvent(
 		return fmt.Errorf("r.DB.RoomInfo: %w", rerr)
 	}
 	isCreateEvent := event.Type() == spec.MRoomCreate && event.StateKeyEquals("")
-	if roomInfo == nil && !isCreateEvent {
+	// A state-backed event may be the first event we process for a room during
+	// a federated join; the supplied state contains the create event needed to
+	// initialise the room.
+	if roomInfo == nil && !isCreateEvent && !input.HasState {
 		return fmt.Errorf("room %s does not exist for event %s", event.RoomID().String(), event.EventID())
 	}
 	sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
