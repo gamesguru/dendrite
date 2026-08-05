@@ -7,9 +7,9 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
 	"github.com/element-hq/dendrite/clientapi/httputil"
@@ -27,6 +27,7 @@ func JoinRoomByIDOrAlias(
 	rsAPI roomserverAPI.ClientRoomserverAPI,
 	profileAPI api.ClientUserAPI,
 	roomIDOrAlias string,
+	joinCtx context.Context,
 ) util.JSONResponse {
 	// Prepare to ask the roomserver to perform the room join.
 	joinReq := roomserverAPI.PerformJoinRequest{
@@ -77,80 +78,61 @@ func JoinRoomByIDOrAlias(
 	default:
 	}
 
-	// Ask the roomserver to perform the join.
-	done := make(chan util.JSONResponse, 1)
-	go func() {
-		defer close(done)
-		roomID, _, err := rsAPI.PerformJoin(req.Context(), &joinReq)
-		var response util.JSONResponse
-
-		switch e := err.(type) {
-		case nil: // success case
-			response = util.JSONResponse{
-				Code: http.StatusOK,
-				// TODO: Put the response struct somewhere internal.
-				JSON: struct {
-					RoomID string `json:"room_id"`
-				}{roomID},
-			}
-		case roomserverAPI.ErrInvalidID:
-			response = util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.Unknown(e.Error()),
-			}
-		case roomserverAPI.ErrNotAllowed:
-			jsonErr := spec.Forbidden(e.Error())
-			if device.AccountType == api.AccountTypeGuest {
-				jsonErr = spec.GuestAccessForbidden(e.Error())
-			}
-			response = util.JSONResponse{
-				Code: http.StatusForbidden,
-				JSON: jsonErr,
-			}
-		case *gomatrix.HTTPError: // this ensures we proxy responses over federation to the client
-			response = util.JSONResponse{
-				Code: e.Code,
-				JSON: json.RawMessage(e.Message),
-			}
-		case eventutil.ErrRoomNoExists:
-			response = util.JSONResponse{
-				Code: http.StatusNotFound,
-				JSON: spec.NotFound(e.Error()),
-			}
-		default:
-			response = util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
+	roomID, _, err := rsAPI.PerformJoin(joinCtx, &joinReq)
+	switch e := err.(type) {
+	case nil: // success case
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			// TODO: Put the response struct somewhere internal.
+			JSON: struct {
+				RoomID string `json:"room_id"`
+			}{roomID},
 		}
-		done <- response
-	}()
-
-	// Wait either for the join to finish, or for us to hit a reasonable
-	// timeout, at which point we'll tell the client that the join is still
-	// running asynchronously.
-	timer := time.NewTimer(time.Second * 20)
-	select {
-	case <-timer.C:
-		var roomID string
-		if _, err := spec.NewRoomID(roomIDOrAlias); err == nil {
-			roomID = roomIDOrAlias
+	case roomserverAPI.ErrInvalidID:
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.Unknown(e.Error()),
+		}
+	case roomserverAPI.ErrNotAllowed:
+		jsonErr := spec.Forbidden(e.Error())
+		if device.AccountType == api.AccountTypeGuest {
+			jsonErr = spec.GuestAccessForbidden(e.Error())
 		}
 		return util.JSONResponse{
-			Code: http.StatusAccepted,
-			JSON: struct {
-				RoomID  string `json:"room_id,omitempty"`
-				Joining bool   `json:"joining"`
-			}{
-				RoomID:  roomID,
-				Joining: true,
-			},
+			Code: http.StatusForbidden,
+			JSON: jsonErr,
 		}
-	case result := <-done:
-		// Stop and drain the timer
-		if !timer.Stop() {
-			<-timer.C
+	case *gomatrix.HTTPError: // this ensures we proxy responses over federation to the client
+		return util.JSONResponse{
+			Code: e.Code,
+			JSON: json.RawMessage(e.Message),
 		}
-		return result
+	case eventutil.ErrRoomNoExists:
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound(e.Error()),
+		}
+	default:
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+}
+
+func asyncJoinResponse(roomIDOrAlias string) util.JSONResponse {
+	var roomID string
+	if _, err := spec.NewRoomID(roomIDOrAlias); err == nil {
+		roomID = roomIDOrAlias
+	}
+	return util.JSONResponse{
+		Code: http.StatusAccepted,
+		JSON: struct {
+			RoomID  string `json:"room_id,omitempty"`
+			Joining bool   `json:"joining"`
+		}{
+			RoomID:  roomID,
+			Joining: true,
+		},
 	}
 }

@@ -51,7 +51,7 @@ global:
     keys:
     - key_id: ed25519:auto
       public_key: abc
-  prefer_direct_fetch: false
+  prefer_direct_fetch: true
 `), &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,8 @@ global:
 	if got := cfg.FederationAPI.KeyPerspectives[0].ServerName; got != "matrix.org" {
 		t.Fatalf("expected matrix.org perspective, got %q", got)
 	}
-	if cfg.FederationAPI.PreferDirectFetch {
-		t.Fatal("expected prefer_direct_fetch to be copied as false")
+	if !cfg.FederationAPI.PreferDirectFetch {
+		t.Fatal("expected prefer_direct_fetch to be copied as true")
 	}
 }
 

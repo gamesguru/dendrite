@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib/fclient"
@@ -322,15 +323,18 @@ func Setup(
 			}
 			// Only execute a join for roomIDOrAlias and UserID once. If there is a join in progress
 			// it waits for it to complete and returns that result for subsequent requests.
-			resp, _, _ := sf.Do(vars["roomIDOrAlias"]+device.UserID, func() (any, error) {
+			roomIDOrAlias := vars["roomIDOrAlias"]
+			result := sf.DoChan(roomIDOrAlias+device.UserID, func() (any, error) {
 				return JoinRoomByIDOrAlias(
-					req, device, rsAPI, userAPI, vars["roomIDOrAlias"],
+					req, device, rsAPI, userAPI, roomIDOrAlias, context.Background(),
 				), nil
 			})
-			// once all joins are processed, drop them from the cache. Further requests
-			// will be processed as usual.
-			sf.Forget(vars["roomIDOrAlias"] + device.UserID)
-			return resp.(util.JSONResponse)
+			select {
+			case resp := <-result:
+				return resp.Val.(util.JSONResponse)
+			case <-time.After(time.Second * 20):
+				return asyncJoinResponse(roomIDOrAlias)
+			}
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 
@@ -366,15 +370,18 @@ func Setup(
 			}
 			// Only execute a join for roomID and UserID once. If there is a join in progress
 			// it waits for it to complete and returns that result for subsequent requests.
-			resp, _, _ := sf.Do(vars["roomID"]+device.UserID, func() (any, error) {
+			roomID := vars["roomID"]
+			result := sf.DoChan(roomID+device.UserID, func() (any, error) {
 				return JoinRoomByIDOrAlias(
-					req, device, rsAPI, userAPI, vars["roomID"],
+					req, device, rsAPI, userAPI, roomID, context.Background(),
 				), nil
 			})
-			// once all joins are processed, drop them from the cache. Further requests
-			// will be processed as usual.
-			sf.Forget(vars["roomID"] + device.UserID)
-			return resp.(util.JSONResponse)
+			select {
+			case resp := <-result:
+				return resp.Val.(util.JSONResponse)
+			case <-time.After(time.Second * 20):
+				return asyncJoinResponse(roomID)
+			}
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/rooms/{roomID}/leave",
