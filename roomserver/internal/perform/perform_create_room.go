@@ -216,7 +216,8 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 			}
 		}
 
-		mapping, err := signedMXIDMapping(userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
 		if err != nil {
 			return "", &util.JSONResponse{
 				Code: http.StatusInternalServerError,

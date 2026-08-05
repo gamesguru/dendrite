@@ -282,7 +282,8 @@ func (r *Joiner) performJoinRoomByID(
 			return "", "", err
 		}
 
-		mapping, err := signedMXIDMapping(*userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(*userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
 		if err != nil {
 			return "", "", err
 		}
