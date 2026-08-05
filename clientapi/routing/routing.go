@@ -50,6 +50,39 @@ type WellKnownClientResponse struct {
 	SlidingSyncProxy *WellKnownSlidingSyncProxy `json:"org.matrix.msc3575.proxy,omitempty"`
 }
 
+const (
+	joinHTTPTimeout       = time.Second * 20
+	joinBackgroundTimeout = time.Minute * 10
+)
+
+func joinRoomByIDOrAliasWithTimeout(
+	req *http.Request,
+	device *userapi.Device,
+	sf *singleflight.Group,
+	rsAPI roomserverAPI.ClientRoomserverAPI,
+	userAPI userapi.ClientUserAPI,
+	roomIDOrAlias string,
+) util.JSONResponse {
+	result := sf.DoChan(roomIDOrAlias+device.UserID, func() (any, error) {
+		// Use a service-owned context so the join can continue after returning
+		// 202, but bound it so a wedged federation request cannot pin this key
+		// forever.
+		joinCtx, cancel := context.WithTimeout(context.Background(), joinBackgroundTimeout)
+		defer cancel()
+		return JoinRoomByIDOrAlias(
+			req, device, rsAPI, userAPI, roomIDOrAlias, joinCtx,
+		), nil
+	})
+	select {
+	case resp := <-result:
+		sf.Forget(roomIDOrAlias + device.UserID)
+		return resp.Val.(util.JSONResponse)
+	case <-time.After(joinHTTPTimeout):
+		sf.Forget(roomIDOrAlias + device.UserID)
+		return asyncJoinResponse(roomIDOrAlias)
+	}
+}
+
 // Setup registers HTTP handlers with the given ServeMux. It also supplies the given http.Client
 // to clients which need to make outbound HTTP requests.
 //
@@ -323,18 +356,9 @@ func Setup(
 			}
 			// Only execute a join for roomIDOrAlias and UserID once. If there is a join in progress
 			// it waits for it to complete and returns that result for subsequent requests.
-			roomIDOrAlias := vars["roomIDOrAlias"]
-			result := sf.DoChan(roomIDOrAlias+device.UserID, func() (any, error) {
-				return JoinRoomByIDOrAlias(
-					req, device, rsAPI, userAPI, roomIDOrAlias, context.Background(),
-				), nil
-			})
-			select {
-			case resp := <-result:
-				return resp.Val.(util.JSONResponse)
-			case <-time.After(time.Second * 20):
-				return asyncJoinResponse(roomIDOrAlias)
-			}
+			return joinRoomByIDOrAliasWithTimeout(
+				req, device, &sf, rsAPI, userAPI, vars["roomIDOrAlias"],
+			)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 
@@ -370,18 +394,9 @@ func Setup(
 			}
 			// Only execute a join for roomID and UserID once. If there is a join in progress
 			// it waits for it to complete and returns that result for subsequent requests.
-			roomID := vars["roomID"]
-			result := sf.DoChan(roomID+device.UserID, func() (any, error) {
-				return JoinRoomByIDOrAlias(
-					req, device, rsAPI, userAPI, roomID, context.Background(),
-				), nil
-			})
-			select {
-			case resp := <-result:
-				return resp.Val.(util.JSONResponse)
-			case <-time.After(time.Second * 20):
-				return asyncJoinResponse(roomID)
-			}
+			return joinRoomByIDOrAliasWithTimeout(
+				req, device, &sf, rsAPI, userAPI, vars["roomID"],
+			)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/rooms/{roomID}/leave",
