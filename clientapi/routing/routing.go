@@ -71,7 +71,10 @@ func joinRoomByIDOrAliasWithTimeout(
 	key := roomIDOrAlias + device.UserID + "\x00" + strings.Join(serverKey, "\x00")
 	result := sf.DoChan(key, func() (any, error) {
 		defer sf.Forget(key)
-		content, serverNames := joinRequestContentAndServers(req)
+		content, serverNames, resErr := joinRequestContentAndServers(req)
+		if resErr != nil {
+			return *resErr, nil
+		}
 		// Use a service-owned context so the join can continue after returning
 		// 202, but bound it so a wedged federation request cannot pin this key
 		// forever.

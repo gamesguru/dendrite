@@ -578,6 +578,12 @@ func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.Inpu
 	}
 	for _, stateEvent := range stateEvents {
 		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
+			if stateEvent.PDU.RoomID() != input.Event.RoomID() {
+				return nil, fmt.Errorf(
+					"supplied create event %s is for room %s, not %s",
+					stateEvent.PDU.EventID(), stateEvent.PDU.RoomID().String(), input.Event.RoomID().String(),
+				)
+			}
 			roomInfo, err := r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
 			if err != nil {
 				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)

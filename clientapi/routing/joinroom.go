@@ -9,6 +9,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 
 	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
@@ -102,10 +103,26 @@ func JoinRoomByIDOrAlias(
 	}
 }
 
-func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []spec.ServerName) {
+func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []spec.ServerName, *util.JSONResponse) {
 	content := map[string]interface{}{}
-	_ = httputil.UnmarshalJSONRequest(req, &content)
-	return content, joinRequestServerNames(req)
+	if req.Body == nil {
+		return content, joinRequestServerNames(req), nil
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("io.ReadAll failed")
+		return nil, nil, &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if len(body) == 0 {
+		return content, joinRequestServerNames(req), nil
+	}
+	if resErr := httputil.UnmarshalJSON(body, &content); resErr != nil {
+		return nil, nil, resErr
+	}
+	return content, joinRequestServerNames(req), nil
 }
 
 func joinRequestServerNames(req *http.Request) []spec.ServerName {

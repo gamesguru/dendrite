@@ -131,6 +131,20 @@ federation_api:
 `,
 			want: false,
 		},
+		{
+			name: "global true applies when federation key perspectives are set",
+			yaml: `
+global:
+  prefer_direct_fetch: true
+federation_api:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+`,
+			want: true,
+		},
 	}
 
 	for _, tc := range tests {

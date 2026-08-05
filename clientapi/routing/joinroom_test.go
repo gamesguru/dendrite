@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/element-hq/dendrite/test/testrig"
 	"github.com/element-hq/dendrite/userapi"
 	uapi "github.com/element-hq/dendrite/userapi/api"
+	"golang.org/x/sync/singleflight"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -156,7 +158,10 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				content, serverNames := joinRequestContentAndServers(req)
+				content, serverNames, resErr := joinRequestContentAndServers(req)
+				if resErr != nil {
+					t.Fatalf("joinRequestContentAndServers returned error: %+v", resErr)
+				}
 				joinResp := JoinRoomByIDOrAlias(context.Background(), tc.device, rsAPI, userAPI, tc.roomID, content, serverNames)
 				if tc.wantHTTP200 && !joinResp.Is2xx() {
 					t.Fatalf("expected join room to succeed, but didn't: %+v", joinResp)
@@ -164,4 +169,22 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestJoinRoomMalformedJSONDoesNotStartJoin(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", strings.NewReader("{"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := joinRoomByIDOrAliasWithTimeout(
+		req,
+		&uapi.Device{UserID: "@alice:test"},
+		&singleflight.Group{},
+		nil,
+		nil,
+		"!room:test",
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed JSON to return HTTP 400, got %+v", resp)
+	}
 }
