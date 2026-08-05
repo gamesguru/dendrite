@@ -119,6 +119,125 @@ func TestRoomInfoFromSuppliedStateRejectsForeignStateEvents(t *testing.T) {
 	})
 }
 
+func TestRoomInfoFromSuppliedStateFindsCreateEvent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
+		defer cancel()
+
+		createEvent := stateEventOfType(t, room, spec.MRoomCreate)
+		storedRoomInfo := storeEventForSuppliedState(t, ctx, db, createEvent)
+
+		inputer := &Inputer{DB: db}
+		event := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
+			"membership": spec.Join,
+		}, test.WithStateKey(alice.ID))
+		roomInfo, err := inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
+			Event:         &rstypes.HeaderedEvent{PDU: event.PDU},
+			StateEventIDs: []string{createEvent.EventID()},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if roomInfo.RoomNID != storedRoomInfo.RoomNID {
+			t.Fatalf("expected room NID %d, got %d", storedRoomInfo.RoomNID, roomInfo.RoomNID)
+		}
+	})
+}
+
+func TestRoomInfoFromSuppliedStateRejectsMissingCreateEvent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
+		defer cancel()
+
+		memberEvent := stateEventOfType(t, room, spec.MRoomMember)
+		storeEventForSuppliedState(t, ctx, db, memberEvent)
+
+		inputer := &Inputer{DB: db}
+		event := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
+			"membership": spec.Join,
+		}, test.WithStateKey(alice.ID))
+		_, err = inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
+			Event:         &rstypes.HeaderedEvent{PDU: event.PDU},
+			StateEventIDs: []string{memberEvent.EventID()},
+		})
+		if err == nil {
+			t.Fatal("expected supplied state without create event to be rejected")
+		}
+		if !strings.Contains(err.Error(), "does not include an m.room.create event") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestCheckSuppliedStateEventRoomsRejectsForeignStateEventsForExistingRoom(t *testing.T) {
+	alice := test.NewUser(t)
+	room1 := test.NewRoom(t, alice)
+	room2 := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
+		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
+		defer cancel()
+
+		create1 := stateEventOfType(t, room1, spec.MRoomCreate)
+		foreignMember := stateEventOfType(t, room2, spec.MRoomMember)
+		roomInfo := storeEventForSuppliedState(t, ctx, db, create1)
+		storeEventForSuppliedState(t, ctx, db, foreignMember)
+
+		inputer := &Inputer{DB: db}
+		event := room1.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
+			"membership": spec.Join,
+		}, test.WithStateKey(alice.ID))
+		err = inputer.checkSuppliedStateEventRooms(ctx, &api.InputRoomEvent{
+			Event: &rstypes.HeaderedEvent{PDU: event.PDU},
+			StateEventIDs: []string{
+				create1.EventID(),
+				foreignMember.EventID(),
+			},
+		}, roomInfo)
+		if err == nil {
+			t.Fatal("expected foreign supplied state event to be rejected")
+		}
+		for _, want := range []string{foreignMember.EventID(), room2.ID, room1.ID} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("expected error %q to contain %q", err.Error(), want)
+			}
+		}
+	})
+}
+
 func stateEventOfType(t *testing.T, room *test.Room, eventType string) *rstypes.HeaderedEvent {
 	t.Helper()
 	for _, ev := range room.Events() {
@@ -130,7 +249,7 @@ func stateEventOfType(t *testing.T, room *test.Room, eventType string) *rstypes.
 	return nil
 }
 
-func storeEventForSuppliedState(t *testing.T, ctx context.Context, db storage.Database, ev *rstypes.HeaderedEvent) {
+func storeEventForSuppliedState(t *testing.T, ctx context.Context, db storage.Database, ev *rstypes.HeaderedEvent) *rstypes.RoomInfo {
 	t.Helper()
 	roomInfo, err := db.GetOrCreateRoomInfo(ctx, ev.PDU)
 	if err != nil {
@@ -147,4 +266,5 @@ func storeEventForSuppliedState(t *testing.T, ctx context.Context, db storage.Da
 	if _, _, err = db.StoreEvent(ctx, ev.PDU, roomInfo, eventTypeNID, eventStateKeyNID, nil, false); err != nil {
 		t.Fatal(err)
 	}
+	return roomInfo
 }

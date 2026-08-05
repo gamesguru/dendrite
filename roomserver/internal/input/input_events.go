@@ -120,6 +120,7 @@ func (r *Inputer) processRoomEvent(
 	if rerr != nil {
 		return fmt.Errorf("r.DB.RoomInfo: %w", rerr)
 	}
+	roomExisted := roomInfo != nil
 	isCreateEvent := event.Type() == spec.MRoomCreate && event.StateKeyEquals("")
 	// A state-backed event may be the first event we process for a room during
 	// a federated join; the supplied state contains the create event needed to
@@ -132,6 +133,11 @@ func (r *Inputer) processRoomEvent(
 		roomInfo, infoErr = r.roomInfoFromSuppliedState(ctx, input)
 		if infoErr != nil {
 			return fmt.Errorf("r.roomInfoFromSuppliedState: %w", infoErr)
+		}
+	}
+	if roomExisted && input.HasState {
+		if validateErr := r.checkSuppliedStateEventRooms(ctx, input, roomInfo); validateErr != nil {
+			return fmt.Errorf("r.checkSuppliedStateEventRooms: %w", validateErr)
 		}
 	}
 	sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
@@ -339,10 +345,10 @@ func (r *Inputer) processRoomEvent(
 	}
 
 	var softfail bool
-	if input.Kind == api.KindNew && !isCreateEvent && !input.HasState {
+	if input.Kind == api.KindNew && !isCreateEvent && roomExisted {
 		// Check that the event passes authentication checks based on the
 		// current room state.
-		softfail, err = helpers.CheckForSoftFail(ctx, r.DB, roomInfo, headered, input.StateEventIDs, r.Queryer)
+		softfail, err = helpers.CheckForSoftFail(ctx, r.DB, roomInfo, headered, nil, r.Queryer)
 		if err != nil {
 			logger.WithError(err).Warn("Error authing soft-failed event")
 		}
@@ -564,6 +570,39 @@ func (r *Inputer) processRoomEvent(
 }
 
 func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.InputRoomEvent) (*types.RoomInfo, error) {
+	stateEvents, err := r.suppliedStateEvents(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var roomInfo *types.RoomInfo
+	for _, stateEvent := range stateEvents {
+		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
+			roomInfo, err = r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
+			if err != nil {
+				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)
+			}
+		}
+	}
+	if roomInfo != nil {
+		return roomInfo, nil
+	}
+	return nil, fmt.Errorf("supplied state for event %s does not include an m.room.create event", input.Event.EventID())
+}
+
+func (r *Inputer) checkSuppliedStateEventRooms(ctx context.Context, input *api.InputRoomEvent, roomInfo *types.RoomInfo) error {
+	stateEvents, err := r.DB.EventsFromIDs(ctx, roomInfo, input.StateEventIDs)
+	if err != nil {
+		return fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+	}
+	for _, stateEvent := range stateEvents {
+		if stateEvent.PDU.RoomID() != input.Event.RoomID() {
+			return suppliedStateRoomMismatchError(input, stateEvent.PDU)
+		}
+	}
+	return nil
+}
+
+func (r *Inputer) suppliedStateEvents(ctx context.Context, input *api.InputRoomEvent) ([]types.Event, error) {
 	entries, err := r.DB.StateEntriesForEventIDs(ctx, input.StateEventIDs, true)
 	if err != nil {
 		return nil, fmt.Errorf("r.DB.StateEntriesForEventIDs: %w", err)
@@ -576,25 +615,19 @@ func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.Inpu
 	if err != nil {
 		return nil, fmt.Errorf("r.DB.Events: %w", err)
 	}
-	var roomInfo *types.RoomInfo
 	for _, stateEvent := range stateEvents {
 		if stateEvent.PDU.RoomID() != input.Event.RoomID() {
-			return nil, fmt.Errorf(
-				"supplied state event %s is for room %s, not %s",
-				stateEvent.PDU.EventID(), stateEvent.PDU.RoomID().String(), input.Event.RoomID().String(),
-			)
-		}
-		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
-			roomInfo, err = r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
-			if err != nil {
-				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)
-			}
+			return nil, suppliedStateRoomMismatchError(input, stateEvent.PDU)
 		}
 	}
-	if roomInfo != nil {
-		return roomInfo, nil
-	}
-	return nil, fmt.Errorf("supplied state for event %s does not include an m.room.create event", input.Event.EventID())
+	return stateEvents, nil
+}
+
+func suppliedStateRoomMismatchError(input *api.InputRoomEvent, stateEvent gomatrixserverlib.PDU) error {
+	return fmt.Errorf(
+		"supplied state event %s is for room %s, not %s",
+		stateEvent.EventID(), stateEvent.RoomID().String(), input.Event.RoomID().String(),
+	)
 }
 
 // handleRemoteRoomUpgrade updates published rooms and room aliases

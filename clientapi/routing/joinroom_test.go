@@ -94,13 +94,6 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			t.Fatalf("response is not a createRoomResponse: %+v", resp)
 		}
 
-		// Dummy request
-		body := &bytes.Buffer{}
-		req, err := http.NewRequest(http.MethodPost, "/?server_name=test", body)
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		testCases := []struct {
 			name        string
 			device      *uapi.Device
@@ -158,6 +151,10 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
+				req, err := http.NewRequest(http.MethodPost, "/?server_name=test", &bytes.Buffer{})
+				if err != nil {
+					t.Fatal(err)
+				}
 				content, serverNames, resErr := joinRequestContentAndServers(req)
 				if resErr != nil {
 					t.Fatalf("joinRequestContentAndServers returned error: %+v", resErr)

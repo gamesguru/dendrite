@@ -140,19 +140,9 @@ func joinRequestServerNames(req *http.Request) []spec.ServerName {
 	return serverNames
 }
 
-func asyncJoinResponse(roomIDOrAlias string) util.JSONResponse {
-	var roomID string
-	if _, err := spec.NewRoomID(roomIDOrAlias); err == nil {
-		roomID = roomIDOrAlias
-	}
+func asyncJoinResponse(_ string) util.JSONResponse {
 	return util.JSONResponse{
 		Code: http.StatusAccepted,
-		JSON: struct {
-			RoomID  string `json:"room_id,omitempty"`
-			Joining bool   `json:"joining"`
-		}{
-			RoomID:  roomID,
-			Joining: true,
-		},
+		JSON: spec.Unknown("The room join is still in progress."),
 	}
 }
