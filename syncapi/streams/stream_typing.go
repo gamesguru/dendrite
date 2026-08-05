@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/element-hq/dendrite/internal/caching"
 	"github.com/element-hq/dendrite/syncapi/storage"
@@ -21,7 +22,27 @@ func (p *TypingStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	to := p.LatestPosition(ctx)
+	if p.addTypingEvents(req, 0) {
+		return to
+	}
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return to
+		case <-timer.C:
+			return to
+		case <-ticker.C:
+			if p.addTypingEvents(req, 0) {
+				return p.LatestPosition(ctx)
+			}
+		}
+	}
 }
 
 func (p *TypingStreamProvider) IncrementalSync(
@@ -30,7 +51,16 @@ func (p *TypingStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) types.StreamPosition {
+	p.addTypingEvents(req, from)
+	return to
+}
+
+func (p *TypingStreamProvider) addTypingEvents(
+	req *types.SyncRequest,
+	from types.StreamPosition,
+) bool {
 	var err error
+	added := false
 	for roomID, membership := range req.Rooms {
 		if membership != spec.Join {
 			continue
@@ -59,13 +89,14 @@ func (p *TypingStreamProvider) IncrementalSync(
 			})
 			if err != nil {
 				req.Log.WithError(err).Error("json.Marshal failed")
-				return from
+				return added
 			}
 
 			jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
 			req.Response.Rooms.Join[roomID] = jr
+			added = true
 		}
 	}
 
-	return to
+	return added
 }
