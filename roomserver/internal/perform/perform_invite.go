@@ -134,11 +134,13 @@ func (r *Inviter) PerformInvite(
 	}
 
 	signingKey := req.InviteInput.PrivateKey
+	keyID := req.InviteInput.KeyID
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
 		signingKey, err = r.RSAPI.GetOrCreateUserRoomPrivateKey(ctx, req.InviteInput.Inviter, req.InviteInput.RoomID)
 		if err != nil {
 			return err
 		}
+		keyID = gomatrixserverlib.KeyID("ed25519:1")
 		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
 			return err
 		}
@@ -187,7 +189,7 @@ func (r *Inviter) PerformInvite(
 		IsTargetLocal:     isTargetLocal,
 		EventTemplate:     proto,
 		StrippedState:     req.InviteRoomState,
-		KeyID:             req.InviteInput.KeyID,
+		KeyID:             keyID,
 		SigningKey:        signingKey,
 		EventTime:         req.InviteInput.EventTime,
 		MembershipQuerier: &api.MembershipQuerier{Roomserver: r.RSAPI},
