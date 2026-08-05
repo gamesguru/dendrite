@@ -109,6 +109,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: false
       - uses: actions/cache@v4
         # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
         with:
@@ -146,6 +147,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: false
       - uses: actions/cache@v4
         with:
           path: |
@@ -153,7 +155,7 @@ jobs:
             ~/go/pkg/mod
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
+            ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
       - name: Install dependencies x86
         if: ${{ matrix.goarch == '386' }}
         run: sudo apt update && sudo apt-get install -y gcc-multilib
@@ -179,6 +181,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: false
       - uses: actions/cache@v4
         with:
           path: |
@@ -186,7 +189,7 @@ jobs:
             ~/go/pkg/mod
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
+            ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
       - name: Install dependencies
         run: sudo apt update && sudo apt install -y gcc-mingw-w64-x86-64 # install required gcc
       - env:
@@ -242,6 +245,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: false
       - name: Set up gotestfmt
         uses: gotesttools/gotestfmt-action@v2
         with:
@@ -280,7 +284,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
-          cache: true
+          cache: false
       - uses: actions/cache@v4
         with:
           path: |
@@ -310,7 +314,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
-          cache: true
+          cache: false
       - uses: actions/cache@v4
         with:
           path: |
