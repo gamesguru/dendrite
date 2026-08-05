@@ -32,14 +32,14 @@ type QueryState struct {
 
 const pseudoIDRoomKeyID = gomatrixserverlib.KeyID("ed25519:1")
 
-// signedMXIDMapping signs the pseudo-ID to MXID mapping with the user's
+// signedMXIDMapping signs the pseudo-ID to MXID mapping with the server
 // federation key, not the per-room pseudo-ID signing key.
-func signedMXIDMapping(inviter spec.UserID, senderID spec.SenderID, keyID gomatrixserverlib.KeyID, privateKey ed25519.PrivateKey) (*gomatrixserverlib.MXIDMapping, error) {
+func signedMXIDMapping(userID spec.UserID, senderID spec.SenderID, serverName spec.ServerName, keyID gomatrixserverlib.KeyID, privateKey ed25519.PrivateKey) (*gomatrixserverlib.MXIDMapping, error) {
 	mapping := &gomatrixserverlib.MXIDMapping{
 		UserRoomKey: senderID,
-		UserID:      inviter.String(),
+		UserID:      userID.String(),
 	}
-	if err := mapping.Sign(inviter.Domain(), keyID, privateKey); err != nil {
+	if err := mapping.Sign(serverName, keyID, privateKey); err != nil {
 		return nil, err
 	}
 	return mapping, nil
@@ -148,6 +148,13 @@ func (r *Inviter) PerformInvite(
 		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
 	}
 
+	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
+	if err != nil {
+		return err
+	} else if senderID == nil {
+		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
+	}
+
 	signingKey := req.InviteInput.PrivateKey
 	keyID := req.InviteInput.KeyID
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
@@ -159,13 +166,6 @@ func (r *Inviter) PerformInvite(
 		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
 			return err
 		}
-	}
-
-	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
-	if err != nil {
-		return err
-	} else if senderID == nil {
-		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
 	}
 
 	proto := gomatrixserverlib.ProtoEvent{
@@ -181,7 +181,7 @@ func (r *Inviter) PerformInvite(
 	}
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
 		var mapping *gomatrixserverlib.MXIDMapping
-		mapping, err = signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
+		mapping, err = signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter.Domain(), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
 		if err != nil {
 			return err
 		}

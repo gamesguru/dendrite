@@ -38,7 +38,7 @@ func TestPseudoIDInviteSignatureKeyIDs(t *testing.T) {
 	}
 
 	inviterSenderID := spec.SenderIDFromPseudoIDKey(roomKey)
-	mapping, err := signedMXIDMapping(*inviter, inviterSenderID, federationKeyID, federationKey)
+	mapping, err := signedMXIDMapping(*inviter, inviterSenderID, inviter.Domain(), federationKeyID, federationKey)
 	if err != nil {
 		t.Fatal(err)
 	}

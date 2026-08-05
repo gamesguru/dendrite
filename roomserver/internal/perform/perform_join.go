@@ -282,13 +282,8 @@ func (r *Joiner) performJoinRoomByID(
 			return "", "", err
 		}
 
-		mapping := &gomatrixserverlib.MXIDMapping{
-			UserRoomKey: spec.SenderIDFromPseudoIDKey(pseudoIDKey),
-			UserID:      userID.String(),
-		}
-
-		// Sign the mapping with the server identity
-		if err = mapping.Sign(identity.ServerName, identity.KeyID, identity.PrivateKey); err != nil {
+		mapping, err := signedMXIDMapping(*userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
+		if err != nil {
 			return "", "", err
 		}
 		req.Content["mxid_mapping"] = mapping
@@ -296,7 +291,7 @@ func (r *Joiner) performJoinRoomByID(
 		// sign the event with the pseudo ID key
 		identity = fclient.SigningIdentity{
 			ServerName: spec.ServerName(spec.SenderIDFromPseudoIDKey(pseudoIDKey)),
-			KeyID:      "ed25519:1",
+			KeyID:      pseudoIDRoomKeyID,
 			PrivateKey: pseudoIDKey,
 		}
 	}
