@@ -86,10 +86,12 @@ func (s *OutputTypingEventConsumer) onMessage(ctx context.Context, msgs []*nats.
 
 	var typingPos types.StreamPosition
 	if typing {
-		expiry := time.Now().Add(time.Duration(timeout) * time.Millisecond)
-		typingPos = types.StreamPosition(
-			s.eduCache.AddTypingUser(userID, roomID, &expiry),
-		)
+		var expiry *time.Time
+		if timeout > 0 {
+			expireTime := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+			expiry = &expireTime
+		}
+		typingPos = types.StreamPosition(s.eduCache.AddTypingUser(userID, roomID, expiry))
 	} else {
 		typingPos = types.StreamPosition(
 			s.eduCache.RemoveUser(userID, roomID),
