@@ -337,7 +337,9 @@ func (c *Dendrite) Verify(configErrs *ConfigErrors) {
 func (c *Dendrite) Wiring() {
 	if c.FederationAPI.KeyPerspectives == nil && len(c.Global.KeyPerspectives) > 0 {
 		c.FederationAPI.KeyPerspectives = c.Global.KeyPerspectives
-		c.FederationAPI.PreferDirectFetch = c.Global.PreferDirectFetch
+		if !c.FederationAPI.preferDirectFetchSet {
+			c.FederationAPI.PreferDirectFetch = c.Global.PreferDirectFetch
+		}
 	}
 
 	c.Global.JetStream.Matrix = &c.Global

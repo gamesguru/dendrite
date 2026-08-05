@@ -47,9 +47,27 @@ type FederationAPI struct {
 	// Should we prefer direct key fetches over perspective ones?
 	PreferDirectFetch bool `yaml:"prefer_direct_fetch"`
 
+	preferDirectFetchSet bool
+
 	// Deny/Allow lists used for restricting request scopes.
 	DenyNetworkCIDRs  []string `yaml:"deny_networks"`
 	AllowNetworkCIDRs []string `yaml:"allow_networks"`
+}
+
+func (c *FederationAPI) UnmarshalYAML(unmarshal func(any) error) error {
+	var keys map[interface{}]interface{}
+	if err := unmarshal(&keys); err != nil {
+		return err
+	}
+
+	type federationAPI FederationAPI
+	raw := federationAPI(*c)
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	*c = FederationAPI(raw)
+	_, c.preferDirectFetchSet = keys["prefer_direct_fetch"]
+	return nil
 }
 
 func (c *FederationAPI) Defaults(opts DefaultOpts) {

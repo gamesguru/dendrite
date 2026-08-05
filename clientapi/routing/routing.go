@@ -73,12 +73,13 @@ func joinRoomByIDOrAliasWithTimeout(
 			req, device, rsAPI, userAPI, roomIDOrAlias, joinCtx,
 		), nil
 	})
+	timeout := time.NewTimer(joinHTTPTimeout)
+	defer timeout.Stop()
 	select {
 	case resp := <-result:
 		sf.Forget(roomIDOrAlias + device.UserID)
 		return resp.Val.(util.JSONResponse)
-	case <-time.After(joinHTTPTimeout):
-		sf.Forget(roomIDOrAlias + device.UserID)
+	case <-timeout.C:
 		return asyncJoinResponse(roomIDOrAlias)
 	}
 }
