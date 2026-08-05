@@ -125,6 +125,12 @@ func (r *Inviter) PerformInvite(
 	info, err := r.DB.RoomInfo(ctx, req.InviteInput.RoomID.String())
 	if err != nil {
 		return err
+	} else if info == nil {
+		return fmt.Errorf("room %s not found", req.InviteInput.RoomID)
+	}
+
+	if !r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Inviter.Domain()) {
+		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
 	}
 
 	signingKey := req.InviteInput.PrivateKey
@@ -169,10 +175,6 @@ func (r *Inviter) PerformInvite(
 
 	if err = proto.SetContent(content); err != nil {
 		return err
-	}
-
-	if !r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Inviter.Domain()) {
-		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
 	}
 
 	isTargetLocal := r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Invitee.Domain())

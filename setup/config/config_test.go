@@ -68,6 +68,34 @@ global:
 	}
 }
 
+func TestFederationAPIKeyPerspectivesEmptyOverridesGlobal(t *testing.T) {
+	var cfg Dendrite
+	cfg.Defaults(DefaultOpts{
+		Generate:       false,
+		SingleDatabase: true,
+	})
+	if err := yaml.Unmarshal([]byte(`
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+federation_api:
+  key_perspectives: []
+`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Wiring()
+
+	if cfg.FederationAPI.KeyPerspectives == nil {
+		t.Fatal("expected federation key perspectives to remain explicitly set")
+	}
+	if got := len(cfg.FederationAPI.KeyPerspectives); got != 0 {
+		t.Fatalf("expected empty federation key perspectives override, got %d", got)
+	}
+}
+
 const testConfig = `
 version: 2
 global:

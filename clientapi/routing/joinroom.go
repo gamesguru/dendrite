@@ -132,13 +132,17 @@ func JoinRoomByIDOrAlias(
 	timer := time.NewTimer(time.Second * 20)
 	select {
 	case <-timer.C:
+		var roomID string
+		if _, err := spec.NewRoomID(roomIDOrAlias); err == nil {
+			roomID = roomIDOrAlias
+		}
 		return util.JSONResponse{
 			Code: http.StatusAccepted,
 			JSON: struct {
-				RoomID  string `json:"room_id"`
+				RoomID  string `json:"room_id,omitempty"`
 				Joining bool   `json:"joining"`
 			}{
-				RoomID:  roomIDOrAlias,
+				RoomID:  roomID,
 				Joining: true,
 			},
 		}
