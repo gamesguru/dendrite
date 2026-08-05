@@ -111,7 +111,8 @@ jobs:
           go-version-file: "go.mod"
           cache: false
       - uses: actions/cache@v4
-        # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
+        # Disable setup-go's built-in cache so this manual cache is the only
+        # writer for the Go build and module caches in this job.
         with:
           path: |
             ~/.cache/go-build

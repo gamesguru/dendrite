@@ -87,6 +87,7 @@ func (s *OutputTypingEventConsumer) onMessage(ctx context.Context, msgs []*nats.
 	var typingPos types.StreamPosition
 	if typing {
 		var expiry *time.Time
+		// A missing or non-positive timeout uses the cache's default typing timeout.
 		if timeout > 0 {
 			expireTime := time.Now().Add(time.Duration(timeout) * time.Millisecond)
 			expiry = &expireTime

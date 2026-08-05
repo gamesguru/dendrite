@@ -30,6 +30,19 @@ type QueryState struct {
 	querier api.QuerySenderIDAPI
 }
 
+const pseudoIDRoomKeyID = gomatrixserverlib.KeyID("ed25519:1")
+
+func signedMXIDMapping(inviter spec.UserID, senderID spec.SenderID, keyID gomatrixserverlib.KeyID, privateKey ed25519.PrivateKey) (*gomatrixserverlib.MXIDMapping, error) {
+	mapping := &gomatrixserverlib.MXIDMapping{
+		UserRoomKey: senderID,
+		UserID:      inviter.String(),
+	}
+	if err := mapping.Sign(inviter.Domain(), keyID, privateKey); err != nil {
+		return nil, err
+	}
+	return mapping, nil
+}
+
 func (q *QueryState) GetAuthEvents(ctx context.Context, event gomatrixserverlib.PDU) (gomatrixserverlib.AuthEventProvider, error) {
 	authEventIDs := event.AuthEventIDs()
 	if gomatrixserverlib.MustGetRoomVersion(event.Version()).DomainlessRoomIDs() {
@@ -140,7 +153,7 @@ func (r *Inviter) PerformInvite(
 		if err != nil {
 			return err
 		}
-		keyID = gomatrixserverlib.KeyID("ed25519:1")
+		keyID = pseudoIDRoomKeyID
 		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
 			return err
 		}
@@ -165,11 +178,8 @@ func (r *Inviter) PerformInvite(
 		IsDirect:   req.InviteInput.IsDirect,
 	}
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
-		mapping := &gomatrixserverlib.MXIDMapping{
-			UserRoomKey: spec.SenderIDFromPseudoIDKey(signingKey),
-			UserID:      req.InviteInput.Inviter.String(),
-		}
-		if err = mapping.Sign(req.InviteInput.Inviter.Domain(), req.InviteInput.KeyID, req.InviteInput.PrivateKey); err != nil {
+		mapping, err := signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
+		if err != nil {
 			return err
 		}
 		content.MXIDMapping = mapping

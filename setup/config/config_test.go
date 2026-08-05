@@ -160,7 +160,7 @@ federation_api:
 			cfg.Wiring()
 
 			if got := len(cfg.FederationAPI.KeyPerspectives); got != 1 {
-				t.Fatalf("expected global key perspectives to be copied, got %d", got)
+				t.Fatalf("expected 1 federation key perspective, got %d", got)
 			}
 			if got := cfg.FederationAPI.PreferDirectFetch; got != tc.want {
 				t.Fatalf("expected federation prefer_direct_fetch %v, got %v", tc.want, got)

@@ -36,11 +36,8 @@ func TestPseudoIDInviteSignatureKeyIDs(t *testing.T) {
 	}
 
 	inviterSenderID := spec.SenderIDFromPseudoIDKey(roomKey)
-	mapping := &gomatrixserverlib.MXIDMapping{
-		UserRoomKey: inviterSenderID,
-		UserID:      inviter.String(),
-	}
-	if err = mapping.Sign(inviter.Domain(), federationKeyID, federationKey); err != nil {
+	mapping, err := signedMXIDMapping(*inviter, inviterSenderID, federationKeyID, federationKey)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := mapping.Signatures[inviter.Domain()][federationKeyID]; !ok {
