@@ -127,6 +127,13 @@ func (r *Inputer) processRoomEvent(
 	if roomInfo == nil && !isCreateEvent && !input.HasState {
 		return fmt.Errorf("room %s does not exist for event %s", event.RoomID().String(), event.EventID())
 	}
+	if roomInfo == nil && !isCreateEvent && input.HasState {
+		var infoErr error
+		roomInfo, infoErr = r.roomInfoFromSuppliedState(ctx, input)
+		if infoErr != nil {
+			return fmt.Errorf("r.roomInfoFromSuppliedState: %w", infoErr)
+		}
+	}
 	sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
 	if err != nil {
 		return fmt.Errorf("failed getting userID for sender %q. %w", event.SenderID(), err)
@@ -554,6 +561,31 @@ func (r *Inputer) processRoomEvent(
 	// we've sent output events. Finally, generate a hook call.
 	hooks.Run(hooks.KindNewEventPersisted, headered)
 	return nil
+}
+
+func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.InputRoomEvent) (*types.RoomInfo, error) {
+	entries, err := r.DB.StateEntriesForEventIDs(ctx, input.StateEventIDs, true)
+	if err != nil {
+		return nil, fmt.Errorf("r.DB.StateEntriesForEventIDs: %w", err)
+	}
+	eventNIDs := make([]types.EventNID, 0, len(entries))
+	for _, entry := range entries {
+		eventNIDs = append(eventNIDs, entry.EventNID)
+	}
+	stateEvents, err := r.DB.Events(ctx, input.Event.Version(), eventNIDs)
+	if err != nil {
+		return nil, fmt.Errorf("r.DB.Events: %w", err)
+	}
+	for _, stateEvent := range stateEvents {
+		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
+			roomInfo, err := r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
+			if err != nil {
+				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)
+			}
+			return roomInfo, nil
+		}
+	}
+	return nil, fmt.Errorf("supplied state for event %s does not include an m.room.create event", input.Event.EventID())
 }
 
 // handleRemoteRoomUpgrade updates published rooms and room aliases

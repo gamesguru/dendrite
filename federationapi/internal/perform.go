@@ -205,9 +205,6 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	if response == nil {
 		return fmt.Errorf("Received nil response from gomatrixserverlib.PerformJoin")
 	}
-	if _, err = r.rsAPI.AssignRoomNID(ctx, *room, response.JoinEvent.Version()); err != nil {
-		return fmt.Errorf("AssignRoomNID: failed to assign joined room version: %w", err)
-	}
 
 	// We need to immediately update our list of joined hosts for this room now as we are technically
 	// joined. We must do this synchronously: we cannot rely on the roomserver output events as they
