@@ -22,55 +22,37 @@ import (
 )
 
 func JoinRoomByIDOrAlias(
-	req *http.Request,
+	joinCtx context.Context,
 	device *api.Device,
 	rsAPI roomserverAPI.ClientRoomserverAPI,
 	profileAPI api.ClientUserAPI,
 	roomIDOrAlias string,
-	joinCtx context.Context,
+	content map[string]interface{},
+	serverNames []spec.ServerName,
 ) util.JSONResponse {
 	// Prepare to ask the roomserver to perform the room join.
+	if content == nil {
+		content = map[string]interface{}{}
+	}
 	joinReq := roomserverAPI.PerformJoinRequest{
 		RoomIDOrAlias: roomIDOrAlias,
 		UserID:        device.UserID,
 		IsGuest:       device.AccountType == api.AccountTypeGuest,
-		Content:       map[string]interface{}{},
+		Content:       content,
+		ServerNames:   serverNames,
 	}
-
-	// Check to see if any ?via= or ?server_name= query parameters
-	// were given in the request.
-	if serverNames, ok := req.URL.Query()["via"]; ok {
-		for _, serverName := range serverNames {
-			joinReq.ServerNames = append(
-				joinReq.ServerNames,
-				spec.ServerName(serverName),
-			)
-		}
-	} else if serverNames, ok := req.URL.Query()["server_name"]; ok {
-		for _, serverName := range serverNames {
-			joinReq.ServerNames = append(
-				joinReq.ServerNames,
-				spec.ServerName(serverName),
-			)
-		}
-	}
-
-	// If content was provided in the request then include that
-	// in the request. It'll get used as a part of the membership
-	// event content.
-	_ = httputil.UnmarshalJSONRequest(req, &joinReq.Content)
 
 	// Work out our localpart for the client profile request.
 
 	// Request our profile content to populate the request content with.
-	profile, err := profileAPI.QueryProfile(req.Context(), device.UserID)
+	profile, err := profileAPI.QueryProfile(joinCtx, device.UserID)
 
 	switch err {
 	case nil:
 		joinReq.Content["displayname"] = profile.DisplayName
 		joinReq.Content["avatar_url"] = profile.AvatarURL
 	case appserviceAPI.ErrProfileNotExists:
-		util.GetLogger(req.Context()).Error("Unable to query user profile, no profile found.")
+		util.GetLogger(joinCtx).Error("Unable to query user profile, no profile found.")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.Unknown("Unable to query user profile, no profile found."),
@@ -118,6 +100,24 @@ func JoinRoomByIDOrAlias(
 			JSON: spec.InternalServerError{},
 		}
 	}
+}
+
+func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []spec.ServerName) {
+	content := map[string]interface{}{}
+	_ = httputil.UnmarshalJSONRequest(req, &content)
+
+	var serverNames []spec.ServerName
+	if via, ok := req.URL.Query()["via"]; ok {
+		for _, serverName := range via {
+			serverNames = append(serverNames, spec.ServerName(serverName))
+		}
+	} else if queryServerNames, ok := req.URL.Query()["server_name"]; ok {
+		for _, serverName := range queryServerNames {
+			serverNames = append(serverNames, spec.ServerName(serverName))
+		}
+	}
+
+	return content, serverNames
 }
 
 func asyncJoinResponse(roomIDOrAlias string) util.JSONResponse {

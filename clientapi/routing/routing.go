@@ -63,21 +63,23 @@ func joinRoomByIDOrAliasWithTimeout(
 	userAPI userapi.ClientUserAPI,
 	roomIDOrAlias string,
 ) util.JSONResponse {
-	result := sf.DoChan(roomIDOrAlias+device.UserID, func() (any, error) {
+	key := roomIDOrAlias + device.UserID
+	content, serverNames := joinRequestContentAndServers(req)
+	result := sf.DoChan(key, func() (any, error) {
+		defer sf.Forget(key)
 		// Use a service-owned context so the join can continue after returning
 		// 202, but bound it so a wedged federation request cannot pin this key
 		// forever.
 		joinCtx, cancel := context.WithTimeout(context.Background(), joinBackgroundTimeout)
 		defer cancel()
 		return JoinRoomByIDOrAlias(
-			req, device, rsAPI, userAPI, roomIDOrAlias, joinCtx,
+			joinCtx, device, rsAPI, userAPI, roomIDOrAlias, content, serverNames,
 		), nil
 	})
 	timeout := time.NewTimer(joinHTTPTimeout)
 	defer timeout.Stop()
 	select {
 	case resp := <-result:
-		sf.Forget(roomIDOrAlias + device.UserID)
 		return resp.Val.(util.JSONResponse)
 	case <-timeout.C:
 		return asyncJoinResponse(roomIDOrAlias)

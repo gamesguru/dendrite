@@ -133,6 +133,13 @@ func (r *Inviter) PerformInvite(
 		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
 	}
 
+	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
+	if err != nil {
+		return err
+	} else if senderID == nil {
+		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
+	}
+
 	signingKey := req.InviteInput.PrivateKey
 	keyID := req.InviteInput.KeyID
 	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
@@ -144,13 +151,6 @@ func (r *Inviter) PerformInvite(
 		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
 			return err
 		}
-	}
-
-	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
-	if err != nil {
-		return err
-	} else if senderID == nil {
-		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
 	}
 
 	proto := gomatrixserverlib.ProtoEvent{
