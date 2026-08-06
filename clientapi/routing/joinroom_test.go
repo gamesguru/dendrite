@@ -208,7 +208,7 @@ func TestJoinRoomSlowBodyReturnsAsyncResponse(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("expected slow body to return HTTP 202, got %+v", resp)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("slow body timeout took too long: %s", elapsed)
 	}
 }
