@@ -209,9 +209,13 @@ jobs:
               continue
             fi
             for COMPLEMENT_REPO in "${GITHUB_REPOSITORY_OWNER}/complement" "matrix-org/complement"; do
-              if wget -O - "https://github.com/$COMPLEMENT_REPO/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement; then
+              CANDIDATE_DIR="$(mktemp -d)"
+              if wget -O - "https://github.com/$COMPLEMENT_REPO/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C "$CANDIDATE_DIR"; then
+                rm -rf complement
+                mv "$CANDIDATE_DIR" complement
                 exit 0
               fi
+              rm -rf "$CANDIDATE_DIR"
             done
           done
           echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement or matrix-org/complement" >&2

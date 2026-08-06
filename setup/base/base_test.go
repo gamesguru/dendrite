@@ -106,3 +106,33 @@ func TestLandingPage_UnixSocket(t *testing.T) {
 	// Using .String() for user friendly output
 	assert.Equal(t, expectedRes.String(), buf.String(), "response mismatch")
 }
+
+func TestLandingPage_ZeroValueRouters(t *testing.T) {
+	tmpl := template.Must(template.ParseFS(staticContent, "static/*.gotmpl"))
+	expectedRes := &bytes.Buffer{}
+	err := tmpl.ExecuteTemplate(expectedRes, "index.gotmpl", map[string]string{
+		"Version": internal.VersionString(),
+	})
+	assert.NoError(t, err)
+
+	processCtx := process.NewProcessContext()
+	cfg := config.Dendrite{}
+	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+
+	s := httptest.NewServer(nil)
+	s.Close()
+
+	address, err := config.HTTPAddress(s.URL)
+	assert.NoError(t, err)
+	go basepkg.SetupAndServeHTTP(processCtx, &cfg, httputil.Routers{}, address, nil, nil)
+	time.Sleep(time.Millisecond * 10)
+
+	resp, err := s.Client().Get(s.URL + "/_matrix/static/")
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	buf := &bytes.Buffer{}
+	_, err = buf.ReadFrom(resp.Body)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedRes.String(), buf.String(), "response mismatch")
+}

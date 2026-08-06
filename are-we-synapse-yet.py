@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Summarize Dendrite TAP results as coarse Synapse parity percentages."""
 
 from __future__ import division
 import argparse
@@ -123,6 +124,7 @@ re_testname = re.compile(r"^(not )?ok [0-9]+ ([^#]+)")
 # Returns a dict like:
 # { name: "...", ok: True }
 def parse_test_line(line):
+    """Parse a TAP result line into a test name and pass/fail flag."""
     if not line.startswith("ok ") and not line.startswith("not ok "):
         return
     re_match = re_testname.match(line)
@@ -156,6 +158,7 @@ def parse_test_line(line):
 #    ✓ POST /register downcases capitals in usernames
 #    ...
 def print_stats(header_name, gid_to_tests, gid_to_name, verbose):
+    """Print aggregate and per-group test stats for one result section."""
     ci = os.getenv("CI") # When running from GHA, this groups the subsections
     subsections = [] # Registration: 100% (13/13 tests)
     subsection_test_names = {} # 'subsection name': ["✓ Test 1", "✓ Test 2", "× Test 3"]
@@ -195,6 +198,7 @@ def print_stats(header_name, gid_to_tests, gid_to_name, verbose):
     print("")
 
 def main(results_tap_path, verbose):
+    """Load mappings and TAP results, then print grouped parity summaries."""
     # Load up test mappings
     test_name_to_group_id = {}
     fed_tests = set()
