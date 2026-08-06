@@ -201,25 +201,23 @@ jobs:
           # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
           #    (GITHUB_BASE_REF for pull requests).
           # 3. Use the default complement branch ("main").
-          # 4. For each candidate branch, prefer the current repository owner's
-          #    fork first, then fall back to upstream. This preserves branch
-          #    priority so upstream/<matching-branch> beats fork/main.
+          # 4. Only use the current repository owner's complement fork.
+          #    If none of the candidate branches exist there, fail loudly.
           for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "main"; do
             # Skip empty branch names and merge commits.
             if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
               continue
             fi
-            for COMPLEMENT_REPO in "${GITHUB_REPOSITORY_OWNER}/complement" "matrix-org/complement"; do
-              CANDIDATE_DIR="$(mktemp -d)"
-              if wget -O - "https://github.com/$COMPLEMENT_REPO/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C "$CANDIDATE_DIR"; then
-                rm -rf complement
-                mv "$CANDIDATE_DIR" complement
-                exit 0
-              fi
-              rm -rf "$CANDIDATE_DIR"
-            done
+            CANDIDATE_DIR="$(mktemp -d)"
+            if wget -O - "https://github.com/${GITHUB_REPOSITORY_OWNER}/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C "$CANDIDATE_DIR"; then
+              rm -rf complement
+              mv "$CANDIDATE_DIR" complement
+              echo "Using Complement from ${GITHUB_REPOSITORY_OWNER}/complement branch ${BRANCH_NAME}" >&2
+              exit 0
+            fi
+            rm -rf "$CANDIDATE_DIR"
           done
-          echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement or matrix-org/complement after trying branch matches and explicit main fallback" >&2
+          echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement after trying \$GITHUB_HEAD_REF, \$GITHUB_BASE_REF, \${GITHUB_REF#refs/heads/}, and main" >&2
           exit 1
       # Build initial Dendrite image
       - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
