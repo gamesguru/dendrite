@@ -518,7 +518,8 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
-		if a.State == nil && a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil {
+		emptyEphemeral := a.Ephemeral == nil || len(a.Ephemeral.Events) == 0
+		if a.State == nil && emptyEphemeral && a.AccountData == nil && a.Timeline == nil && a.Summary == nil {
 			a.UnreadNotifications = nil
 		}
 	}

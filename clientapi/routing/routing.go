@@ -63,10 +63,49 @@ func joinRoomByIDOrAliasWithTimeout(
 	userAPI userapi.ClientUserAPI,
 	roomIDOrAlias string,
 ) util.JSONResponse {
-	content, serverNames, resErr := joinRequestContentAndServers(req)
-	if resErr != nil {
-		return *resErr
+	return joinRoomByIDOrAliasWithTimeoutDuration(
+		req, device, sf, rsAPI, userAPI, roomIDOrAlias, joinHTTPTimeout,
+	)
+}
+
+func joinRoomByIDOrAliasWithTimeoutDuration(
+	req *http.Request,
+	device *userapi.Device,
+	sf *singleflight.Group,
+	rsAPI roomserverAPI.ClientRoomserverAPI,
+	userAPI userapi.ClientUserAPI,
+	roomIDOrAlias string,
+	httpTimeout time.Duration,
+) util.JSONResponse {
+	type parseResult struct {
+		content     map[string]interface{}
+		serverNames []spec.ServerName
+		resErr      *util.JSONResponse
 	}
+	timeout := time.NewTimer(httpTimeout)
+	defer timeout.Stop()
+	parsed := make(chan parseResult, 1)
+	go func() {
+		content, serverNames, resErr := joinRequestContentAndServers(req)
+		parsed <- parseResult{content: content, serverNames: serverNames, resErr: resErr}
+	}()
+
+	var content map[string]interface{}
+	var serverNames []spec.ServerName
+	select {
+	case parse := <-parsed:
+		if parse.resErr != nil {
+			return *parse.resErr
+		}
+		content = parse.content
+		serverNames = parse.serverNames
+	case <-timeout.C:
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return asyncJoinResponse(roomIDOrAlias)
+	}
+
 	serverKey := make([]string, len(serverNames))
 	for i := range serverNames {
 		serverKey[i] = string(serverNames[i])
@@ -82,8 +121,6 @@ func joinRoomByIDOrAliasWithTimeout(
 			joinCtx, device, rsAPI, userAPI, roomIDOrAlias, content, serverNames,
 		), nil
 	})
-	timeout := time.NewTimer(joinHTTPTimeout)
-	defer timeout.Stop()
 	select {
 	case resp := <-result:
 		return resp.Val.(util.JSONResponse)

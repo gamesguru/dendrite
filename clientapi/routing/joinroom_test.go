@@ -3,8 +3,10 @@ package routing
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,4 +186,50 @@ func TestJoinRoomMalformedJSONDoesNotStartJoin(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected malformed JSON to return HTTP 400, got %+v", resp)
 	}
+}
+
+func TestJoinRoomSlowBodyReturnsAsyncResponse(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Body = newBlockingReadCloser()
+
+	start := time.Now()
+	resp := joinRoomByIDOrAliasWithTimeoutDuration(
+		req,
+		&uapi.Device{UserID: "@alice:test"},
+		&singleflight.Group{},
+		nil,
+		nil,
+		"!room:test",
+		10*time.Millisecond,
+	)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("expected slow body to return HTTP 202, got %+v", resp)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("slow body timeout took too long: %s", elapsed)
+	}
+}
+
+type blockingReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingReadCloser() *blockingReadCloser {
+	return &blockingReadCloser{closed: make(chan struct{})}
+}
+
+func (b *blockingReadCloser) Read(_ []byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingReadCloser) Close() error {
+	b.once.Do(func() {
+		close(b.closed)
+	})
+	return nil
 }
