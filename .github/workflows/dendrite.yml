@@ -476,11 +476,11 @@ jobs:
           #    for pull requests, otherwise GITHUB_REF).
           # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
           #    (GITHUB_BASE_REF for pull requests).
-          # 3. Use the default complement branch ("master").
+          # 3. Use the default complement branch ("main").
           # 4. For each candidate branch, prefer the current repository owner's
           #    fork first, then fall back to upstream. This preserves branch
-          #    priority so upstream/<matching-branch> beats fork/master.
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
+          #    priority so upstream/<matching-branch> beats fork/main.
+          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "main"; do
             # Skip empty branch names and merge commits.
             if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
               continue
@@ -495,7 +495,7 @@ jobs:
               rm -rf "$CANDIDATE_DIR"
             done
           done
-          echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement or matrix-org/complement" >&2
+          echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement or matrix-org/complement after trying branch matches and explicit main fallback" >&2
           exit 1
       # Build initial Dendrite image
       - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
