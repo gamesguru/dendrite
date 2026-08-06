@@ -130,42 +130,42 @@ jobs:
         include:
           - label: SQLite native
             cgo: 0
-            room_version: v10
+            room_version: 10
 
           - label: SQLite Cgo
             cgo: 1
-            room_version: v10
+            room_version: 10
 
           - label: PostgreSQL
             postgres: Postgres
             cgo: 0
-            room_version: v10
+            room_version: 10
 
           - label: SQLite native
             cgo: 0
-            room_version: v11
+            room_version: 11
 
           - label: SQLite Cgo
             cgo: 1
-            room_version: v11
+            room_version: 11
 
           - label: PostgreSQL
             postgres: Postgres
             cgo: 0
-            room_version: v11
+            room_version: 11
 
           - label: SQLite native
             cgo: 0
-            room_version: v12
+            room_version: 12
 
           - label: SQLite Cgo
             cgo: 1
-            room_version: v12
+            room_version: 12
 
           - label: PostgreSQL
             postgres: Postgres
             cgo: 0
-            room_version: v12
+            room_version: 12
     steps:
       # Env vars are set file a file given by $GITHUB_PATH. We need both Go 1.17 and GOPATH on env to run Complement.
       # See https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
