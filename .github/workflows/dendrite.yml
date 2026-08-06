@@ -287,7 +287,12 @@ jobs:
           key: ${{ runner.os }}-go-stable-test-race-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-test-race-
-      - run: go test -race -json -v -coverpkg=./... -coverprofile=cover.out $(go list ./... | grep -v /cmd/dendrite*) 2>&1 | gotestfmt -hide all
+      - run: |
+          set -o pipefail
+          PKGS=$(go list ./... | grep -v /cmd/dendrite*)
+          COVERPKGS=$(echo "$PKGS" | tr '\n' ',' | sed 's/,$//')
+          go test -race -json -v -coverpkg="$COVERPKGS" -coverprofile=cover.out $PKGS 2>&1 | gotestfmt -hide all
+        shell: bash
         env:
           POSTGRES_HOST: localhost
           POSTGRES_USER: postgres
