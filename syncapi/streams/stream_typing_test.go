@@ -38,6 +38,34 @@ func TestTypingStreamProviderCompleteSyncWaitsForPendingTyping(t *testing.T) {
 	}
 }
 
+func TestTypingStreamProviderCompleteSyncTimeoutZeroWaitsForPendingTyping(t *testing.T) {
+	const roomID = "!room:test"
+	const userID = "@alice:test"
+
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+	req := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    map[string]string{roomID: spec.Join},
+		Timeout:  0,
+	}
+
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cache.AddTypingUser(userID, roomID, nil)
+	}()
+
+	pos := provider.CompleteSync(context.Background(), nil, req)
+	if pos == 0 {
+		t.Fatal("expected typing stream position to advance")
+	}
+	jr := req.Response.Rooms.Join[roomID]
+	if jr == nil || len(jr.Ephemeral.Events) != 1 {
+		t.Fatalf("expected one typing event, got %+v", jr)
+	}
+}
+
 func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) {
 	const roomID = "!room:test"
 	const userID = "@alice:test"
