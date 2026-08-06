@@ -63,12 +63,12 @@ lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for cha
 			exit 0; \
 		fi; \
 		$(GO) vet $(VETFLAGS) $$dirs; \
-		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs; \
 		$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $$dirs; \
+		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs; \
 	else \
 		$(GO) vet $(VETFLAGS) $(PKGS); \
-		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $(PKGS); \
 		$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS); \
+		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $(PKGS); \
 	fi
 
 .PHONY: build

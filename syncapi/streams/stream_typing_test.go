@@ -37,7 +37,6 @@ func TestTypingStreamProviderCompleteSyncReturnsCurrentTypingOnly(t *testing.T) 
 
 func TestTypingStreamProviderCompleteSyncDoesNotWaitForFutureTyping(t *testing.T) {
 	const roomID = "!room:test"
-	const userID = "@alice:test"
 
 	cache := caching.NewTypingCache()
 	provider := &TypingStreamProvider{EDUCache: cache}
