@@ -48,23 +48,23 @@ jobs:
       image: matrixdotorg/sytest-dendrite:latest
       volumes:
         - ${{ github.workspace }}:/src
-        - ${{ runner.temp }}/go-build-cache:/github/home/.cache/go-build
-        - ${{ runner.temp }}/go-mod-cache:/gopath/pkg/mod
+        - ${{ github.workspace }}/.ci-cache/go-build:/github/home/.cache/go-build
+        - ${{ github.workspace }}/.ci-cache/go-mod:/gopath/pkg/mod
       env:
         POSTGRES: ${{ matrix.postgres && 1}}
         SYTEST_BRANCH: ${{ github.head_ref }}
         RACE_DETECTION: 1
         COVER: 1
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     steps:
       - uses: actions/checkout@v5
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-sytest-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-sytest-

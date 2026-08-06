@@ -82,8 +82,8 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -118,8 +118,8 @@ jobs:
         # writer for the Go build and module caches in this job.
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-unit-
@@ -141,8 +141,8 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     strategy:
       fail-fast: false
       matrix:
@@ -158,8 +158,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
@@ -179,8 +179,8 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     strategy:
       matrix:
         goos: ["windows"]
@@ -195,8 +195,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
@@ -228,8 +228,8 @@ jobs:
     name: Integration tests
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -267,8 +267,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-stable-test-race-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-test-race-
@@ -292,8 +292,8 @@ jobs:
     needs: initial-tests-done
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     steps:
       - uses: actions/checkout@v5
       - name: Setup go
@@ -304,8 +304,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-upgrade-test-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-upgrade-test-
@@ -325,8 +325,8 @@ jobs:
     needs: initial-tests-done
     runs-on: ubuntu-latest
     env:
-      GOCACHE: ${{ runner.temp }}/go-build-cache
-      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     steps:
       - uses: actions/checkout@v5
       - name: Setup go
@@ -337,8 +337,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/go-build-cache
-            ${{ runner.temp }}/go-mod-cache
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
           key: ${{ runner.os }}-go-upgrade-direct-test-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-upgrade-direct-test-
