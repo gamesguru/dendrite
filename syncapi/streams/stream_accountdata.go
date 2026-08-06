@@ -40,6 +40,11 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	if len(req.Response.AccountData.Events) > 0 {
 		return pos
 	}
+	for _, jr := range req.Response.Rooms.Join {
+		if len(jr.AccountData.Events) > 0 {
+			return pos
+		}
+	}
 	return p.waitForAccountData(ctx, req, pos)
 }
 

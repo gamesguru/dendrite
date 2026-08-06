@@ -63,7 +63,7 @@ lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for cha
 			exit 0; \
 		fi; \
 		$(GO) vet $(VETFLAGS) $$dirs; \
-		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs || true; \
+		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs; \
 		$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $$dirs; \
 	else \
 		$(GO) vet $(VETFLAGS) $(PKGS); \
@@ -92,7 +92,8 @@ complement-build: ## Build the Complement Dendrite image
 	$(DOCKER) build --build-arg=CGO=$(COMPLEMENT_CGO) -t $(COMPLEMENT_BASE_IMAGE) -f build/scripts/Complement$(COMPLEMENT_POSTGRES).Dockerfile .
 
 .PHONY: complement-run
-complement-run: ## Run Complement with the image built by complement-build
+complement-run: complement-build ## Run Complement with the image built by complement-build
+	@test -d $(COMPLEMENT_DIR) || (echo "Complement directory not found at $(COMPLEMENT_DIR). Please clone matrix-org/complement." && exit 1)
 	cd $(COMPLEMENT_DIR) && \
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 	go test -v -count=1 -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)

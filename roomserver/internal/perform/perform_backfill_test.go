@@ -24,11 +24,11 @@ func TestPrioritiseBackfillFromEventIDsPrefersMostServers(t *testing.T) {
 		},
 	)
 
-	if got[0] != "$two" {
-		t.Fatalf("expected best from-event first, got %v", got)
-	}
 	if len(got) != len(fromEventIDs) {
 		t.Fatalf("expected %d from-event IDs, got %d", len(fromEventIDs), len(got))
+	}
+	if got[0] != "$two" || got[1] != "$one" || got[2] != "$three" {
+		t.Fatalf("expected best from-event first and others in order, got %v", got)
 	}
 }
 

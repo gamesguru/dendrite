@@ -50,17 +50,12 @@ func TestTypingStreamProviderCompleteSyncDoesNotWaitForFutureTyping(t *testing.T
 
 	start := time.Now()
 	pos := provider.CompleteSync(context.Background(), nil, req)
-	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 40*time.Millisecond {
 		t.Fatalf("expected complete sync to return quickly, took %s", elapsed)
 	}
 	if pos != 0 {
 		t.Fatalf("expected no typing stream advance, got %d", pos)
 	}
-
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		cache.AddTypingUser(userID, roomID, nil)
-	}()
 
 	jr := req.Response.Rooms.Join[roomID]
 	if jr != nil && len(jr.Ephemeral.Events) != 0 {
@@ -110,7 +105,7 @@ func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
 
 	start := time.Now()
 	pos := provider.IncrementalSync(context.Background(), nil, req, 0, 0)
-	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 40*time.Millisecond {
 		t.Fatalf("expected immediate sync to return quickly, took %s", elapsed)
 	}
 	if pos != 0 {

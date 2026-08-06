@@ -599,7 +599,6 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error {
 	ctx := context.Background() // we've got the keys, don't time out when persisting them to the database.
 	keys := make([]api.DeviceMessage, len(res.Devices))
-	existingKeys := make([]api.DeviceMessage, len(res.Devices))
 	for i, device := range res.Devices {
 		keyJSON, err := json.Marshal(device.Keys)
 		if err != nil {
@@ -616,20 +615,6 @@ func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error
 				KeyJSON:     keyJSON,
 			},
 		}
-		existingKeys[i] = api.DeviceMessage{
-			Type: api.TypeDeviceKeyUpdate,
-			DeviceKeys: &api.DeviceKeys{
-				UserID:   res.UserID,
-				DeviceID: device.DeviceID,
-			},
-		}
-	}
-	// fetch what keys we had already and only emit changes
-	if err := u.db.DeviceKeysJSON(ctx, existingKeys); err != nil {
-		// non-fatal, log and continue
-		util.GetLogger(ctx).WithError(err).WithField("user_id", res.UserID).Errorf(
-			"failed to query device keys json for calculating diffs",
-		)
 	}
 
 	err := u.db.StoreRemoteDeviceKeys(ctx, keys, []string{res.UserID})
