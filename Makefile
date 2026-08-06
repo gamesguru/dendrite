@@ -23,6 +23,11 @@ COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
 COMPLEMENT_PACKAGES ?= ./tests/...
+# Cap concurrent homeserver containers so a full run doesn't spin up dozens at
+# once and thrash host memory/swap. Override for a beefier box, e.g.
+# `make complement-run COMPLEMENT_P=4 COMPLEMENT_PARALLEL=4`.
+COMPLEMENT_P ?= 1
+COMPLEMENT_PARALLEL ?= 2
 DENDRITE_INSTALL_PATH ?= /usr/local/bin/dendrite
 DENDRITE_SYSTEMD_SERVICE ?= dendrite
 SUDO ?= sudo
@@ -109,7 +114,7 @@ complement-run: ## Run Complement, building the image first
 	$(MAKE) complement-build
 	cd $(COMPLEMENT_DIR) && \
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-	go test -v -count=1 -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)
+	go test -v -count=1 -p=$(COMPLEMENT_P) -parallel=$(COMPLEMENT_PARALLEL) -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies
