@@ -81,3 +81,6 @@ go.work*
 
 # helm chart
 helm/dendrite/charts/
+
+# new ignores
+coverage.out

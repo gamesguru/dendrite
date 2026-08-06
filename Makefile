@@ -12,6 +12,7 @@ VETFLAGS ?=
 STATICCHECKFLAGS ?=
 GOLANGCI_LINTFLAGS ?=
 DENDRITE_TEST_SKIP_NODB ?= 1
+DIFF_BASE ?= origin/main
 PKGS := ./...
 LIBPKGS = $(shell $(GO) list ./... | grep -v '/cmd/')
 COVERPROFILE ?= coverage.out
@@ -24,8 +25,8 @@ help: ## Show available targets
 	@grep -hE '^[a-zA-Z0-9_\/-]+:[[:space:]]*## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":[[:space:]]*## "}; {printf "$(STYLE_CYAN)%-18s$(STYLE_RESET) %s\n", $$1, $$2}'
 
-.PHONY: fmt
-fmt: ## Format Go source files
+.PHONY: format
+format: ## Format Go source files
 	$(GO) fmt $(PKGS)
 
 .PHONY: test
@@ -46,10 +47,25 @@ cov: ## Run library package tests with coverage and print a summary
 	$(GO) tool cover -func=$(COVERPROFILE)
 
 .PHONY: lint
-lint: ## Run vet, staticcheck, and golangci-lint
-	$(GO) vet $(VETFLAGS) $(PKGS)
-	$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $(PKGS)
-	$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS)
+lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for changed packages only
+	@set -euo pipefail; \
+	if [ -n "$(strip $(diff))" ]; then \
+		dirs="$$(git diff --name-only $(DIFF_BASE) -- '*.go' \
+			| xargs -r dirname \
+			| sort -u \
+			| sed 's#^\.$$#./#; s#^[^.].*#./&#')"; \
+		if [ -z "$$dirs" ]; then \
+			echo "No changed Go packages against $(DIFF_BASE)"; \
+			exit 0; \
+		fi; \
+		$(GO) vet $(VETFLAGS) $$dirs; \
+		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs || true; \
+		$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $$dirs; \
+	else \
+		$(GO) vet $(VETFLAGS) $(PKGS); \
+		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $(PKGS); \
+		$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS); \
+	fi
 
 .PHONY: build
 build: ## Build all packages
