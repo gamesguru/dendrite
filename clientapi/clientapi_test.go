@@ -2347,6 +2347,79 @@ func TestCreateRoomInvite(t *testing.T) {
 	})
 }
 
+func TestCreateRoomNameTopicDefaultRoomVersionV11(t *testing.T) {
+	alice := test.NewUser(t)
+
+	cfg, processCtx, close := testrig.CreateConfig(t, test.DBTypeSQLite)
+	cfg.RoomServer.DefaultRoomVersion = gomatrixserverlib.RoomVersionV11
+	routers := httputil.NewRouters()
+	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+	defer close()
+	natsInstance := jetstream.NATSInstance{}
+	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
+
+	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+	rsAPI.SetFederationAPI(nil, nil)
+	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+
+	accessTokens := map[*test.User]userDevice{
+		alice: {},
+	}
+	createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+
+	reqBody := map[string]any{
+		"name":  "My Room",
+		"topic": "Testing topic",
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/createRoom", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+accessTokens[alice].accessToken)
+	routers.Client.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected room creation to be successful, got HTTP %d instead: %s", w.Code, w.Body.String())
+	}
+
+	roomID := gjson.GetBytes(w.Body.Bytes(), "room_id").Str
+	validRoomID, err := spec.NewRoomID(roomID)
+	if err != nil {
+		t.Fatalf("invalid room id %q: %v", roomID, err)
+	}
+
+	roomVersion, err := rsAPI.QueryRoomVersionForRoom(context.Background(), roomID)
+	if err != nil {
+		t.Fatalf("QueryRoomVersionForRoom failed: %v", err)
+	}
+	if roomVersion != gomatrixserverlib.RoomVersionV11 {
+		t.Fatalf("expected room version %q, got %q", gomatrixserverlib.RoomVersionV11, roomVersion)
+	}
+
+	nameEvent, err := rsAPI.CurrentStateEvent(context.Background(), *validRoomID, spec.MRoomName, "")
+	if err != nil {
+		t.Fatalf("CurrentStateEvent name failed: %v", err)
+	}
+	if got := gjson.GetBytes(nameEvent.Content(), "name").Str; got != "My Room" {
+		t.Fatalf("expected room name %q, got %q", "My Room", got)
+	}
+
+	topicEvent, err := rsAPI.CurrentStateEvent(context.Background(), *validRoomID, spec.MRoomTopic, "")
+	if err != nil {
+		t.Fatalf("CurrentStateEvent topic failed: %v", err)
+	}
+	if got := gjson.GetBytes(topicEvent.Content(), "topic").Str; got != "Testing topic" {
+		t.Fatalf("expected room topic %q, got %q", "Testing topic", got)
+	}
+}
+
 func TestReportEvent(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
