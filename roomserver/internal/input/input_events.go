@@ -576,7 +576,7 @@ func (r *Inputer) roomInfoFromSuppliedState(ctx context.Context, input *api.Inpu
 	}
 	var roomInfo *types.RoomInfo
 	for _, stateEvent := range stateEvents {
-		if stateEvent.PDU.Type() == spec.MRoomCreate && stateEvent.PDU.StateKeyEquals("") {
+		if stateEvent.Type() == spec.MRoomCreate && stateEvent.StateKeyEquals("") {
 			roomInfo, err = r.DB.GetOrCreateRoomInfo(ctx, stateEvent.PDU)
 			if err != nil {
 				return nil, fmt.Errorf("r.DB.GetOrCreateRoomInfo: %w", err)
@@ -595,7 +595,7 @@ func (r *Inputer) checkSuppliedStateEventRooms(ctx context.Context, input *api.I
 		return fmt.Errorf("r.DB.EventsFromIDs: %w", err)
 	}
 	for _, stateEvent := range stateEvents {
-		if stateEvent.PDU.RoomID() != input.Event.RoomID() {
+		if stateEvent.RoomID() != input.Event.RoomID() {
 			return suppliedStateRoomMismatchError(input, stateEvent.PDU)
 		}
 	}
@@ -616,7 +616,7 @@ func (r *Inputer) suppliedStateEvents(ctx context.Context, input *api.InputRoomE
 		return nil, fmt.Errorf("r.DB.Events: %w", err)
 	}
 	for _, stateEvent := range stateEvents {
-		if stateEvent.PDU.RoomID() != input.Event.RoomID() {
+		if stateEvent.RoomID() != input.Event.RoomID() {
 			return nil, suppliedStateRoomMismatchError(input, stateEvent.PDU)
 		}
 	}

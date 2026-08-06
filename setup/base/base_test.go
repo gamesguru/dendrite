@@ -63,7 +63,9 @@ func waitForResponse(t *testing.T, client *http.Client, method, url string, body
 
 func readBody(t *testing.T, body io.ReadCloser) string {
 	t.Helper()
-	defer body.Close()
+	defer func() {
+		assert.NoError(t, body.Close())
+	}()
 
 	buf := &bytes.Buffer{}
 	_, err := buf.ReadFrom(body)
