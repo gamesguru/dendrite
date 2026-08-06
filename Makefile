@@ -19,6 +19,10 @@ COVERPROFILE ?= coverage.out
 COMPLEMENT_IMAGE ?= complement-dendrite
 COMPLEMENT_POSTGRES ?=
 COMPLEMENT_CGO ?= 0
+COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
+COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
+COMPLEMENT_DIR ?= complement
+COMPLEMENT_PACKAGES ?= ./tests/...
 
 .PHONY: help
 help: ## Show available targets
@@ -85,7 +89,13 @@ sytest: ## Run Sytest via the repo helper script
 
 .PHONY: complement-build
 complement-build: ## Build the Complement Dendrite image
-	$(DOCKER) build --build-arg=CGO=$(COMPLEMENT_CGO) -t $(COMPLEMENT_IMAGE):$(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO) -f build/scripts/Complement$(COMPLEMENT_POSTGRES).Dockerfile .
+	$(DOCKER) build --build-arg=CGO=$(COMPLEMENT_CGO) -t $(COMPLEMENT_BASE_IMAGE) -f build/scripts/Complement$(COMPLEMENT_POSTGRES).Dockerfile .
+
+.PHONY: complement-run
+complement-run: ## Run Complement with the image built by complement-build
+	cd $(COMPLEMENT_DIR) && \
+	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
+	go test -v -count=1 -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies
