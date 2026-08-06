@@ -35,7 +35,11 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	pos := p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	if len(req.Response.AccountData.Events) == 0 {
+		p.addGlobalAccountDataDirect(ctx, req, "m.push_rules")
+	}
+	return pos
 }
 
 func (p *AccountDataStreamProvider) IncrementalSync(
@@ -108,4 +112,29 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 	}
 
 	return pos
+}
+
+func (p *AccountDataStreamProvider) addGlobalAccountDataDirect(
+	ctx context.Context,
+	req *types.SyncRequest,
+	dataType string,
+) {
+	dataReq := userapi.QueryAccountDataRequest{
+		UserID:   req.Device.UserID,
+		DataType: dataType,
+	}
+	dataRes := userapi.QueryAccountDataResponse{}
+	if err := p.userAPI.QueryAccountData(ctx, &dataReq, &dataRes); err != nil {
+		req.Log.WithError(err).Error("p.userAPI.QueryAccountData failed")
+		return
+	}
+	if globalData, ok := dataRes.GlobalAccountData[dataType]; ok {
+		req.Response.AccountData.Events = append(
+			req.Response.AccountData.Events,
+			synctypes.ClientEvent{
+				Type:    dataType,
+				Content: spec.RawJSON(globalData),
+			},
+		)
+	}
 }
