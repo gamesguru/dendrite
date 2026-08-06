@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -352,7 +351,7 @@ func TestRoomserverConsumerOneInvite(t *testing.T) {
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
 
-		evChan := make(chan struct{})
+		evChan := make(chan struct{}, 1)
 		// create a dummy AS url, handling the events
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var txn consumers.ApplicationServiceTransaction
@@ -457,7 +456,7 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}, test.WithStateKey(bob.ID))
 
 		// create a dummy AS url, handling the events
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := newIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var txn consumers.ApplicationServiceTransaction
 			err := json.NewDecoder(r.Body).Decode(&txn)
 			if err != nil {
@@ -496,7 +495,10 @@ func TestOutputAppserviceEvent(t *testing.T) {
 						if !gjson.GetBytes(rec.Body.Bytes(), "joined."+bob.ID).Exists() {
 							t.Errorf("Bob is not joined to the room")
 						}
-						evChan <- struct{}{}
+						select {
+						case evChan <- struct{}{}:
+						default:
+						}
 					default:
 						t.Fatalf("Unexpected membership: %s", membership)
 					}
@@ -556,11 +558,10 @@ func TestOutputAppserviceEvent(t *testing.T) {
 
 		select {
 		// Pretty generous timeout duration...
-		case <-time.After(time.Millisecond * 1000): // wait for the AS to process the events
+		case <-time.After(5 * time.Second): // allow for race/coverage overhead in CI
 			t.Errorf("Timed out waiting for join event")
 		case <-evChan:
 		}
-		close(evChan)
 	})
 }
 

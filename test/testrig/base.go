@@ -55,6 +55,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		return &cfg, ctx, func() {
 			ctx.ShutdownDendrite()
 			ctx.WaitForShutdown()
+			ctx.WaitForComponentsToFinish()
 			closeDb()
 		}
 	case test.DBTypeSQLite:
@@ -83,6 +84,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		return &cfg, ctx, func() {
 			ctx.ShutdownDendrite()
 			ctx.WaitForShutdown()
+			ctx.WaitForComponentsToFinish()
 			t.Cleanup(func() {}) // removes t.TempDir, where all database files are created
 		}
 	default:

@@ -10,7 +10,7 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-func TestTypingStreamProviderCompleteSyncWaitsForPendingTyping(t *testing.T) {
+func TestTypingStreamProviderCompleteSyncReturnsCurrentTypingOnly(t *testing.T) {
 	const roomID = "!room:test"
 	const userID = "@alice:test"
 
@@ -23,10 +23,7 @@ func TestTypingStreamProviderCompleteSyncWaitsForPendingTyping(t *testing.T) {
 		Timeout:  time.Second,
 	}
 
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		cache.AddTypingUser(userID, roomID, nil)
-	}()
+	cache.AddTypingUser(userID, roomID, nil)
 
 	pos := provider.CompleteSync(context.Background(), nil, req)
 	if pos == 0 {
@@ -38,7 +35,7 @@ func TestTypingStreamProviderCompleteSyncWaitsForPendingTyping(t *testing.T) {
 	}
 }
 
-func TestTypingStreamProviderCompleteSyncTimeoutZeroWaitsForPendingTyping(t *testing.T) {
+func TestTypingStreamProviderCompleteSyncDoesNotWaitForFutureTyping(t *testing.T) {
 	const roomID = "!room:test"
 	const userID = "@alice:test"
 
@@ -51,18 +48,23 @@ func TestTypingStreamProviderCompleteSyncTimeoutZeroWaitsForPendingTyping(t *tes
 		Timeout:  0,
 	}
 
+	start := time.Now()
+	pos := provider.CompleteSync(context.Background(), nil, req)
+	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+		t.Fatalf("expected complete sync to return quickly, took %s", elapsed)
+	}
+	if pos != 0 {
+		t.Fatalf("expected no typing stream advance, got %d", pos)
+	}
+
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		cache.AddTypingUser(userID, roomID, nil)
 	}()
 
-	pos := provider.CompleteSync(context.Background(), nil, req)
-	if pos == 0 {
-		t.Fatal("expected typing stream position to advance")
-	}
 	jr := req.Response.Rooms.Join[roomID]
-	if jr == nil || len(jr.Ephemeral.Events) != 1 {
-		t.Fatalf("expected one typing event, got %+v", jr)
+	if jr != nil && len(jr.Ephemeral.Events) != 0 {
+		t.Fatalf("expected no typing events, got %+v", jr)
 	}
 }
 

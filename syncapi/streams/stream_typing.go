@@ -22,7 +22,9 @@ func (p *TypingStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.waitForTypingEvents(ctx, req, 0, false)
+	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+	p.addTypingEvents(req, 0)
+	return to
 }
 
 func (p *TypingStreamProvider) IncrementalSync(
