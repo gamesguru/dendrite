@@ -361,13 +361,30 @@ func (r *Joiner) performJoinRoomByID(
 		// The room doesn't exist locally. If the room ID looks like it should
 		// be ours then this probably means that we've nuked our database at
 		// some point.
-		if r.Cfg.Matrix.IsLocalServerName(roomID.Domain()) {
+		//
+		// roomID.Domain() panics on v12+ "domainless" room IDs (43-char
+		// base64, no ":domain" suffix), so guard on the same raw-string
+		// check gomatrixserverlib's own parser uses before ever calling it.
+		hasDomain := strings.ContainsRune(roomID.String(), ':')
+		if hasDomain && r.Cfg.Matrix.IsLocalServerName(roomID.Domain()) {
 			// If there are no more server names to try then give up here.
 			// Otherwise we'll try a federated join as normal, since it's quite
 			// possible that the room still exists on other servers.
 			if len(req.ServerNames) == 0 {
 				return "", "", eventutil.ErrRoomNoExists{}
 			}
+		} else if hasDomain && len(req.ServerNames) == 0 {
+			// The room ID belongs to a remote server and the caller didn't
+			// give us any ?server_name= hints (e.g. a bare room ID join with
+			// no via list). Fall back to trying the room ID's own domain,
+			// mirroring what performJoinRoomByAlias already does for alias
+			// joins - otherwise we'd hand performFederatedJoinRoomByID an
+			// empty server list and it would fail outright with a confusing
+			// "0 server(s)" error even though the room may well still exist.
+			// Domainless (v12+) room IDs carry no server hint at all, so
+			// there's nothing to fall back to in that case - the caller
+			// must supply ?server_name=/via for those.
+			req.ServerNames = append(req.ServerNames, roomID.Domain())
 		}
 
 		// Perform a federated room join.
