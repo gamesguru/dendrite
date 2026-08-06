@@ -317,19 +317,34 @@ func (r *Admin) PerformAdminDownloadState(
 		return fmt.Errorf("eventutil.BuildEvent: %w", err)
 	}
 
-	inputReq := &api.InputRoomEventsRequest{
-		Asynchronous: false,
-	}
-	inputRes := &api.InputRoomEventsResponse{}
-
+	// Submit the outliers (auth chain + state events) as their own request
+	// first, and check the result before touching the state snapshot. If
+	// we folded these into the same InputRoomEvents call as the final
+	// KindNew event below, a failure fetching/storing any individual
+	// outlier would be masked: InputRoomEvents only reports back the last
+	// error it saw across the whole batch, so a late success (e.g. the
+	// final state_download event, which doesn't depend on every outlier
+	// having stored cleanly) could silently swallow an earlier outlier
+	// failure. That would let this "heal" operation report success while
+	// quietly building the new state snapshot on top of missing data -
+	// exactly the kind of silent partial failure that got a real room
+	// stuck in the first place. Fail loudly instead.
+	outlierReq := &api.InputRoomEventsRequest{Asynchronous: false}
+	outlierRes := &api.InputRoomEventsResponse{}
 	for _, authEvent := range append(authEvents, stateEvents...) {
-		inputReq.InputRoomEvents = append(inputReq.InputRoomEvents, api.InputRoomEvent{
+		outlierReq.InputRoomEvents = append(outlierReq.InputRoomEvents, api.InputRoomEvent{
 			Kind:  api.KindOutlier,
 			Event: authEvent,
 		})
 	}
+	r.Inputer.InputRoomEvents(ctx, outlierReq, outlierRes)
+	if outlierRes.ErrMsg != "" {
+		return fmt.Errorf("failed to store %d auth/state events needed to rebuild room state, aborting before touching the current snapshot: %w", len(outlierReq.InputRoomEvents), outlierRes.Err())
+	}
 
-	inputReq.InputRoomEvents = append(inputReq.InputRoomEvents, api.InputRoomEvent{
+	stateReq := &api.InputRoomEventsRequest{Asynchronous: false}
+	stateRes := &api.InputRoomEventsResponse{}
+	stateReq.InputRoomEvents = append(stateReq.InputRoomEvents, api.InputRoomEvent{
 		Kind:          api.KindNew,
 		Event:         ev,
 		Origin:        r.Cfg.Matrix.ServerName,
@@ -337,11 +352,9 @@ func (r *Admin) PerformAdminDownloadState(
 		StateEventIDs: stateIDs,
 		SendAsServer:  string(r.Cfg.Matrix.ServerName),
 	})
-
-	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
-
-	if inputRes.ErrMsg != "" {
-		return inputRes.Err()
+	r.Inputer.InputRoomEvents(ctx, stateReq, stateRes)
+	if stateRes.ErrMsg != "" {
+		return stateRes.Err()
 	}
 
 	return nil
