@@ -396,7 +396,7 @@ jobs:
 
   # run Complement
   complement:
-    name: "Complement (${{ matrix.label }})"
+    name: "Complement (${{ matrix.label }}, ${{ matrix.room_version }})"
     timeout-minutes: 20
     needs: initial-tests-done
     runs-on: ubuntu-latest
@@ -406,13 +406,42 @@ jobs:
         include:
           - label: SQLite native
             cgo: 0
+            room_version: v10
 
           - label: SQLite Cgo
             cgo: 1
+            room_version: v10
 
           - label: PostgreSQL
             postgres: Postgres
             cgo: 0
+            room_version: v10
+
+          - label: SQLite native
+            cgo: 0
+            room_version: v11
+
+          - label: SQLite Cgo
+            cgo: 1
+            room_version: v11
+
+          - label: PostgreSQL
+            postgres: Postgres
+            cgo: 0
+            room_version: v11
+
+          - label: SQLite native
+            cgo: 0
+            room_version: v12
+
+          - label: SQLite Cgo
+            cgo: 1
+            room_version: v12
+
+          - label: PostgreSQL
+            postgres: Postgres
+            cgo: 0
+            room_version: v12
     steps:
       # Env vars are set file a file given by $GITHUB_PATH. We need both Go 1.17 and GOPATH on env to run Complement.
       # See https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
@@ -431,8 +460,9 @@ jobs:
         with:
           path: dendrite
 
-      # Attempt to check out the same branch of Complement as the PR. If it
-      # doesn't exist, fallback to main.
+      # Attempt to check out the same branch of Complement as the PR. Prefer a
+      # fork-local complement repo when available, then fall back to the
+      # upstream complement repo.
       - name: Checkout complement
         shell: bash
         run: |
@@ -446,13 +476,21 @@ jobs:
           # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
           #    (GITHUB_BASE_REF for pull requests).
           # 3. Use the default complement branch ("master").
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
-            # Skip empty branch names and merge commits.
-            if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
-              continue
-            fi
-            (wget -O - "https://github.com/matrix-org/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
+          # 4. Prefer the current repository owner fork first, then fall back to
+          #    the upstream matrix-org/complement repository.
+          for COMPLEMENT_REPO in "${GITHUB_REPOSITORY_OWNER}/complement" "matrix-org/complement"; do
+            for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
+              # Skip empty branch names and merge commits.
+              if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
+                continue
+              fi
+              if wget -O - "https://github.com/$COMPLEMENT_REPO/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement; then
+                exit 0
+              fi
+            done
           done
+          echo "Failed to download Complement from ${GITHUB_REPOSITORY_OWNER}/complement or matrix-org/complement" >&2
+          exit 1
       # Build initial Dendrite image
       - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
         working-directory: dendrite
@@ -468,6 +506,7 @@ jobs:
         env:
           COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
+          COMPLEMENT_DENDRITE_ROOM_SERVER_DEFAULT_ROOM_VERSION: ${{ matrix.room_version }}
         working-directory: complement
 
   integration-tests-done:
