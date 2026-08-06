@@ -2407,6 +2407,9 @@ func TestCreateRoomNameTopicDefaultRoomVersionV11(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentStateEvent name failed: %v", err)
 	}
+	if nameEvent == nil {
+		t.Fatalf("CurrentStateEvent name returned nil event")
+	}
 	if got := gjson.GetBytes(nameEvent.Content(), "name").Str; got != "My Room" {
 		t.Fatalf("expected room name %q, got %q", "My Room", got)
 	}
@@ -2414,6 +2417,9 @@ func TestCreateRoomNameTopicDefaultRoomVersionV11(t *testing.T) {
 	topicEvent, err := rsAPI.CurrentStateEvent(context.Background(), *validRoomID, spec.MRoomTopic, "")
 	if err != nil {
 		t.Fatalf("CurrentStateEvent topic failed: %v", err)
+	}
+	if topicEvent == nil {
+		t.Fatalf("CurrentStateEvent topic returned nil event")
 	}
 	if got := gjson.GetBytes(topicEvent.Content(), "topic").Str; got != "Testing topic" {
 		t.Fatalf("expected room topic %q, got %q", "Testing topic", got)
