@@ -120,3 +120,4 @@ clean: ## Remove generated coverage and build artifacts
 	rm -f coverage.out cover.out
 	rm -rf bin
 	$(GO) clean -testcache
+	rm -rf contrib/dendrite-demo-*/data-dir-*/
