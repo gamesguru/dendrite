@@ -67,6 +67,15 @@ func BuildEvent(
 	identity *fclient.SigningIdentity, evTime time.Time,
 	eventsNeeded *gomatrixserverlib.StateNeeded, queryRes *api.QueryLatestEventsAndStateResponse,
 ) (*types.HeaderedEvent, error) {
+	// Check that the room actually exists before looking at its room version:
+	// a room that doesn't exist locally has an empty RoomVersion, which would
+	// otherwise surface as a confusing "unsupported room version ''" error
+	// instead of the ErrRoomNoExists that callers (e.g. join handling) rely on
+	// to fall back to a federated join.
+	if !queryRes.RoomExists {
+		return nil, ErrRoomNoExists{}
+	}
+
 	verImpl, err := gomatrixserverlib.GetRoomVersion(queryRes.RoomVersion)
 	if err != nil {
 		return nil, err
