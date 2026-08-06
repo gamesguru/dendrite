@@ -61,7 +61,15 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 	[]string{"room_id"},
 )
 
-// processRoomEvent can only be called once at a time
+// processRoomEvent can only be called once at a time per room.
+//
+// This is enforced by Inputer.roomMutexes: the NATS-queued path already
+// gives each room a single-threaded actor, but callers that invoke this
+// directly on their own goroutine (namely the missing-event/state gap-fill
+// logic in input_missing.go) do not get that for free, and used to be able
+// to race against it - see the comment on Inputer.roomMutexes for the full
+// story and roomserver/internal/input/input_events_test.go for a regression
+// test. Do not bypass the lock below; every caller must go through it.
 //
 // TODO(#375): This should be rewritten to allow concurrent calls. The
 // difficulty is in ensuring that we correctly annotate events with the correct
@@ -81,6 +89,10 @@ func (r *Inputer) processRoomEvent(
 		return context.DeadlineExceeded
 	default:
 	}
+
+	var unlock func()
+	ctx, unlock = r.lockRoom(ctx, input.Event.RoomID().String())
+	defer unlock()
 
 	trace, ctx := internal.StartRegion(ctx, "processRoomEvent")
 	trace.SetTag("room_id", input.Event.RoomID().String())
