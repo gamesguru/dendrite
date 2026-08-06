@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"time"
 
 	"github.com/element-hq/dendrite/syncapi/storage"
 	"github.com/element-hq/dendrite/syncapi/synctypes"
@@ -36,10 +37,10 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	req *types.SyncRequest,
 ) types.StreamPosition {
 	pos := p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
-	if len(req.Response.AccountData.Events) == 0 {
-		p.addGlobalAccountDataDirect(ctx, req, "m.push_rules")
+	if len(req.Response.AccountData.Events) > 0 {
+		return pos
 	}
-	return pos
+	return p.waitForAccountData(ctx, snapshot, req, pos)
 }
 
 func (p *AccountDataStreamProvider) IncrementalSync(
@@ -114,27 +115,33 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 	return pos
 }
 
-func (p *AccountDataStreamProvider) addGlobalAccountDataDirect(
+func (p *AccountDataStreamProvider) waitForAccountData(
 	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
-	dataType string,
-) {
-	dataReq := userapi.QueryAccountDataRequest{
-		UserID:   req.Device.UserID,
-		DataType: dataType,
-	}
-	dataRes := userapi.QueryAccountDataResponse{}
-	if err := p.userAPI.QueryAccountData(ctx, &dataReq, &dataRes); err != nil {
-		req.Log.WithError(err).Error("p.userAPI.QueryAccountData failed")
-		return
-	}
-	if globalData, ok := dataRes.GlobalAccountData[dataType]; ok {
-		req.Response.AccountData.Events = append(
-			req.Response.AccountData.Events,
-			synctypes.ClientEvent{
-				Type:    dataType,
-				Content: spec.RawJSON(globalData),
-			},
-		)
+	from types.StreamPosition,
+) types.StreamPosition {
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	pos := from
+	for {
+		select {
+		case <-ctx.Done():
+			return pos
+		case <-timer.C:
+			return pos
+		case <-ticker.C:
+			latest := p.LatestPosition(ctx)
+			if latest <= pos {
+				continue
+			}
+			pos = p.IncrementalSync(ctx, snapshot, req, pos, latest)
+			if len(req.Response.AccountData.Events) > 0 {
+				return pos
+			}
+		}
 	}
 }
