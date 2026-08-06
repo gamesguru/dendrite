@@ -81,11 +81,11 @@ type Inputer struct {
 	InputRoomEventTopic string
 	OutputProducer      *producers.RoomEventProducer
 	workers             sync.Map // room ID -> *worker
-	// roomMutexes serializes processRoomEvent per room. The NATS-queued path
+	// roomMutexes serialises processRoomEvent per room. The NATS-queued path
 	// (see worker, below) already gives each room its own single-threaded
 	// actor, but roomserver/internal/input/input_missing.go's missing-event/
 	// state gap-filling calls processRoomEvent directly, on its own
-	// goroutine, bypassing that serialization entirely. That lets it race
+	// goroutine, bypassing that serialisation entirely. That lets it race
 	// against the per-room worker (or another concurrent gap-fill) while
 	// both are bootstrapping/mutating the same room, which can silently drop
 	// or corrupt state - see the comment on processRoomEvent. This mutex
@@ -127,7 +127,7 @@ type worker struct {
 // blocks on the mutex as intended.
 type roomLockCtxKey struct{}
 
-// lockRoom acquires the per-room mutex used to serialize processRoomEvent
+// lockRoom acquires the per-room mutex used to serialise processRoomEvent
 // (see the comment on Inputer.roomMutexes for why this exists) unless the
 // given context shows this call chain already holds it. It returns the
 // context to use for the remainder of the call (carrying the "held" marker)

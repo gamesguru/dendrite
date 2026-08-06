@@ -233,7 +233,7 @@ func (r *Admin) PerformAdminDownloadState(
 		return eventutil.ErrRoomNoExists{}
 	}
 
-	fwdExtremities, _, depth, err := r.DB.LatestEventIDs(ctx, roomInfo.RoomNID)
+	fwdExtremities, _, _, err := r.DB.LatestEventIDs(ctx, roomInfo.RoomNID)
 	if err != nil {
 		return err
 	}
@@ -299,12 +299,24 @@ func (r *Admin) PerformAdminDownloadState(
 		return fmt.Errorf("gomatrixserverlib.StateNeededForProtoEvent: %w", err)
 	}
 
-	queryRes := &api.QueryLatestEventsAndStateResponse{
-		RoomExists:   true,
-		RoomVersion:  roomInfo.RoomVersion,
-		LatestEvents: fwdExtremities,
-		StateEvents:  stateEvents,
-		Depth:        depth,
+	// Build/auth this event against den's own current, locally-resolved
+	// state - NOT the state we just fetched from serverName. Per the
+	// federation spec, GET /state returns the room's state as of *before*
+	// the given event, so if fwdExtremity is itself a recent membership
+	// change (e.g. the local user's own join), the fetched state predates
+	// it and won't show the sender as a room member yet. Authing the
+	// corrective event against that stale snapshot makes it fail its own
+	// auth check ("sender not in room") before it can ever apply the fix -
+	// confirmed in production: PerformAdminDownloadState rejected itself
+	// with exactly that error. The remote-fetched state (stateIDs, below)
+	// is still what gets *installed* as the new snapshot; only the auth
+	// chain used to build and authorize this specific event needs to come
+	// from state we already know is valid.
+	var localState api.QueryLatestEventsAndStateResponse
+	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+	}, &localState); err != nil {
+		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
 	}
 
 	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
@@ -312,7 +324,7 @@ func (r *Admin) PerformAdminDownloadState(
 		return err
 	}
 
-	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, queryRes)
+	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, &localState)
 	if err != nil {
 		return fmt.Errorf("eventutil.BuildEvent: %w", err)
 	}
