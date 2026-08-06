@@ -442,7 +442,7 @@ type UnreadNotifications struct {
 }
 
 type ClientEvents struct {
-	Events []synctypes.ClientEvent `json:"events,omitempty"`
+	Events []synctypes.ClientEvent `json:"events"`
 }
 
 type Timeline struct {
@@ -468,38 +468,20 @@ type JoinResponse struct {
 }
 
 func (jr JoinResponse) MarshalJSON() ([]byte, error) {
-	type ephemeralClientEvents struct {
-		Events []synctypes.ClientEvent `json:"events"`
-	}
-	type joinResponseJSON struct {
-		Summary             *Summary               `json:"summary,omitempty"`
-		State               *ClientEvents          `json:"state,omitempty"`
-		Timeline            *Timeline              `json:"timeline,omitempty"`
-		Ephemeral           *ephemeralClientEvents `json:"ephemeral,omitempty"`
-		AccountData         *ClientEvents          `json:"account_data,omitempty"`
-		UnreadNotifications *UnreadNotifications   `json:"unread_notifications,omitempty"`
-	}
-	a := joinResponseJSON{
-		Summary:             jr.Summary,
-		State:               jr.State,
-		Timeline:            jr.Timeline,
-		AccountData:         jr.AccountData,
-		UnreadNotifications: jr.UnreadNotifications,
-	}
+	type alias JoinResponse
+	a := alias(jr)
 	if jr.State != nil && len(jr.State.Events) == 0 {
 		a.State = nil
 	}
 	if jr.Ephemeral != nil {
 		// Remove the room_id from EDUs, as this seems to cause Element Web
 		// to trigger notifications - https://github.com/vector-im/element-web/issues/17263
-		events := append([]synctypes.ClientEvent(nil), jr.Ephemeral.Events...)
-		if events == nil {
-			events = []synctypes.ClientEvent{}
+		if jr.Ephemeral.Events == nil {
+			jr.Ephemeral.Events = []synctypes.ClientEvent{}
 		}
-		for i := range events {
-			events[i].RoomID = ""
+		for i := range jr.Ephemeral.Events {
+			jr.Ephemeral.Events[i].RoomID = ""
 		}
-		a.Ephemeral = &ephemeralClientEvents{Events: events}
 	}
 	if jr.AccountData != nil && len(jr.AccountData.Events) == 0 {
 		a.AccountData = nil
