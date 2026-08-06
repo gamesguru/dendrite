@@ -81,6 +81,9 @@ jobs:
     timeout-minutes: 10
     name: Unit tests
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -115,8 +118,8 @@ jobs:
         # writer for the Go build and module caches in this job.
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-unit-
@@ -137,6 +140,9 @@ jobs:
     name: Build for Linux
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     strategy:
       fail-fast: false
       matrix:
@@ -152,8 +158,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
@@ -172,6 +178,9 @@ jobs:
     name: Build for Windows
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     strategy:
       matrix:
         goos: ["windows"]
@@ -186,8 +195,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
@@ -218,6 +227,9 @@ jobs:
     needs: initial-tests-done
     name: Integration tests
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -255,8 +267,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-stable-test-race-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-stable-test-race-
@@ -279,6 +291,9 @@ jobs:
     timeout-minutes: 20
     needs: initial-tests-done
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     steps:
       - uses: actions/checkout@v5
       - name: Setup go
@@ -289,8 +304,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-upgrade-test-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-upgrade-test-
@@ -309,6 +324,9 @@ jobs:
     timeout-minutes: 20
     needs: initial-tests-done
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ runner.temp }}/go-build-cache
+      GOMODCACHE: ${{ runner.temp }}/go-mod-cache
     steps:
       - uses: actions/checkout@v5
       - name: Setup go
@@ -319,8 +337,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+            ${{ runner.temp }}/go-build-cache
+            ${{ runner.temp }}/go-mod-cache
           key: ${{ runner.os }}-go-upgrade-direct-test-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-upgrade-direct-test-
