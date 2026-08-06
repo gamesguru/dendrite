@@ -190,6 +190,7 @@ jobs:
       - name: Checkout complement
         shell: bash
         run: |
+          set -o pipefail
           mkdir -p complement
           # Attempt to use the version of complement which best matches the current
           # build. Depending on whether this is a PR or release, etc. we need to
