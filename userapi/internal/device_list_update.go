@@ -640,7 +640,10 @@ func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error
 	if err != nil {
 		return fmt.Errorf("failed to mark device list as fresh: %w", err)
 	}
-	err = emitDeviceKeyChanges(u.producer, existingKeys, keys, false)
+	// A full stale-list refresh is our recovery path after missing updates, so
+	// shared users should be prompted to re-check this user's device list even
+	// if the final snapshot happens to match what was already cached locally.
+	err = u.producer.ProduceKeyChanges(keys)
 	if err != nil {
 		return fmt.Errorf("failed to emit key changes for fresh device list: %w", err)
 	}

@@ -48,8 +48,6 @@ jobs:
       image: matrixdotorg/sytest-dendrite:latest
       volumes:
         - ${{ github.workspace }}:/src
-        - ${{ github.workspace }}/.ci-cache/go-build:/github/home/.cache/go-build
-        - ${{ github.workspace }}/.ci-cache/go-mod:/gopath/pkg/mod
       env:
         POSTGRES: ${{ matrix.postgres && 1}}
         SYTEST_BRANCH: ${{ github.head_ref }}

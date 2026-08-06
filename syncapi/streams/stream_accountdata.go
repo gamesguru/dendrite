@@ -40,7 +40,7 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	if len(req.Response.AccountData.Events) > 0 {
 		return pos
 	}
-	return p.waitForAccountData(ctx, snapshot, req, pos)
+	return p.waitForAccountData(ctx, req, pos)
 }
 
 func (p *AccountDataStreamProvider) IncrementalSync(
@@ -117,7 +117,6 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 
 func (p *AccountDataStreamProvider) waitForAccountData(
 	ctx context.Context,
-	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 	from types.StreamPosition,
 ) types.StreamPosition {
@@ -138,7 +137,16 @@ func (p *AccountDataStreamProvider) waitForAccountData(
 			if latest <= pos {
 				continue
 			}
+
+			snapshot, err := p.DB.NewDatabaseSnapshot(ctx)
+			if err != nil {
+				req.Log.WithError(err).Error("p.DB.NewDatabaseSnapshot failed")
+				continue
+			}
 			pos = p.IncrementalSync(ctx, snapshot, req, pos, latest)
+			if err = snapshot.Rollback(); err != nil {
+				req.Log.WithError(err).Error("snapshot.Rollback failed")
+			}
 			if len(req.Response.AccountData.Events) > 0 {
 				return pos
 			}
