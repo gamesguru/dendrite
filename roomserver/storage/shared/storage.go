@@ -1755,8 +1755,10 @@ func (d *Database) ForgetRoom(ctx context.Context, userID, roomID string, forget
 // PurgeRoom removes all information about a given room from the roomserver.
 // For large rooms this operation may take a considerable amount of time.
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
-	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		roomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomID)
+	var roomNID types.RoomNID
+	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		var err error
+		roomNID, err = d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return fmt.Errorf("room %s does not exist", roomID)
@@ -1765,6 +1767,23 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 		}
 		return d.Purge.PurgeRoom(ctx, txn, roomNID, roomID)
 	})
+	if err != nil {
+		return err
+	}
+	// The room's row (and therefore its NID) no longer exists in the database.
+	// GetOrCreateRoomInfo will happily hand back a stale cached NID/version
+	// without ever consulting the database, so any cached entry for this room
+	// must be dropped now or a subsequent join will be bootstrapped against a
+	// room NID that doesn't exist anymore.
+	d.Cache.InvalidateRoomServerRoomID(roomNID, roomID)
+	d.Cache.InvalidateRoomVersion(roomID)
+	return nil
+}
+
+// InvalidateRoomCache drops any cached room NID/version for roomID.
+func (d *Database) InvalidateRoomCache(roomID string, roomNID types.RoomNID) {
+	d.Cache.InvalidateRoomServerRoomID(roomNID, roomID)
+	d.Cache.InvalidateRoomVersion(roomID)
 }
 
 func (d *Database) UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error {

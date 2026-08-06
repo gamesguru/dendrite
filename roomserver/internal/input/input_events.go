@@ -403,11 +403,22 @@ func (r *Inputer) processRoomEvent(
 
 	// Request the room info again — it's possible that the room has been
 	// created by now if it didn't exist already.
+	staleRoomInfo := roomInfo
 	roomInfo, err = r.DB.RoomInfo(ctx, event.RoomID().String())
 	if err != nil {
 		return fmt.Errorf("updater.RoomInfo: %w", err)
 	}
 	if roomInfo == nil {
+		// We had a roomInfo a moment ago (e.g. from GetOrCreateRoomInfo via
+		// roomInfoFromSuppliedState) but the database now says the room
+		// doesn't exist. This happens if the room's NID/version got cached
+		// before its database row was removed (e.g. by an admin PurgeRoom)
+		// - GetOrCreateRoomInfo trusts that cache without ever checking the
+		// database. Drop the stale entry so a retry can self-heal instead of
+		// requiring a process restart to clear the cache.
+		if staleRoomInfo != nil {
+			r.DB.InvalidateRoomCache(event.RoomID().String(), staleRoomInfo.RoomNID)
+		}
 		return fmt.Errorf("updater.RoomInfo missing for room %s", event.RoomID().String())
 	}
 

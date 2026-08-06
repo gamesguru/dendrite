@@ -170,6 +170,10 @@ type Database interface {
 	GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error)
 	PurgeRoom(ctx context.Context, roomID string) error
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
+	// InvalidateRoomCache drops any cached room NID/version for roomID. Callers
+	// should use this to self-heal when they discover the cache disagrees with
+	// the database (e.g. a stale NID left behind by PurgeRoom).
+	InvalidateRoomCache(roomID string, roomNID types.RoomNID)
 
 	// GetMembershipForHistoryVisibility queries the membership events for the given eventIDs.
 	// Returns a map from (input) eventID -> membership event. If no membership event is found, returns an empty event, resulting in
@@ -237,6 +241,10 @@ type RoomDatabase interface {
 	GetOrCreateEventTypeNID(ctx context.Context, eventType string) (eventTypeNID types.EventTypeNID, err error)
 	GetOrCreateEventStateKeyNID(ctx context.Context, eventStateKey *string) (types.EventStateKeyNID, error)
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*types.HeaderedEvent, error)
+	// InvalidateRoomCache drops any cached room NID/version for roomID. Callers
+	// should use this to self-heal when they discover the cache disagrees with
+	// the database (e.g. a stale NID left behind by PurgeRoom).
+	InvalidateRoomCache(roomID string, roomNID types.RoomNID)
 }
 
 type EventDatabase interface {

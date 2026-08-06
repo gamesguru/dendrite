@@ -20,6 +20,11 @@ type RoomServerNIDsCache interface {
 	// StoreRoomServerRoomID stores roomNID -> roomID and roomID -> roomNID
 	StoreRoomServerRoomID(roomNID types.RoomNID, roomID string)
 	GetRoomServerRoomNID(roomID string) (types.RoomNID, bool)
+	// InvalidateRoomServerRoomID removes both directions of the roomNID <-> roomID
+	// mapping. This must be called whenever a room's row is removed from the
+	// database (e.g. PurgeRoom) so that a subsequent GetOrCreateRoomInfo can't be
+	// satisfied by a stale cache hit that never touches the database.
+	InvalidateRoomServerRoomID(roomNID types.RoomNID, roomID string)
 }
 
 func (c Caches) GetRoomServerRoomID(roomNID types.RoomNID) (string, bool) {
@@ -34,4 +39,11 @@ func (c Caches) StoreRoomServerRoomID(roomNID types.RoomNID, roomID string) {
 
 func (c Caches) GetRoomServerRoomNID(roomID string) (types.RoomNID, bool) {
 	return c.RoomServerRoomNIDs.Get(roomID)
+}
+
+// InvalidateRoomServerRoomID removes both directions of the roomNID <-> roomID
+// mapping from the cache.
+func (c Caches) InvalidateRoomServerRoomID(roomNID types.RoomNID, roomID string) {
+	c.RoomServerRoomNIDs.Unset(roomID)
+	c.RoomServerRoomIDs.Unset(roomNID)
 }
