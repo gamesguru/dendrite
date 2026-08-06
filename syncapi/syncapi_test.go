@@ -370,6 +370,7 @@ func TestSyncAPICreateRoomSyncEarly(t *testing.T) {
 	})
 }
 
+// nolint:unparam // dbType is forwarded from a WithAllDatabases callback; this test is skipped below.
 func testSyncAPICreateRoomSyncEarly(t *testing.T, dbType test.DBType) {
 	t.Skip("Skipped, possibly fixed")
 	user := test.NewUser(t)

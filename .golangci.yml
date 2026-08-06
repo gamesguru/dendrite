@@ -59,6 +59,15 @@ linters:
       locale: UK
     nakedret:
       max-func-lines: 60
+    staticcheck:
+      # v1 ran staticcheck (SA) + gosimple (S) but explicitly disabled the
+      # separate `stylecheck` linter (ST checks); quickfix (QF) wasn't a
+      # linter at all under v1. v2 merged all of these under one
+      # `staticcheck` name, so scope it back to what v1 actually enabled.
+      checks:
+        - all
+        - -ST*
+        - -QF*
     prealloc:
       simple: true
       range-loops: true
