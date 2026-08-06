@@ -112,29 +112,43 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 }
 
 func normalizeRouters(routers httputil.Routers) httputil.Routers {
-	defaults := httputil.NewRouters()
+	var defaults httputil.Routers
+	getDefaults := func() httputil.Routers {
+		if defaults.Client == nil {
+			defaults = httputil.NewRouters()
+		}
+		return defaults
+	}
 	if routers.Client == nil {
+		defaults := getDefaults()
 		routers.Client = defaults.Client
 	}
 	if routers.Federation == nil {
+		defaults := getDefaults()
 		routers.Federation = defaults.Federation
 	}
 	if routers.Keys == nil {
+		defaults := getDefaults()
 		routers.Keys = defaults.Keys
 	}
 	if routers.Media == nil {
+		defaults := getDefaults()
 		routers.Media = defaults.Media
 	}
 	if routers.WellKnown == nil {
+		defaults := getDefaults()
 		routers.WellKnown = defaults.WellKnown
 	}
 	if routers.Static == nil {
+		defaults := getDefaults()
 		routers.Static = defaults.Static
 	}
 	if routers.DendriteAdmin == nil {
+		defaults := getDefaults()
 		routers.DendriteAdmin = defaults.DendriteAdmin
 	}
 	if routers.SynapseAdmin == nil {
+		defaults := getDefaults()
 		routers.SynapseAdmin = defaults.SynapseAdmin
 	}
 	return routers
