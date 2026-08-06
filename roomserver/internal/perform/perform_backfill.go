@@ -112,9 +112,10 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// We can't honour exactly the limit as some sytests rely on requesting more for tests to pass
 	// (so we don't need to hit /state_ids which the test has no listener for)
 	// Specifically the test "Outbound federation can backfill events"
+	fromEventIDs := prioritiseBackfillFromEventIDs(ctx, req.RoomID, req.PrevEventIDs(), requester.ServersAtEvent)
 	events, err := gomatrixserverlib.RequestBackfill(
 		ctx, req.VirtualHost, requester,
-		r.KeyRing, req.RoomID, info.RoomVersion, req.PrevEventIDs(), 100, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, 100, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 	)
@@ -169,6 +170,36 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
+}
+
+func prioritiseBackfillFromEventIDs(
+	ctx context.Context,
+	roomID string,
+	fromEventIDs []string,
+	serversAtEvent func(context.Context, string, string) []spec.ServerName,
+) []string {
+	if len(fromEventIDs) < 2 {
+		return fromEventIDs
+	}
+
+	bestIndex := 0
+	bestServerCount := len(serversAtEvent(ctx, roomID, fromEventIDs[0]))
+	for i := 1; i < len(fromEventIDs); i++ {
+		serverCount := len(serversAtEvent(ctx, roomID, fromEventIDs[i]))
+		if serverCount > bestServerCount {
+			bestIndex = i
+			bestServerCount = serverCount
+		}
+	}
+	if bestIndex == 0 {
+		return fromEventIDs
+	}
+
+	reordered := make([]string, 0, len(fromEventIDs))
+	reordered = append(reordered, fromEventIDs[bestIndex])
+	reordered = append(reordered, fromEventIDs[:bestIndex]...)
+	reordered = append(reordered, fromEventIDs[bestIndex+1:]...)
+	return reordered
 }
 
 // fetchAndStoreMissingEvents does a best-effort fetch and store of missing events specified in stateIDs. Returns no error as it is just
