@@ -49,8 +49,15 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 	if p.addTypingEvents(req, from) {
 		return to
 	}
+	if req.Timeout <= 0 {
+		return to
+	}
 
-	timer := time.NewTimer(50 * time.Millisecond)
+	wait := req.Timeout
+	if wait > 50*time.Millisecond {
+		wait = 50 * time.Millisecond
+	}
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
@@ -61,8 +68,9 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 		case <-timer.C:
 			return to
 		case <-ticker.C:
+			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
 			if p.addTypingEvents(req, from) {
-				return types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+				return to
 			}
 		}
 	}

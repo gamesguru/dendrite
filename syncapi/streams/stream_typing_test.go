@@ -20,6 +20,7 @@ func TestTypingStreamProviderCompleteSyncWaitsForPendingTyping(t *testing.T) {
 		Context:  context.Background(),
 		Response: types.NewResponse(),
 		Rooms:    map[string]string{roomID: spec.Join},
+		Timeout:  time.Second,
 	}
 
 	go func() {
@@ -47,6 +48,7 @@ func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) 
 		Context:  context.Background(),
 		Response: types.NewResponse(),
 		Rooms:    map[string]string{roomID: spec.Join},
+		Timeout:  time.Second,
 	}
 
 	go func() {
@@ -61,5 +63,27 @@ func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) 
 	jr := req.Response.Rooms.Join[roomID]
 	if jr == nil || len(jr.Ephemeral.Events) != 1 {
 		t.Fatalf("expected one typing event, got %+v", jr)
+	}
+}
+
+func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
+	const roomID = "!room:test"
+
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+	req := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    map[string]string{roomID: spec.Join},
+		Timeout:  0,
+	}
+
+	start := time.Now()
+	pos := provider.IncrementalSync(context.Background(), nil, req, 0, 0)
+	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+		t.Fatalf("expected immediate sync to return quickly, took %s", elapsed)
+	}
+	if pos != 0 {
+		t.Fatalf("expected no typing stream advance, got %d", pos)
 	}
 }
