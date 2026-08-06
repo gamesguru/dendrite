@@ -86,7 +86,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-stable-lint-
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           skip-cache: true
@@ -537,7 +537,7 @@ jobs:
       # Run Complement
       - run: |
           set -o pipefail &&
-          go test -v -json -tags dendrite_blacklist ./tests/... 2>&1 | gotestfmt -hide all
+          go test -v -json -tags dendrite_blacklist ./tests ./tests/csapi 2>&1 | gotestfmt -hide all
         shell: bash
         name: Run Complement Tests
         env:

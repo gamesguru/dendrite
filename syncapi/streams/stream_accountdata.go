@@ -2,7 +2,6 @@ package streams
 
 import (
 	"context"
-	"time"
 
 	"github.com/element-hq/dendrite/syncapi/storage"
 	"github.com/element-hq/dendrite/syncapi/synctypes"
@@ -36,11 +35,7 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	pos := p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
-	if len(req.Response.AccountData.Events) > 0 {
-		return pos
-	}
-	return p.waitForAccountData(ctx, req, pos)
+	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
 }
 
 func (p *AccountDataStreamProvider) IncrementalSync(
@@ -113,43 +108,4 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 	}
 
 	return pos
-}
-
-func (p *AccountDataStreamProvider) waitForAccountData(
-	ctx context.Context,
-	req *types.SyncRequest,
-	from types.StreamPosition,
-) types.StreamPosition {
-	timer := time.NewTimer(50 * time.Millisecond)
-	defer timer.Stop()
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-
-	pos := from
-	for {
-		select {
-		case <-ctx.Done():
-			return pos
-		case <-timer.C:
-			return pos
-		case <-ticker.C:
-			latest := p.LatestPosition(ctx)
-			if latest <= pos {
-				continue
-			}
-
-			snapshot, err := p.DB.NewDatabaseSnapshot(ctx)
-			if err != nil {
-				req.Log.WithError(err).Error("p.DB.NewDatabaseSnapshot failed")
-				continue
-			}
-			pos = p.IncrementalSync(ctx, snapshot, req, pos, latest)
-			if err = snapshot.Rollback(); err != nil {
-				req.Log.WithError(err).Error("snapshot.Rollback failed")
-			}
-			if len(req.Response.AccountData.Events) > 0 {
-				return pos
-			}
-		}
-	}
 }
