@@ -111,6 +111,35 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 	})
 }
 
+func normalizeRouters(routers httputil.Routers) httputil.Routers {
+	defaults := httputil.NewRouters()
+	if routers.Client == nil {
+		routers.Client = defaults.Client
+	}
+	if routers.Federation == nil {
+		routers.Federation = defaults.Federation
+	}
+	if routers.Keys == nil {
+		routers.Keys = defaults.Keys
+	}
+	if routers.Media == nil {
+		routers.Media = defaults.Media
+	}
+	if routers.WellKnown == nil {
+		routers.WellKnown = defaults.WellKnown
+	}
+	if routers.Static == nil {
+		routers.Static = defaults.Static
+	}
+	if routers.DendriteAdmin == nil {
+		routers.DendriteAdmin = defaults.DendriteAdmin
+	}
+	if routers.SynapseAdmin == nil {
+		routers.SynapseAdmin = defaults.SynapseAdmin
+	}
+	return routers
+}
+
 // SetupAndServeHTTP sets up the HTTP server to serve client & federation APIs
 // and adds a prometheus handler under /_dendrite/metrics.
 func SetupAndServeHTTP(
@@ -120,6 +149,8 @@ func SetupAndServeHTTP(
 	externalHTTPAddr config.ServerAddress,
 	certFile, keyFile *string,
 ) {
+	routers = normalizeRouters(routers)
+
 	externalRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
 
 	externalServ := &http.Server{
