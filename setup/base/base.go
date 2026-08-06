@@ -111,6 +111,31 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 	})
 }
 
+func createBaseAdminRouter(processContext *process.ProcessContext, upstream *mux.Router) *mux.Router {
+	adminRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.DendriteAdminPathPrefix).Subrouter().UseEncodedPath()
+	ConfigureAdminEndpoints(processContext, httputil.Routers{DendriteAdmin: adminRouter})
+	if upstream != nil {
+		adminRouter.PathPrefix("/").Handler(upstream)
+	}
+	adminRouter.NotFoundHandler = httputil.NotFoundCORSHandler
+	adminRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	return adminRouter
+}
+
+func createBaseStaticRouter(landingPage *bytes.Buffer, loginFS fs.FS, upstream *mux.Router) *mux.Router {
+	staticRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.PublicStaticPath).Subrouter().UseEncodedPath()
+	staticRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(landingPage.Bytes())
+	})
+	staticRouter.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(loginFS))))
+	if upstream != nil {
+		staticRouter.PathPrefix("/").Handler(upstream)
+	}
+	staticRouter.NotFoundHandler = httputil.NotFoundCORSHandler
+	staticRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	return staticRouter
+}
+
 func normalizeRouters(routers httputil.Routers) httputil.Routers {
 	var defaults httputil.Routers
 	getDefaults := func() httputil.Routers {
@@ -185,8 +210,6 @@ func SetupAndServeHTTP(
 		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth))
 	}
 
-	ConfigureAdminEndpoints(processContext, routers)
-
 	// Parse and execute the landing page template
 	tmpl := template.Must(template.ParseFS(staticContent, "static/*.gotmpl"))
 	landingPage := &bytes.Buffer{}
@@ -196,17 +219,13 @@ func SetupAndServeHTTP(
 		logrus.WithError(err).Fatal("failed to execute landing page template")
 	}
 
-	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(landingPage.Bytes())
-	})
-
 	// We only need the files beneath the static/client/login folder.
 	sub, err := fs.Sub(loginFallback, "static/client/login")
 	if err != nil {
 		logrus.Panicf("unable to read embedded files, this should never happen: %s", err)
 	}
-	// Serve a static page for login fallback
-	routers.Static.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(sub))))
+	baseAdminRouter := createBaseAdminRouter(processContext, routers.DendriteAdmin)
+	baseStaticRouter := createBaseStaticRouter(landingPage, sub, routers.Static)
 
 	var clientHandler http.Handler
 	clientHandler = routers.Client
@@ -224,7 +243,7 @@ func SetupAndServeHTTP(
 		})
 		federationHandler = sentryHandler.Handle(routers.Federation)
 	}
-	externalRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(routers.DendriteAdmin)
+	externalRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(baseAdminRouter)
 	externalRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(clientHandler)
 	if !cfg.Global.DisableFederation {
 		externalRouter.PathPrefix(httputil.PublicKeyPathPrefix).Handler(routers.Keys)
@@ -233,7 +252,7 @@ func SetupAndServeHTTP(
 	externalRouter.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 	externalRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
-	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
+	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(baseStaticRouter)
 
 	externalRouter.NotFoundHandler = httputil.NotFoundCORSHandler
 	externalRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
