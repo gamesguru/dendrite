@@ -476,14 +476,15 @@ jobs:
           # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
           #    (GITHUB_BASE_REF for pull requests).
           # 3. Use the default complement branch ("master").
-          # 4. Prefer the current repository owner fork first, then fall back to
-          #    the upstream matrix-org/complement repository.
-          for COMPLEMENT_REPO in "${GITHUB_REPOSITORY_OWNER}/complement" "matrix-org/complement"; do
-            for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
-              # Skip empty branch names and merge commits.
-              if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
-                continue
-              fi
+          # 4. For each candidate branch, prefer the current repository owner's
+          #    fork first, then fall back to upstream. This preserves branch
+          #    priority so upstream/<matching-branch> beats fork/master.
+          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
+            # Skip empty branch names and merge commits.
+            if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
+              continue
+            fi
+            for COMPLEMENT_REPO in "${GITHUB_REPOSITORY_OWNER}/complement" "matrix-org/complement"; do
               if wget -O - "https://github.com/$COMPLEMENT_REPO/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement; then
                 exit 0
               fi
