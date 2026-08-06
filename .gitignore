@@ -84,3 +84,4 @@ helm/dendrite/charts/
 
 # new ignores
 coverage.out
+/dendrite
