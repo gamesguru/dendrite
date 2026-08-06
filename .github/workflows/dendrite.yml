@@ -65,6 +65,9 @@ jobs:
     timeout-minutes: 5
     name: Linting
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.ci-cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.ci-cache/go-mod
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
@@ -73,6 +76,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.ci-cache/go-build
+            ${{ github.workspace }}/.ci-cache/go-mod
+          key: ${{ runner.os }}-go-stable-lint-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-stable-lint-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
 
