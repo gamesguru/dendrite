@@ -23,6 +23,9 @@ COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
 COMPLEMENT_PACKAGES ?= ./tests/...
+DENDRITE_INSTALL_PATH ?= /usr/local/bin/dendrite
+DENDRITE_SYSTEMD_SERVICE ?= dendrite
+SUDO ?= sudo
 
 .PHONY: help
 help: ## Show available targets
@@ -78,6 +81,15 @@ build: ## Build all packages
 .PHONY: build-cmd
 build-cmd: ## Build binaries under cmd/
 	$(GO) build ./cmd/...
+
+.PHONY: install
+install: ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
+	$(GO) build -o dendrite ./cmd/dendrite
+	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
+
+.PHONY: restart
+restart: ## Restart the dendrite systemd service (DENDRITE_SYSTEMD_SERVICE)
+	$(SUDO) systemctl restart $(DENDRITE_SYSTEMD_SERVICE)
 
 .PHONY: ci
 ci: ## Run the documented local CI preflight
