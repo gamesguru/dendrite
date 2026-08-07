@@ -430,6 +430,146 @@ func (r *Admin) fetchStateToInstall(
 	return authEvents, stateEvents, stateIDs, nil
 }
 
+// PerformAdminBridgeState submits an ordinary new event from userID whose
+// prev_events explicitly include den's current forward extremities AND the
+// given extraEventIDs: events den already holds, with ancestry den can
+// verify, but which aren't currently ancestors of den's forward
+// extremities (the shape of the three stuck den.nutra.tk events after
+// backfill connected them to the room's graph without making them part of
+// current state).
+//
+// Unlike PerformAdminDownloadState, this does NOT set HasState. It goes
+// through completely ordinary state resolution - the same code path a real
+// client message uses - which correctly folds both branches together when
+// neither side has a competing value for a given state key (see
+// roomState.LoadCombinedStateAfterEvents / calculateStateAfterManyEvents).
+//
+// This only works for a userID den currently recognises as a room member:
+// helpers.CheckForSoftFail authorises the event against den's CURRENT state
+// snapshot, independent of the event's own prev_events, so an event from a
+// user den doesn't currently recognise will always soft-fail regardless of
+// ancestry - confirmed locally via TestDisconnectedJoinerSendsMessage,
+// where an event from the disconnected user soft-fails but an otherwise
+// identical event from a currently-recognised member is accepted and
+// correctly restores the disconnected user to current state.
+//
+// This is genuinely ordinary, not a fabricated DAG edge: every ID in
+// extraEventIDs must already be present in den's database as a connected
+// part of the room's graph (state_snapshot_nid != 0, i.e. state resolution
+// has already run for it) - enforced below by refusing anything den can't
+// verify. It's exactly what a client naturally produces when its
+// prev_events happen to span a branch that's been sitting disconnected.
+//
+// It IS outward-facing: the resulting event is signed by den and federated
+// to every other server in the room like any other event. Call sites should
+// treat this as an irreversible, visible action, not a local repair.
+func (r *Admin) PerformAdminBridgeState(
+	ctx context.Context,
+	roomID, userID string,
+	extraEventIDs []string,
+) error {
+	fullUserID, err := spec.NewUserID(userID, true)
+	if err != nil {
+		return err
+	}
+	senderDomain := fullUserID.Domain()
+
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return eventutil.ErrRoomNoExists{}
+	}
+
+	var localState api.QueryLatestEventsAndStateResponse
+	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+	}, &localState); err != nil {
+		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
+	}
+
+	// Refuse anything den can't verify is actually connected to the room's
+	// graph - this is what keeps this from being a way to smuggle in a
+	// fabricated ancestry claim. First confirm den actually has each event
+	// at all (EventsFromIDs silently omits IDs it doesn't have, so a length
+	// mismatch means at least one is unknown).
+	knownExtra, err := r.DB.EventsFromIDs(ctx, roomInfo, extraEventIDs)
+	if err != nil {
+		return fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+	}
+	if len(knownExtra) != len(extraEventIDs) {
+		return fmt.Errorf("one or more of the given event IDs are not known to den - refusing to reference them")
+	}
+	// Then confirm each is a connected part of the room's graph, not a bare
+	// outlier. StateAtEventIDs itself errors loudly (MissingStateError) if
+	// any non-create event it finds has BeforeStateSnapshotNID == 0, i.e.
+	// state resolution has never run for it - exactly the "not vouched for"
+	// case this guard exists to catch.
+	if _, err = r.DB.StateAtEventIDs(ctx, extraEventIDs); err != nil {
+		return fmt.Errorf("one or more of the given event IDs are not a connected part of the room's graph den can verify: %w", err)
+	}
+
+	validRoomID, err := spec.NewRoomID(roomID)
+	if err != nil {
+		return err
+	}
+	senderID, err := r.Queryer.QuerySenderIDForUser(ctx, *validRoomID, *fullUserID)
+	if err != nil {
+		return err
+	} else if senderID == nil {
+		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
+	}
+
+	proto := &gomatrixserverlib.ProtoEvent{
+		Type:     "m.room.message",
+		SenderID: string(*senderID),
+		RoomID:   roomID,
+	}
+	if proto.Content, err = json.Marshal(map[string]any{
+		"msgtype": "m.notice",
+		"body":    "(state repair: bridging previously-disconnected room history back into current state)",
+	}); err != nil {
+		return fmt.Errorf("json.Marshal: %w", err)
+	}
+
+	eventsNeeded, err := gomatrixserverlib.StateNeededForProtoEvent(proto)
+	if err != nil {
+		return fmt.Errorf("gomatrixserverlib.StateNeededForProtoEvent: %w", err)
+	}
+
+	// Extend den's own latest events with the extra IDs so
+	// eventutil.BuildEvent's prev_events span both branches.
+	bridgingState := localState
+	bridgingState.LatestEvents = append(append([]string{}, localState.LatestEvents...), extraEventIDs...)
+
+	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
+	if err != nil {
+		return err
+	}
+
+	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, &bridgingState)
+	if err != nil {
+		return fmt.Errorf("eventutil.BuildEvent: %w", err)
+	}
+
+	inputReq := &api.InputRoomEventsRequest{
+		InputRoomEvents: []api.InputRoomEvent{{
+			Kind:         api.KindNew,
+			Event:        ev,
+			Origin:       r.Cfg.Matrix.ServerName,
+			SendAsServer: string(r.Cfg.Matrix.ServerName),
+		}},
+		Asynchronous: false,
+	}
+	inputRes := &api.InputRoomEventsResponse{}
+	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
+	if inputRes.ErrMsg != "" {
+		return inputRes.Err()
+	}
+	return nil
+}
+
 func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error {
 	return r.DB.AdminDeleteEventReport(ctx, reportID)
 }

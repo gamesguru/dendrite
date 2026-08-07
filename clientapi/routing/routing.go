@@ -311,6 +311,12 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
+	dendriteAdminRouter.Handle("/admin/bridgeState/{roomID}",
+		httputil.MakeAdminAPI("admin_bridge_state", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return AdminBridgeState(req, device, rsAPI)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	dendriteAdminRouter.Handle("/admin/fulltext/reindex",
 		httputil.MakeAdminAPI("admin_fultext_reindex", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminReindex(req, cfg, device, natsClient)

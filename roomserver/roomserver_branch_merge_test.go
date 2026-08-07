@@ -229,3 +229,112 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 		}
 	})
 }
+
+// TestPerformAdminBridgeState exercises the actual admin function
+// (PerformAdminBridgeState) added to close this gap in production, using
+// the same disconnected-join setup as TestDisconnectedJoinerSendsMessage,
+// rather than a hand-built event. This is what an operator actually calls.
+func TestPerformAdminBridgeState(t *testing.T) {
+	alice := test.NewUser(t)
+	dave := test.NewUser(t)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+
+		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+		if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
+			t.Fatalf("failed to send create-room events: %v", err)
+		}
+		preJoinTip := room.Events()[len(room.Events())-1]
+
+		daveJoinEv := mustCreateEvent(t, fledglingEvent{
+			Type:     spec.MRoomMember,
+			StateKey: &dave.ID,
+			SenderID: dave.ID,
+			RoomID:   room.ID,
+			Content:  map[string]any{"membership": "join"},
+			Depth:    preJoinTip.Depth() + 1,
+			PrevEvents: []any{
+				preJoinTip.EventID(),
+			},
+			AuthEvents: []any{
+				room.Events()[0].EventID(),
+				room.Events()[2].EventID(),
+				room.Events()[3].EventID(),
+			},
+		})
+		res := &api.InputRoomEventsResponse{}
+		rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+			InputRoomEvents: []api.InputRoomEvent{{
+				Kind:   api.KindOld,
+				Event:  daveJoinEv,
+				Origin: "test",
+			}},
+			Asynchronous: false,
+		}, res)
+		if res.ErrMsg != "" {
+			t.Fatalf("failed to insert dave's KindOld join: %s", res.ErrMsg)
+		}
+
+		tip := preJoinTip
+		for i := 0; i < 5; i++ {
+			msg := mustCreateEvent(t, fledglingEvent{
+				Type:     "m.room.message",
+				SenderID: alice.ID,
+				RoomID:   room.ID,
+				Content:  map[string]any{"body": "hello"},
+				Depth:    tip.Depth() + 1,
+				PrevEvents: []any{
+					tip.EventID(),
+				},
+				AuthEvents: []any{
+					room.Events()[0].EventID(),
+					room.Events()[1].EventID(),
+					room.Events()[2].EventID(),
+				},
+			})
+			res = &api.InputRoomEventsResponse{}
+			rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+				InputRoomEvents: []api.InputRoomEvent{{
+					Kind:   api.KindNew,
+					Event:  msg,
+					Origin: "test",
+				}},
+				Asynchronous: false,
+			}, res)
+			if res.ErrMsg != "" {
+				t.Fatalf("failed to send filler message %d: %s", i, res.ErrMsg)
+			}
+			tip = msg
+		}
+
+		// Sanity check before calling the admin function.
+		if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev != nil {
+			t.Fatalf("dave is already in current state before calling PerformAdminBridgeState")
+		}
+
+		// alice calls the admin function, referencing dave's disconnected
+		// join as the extra event to bridge in.
+		if err := rsAPI.PerformAdminBridgeState(ctx, room.ID, alice.ID, []string{daveJoinEv.EventID()}); err != nil {
+			t.Fatalf("PerformAdminBridgeState failed: %v", err)
+		}
+
+		if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev == nil {
+			t.Fatalf("dave still isn't in current state after PerformAdminBridgeState")
+		}
+
+		// Refusal check: an unconnected/unknown event ID must be rejected,
+		// not silently accepted as a fabricated ancestry claim.
+		if err := rsAPI.PerformAdminBridgeState(ctx, room.ID, alice.ID, []string{"$doesnotexist"}); err == nil {
+			t.Fatalf("PerformAdminBridgeState should have refused an unknown event ID")
+		}
+	})
+}
