@@ -337,21 +337,26 @@ func (r *Admin) PerformAdminDownloadState(
 }
 
 // fetchStateToInstall fetches the room's state from serverName at each of
-// the given forward extremities, verifies signatures, and merges in any
-// state key that den's own local state (localStateEvents) has but the
-// remote snapshot doesn't.
+// the given forward extremities, verifies signatures, and merges it with
+// den's own local state (localStateEvents), preferring *local* wherever
+// local has an entry for a given (type, state_key) tuple and only falling
+// back to the remote-fetched value for tuples local doesn't have at all.
 //
-// That merge matters because GET /state returns the room's state as of
+// That priority matters because GET /state returns the room's state as of
 // *before* the queried event. If a forward extremity is itself a recent
 // membership change - e.g. the admin operation's own requester having only
-// just joined - the remote server's response won't include that membership
-// at all, even though it's real and den already has it. Left alone, that
-// drops the requester's own membership from the state about to be
-// installed, which then makes the corrective event fail its own auth check
-// before it can apply anything (confirmed in production: "eventauth:
-// sender ... not in room"). The merge can only add state keys den already
-// legitimately has; it never removes or overrides anything the remote
-// server reported.
+// just joined - the remote server's response reflects the state *before*
+// that join, i.e. it can still show the requester as merely invited, not
+// joined. Preferring remote there would silently regress the requester's
+// own membership and make the corrective event fail its own auth check
+// before it can apply anything - confirmed in production: this exact
+// scenario ("eventauth: sender ... not in room") survived an earlier
+// version of this fix that only filled gaps missing from remote, because
+// remote wasn't missing that tuple - it just had a stale (pre-join) value
+// for it. Local is always at least as fresh as remote for anything den has
+// already legitimately processed, so local should win on conflicts; remote
+// is only needed to fill in tuples (like other users' memberships den never
+// received) that local doesn't have at all.
 func (r *Admin) fetchStateToInstall(
 	ctx context.Context,
 	roomID string,
@@ -360,20 +365,19 @@ func (r *Admin) fetchStateToInstall(
 	fwdExtremities []string,
 	localStateEvents []*types.HeaderedEvent,
 ) (authEvents, stateEvents []*types.HeaderedEvent, stateIDs []string, err error) {
-	// Keyed by "type\x00state_key" so we can tell whether a remote-fetched
-	// state event already covers a given slot, without caring whether the
-	// specific event ID matches.
-	localByTuple := make(map[string]gomatrixserverlib.PDU, len(localStateEvents))
-	for _, ev := range localStateEvents {
-		if ev.StateKey() == nil {
-			continue
-		}
-		localByTuple[ev.Type()+"\x00"+*ev.StateKey()] = ev.PDU
-	}
-
+	// Keyed by "type\x00state_key". stateEventMap is seeded from local state
+	// first so local always wins ties; remote-fetched events below only fill
+	// in tuples this map doesn't already have a state_key entry for.
+	stateTupleOf := make(map[string]string) // "type\x00state_key" -> event ID, for events currently in stateEventMap
 	authEventMap := map[string]gomatrixserverlib.PDU{}
 	stateEventMap := map[string]gomatrixserverlib.PDU{}
-	stateTuplesSeen := map[string]bool{}
+
+	for _, ev := range localStateEvents {
+		stateEventMap[ev.EventID()] = ev.PDU
+		if sk := ev.StateKey(); sk != nil {
+			stateTupleOf[ev.Type()+"\x00"+*sk] = ev.EventID()
+		}
+	}
 
 	for _, fwdExtremity := range fwdExtremities {
 		var state gomatrixserverlib.StateResponse
@@ -395,18 +399,20 @@ func (r *Admin) fetchStateToInstall(
 			}); err != nil {
 				continue
 			}
-			stateEventMap[stateEvent.EventID()] = stateEvent
-			if sk := stateEvent.StateKey(); sk != nil {
-				stateTuplesSeen[stateEvent.Type()+"\x00"+*sk] = true
+			sk := stateEvent.StateKey()
+			if sk == nil {
+				stateEventMap[stateEvent.EventID()] = stateEvent
+				continue
 			}
+			tuple := stateEvent.Type() + "\x00" + *sk
+			if _, haveLocal := stateTupleOf[tuple]; haveLocal {
+				// Local already covers this slot - it wins, per the
+				// function comment. Don't add the remote version at all.
+				continue
+			}
+			stateEventMap[stateEvent.EventID()] = stateEvent
+			stateTupleOf[tuple] = stateEvent.EventID()
 		}
-	}
-
-	for tuple, ev := range localByTuple {
-		if stateTuplesSeen[tuple] {
-			continue
-		}
-		stateEventMap[ev.EventID()] = ev
 	}
 
 	authEvents = make([]*types.HeaderedEvent, 0, len(authEventMap))
