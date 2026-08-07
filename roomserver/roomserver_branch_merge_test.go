@@ -12,6 +12,7 @@ import (
 	"github.com/element-hq/dendrite/internal/sqlutil"
 	"github.com/element-hq/dendrite/roomserver"
 	"github.com/element-hq/dendrite/roomserver/api"
+	"github.com/element-hq/dendrite/roomserver/types"
 	"github.com/element-hq/dendrite/setup/jetstream"
 	"github.com/element-hq/dendrite/test"
 	"github.com/element-hq/dendrite/test/testrig"
@@ -19,7 +20,16 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
-// TestDisconnectedJoinerSendsMessage reproduces the den.nutra.tk production
+// disconnectedJoinScenario holds what buildDisconnectedJoinScenario built,
+// for the caller to act on.
+type disconnectedJoinScenario struct {
+	rsAPI      api.RoomserverInternalAPI
+	room       *test.Room
+	daveJoinEv *types.HeaderedEvent
+	tip        *types.HeaderedEvent
+}
+
+// buildDisconnectedJoinScenario reproduces the den.nutra.tk production
 // scenario: a user (dave) joins a room, but that join is never referenced by
 // the room's forward extremities - the shape you get when a join is learned
 // about via backfill/gap-fill rather than processed live, which is exactly
@@ -28,130 +38,142 @@ import (
 // matter how valid the event is). A KindNew join, by contrast, becomes an
 // extremity and stays part of current state even if nothing later
 // references it - that would NOT reproduce the production bug, which is why
-// this test deliberately avoids test.Room's normal CreateAndInsert helper
-// for the events built after dave's join: that helper chains every new
-// event's prev_events onto whatever was inserted last, which would make
+// the mainline events built after dave's join are built manually rather than
+// via test.Room's normal CreateAndInsert helper: that helper chains every
+// new event's prev_events onto whatever was inserted last, which would make
 // dave's join an ancestor of everything that follows regardless of Kind.
 //
-// After the room's mainline moves on with no path back to dave's join, dave
+// Must be called from inside a test.WithAllDatabases callback (t is that
+// callback's *testing.T, already scoped to one database type).
+func buildDisconnectedJoinScenario(t *testing.T, dbType test.DBType, alice, dave *test.User) disconnectedJoinScenario {
+	t.Helper()
+	ctx := context.Background()
+
+	cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+	t.Cleanup(closeDB)
+
+	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+	natsInstance := jetstream.NATSInstance{}
+	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+	rsAPI.SetFederationAPI(nil, nil)
+
+	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+	if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
+		t.Fatalf("failed to send create-room events: %v", err)
+	}
+
+	// The room's tip right after creation, before dave joins - this is the
+	// branch point everything below diverges from.
+	preJoinTip := room.Events()[len(room.Events())-1]
+
+	// dave's join, submitted as KindOld (i.e. as if learned about via
+	// backfill/gap-fill, not processed live). Per input_events.go, this
+	// skips updateLatestEvents entirely, so it will never become part of
+	// current state's fold no matter what its own state resolves to -
+	// exactly the shape of the three stuck production events (present,
+	// signature-valid, is_rejected=false, but never an extremity).
+	daveJoinEv := mustCreateEvent(t, fledglingEvent{
+		Type:     spec.MRoomMember,
+		StateKey: &dave.ID,
+		SenderID: dave.ID,
+		RoomID:   room.ID,
+		Content:  map[string]any{"membership": "join"},
+		Depth:    preJoinTip.Depth() + 1,
+		PrevEvents: []any{
+			preJoinTip.EventID(),
+		},
+		AuthEvents: []any{
+			room.Events()[0].EventID(), // create event
+			room.Events()[2].EventID(), // power levels event
+			room.Events()[3].EventID(), // join rules event
+		},
+	})
+
+	res := &api.InputRoomEventsResponse{}
+	rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+		InputRoomEvents: []api.InputRoomEvent{{
+			Kind:   api.KindOld,
+			Event:  daveJoinEv,
+			Origin: "test",
+		}},
+		Asynchronous: false,
+	}, res)
+	if res.ErrMsg != "" {
+		t.Fatalf("failed to insert dave's KindOld join: %s", res.ErrMsg)
+	}
+
+	// Sanity check: dave must NOT be part of current state at this point -
+	// if he is, this scenario isn't reproducing the bug shape and everything
+	// built on top of it is meaningless.
+	if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev != nil {
+		t.Fatalf("dave is already in current state right after a KindOld join - scenario setup didn't reproduce a disconnected join")
+	}
+
+	// The room moves on from the PRE-join tip, never referencing dave's
+	// join. Built manually (not via room.CreateAndInsert, which would chain
+	// prev_events onto dave's join since it's the last-inserted event) so
+	// the mainline genuinely never has dave's join as an ancestor.
+	tip := preJoinTip
+	for i := 0; i < 5; i++ {
+		msg := mustCreateEvent(t, fledglingEvent{
+			Type:     "m.room.message",
+			SenderID: alice.ID,
+			RoomID:   room.ID,
+			Content:  map[string]any{"body": "hello"},
+			Depth:    tip.Depth() + 1,
+			PrevEvents: []any{
+				tip.EventID(),
+			},
+			AuthEvents: []any{
+				room.Events()[0].EventID(), // create event
+				room.Events()[1].EventID(), // alice's own join, for membership auth
+				room.Events()[2].EventID(), // power levels event
+			},
+		})
+		res = &api.InputRoomEventsResponse{}
+		rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+			InputRoomEvents: []api.InputRoomEvent{{
+				Kind:   api.KindNew,
+				Event:  msg,
+				Origin: "test",
+			}},
+			Asynchronous: false,
+		}, res)
+		if res.ErrMsg != "" {
+			t.Fatalf("failed to send filler message %d: %s", i, res.ErrMsg)
+		}
+		tip = msg
+	}
+
+	return disconnectedJoinScenario{
+		rsAPI:      rsAPI,
+		room:       room,
+		daveJoinEv: daveJoinEv,
+		tip:        tip,
+	}
+}
+
+// TestDisconnectedJoinerSendsMessage checks the "someone sends a message"
+// fix floated for production tonight, at the level of raw events: dave
 // sends a brand new message whose prev_events span both his own last-known
-// event and the room's current tip - the "someone sends a message" fix
-// floated for production tonight. This checks whether that new message is
-// correctly authed (dave recognised as a room member) and whether it's own
-// state gets folded back into current state afterwards.
+// event and the room's current tip. EXPECTATION: this fails, because
+// CheckForSoftFail (roomserver/internal/helpers/auth.go) checks the event
+// against roomInfo's CURRENT state snapshot regardless of the event's own
+// prev_events - dave isn't currently a member, so this soft-fails no matter
+// what his message's ancestry says. An otherwise identical message from
+// alice (a CURRENTLY recognised member) is not soft-failed, and correctly
+// folds dave back into current state via ordinary multi-branch state
+// resolution.
 func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 	alice := test.NewUser(t)
 	dave := test.NewUser(t)
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
+		s := buildDisconnectedJoinScenario(t, dbType, alice, dave)
+		rsAPI, room, daveJoinEv, tip := s.rsAPI, s.room, s.daveJoinEv, s.tip
 
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		natsInstance := jetstream.NATSInstance{}
-		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
-		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
-		rsAPI.SetFederationAPI(nil, nil)
-
-		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
-
-		if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
-			t.Fatalf("failed to send create-room events: %v", err)
-		}
-
-		// The room's tip right after creation, before dave joins - this is
-		// the branch point everything below diverges from.
-		preJoinTip := room.Events()[len(room.Events())-1]
-
-		// dave's join, submitted as KindOld (i.e. as if learned about via
-		// backfill/gap-fill, not processed live). Per input_events.go, this
-		// skips updateLatestEvents entirely, so it will never become part of
-		// current state's fold no matter what its own state resolves to -
-		// exactly the shape of the three stuck production events (present,
-		// signature-valid, is_rejected=false, but never an extremity).
-		daveJoinEv := mustCreateEvent(t, fledglingEvent{
-			Type:     spec.MRoomMember,
-			StateKey: &dave.ID,
-			SenderID: dave.ID,
-			RoomID:   room.ID,
-			Content:  map[string]any{"membership": "join"},
-			Depth:    preJoinTip.Depth() + 1,
-			PrevEvents: []any{
-				preJoinTip.EventID(),
-			},
-			AuthEvents: []any{
-				room.Events()[0].EventID(), // create event
-				room.Events()[2].EventID(), // power levels event
-				room.Events()[3].EventID(), // join rules event
-			},
-		})
-
-		res := &api.InputRoomEventsResponse{}
-		rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
-			InputRoomEvents: []api.InputRoomEvent{{
-				Kind:   api.KindOld,
-				Event:  daveJoinEv,
-				Origin: "test",
-			}},
-			Asynchronous: false,
-		}, res)
-		if res.ErrMsg != "" {
-			t.Fatalf("failed to insert dave's KindOld join: %s", res.ErrMsg)
-		}
-
-		// Sanity check: dave must NOT be part of current state at this
-		// point - if he is, this test isn't reproducing the bug shape and
-		// everything below is meaningless.
-		if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev != nil {
-			t.Fatalf("dave is already in current state right after a KindOld join - test setup didn't reproduce a disconnected join")
-		}
-
-		// The room moves on from the PRE-join tip, never referencing dave's
-		// join. Built manually (not via room.CreateAndInsert, which would
-		// chain prev_events onto dave's join since it's the last-inserted
-		// event) so the mainline genuinely never has dave's join as an
-		// ancestor.
-		tip := preJoinTip
-		for i := 0; i < 5; i++ {
-			msg := mustCreateEvent(t, fledglingEvent{
-				Type:     "m.room.message",
-				SenderID: alice.ID,
-				RoomID:   room.ID,
-				Content:  map[string]any{"body": "hello"},
-				Depth:    tip.Depth() + 1,
-				PrevEvents: []any{
-					tip.EventID(),
-				},
-				AuthEvents: []any{
-					room.Events()[0].EventID(), // create event
-					room.Events()[1].EventID(), // alice's own join, for membership auth
-					room.Events()[2].EventID(), // power levels event
-				},
-			})
-			res = &api.InputRoomEventsResponse{}
-			rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
-				InputRoomEvents: []api.InputRoomEvent{{
-					Kind:   api.KindNew,
-					Event:  msg,
-					Origin: "test",
-				}},
-				Asynchronous: false,
-			}, res)
-			if res.ErrMsg != "" {
-				t.Fatalf("failed to send filler message %d: %s", i, res.ErrMsg)
-			}
-			tip = msg
-		}
-
-		// dave sends a brand new message. Its prev_events span BOTH his own
-		// last known event (the join, still disconnected from current
-		// state) and the room's current tip - exactly the shape of a live
-		// message fixing a stuck state gap. EXPECTATION: this fails, because
-		// CheckForSoftFail (roomserver/internal/helpers/auth.go) checks the
-		// event against roomInfo's CURRENT state snapshot regardless of the
-		// event's own prev_events - dave isn't currently a member, so this
-		// soft-fails no matter what his message's ancestry says.
 		daveMsg := mustCreateEvent(t, fledglingEvent{
 			Type:     "m.room.message",
 			SenderID: dave.ID,
@@ -169,7 +191,7 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 			},
 		})
 
-		res = &api.InputRoomEventsResponse{}
+		res := &api.InputRoomEventsResponse{}
 		rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
 			InputRoomEvents: []api.InputRoomEvent{{
 				Kind:   api.KindNew,
@@ -232,7 +254,7 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 
 // TestPerformAdminBridgeState exercises the actual admin function
 // (PerformAdminBridgeState) added to close this gap in production, using
-// the same disconnected-join setup as TestDisconnectedJoinerSendsMessage,
+// the same disconnected-join scenario as TestDisconnectedJoinerSendsMessage,
 // rather than a hand-built event. This is what an operator actually calls.
 func TestPerformAdminBridgeState(t *testing.T) {
 	alice := test.NewUser(t)
@@ -240,81 +262,8 @@ func TestPerformAdminBridgeState(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
-
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		natsInstance := jetstream.NATSInstance{}
-		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
-		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
-		rsAPI.SetFederationAPI(nil, nil)
-
-		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
-		if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
-			t.Fatalf("failed to send create-room events: %v", err)
-		}
-		preJoinTip := room.Events()[len(room.Events())-1]
-
-		daveJoinEv := mustCreateEvent(t, fledglingEvent{
-			Type:     spec.MRoomMember,
-			StateKey: &dave.ID,
-			SenderID: dave.ID,
-			RoomID:   room.ID,
-			Content:  map[string]any{"membership": "join"},
-			Depth:    preJoinTip.Depth() + 1,
-			PrevEvents: []any{
-				preJoinTip.EventID(),
-			},
-			AuthEvents: []any{
-				room.Events()[0].EventID(),
-				room.Events()[2].EventID(),
-				room.Events()[3].EventID(),
-			},
-		})
-		res := &api.InputRoomEventsResponse{}
-		rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
-			InputRoomEvents: []api.InputRoomEvent{{
-				Kind:   api.KindOld,
-				Event:  daveJoinEv,
-				Origin: "test",
-			}},
-			Asynchronous: false,
-		}, res)
-		if res.ErrMsg != "" {
-			t.Fatalf("failed to insert dave's KindOld join: %s", res.ErrMsg)
-		}
-
-		tip := preJoinTip
-		for i := 0; i < 5; i++ {
-			msg := mustCreateEvent(t, fledglingEvent{
-				Type:     "m.room.message",
-				SenderID: alice.ID,
-				RoomID:   room.ID,
-				Content:  map[string]any{"body": "hello"},
-				Depth:    tip.Depth() + 1,
-				PrevEvents: []any{
-					tip.EventID(),
-				},
-				AuthEvents: []any{
-					room.Events()[0].EventID(),
-					room.Events()[1].EventID(),
-					room.Events()[2].EventID(),
-				},
-			})
-			res = &api.InputRoomEventsResponse{}
-			rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
-				InputRoomEvents: []api.InputRoomEvent{{
-					Kind:   api.KindNew,
-					Event:  msg,
-					Origin: "test",
-				}},
-				Asynchronous: false,
-			}, res)
-			if res.ErrMsg != "" {
-				t.Fatalf("failed to send filler message %d: %s", i, res.ErrMsg)
-			}
-			tip = msg
-		}
+		s := buildDisconnectedJoinScenario(t, dbType, alice, dave)
+		rsAPI, room, daveJoinEv := s.rsAPI, s.room, s.daveJoinEv
 
 		// Sanity check before calling the admin function.
 		if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev != nil {

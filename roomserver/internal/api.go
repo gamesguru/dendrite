@@ -199,6 +199,7 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		Inputer: r.Inputer,
 		Queryer: r.Queryer,
 		Leaver:  r.Leaver,
+		RSAPI:   r,
 	}
 	r.Creator = &perform.Creator{
 		DB:    r.DB,

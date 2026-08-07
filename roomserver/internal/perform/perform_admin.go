@@ -32,6 +32,10 @@ type Admin struct {
 	Queryer *query.Queryer
 	Inputer *input.Inputer
 	Leaver  *Leaver
+	// RSAPI is used where a signing identity must be resolved per-room
+	// rather than per-server-domain (see PerformAdminBridgeState) - pseudo-ID
+	// rooms sign events with a per-room identity, not the server's own.
+	RSAPI api.RoomserverInternalAPI
 }
 
 // PerformAdminEvacuateRoom will remove all local users from the given room.
@@ -472,7 +476,6 @@ func (r *Admin) PerformAdminBridgeState(
 	if err != nil {
 		return err
 	}
-	senderDomain := fullUserID.Domain()
 
 	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
 	if err != nil {
@@ -500,6 +503,16 @@ func (r *Admin) PerformAdminBridgeState(
 	}
 	if len(knownExtra) != len(extraEventIDs) {
 		return fmt.Errorf("one or more of the given event IDs are not known to den - refusing to reference them")
+	}
+	// EventsFromIDs looks up by event ID alone - it isn't room-scoped, and
+	// parses each event using roomID's room version regardless of which room
+	// it actually belongs to. Refuse anything that isn't genuinely in this
+	// room; otherwise a foreign-room event ID could pass every check above
+	// and end up referenced as this room's ancestry.
+	for _, ev := range knownExtra {
+		if ev.RoomID().String() != roomID {
+			return fmt.Errorf("event %s belongs to room %s, not %s - refusing to reference it", ev.EventID(), ev.RoomID().String(), roomID)
+		}
 	}
 	// Then confirm each is a connected part of the room's graph, not a bare
 	// outlier. StateAtEventIDs itself errors loudly (MissingStateError) if
@@ -539,16 +552,31 @@ func (r *Admin) PerformAdminBridgeState(
 	}
 
 	// Extend den's own latest events with the extra IDs so
-	// eventutil.BuildEvent's prev_events span both branches.
+	// eventutil.BuildEvent's prev_events span both branches. addPrevEventsToEvent
+	// silently truncates to 20 prev_events (truncateAuthAndPrevEvents in
+	// internal/eventutil/events.go) - since extraEventIDs are appended after
+	// den's own latest events, a truncation would silently drop the very IDs
+	// this call exists to bridge in. Refuse loudly instead of building an
+	// event that quietly doesn't do what was asked.
+	const maxPrevEvents = 20
 	bridgingState := localState
 	bridgingState.LatestEvents = append(append([]string{}, localState.LatestEvents...), extraEventIDs...)
-
-	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
-	if err != nil {
-		return err
+	if len(bridgingState.LatestEvents) > maxPrevEvents {
+		return fmt.Errorf(
+			"room's current extremities (%d) plus the requested extra event IDs (%d) exceed the %d prev_events an event can carry - reduce extraEventIDs or bridge in smaller batches",
+			len(localState.LatestEvents), len(extraEventIDs), maxPrevEvents,
+		)
 	}
 
-	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, &bridgingState)
+	// Room-aware, not r.Cfg.Matrix.SigningIdentityFor(senderDomain): pseudo-ID
+	// rooms sign events with a per-room identity that the plain server-domain
+	// lookup won't resolve correctly.
+	identity, err := r.RSAPI.SigningIdentityFor(ctx, *validRoomID, *fullUserID)
+	if err != nil {
+		return fmt.Errorf("r.RSAPI.SigningIdentityFor: %w", err)
+	}
+
+	ev, err := eventutil.BuildEvent(ctx, proto, &identity, time.Now(), &eventsNeeded, &bridgingState)
 	if err != nil {
 		return fmt.Errorf("eventutil.BuildEvent: %w", err)
 	}

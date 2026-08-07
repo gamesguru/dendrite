@@ -1775,8 +1775,7 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	// without ever consulting the database, so any cached entry for this room
 	// must be dropped now or a subsequent join will be bootstrapped against a
 	// room NID that doesn't exist anymore.
-	d.Cache.InvalidateRoomServerRoomID(roomNID, roomID)
-	d.Cache.InvalidateRoomVersion(roomID)
+	d.InvalidateRoomCache(roomID, roomNID)
 	return nil
 }
 
