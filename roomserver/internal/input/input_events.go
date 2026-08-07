@@ -63,13 +63,19 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 
 // processRoomEvent can only be called once at a time per room.
 //
-// This is enforced by Inputer.roomMutexes: the NATS-queued path already
-// gives each room a single-threaded actor, but callers that invoke this
-// directly on their own goroutine (namely the missing-event/state gap-fill
-// logic in input_missing.go) do not get that for free, and used to be able
-// to race against it - see the comment on Inputer.roomMutexes for the full
-// story and roomserver/internal/input/input_events_test.go for a regression
-// test. Do not bypass the lock below; every caller must go through it.
+// This invariant is enforced structurally, not by a lock: the NATS-queued
+// path (see worker, above) gives each room a single-threaded actor, and
+// every other caller of this function - namely the missing-event/state
+// gap-fill logic in input_missing.go - is itself only ever reached
+// synchronously from within that same worker call chain, never from an
+// independently-scheduled goroutine. If that ever stops being true - a new
+// caller reaching this function from outside a worker's call chain - this
+// invariant breaks silently. Don't add such a caller without adding
+// something that would catch the violation (this function used to be
+// wrapped in a per-room mutex to paper over exactly this concern; it was
+// removed because every acquisition happened on the already-serialised
+// worker goroutine, making it a no-op, while its context-based reentrancy
+// exemption meant it wouldn't have caught a real violation either).
 //
 // TODO(#375): This should be rewritten to allow concurrent calls. The
 // difficulty is in ensuring that we correctly annotate events with the correct
@@ -89,10 +95,6 @@ func (r *Inputer) processRoomEvent(
 		return context.DeadlineExceeded
 	default:
 	}
-
-	var unlock func()
-	ctx, unlock = r.lockRoom(ctx, input.Event.RoomID().String())
-	defer unlock()
 
 	trace, ctx := internal.StartRegion(ctx, "processRoomEvent")
 	trace.SetTag("room_id", input.Event.RoomID().String())

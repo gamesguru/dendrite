@@ -81,16 +81,6 @@ type Inputer struct {
 	InputRoomEventTopic string
 	OutputProducer      *producers.RoomEventProducer
 	workers             sync.Map // room ID -> *worker
-	// roomMutexes serialises processRoomEvent per room. The NATS-queued path
-	// (see worker, below) already gives each room its own single-threaded
-	// actor, but roomserver/internal/input/input_missing.go's missing-event/
-	// state gap-filling calls processRoomEvent directly, on its own
-	// goroutine, bypassing that serialisation entirely. That lets it race
-	// against the per-room worker (or another concurrent gap-fill) while
-	// both are bootstrapping/mutating the same room, which can silently drop
-	// or corrupt state - see the comment on processRoomEvent. This mutex
-	// closes that gap for every caller, not just the NATS-queued one.
-	roomMutexes sync.Map // room ID -> *sync.Mutex
 
 	Queryer       *query.Queryer
 	UserAPI       userapi.RoomserverUserAPI
@@ -114,33 +104,6 @@ type worker struct {
 	ephemeralSeq uint64
 	// last seq we fully processed
 	durableSeq uint64
-}
-
-// roomLockCtxKey marks, via the context, that the current call chain already
-// holds the lock for a given room ID. processRoomEvent can legitimately
-// re-enter itself on the *same* goroutine (a KindNew event with missing prev
-// events synchronously calls into the missing-event/state gap-fill logic in
-// input_missing.go, which calls processRoomEvent again for the same room to
-// backfill) - a plain mutex would self-deadlock on that path. This lets that
-// same-call-chain recursion skip re-locking, while a genuinely concurrent
-// caller on a different goroutine (no marker in its own context) still
-// blocks on the mutex as intended.
-type roomLockCtxKey struct{}
-
-// lockRoom acquires the per-room mutex used to serialise processRoomEvent
-// (see the comment on Inputer.roomMutexes for why this exists) unless the
-// given context shows this call chain already holds it. It returns the
-// context to use for the remainder of the call (carrying the "held" marker)
-// and a function that releases the lock; callers should `defer unlock()`
-// immediately and use the returned context for anything downstream.
-func (r *Inputer) lockRoom(ctx context.Context, roomID string) (context.Context, func()) {
-	if held, _ := ctx.Value(roomLockCtxKey{}).(string); held == roomID {
-		return ctx, func() {}
-	}
-	v, _ := r.roomMutexes.LoadOrStore(roomID, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return context.WithValue(ctx, roomLockCtxKey{}, roomID), mu.Unlock
 }
 
 func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
