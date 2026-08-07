@@ -628,12 +628,9 @@ Event:
 		}
 	}
 	if !hasPrevEvent {
-		newEvents, hasPrevEvent = t.fallbackFetchMissingPrevEvents(ctx, roomVersion, shouldHaveSomeEventIDs, newEvents, logger)
-	}
-	if !hasPrevEvent {
-		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v, and direct /event lookups for them also failed", t.origin, shouldHaveSomeEventIDs)
+		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v", t.origin, shouldHaveSomeEventIDs)
 		logger.WithError(err).Warnf(
-			"%s pushed us an event but couldn't give us details about prev_events via /get_missing_events or direct /event lookup - dropping this event until it can",
+			"%s pushed us an event but couldn't give us details about prev_events via /get_missing_events - dropping this event until it can",
 			t.origin,
 		)
 		return nil, false, false, missingPrevEventsError{
@@ -676,58 +673,6 @@ Event:
 // happened to be excluded from a broken /get_missing_events response - it was
 // excluded because it's in EarliestEvents, i.e. den already told the remote
 // it has it.
-func (t *missingStateReq) fallbackFetchMissingPrevEvents(
-	ctx context.Context,
-	roomVersion gomatrixserverlib.RoomVersion,
-	shouldHaveSomeEventIDs []string,
-	newEvents []gomatrixserverlib.PDU,
-	logger *logrus.Entry,
-) ([]gomatrixserverlib.PDU, bool) {
-	hasPrevEvent := false
-	for _, pe := range shouldHaveSomeEventIDs {
-		already := false
-		for _, ev := range newEvents {
-			if ev.EventID() == pe {
-				already = true
-				break
-			}
-		}
-		if already {
-			continue
-		}
-		fetched, ferr := t.lookupEvent(ctx, roomVersion, "", pe, true)
-		switch fe := ferr.(type) {
-		case gomatrixserverlib.EventValidationError:
-			// Mirrors the acceptance policy of fetch, above: a persistable
-			// validation failure still gets the event accepted (and
-			// eventually processed/rejected normally downstream), it's only
-			// a hard failure to fetch that we skip.
-			if !fe.Persistable {
-				logger.WithError(ferr).Warnf("fallback /event lookup for missing prev_event %s failed validation", pe)
-				continue
-			}
-		case verifySigError:
-			logger.WithError(ferr).Warnf("fallback /event lookup for missing prev_event %s failed signature verification", pe)
-			continue
-		case nil:
-			break
-		default:
-			logger.WithError(ferr).Warnf("fallback /event lookup for missing prev_event %s also failed", pe)
-			continue
-		}
-		if fetched == nil {
-			continue
-		}
-		newEvents = append(newEvents, fetched)
-		hasPrevEvent = true
-	}
-	if hasPrevEvent {
-		newEvents = gomatrixserverlib.ReverseTopologicalOrdering(
-			gomatrixserverlib.ToPDUs(newEvents), gomatrixserverlib.TopologicalOrderByPrevEvents)
-	}
-	return newEvents, hasPrevEvent
-}
-
 func (t *missingStateReq) isPrevStateKnown(ctx context.Context, e gomatrixserverlib.PDU) bool {
 	expected := len(e.PrevEventIDs())
 	state, err := t.db.StateAtEventIDs(ctx, e.PrevEventIDs())
