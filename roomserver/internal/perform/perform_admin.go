@@ -238,43 +238,22 @@ func (r *Admin) PerformAdminDownloadState(
 		return err
 	}
 
-	authEventMap := map[string]gomatrixserverlib.PDU{}
-	stateEventMap := map[string]gomatrixserverlib.PDU{}
-
-	for _, fwdExtremity := range fwdExtremities {
-		var state gomatrixserverlib.StateResponse
-		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
-		if err != nil {
-			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
-		}
-		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
-			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-			}); err != nil {
-				continue
-			}
-			authEventMap[authEvent.EventID()] = authEvent
-		}
-		for _, stateEvent := range state.GetStateEvents().UntrustedEvents(roomInfo.RoomVersion) {
-			if err = gomatrixserverlib.VerifyEventSignatures(ctx, stateEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-			}); err != nil {
-				continue
-			}
-			stateEventMap[stateEvent.EventID()] = stateEvent
-		}
+	// Fetch den's own current, locally-resolved state up front. We need it
+	// for two things: (1) as the basis for building/authing the corrective
+	// event itself, and (2) merged into the state we install, so that state
+	// keys den already has right (most notably its own users' memberships)
+	// aren't clobbered/dropped just because serverName's snapshot predates
+	// them - see fetchStateToInstall for why that matters.
+	var localState api.QueryLatestEventsAndStateResponse
+	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+	}, &localState); err != nil {
+		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
 	}
 
-	authEvents := make([]*types.HeaderedEvent, 0, len(authEventMap))
-	stateEvents := make([]*types.HeaderedEvent, 0, len(stateEventMap))
-	stateIDs := make([]string, 0, len(stateEventMap))
-
-	for _, authEvent := range authEventMap {
-		authEvents = append(authEvents, &types.HeaderedEvent{PDU: authEvent})
-	}
-	for _, stateEvent := range stateEventMap {
-		stateEvents = append(stateEvents, &types.HeaderedEvent{PDU: stateEvent})
-		stateIDs = append(stateIDs, stateEvent.EventID())
+	authEvents, stateEvents, stateIDs, err := r.fetchStateToInstall(ctx, roomID, serverName, roomInfo, fwdExtremities, localState.StateEvents)
+	if err != nil {
+		return err
 	}
 
 	validRoomID, err := spec.NewRoomID(roomID)
@@ -300,25 +279,10 @@ func (r *Admin) PerformAdminDownloadState(
 	}
 
 	// Build/auth this event against den's own current, locally-resolved
-	// state - NOT the state we just fetched from serverName. Per the
-	// federation spec, GET /state returns the room's state as of *before*
-	// the given event, so if fwdExtremity is itself a recent membership
-	// change (e.g. the local user's own join), the fetched state predates
-	// it and won't show the sender as a room member yet. Authing the
-	// corrective event against that stale snapshot makes it fail its own
-	// auth check ("sender not in room") before it can ever apply the fix -
-	// confirmed in production: PerformAdminDownloadState rejected itself
-	// with exactly that error. The remote-fetched state (stateIDs, below)
-	// is still what gets *installed* as the new snapshot; only the auth
-	// chain used to build and authorize this specific event needs to come
-	// from state we already know is valid.
-	var localState api.QueryLatestEventsAndStateResponse
-	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
-		RoomID: roomID,
-	}, &localState); err != nil {
-		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
-	}
-
+	// state (fetched above as localState) - NOT the state we just fetched
+	// from serverName in fetchStateToInstall. That remote state can predate
+	// the requester's own membership, which would make this event fail its
+	// own auth check before it can apply anything.
 	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
 	if err != nil {
 		return err
@@ -370,6 +334,94 @@ func (r *Admin) PerformAdminDownloadState(
 	}
 
 	return nil
+}
+
+// fetchStateToInstall fetches the room's state from serverName at each of
+// the given forward extremities, verifies signatures, and merges in any
+// state key that den's own local state (localStateEvents) has but the
+// remote snapshot doesn't.
+//
+// That merge matters because GET /state returns the room's state as of
+// *before* the queried event. If a forward extremity is itself a recent
+// membership change - e.g. the admin operation's own requester having only
+// just joined - the remote server's response won't include that membership
+// at all, even though it's real and den already has it. Left alone, that
+// drops the requester's own membership from the state about to be
+// installed, which then makes the corrective event fail its own auth check
+// before it can apply anything (confirmed in production: "eventauth:
+// sender ... not in room"). The merge can only add state keys den already
+// legitimately has; it never removes or overrides anything the remote
+// server reported.
+func (r *Admin) fetchStateToInstall(
+	ctx context.Context,
+	roomID string,
+	serverName spec.ServerName,
+	roomInfo *types.RoomInfo,
+	fwdExtremities []string,
+	localStateEvents []*types.HeaderedEvent,
+) (authEvents, stateEvents []*types.HeaderedEvent, stateIDs []string, err error) {
+	// Keyed by "type\x00state_key" so we can tell whether a remote-fetched
+	// state event already covers a given slot, without caring whether the
+	// specific event ID matches.
+	localByTuple := make(map[string]gomatrixserverlib.PDU, len(localStateEvents))
+	for _, ev := range localStateEvents {
+		if ev.StateKey() == nil {
+			continue
+		}
+		localByTuple[ev.Type()+"\x00"+*ev.StateKey()] = ev.PDU
+	}
+
+	authEventMap := map[string]gomatrixserverlib.PDU{}
+	stateEventMap := map[string]gomatrixserverlib.PDU{}
+	stateTuplesSeen := map[string]bool{}
+
+	for _, fwdExtremity := range fwdExtremities {
+		var state gomatrixserverlib.StateResponse
+		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
+		}
+		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
+			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+			}); err != nil {
+				continue
+			}
+			authEventMap[authEvent.EventID()] = authEvent
+		}
+		for _, stateEvent := range state.GetStateEvents().UntrustedEvents(roomInfo.RoomVersion) {
+			if err = gomatrixserverlib.VerifyEventSignatures(ctx, stateEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+			}); err != nil {
+				continue
+			}
+			stateEventMap[stateEvent.EventID()] = stateEvent
+			if sk := stateEvent.StateKey(); sk != nil {
+				stateTuplesSeen[stateEvent.Type()+"\x00"+*sk] = true
+			}
+		}
+	}
+
+	for tuple, ev := range localByTuple {
+		if stateTuplesSeen[tuple] {
+			continue
+		}
+		stateEventMap[ev.EventID()] = ev
+	}
+
+	authEvents = make([]*types.HeaderedEvent, 0, len(authEventMap))
+	stateEvents = make([]*types.HeaderedEvent, 0, len(stateEventMap))
+	stateIDs = make([]string, 0, len(stateEventMap))
+
+	for _, authEvent := range authEventMap {
+		authEvents = append(authEvents, &types.HeaderedEvent{PDU: authEvent})
+	}
+	for _, stateEvent := range stateEventMap {
+		stateEvents = append(stateEvents, &types.HeaderedEvent{PDU: stateEvent})
+		stateIDs = append(stateIDs, stateEvent.EventID())
+	}
+
+	return authEvents, stateEvents, stateIDs, nil
 }
 
 func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error {
