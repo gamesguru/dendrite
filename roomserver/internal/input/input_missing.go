@@ -661,18 +661,6 @@ Event:
 	return newEvents, true, t.isPrevStateKnown(ctx, e), nil
 }
 
-// fallbackFetchMissingPrevEvents is called when /get_missing_events failed to
-// return one or more of an event's own prev_events - confirmed in production
-// against a real server that otherwise answers direct single-event lookups
-// correctly, so the graph-walking endpoint failing doesn't mean the data is
-// actually unavailable. It fetches each still-missing prev_event individually
-// via /event/{eventID} instead, which doesn't depend on the remote's
-// graph-traversal logic being correct. localFirst=true, matching the other
-// per-event lookups in this file (see fetch, above): a prev_event den already
-// has locally must not be re-requested over federation just because it
-// happened to be excluded from a broken /get_missing_events response - it was
-// excluded because it's in EarliestEvents, i.e. den already told the remote
-// it has it.
 func (t *missingStateReq) isPrevStateKnown(ctx context.Context, e gomatrixserverlib.PDU) bool {
 	expected := len(e.PrevEventIDs())
 	state, err := t.db.StateAtEventIDs(ctx, e.PrevEventIDs())

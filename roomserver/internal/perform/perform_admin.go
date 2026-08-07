@@ -521,16 +521,16 @@ func (r *Admin) PerformAdminBridgeState(
 		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
 	}
 
+	// Custom, non-message type (matching PerformAdminDownloadState's
+	// org.matrix.dendrite.state_download below) - ordinary clients don't
+	// recognise it and won't render it in the timeline. Nothing about the
+	// bridging mechanism requires a message specifically; only that this be
+	// an ordinary, non-state KindNew event (see the function doc comment).
 	proto := &gomatrixserverlib.ProtoEvent{
-		Type:     "m.room.message",
+		Type:     "org.matrix.dendrite.state_bridge",
 		SenderID: string(*senderID),
 		RoomID:   roomID,
-	}
-	if proto.Content, err = json.Marshal(map[string]any{
-		"msgtype": "m.notice",
-		"body":    "(state repair: bridging previously-disconnected room history back into current state)",
-	}); err != nil {
-		return fmt.Errorf("json.Marshal: %w", err)
+		Content:  spec.RawJSON("{}"),
 	}
 
 	eventsNeeded, err := gomatrixserverlib.StateNeededForProtoEvent(proto)
