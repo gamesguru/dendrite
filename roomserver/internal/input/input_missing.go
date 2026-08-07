@@ -628,9 +628,42 @@ Event:
 		}
 	}
 	if !hasPrevEvent {
-		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v", t.origin, shouldHaveSomeEventIDs)
+		// /get_missing_events walks the room graph server-side, and that
+		// walk can fail even when the remote server unquestionably has the
+		// event in question (it's the one that referenced it in the first
+		// place) - observed in production against a real server that
+		// otherwise answers direct single-event lookups correctly. Before
+		// giving up and dropping the event, fall back to /event/{eventID}
+		// for each missing prev_event: a much simpler lookup that doesn't
+		// depend on the remote's graph-traversal logic being correct.
+		for _, pe := range shouldHaveSomeEventIDs {
+			already := false
+			for _, ev := range newEvents {
+				if ev.EventID() == pe {
+					already = true
+					break
+				}
+			}
+			if already {
+				continue
+			}
+			fetched, ferr := t.lookupEvent(ctx, roomVersion, "", pe, false)
+			if ferr != nil || fetched == nil {
+				logger.WithError(ferr).Warnf("fallback /event lookup for missing prev_event %s also failed", pe)
+				continue
+			}
+			newEvents = append(newEvents, fetched)
+			hasPrevEvent = true
+		}
+		if hasPrevEvent {
+			newEvents = gomatrixserverlib.ReverseTopologicalOrdering(
+				gomatrixserverlib.ToPDUs(newEvents), gomatrixserverlib.TopologicalOrderByPrevEvents)
+		}
+	}
+	if !hasPrevEvent {
+		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v, and direct /event lookups for them also failed", t.origin, shouldHaveSomeEventIDs)
 		logger.WithError(err).Warnf(
-			"%s pushed us an event but couldn't give us details about prev_events via /get_missing_events - dropping this event until it can",
+			"%s pushed us an event but couldn't give us details about prev_events via /get_missing_events or direct /event lookup - dropping this event until it can",
 			t.origin,
 		)
 		return nil, false, false, missingPrevEventsError{
