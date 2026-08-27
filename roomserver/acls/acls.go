@@ -16,9 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 )
 
 const MRoomServerACL = "m.room.server_acl"
@@ -97,12 +98,12 @@ type serverACL struct {
 
 func compileACLRegex(orig string) (*regexp.Regexp, error) {
 	escaped := regexp.QuoteMeta(orig)
-	escaped = strings.Replace(escaped, "\\?", ".", -1)
-	escaped = strings.Replace(escaped, "\\*", ".*", -1)
+	escaped = strings.ReplaceAll(escaped, "\\?", ".")
+	escaped = strings.ReplaceAll(escaped, "\\*", ".*")
 	return regexp.Compile(escaped)
 }
 
-// cachedCompileACLRegex is a wrapper around compileACLRegex with added caching
+// cachedCompileACLRegex is a wrapper around compileACLRegex with added caching.
 func (s *ServerACLs) cachedCompileACLRegex(orig string) (**regexp.Regexp, error) {
 	s.aclRegexCacheMutex.RLock()
 	re, ok := s.aclRegexCache[orig]

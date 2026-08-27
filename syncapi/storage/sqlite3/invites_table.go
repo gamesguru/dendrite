@@ -12,11 +12,11 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const inviteEventsSchema = `
@@ -183,9 +183,54 @@ func (s *inviteEventsStatements) SelectMaxInviteID(
 	return
 }
 
+// SelectRoomsWithInvitesSince returns a list of room IDs that have invite events with stream position > since.
+func (s *inviteEventsStatements) SelectRoomsWithInvitesSince(
+	ctx context.Context, txn *sql.Tx,
+	targetUserID string, roomIDs []string, since types.StreamPosition,
+) ([]string, error) {
+	// Build a set of candidate room IDs for fast lookup
+	candidateRooms := make(map[string]bool, len(roomIDs))
+	for _, roomID := range roomIDs {
+		candidateRooms[roomID] = true
+	}
+
+	// Query for all rooms with invites for this user since the position
+	// SQLite doesn't support ANY, so we query all and filter in Go
+	query := `SELECT DISTINCT room_id FROM syncapi_invite_events
+		WHERE target_user_id = ?  AND id > ?`
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if txn == nil {
+		rows, err = s.db.QueryContext(ctx, query, targetUserID, since)
+	} else {
+		rows, err = txn.QueryContext(ctx, query, targetUserID, since)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomsWithInvitesSince: rows.close() failed")
+
+	var result []string
+	for rows.Next() {
+		var roomID string
+		if err := rows.Scan(&roomID); err != nil {
+			return nil, err
+		}
+		// Only include if in candidate list
+		if candidateRooms[roomID] {
+			result = append(result, roomID)
+		}
+	}
+	return result, rows.Err()
+}
+
 func (s *inviteEventsStatements) PurgeInvites(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeInvitesStmt).ExecContext(ctx, roomID)
+	purgeInvitesStmt := sqlutil.TxStmt(txn, s.purgeInvitesStmt)
+	_, err := purgeInvitesStmt.ExecContext(ctx, roomID)
 	return err
 }

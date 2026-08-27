@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventTypesSchema = `
@@ -111,7 +111,7 @@ func (s *eventTypeStatements) BulkSelectEventTypeNID(
 	ctx context.Context, txn *sql.Tx, eventTypes []string,
 ) (map[string]types.EventTypeNID, error) {
 	///////////////
-	iEventTypes := make([]interface{}, len(eventTypes))
+	iEventTypes := make([]any, len(eventTypes))
 	for k, v := range eventTypes {
 		iEventTypes[k] = v
 	}

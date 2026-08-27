@@ -10,9 +10,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/types"
 )
 
 type NotaryID int64
@@ -114,7 +115,7 @@ type FederationNotaryServerKeysJSON interface {
 	InsertJSONResponse(ctx context.Context, txn *sql.Tx, keyQueryResponseJSON gomatrixserverlib.ServerKeys, serverName spec.ServerName, validUntil spec.Timestamp) (NotaryID, error)
 }
 
-// FederationNotaryServerKeysMetadata persists the metadata for FederationNotaryServerKeysJSON
+// FederationNotaryServerKeysMetadata persists the metadata for FederationNotaryServerKeysJSON.
 type FederationNotaryServerKeysMetadata interface {
 	// UpsertKey updates or inserts a (server_name, key_id) tuple, pointing it via NotaryID at the the response which has the longest valid_until_ts
 	// `newNotaryID` and `newValidUntil` should be the notary ID / valid_until  which has this (server_name, key_id) tuple already, e.g one you just inserted.
@@ -129,4 +130,17 @@ type FederationNotaryServerKeysMetadata interface {
 type FederationServerSigningKeys interface {
 	BulkSelectServerKeys(ctx context.Context, txn *sql.Tx, requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp) (map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult, error)
 	UpsertServerKeys(ctx context.Context, txn *sql.Tx, request gomatrixserverlib.PublicKeyLookupRequest, key gomatrixserverlib.PublicKeyLookupResult) error
+}
+
+// FederationRetryState persists the backoff/retry state for federation destinations
+// so that retry timers survive server restarts.
+type FederationRetryState interface {
+	// UpsertRetryState updates or inserts the retry state for a server
+	UpsertRetryState(ctx context.Context, txn *sql.Tx, serverName spec.ServerName, failureCount uint32, retryUntil spec.Timestamp) error
+	// SelectRetryState returns the retry state for a server, or (0, 0, false) if not found
+	SelectRetryState(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (failureCount uint32, retryUntil spec.Timestamp, exists bool, err error)
+	// SelectAllRetryStates returns all retry states (for loading on startup)
+	SelectAllRetryStates(ctx context.Context, txn *sql.Tx) (map[spec.ServerName]types.RetryState, error)
+	// DeleteRetryState removes the retry state for a server (called on success)
+	DeleteRetryState(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) error
 }

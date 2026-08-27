@@ -1,18 +1,21 @@
 package internal
 
 import (
+	"errors"
 	"net/http"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func Test_validatePassword(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		password  string
@@ -37,7 +40,9 @@ func Test_validatePassword(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotErr := ValidatePassword(tt.password)
 			if !reflect.DeepEqual(gotErr, tt.wantError) {
 				t.Errorf("validatePassword() = %v, wantError %v", gotErr, tt.wantError)
@@ -51,6 +56,7 @@ func Test_validatePassword(t *testing.T) {
 }
 
 func Test_validateUsername(t *testing.T) {
+	t.Parallel()
 	tooLongUsername := strings.Repeat("a", maxUsernameLength)
 	tests := []struct {
 		name      string
@@ -161,7 +167,9 @@ func Test_validateUsername(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotErr := ValidateUsername(tt.localpart, tt.domain)
 			if !reflect.DeepEqual(gotErr, tt.wantErr) {
 				t.Errorf("ValidateUsername() = %v, wantErr %v", gotErr, tt.wantErr)
@@ -171,7 +179,7 @@ func Test_validateUsername(t *testing.T) {
 			}
 
 			// Application services are allowed usernames starting with an underscore
-			if tt.wantErr == ErrUsernameUnderscore {
+			if errors.Is(tt.wantErr, ErrUsernameUnderscore) {
 				return
 			}
 			gotErr = ValidateApplicationServiceUsername(tt.localpart, tt.domain)
@@ -186,8 +194,9 @@ func Test_validateUsername(t *testing.T) {
 }
 
 // This method tests validation of the provided Application Service token and
-// username that they're registering
+// username that they're registering.
 func TestValidateApplicationServiceRequest(t *testing.T) {
+	t.Parallel()
 	// Create a fake application service
 	regex := "@_appservice_.*"
 	fakeNamespace := config.ApplicationServiceNamespace{
@@ -227,7 +236,7 @@ func TestValidateApplicationServiceRequest(t *testing.T) {
 	}
 
 	// Set up a config
-	fakeConfig := &config.Dendrite{}
+	fakeConfig := &config.Zendrite{}
 	fakeConfig.Defaults(config.DefaultOpts{
 		Generate: true,
 	})
@@ -300,7 +309,9 @@ func TestValidateApplicationServiceRequest(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotASID, gotResp := ValidateApplicationServiceRequest(&fakeConfig.ClientAPI, tt.localpart, tt.asToken)
 			if tt.wantError && gotResp == nil {
 				t.Error("expected an error, but succeeded")

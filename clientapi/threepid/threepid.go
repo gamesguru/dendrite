@@ -16,9 +16,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // EmailAssociationRequest represents the request defined at https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-register-email-requesttoken
@@ -75,7 +76,7 @@ func CreateSession(
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close() // nolint: errcheck
+	defer resp.Body.Close()
 
 	// Error if the status isn't OK
 	if resp.StatusCode != http.StatusOK {
@@ -121,6 +122,7 @@ func CheckAssociation(
 	if err != nil {
 		return false, "", "", err
 	}
+	defer resp.Body.Close()
 
 	var respBody GetValidatedResponse
 	if err = json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
@@ -162,6 +164,7 @@ func PublishAssociation(ctx context.Context, creds Credentials, userID string, c
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	// Error if the status isn't OK
 	if resp.StatusCode != http.StatusOK {

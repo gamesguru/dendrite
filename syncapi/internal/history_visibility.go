@@ -12,17 +12,18 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
 )
 
+//nolint:gochecknoinits
 func init() {
 	prometheus.MustRegister(calculateHistoryVisibilityDuration)
 }
@@ -31,7 +32,7 @@ func init() {
 // calculate the history visibility.
 var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "syncapi",
 		Name:      "calculateHistoryVisibility_duration_millis",
 		Help:      "How long it takes to calculate the history visibility",
@@ -47,11 +48,11 @@ var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 var historyVisibilityPriority = map[gomatrixserverlib.HistoryVisibility]uint8{
 	spec.WorldReadable:                         0,
 	gomatrixserverlib.HistoryVisibilityShared:  1,
-	gomatrixserverlib.HistoryVisibilityInvited: 2,
-	gomatrixserverlib.HistoryVisibilityJoined:  3,
+	gomatrixserverlib.HistoryVisibilityInvited: 2, //nolint:mnd
+	gomatrixserverlib.HistoryVisibilityJoined:  3, //nolint:mnd
 }
 
-// eventVisibility contains the history visibility and membership state at a given event
+// eventVisibility contains the history visibility and membership state at a given event.
 type eventVisibility struct {
 	visibility        gomatrixserverlib.HistoryVisibility
 	membershipAtEvent string

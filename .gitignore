@@ -1,8 +1,5 @@
 .*.swp
 
-# Hidden files
-.*
-
 # Allow GitHub config
 !.github
 
@@ -23,7 +20,9 @@
 /vendor/bin
 /docker/build
 /logs
-/jetstream
+**/jetstream/
+**/jetstream*/
+!setup/jetstream/
 
 # Architecture specific extensions/prefixes
 *.[568vq]
@@ -52,7 +51,7 @@ _testmain.go
 *.crt
 
 # Default configuration file
-dendrite.yaml
+zendrite.yaml
 
 # Database files
 *.db
@@ -61,17 +60,11 @@ dendrite.yaml
 # Log files
 *.log*
 
-# Generated code
-cmd/dendrite-demo-yggdrasil/embed/fs*.go
-
 # Test dependencies
 test/wasm/node_modules
 
 # Ignore complement folder when running locally
 complement/
-
-# Stuff from GitHub Pages
-docs/_site
 
 media_store/
 build
@@ -80,4 +73,11 @@ build
 go.work*
 
 # helm chart
-helm/dendrite/charts/
+helm/zendrite/charts/
+vendor/
+.zendrite-dev/
+zendrite
+!cmd/zendrite
+!.forgejo/**/zendrite.yaml
+CLAUDE.md
+AGENTS.md

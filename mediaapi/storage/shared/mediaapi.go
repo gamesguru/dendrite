@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/storage/tables"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 type Database struct {
@@ -41,6 +42,13 @@ func (d *Database) GetMediaMetadata(ctx context.Context, mediaID types.MediaID, 
 		return nil, nil
 	}
 	return mediaMetadata, err
+}
+
+// DeleteMediaMetadata removes the metadata for the given media from the database.
+func (d *Database) DeleteMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.MediaRepository.DeleteMedia(ctx, txn, mediaID, mediaOrigin)
+	})
 }
 
 // GetMediaMetadataByHash returns metadata about media stored on this server.

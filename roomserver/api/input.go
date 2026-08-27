@@ -10,12 +10,13 @@ package api
 import (
 	"fmt"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-// for detecting rejected events and returning 403 instead of 500ing
+// for detecting rejected events and returning 403 instead of 500ing.
 const InputWasRejected = "InputWasRejected"
 
 type Kind int
@@ -80,6 +81,14 @@ type InputRoomEvent struct {
 	// The transaction ID of the send request if sent by a local user and one
 	// was specified
 	TransactionID *TransactionID `json:"transaction_id"`
+	// SkipMissingEvents, if true, will skip the missing event backfill process
+	// for this event. This is used for local user leave events where we don't
+	// want to block on federation to process missing events.
+	SkipMissingEvents bool `json:"skip_missing_events,omitempty"`
+	// SkipEventAuth, if true, will skip the auth and soft-fail checks for this
+	// event. This is used by admin endpoints (e.g. downloadState) that need to
+	// inject events into rooms where the sender may lack the necessary power level.
+	SkipEventAuth bool `json:"skip_event_auth,omitempty"`
 }
 
 // TransactionID contains the transaction ID sent by a client when sending an
@@ -89,14 +98,14 @@ type TransactionID struct {
 	TransactionID string `json:"id"`
 }
 
-// InputRoomEventsRequest is a request to InputRoomEvents
+// InputRoomEventsRequest is a request to InputRoomEvents.
 type InputRoomEventsRequest struct {
 	InputRoomEvents []InputRoomEvent `json:"input_room_events"`
 	Asynchronous    bool             `json:"async"`
 	VirtualHost     spec.ServerName  `json:"virtual_host"`
 }
 
-// InputRoomEventsResponse is a response to InputRoomEvents
+// InputRoomEventsResponse is a response to InputRoomEvents.
 type InputRoomEventsResponse struct {
 	ErrMsg     string // set if there was any error
 	NotAllowed bool   // true if an event in the input was not allowed.
@@ -111,5 +120,5 @@ func (r *InputRoomEventsResponse) Err() error {
 			Message: r.ErrMsg,
 		}
 	}
-	return fmt.Errorf(r.ErrMsg)
+	return fmt.Errorf("%s", r.ErrMsg)
 }

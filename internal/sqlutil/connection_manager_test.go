@@ -4,14 +4,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func TestConnectionManager(t *testing.T) {
-
 	t.Run("component defined connection string", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 			conStr, close := test.PrepareDBConnectionString(t, dbType)
@@ -120,7 +119,7 @@ func TestConnectionManager(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			processCtx.ShutdownDendrite()
+			processCtx.ShutdownZendrite()
 			processCtx.WaitForComponentsToFinish()
 		})
 	})

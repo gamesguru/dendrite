@@ -11,9 +11,9 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const ignoresSchema = `
@@ -54,7 +54,8 @@ func (s *ignoresStatements) SelectIgnores(
 	ctx context.Context, txn *sql.Tx, userID string,
 ) (*types.IgnoredUsers, error) {
 	var ignoresData []byte
-	err := sqlutil.TxStmt(txn, s.selectIgnoresStmt).QueryRowContext(ctx, userID).Scan(&ignoresData)
+	selectStmt := sqlutil.TxStmt(txn, s.selectIgnoresStmt)
+	err := selectStmt.QueryRowContext(ctx, userID).Scan(&ignoresData)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +73,7 @@ func (s *ignoresStatements) UpsertIgnores(
 	if err != nil {
 		return err
 	}
-	_, err = sqlutil.TxStmt(txn, s.upsertIgnoresStmt).ExecContext(ctx, userID, ignoresJSON)
+	upsertIgnoresStmt := sqlutil.TxStmt(txn, s.upsertIgnoresStmt)
+	_, err = upsertIgnoresStmt.ExecContext(ctx, userID, ignoresJSON)
 	return err
 }

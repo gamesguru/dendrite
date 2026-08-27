@@ -9,14 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	uapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"gotest.tools/v3/assert"
+
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Mock roomserver API for testing
@@ -72,7 +73,6 @@ func (s *sendEventTestRoomserverAPI) QueryLatestEventsAndState(ctx context.Conte
 		s.t.Logf("room event/state queried for %s", req.RoomID)
 		return fmt.Errorf("unknown room")
 	}
-
 }
 
 func (s *sendEventTestRoomserverAPI) QuerySenderIDForUser(
@@ -147,7 +147,7 @@ func (s *sendEventTestRoomserverAPI) InputRoomEvents(ctx context.Context, req *r
 	s.savedInputRoomEvents = req.InputRoomEvents
 }
 
-// Test that user ID state keys are translated correctly
+// Test that user ID state keys are translated correctly.
 func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 	nonpseudoIDRoomVersion := gomatrixserverlib.RoomVersionV10
 	pseudoIDRoomVersion := gomatrixserverlib.RoomVersionPseudoIDs

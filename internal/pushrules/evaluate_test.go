@@ -3,9 +3,9 @@ package pushrules
 import (
 	"testing"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/google/go-cmp/cmp"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 
 func UserIDForSender(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -13,6 +13,7 @@ func UserIDForSender(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, 
 }
 
 func TestRuleSetEvaluatorMatchEvent(t *testing.T) {
+	t.Parallel()
 	ev := mustEventFromJSON(t, `{"room_id":"!room:a"}`)
 	defaultEnabled := &Rule{
 		RuleID:  ".default.enabled",
@@ -48,7 +49,9 @@ func TestRuleSetEvaluatorMatchEvent(t *testing.T) {
 		{"receipts don't notify", *defaultRuleset, nil, mustEventFromJSON(t, `{"room_id":"!room:a","type":"m.receipt"}`)},
 	}
 	for _, tst := range tsts {
+		tst := tst // capture range variable
 		t.Run(tst.Name, func(t *testing.T) {
+			t.Parallel()
 			rse := NewRuleSetEvaluator(fakeEvaluationContext{3}, &tst.RuleSet)
 			got, err := rse.MatchEvent(tst.Event, UserIDForSender)
 			if err != nil {
@@ -62,6 +65,7 @@ func TestRuleSetEvaluatorMatchEvent(t *testing.T) {
 }
 
 func TestRuleMatches(t *testing.T) {
+	t.Parallel()
 	emptyRule := Rule{Enabled: true}
 	tsts := []struct {
 		Name      string
@@ -93,7 +97,9 @@ func TestRuleMatches(t *testing.T) {
 		{"senderNoMatch", SenderKind, Rule{Enabled: true, RuleID: "@user:example.com"}, `{"room_id":"!room:example.com","sender":"@otheruser:example.com","room_id":"!room:example.com"}`, false},
 	}
 	for _, tst := range tsts {
+		tst := tst // capture range variable
 		t.Run(tst.Name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ruleMatches(&tst.Rule, tst.Kind, mustEventFromJSON(t, tst.EventJSON), nil, UserIDForSender)
 			if err != nil {
 				t.Fatalf("ruleMatches failed: %v", err)
@@ -106,6 +112,7 @@ func TestRuleMatches(t *testing.T) {
 }
 
 func TestConditionMatches(t *testing.T) {
+	t.Parallel()
 	tsts := []struct {
 		Name      string
 		Cond      Condition
@@ -141,7 +148,9 @@ func TestConditionMatches(t *testing.T) {
 		{Name: "senderNotificationPermissionNoMatch", Cond: Condition{Kind: SenderNotificationPermissionCondition, Key: "powerlevel"}, EventJSON: `{"room_id":"!room:example.com","sender":"@nobody:example.com"}`, WantMatch: false, WantErr: false},
 	}
 	for _, tst := range tsts {
+		tst := tst // capture range variable
 		t.Run(tst.Name, func(t *testing.T) {
+			t.Parallel()
 			got, err := conditionMatches(&tst.Cond, mustEventFromJSON(t, tst.EventJSON), &fakeEvaluationContext{2})
 			if err != nil && !tst.WantErr {
 				t.Fatalf("conditionMatches failed: %v", err)
@@ -162,6 +171,7 @@ func (fakeEvaluationContext) HasPowerLevel(senderID spec.SenderID, levelKey stri
 }
 
 func TestPatternMatches(t *testing.T) {
+	t.Parallel()
 	tsts := []struct {
 		Name      string
 		Key       string
@@ -180,7 +190,9 @@ func TestPatternMatches(t *testing.T) {
 		{"patternNoSubstring", "content.creator", "r*t", `{"room_id":"!room:a","content":{"creator":"acreator"}}`, false},
 	}
 	for _, tst := range tsts {
+		tst := tst // capture range variable
 		t.Run(tst.Name, func(t *testing.T) {
+			t.Parallel()
 			got, err := patternMatches(tst.Key, tst.Pattern, mustEventFromJSON(t, tst.EventJSON))
 			if err != nil {
 				t.Fatalf("patternMatches failed: %v", err)

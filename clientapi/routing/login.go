@@ -10,19 +10,22 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/userutil"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type loginResponse struct {
-	UserID      string `json:"user_id"`
-	AccessToken string `json:"access_token"`
-	DeviceID    string `json:"device_id"`
+	UserID       string `json:"user_id"`
+	AccessToken  string `json:"access_token"`
+	DeviceID     string `json:"device_id"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresInMs  int    `json:"expires_in_ms,omitempty"`
 }
 
 type flows struct {
@@ -31,14 +34,18 @@ type flows struct {
 
 type flow struct {
 	Type string `json:"type"`
+	// OAuthAwarePreferred indicates the m.login.sso flow is preferred over
+	// other flows, as defined for OAuth 2.0 aware clients (spec v1.18).
+	OAuthAwarePreferred bool `json:"oauth_aware_preferred,omitempty"`
 }
 
-// Login implements GET and POST /login
+// Login implements GET and POST /login.
 func Login(
 	req *http.Request, userAPI userapi.ClientUserAPI,
 	cfg *config.ClientAPI,
 ) util.JSONResponse {
-	if req.Method == http.MethodGet {
+	switch req.Method {
+	case http.MethodGet:
 		loginFlows := []flow{{Type: authtypes.LoginTypePassword}}
 		if len(cfg.Derived.ApplicationServices) > 0 {
 			loginFlows = append(loginFlows, flow{Type: authtypes.LoginTypeApplicationService})
@@ -50,7 +57,7 @@ func Login(
 				Flows: loginFlows,
 			},
 		}
-	} else if req.Method == http.MethodPost {
+	case http.MethodPost:
 		login, cleanup, authErr := auth.LoginFromJSONReader(req, userAPI, userAPI, cfg)
 		if authErr != nil {
 			return *authErr

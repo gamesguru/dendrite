@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -17,18 +18,17 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
-
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // ApplicationServiceTransaction is the transaction that is sent off to an
@@ -68,7 +68,7 @@ func NewOutputRoomEventConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputRoomEventConsumer) Start() error {
 	durableNames := make([]string, 0, len(s.cfg.Derived.ApplicationServices))
 	for _, as := range s.cfg.Derived.ApplicationServices {
@@ -80,7 +80,7 @@ func (s *OutputRoomEventConsumer) Start() error {
 		if err := jetstream.JetStreamConsumer(
 			s.ctx, s.jetstream, s.topic,
 			s.cfg.Matrix.JetStream.Durable("Appservice_"+token),
-			50, // maximum number of events to send in a single transaction
+			50, //nolint:mnd // maximum number of events to send in a single transaction
 			func(ctx context.Context, msgs []*nats.Msg) bool {
 				return s.onMessage(ctx, state, msgs)
 			},
@@ -94,7 +94,7 @@ func (s *OutputRoomEventConsumer) Start() error {
 	// to avoid messages not being deleted
 	for _, consumerName := range durableNames {
 		err := s.jetstream.DeleteConsumer(s.cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent), consumerName+"Pull")
-		if err != nil && err != nats.ErrConsumerNotFound {
+		if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 			return err
 		}
 	}
@@ -140,7 +140,7 @@ func (s *OutputRoomEventConsumer) onMessage(
 					}
 				}
 				if len(eventsReq.EventIDs) > 0 {
-					if err := s.rsAPI.QueryEventsByID(s.ctx, eventsReq, eventsRes); err != nil {
+					if err := s.rsAPI.QueryEventsByID(s.ctx, eventsReq, eventsRes); err != nil { //nolint:contextcheck
 						log.WithError(err).Errorf("s.rsAPI.QueryEventsByID failed")
 						return false
 					}
@@ -194,7 +194,7 @@ func (s *OutputRoomEventConsumer) sendEvents(
 
 	// If txnID is not defined, generate one from the events.
 	if txnID == "" {
-		txnID = fmt.Sprintf("%d_%d", events[0].PDU.OriginServerTS(), len(transaction))
+		txnID = fmt.Sprintf("%d_%d", events[0].OriginServerTS(), len(transaction))
 	}
 
 	// Send the transaction to the appservice.
@@ -217,6 +217,7 @@ func (s *OutputRoomEventConsumer) sendEvents(
 	if err != nil {
 		return state.backoffAndPause(err)
 	}
+	defer resp.Body.Close()
 
 	// If the response was fine then we can clear any backoffs in place and
 	// report that everything was OK. Otherwise, back off for a while.
@@ -229,12 +230,12 @@ func (s *OutputRoomEventConsumer) sendEvents(
 	return nil
 }
 
-// backoff pauses the calling goroutine for a 2^some backoff exponent seconds
+// backoff pauses the calling goroutine for a 2^some backoff exponent seconds.
 func (s *appserviceState) backoffAndPause(err error) error {
-	if s.backoff < 6 {
+	if s.backoff < 6 { //nolint:mnd
 		s.backoff++
 	}
-	duration := time.Second * time.Duration(math.Pow(2, float64(s.backoff)))
+	duration := time.Second * time.Duration(math.Pow(2, float64(s.backoff))) //nolint:mnd
 	log.WithField("appservice", s.ID).WithError(err).Errorf("Unable to send transaction to appservice, backing off for %s", duration.String())
 	time.Sleep(duration)
 	return err
@@ -243,7 +244,7 @@ func (s *appserviceState) backoffAndPause(err error) error {
 // appserviceIsInterestedInEvent returns a boolean depending on whether a given
 // event falls within one of a given application service's namespaces.
 //
-// TODO: This should be cached, see https://github.com/element-hq/dendrite/issues/1682
+// TODO: This should be cached, see https://codefloe.com/pat-s/zendrite/issues/1682
 func (s *OutputRoomEventConsumer) appserviceIsInterestedInEvent(ctx context.Context, event *types.HeaderedEvent, appservice *config.ApplicationService) bool {
 	user := ""
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())

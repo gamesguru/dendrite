@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 type Presence uint8
@@ -67,7 +67,7 @@ func (p1 *PresenceInternal) Equals(p2 *PresenceInternal) bool {
 
 // CurrentlyActive returns the current active state.
 func (p *PresenceInternal) CurrentlyActive() bool {
-	return time.Since(p.LastActiveTS.Time()).Minutes() < 5
+	return time.Since(p.LastActiveTS.Time()).Minutes() < 5 //nolint:mnd
 }
 
 // LastActiveAgo returns the time since the LastActiveTS in milliseconds.

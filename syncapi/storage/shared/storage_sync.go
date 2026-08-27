@@ -3,18 +3,19 @@ package shared
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type DatabaseTransaction struct {
@@ -93,6 +94,12 @@ func (d *DatabaseTransaction) RoomIDsWithMembership(ctx context.Context, userID 
 	return d.CurrentRoomState.SelectRoomIDsWithMembership(ctx, d.txn, userID, membership)
 }
 
+// KickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
+// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
+func (d *DatabaseTransaction) KickedRoomIDs(ctx context.Context, userID string) ([]string, error) {
+	return d.CurrentRoomState.SelectKickedRoomIDs(ctx, d.txn, userID)
+}
+
 func (d *DatabaseTransaction) MembershipCount(ctx context.Context, roomID, membership string, pos types.StreamPosition) (int, error) {
 	return d.Memberships.SelectMembershipCount(ctx, d.txn, roomID, membership, pos)
 }
@@ -158,6 +165,14 @@ func (d *DatabaseTransaction) RecentEvents(ctx context.Context, roomIDs []string
 	return d.OutputEvents.SelectRecentEvents(ctx, d.txn, roomIDs, r, eventFilter, chronologicalOrder, onlySyncEvents)
 }
 
+func (d *DatabaseTransaction) RoomsWithEventsSince(ctx context.Context, roomIDs []string, since types.StreamPosition) ([]string, error) {
+	return d.OutputEvents.SelectRoomsWithEventsSince(ctx, d.txn, roomIDs, since)
+}
+
+func (d *DatabaseTransaction) MaxStreamPositionsForRooms(ctx context.Context, roomIDs []string) (map[string]types.StreamPosition, error) {
+	return d.OutputEvents.SelectMaxStreamPositionsForRooms(ctx, d.txn, roomIDs)
+}
+
 func (d *DatabaseTransaction) PositionInTopology(ctx context.Context, eventID string) (pos types.StreamPosition, spos types.StreamPosition, err error) {
 	return d.Topology.SelectPositionInTopology(ctx, d.txn, eventID)
 }
@@ -166,12 +181,29 @@ func (d *DatabaseTransaction) InviteEventsInRange(ctx context.Context, targetUse
 	return d.Invites.SelectInviteEventsInRange(ctx, d.txn, targetUserID, r)
 }
 
+func (d *DatabaseTransaction) RoomsWithInvitesSince(ctx context.Context, targetUserID string, roomIDs []string, since types.StreamPosition) ([]string, error) {
+	return d.Invites.SelectRoomsWithInvitesSince(ctx, d.txn, targetUserID, roomIDs, since)
+}
+
 func (d *DatabaseTransaction) PeeksInRange(ctx context.Context, userID, deviceID string, r types.Range) (peeks []types.Peek, err error) {
 	return d.Peeks.SelectPeeksInRange(ctx, d.txn, userID, deviceID, r)
 }
 
 func (d *DatabaseTransaction) RoomReceiptsAfter(ctx context.Context, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error) {
 	return d.Receipts.SelectRoomReceiptsAfter(ctx, d.txn, roomIDs, streamPos)
+}
+
+// Per-connection receipt tracking for sliding sync (MSC4186).
+func (d *DatabaseTransaction) SelectLatestUserReceiptsForConnection(ctx context.Context, connectionKey int64, roomIDs []string, userID string) ([]types.OutputReceiptEvent, error) {
+	return d.Receipts.SelectLatestUserReceiptsForConnection(ctx, d.txn, connectionKey, roomIDs, userID)
+}
+
+func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error {
+	return d.Receipts.UpsertConnectionReceipt(ctx, d.txn, connectionKey, roomID, receiptType, userID, eventID, timestamp)
+}
+
+func (d *DatabaseTransaction) DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error {
+	return d.Receipts.DeleteConnectionReceipts(ctx, d.txn, connectionKey)
 }
 
 // Events lookups a list of event by their event ID.
@@ -223,7 +255,7 @@ func (d *DatabaseTransaction) GetStateEventsForRoom(
 // updated between two given positions
 // Returns a map following the format data[roomID] = []dataTypes
 // If no data is retrieved, returns an empty map
-// If there was an issue with the retrieval, returns an error
+// If there was an issue with the retrieval, returns an error.
 func (d *DatabaseTransaction) GetAccountDataInRange(
 	ctx context.Context, userID string, r types.Range,
 	accountDataFilterPart *synctypes.EventFilter,
@@ -292,9 +324,9 @@ func (d *DatabaseTransaction) StreamToTopologicalPosition(
 ) (types.TopologyToken, error) {
 	topoPos, err := d.Topology.SelectStreamToTopologicalPosition(ctx, d.txn, roomID, streamPos, backwardOrdering)
 	switch {
-	case err == sql.ErrNoRows && backwardOrdering: // no events in range, going backward
+	case errors.Is(err, sql.ErrNoRows) && backwardOrdering: // no events in range, going backward
 		return types.TopologyToken{PDUPosition: streamPos}, nil
-	case err == sql.ErrNoRows && !backwardOrdering: // no events in range, going forward
+	case errors.Is(err, sql.ErrNoRows) && !backwardOrdering: // no events in range, going forward
 		return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil
 	case err != nil: // some other error happened
 		return types.TopologyToken{}, fmt.Errorf("d.Topology.SelectStreamToTopologicalPosition: %w", err)
@@ -326,7 +358,8 @@ func (d *DatabaseTransaction) GetBackwardTopologyPos(
 // exclusive of oldPos, inclusive of newPos, for the rooms in which
 // the user has new membership events.
 // A list of joined room IDs is also returned in case the caller needs it.
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func (d *DatabaseTransaction) GetStateDeltas(
 	ctx context.Context, device *userapi.Device,
 	r types.Range, userID string,
@@ -345,7 +378,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 	// user has ever interacted with — joined to, kicked/banned from, left.
 	memberships, err := d.CurrentRoomState.SelectRoomIDsWithAnyMembership(ctx, d.txn, userID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
@@ -363,14 +396,14 @@ func (d *DatabaseTransaction) GetStateDeltas(
 	// get all the state events ever (i.e. for all available rooms) between these two positions
 	stateNeeded, eventMap, err := d.OutputEvents.SelectStateInRange(ctx, d.txn, r, nil, allRoomIDs)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
 	}
 	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
@@ -384,14 +417,14 @@ func (d *DatabaseTransaction) GetStateDeltas(
 		var eventMapFiltered map[string]types.StreamEvent
 		stateNeededFiltered, eventMapFiltered, err = d.OutputEvents.SelectStateInRange(ctx, d.txn, r, stateFilter, allRoomIDs)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil, nil
 			}
 			return nil, nil, err
 		}
 		stateFiltered, err = d.fetchStateEvents(ctx, d.txn, stateNeededFiltered, eventMapFiltered)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil, nil
 			}
 			return nil, nil, err
@@ -401,7 +434,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 	// find out which rooms this user is peeking, if any.
 	// We do this before joins so any peeks get overwritten
 	peeks, err := d.Peeks.SelectPeeksInRange(ctx, d.txn, userID, device.ID, r)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, err
 	}
 
@@ -412,7 +445,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 			var s []types.StreamEvent
 			s, err = d.currentStateStreamEventsForRoom(ctx, peek.RoomID, stateFilter)
 			if err != nil {
-				if err == sql.ErrNoRows {
+				if errors.Is(err, sql.ErrNoRows) {
 					continue
 				}
 				return nil, nil, err
@@ -448,7 +481,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 					// joined room instead of a delta.
 					var s []types.StreamEvent
 					if s, err = d.currentStateStreamEventsForRoom(ctx, roomID, stateFilter); err != nil {
-						if err == sql.ErrNoRows {
+						if errors.Is(err, sql.ErrNoRows) {
 							continue
 						}
 						return nil, nil, err
@@ -501,7 +534,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 	// user has ever interacted with — joined to, kicked/banned from, left.
 	memberships, err := d.CurrentRoomState.SelectRoomIDsWithAnyMembership(ctx, d.txn, userID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
@@ -520,7 +553,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 	deltas := make(map[string]types.StateDelta)
 
 	peeks, err := d.Peeks.SelectPeeksInRange(ctx, d.txn, userID, device.ID, r)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, err
 	}
 
@@ -529,7 +562,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 		if !peek.Deleted {
 			s, stateErr := d.currentStateStreamEventsForRoom(ctx, peek.RoomID, stateFilter)
 			if stateErr != nil {
-				if stateErr == sql.ErrNoRows {
+				if errors.Is(stateErr, sql.ErrNoRows) {
 					continue
 				}
 				return nil, nil, stateErr
@@ -545,14 +578,14 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 	// Get all the state events ever between these two positions
 	stateNeeded, eventMap, err := d.OutputEvents.SelectStateInRange(ctx, d.txn, r, stateFilter, allRoomIDs)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
 	}
 	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
@@ -579,7 +612,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 	for _, joinedRoomID := range joinedRoomIDs {
 		s, stateErr := d.currentStateStreamEventsForRoom(ctx, joinedRoomID, stateFilter)
 		if stateErr != nil {
-			if stateErr == sql.ErrNoRows {
+			if errors.Is(stateErr, sql.ErrNoRows) {
 				continue
 			}
 			return nil, nil, stateErr
@@ -810,4 +843,14 @@ func (d *DatabaseTransaction) RelationsFor(ctx context.Context, roomID, eventID,
 	}
 
 	return events, prevBatch, nextBatch, nil
+}
+
+// UnPartialStatedRoomsInRange returns room IDs that became fully-stated (completed
+// partial state resync) for a user in the given range. This is used by MSC3706 faster
+// joins to force room summary updates when partial state resync completes.
+func (d *DatabaseTransaction) UnPartialStatedRoomsInRange(
+	ctx context.Context, userID string, r types.Range,
+) ([]string, error) {
+	roomIDs, _, err := d.UnPartialStatedRooms.SelectUnPartialStatedRoomsInRange(ctx, d.txn, userID, r)
+	return roomIDs, err
 }

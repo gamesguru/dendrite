@@ -10,19 +10,21 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// InviteV3 implements /_matrix/federation/v2/invite/{roomID}/{userID}
+// InviteV3 implements /_matrix/federation/v2/invite/{roomID}/{userID}.
 func InviteV3(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -60,7 +62,7 @@ func InviteV3(
 			StateQuerier:      rsAPI.StateQuerier(),
 			InviteEvent:       nil,
 			StrippedState:     inviteReq.InviteRoomState(),
-			UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 				return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 			},
 		},
@@ -89,7 +91,7 @@ func InviteV3(
 	}
 }
 
-// InviteV2 implements /_matrix/federation/v2/invite/{roomID}/{eventID}
+// InviteV2 implements /_matrix/federation/v2/invite/{roomID}/{eventID}.
 func InviteV2(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -101,81 +103,83 @@ func InviteV2(
 ) util.JSONResponse {
 	inviteReq := fclient.InviteV2Request{}
 	err := json.Unmarshal(request.Content(), &inviteReq)
-	switch e := err.(type) {
-	case gomatrixserverlib.UnsupportedRoomVersionError:
+	var unsupportedVersionErr gomatrixserverlib.UnsupportedRoomVersionError
+	var badJSONErr gomatrixserverlib.BadJSONError
+	switch {
+	case errors.As(err, &unsupportedVersionErr):
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.UnsupportedRoomVersion(
-				fmt.Sprintf("Room version %q is not supported by this server.", e.Version),
+				fmt.Sprintf("Room version %q is not supported by this server.", unsupportedVersionErr.Version),
 			),
 		}
-	case gomatrixserverlib.BadJSONError:
+	case errors.As(err, &badJSONErr):
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON(err.Error()),
 		}
-	case nil:
-		if inviteReq.Event().StateKey() == nil {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.BadJSON("The invite event has no state key"),
-			}
-		}
-
-		invitedUser, userErr := spec.NewUserID(*inviteReq.Event().StateKey(), true)
-		if userErr != nil {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.InvalidParam("The user ID is invalid"),
-			}
-		}
-		if !cfg.Matrix.IsLocalServerName(invitedUser.Domain()) {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.InvalidParam("The invited user domain does not belong to this server"),
-			}
-		}
-
-		if inviteReq.Event().EventID() != eventID {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.BadJSON("The event ID in the request path must match the event ID in the invite event JSON"),
-			}
-		}
-
-		input := gomatrixserverlib.HandleInviteInput{
-			RoomVersion:       inviteReq.RoomVersion(),
-			RoomID:            roomID,
-			InvitedUser:       *invitedUser,
-			KeyID:             cfg.Matrix.KeyID,
-			PrivateKey:        cfg.Matrix.PrivateKey,
-			Verifier:          keys,
-			RoomQuerier:       rsAPI,
-			MembershipQuerier: &api.MembershipQuerier{Roomserver: rsAPI},
-			StateQuerier:      rsAPI.StateQuerier(),
-			InviteEvent:       inviteReq.Event(),
-			StrippedState:     inviteReq.InviteRoomState(),
-			UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-				return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
-			},
-		}
-		event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI)
-		if jsonErr != nil {
-			return *jsonErr
-		}
-		return util.JSONResponse{
-			Code: http.StatusOK,
-			JSON: fclient.RespInviteV2{Event: event.JSON()},
-		}
-	default:
+	case err != nil:
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.NotJSON("The request body could not be decoded into an invite request. " + err.Error()),
 		}
 	}
+
+	if inviteReq.Event().StateKey() == nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("The invite event has no state key"),
+		}
+	}
+
+	invitedUser, userErr := spec.NewUserID(*inviteReq.Event().StateKey(), true)
+	if userErr != nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("The user ID is invalid"),
+		}
+	}
+	if !cfg.Matrix.IsLocalServerName(invitedUser.Domain()) {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("The invited user domain does not belong to this server"),
+		}
+	}
+
+	if inviteReq.Event().EventID() != eventID {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("The event ID in the request path must match the event ID in the invite event JSON"),
+		}
+	}
+
+	input := gomatrixserverlib.HandleInviteInput{
+		RoomVersion:       inviteReq.RoomVersion(),
+		RoomID:            roomID,
+		InvitedUser:       *invitedUser,
+		KeyID:             cfg.Matrix.KeyID,
+		PrivateKey:        cfg.Matrix.PrivateKey,
+		Verifier:          keys,
+		RoomQuerier:       rsAPI,
+		MembershipQuerier: &api.MembershipQuerier{Roomserver: rsAPI},
+		StateQuerier:      rsAPI.StateQuerier(),
+		InviteEvent:       inviteReq.Event(),
+		StrippedState:     inviteReq.InviteRoomState(),
+		UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
+			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
+		},
+	}
+	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI)
+	if jsonErr != nil {
+		return *jsonErr
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: fclient.RespInviteV2{Event: event.JSON()},
+	}
 }
 
-// InviteV1 implements /_matrix/federation/v1/invite/{roomID}/{eventID}
+// InviteV1 implements /_matrix/federation/v1/invite/{roomID}/{eventID}.
 func InviteV1(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -189,14 +193,13 @@ func InviteV1(
 	body := request.Content()
 	// roomVer is hardcoded to v1 so we know we won't panic on Must
 	event, err := gomatrixserverlib.MustGetRoomVersion(roomVer).NewEventFromTrustedJSON(body, false)
-	switch err.(type) {
-	case gomatrixserverlib.BadJSONError:
+	var badJSONErr gomatrixserverlib.BadJSONError
+	if errors.As(err, &badJSONErr) {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON(err.Error()),
 		}
-	case nil:
-	default:
+	} else if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.NotJSON("The request body could not be decoded into an invite v1 request. " + err.Error()),
@@ -248,7 +251,7 @@ func InviteV1(
 		StateQuerier:      rsAPI.StateQuerier(),
 		InviteEvent:       event,
 		StrippedState:     strippedState,
-		UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 		},
 	}
@@ -273,18 +276,21 @@ func handleInviteV3(ctx context.Context, input gomatrixserverlib.HandleInviteV3I
 }
 
 func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, err error, rsAPI api.FederationRoomserverAPI) (gomatrixserverlib.PDU, *util.JSONResponse) {
-	switch e := err.(type) {
-	case nil:
-	case spec.InternalServerError:
+	var internalErr spec.InternalServerError
+	var matrixErr spec.MatrixError
+	switch {
+	case err == nil:
+		// no error, fall through to processing below
+	case errors.As(err, &internalErr):
 		util.GetLogger(ctx).WithError(err)
 		return nil, &util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
-	case spec.MatrixError:
+	case errors.As(err, &matrixErr):
 		util.GetLogger(ctx).WithError(err)
 		code := http.StatusInternalServerError
-		switch e.ErrCode {
+		switch matrixErr.ErrCode {
 		case spec.ErrorForbidden:
 			code = http.StatusForbidden
 		case spec.ErrorUnsupportedRoomVersion:
@@ -295,7 +301,7 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 
 		return nil, &util.JSONResponse{
 			Code: code,
-			JSON: e,
+			JSON: matrixErr,
 		}
 	default:
 		util.GetLogger(ctx).WithError(err)
@@ -314,5 +320,4 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 		}
 	}
 	return inviteEvent, nil
-
 }

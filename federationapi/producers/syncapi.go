@@ -13,18 +13,18 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// SyncAPIProducer produces events for the sync API server to consume
+// SyncAPIProducer produces events for the sync API server to consume.
 type SyncAPIProducer struct {
 	TopicReceiptEvent      string
 	TopicSendToDeviceEvent string
@@ -73,7 +73,7 @@ func (p *SyncAPIProducer) SendToDevice(
 	// as-is, so that the federation sender can send it on with the wildcard intact.
 	if p.Config.Matrix.IsLocalServerName(domain) && deviceID == "*" {
 		var res userapi.QueryDevicesResponse
-		err = p.UserAPI.QueryDevices(context.TODO(), &userapi.QueryDevicesRequest{
+		err = p.UserAPI.QueryDevices(context.TODO(), &userapi.QueryDevicesRequest{ //nolint:contextcheck
 			UserID: userID,
 		}, &res)
 		if err != nil {

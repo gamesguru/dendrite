@@ -4,6 +4,7 @@ import "golang.org/x/crypto/bcrypt"
 
 type UserAPI struct {
 	Matrix *Global `yaml:"-"`
+	MSCs   *MSCs   `yaml:"-"`
 
 	// The cost when hashing passwords.
 	BCryptCost int `yaml:"bcrypt_cost"`

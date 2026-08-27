@@ -12,15 +12,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/userapi/storage/shared"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
 )
 
-// NewUserDatabase creates a new accounts and profiles database
+// NewUserDatabase creates a new accounts and profiles database.
 func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, serverName spec.ServerName, bcryptCost int, openIDTokenLifetimeMS int64, loginTokenLifetime time.Duration, serverNoticesLocalpart string) (*shared.Database, error) {
 	db, writer, err := conMan.Connection(dbProperties)
 	if err != nil {
@@ -46,7 +46,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteRegistrationsTokenTable: %w", err)
 	}
-	accountsTable, err := NewSQLiteAccountsTable(db, serverName)
+	accountsTable, err := NewSQLiteAccountsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteAccountsTable: %w", err)
 	}
@@ -54,7 +54,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteAccountDataTable: %w", err)
 	}
-	devicesTable, err := NewSQLiteDevicesTable(db, serverName)
+	devicesTable, err := NewSQLiteDevicesTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteDevicesTable: %w", err)
 	}
@@ -82,6 +82,10 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteThreePIDTable: %w", err)
 	}
+	externalIDsTable, err := NewSQLiteExternalIDsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteExternalIDsTable: %w", err)
+	}
 	pusherTable, err := NewSQLitePusherTable(db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresPusherTable: %w", err)
@@ -90,9 +94,13 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewSQLiteStatsTable(db, serverName)
+	statsTable, err := NewSQLiteStatsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteStatsTable: %w", err)
+	}
+	dehydratedDevicesTable, err := NewSQLiteDehydratedDevicesTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteDehydratedDevicesTable: %w", err)
 	}
 
 	m = sqlutil.NewMigrator(db)
@@ -116,9 +124,11 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
 		ThreePIDs:             threePIDTable,
+		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,
 		Notifications:         notificationsTable,
 		Stats:                 statsTable,
+		DehydratedDevices:     dehydratedDevicesTable,
 		ServerName:            serverName,
 		DB:                    db,
 		Writer:                writer,

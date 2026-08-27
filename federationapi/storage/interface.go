@@ -10,12 +10,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/federationapi/types"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type Database interface {
@@ -60,6 +60,15 @@ type Database interface {
 	// Gets whether the provided server is present in the table.
 	// If it is present, returns true. If not, returns false.
 	IsServerAssumedOffline(ctx context.Context, serverName spec.ServerName) (bool, error)
+
+	// SetServerRetryState updates the retry state for a server (failure count and retry time)
+	SetServerRetryState(ctx context.Context, serverName spec.ServerName, failureCount uint32, retryUntil time.Time) error
+	// GetServerRetryState retrieves the retry state for a server
+	GetServerRetryState(ctx context.Context, serverName spec.ServerName) (failureCount uint32, retryUntil time.Time, exists bool, err error)
+	// GetAllServerRetryStates retrieves all retry states (for loading on startup)
+	GetAllServerRetryStates(ctx context.Context) (map[spec.ServerName]types.RetryState, error)
+	// ClearServerRetryState removes the retry state for a server (called on success)
+	ClearServerRetryState(ctx context.Context, serverName spec.ServerName) error
 
 	AddOutboundPeek(ctx context.Context, serverName spec.ServerName, roomID, peekID string, renewalInterval int64) error
 	RenewOutboundPeek(ctx context.Context, serverName spec.ServerName, roomID, peekID string, renewalInterval int64) error

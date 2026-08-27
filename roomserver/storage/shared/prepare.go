@@ -33,7 +33,7 @@ type transaction struct {
 	txn *sql.Tx
 }
 
-// Commit implements types.Transaction
+// Commit implements types.Transaction.
 func (t *transaction) Commit() error {
 	if t.txn == nil {
 		// The Updater structs can operate in useTxns=false mode. The code will still call this though.
@@ -42,7 +42,7 @@ func (t *transaction) Commit() error {
 	return t.txn.Commit()
 }
 
-// Rollback implements types.Transaction
+// Rollback implements types.Transaction.
 func (t *transaction) Rollback() error {
 	if t.txn == nil {
 		// The Updater structs can operate in useTxns=false mode. The code will still call this though.

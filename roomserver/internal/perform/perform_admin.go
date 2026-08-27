@@ -10,28 +10,31 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
-	"github.com/element-hq/dendrite/roomserver/internal/query"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Admin struct {
-	DB      storage.Database
-	Cfg     *config.RoomServer
-	Queryer *query.Queryer
-	Inputer *input.Inputer
-	Leaver  *Leaver
+	DB           storage.Database
+	Cfg          *config.RoomServer
+	Queryer      *query.Queryer
+	Inputer      *input.Inputer
+	Leaver       *Leaver
+	PurgeTracker *PurgeTracker
 }
 
 // PerformAdminEvacuateRoom will remove all local users from the given room.
@@ -137,6 +140,10 @@ func (r *Admin) PerformAdminEvacuateRoom(
 	}
 	inputRes := &api.InputRoomEventsResponse{}
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
+	if inputRes.ErrMsg != "" {
+		return nil, inputRes.Err()
+	}
+
 	return affected, nil
 }
 
@@ -159,11 +166,13 @@ func (r *Admin) PerformAdminEvacuateUser(
 	}
 
 	inviteRoomIDs, err := r.DB.GetRoomsByMembership(ctx, *fullUserID, spec.Invite)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
-	allRooms := append(roomIDs, inviteRoomIDs...)
+	allRooms := make([]string, 0, len(roomIDs)+len(inviteRoomIDs))
+	allRooms = append(allRooms, roomIDs...)
+	allRooms = append(allRooms, inviteRoomIDs...)
 	affected = make([]string, 0, len(allRooms))
 	for _, roomID := range allRooms {
 		leaveReq := &api.PerformLeaveRequest{
@@ -196,13 +205,25 @@ func (r *Admin) PerformAdminPurgeRoom(
 		return err
 	}
 
-	logrus.WithField("room_id", roomID).Warn("Purging room from roomserver")
+	// Evacuate the room before purging it from the database
+	evacAffected, err := r.PerformAdminEvacuateRoom(ctx, roomID)
+	if err != nil {
+		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to evacuate room before purging")
+		// Continue with deleting the room (it's probably broken)
+	} else {
+		logrus.WithFields(logrus.Fields{
+			"room_id":         roomID,
+			"evacuated_users": evacAffected,
+		}).Infof("Evacuated %d users from room before purging", len(evacAffected))
+	}
+
+	logrus.WithField("room_id", roomID).Info("Purging room from roomserver")
 	if err := r.DB.PurgeRoom(ctx, roomID); err != nil {
-		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to purge room from roomserver")
+		logrus.WithField("room_id", roomID).WithError(err).Error("Failed to purge room from roomserver")
 		return err
 	}
 
-	logrus.WithField("room_id", roomID).Warn("Room purged from roomserver, informing other components")
+	logrus.WithField("room_id", roomID).Info("Room purged from roomserver, informing other components")
 
 	return r.Inputer.OutputProducer.ProduceRoomEvents(roomID, []api.OutputEvent{
 		{
@@ -212,6 +233,37 @@ func (r *Admin) PerformAdminPurgeRoom(
 			},
 		},
 	})
+}
+
+// AutoPurgeRoom asynchronously purges roomID via PerformAdminPurgeRoom,
+// tracking it in the PurgeTracker so that concurrent rejoin attempts can
+// wait for the purge to complete. Coalesces concurrent calls for the same
+// roomID. The flag check is the caller's responsibility — see
+// ScheduleAutoPurgeIfEmpty and the startup sweep.
+//
+// The ctx parameter exists for the api.RoomserverInternalAPI interface;
+// the spawned goroutine intentionally uses context.Background() so the
+// purge cannot be canceled by a short-lived caller (e.g. a NATS message
+// handler whose context is canceled when the handler returns).
+func (r *Admin) AutoPurgeRoom(ctx context.Context, roomID, reason string) {
+	_, owner := r.PurgeTracker.BeginPurge(roomID)
+	if !owner {
+		return
+	}
+	go func() { //nolint:contextcheck
+		defer r.PurgeTracker.FinishPurge(roomID)
+		// Detach from the caller's context: the caller may be a short-lived
+		// handler (e.g. NATS message dispatch) whose ctx is canceled as soon
+		// as the handler returns. The purge itself is an autonomous, in-flight
+		// operation and must run to completion.
+		ctx := context.Background()
+		fields := logrus.Fields{"room_id": roomID, "reason": reason}
+		if err := r.PerformAdminPurgeRoom(ctx, roomID); err != nil {
+			logrus.WithError(err).WithFields(fields).Warn("Auto-purge of empty room failed")
+			return
+		}
+		logrus.WithFields(fields).Info("Auto-purged empty room")
+	}()
 }
 
 func (r *Admin) PerformAdminDownloadState(
@@ -238,6 +290,14 @@ func (r *Admin) PerformAdminDownloadState(
 		return err
 	}
 
+	// Resolve forward extremities: replace any local-only
+	// org.matrix.zendrite.state_download events (from previous runs) with
+	// their prev events, which the remote server will actually know about.
+	fwdExtremities, err = r.resolveLocalExtremities(ctx, roomInfo, fwdExtremities)
+	if err != nil {
+		return fmt.Errorf("resolveLocalExtremities: %w", err)
+	}
+
 	authEventMap := map[string]gomatrixserverlib.PDU{}
 	stateEventMap := map[string]gomatrixserverlib.PDU{}
 
@@ -245,7 +305,7 @@ func (r *Admin) PerformAdminDownloadState(
 		var state gomatrixserverlib.StateResponse
 		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
 		if err != nil {
-			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
+			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %w", fwdExtremity, err)
 		}
 		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -284,12 +344,16 @@ func (r *Admin) PerformAdminDownloadState(
 	senderID, err := r.Queryer.QuerySenderIDForUser(ctx, *validRoomID, *fullUserID)
 	if err != nil {
 		return err
-	} else if senderID == nil {
-		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
+	}
+	// Fall back to the user ID as sender if no sender ID mapping exists
+	// (e.g. admin is not a member of the room).
+	senderIDStr := userID
+	if senderID != nil {
+		senderIDStr = string(*senderID)
 	}
 	proto := &gomatrixserverlib.ProtoEvent{
-		Type:     "org.matrix.dendrite.state_download",
-		SenderID: string(*senderID),
+		Type:     "org.matrix.zendrite.state_download",
+		SenderID: senderIDStr,
 		RoomID:   roomID,
 		Content:  spec.RawJSON("{}"),
 	}
@@ -335,7 +399,8 @@ func (r *Admin) PerformAdminDownloadState(
 		Origin:        r.Cfg.Matrix.ServerName,
 		HasState:      true,
 		StateEventIDs: stateIDs,
-		SendAsServer:  string(r.Cfg.Matrix.ServerName),
+		SendAsServer:  api.DoNotSendToOtherServers,
+		SkipEventAuth: true,
 	})
 
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
@@ -345,6 +410,37 @@ func (r *Admin) PerformAdminDownloadState(
 	}
 
 	return nil
+}
+
+// resolveLocalExtremities replaces forward extremities that remote servers
+// won't know about with their prev events. This includes:
+//   - org.matrix.zendrite.state_download marker events (local-only)
+//   - Rejected events (stored locally but not accepted by remote servers)
+func (r *Admin) resolveLocalExtremities(ctx context.Context, roomInfo *types.RoomInfo, extremities []string) ([]string, error) {
+	events, err := r.DB.EventsFromIDs(ctx, roomInfo, extremities)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]string, 0, len(extremities))
+	for _, ev := range events {
+		if ev.Type() == "org.matrix.zendrite.state_download" {
+			resolved = append(resolved, ev.PrevEventIDs()...)
+			continue
+		}
+		isRejected, rejErr := r.DB.IsEventRejected(ctx, roomInfo.RoomNID, ev.EventID())
+		if rejErr == nil && isRejected {
+			logrus.WithField("event_id", ev.EventID()).Info("Replacing rejected forward extremity with its prev_events")
+			resolved = append(resolved, ev.PrevEventIDs()...)
+			continue
+		}
+		resolved = append(resolved, ev.EventID())
+	}
+
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("no usable forward extremities found in room %d", roomInfo.RoomNID)
+	}
+	return resolved, nil
 }
 
 func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error {

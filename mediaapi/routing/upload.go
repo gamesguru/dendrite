@@ -15,24 +15,24 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strings"
 
-	"github.com/element-hq/dendrite/mediaapi/fileutils"
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/thumbnailer"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
+	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // uploadRequest metadata included in or derivable from an upload request
 // https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-media-r0-upload
-// NOTE: The members come from HTTP request metadata such as headers, query parameters or can be derived from such
+// NOTE: The members come from HTTP request metadata such as headers, query parameters or can be derived from such.
 type uploadRequest struct {
 	MediaMetadata *types.MediaMetadata
 	Logger        *log.Entry
@@ -49,13 +49,13 @@ type uploadResponse struct {
 // This implementation supports a configurable maximum file size limit in bytes. If a user tries to upload more than this, they will receive an error that their upload is too large.
 // Uploaded files are processed piece-wise to avoid DoS attacks which would starve the server of memory.
 // TODO: We should time out requests if they have not received any data within a configured timeout period.
-func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db storage.Database, activeThumbnailGeneration *types.ActiveThumbnailGeneration) util.JSONResponse {
+func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db storage.Database, fileStore filestore.FileStore, activeThumbnailGeneration *types.ActiveThumbnailGeneration) util.JSONResponse {
 	r, resErr := parseAndValidateRequest(req, cfg, dev)
 	if resErr != nil {
 		return *resErr
 	}
 
-	if resErr = r.doUpload(req.Context(), req.Body, cfg, db, activeThumbnailGeneration); resErr != nil {
+	if resErr = r.doUpload(req.Context(), req.Body, cfg, db, fileStore, activeThumbnailGeneration); resErr != nil {
 		return *resErr
 	}
 
@@ -69,7 +69,7 @@ func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db sto
 
 // parseAndValidateRequest parses the incoming upload request to validate and extract
 // all the metadata about the media being uploaded.
-// Returns either an uploadRequest or an error formatted as a util.JSONResponse
+// Returns either an uploadRequest or an error formatted as a util.JSONResponse.
 func parseAndValidateRequest(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device) (*uploadRequest, *util.JSONResponse) {
 	r := &uploadRequest{
 		MediaMetadata: &types.MediaMetadata{
@@ -121,6 +121,7 @@ func (r *uploadRequest) doUpload(
 	reqReader io.Reader,
 	cfg *config.MediaAPI,
 	db storage.Database,
+	fileStore filestore.FileStore,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 ) *util.JSONResponse {
 	r.Logger.WithFields(log.Fields{
@@ -133,13 +134,6 @@ func (r *uploadRequest) doUpload(
 	// method of deduplicating files to save storage, as well as a way to conduct
 	// integrity checks on the file data in the repository.
 	// Data is truncated to maxFileSizeBytes. Content-Length was reported as 0 < Content-Length <= maxFileSizeBytes so this is OK.
-	//
-	// TODO: This has a bad API shape where you either need to call:
-	//   fileutils.RemoveDir(tmpDir, r.Logger)
-	// or call:
-	//   r.storeFileAndMetadata(ctx, tmpDir, ...)
-	// before you return from doUpload else we will leak a temp file. We could make this nicer with a `WithTransaction` style of
-	// nested function to guarantee either storage or cleanup.
 	if cfg.MaxFileSizeBytes > 0 {
 		if cfg.MaxFileSizeBytes+1 <= 0 {
 			r.Logger.WithFields(log.Fields{
@@ -150,7 +144,7 @@ func (r *uploadRequest) doUpload(
 		reqReader = io.LimitReader(reqReader, int64(cfg.MaxFileSizeBytes)+1)
 	}
 
-	hash, bytesWritten, tmpDir, err := fileutils.WriteTempFile(ctx, reqReader, cfg.AbsBasePath)
+	hash, bytesWritten, tmpDir, cleanup, err := fileStore.WriteTemp(ctx, reqReader)
 	if err != nil {
 		r.Logger.WithError(err).WithFields(log.Fields{
 			"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
@@ -160,10 +154,10 @@ func (r *uploadRequest) doUpload(
 			JSON: spec.Unknown("Failed to upload"),
 		}
 	}
+	defer cleanup()
 
 	// Check if temp file size exceeds max file size configuration
 	if cfg.MaxFileSizeBytes > 0 && bytesWritten > types.FileSizeBytes(cfg.MaxFileSizeBytes) {
-		fileutils.RemoveDir(tmpDir, r.Logger) // delete temp file
 		return requestEntityTooLargeJSONResponse(cfg.MaxFileSizeBytes)
 	}
 
@@ -174,7 +168,6 @@ func (r *uploadRequest) doUpload(
 		ctx, hash, r.MediaMetadata.Origin,
 	)
 	if err != nil {
-		fileutils.RemoveDir(tmpDir, r.Logger)
 		r.Logger.WithError(err).Error("Error querying the database by hash.")
 		return &util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -182,8 +175,6 @@ func (r *uploadRequest) doUpload(
 		}
 	}
 	if existingMetadata != nil {
-		// The file already exists, delete the uploaded temporary file.
-		defer fileutils.RemoveDir(tmpDir, r.Logger)
 		// The file already exists. Make a new media ID up for it.
 		mediaID, merr := r.generateMediaID(ctx, db)
 		if merr != nil {
@@ -211,7 +202,6 @@ func (r *uploadRequest) doUpload(
 		r.MediaMetadata.Base64Hash = hash
 		r.MediaMetadata.MediaID, err = r.generateMediaID(ctx, db)
 		if err != nil {
-			fileutils.RemoveDir(tmpDir, r.Logger)
 			r.Logger.WithError(err).Error("Failed to generate media ID for new upload")
 			return &util.JSONResponse{
 				Code: http.StatusInternalServerError,
@@ -229,7 +219,7 @@ func (r *uploadRequest) doUpload(
 	}).Info("File uploaded")
 
 	return r.storeFileAndMetadata(
-		ctx, tmpDir, cfg.AbsBasePath, db, cfg.ThumbnailSizes,
+		ctx, tmpDir, fileStore, db, cfg.ThumbnailSizes,
 		activeThumbnailGeneration, cfg.MaxThumbnailGenerators,
 	)
 }
@@ -237,11 +227,11 @@ func (r *uploadRequest) doUpload(
 func requestEntityTooLargeJSONResponse(maxFileSizeBytes config.FileSizeBytes) *util.JSONResponse {
 	return &util.JSONResponse{
 		Code: http.StatusRequestEntityTooLarge,
-		JSON: spec.Unknown(fmt.Sprintf("HTTP Content-Length is greater than the maximum allowed upload size (%v).", maxFileSizeBytes)),
+		JSON: spec.MatrixError{ErrCode: "M_TOO_LARGE", Err: fmt.Sprintf("HTTP Content-Length is greater than the maximum allowed upload size (%v).", maxFileSizeBytes)},
 	}
 }
 
-// Validate validates the uploadRequest fields
+// Validate validates the uploadRequest fields.
 func (r *uploadRequest) Validate(maxFileSizeBytes config.FileSizeBytes) *util.JSONResponse {
 	if maxFileSizeBytes > 0 && r.MediaMetadata.FileSizeBytes > types.FileSizeBytes(maxFileSizeBytes) {
 		return requestEntityTooLargeJSONResponse(maxFileSizeBytes)
@@ -249,13 +239,13 @@ func (r *uploadRequest) Validate(maxFileSizeBytes config.FileSizeBytes) *util.JS
 	if strings.HasPrefix(string(r.MediaMetadata.UploadName), "~") {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.Unknown("File name must not begin with '~'."),
+			JSON: spec.InvalidParam("File name must not begin with '~'."),
 		}
 	}
 	// TODO: Validate filename - what are the valid characters?
 	if r.MediaMetadata.UserID != "" {
 		// TODO: We should put user ID parsing code into gomatrixserverlib and use that instead
-		//       (see https://github.com/matrix-org/gomatrixserverlib/blob/3394e7c7003312043208aa73727d2256eea3d1f6/eventcontent.go#L347 )
+		//       (see https://codefloe.com/pat-s/gomatrixserverlib/blob/3394e7c7003312043208aa73727d2256eea3d1f6/eventcontent.go#L347 )
 		//       It should be a struct (with pointers into a single string to avoid copying) and
 		//       we should update all refs to use UserID types rather than strings.
 		// https://github.com/matrix-org/synapse/blob/v0.19.2/synapse/types.py#L92
@@ -269,30 +259,30 @@ func (r *uploadRequest) Validate(maxFileSizeBytes config.FileSizeBytes) *util.JS
 	return nil
 }
 
-// storeFileAndMetadata moves the temporary file to its final path based on metadata and stores the metadata in the database
-// See getPathFromMediaMetadata in fileutils for details of the final path.
-// The order of operations is important as it avoids metadata entering the database before the file
-// is ready, and if we fail to move the file, it never gets added to the database.
+// storeFileAndMetadata stores the temporary file via the FileStore and stores
+// the metadata in the database. The order of operations is important as it
+// avoids metadata entering the database before the file is ready, and if we
+// fail to store the file, it never gets added to the database.
 // Returns a util.JSONResponse error and cleans up directories in case of error.
 func (r *uploadRequest) storeFileAndMetadata(
 	ctx context.Context,
 	tmpDir types.Path,
-	absBasePath config.Path,
+	fileStore filestore.FileStore,
 	db storage.Database,
 	thumbnailSizes []config.ThumbnailSize,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 	maxThumbnailGenerators int,
 ) *util.JSONResponse {
-	finalPath, duplicate, err := fileutils.MoveFileWithHashCheck(tmpDir, r.MediaMetadata, absBasePath, r.Logger)
+	duplicate, err := fileStore.Store(ctx, tmpDir, r.MediaMetadata.Base64Hash, r.MediaMetadata.FileSizeBytes)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to move file.")
+		r.Logger.WithError(err).Error("Failed to store file.")
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.Unknown("Failed to upload"),
 		}
 	}
 	if duplicate {
-		r.Logger.WithField("dst", finalPath).Info("File was stored previously - discarding duplicate")
+		r.Logger.Info("File was stored previously - discarding duplicate")
 	}
 
 	if err = db.StoreMediaMetadata(ctx, r.MediaMetadata); err != nil {
@@ -301,7 +291,9 @@ func (r *uploadRequest) storeFileAndMetadata(
 		// there is valid metadata in the database for that file. As such we only
 		// remove the file if it is not a duplicate.
 		if !duplicate {
-			fileutils.RemoveDir(types.Path(path.Dir(string(finalPath))), r.Logger)
+			if delErr := fileStore.Delete(ctx, r.MediaMetadata.Base64Hash); delErr != nil {
+				r.Logger.WithError(delErr).Warn("Failed to delete stored file after metadata failure")
+			}
 		}
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -309,13 +301,20 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 	}
 
-	go func() {
-		file, err := os.Open(string(finalPath))
+	go func() { //nolint:contextcheck
+		localPath, cleanup, err := fileStore.LocalPath(context.Background(), r.MediaMetadata.Base64Hash)
+		if err != nil {
+			r.Logger.WithError(err).Error("unable to get local path for thumbnail generation")
+			return
+		}
+		defer cleanup()
+
+		file, err := os.Open(localPath)
 		if err != nil {
 			r.Logger.WithError(err).Error("unable to open file")
 			return
 		}
-		defer file.Close() // nolint: errcheck
+		defer file.Close()
 		// http.DetectContentType only needs 512 bytes
 		buf := make([]byte, 512)
 		_, err = file.Read(buf)
@@ -331,8 +330,8 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 
 		busy, err := thumbnailer.GenerateThumbnails(
-			context.Background(), finalPath, thumbnailSizes, r.MediaMetadata,
-			activeThumbnailGeneration, maxThumbnailGenerators, db, r.Logger,
+			context.Background(), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
+			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
 		)
 		if err != nil {
 			r.Logger.WithError(err).Warn("Error generating thumbnails")

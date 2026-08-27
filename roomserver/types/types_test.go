@@ -6,6 +6,7 @@ import (
 )
 
 func TestDeduplicateStateEntries(t *testing.T) {
+	t.Parallel()
 	entries := []StateEntry{
 		{StateKeyTuple{1, 1}, 1},
 		{StateKeyTuple{1, 1}, 2},
@@ -27,6 +28,7 @@ func TestDeduplicateStateEntries(t *testing.T) {
 }
 
 func TestStateKeyTupleSorter(t *testing.T) {
+	t.Parallel()
 	input := StateKeyTupleSorter{
 		{EventTypeNID: 1, EventStateKeyNID: 2},
 		{EventTypeNID: 1, EventStateKeyNID: 4},

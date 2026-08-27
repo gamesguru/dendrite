@@ -1,0 +1,45 @@
+name: Dendrite migration
+
+on:
+  pull_request:
+    paths:
+      - '**/storage/**'
+      - 'internal/sqlutil/**'
+      - 'cmd/dendrite-migration-test/**'
+      - 'build/scripts/DendriteMigration.Dockerfile'
+      - 'build/scripts/DendriteMigrationTest.Dockerfile'
+      - 'build/scripts/dendrite-migration-entrypoint.sh'
+      - 'build/scripts/test-dendrite-head-migration.sh'
+      - '.forgejo/workflows/dendrite-migration.yaml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    name: Dendrite HEAD to Zendrite (${{ matrix.backend }})
+    runs-on: docker
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - postgres
+          - sqlite
+    steps:
+      - name: Install runner dependencies
+        run: apk add --no-cache curl git nodejs
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Show Docker version
+        run: docker version
+      - name: Test migration
+        run: build/scripts/test-dendrite-head-migration.sh ${{ matrix.backend }}

@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/depth"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventsSchema = `
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS roomserver_events (
 -- Create an index which helps in resolving membership events (event_type_nid = 5) - (used for history visibility)
 CREATE INDEX IF NOT EXISTS roomserver_events_memberships_idx ON roomserver_events (room_nid, event_state_key_nid) WHERE (event_type_nid = 5);
 
--- The following indexes are used by bulkSelectStateEventByNIDSQL 
+-- The following indexes are used by bulkSelectStateEventByNIDSQL
 CREATE INDEX IF NOT EXISTS roomserver_event_event_type_nid_idx ON roomserver_events (event_type_nid);
 CREATE INDEX IF NOT EXISTS roomserver_event_state_key_nid_idx ON roomserver_events (event_state_key_nid);
 `
@@ -244,8 +244,7 @@ func (s *eventStatements) BulkSelectSnapshotsFromEventIDs(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) (map[types.StateSnapshotNID][]string, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectSnapshotsForEventIDsStmt)
-
-	rows, err := stmt.QueryContext(ctx, pq.Array(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +276,7 @@ func (s *eventStatements) BulkSelectStateEventByID(
 	} else {
 		stmt = sqlutil.TxStmt(txn, s.bulkSelectStateEventByIDStmt)
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +315,7 @@ func (s *eventStatements) BulkSelectStateEventByID(
 }
 
 // bulkSelectStateEventByNID lookups a list of state events by event NID.
-// If any of the requested events are missing from the database it returns a types.MissingEventError
+// If any of the requested events are missing from the database it returns a types.MissingEventError.
 func (s *eventStatements) BulkSelectStateEventByNID(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 	stateKeyTuples []types.StateKeyTuple,
@@ -325,7 +324,7 @@ func (s *eventStatements) BulkSelectStateEventByNID(
 	sort.Sort(tuples)
 	eventTypeNIDArray, eventStateKeyNIDArray := tuples.TypesAndStateKeysAsArrays()
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateEventByNIDStmt)
-	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), pq.Int64Array(eventTypeNIDArray), pq.Int64Array(eventStateKeyNIDArray))
+	rows, err := stmt.QueryContext(ctx, eventNIDsAsArray(eventNIDs), eventTypeNIDArray, eventStateKeyNIDArray)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +358,7 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) ([]types.StateAtEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateAtEventByIDStmt)
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +514,7 @@ func (s *eventStatements) bulkSelectEventNID(ctx context.Context, txn *sql.Tx, e
 	} else {
 		stmt = sqlutil.TxStmt(txn, s.bulkSelectEventNIDStmt)
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(eventIDs))
+	rows, err := stmt.QueryContext(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +542,9 @@ func (s *eventStatements) SelectMaxEventDepth(ctx context.Context, txn *sql.Tx, 
 	if err != nil {
 		return 0, err
 	}
-	return result, nil
+	// Clamp the depth to prevent overflow beyond the canonical JSON integer limit.
+	// This handles rooms where events have depth = MAX_SAFE_INTEGER (2^53-1).
+	return depth.Clamp(result), nil
 }
 
 func (s *eventStatements) SelectRoomNIDsForEventNIDs(
@@ -567,7 +568,7 @@ func (s *eventStatements) SelectRoomNIDsForEventNIDs(
 	return result, rows.Err()
 }
 
-func eventNIDsAsArray(eventNIDs []types.EventNID) pq.Int64Array {
+func eventNIDsAsArray(eventNIDs []types.EventNID) []int64 {
 	nids := make([]int64, len(eventNIDs))
 	for i := range eventNIDs {
 		nids[i] = int64(eventNIDs[i])

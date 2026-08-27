@@ -1,0 +1,55 @@
+name: Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  changelog:
+    name: Update changelog issue
+    runs-on: ubuntu-latest
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.1
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache curl jq nodejs
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate and post changelog
+        env:
+          ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          # Generate release notes
+          git-sv rn -o changelog.md
+
+          # Find existing changelog issue
+          ISSUE_NUMBER=$(curl -sf "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/issues?state=open" \
+            -H "Authorization: token $ISSUE_TOKEN" | \
+            jq -r '[.[] | select(.title == "Changelog for upcoming version")] | first | .number // empty')
+
+          echo "ISSUE_NUMBER: '$ISSUE_NUMBER'"
+
+          # Build JSON payload
+          JSON_DATA=$(jq -n --arg title 'Changelog for upcoming version' --arg body "$(cat changelog.md)" \
+            '{title: $title, body: $body}')
+
+          # Create or update issue
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "Creating new changelog issue..."
+            curl -sf -X POST "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/issues" \
+              -H "Authorization: token $ISSUE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$JSON_DATA"
+          else
+            echo "Updating existing changelog issue #$ISSUE_NUMBER..."
+            curl -sf -X PATCH "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/issues/$ISSUE_NUMBER" \
+              -H "Authorization: token $ISSUE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$JSON_DATA"
+          fi

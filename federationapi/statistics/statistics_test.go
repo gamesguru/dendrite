@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 const (
@@ -71,16 +72,18 @@ func TestBackoff(t *testing.T) {
 		}
 
 		// Check if we should be blacklisted by now.
-		if i >= stats.FailuresUntilBlacklist {
-			if !blacklist {
+		switch {
+		case i >= stats.FailuresUntilBlacklist:
+			switch {
+			case !blacklist:
 				t.Fatalf("Backoff %d should have resulted in blacklist but didn't", i)
-			} else if blacklist != blacklisted {
+			case blacklist != blacklisted:
 				t.Fatalf("Blacklisted and Failure returned different blacklist values")
-			} else {
+			default:
 				t.Logf("Backoff %d is blacklisted as expected", i)
 				continue
 			}
-		} else {
+		default:
 			if blacklist {
 				t.Fatalf("Backoff %d should not have resulted in blacklist but did", i)
 			} else {
@@ -89,10 +92,15 @@ func TestBackoff(t *testing.T) {
 		}
 
 		// Check if the duration is what we expect.
+		// The backoff formula is 2^(count+7) with a cap at 2^19
 		t.Logf("Backoff %d is for %s", i, duration)
 		roundingAllowance := 0.01
-		minDuration := time.Millisecond * time.Duration(math.Exp2(float64(i))*minJitterMultiplier*1000-roundingAllowance)
-		maxDuration := time.Millisecond * time.Duration(math.Exp2(float64(i))*maxJitterMultiplier*1000+roundingAllowance)
+		exponent := float64(i) + float64(minBackoffExponent-1) // count + 7
+		if exponent > float64(maxBackoffExponent) {
+			exponent = float64(maxBackoffExponent)
+		}
+		minDuration := time.Millisecond * time.Duration(math.Exp2(exponent)*minJitterMultiplier*1000-roundingAllowance)
+		maxDuration := time.Millisecond * time.Duration(math.Exp2(exponent)*maxJitterMultiplier*1000+roundingAllowance)
 		var inJitterRange bool
 		if duration >= minDuration && duration <= maxDuration {
 			inJitterRange = true

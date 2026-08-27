@@ -10,12 +10,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const queueEDUsSchema = `
@@ -134,7 +133,7 @@ func (s *queueEDUsStatements) DeleteQueueEDUs(
 	jsonNIDs []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteQueueEDUStmt)
-	_, err := stmt.ExecContext(ctx, serverName, pq.Int64Array(jsonNIDs))
+	_, err := stmt.ExecContext(ctx, serverName, jsonNIDs)
 	return err
 }
 

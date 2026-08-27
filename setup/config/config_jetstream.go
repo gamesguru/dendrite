@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 )
 
 type JetStream struct {
@@ -13,7 +14,7 @@ type JetStream struct {
 	// internal NATS server will be used when running in monolith mode only.
 	Addresses []string `yaml:"addresses"`
 	// The prefix to use for stream names for this homeserver - really only
-	// useful if running more than one Dendrite on the same NATS deployment.
+	// useful if running more than one Zendrite on the same NATS deployment.
 	TopicPrefix string `yaml:"topic_prefix"`
 	// The JetStream domain, if needed.
 	JetStreamDomain string `yaml:"js_domain"`
@@ -21,9 +22,11 @@ type JetStream struct {
 	InMemory bool `yaml:"in_memory"`
 	// Disable logging. This is mostly useful for unit tests.
 	NoLog bool `yaml:"-"`
-	// Disables TLS validation. This should NOT be used in production
+	// Disables TLS validation. This should NOT be used in production.
 	DisableTLSValidation bool `yaml:"disable_tls_validation"`
-	// A credentials file to be used for authentication, example:
+	// A NATS .creds file used to authenticate to an external NATS server.
+	// The file is re-read on each reconnect, so credentials can be rotated
+	// without restarting Zendrite. See:
 	// https://docs.nats.io/using-nats/developer/connecting/creds
 	Credentials Path `yaml:"credentials_path"`
 }
@@ -38,7 +41,7 @@ func (c *JetStream) Durable(name string) string {
 
 func (c *JetStream) Defaults(opts DefaultOpts) {
 	c.Addresses = []string{}
-	c.TopicPrefix = "Dendrite"
+	c.TopicPrefix = "Zendrite"
 	if opts.Generate {
 		c.StoragePath = Path("./")
 		c.NoLog = true
@@ -47,4 +50,20 @@ func (c *JetStream) Defaults(opts DefaultOpts) {
 	}
 }
 
-func (c *JetStream) Verify(configErrs *ConfigErrors) {}
+func (c *JetStream) Verify(configErrs *ConfigErrors) {
+	// Without an explicit storage_path, NATS Server falls back to os.TempDir(),
+	// which on Windows + Go 1.26+ can latch JetStream into a permanent
+	// "Critical write error" state via ERROR_INVALID_PARAMETER in os.RemoveAll.
+	if len(c.Addresses) == 0 && c.StoragePath == "" {
+		configErrs.Add("global.jetstream.storage_path must not be empty when using the built-in NATS server")
+	}
+
+	// The credentials file is only used when connecting to an external NATS
+	// server. Check that it exists at startup so that the operator gets a clear
+	// config error rather than a runtime auth failure.
+	if len(c.Addresses) > 0 && string(c.Credentials) != "" {
+		if _, err := os.Stat(string(c.Credentials)); err != nil {
+			configErrs.Add(fmt.Sprintf("global.jetstream.credentials_path: %v", err))
+		}
+	}
+}

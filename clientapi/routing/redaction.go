@@ -12,17 +12,17 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/transactions"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type redactionContent struct {
@@ -73,7 +73,7 @@ func SendRedaction(
 		util.GetLogger(req.Context()).WithField("userID", *deviceUserID).WithField("roomID", roomID).Error("missing sender ID for user, despite having membership")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -87,13 +87,13 @@ func SendRedaction(
 	ev := roomserverAPI.GetEvent(req.Context(), rsAPI, roomID, eventID)
 	if ev == nil {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400,                               //nolint:mnd
 			JSON: spec.NotFound("unknown event ID"), // TODO: is it ok to leak existence?
 		}
 	}
 	if ev.RoomID().String() != roomID {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.NotFound("cannot redact event in another room"),
 		}
 	}
@@ -111,14 +111,14 @@ func SendRedaction(
 		})
 		if plEvent == nil {
 			return util.JSONResponse{
-				Code: 403,
+				Code: 403, //nolint:mnd
 				JSON: spec.Forbidden("You don't have permission to redact this event, no power_levels event in this room."),
 			}
 		}
 		pl, plErr := plEvent.PowerLevels()
 		if plErr != nil {
 			return util.JSONResponse{
-				Code: 403,
+				Code: 403, //nolint:mnd
 				JSON: spec.Forbidden(
 					"You don't have permission to redact this event, the power_levels event for this room is malformed so auth checks cannot be performed.",
 				),
@@ -128,7 +128,7 @@ func SendRedaction(
 	}
 	if !allowedToRedact {
 		return util.JSONResponse{
-			Code: 403,
+			Code: 403, //nolint:mnd
 			JSON: spec.Forbidden("You don't have permission to redact this event, power level too low."),
 		}
 	}
@@ -177,7 +177,7 @@ func SendRedaction(
 		}
 	}
 	domain := device.UserDomain()
-	if err = roomserverAPI.SendEvents(context.Background(), rsAPI, roomserverAPI.KindNew, []*types.HeaderedEvent{e}, device.UserDomain(), domain, domain, nil, false); err != nil {
+	if err = roomserverAPI.SendEvents(context.Background(), rsAPI, roomserverAPI.KindNew, []*types.HeaderedEvent{e}, device.UserDomain(), domain, domain, nil, false); err != nil { //nolint:contextcheck
 		util.GetLogger(req.Context()).WithError(err).Errorf("failed to SendEvents")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -186,7 +186,7 @@ func SendRedaction(
 	}
 
 	res := util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: redactionResponse{
 			EventID: e.EventID(),
 		},

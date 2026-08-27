@@ -10,8 +10,9 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 type Thumbnails interface {
@@ -35,4 +36,5 @@ type MediaRepository interface {
 		ctx context.Context, txn *sql.Tx,
 		mediaHash types.Base64Hash, mediaOrigin spec.ServerName,
 	) (*types.MediaMetadata, error)
+	DeleteMedia(ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName) error
 }

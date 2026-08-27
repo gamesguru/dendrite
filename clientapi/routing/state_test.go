@@ -7,17 +7,16 @@ import (
 	"net/http"
 	"testing"
 
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	uapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"gotest.tools/v3/assert"
-)
 
-var ()
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
+)
 
 type stateTestRoomserverAPI struct {
 	rsapi.RoomserverInternalAPI
@@ -140,7 +139,7 @@ func Test_OnIncomingStateTypeRequest(t *testing.T) {
 				{
 					EventType: eventType,
 					StateKey:  stateKey,
-				}: mustCreateStatePDU(t, defaultRoomVersion, roomIDStr, eventType, stateKey, map[string]interface{}{
+				}: mustCreateStatePDU(t, defaultRoomVersion, roomIDStr, eventType, stateKey, map[string]any{
 					"foo": "bar",
 				}),
 			},
@@ -168,13 +167,13 @@ func Test_OnIncomingStateTypeRequest(t *testing.T) {
 				{
 					EventType: eventType,
 					StateKey:  stateSenderRoomKey,
-				}: mustCreateStatePDU(t, pseudoIDRoomVersion, roomIDStr, eventType, stateSenderRoomKey, map[string]interface{}{
+				}: mustCreateStatePDU(t, pseudoIDRoomVersion, roomIDStr, eventType, stateSenderRoomKey, map[string]any{
 					"foo": "bar",
 				}),
 				{
 					EventType: eventType,
 					StateKey:  stateSenderUserID,
-				}: mustCreateStatePDU(t, pseudoIDRoomVersion, roomIDStr, eventType, stateSenderUserID, map[string]interface{}{
+				}: mustCreateStatePDU(t, pseudoIDRoomVersion, roomIDStr, eventType, stateSenderUserID, map[string]any{
 					"not": "thisone",
 				}),
 			},
@@ -205,13 +204,13 @@ func Test_OnIncomingStateTypeRequest(t *testing.T) {
 				{
 					EventType: eventType,
 					StateKey:  stateSenderRoomKey,
-				}: mustCreateStatePDU(t, nonPseudoIDRoomVersion, roomIDStr, eventType, stateSenderRoomKey, map[string]interface{}{
+				}: mustCreateStatePDU(t, nonPseudoIDRoomVersion, roomIDStr, eventType, stateSenderRoomKey, map[string]any{
 					"not": "thisone",
 				}),
 				{
 					EventType: eventType,
 					StateKey:  stateSenderUserID,
-				}: mustCreateStatePDU(t, nonPseudoIDRoomVersion, roomIDStr, eventType, stateSenderUserID, map[string]interface{}{
+				}: mustCreateStatePDU(t, nonPseudoIDRoomVersion, roomIDStr, eventType, stateSenderUserID, map[string]any{
 					"foo": "bar",
 				}),
 			},
@@ -230,11 +229,11 @@ func Test_OnIncomingStateTypeRequest(t *testing.T) {
 	})
 }
 
-func mustCreateStatePDU(t *testing.T, roomVer gomatrixserverlib.RoomVersion, roomID string, stateType string, stateKey string, stateContent map[string]interface{}) *types.HeaderedEvent {
+func mustCreateStatePDU(t *testing.T, roomVer gomatrixserverlib.RoomVersion, roomID string, stateType string, stateKey string, stateContent map[string]any) *types.HeaderedEvent {
 	t.Helper()
 	roomVerImpl := gomatrixserverlib.MustGetRoomVersion(roomVer)
 
-	evBytes, err := json.Marshal(map[string]interface{}{
+	evBytes, err := json.Marshal(map[string]any{
 		"room_id":   roomID,
 		"type":      stateType,
 		"state_key": stateKey,

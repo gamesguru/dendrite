@@ -9,22 +9,23 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 const (
@@ -255,7 +256,6 @@ func (oq *destinationQueue) getPendingFromDatabase() {
 	// in memory then we'll no longer consider this queue to be overflowed.
 	if !overflowed {
 		oq.overflowed.Store(false)
-	} else {
 	}
 	// If we've retrieved some events then notify the destination queue goroutine.
 	if retrieved {
@@ -365,9 +365,25 @@ func (oq *destinationQueue) backgroundSend() {
 			continue
 		}
 
+		// Check if we should be backing off according to persisted statistics.
+		// This handles the case where the server restarted and the backoff state
+		// was restored from the database, but the queue's backingOff flag was reset.
+		if backoffUntil := oq.statistics.BackoffInfo(); backoffUntil != nil && time.Now().Before(*backoffUntil) {
+			// We're still in a backoff period - don't send yet.
+			// Set the backingOff flag and exit. The statistics backoff timer
+			// will notify us when the backoff expires.
+			oq.backingOff.Store(true)
+			destinationQueueBackingOff.Inc()
+			logrus.WithFields(logrus.Fields{
+				"destination":   oq.destination,
+				"backoff_until": backoffUntil,
+			}).Debug("Destination queue respecting persisted backoff")
+			return
+		}
+
 		// If we have pending PDUs or EDUs then construct a transaction.
 		// Try sending the next transaction and see what happens.
-		terr, sendMethod := oq.nextTransaction(toSendPDUs, toSendEDUs)
+		sendMethod, terr := oq.nextTransaction(toSendPDUs, toSendEDUs)
 		if terr != nil {
 			// We failed to send the transaction. Mark it as a failure.
 			_, blacklisted := oq.statistics.Failure()
@@ -396,13 +412,13 @@ func (oq *destinationQueue) backgroundSend() {
 func (oq *destinationQueue) nextTransaction(
 	pdus []*queuedPDU,
 	edus []*queuedEDU,
-) (err error, sendMethod statistics.SendMethod) {
+) (sendMethod statistics.SendMethod, err error) {
 	// Create the transaction.
 	t, pduReceipts, eduReceipts := oq.createTransaction(pdus, edus)
 	logrus.WithField("server_name", oq.destination).Debugf("Sending transaction %q containing %d PDUs, %d EDUs", t.TransactionID, len(t.PDUs), len(t.EDUs))
 
 	// Try to send the transaction to the destination server.
-	ctx, cancel := context.WithTimeout(oq.process.Context(), time.Minute*5)
+	ctx, cancel := context.WithTimeout(oq.process.Context(), time.Minute*5) //nolint:mnd
 	defer cancel()
 
 	relayServers := oq.statistics.KnownRelayServers()
@@ -423,7 +439,7 @@ func (oq *destinationQueue) nextTransaction(
 			// TODO : how to pass through actual userID here?!?!?!?!
 			userID, userErr := spec.NewUserID("@user:"+string(oq.destination), false)
 			if userErr != nil {
-				return userErr, sendMethod
+				return sendMethod, userErr
 			}
 
 			// Attempt sending to each known relay server.
@@ -450,17 +466,16 @@ func (oq *destinationQueue) nextTransaction(
 			}
 		}
 	}
-	switch errResponse := err.(type) {
-	case nil:
+	if err == nil {
 		// Clean up the transaction in the database.
 		if pduReceipts != nil {
-			//logrus.Infof("Cleaning PDUs %q", pduReceipt.String())
+			// logrus.Infof("Cleaning PDUs %q", pduReceipt.String())
 			if err = oq.db.CleanPDUs(oq.process.Context(), oq.destination, pduReceipts); err != nil {
 				logrus.WithError(err).Errorf("Failed to clean PDUs for server %q", t.Destination)
 			}
 		}
 		if eduReceipts != nil {
-			//logrus.Infof("Cleaning EDUs %q", eduReceipt.String())
+			// logrus.Infof("Cleaning EDUs %q", eduReceipt.String())
 			if err = oq.db.CleanEDUs(oq.process.Context(), oq.destination, eduReceipts); err != nil {
 				logrus.WithError(err).Errorf("Failed to clean EDUs for server %q", t.Destination)
 			}
@@ -469,8 +484,10 @@ func (oq *destinationQueue) nextTransaction(
 		oq.transactionIDMutex.Lock()
 		oq.transactionID = ""
 		oq.transactionIDMutex.Unlock()
-		return nil, sendMethod
-	case gomatrix.HTTPError:
+		return sendMethod, nil
+	}
+	var errResponse gomatrix.HTTPError
+	if errors.As(err, &errResponse) {
 		// Report that we failed to send the transaction and we
 		// will retry again, subject to backoff.
 
@@ -479,14 +496,13 @@ func (oq *destinationQueue) nextTransaction(
 		// to a 400-ish error
 		code := errResponse.Code
 		logrus.Debug("Transaction failed with HTTP", code)
-		return err, sendMethod
-	default:
-		logrus.WithFields(logrus.Fields{
-			"destination":   oq.destination,
-			logrus.ErrorKey: err,
-		}).Debugf("Failed to send transaction %q", t.TransactionID)
-		return err, sendMethod
+		return sendMethod, err
 	}
+	logrus.WithFields(logrus.Fields{
+		"destination":   oq.destination,
+		logrus.ErrorKey: err,
+	}).Debugf("Failed to send transaction %q", t.TransactionID)
+	return sendMethod, err
 }
 
 // createTransaction generates a gomatrixserverlib.Transaction from the provided pdus and edus.

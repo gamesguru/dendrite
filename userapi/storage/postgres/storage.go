@@ -12,17 +12,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/shared"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	// Import the postgres database driver.
-	_ "github.com/lib/pq"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
 )
 
-// NewDatabase creates a new accounts and profiles database
+// NewDatabase creates a new accounts and profiles database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, serverName spec.ServerName, bcryptCost int, openIDTokenLifetimeMS int64, loginTokenLifetime time.Duration, serverNoticesLocalpart string) (*shared.Database, error) {
 	db, writer, err := conMan.Connection(dbProperties)
 	if err != nil {
@@ -49,7 +49,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresRegistrationsTokenTable: %w", err)
 	}
-	accountsTable, err := NewPostgresAccountsTable(db, serverName)
+	accountsTable, err := NewPostgresAccountsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresAccountsTable: %w", err)
 	}
@@ -57,7 +57,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresAccountDataTable: %w", err)
 	}
-	devicesTable, err := NewPostgresDevicesTable(db, serverName)
+	devicesTable, err := NewPostgresDevicesTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresDevicesTable: %w", err)
 	}
@@ -85,6 +85,10 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresThreePIDTable: %w", err)
 	}
+	externalIDsTable, err := NewPostgresExternalIDsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresExternalIDsTable: %w", err)
+	}
 	pusherTable, err := NewPostgresPusherTable(db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresPusherTable: %w", err)
@@ -93,9 +97,13 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewPostgresStatsTable(db, serverName)
+	statsTable, err := NewPostgresStatsTable(db, serverName) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresStatsTable: %w", err)
+	}
+	dehydratedDevicesTable, err := NewPostgresDehydratedDevicesTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresDehydratedDevicesTable: %w", err)
 	}
 
 	m = sqlutil.NewMigrator(db)
@@ -119,10 +127,12 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
 		ThreePIDs:             threePIDTable,
+		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,
 		Notifications:         notificationsTable,
 		RegistrationTokens:    registationTokensTable,
 		Stats:                 statsTable,
+		DehydratedDevices:     dehydratedDevicesTable,
 		ServerName:            serverName,
 		DB:                    db,
 		Writer:                writer,

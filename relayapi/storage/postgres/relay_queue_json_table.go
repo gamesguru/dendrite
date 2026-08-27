@@ -10,14 +10,13 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const relayQueueJSONSchema = `
 -- The relayapi_queue_json table contains event contents that
--- we are storing for future forwarding. 
+-- we are storing for future forwarding.
 CREATE TABLE IF NOT EXISTS relayapi_queue_json (
 	-- The JSON NID. This allows cross-referencing to find the JSON blob.
 	json_nid BIGSERIAL,
@@ -79,7 +78,7 @@ func (s *relayQueueJSONStatements) DeleteQueueJSON(
 	ctx context.Context, txn *sql.Tx, nids []int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJSONStmt)
-	_, err := stmt.ExecContext(ctx, pq.Int64Array(nids))
+	_, err := stmt.ExecContext(ctx, nids)
 	return err
 }
 
@@ -88,7 +87,7 @@ func (s *relayQueueJSONStatements) SelectQueueJSON(
 ) (map[int64][]byte, error) {
 	blobs := map[int64][]byte{}
 	stmt := sqlutil.TxStmt(txn, s.selectJSONStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Int64Array(jsonNIDs))
+	rows, err := stmt.QueryContext(ctx, jsonNIDs)
 	if err != nil {
 		return nil, err
 	}

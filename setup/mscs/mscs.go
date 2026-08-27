@@ -10,18 +10,20 @@ package mscs
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/mscs/msc2836"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/mscs/msc2836"
+	"codefloe.com/pat-s/zendrite/setup/mscs/msc3814"
 )
 
-// Enable MSCs - returns an error on unknown MSCs
-func Enable(cfg *config.Dendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, caches *caching.Caches) error {
+// Enable MSCs - returns an error on unknown MSCs.
+func Enable(cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, caches *caching.Caches) error {
 	for _, msc := range cfg.MSCs.MSCs {
 		util.GetLogger(context.Background()).WithField("msc", msc).Info("Enabling MSC")
 		if err := EnableMSC(cfg, cm, routers, monolith, msc, caches); err != nil {
@@ -31,14 +33,17 @@ func Enable(cfg *config.Dendrite, cm *sqlutil.Connections, routers httputil.Rout
 	return nil
 }
 
-func EnableMSC(cfg *config.Dendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, msc string, caches *caching.Caches) error {
+func EnableMSC(cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, msc string, caches *caching.Caches) error {
 	switch msc {
 	case "msc2836":
 		return msc2836.Enable(cfg, cm, routers, monolith.RoomserverAPI, monolith.FederationAPI, monolith.UserAPI, monolith.KeyRing)
+	case "msc3814":
+		return msc3814.Enable(cfg, cm, routers, monolith.UserAPI)
 	case "msc2444": // enabled inside federationapi
 	case "msc2753": // enabled inside clientapi
+	case "msc3861": // enabled inside clientapi routing and userapi
 	default:
-		logrus.Warnf("EnableMSC: unknown MSC '%s', this MSC is either not supported or is natively supported by Dendrite", msc)
+		logrus.Warnf("EnableMSC: unknown MSC '%s', this MSC is either not supported or is natively supported by Zendrite", msc)
 	}
 	return nil
 }

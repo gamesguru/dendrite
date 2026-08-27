@@ -9,17 +9,17 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/element-hq/dendrite/internal/transactions"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // SendToDevice handles PUT /_matrix/client/r0/sendToDevice/{eventType}/{txnId}
-// sends the device events to the syncapi & federationsender
+// sends the device events to the syncapi & federationsender.
 func SendToDevice(
 	req *http.Request, device *userapi.Device,
 	syncProducer *producers.SyncAPIProducer,

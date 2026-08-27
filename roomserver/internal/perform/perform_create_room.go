@@ -10,20 +10,22 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 const (
@@ -37,7 +39,8 @@ type Creator struct {
 }
 
 // PerformCreateRoom handles all the steps necessary to create a new room.
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roomID spec.RoomID, createRequest *api.PerformCreateRoomRequest) (string, *util.JSONResponse) {
 	// Make sure we know the room version
 	verImpl, err := gomatrixserverlib.GetRoomVersion(createRequest.RoomVersion)
@@ -382,7 +385,7 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		{PDU: createEvent},
 	}
 	for i, e := range eventsToMake {
-		depth := i + 2 // depth starts at 2 since we made the create event already
+		depth := i + 2 //nolint:mnd // depth starts at 2 since we made the create event already
 
 		ev, jsonErr := api.GeneratePDU(
 			ctx, verImpl, e,
@@ -501,18 +504,20 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 				InviteRoomState: globalStrippedState,
 				SendAsServer:    string(userID.Domain()),
 			})
-			switch e := err.(type) {
-			case api.ErrInvalidID:
+			var errInvalidID api.ErrInvalidID
+			var errNotAllowed api.ErrNotAllowed
+			switch {
+			case errors.As(err, &errInvalidID):
 				return "", &util.JSONResponse{
 					Code: http.StatusBadRequest,
-					JSON: spec.Unknown(e.Error()),
+					JSON: spec.Unknown(errInvalidID.Error()),
 				}
-			case api.ErrNotAllowed:
+			case errors.As(err, &errNotAllowed):
 				return "", &util.JSONResponse{
 					Code: http.StatusForbidden,
-					JSON: spec.Forbidden(e.Error()),
+					JSON: spec.Forbidden(errNotAllowed.Error()),
 				}
-			case nil:
+			case err == nil:
 			default:
 				util.GetLogger(ctx).WithError(err).Error("PerformInvite failed")
 				sentry.CaptureException(err)

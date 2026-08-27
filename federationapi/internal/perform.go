@@ -8,29 +8,29 @@ import (
 	"fmt"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/consumers"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/consumers"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/version"
 )
 
-// PerformLeaveRequest implements api.FederationInternalAPI
+// PerformLeaveRequest implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformDirectoryLookup(
 	ctx context.Context,
 	request *api.PerformDirectoryLookupRequest,
 	response *api.PerformDirectoryLookupResponse,
 ) (err error) {
-	if !r.shouldAttemptDirectFederation(request.ServerName) {
-		return fmt.Errorf("relay servers have no meaningful response for directory lookup.")
+	if !r.shouldAttemptDirectFederation(request.ServerName) { //nolint:contextcheck
+		return fmt.Errorf("relay servers have no meaningful response for directory lookup")
 	}
 
 	dir, err := r.federation.LookupRoomAlias(
@@ -40,12 +40,12 @@ func (r *FederationInternalAPI) PerformDirectoryLookup(
 		request.RoomAlias,
 	)
 	if err != nil {
-		r.statistics.ForServer(request.ServerName).Failure()
+		r.statistics.ForServer(request.ServerName).Failure() //nolint:contextcheck
 		return err
 	}
 	response.RoomID = dir.RoomID
 	response.ServerNames = dir.Servers
-	r.statistics.ForServer(request.ServerName).Success(statistics.SendDirect)
+	r.statistics.ForServer(request.ServerName).Success(statistics.SendDirect) //nolint:contextcheck
 	return nil
 }
 
@@ -54,7 +54,7 @@ type federatedJoin struct {
 	RoomID string
 }
 
-// PerformJoin implements api.FederationInternalAPI
+// PerformJoin implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformJoin(
 	ctx context.Context,
 	request *api.PerformJoinRequest,
@@ -64,7 +64,7 @@ func (r *FederationInternalAPI) PerformJoin(
 	j := federatedJoin{request.UserID, request.RoomID}
 	if _, found := r.joins.Load(j); found {
 		response.LastError = &gomatrix.HTTPError{
-			Code: 429,
+			Code: 429, //nolint:mnd
 			Message: `{
 				"errcode": "M_LIMIT_EXCEEDED",
 				"error": "There is already a federated join to this room in progress. Please wait for it to finish."
@@ -139,12 +139,22 @@ func (r *FederationInternalAPI) PerformJoin(
 func (r *FederationInternalAPI) performJoinUsingServer(
 	ctx context.Context,
 	roomID, userID string,
-	content map[string]interface{},
+	content map[string]any,
 	serverName spec.ServerName,
-	unsigned map[string]interface{},
+	unsigned map[string]any,
 ) error {
-	if !r.shouldAttemptDirectFederation(serverName) {
-		return fmt.Errorf("relay servers have no meaningful response for join.")
+	// MSC3706: Trace join timing for diagnostics
+	joinStartTime := time.Now()
+	traceLogger := logrus.WithFields(logrus.Fields{
+		"room_id":     roomID,
+		"user_id":     userID,
+		"server_name": serverName,
+		"trace":       "join_timing",
+	})
+	traceLogger.Debug("Federation join started")
+
+	if !r.shouldAttemptDirectFederation(serverName) { //nolint:contextcheck
+		return fmt.Errorf("relay servers have no meaningful response for join")
 	}
 
 	user, err := spec.NewUserID(userID, true)
@@ -191,20 +201,38 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 			return r.rsAPI.StoreUserRoomPublicKey(ctx, senderID, *storeUserID, roomID)
 		},
 	}
-	response, joinErr := gomatrixserverlib.PerformJoin(ctx, r, joinInput)
+	// Use partial state join client for MSC3706 faster joins
+	performJoinStartTime := time.Now()
+	partialStateClient := &PartialStateJoinClient{FederationInternalAPI: r}
+	response, joinErr := gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	performJoinDuration := time.Since(performJoinStartTime)
 
 	if joinErr != nil {
+		traceLogger.WithFields(logrus.Fields{
+			"perform_join_ms": performJoinDuration.Milliseconds(),
+			"result":          "error",
+			"reachable":       joinErr.Reachable,
+		}).Debug("Federation PerformJoin failed")
 		if !joinErr.Reachable {
-			r.statistics.ForServer(joinErr.ServerName).Failure()
+			r.statistics.ForServer(joinErr.ServerName).Failure() //nolint:contextcheck
 		} else {
-			r.statistics.ForServer(joinErr.ServerName).Success(statistics.SendDirect)
+			r.statistics.ForServer(joinErr.ServerName).Success(statistics.SendDirect) //nolint:contextcheck
 		}
 		return joinErr.Err
 	}
-	r.statistics.ForServer(serverName).Success(statistics.SendDirect)
+	r.statistics.ForServer(serverName).Success(statistics.SendDirect) //nolint:contextcheck
 	if response == nil {
-		return fmt.Errorf("Received nil response from gomatrixserverlib.PerformJoin")
+		return fmt.Errorf("received nil response from gomatrixserverlib.PerformJoin")
 	}
+
+	// Check if this was a partial state join (MSC3706)
+	isPartialState := partialStateClient.LastJoinMembersOmitted
+	serversInRoom := partialStateClient.LastJoinServersInRoom
+	traceLogger.WithFields(logrus.Fields{
+		"perform_join_ms": performJoinDuration.Milliseconds(),
+		"partial_state":   isPartialState,
+		"servers_in_room": len(serversInRoom),
+	}).Debug("Federation PerformJoin completed (make_join + send_join)")
 
 	// We need to immediately update our list of joined hosts for this room now as we are technically
 	// joined. We must do this synchronously: we cannot rely on the roomserver output events as they
@@ -212,18 +240,28 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	// joining a room, waiting for 200 OK then changing device keys and have those keys not be sent
 	// to other servers (this was a cause of a flakey sytest "Local device key changes get to remote servers")
 	// The events are trusted now as we performed auth checks above.
+	joinedHostsStartTime := time.Now()
 	joinedHosts, err := consumers.JoinedHostsFromEvents(ctx, response.StateSnapshot.GetStateEvents().TrustedEvents(response.JoinEvent.Version(), false), r.rsAPI)
 	if err != nil {
-		return fmt.Errorf("JoinedHostsFromEvents: failed to get joined hosts: %s", err)
+		return fmt.Errorf("JoinedHostsFromEvents: failed to get joined hosts: %w", err)
 	}
+	traceLogger.WithFields(logrus.Fields{
+		"joined_hosts_ms": time.Since(joinedHostsStartTime).Milliseconds(),
+		"host_count":      len(joinedHosts),
+	}).Debug("JoinedHostsFromEvents completed")
 
+	updateRoomStartTime := time.Now()
 	logrus.WithField("room", roomID).Infof("Joined federated room with %d hosts", len(joinedHosts))
-	if _, err = r.db.UpdateRoom(context.Background(), roomID, joinedHosts, nil, true); err != nil {
-		return fmt.Errorf("UpdatedRoom: failed to update room with joined hosts: %s", err)
+	if _, err = r.db.UpdateRoom(context.Background(), roomID, joinedHosts, nil, true); err != nil { //nolint:contextcheck
+		return fmt.Errorf("UpdatedRoom: failed to update room with joined hosts: %w", err)
 	}
+	traceLogger.WithFields(logrus.Fields{
+		"update_room_ms": time.Since(updateRoomStartTime).Milliseconds(),
+	}).Debug("UpdateRoom completed")
 
 	// TODO: Can I change this to not take respState but instead just take an opaque list of events?
-	if err = roomserverAPI.SendEventWithState(
+	sendEventStartTime := time.Now()
+	if err = roomserverAPI.SendEventWithState( //nolint:contextcheck
 		context.Background(),
 		r.rsAPI,
 		user.Domain(),
@@ -236,10 +274,49 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	); err != nil {
 		return fmt.Errorf("roomserverAPI.SendEventWithState: %w", err)
 	}
+	traceLogger.WithFields(logrus.Fields{
+		"send_event_ms": time.Since(sendEventStartTime).Milliseconds(),
+	}).Debug("SendEventWithState completed")
+
+	// If this was a partial state join, store the partial state info (MSC3706)
+	if isPartialState {
+		setPartialStateStartTime := time.Now()
+		roomNID, err := r.rsAPI.AssignRoomNID(ctx, *room, response.JoinEvent.Version())
+		if err != nil {
+			logrus.WithError(err).WithField("room_id", roomID).Error("Failed to get room NID for partial state tracking")
+		} else {
+			// We don't have the join event NID here, so pass 0 for now
+			// The resync worker will handle this properly
+			// Pass 0 for deviceListStreamID for now - this will be populated when we have
+			// access to the userapi to get the current device list stream position
+			if err := r.rsAPI.SetRoomPartialState(ctx, roomNID, 0, string(serverName), serversInRoom, 0); err != nil {
+				logrus.WithError(err).WithField("room_id", roomID).Error("Failed to store partial state info")
+			} else {
+				traceLogger.WithFields(logrus.Fields{
+					"set_partial_state_ms": time.Since(setPartialStateStartTime).Milliseconds(),
+					"room_nid":             roomNID,
+				}).Debug("SetRoomPartialState completed")
+
+				// Queue the room for background state resync (MSC3706)
+				if r.partialStateWorker != nil {
+					r.partialStateWorker.QueueRoom(roomNID)
+					traceLogger.WithField("room_nid", roomNID).Debug("Queued room for partial state resync")
+				}
+			}
+		}
+	}
+
+	// Final summary log
+	traceLogger.WithFields(logrus.Fields{
+		"total_duration_ms": time.Since(joinStartTime).Milliseconds(),
+		"partial_state":     isPartialState,
+		"result":            "success",
+	}).Debug("Federation join completed")
+
 	return nil
 }
 
-// PerformOutboundPeekRequest implements api.FederationInternalAPI
+// PerformOutboundPeekRequest implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformOutboundPeek(
 	ctx context.Context,
 	request *api.PerformOutboundPeekRequest,
@@ -325,7 +402,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	supportedVersions []gomatrixserverlib.RoomVersion,
 ) error {
 	if !r.shouldAttemptDirectFederation(serverName) {
-		return fmt.Errorf("relay servers have no meaningful response for outbound peek.")
+		return fmt.Errorf("relay servers have no meaningful response for outbound peek")
 	}
 
 	// create a unique ID for this peek.
@@ -379,7 +456,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	}
 
 	// we have the peek state now so let's process regardless of whether upstream gives up
-	ctx = context.Background()
+	ctx = context.Background() //nolint:contextcheck
 
 	// authenticate the state returned (check its auth events etc)
 	// the equivalent of CheckSendJoinResponse()
@@ -428,7 +505,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	return nil
 }
 
-// PerformLeaveRequest implements api.FederationInternalAPI
+// PerformLeaveRequest implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformLeave(
 	ctx context.Context,
 	request *api.PerformLeaveRequest,
@@ -445,7 +522,7 @@ func (r *FederationInternalAPI) PerformLeave(
 	// Try each server that we were provided until we land on one that
 	// successfully completes the make-leave send-leave dance.
 	for _, serverName := range request.ServerNames {
-		if !r.shouldAttemptDirectFederation(serverName) {
+		if !r.shouldAttemptDirectFederation(serverName) { //nolint:contextcheck
 			continue
 		}
 
@@ -461,7 +538,7 @@ func (r *FederationInternalAPI) PerformLeave(
 		if err != nil {
 			// TODO: Check if the user was not allowed to leave the room.
 			logrus.WithError(err).Warnf("r.federation.MakeLeave failed")
-			r.statistics.ForServer(serverName).Failure()
+			r.statistics.ForServer(serverName).Failure() //nolint:contextcheck
 			continue
 		}
 
@@ -493,7 +570,7 @@ func (r *FederationInternalAPI) PerformLeave(
 		leaveEB := verImpl.NewEventBuilderFromProtoEvent(&respMakeLeave.LeaveEvent)
 
 		if respMakeLeave.LeaveEvent.Content == nil {
-			content := map[string]interface{}{
+			content := map[string]any{
 				"membership": "leave",
 			}
 			if err = leaveEB.SetContent(content); err != nil {
@@ -527,11 +604,11 @@ func (r *FederationInternalAPI) PerformLeave(
 		)
 		if err != nil {
 			logrus.WithError(err).Warnf("r.federation.SendLeave failed")
-			r.statistics.ForServer(serverName).Failure()
+			r.statistics.ForServer(serverName).Failure() //nolint:contextcheck
 			continue
 		}
 
-		r.statistics.ForServer(serverName).Success(statistics.SendDirect)
+		r.statistics.ForServer(serverName).Success(statistics.SendDirect) //nolint:contextcheck
 		return nil
 	}
 
@@ -542,7 +619,7 @@ func (r *FederationInternalAPI) PerformLeave(
 	)
 }
 
-// SendInvite implements api.FederationInternalAPI
+// SendInvite implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) SendInvite(
 	ctx context.Context,
 	event gomatrixserverlib.PDU,
@@ -564,8 +641,8 @@ func (r *FederationInternalAPI) SendInvite(
 
 	// TODO (devon): This should be allowed via a relay. Currently only transactions
 	// can be sent to relays. Would need to extend relays to handle invites.
-	if !r.shouldAttemptDirectFederation(destination) {
-		return nil, fmt.Errorf("relay servers have no meaningful response for invite.")
+	if !r.shouldAttemptDirectFederation(destination) { //nolint:contextcheck
+		return nil, fmt.Errorf("relay servers have no meaningful response for invite")
 	}
 
 	logrus.WithFields(logrus.Fields{
@@ -597,7 +674,7 @@ func (r *FederationInternalAPI) SendInvite(
 	return inviteEvent, nil
 }
 
-// SendInviteV3 implements api.FederationInternalAPI
+// SendInviteV3 implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) SendInviteV3(
 	ctx context.Context,
 	event gomatrixserverlib.ProtoEvent,
@@ -621,8 +698,8 @@ func (r *FederationInternalAPI) SendInviteV3(
 
 	// TODO (devon): This should be allowed via a relay. Currently only transactions
 	// can be sent to relays. Would need to extend relays to handle invites.
-	if !r.shouldAttemptDirectFederation(invitee.Domain()) {
-		return nil, fmt.Errorf("relay servers have no meaningful response for invite.")
+	if !r.shouldAttemptDirectFederation(invitee.Domain()) { //nolint:contextcheck
+		return nil, fmt.Errorf("relay servers have no meaningful response for invite")
 	}
 
 	logrus.WithFields(logrus.Fields{
@@ -649,7 +726,7 @@ func (r *FederationInternalAPI) SendInviteV3(
 	return inviteEvent, nil
 }
 
-// PerformServersAlive implements api.FederationInternalAPI
+// PerformServersAlive implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformBroadcastEDU(
 	ctx context.Context,
 	request *api.PerformBroadcastEDURequest,
@@ -666,24 +743,24 @@ func (r *FederationInternalAPI) PerformBroadcastEDU(
 	logrus.WithContext(ctx).Infof("Sending wake-up EDU to %d destination(s)", len(destinations))
 
 	edu := &gomatrixserverlib.EDU{
-		Type:   "org.matrix.dendrite.wakeup",
+		Type:   "org.matrix.zendrite.wakeup",
 		Origin: string(r.cfg.Matrix.ServerName),
 	}
-	if err = r.queues.SendEDU(edu, r.cfg.Matrix.ServerName, destinations); err != nil {
+	if err = r.queues.SendEDU(edu, r.cfg.Matrix.ServerName, destinations); err != nil { //nolint:contextcheck
 		return fmt.Errorf("r.queues.SendEDU: %w", err)
 	}
-	r.MarkServersAlive(destinations)
+	r.MarkServersAlive(destinations) //nolint:contextcheck
 
 	return nil
 }
 
-// PerformWakeupServers implements api.FederationInternalAPI
+// PerformWakeupServers implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformWakeupServers(
 	ctx context.Context,
 	request *api.PerformWakeupServersRequest,
 	response *api.PerformWakeupServersResponse,
 ) (err error) {
-	r.MarkServersAlive(request.ServerNames)
+	r.MarkServersAlive(request.ServerNames) //nolint:contextcheck
 	return nil
 }
 
@@ -722,7 +799,7 @@ func checkEventsContainCreateEvent(events []gomatrixserverlib.PDU) error {
 	return fmt.Errorf("response is missing m.room.create event")
 }
 
-// federatedEventProvider is an event provider which fetches events from the server provided
+// federatedEventProvider is an event provider which fetches events from the server provided.
 func federatedEventProvider(
 	ctx context.Context, federation fclient.FederationClient,
 	keyRing gomatrixserverlib.JSONVerifier, origin, server spec.ServerName,
@@ -789,7 +866,7 @@ func federatedEventProvider(
 	}
 }
 
-// P2PQueryRelayServers implements api.FederationInternalAPI
+// P2PQueryRelayServers implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) P2PQueryRelayServers(
 	ctx context.Context,
 	request *api.P2PQueryRelayServersRequest,
@@ -805,7 +882,7 @@ func (r *FederationInternalAPI) P2PQueryRelayServers(
 	return nil
 }
 
-// P2PAddRelayServers implements api.FederationInternalAPI
+// P2PAddRelayServers implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) P2PAddRelayServers(
 	ctx context.Context,
 	request *api.P2PAddRelayServersRequest,
@@ -820,7 +897,7 @@ func (r *FederationInternalAPI) P2PAddRelayServers(
 	return nil
 }
 
-// P2PRemoveRelayServers implements api.FederationInternalAPI
+// P2PRemoveRelayServers implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) P2PRemoveRelayServers(
 	ctx context.Context,
 	request *api.P2PRemoveRelayServersRequest,

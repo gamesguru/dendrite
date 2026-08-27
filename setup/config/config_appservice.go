@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	log "github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 )
 
 const UnixSocketPrefix = "unix://"
@@ -90,7 +90,7 @@ type ApplicationService struct {
 
 func (a *ApplicationService) CreateHTTPClient(insecureSkipVerify bool) {
 	client := &http.Client{
-		Timeout: time.Second * 30,
+		Timeout: time.Second * 30, //nolint:mnd
 		Transport: &http.Transport{
 			DisableKeepAlives: true,
 			TLSClientConfig: &tls.Config{
@@ -120,7 +120,7 @@ func (a *ApplicationService) RequestUrl() string {
 }
 
 // IsInterestedInRoomID returns a bool on whether an application service's
-// namespace includes the given room ID
+// namespace includes the given room ID.
 func (a *ApplicationService) IsInterestedInRoomID(
 	roomID string,
 ) bool {
@@ -136,7 +136,7 @@ func (a *ApplicationService) IsInterestedInRoomID(
 }
 
 // IsInterestedInUserID returns a bool on whether an application service's
-// namespace includes the given user ID
+// namespace includes the given user ID.
 func (a *ApplicationService) IsInterestedInUserID(
 	userID string,
 ) bool {
@@ -152,7 +152,7 @@ func (a *ApplicationService) IsInterestedInUserID(
 }
 
 // OwnsNamespaceCoveringUserId returns a bool on whether an application service's
-// namespace is exclusive and includes the given user ID
+// namespace is exclusive and includes the given user ID.
 func (a *ApplicationService) OwnsNamespaceCoveringUserId(
 	userID string,
 ) bool {
@@ -168,7 +168,7 @@ func (a *ApplicationService) OwnsNamespaceCoveringUserId(
 }
 
 // IsInterestedInRoomAlias returns a bool on whether an application service's
-// namespace includes the given room alias
+// namespace includes the given room alias.
 func (a *ApplicationService) IsInterestedInRoomAlias(
 	roomAlias string,
 ) bool {
@@ -284,7 +284,7 @@ func setupRegexps(asAPI *AppServiceAPI, derived *Derived) (err error) {
 
 // appendExclusiveNamespaceRegexs takes a slice of strings and a slice of
 // namespaces and will append the regexes of only the exclusive namespaces
-// into the string slice
+// into the string slice.
 func appendExclusiveNamespaceRegexs(
 	exclusiveStrings *[]string, namespaces []ApplicationServiceNamespace,
 ) {
@@ -298,7 +298,7 @@ func appendExclusiveNamespaceRegexs(
 }
 
 // compileNamespaceRegexes turns strings into regex objects and complains
-// if some of there are bad
+// if some of there are bad.
 func compileNamespaceRegexes(namespaces []ApplicationServiceNamespace) (err error) {
 	for index, namespace := range namespaces {
 		// Compile this regex into a Regexp object for later use
@@ -316,8 +316,8 @@ func compileNamespaceRegexes(namespaces []ApplicationServiceNamespace) (err erro
 // checkErrors checks for any configuration errors amongst the loaded
 // application services according to the application service spec.
 func checkErrors(config *AppServiceAPI, derived *Derived) (err error) {
-	var idMap = make(map[string]bool)
-	var tokenMap = make(map[string]bool)
+	idMap := make(map[string]bool)
+	tokenMap := make(map[string]bool)
 
 	// Compile regexp object for checking groupIDs
 	groupIDRegexp := regexp.MustCompile(`\+.*:.*`)
@@ -416,7 +416,7 @@ func validateNamespace(
 }
 
 // IsValidRegex returns true or false based on whether the
-// given string is valid regex or not
+// given string is valid regex or not.
 func IsValidRegex(regexString string) bool {
 	_, err := regexp.Compile(regexString)
 

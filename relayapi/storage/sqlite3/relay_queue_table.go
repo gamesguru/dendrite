@@ -12,10 +12,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const relayQueueSchema = `
@@ -108,7 +109,7 @@ func (s *relayQueueStatements) DeleteQueueEntries(
 		return fmt.Errorf("s.deleteQueueEntries s.db.Prepare: %w", err)
 	}
 
-	params := make([]interface{}, len(jsonNIDs)+1)
+	params := make([]any, len(jsonNIDs)+1)
 	params[0] = serverName
 	for k, v := range jsonNIDs {
 		params[k+1] = v

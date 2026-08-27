@@ -9,11 +9,11 @@ package routing
 import (
 	"net/http"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type getJoinedRoomsResponse struct {
@@ -30,7 +30,7 @@ func GetJoinedRooms(
 		util.GetLogger(req.Context()).WithError(err).Error("Invalid device user ID")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -39,7 +39,7 @@ func GetJoinedRooms(
 		util.GetLogger(req.Context()).WithError(err).Error("QueryRoomsForUser failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 

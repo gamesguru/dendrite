@@ -11,11 +11,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventStateKeysSchema = `
@@ -39,7 +38,7 @@ INSERT INTO roomserver_event_state_keys (event_state_key_nid, event_state_key) V
     (1, '') ON CONFLICT DO NOTHING;
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertEventStateKeyNIDSQL = "" +
 	"INSERT INTO roomserver_event_state_keys (event_state_key) VALUES ($1)" +
 	" ON CONFLICT ON CONSTRAINT roomserver_event_state_key_unique" +
@@ -107,7 +106,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 ) (map[string]types.EventStateKeyNID, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectEventStateKeyNIDStmt)
 	rows, err := stmt.QueryContext(
-		ctx, pq.StringArray(eventStateKeys),
+		ctx, eventStateKeys,
 	)
 	if err != nil {
 		return nil, err
@@ -129,7 +128,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	ctx context.Context, txn *sql.Tx, eventStateKeyNIDs []types.EventStateKeyNID,
 ) (map[types.EventStateKeyNID]string, error) {
-	nIDs := make(pq.Int64Array, len(eventStateKeyNIDs))
+	nIDs := make([]int64, len(eventStateKeyNIDs))
 	for i := range eventStateKeyNIDs {
 		nIDs[i] = int64(eventStateKeyNIDs[i])
 	}

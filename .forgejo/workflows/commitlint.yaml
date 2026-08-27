@@ -1,0 +1,44 @@
+name: Commitlint
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Validate the pull request title. PRs are squash-merged, so the title
+  # becomes the commit that git-sv turns into a changelog entry. It must be a
+  # Conventional Commit *with* a package scope, e.g. `fix(clientapi/routing): …`
+  # (see https://codefloe.com/pat-s/zendrite/pulls/246 for the ruling).
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Conventional Commit format with mandatory scope
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # Keep the type list in sync with .commitlintrc.json and
+          # .gitsv/config.yaml. WIP is intentionally excluded: it is allowed on
+          # local commits but never on a mergeable PR title.
+          types='build|chore|ci|docs|enh|feat|fix|perf|refactor|revert|style|test'
+          # Scope is required (the parentheses are not optional). It may contain
+          # lower-case letters, digits and / . _ - so nested package scopes such
+          # as clientapi/routing are allowed. `!` marks a breaking change.
+          pattern="^(${types})\([a-z0-9._/-]+\)!?: .+"
+          if printf '%s' "$PR_TITLE" | grep -qE "$pattern"; then
+            echo "PR title OK: $PR_TITLE"
+            exit 0
+          fi
+          echo "::error::Invalid PR title: '$PR_TITLE'"
+          echo ""
+          echo "Titles must follow Conventional Commits with a mandatory scope:"
+          echo "  <type>(<scope>): <subject>"
+          echo ""
+          echo "Allowed types: ${types//|/, }"
+          echo "The scope names the affected package, e.g. clientapi/routing."
+          echo "Example: fix(clientapi/routing): time out federated join requests"
+          exit 1

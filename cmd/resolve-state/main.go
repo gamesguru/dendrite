@@ -9,16 +9,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // This is a utility for inspecting state snapshots and running state resolution
@@ -29,9 +30,11 @@ import (
 // Usage: ./resolve-state --roomversion=version snapshot [snapshot ...]
 //   e.g. ./resolve-state --roomversion=5 1254 1235 1282
 
-var roomVersion = flag.String("roomversion", "5", "the room version to parse events as")
-var filterType = flag.String("filtertype", "", "the event types to filter on")
-var difference = flag.Bool("difference", false, "whether to calculate the difference between snapshots")
+var (
+	roomVersion = flag.String("roomversion", "5", "the room version to parse events as")
+	filterType  = flag.String("filtertype", "", "the event types to filter on")
+	difference  = flag.Bool("difference", false, "whether to calculate the difference between snapshots")
+)
 
 // dummyQuerier implements QuerySenderIDAPI. Does **NOT** do any "magic" for pseudoID rooms
 // to avoid having to "start" a full roomserver API.
@@ -46,7 +49,7 @@ func (d dummyQuerier) QueryUserIDForSender(ctx context.Context, roomID spec.Room
 	return senderID.ToUserID(), nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func main() {
 	ctx := context.Background()
 	cfg := setup.ParseFlags(true)
@@ -78,7 +81,7 @@ func main() {
 	fmt.Println("Opening database")
 	roomserverDB, err := storage.Open(
 		processCtx.Context(), cm, &dbOpts,
-		caching.NewRistrettoCache(8*1024*1024, time.Minute*5, caching.DisableMetrics),
+		caching.NewRistrettoCache(8*1024*1024, time.Minute*5, caching.DisableMetrics), //nolint:mnd
 	)
 	if err != nil {
 		panic(err)
@@ -94,7 +97,7 @@ func main() {
 	fmt.Println("Fetching", len(snapshotNIDs), "snapshot NIDs")
 
 	if *difference {
-		if len(snapshotNIDs) != 2 {
+		if len(snapshotNIDs) != 2 { //nolint:mnd
 			panic("need exactly two state snapshot NIDs to calculate difference")
 		}
 		var removed, added []types.StateEntry
@@ -210,8 +213,9 @@ func main() {
 
 	fmt.Println("Resolving state")
 	var resolved Events
-	resolved, err = gomatrixserverlib.ResolveConflicts(
-		gomatrixserverlib.RoomVersion(*roomVersion), events, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	// Duplicate the state set so ResolveConflictsNew has ≥2 sets as required.
+	resolved, err = gomatrixserverlib.ResolveConflictsNew(
+		gomatrixserverlib.RoomVersion(*roomVersion), [][]gomatrixserverlib.PDU{events, events}, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 		func(eventID string) bool {

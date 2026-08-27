@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventStateKeysSchema = `
@@ -29,7 +29,7 @@ const eventStateKeysSchema = `
 		ON CONFLICT DO NOTHING;
 `
 
-// Same as insertEventTypeNIDSQL
+// Same as insertEventTypeNIDSQL.
 const insertEventStateKeyNIDSQL = `
 	INSERT INTO roomserver_event_state_keys (event_state_key) VALUES ($1)
 	  ON CONFLICT DO NOTHING
@@ -103,7 +103,7 @@ func (s *eventStateKeyStatements) SelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 	ctx context.Context, txn *sql.Tx, eventStateKeys []string,
 ) (map[string]types.EventStateKeyNID, error) {
-	iEventStateKeys := make([]interface{}, len(eventStateKeys))
+	iEventStateKeys := make([]any, len(eventStateKeys))
 	for k, v := range eventStateKeys {
 		iEventStateKeys[k] = v
 	}
@@ -134,7 +134,7 @@ func (s *eventStateKeyStatements) BulkSelectEventStateKeyNID(
 func (s *eventStateKeyStatements) BulkSelectEventStateKey(
 	ctx context.Context, txn *sql.Tx, eventStateKeyNIDs []types.EventStateKeyNID,
 ) (map[types.EventStateKeyNID]string, error) {
-	iEventStateKeyNIDs := make([]interface{}, len(eventStateKeyNIDs))
+	iEventStateKeyNIDs := make([]any, len(eventStateKeyNIDs))
 	for k, v := range eventStateKeyNIDs {
 		iEventStateKeyNIDs[k] = v
 	}

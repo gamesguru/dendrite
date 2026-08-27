@@ -12,17 +12,17 @@ import (
 	"context"
 	"fmt"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage/shared"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // updateLatestEvents updates the list of latest events for this room in the database and writes the
@@ -40,7 +40,7 @@ import (
 //	      |
 //	      7 <----- latest
 //
-// Can only be called once at a time
+// Can only be called once at a time.
 func (r *Inputer) updateLatestEvents(
 	ctx context.Context,
 	roomInfo *types.RoomInfo,
@@ -50,14 +50,14 @@ func (r *Inputer) updateLatestEvents(
 	transactionID *api.TransactionID,
 	rewritesState bool,
 	historyVisibility gomatrixserverlib.HistoryVisibility,
-) (err error) {
+) (localLeftJoin bool, err error) {
 	trace, ctx := internal.StartRegion(ctx, "updateLatestEvents")
 	defer trace.EndRegion()
 
 	var succeeded bool
 	updater, err := r.DB.GetRoomUpdater(ctx, roomInfo)
 	if err != nil {
-		return fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
+		return false, fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
 	}
 
 	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
@@ -75,12 +75,12 @@ func (r *Inputer) updateLatestEvents(
 		historyVisibility: historyVisibility,
 	}
 
-	if err = u.doUpdateLatestEvents(); err != nil {
-		return fmt.Errorf("u.doUpdateLatestEvents: %w", err)
+	if err = u.doUpdateLatestEvents(); err != nil { //nolint:contextcheck
+		return false, fmt.Errorf("u.doUpdateLatestEvents: %w", err)
 	}
 
 	succeeded = true
-	return
+	return u.localLeftJoin, nil
 }
 
 // latestEventsUpdater tracks the state used to update the latest events in the
@@ -116,6 +116,10 @@ type latestEventsUpdater struct {
 	newStateNID types.StateSnapshotNID
 	// The history visibility of the event itself (from the state before the event).
 	historyVisibility gomatrixserverlib.HistoryVisibility
+	// localLeftJoin is set true when updateMemberships detects at least one
+	// local user transitioning out of join. The auto-purge schedule is fired
+	// by updateLatestEvents's caller AFTER the deferred commit completes.
+	localLeftJoin bool
 }
 
 func (u *latestEventsUpdater) doUpdateLatestEvents() error {
@@ -164,8 +168,12 @@ func (u *latestEventsUpdater) doUpdateLatestEvents() error {
 
 		// If we need to generate any output events then here's where we do it.
 		// TODO: Move this!
-		if updates, err = u.api.updateMemberships(u.ctx, u.updater, u.removed, u.added); err != nil {
+		var localLeft bool
+		if updates, localLeft, err = u.api.updateMemberships(u.ctx, u.updater, u.removed, u.added); err != nil {
 			return fmt.Errorf("u.api.updateMemberships: %w", err)
+		}
+		if localLeft {
+			u.localLeftJoin = true
 		}
 	} else {
 		u.newStateNID = u.oldStateNID
@@ -198,6 +206,55 @@ func (u *latestEventsUpdater) doUpdateLatestEvents() error {
 	}
 
 	return nil
+}
+
+// reconcileStateEpoch decides which part of an out-of-order state delta to
+// apply when the MSC3706 partial-state-resync epoch guard fires.
+//
+// The guard protects authoritative membership fetched by a partial-state resync
+// from being collaterally dropped by an event whose base state predates the
+// resync. But when that event is itself a state event authoring one of the
+// changes in the delta — e.g. a remote kick carrying its own m.room.member
+// transition — that change is a legitimate progression and must still be
+// applied, otherwise the membership row stays frozen at join (issue #181).
+//
+// It returns the subset of removed/added entries that should still be applied:
+// only the triggering event's own (type, state-key) tuple. Everything else is
+// suppressed, so resync-authoritative state for unrelated keys is preserved.
+// When both returned slices are empty the whole delta is suppressed, matching
+// the original guard behavior (genuine out-of-order events that do not author
+// any of the dropped state).
+func reconcileStateEpoch(ownKey types.StateKeyTuple, eventIsStateEvent bool, removed, added []types.StateEntry) (keepRemoved, keepAdded []types.StateEntry) {
+	if !eventIsStateEvent {
+		return nil, nil
+	}
+	for _, e := range removed {
+		if e.StateKeyTuple == ownKey {
+			keepRemoved = append(keepRemoved, e)
+		}
+	}
+	for _, e := range added {
+		if e.StateKeyTuple == ownKey {
+			keepAdded = append(keepAdded, e)
+		}
+	}
+	return keepRemoved, keepAdded
+}
+
+// removesCollateralMembers reports whether the removed state delta drops a
+// membership event for a state key other than ownKey (the triggering event's
+// own state-key tuple). After a partial-state resync a single event never
+// legitimately evicts other users from the current state, so a collateral
+// member removal reliably signals that an out-of-order event is regressing
+// resync-authoritative membership, which the content-addressed snapshot-NID
+// heuristic can miss (issue #247).
+func removesCollateralMembers(ownKey types.StateKeyTuple, removed []types.StateEntry) bool {
+	for _, e := range removed {
+		if e.EventTypeNID == types.MRoomMemberNID && e.StateKeyTuple != ownKey {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *latestEventsUpdater) latestState() error {
@@ -277,6 +334,76 @@ func (u *latestEventsUpdater) latestState() error {
 		if err != nil {
 			return fmt.Errorf("roomState.DifferenceBetweenStateSnapshots: %w", err)
 		}
+
+		// MSC3706 State Epoch Protection: After a partial state resync completes,
+		// prevent out-of-order events from causing state regressions.
+		// If this event references state from before the resync completed,
+		// it could cause us to lose the authoritative state we fetched.
+		resyncStateNID, resyncErr := u.updater.SelectResyncStateNID(u.roomInfo.RoomNID)
+		if resyncErr == nil && resyncStateNID > 0 && len(u.removed) > len(u.added) {
+			// Room has completed a partial state resync and this event's delta
+			// removes more state than it adds. Two independent signals mark it as
+			// a regression of resync-authoritative state:
+			//
+			//   - byNID: the event's base state predates the resync snapshot. This
+			//     is a heuristic — state snapshot NIDs are content-addressed
+			//     (deduplicated by hash), so an out-of-order event whose base state
+			//     dedups to a pre-resync snapshot gets a NID below resyncStateNID.
+			//     But an out-of-order event whose base state is a *new* block
+			//     combination gets a fresh NID above resyncStateNID and slips past
+			//     this check (issue #247).
+			//   - collateralMembers: the delta would drop m.room.member events for
+			//     users *other* than the one this event is about. After a resync a
+			//     single event never legitimately evicts other users from the
+			//     current state, so this reliably catches the regressions the NID
+			//     heuristic misses, regardless of snapshot NID ordering.
+			byNID := u.stateAtEvent.BeforeStateSnapshotNID > 0 && u.stateAtEvent.BeforeStateSnapshotNID < resyncStateNID
+			collateralMembers := removesCollateralMembers(u.stateAtEvent.StateKeyTuple, u.removed)
+			if byNID || collateralMembers {
+				// Applying the full delta would collaterally drop membership the
+				// resync authoritatively fetched. Keep the resync state instead -
+				// but if this event is itself a state event authoring one of the
+				// dropped keys (e.g. a remote kick carrying its own m.room.member
+				// transition), still apply that own-key change, otherwise the
+				// membership row stays frozen at join (#181).
+				keepRemoved, keepAdded := reconcileStateEpoch(
+					u.stateAtEvent.StateKeyTuple, u.stateAtEvent.IsStateEvent(), u.removed, u.added,
+				)
+
+				// Count membership events being removed for logging
+				memberRemoved := 0
+				for _, entry := range u.removed {
+					if entry.EventTypeNID == types.MRoomMemberNID {
+						memberRemoved++
+					}
+				}
+
+				logrus.WithFields(logrus.Fields{
+					"event_id":               u.event.EventID(),
+					"room_id":                u.event.RoomID().String(),
+					"event_before_state_nid": u.stateAtEvent.BeforeStateSnapshotNID,
+					"resync_state_nid":       resyncStateNID,
+					"old_state_nid":          u.oldStateNID,
+					"new_state_nid":          u.newStateNID,
+					"would_remove":           len(u.removed),
+					"would_add":              len(u.added),
+					"would_remove_members":   memberRemoved,
+					"applied_own_remove":     len(keepRemoved),
+					"applied_own_add":        len(keepAdded),
+					"trigger_by_nid":         byNID,
+					"trigger_collateral":     collateralMembers,
+					"trace":                  "msc3706_state_epoch",
+				}).Warn("Suppressing state regression from out-of-order event after partial state resync")
+
+				// Keep the current (resync-authoritative) state snapshot, but
+				// still apply the triggering event's own state-key change so
+				// its membership row is not left frozen.
+				u.newStateNID = u.oldStateNID
+				u.removed = keepRemoved
+				u.added = keepAdded
+				return nil
+			}
+		}
 	}
 
 	if removed := len(u.removed) - len(u.added); !u.rewritesState && removed > 0 {
@@ -291,7 +418,7 @@ func (u *latestEventsUpdater) latestState() error {
 		sentry.WithScope(func(scope *sentry.Scope) {
 			scope.SetLevel("warning")
 			scope.SetTag("room_id", u.event.RoomID().String())
-			scope.SetContext("State reset", map[string]interface{}{
+			scope.SetContext("State reset", map[string]any{
 				"Event ID":      u.event.EventID(),
 				"Old state NID": fmt.Sprintf("%d", u.oldStateNID),
 				"New state NID": fmt.Sprintf("%d", u.newStateNID),
@@ -418,7 +545,7 @@ func (u *latestEventsUpdater) makeOutputNewRoomEvent() (*api.OutputEvent, error)
 	}, nil
 }
 
-// retrieve an event nid -> event ID map for all events that need updating
+// retrieve an event nid -> event ID map for all events that need updating.
 func (u *latestEventsUpdater) stateEventMap() (map[types.EventNID]string, error) {
 	cap := len(u.added) + len(u.removed) + len(u.stateBeforeEventRemoves) + len(u.stateBeforeEventAdds)
 	stateEventNIDs := make(types.EventNIDs, 0, cap)

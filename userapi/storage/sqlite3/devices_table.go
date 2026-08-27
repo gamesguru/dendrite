@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const devicesSchema = `
@@ -62,6 +62,9 @@ const selectDevicesByLocalpartSQL = "" +
 const updateDeviceNameSQL = "" +
 	"UPDATE userapi_devices SET display_name = $1 WHERE localpart = $2 AND server_name = $3 AND device_id = $4"
 
+const updateDeviceAccessTokenSQL = "" +
+	"UPDATE userapi_devices SET access_token = $1 WHERE localpart = $2 AND server_name = $3 AND device_id = $4"
+
 const deleteDeviceSQL = "" +
 	"DELETE FROM userapi_devices WHERE device_id = $1 AND localpart = $2 AND server_name = $3"
 
@@ -86,6 +89,7 @@ type devicesStatements struct {
 	selectDevicesByIDStmt        *sql.Stmt
 	selectDevicesByLocalpartStmt *sql.Stmt
 	updateDeviceNameStmt         *sql.Stmt
+	updateDeviceAccessTokenStmt  *sql.Stmt
 	updateDeviceLastSeenStmt     *sql.Stmt
 	deleteDeviceStmt             *sql.Stmt
 	deleteDevicesByLocalpartStmt *sql.Stmt
@@ -117,6 +121,7 @@ func NewSQLiteDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Devic
 		{&s.selectDeviceByIDStmt, selectDeviceByIDSQL},
 		{&s.selectDevicesByLocalpartStmt, selectDevicesByLocalpartSQL},
 		{&s.updateDeviceNameStmt, updateDeviceNameSQL},
+		{&s.updateDeviceAccessTokenStmt, updateDeviceAccessTokenSQL},
 		{&s.deleteDeviceStmt, deleteDeviceSQL},
 		{&s.deleteDevicesByLocalpartStmt, deleteDevicesByLocalpartSQL},
 		{&s.selectDevicesByIDStmt, selectDevicesByIDSQL},
@@ -132,7 +137,7 @@ func (s *devicesStatements) InsertDevice(
 	localpart string, serverName spec.ServerName,
 	accessToken string, displayName *string, ipAddr, userAgent string,
 ) (*api.Device, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	var sessionID int64
 	countStmt := sqlutil.TxStmt(txn, s.selectDevicesCountStmt)
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
@@ -163,7 +168,7 @@ func (s *devicesStatements) InsertDeviceWithSessionID(ctx context.Context, txn *
 	accessToken string, displayName *string, ipAddr, userAgent string,
 	sessionID int64,
 ) (*api.Device, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	insertStmt := sqlutil.TxStmt(txn, s.insertDeviceStmt)
 	if _, err := insertStmt.ExecContext(ctx, id, localpart, serverName, accessToken, createdTimeMS, displayName, sessionID, createdTimeMS, ipAddr, userAgent); err != nil {
 		return nil, err
@@ -197,14 +202,14 @@ func (s *devicesStatements) DeleteDevices(
 	localpart string, serverName spec.ServerName,
 	devices []string,
 ) error {
-	orig := strings.Replace(deleteDevicesSQL, "($3)", sqlutil.QueryVariadicOffset(len(devices), 2), 1)
+	orig := strings.Replace(deleteDevicesSQL, "($3)", sqlutil.QueryVariadicOffset(len(devices), 2), 1) //nolint:mnd
 	prep, err := s.db.Prepare(orig)
 	if err != nil {
 		return err
 	}
 	defer internal.CloseAndLogIfError(ctx, prep, "DeleteDevices.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, prep)
-	params := make([]interface{}, len(devices)+2)
+	params := make([]any, len(devices)+2)
 	params[0] = localpart
 	params[1] = serverName
 	for i, v := range devices {
@@ -234,6 +239,18 @@ func (s *devicesStatements) UpdateDeviceName(
 	return err
 }
 
+// UpdateDeviceAccessToken swaps the access token of an existing device in
+// place, leaving the session ID, display name and creation time untouched.
+func (s *devicesStatements) UpdateDeviceAccessToken(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	deviceID, accessToken string,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateDeviceAccessTokenStmt)
+	_, err := stmt.ExecContext(ctx, accessToken, localpart, serverName, deviceID)
+	return err
+}
+
 func (s *devicesStatements) SelectDeviceByToken(
 	ctx context.Context, accessToken string,
 ) (*api.Device, error) {
@@ -250,7 +267,7 @@ func (s *devicesStatements) SelectDeviceByToken(
 }
 
 // selectDeviceByID retrieves a device from the database with the given user
-// localpart and deviceID
+// localpart and deviceID.
 func (s *devicesStatements) SelectDeviceByID(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -283,8 +300,8 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 	exceptDeviceID string,
 ) ([]api.Device, error) {
 	devices := []api.Device{}
-	rows, err := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt).QueryContext(ctx, localpart, serverName, exceptDeviceID)
-
+	selectDevicesByLocalpartStmt := sqlutil.TxStmt(txn, s.selectDevicesByLocalpartStmt)
+	rows, err := selectDevicesByLocalpartStmt.QueryContext(ctx, localpart, serverName, exceptDeviceID)
 	if err != nil {
 		return devices, err
 	}
@@ -323,7 +340,7 @@ func (s *devicesStatements) SelectDevicesByLocalpart(
 
 func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error) {
 	sqlQuery := strings.Replace(selectDevicesByIDSQL, "($1)", sqlutil.QueryVariadic(len(deviceIDs)), 1)
-	iDeviceIDs := make([]interface{}, len(deviceIDs))
+	iDeviceIDs := make([]any, len(deviceIDs))
 	for i := range deviceIDs {
 		iDeviceIDs[i] = deviceIDs[i]
 	}
@@ -356,7 +373,7 @@ func (s *devicesStatements) SelectDevicesByID(ctx context.Context, deviceIDs []s
 }
 
 func (s *devicesStatements) UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error {
-	lastSeenTs := time.Now().UnixNano() / 1000000
+	lastSeenTs := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceLastSeenStmt)
 	_, err := stmt.ExecContext(ctx, lastSeenTs, ipAddr, userAgent, localpart, serverName, deviceID)
 	return err

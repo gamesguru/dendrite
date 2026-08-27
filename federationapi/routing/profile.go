@@ -10,15 +10,16 @@ import (
 	"fmt"
 	"net/http"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// GetProfile implements GET /_matrix/federation/v1/query/profile
+// GetProfile implements GET /_matrix/federation/v1/query/profile.
 func GetProfile(
 	httpReq *http.Request,
 	userAPI userapi.FederationUserAPI,
@@ -58,7 +59,7 @@ func GetProfile(
 		}
 	}
 
-	var res interface{}
+	var res any
 	code := http.StatusOK
 
 	if field != "" {

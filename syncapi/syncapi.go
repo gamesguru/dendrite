@@ -9,26 +9,25 @@ package syncapi
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/caching"
-
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-
-	"github.com/element-hq/dendrite/syncapi/consumers"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/producers"
-	"github.com/element-hq/dendrite/syncapi/routing"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/sync"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/consumers"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/producers"
+	"codefloe.com/pat-s/zendrite/syncapi/routing"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/sync"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the SyncAPI
@@ -36,7 +35,7 @@ import (
 func AddPublicRoutes(
 	processContext *process.ProcessContext,
 	routers httputil.Routers,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
 	userAPI userapi.SyncUserAPI,
@@ -44,11 +43,18 @@ func AddPublicRoutes(
 	caches caching.LazyLoadCache,
 	enableMetrics bool,
 ) {
-	js, natsClient := natsInstance.Prepare(processContext, &dendriteCfg.Global.JetStream)
+	js, natsClient := natsInstance.Prepare(processContext, &zendriteCfg.Global.JetStream)
 
-	syncDB, err := storage.NewSyncServerDatasource(processContext.Context(), cm, &dendriteCfg.SyncAPI.Database)
+	syncDB, err := storage.NewSyncServerDatasource(processContext.Context(), cm, &zendriteCfg.SyncAPI.Database)
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to connect to sync db")
+	}
+
+	// Start the sliding sync metadata worker for Phase 12 optimization
+	metadataWorker := internal.NewSlidingSyncMetadataWorker(processContext, syncDB)
+	if err = metadataWorker.Start(); err != nil {
+		logrus.WithError(err).Warn("failed to start sliding sync metadata worker")
+		// Non-fatal - we can continue without background population
 	}
 
 	eduCache := caching.NewTypingCache()
@@ -60,31 +66,31 @@ func AddPublicRoutes(
 	}
 
 	var fts *fulltext.Search
-	if dendriteCfg.SyncAPI.Fulltext.Enabled {
-		fts, err = fulltext.New(processContext, dendriteCfg.SyncAPI.Fulltext)
+	if zendriteCfg.SyncAPI.Fulltext.Enabled {
+		fts, err = fulltext.New(processContext, zendriteCfg.SyncAPI.Fulltext)
 		if err != nil {
 			logrus.WithError(err).Panicf("failed to create full text")
 		}
 	}
 
 	federationPresenceProducer := &producers.FederationAPIPresenceProducer{
-		Topic:     dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputPresenceEvent),
+		Topic:     zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputPresenceEvent),
 		JetStream: js,
 	}
 	presenceConsumer := consumers.NewPresenceConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, natsClient, syncDB,
+		processContext, &zendriteCfg.SyncAPI, js, natsClient, syncDB,
 		notifier, streams.PresenceStreamProvider,
 		userAPI,
 	)
 
-	requestPool := sync.NewRequestPool(syncDB, &dendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
+	requestPool := sync.NewRequestPool(syncDB, &zendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
 
 	if err = presenceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start presence consumer")
 	}
 
 	keyChangeConsumer := consumers.NewOutputKeyChangeEventConsumer(
-		processContext, &dendriteCfg.SyncAPI, dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputKeyChangeEvent),
+		processContext, &zendriteCfg.SyncAPI, zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputKeyChangeEvent),
 		js, rsAPI, syncDB, notifier,
 		streams.DeviceListStreamProvider,
 	)
@@ -93,22 +99,24 @@ func AddPublicRoutes(
 	}
 
 	var asProducer *producers.AppserviceEventProducer
-	if len(dendriteCfg.AppServiceAPI.Derived.ApplicationServices) > 0 {
+	if len(zendriteCfg.AppServiceAPI.Derived.ApplicationServices) > 0 {
 		asProducer = &producers.AppserviceEventProducer{
-			JetStream: js, Topic: dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputAppserviceEvent),
+			JetStream: js, Topic: zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputAppserviceEvent),
 		}
 	}
 
 	roomConsumer := consumers.NewOutputRoomEventConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
+		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
 		streams.InviteStreamProvider, rsAPI, fts, asProducer,
 	)
+	// Wire up the metadata worker for continuous updates (Phase 12 optimization)
+	roomConsumer.SetMetadataQueuer(metadataWorker)
 	if err = roomConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start room server consumer")
 	}
 
 	clientConsumer := consumers.NewOutputClientDataConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, natsClient, syncDB, notifier,
+		processContext, &zendriteCfg.SyncAPI, js, natsClient, syncDB, notifier,
 		streams.AccountDataStreamProvider, fts,
 	)
 	if err = clientConsumer.Start(); err != nil {
@@ -116,38 +124,38 @@ func AddPublicRoutes(
 	}
 
 	notificationConsumer := consumers.NewOutputNotificationDataConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, syncDB, notifier, streams.NotificationDataStreamProvider,
+		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.NotificationDataStreamProvider,
 	)
 	if err = notificationConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start notification data consumer")
 	}
 
 	typingConsumer := consumers.NewOutputTypingEventConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, eduCache, notifier, streams.TypingStreamProvider,
+		processContext, &zendriteCfg.SyncAPI, js, eduCache, notifier, streams.TypingStreamProvider,
 	)
 	if err = typingConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start typing consumer")
 	}
 
 	sendToDeviceConsumer := consumers.NewOutputSendToDeviceEventConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, syncDB, userAPI, notifier, streams.SendToDeviceStreamProvider,
+		processContext, &zendriteCfg.SyncAPI, js, syncDB, userAPI, notifier, streams.SendToDeviceStreamProvider,
 	)
 	if err = sendToDeviceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start send-to-device consumer")
 	}
 
 	receiptConsumer := consumers.NewOutputReceiptEventConsumer(
-		processContext, &dendriteCfg.SyncAPI, js, syncDB, notifier, streams.ReceiptStreamProvider,
+		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.ReceiptStreamProvider,
 	)
 	if err = receiptConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start receipts consumer")
 	}
 
-	rateLimits := httputil.NewRateLimits(&dendriteCfg.ClientAPI.RateLimiting)
+	rateLimits := httputil.NewRateLimits(&zendriteCfg.ClientAPI.RateLimiting)
 
 	routing.Setup(
 		routers.Client, requestPool, syncDB, userAPI,
-		rsAPI, &dendriteCfg.SyncAPI, caches, fts,
+		rsAPI, &zendriteCfg.SyncAPI, caches, fts,
 		rateLimits,
 	)
 }

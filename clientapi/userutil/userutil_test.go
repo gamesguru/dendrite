@@ -8,9 +8,10 @@ package userutil
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 var (
@@ -30,7 +31,6 @@ func TestGoodUserID(t *testing.T) {
 	}
 
 	lp, _, err := ParseUsernameParam(goodUserID, cfg)
-
 	if err != nil {
 		t.Error("User ID Parsing failed for ", goodUserID, " with error: ", err.Error())
 	}
@@ -49,7 +49,6 @@ func TestWithLocalpartOnly(t *testing.T) {
 	}
 
 	lp, _, err := ParseUsernameParam(localpart, cfg)
-
 	if err != nil {
 		t.Error("User ID Parsing failed for ", localpart, " with error: ", err.Error())
 	}
@@ -74,7 +73,7 @@ func TestIncorrectDomain(t *testing.T) {
 	}
 }
 
-// TestBadUserID checks that ParseUsernameParam fails for invalid user ID
+// TestBadUserID checks that ParseUsernameParam fails for invalid user ID.
 func TestBadUserID(t *testing.T) {
 	cfg := &config.Global{
 		SigningIdentity: fclient.SigningIdentity{

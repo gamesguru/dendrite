@@ -12,10 +12,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 var keyChangesSchema = `
@@ -65,7 +65,7 @@ func NewPostgresKeyChangesTable(db *sql.DB) (tables.KeyChanges, error) {
 }
 
 func executeMigration(ctx context.Context, db *sql.DB) error {
-	// TODO: Remove when we are sure we are not having goose artefacts in the db
+	// TODO: Remove when we are sure we are not having goose artifacts in the db
 	// This forces an error, which indicates the migration is already applied, since the
 	// column partition was removed from the table
 	migrationName := "keyserver: refactor key changes"

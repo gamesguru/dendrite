@@ -12,16 +12,17 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type presenceReq struct {
@@ -58,7 +59,7 @@ func SetPresence(
 	if !ok {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.Unknown(fmt.Sprintf("Unknown presence '%s'.", presence.Presence)),
+			JSON: spec.InvalidParam(fmt.Sprintf("Unknown presence '%s'.", presence.Presence)),
 		}
 	}
 	err := producer.SendPresence(req.Context(), userID, presenceStatus, presence.StatusMsg)
@@ -86,7 +87,7 @@ func GetPresence(
 	msg := nats.NewMsg(presenceTopic)
 	msg.Header.Set(jetstream.UserID, userID)
 
-	presence, err := natsClient.RequestMsg(msg, time.Second*10)
+	presence, err := natsClient.RequestMsg(msg, time.Second*10) //nolint:mnd
 	if err != nil {
 		log.WithError(err).Errorf("unable to get presence")
 		return util.JSONResponse{

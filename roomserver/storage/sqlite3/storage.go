@@ -13,13 +13,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/shared"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // A Database is used to store room events and stream offsets.
@@ -36,8 +37,8 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 		return nil, fmt.Errorf("sqlutil.Open: %w", err)
 	}
 
-	//db.Exec("PRAGMA journal_mode=WAL;")
-	//db.Exec("PRAGMA read_uncommitted = true;")
+	// db.Exec("PRAGMA journal_mode=WAL;")
+	// db.Exec("PRAGMA read_uncommitted = true;")
 
 	// FIXME: We are leaking connections somewhere. Setting this to 2 will eventually
 	// cause the roomserver to be unresponsive to new events because something will
@@ -46,7 +47,7 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 	// db.SetMaxOpenConns(20)
 
 	// Create the tables.
-	if err = d.create(db); err != nil {
+	if err = d.create(db); err != nil { //nolint:contextcheck
 		return nil, err
 	}
 
@@ -66,7 +67,7 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 }
 
 func executeMigration(ctx context.Context, db *sql.DB) error {
-	// TODO: Remove when we are sure we are not having goose artefacts in the db
+	// TODO: Remove when we are sure we are not having goose artifacts in the db
 	// This forces an error, which indicates the migration is already applied, since the
 	// column event_nid was removed from the table
 	migrationName := "roomserver: state blocks refactor"
@@ -134,6 +135,9 @@ func (d *Database) create(db *sql.DB) error {
 		return err
 	}
 	if err := CreateReportedEventsTable(db); err != nil {
+		return err
+	}
+	if err := CreatePartialStateTable(db); err != nil {
 		return err
 	}
 	return nil
@@ -204,6 +208,10 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 	if err != nil {
 		return err
 	}
+	partialState, err := PreparePartialStateTable(db)
+	if err != nil {
+		return err
+	}
 
 	d.Database = shared.Database{
 		DB: db,
@@ -231,6 +239,7 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 		GetRoomUpdaterFn:   d.GetRoomUpdater,
 		Purge:              purge,
 		UserRoomKeyTable:   userRoomKeys,
+		PartialStateTable:  partialState,
 	}
 	return nil
 }

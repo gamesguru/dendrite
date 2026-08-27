@@ -8,19 +8,20 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type FakeSyncRoomserverAPI struct{ rsapi.SyncRoomserverAPI }
@@ -33,9 +34,15 @@ func TestSearch(t *testing.T) {
 	alice := test.NewUser(t)
 	aliceDevice := userapi.Device{UserID: alice.ID}
 	room := test.NewRoom(t, alice)
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "context before"})
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world3!"})
-	room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "context after"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "context before"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world3!"})
+	room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "context after"})
+
+	// Pre-compute event IDs so the lazy cache in eventV2.EventID() is populated
+	// before the parallel sqlite/postgres subtests race on the shared events.
+	for _, ev := range room.Events() {
+		ev.EventID()
+	}
 
 	roomsFilter := []string{room.ID}
 	roomsFilterUnknown := []string{"!unknown"}
@@ -211,6 +218,14 @@ func TestSearch(t *testing.T) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
 
+		// WriteEvent mutates HeaderedEvent metadata. The database subtests run in
+		// parallel, so each backend needs its own wrappers around the shared PDUs.
+		events := make([]*rstypes.HeaderedEvent, len(room.Events()))
+		for i, event := range room.Events() {
+			eventCopy := *event
+			events[i] = &eventCopy
+		}
+
 		// create requisites
 		fts, err := fulltext.New(processCtx, cfg.SyncAPI.Fulltext)
 		assert.NoError(t, err)
@@ -223,14 +238,13 @@ func TestSearch(t *testing.T) {
 		elements := []fulltext.IndexElement{}
 		// store the events in the database
 		var sp types.StreamPosition
-		for _, x := range room.Events() {
+		for _, x := range events {
 			var stateEvents []*rstypes.HeaderedEvent
 			var stateEventIDs []string
 			if x.Type() == spec.MRoomMember {
 				stateEvents = append(stateEvents, x)
 				stateEventIDs = append(stateEventIDs, x.EventID())
 			}
-			x.StateKeyResolved = x.StateKey()
 			sp, err = db.WriteEvent(processCtx.Context(), x, stateEvents, stateEventIDs, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 			assert.NoError(t, err)
 			if x.Type() != "m.room.message" {

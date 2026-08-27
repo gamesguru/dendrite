@@ -13,23 +13,22 @@ import (
 	"net/http"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/tokens"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/tokens"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/transactions"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Unspecced server notice request
@@ -44,8 +43,9 @@ type sendServerNoticeRequest struct {
 	StateKey string `json:"state_key,omitempty"`
 }
 
-// nolint:gocyclo
 // SendServerNotice sends a message to a specific user. It can only be invoked by an admin.
+//
+//nolint:gocyclo
 func SendServerNotice(
 	req *http.Request,
 	cfgNotices *config.ServerNotices,
@@ -111,7 +111,7 @@ func SendServerNotice(
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 	senderRooms, err := rsAPI.QueryRoomsForUser(ctx, *senderUserID, "join")
@@ -141,12 +141,12 @@ func SendServerNotice(
 	// create a new room for the user
 	if len(commonRooms) == 0 {
 		powerLevelContent := eventutil.InitialPowerLevelsContent(gomatrixserverlib.MustGetRoomVersion(roomVersion), senderUserID.String())
-		powerLevelContent.Users[r.UserID] = -10 // taken from Synapse
+		powerLevelContent.Users[r.UserID] = -10 //nolint:mnd // taken from Synapse
 		pl, err := json.Marshal(powerLevelContent)
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
-		createContent := map[string]interface{}{}
+		createContent := map[string]any{}
 		createContent["m.federate"] = false
 		cc, err := json.Marshal(createContent)
 		if err != nil {
@@ -217,7 +217,7 @@ func SendServerNotice(
 
 	startedGeneratingEvent := time.Now()
 
-	request := map[string]interface{}{
+	request := map[string]any{
 		"body":    r.Content.Body,
 		"msgtype": r.Content.MsgType,
 	}
@@ -292,7 +292,7 @@ func (r sendServerNoticeRequest) valid() (ok bool) {
 }
 
 // getSenderDevice creates a user account to be used when sending server notices.
-// It returns an userapi.Device, which is used for building the event
+// It returns an userapi.Device, which is used for building the event.
 func getSenderDevice(
 	ctx context.Context,
 	rsAPI api.ClientRoomserverAPI,
@@ -377,7 +377,6 @@ func getSenderDevice(
 		AccessToken:        token,
 		NoDeviceListUpdate: true,
 	}, &devRes)
-
 	if err != nil {
 		return nil, err
 	}

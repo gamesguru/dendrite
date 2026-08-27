@@ -9,17 +9,20 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"testing"
 
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 type testFedClient struct {
@@ -33,12 +36,21 @@ func (t *testFedClient) LookupRoomAlias(ctx context.Context, origin, s spec.Serv
 	return fclient.RespDirectory{}, nil
 }
 
+func (t *testFedClient) GetEvent(ctx context.Context, origin, s spec.ServerName, eventID string) (gomatrixserverlib.Transaction, error) {
+	if t.shouldFail {
+		return gomatrixserverlib.Transaction{}, fmt.Errorf("Failure")
+	}
+	return gomatrixserverlib.Transaction{}, nil
+}
+
 func TestPerformWakeupServers(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
 
 	server := spec.ServerName("wakeup")
-	testDB.AddServerToBlacklist(server)
-	testDB.SetServerAssumedOffline(context.Background(), server)
+	err := testDB.AddServerToBlacklist(server)
+	assert.NoError(t, err)
+	err = testDB.SetServerAssumedOffline(context.Background(), server)
+	assert.NoError(t, err)
 	blacklisted, err := testDB.IsServerBlacklisted(server)
 	assert.NoError(t, err)
 	assert.True(t, blacklisted)
@@ -209,8 +221,8 @@ func TestPerformDirectoryLookupRelaying(t *testing.T) {
 	testDB := test.NewInMemoryFederationDatabase()
 
 	server := spec.ServerName("wakeup")
-	testDB.SetServerAssumedOffline(context.Background(), server)
-	testDB.P2PAddRelayServersForServer(context.Background(), server, []spec.ServerName{"relay"})
+	_ = testDB.SetServerAssumedOffline(context.Background(), server)
+	_ = testDB.P2PAddRelayServersForServer(context.Background(), server, []spec.ServerName{"relay"})
 
 	_, key, err := ed25519.GenerateKey(nil)
 	assert.NoError(t, err)

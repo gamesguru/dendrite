@@ -18,21 +18,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"golang.org/x/crypto/bcrypt"
 
-	clientapi "github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/pushrules"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
+	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/pushrules"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
-// Database represents an account database
+// Database represents an account database.
 type Database struct {
 	DB                    *sql.DB
 	Writer                sqlutil.Writer
@@ -41,6 +41,7 @@ type Database struct {
 	Profiles              tables.ProfileTable
 	AccountDatas          tables.AccountDataTable
 	ThreePIDs             tables.ThreePIDTable
+	ExternalIDs           tables.ExternalIDsTable
 	OpenIDTokens          tables.OpenIDTable
 	KeyBackups            tables.KeyBackupTable
 	KeyBackupVersions     tables.KeyBackupVersionTable
@@ -49,6 +50,7 @@ type Database struct {
 	Notifications         tables.NotificationTable
 	Pushers               tables.PusherTable
 	Stats                 tables.StatsTable
+	DehydratedDevices     tables.DehydratedDevicesTable
 	LoginTokenLifetime    time.Duration
 	ServerName            spec.ServerName
 	BcryptCost            int
@@ -68,7 +70,7 @@ type KeyDatabase struct {
 }
 
 const (
-	// The length of generated device IDs
+	// The length of generated device IDs.
 	deviceIDByteLength   = 6
 	loginTokenByteLength = 32
 )
@@ -101,7 +103,7 @@ func (d *Database) DeleteRegistrationToken(ctx context.Context, tokenString stri
 	return
 }
 
-func (d *Database) UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]interface{}) (updatedToken *clientapi.RegistrationToken, err error) {
+func (d *Database) UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (updatedToken *clientapi.RegistrationToken, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		updatedToken, err = d.RegistrationTokens.UpdateRegistrationToken(ctx, txn, tokenString, newAttributes)
 		return err
@@ -138,7 +140,7 @@ func (d *Database) GetProfileByLocalpart(
 }
 
 // SetAvatarURL updates the avatar URL of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query
+// localpart. Returns an error if something went wrong with the SQL query.
 func (d *Database) SetAvatarURL(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -152,7 +154,7 @@ func (d *Database) SetAvatarURL(
 }
 
 // SetDisplayName updates the display name of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query
+// localpart. Returns an error if something went wrong with the SQL query.
 func (d *Database) SetDisplayName(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -202,6 +204,11 @@ func (d *Database) CreateAccount(
 		return err
 	})
 	return
+}
+
+// CountAccounts returns the number of persisted local accounts.
+func (d *Database) CountAccounts(ctx context.Context) (int64, error) {
+	return d.Accounts.CountAccounts(ctx)
 }
 
 // WARNING! This function assumes that the relevant mutexes have already
@@ -277,7 +284,7 @@ func (d *Database) QueryPushRules(
 // If the account data is not specific to a room, the room ID should be an empty string
 // If an account data already exists for a given set (user, room, data type), it will
 // update the corresponding row with the new content
-// Returns a SQL error if there was an issue with the insertion/update
+// Returns a SQL error if there was an issue with the insertion/update.
 func (d *Database) SaveAccountData(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string, content json.RawMessage,
@@ -289,7 +296,7 @@ func (d *Database) SaveAccountData(
 
 // GetAccountData returns account data related to a given localpart
 // If no account data could be found, returns an empty arrays
-// Returns an error if there was an issue with the retrieval
+// Returns an error if there was an issue with the retrieval.
 func (d *Database) GetAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (
 	global map[string]json.RawMessage,
 	rooms map[string]map[string]json.RawMessage,
@@ -301,7 +308,7 @@ func (d *Database) GetAccountData(ctx context.Context, localpart string, serverN
 // GetAccountDataByType returns account data matching a given
 // localpart, room ID and type.
 // If no account data could be found, returns nil
-// Returns an error if there was an issue with the retrieval
+// Returns an error if there was an issue with the retrieval.
 func (d *Database) GetAccountDataByType(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string,
@@ -311,7 +318,7 @@ func (d *Database) GetAccountDataByType(
 	)
 }
 
-// GetNewNumericLocalpart generates and returns a new unused numeric localpart
+// GetNewNumericLocalpart generates and returns a new unused numeric localpart.
 func (d *Database) GetNewNumericLocalpart(
 	ctx context.Context, serverName spec.ServerName,
 ) (int64, error) {
@@ -386,12 +393,30 @@ func (d *Database) GetThreePIDsForLocalpart(
 	return d.ThreePIDs.SelectThreePIDsForLocalpart(ctx, localpart, serverName)
 }
 
+// GetLocalpartByExternalID looks up the localpart associated with a given external ID
+// from an OIDC provider.
+func (d *Database) GetLocalpartByExternalID(
+	ctx context.Context, providerID, externalID string,
+) (localpart string, serverName spec.ServerName, err error) {
+	return d.ExternalIDs.SelectLocalpartForExternalID(ctx, nil, providerID, externalID)
+}
+
+// CreateExternalIDMapping creates a mapping between an external OIDC subject identifier
+// and a local Matrix user.
+func (d *Database) CreateExternalIDMapping(
+	ctx context.Context, localpart string, serverName spec.ServerName, providerID, externalID string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.ExternalIDs.InsertExternalID(ctx, txn, localpart, serverName, providerID, externalID)
+	})
+}
+
 // CheckAccountAvailability checks if the username/localpart is already present
 // in the database.
 // If the DB returns sql.ErrNoRows the Localpart isn't taken.
 func (d *Database) CheckAccountAvailability(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error) {
 	_, err := d.Accounts.SelectAccountByLocalpart(ctx, localpart, serverName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}
 	return false, err
@@ -404,10 +429,22 @@ func (d *Database) GetAccountByLocalpart(ctx context.Context, localpart string, 
 ) (*api.Account, error) {
 	// try to get the account with lowercase localpart (majority)
 	acc, err := d.Accounts.SelectAccountByLocalpart(ctx, strings.ToLower(localpart), serverName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		acc, err = d.Accounts.SelectAccountByLocalpart(ctx, localpart, serverName) // try with localpart as passed by the request
 	}
 	return acc, err
+}
+
+// IsAccountDeactivated returns whether the account with the given localpart is deactivated.
+// Returns sql.ErrNoRows if no account exists which matches the given localpart.
+func (d *Database) IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName,
+) (bool, error) {
+	// try the lowercase localpart first (majority), mirroring GetAccountByLocalpart
+	deactivated, err := d.Accounts.SelectIsDeactivated(ctx, strings.ToLower(localpart), serverName)
+	if errors.Is(err, sql.ErrNoRows) {
+		deactivated, err = d.Accounts.SelectIsDeactivated(ctx, localpart, serverName) // try with localpart as passed by the request
+	}
+	return deactivated, err
 }
 
 // SearchProfiles returns all profiles where the provided localpart or display name
@@ -424,7 +461,7 @@ func (d *Database) DeactivateAccount(ctx context.Context, localpart string, serv
 	})
 }
 
-// CreateOpenIDToken persists a new token that was issued for OpenID Connect
+// CreateOpenIDToken persists a new token that was issued for OpenID Connect.
 func (d *Database) CreateOpenIDToken(
 	ctx context.Context,
 	token, userID string,
@@ -440,7 +477,7 @@ func (d *Database) CreateOpenIDToken(
 	return expiresAtMS, err
 }
 
-// GetOpenIDTokenAttributes gets the attributes of issued an OIDC auth token
+// GetOpenIDTokenAttributes gets the attributes of issued an OIDC auth token.
 func (d *Database) GetOpenIDTokenAttributes(
 	ctx context.Context,
 	token string,
@@ -518,7 +555,7 @@ func (d *Database) CountBackupKeys(
 	return
 }
 
-// nolint:nakedret
+//nolint:nakedret
 func (d *Database) UpsertBackupKeys(
 	ctx context.Context, version, userID string, uploads []api.InternalKeyBackupSession,
 ) (count int64, etag string, err error) {
@@ -576,7 +613,7 @@ func (d *Database) UpsertBackupKeys(
 			} else {
 				oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
 				if err != nil {
-					return fmt.Errorf("failed to parse old etag: %s", err)
+					return fmt.Errorf("failed to parse old etag: %w", err)
 				}
 				newETag = strconv.FormatInt(oldETagInt+1, 10)
 			}
@@ -715,6 +752,21 @@ func (d *Database) UpdateDevice(
 	})
 }
 
+// UpdateDeviceAccessToken replaces the access token of an existing device.
+// Unlike CreateDevice it does not delete and re-insert the row, so the session
+// ID and display name survive. This is what OIDC token rotation needs: the
+// device is the same, only the bearer token the client presents has changed.
+// Returns SQL error if there are problems and nil on success.
+func (d *Database) UpdateDeviceAccessToken(
+	ctx context.Context,
+	localpart string, serverName spec.ServerName,
+	deviceID, accessToken string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Devices.UpdateDeviceAccessToken(ctx, txn, localpart, serverName, deviceID, accessToken)
+	})
+}
+
 // RemoveDevices revokes one or more devices by deleting the entry in the database
 // matching with the given device IDs and user ID localpart.
 // If the devices don't exist, it will not return an error
@@ -725,7 +777,7 @@ func (d *Database) RemoveDevices(
 	devices []string,
 ) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		if err := d.Devices.DeleteDevices(ctx, txn, localpart, serverName, devices); err != sql.ErrNoRows {
+		if err := d.Devices.DeleteDevices(ctx, txn, localpart, serverName, devices); !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		return nil
@@ -745,7 +797,7 @@ func (d *Database) RemoveAllDevices(
 		if err != nil {
 			return err
 		}
-		if err := d.Devices.DeleteDevicesByLocalpart(ctx, txn, localpart, serverName, exceptDeviceID); err != sql.ErrNoRows {
+		if err := d.Devices.DeleteDevicesByLocalpart(ctx, txn, localpart, serverName, exceptDeviceID); !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		return nil
@@ -804,7 +856,7 @@ func (d *Database) GetLoginTokenDataByToken(ctx context.Context, token string) (
 	return d.LoginTokens.SelectLoginToken(ctx, token)
 }
 
-func (d *Database) InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]interface{}, n *api.Notification) error {
+func (d *Database) InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.Notifications.Insert(ctx, txn, localpart, serverName, eventID, pos, pushrules.BoolTweakOr(tweaks, pushrules.HighlightTweak, false), n)
 	})
@@ -866,7 +918,8 @@ func (d *Database) UpsertPusher(
 			p.Language,
 			string(data),
 			localpart,
-			serverName)
+			serverName,
+		)
 	})
 }
 
@@ -885,7 +938,7 @@ func (d *Database) RemovePusher(
 ) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		err := d.Pushers.DeletePusher(ctx, txn, appid, pushkey, localpart, serverName)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err
@@ -918,6 +971,27 @@ func (d *Database) DailyRoomsMessages(
 	ctx context.Context, serverName spec.ServerName,
 ) (stats types.MessageStats, activeRooms, activeE2EERooms int64, err error) {
 	return d.Stats.DailyRoomsMessages(ctx, nil, serverName)
+}
+
+// StoreDehydratedDevice stores a dehydrated device for the given user.
+func (d *Database) StoreDehydratedDevice(ctx context.Context, userID, deviceID string, deviceData json.RawMessage) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.DehydratedDevices.InsertDehydratedDevice(ctx, txn, userID, deviceID, deviceData)
+	})
+}
+
+// GetDehydratedDevice returns the dehydrated device for the given user.
+func (d *Database) GetDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error) {
+	return d.DehydratedDevices.SelectDehydratedDevice(ctx, userID)
+}
+
+// DeleteDehydratedDevice removes the dehydrated device for the given user and returns the device ID.
+func (d *Database) DeleteDehydratedDevice(ctx context.Context, userID string) (deviceID string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		deviceID, err = d.DehydratedDevices.DeleteDehydratedDevice(ctx, txn, userID)
+		return err
+	})
+	return
 }
 
 //
@@ -1066,13 +1140,13 @@ func (d *KeyDatabase) MarkDeviceListStale(ctx context.Context, userID string, is
 func (d *KeyDatabase) DeleteDeviceKeys(ctx context.Context, userID string, deviceIDs []gomatrixserverlib.KeyID) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		for _, deviceID := range deviceIDs {
-			if err := d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget(ctx, txn, userID, deviceID); err != nil && err != sql.ErrNoRows {
+			if err := d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget(ctx, txn, userID, deviceID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.CrossSigningSigsTable.DeleteCrossSigningSigsForTarget: %w", err)
 			}
-			if err := d.DeviceKeysTable.DeleteDeviceKeys(ctx, txn, userID, string(deviceID)); err != nil && err != sql.ErrNoRows {
+			if err := d.DeviceKeysTable.DeleteDeviceKeys(ctx, txn, userID, string(deviceID)); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.DeviceKeysTable.DeleteDeviceKeys: %w", err)
 			}
-			if err := d.OneTimeKeysTable.DeleteOneTimeKeys(ctx, txn, userID, string(deviceID)); err != nil && err != sql.ErrNoRows {
+			if err := d.OneTimeKeysTable.DeleteOneTimeKeys(ctx, txn, userID, string(deviceID)); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("d.OneTimeKeysTable.DeleteOneTimeKeys: %w", err)
 			}
 		}

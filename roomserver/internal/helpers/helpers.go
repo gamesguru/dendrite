@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/auth"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/storage/shared"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/auth"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // TODO: temporary package which has helper functions used by both internal/perform packages.
@@ -31,7 +31,7 @@ func UpdateToInviteMembership(
 	// reprocessing this event, or because the we received this invite from a
 	// remote server via the federation invite API. In those cases we don't need
 	// to send the event.
-	needsSending, retired, err := mu.Update(tables.MembershipStateInvite, add)
+	needsSending, retired, err := mu.Update(tables.MembershipStateInvite, add, false)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,6 @@ func IsInvitePending(
 func GetMembershipsAtState(
 	ctx context.Context, db storage.RoomDatabase, roomInfo *types.RoomInfo, stateEntries []types.StateEntry, joinedOnly bool,
 ) ([]types.Event, error) {
-
 	var eventNIDs types.EventNIDs
 	for _, entry := range stateEntries {
 		// Filter the events to retrieve to only keep the membership events
@@ -267,10 +266,10 @@ func CheckServerAllowedToSeeEvent(
 	ctx context.Context, db storage.Database, info *types.RoomInfo, roomID string, eventID string, serverName spec.ServerName, isServerInRoom bool, querier api.QuerySenderIDAPI,
 ) (bool, error) {
 	stateAtEvent, err := db.GetHistoryVisibilityState(ctx, info, eventID, string(serverName))
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		// No error, so continue normally
-	case tables.OptimisationNotSupportedError:
+	case errors.Is(err, tables.ErrOptimisationNotSupported):
 		// The database engine didn't support this optimisation, so fall back to using
 		// the old and slow method
 		stateAtEvent, err = slowGetHistoryVisibilityState(ctx, db, info, roomID, eventID, serverName, querier)
@@ -278,15 +277,14 @@ func CheckServerAllowedToSeeEvent(
 			return false, err
 		}
 	default:
-		switch err.(type) {
-		case types.MissingStateError:
+		var missingStateErr types.MissingStateError
+		if errors.As(err, &missingStateErr) {
 			// If there's no state then we assume it's open visibility, as Synapse does:
 			// https://github.com/matrix-org/synapse/blob/aec87a0f9369a3015b2a53469f88d1de274e8b71/synapse/visibility.py#L654-L655
 			return true, nil
-		default:
-			// Something else went wrong
-			return false, err
 		}
+		// Something else went wrong
+		return false, err
 	}
 	return auth.IsServerAllowed(ctx, querier, serverName, isServerInRoom, stateAtEvent), nil
 }
@@ -466,8 +464,7 @@ func QueryLatestEventsAndState(
 	response.RoomVersion = roomInfo.RoomVersion
 
 	var currentStateSnapshotNID types.StateSnapshotNID
-	response.LatestEvents, currentStateSnapshotNID, response.Depth, err =
-		db.LatestEventIDs(ctx, roomInfo.RoomNID)
+	response.LatestEvents, currentStateSnapshotNID, response.Depth, err = db.LatestEventIDs(ctx, roomInfo.RoomNID)
 	if err != nil {
 		return err
 	}

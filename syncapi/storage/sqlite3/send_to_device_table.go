@@ -11,12 +11,13 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const sendToDeviceSchema = `
@@ -92,7 +93,8 @@ func (s *sendToDeviceStatements) InsertSendToDeviceMessage(
 	ctx context.Context, txn *sql.Tx, userID, deviceID, content string,
 ) (pos types.StreamPosition, err error) {
 	var result sql.Result
-	result, err = sqlutil.TxStmt(txn, s.insertSendToDeviceMessageStmt).ExecContext(ctx, userID, deviceID, content)
+	insertSendToDeviceMessageStmt := sqlutil.TxStmt(txn, s.insertSendToDeviceMessageStmt)
+	result, err = insertSendToDeviceMessageStmt.ExecContext(ctx, userID, deviceID, content)
 	if p, err := result.LastInsertId(); err != nil {
 		return 0, err
 	} else {
@@ -104,7 +106,8 @@ func (s *sendToDeviceStatements) InsertSendToDeviceMessage(
 func (s *sendToDeviceStatements) SelectSendToDeviceMessages(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, from, to types.StreamPosition,
 ) (lastPos types.StreamPosition, events []types.SendToDeviceEvent, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectSendToDeviceMessagesStmt).QueryContext(ctx, userID, deviceID, from, to)
+	selectSendToDeviceMessagesStmt := sqlutil.TxStmt(txn, s.selectSendToDeviceMessagesStmt)
+	rows, err := selectSendToDeviceMessagesStmt.QueryContext(ctx, userID, deviceID, from, to)
 	if err != nil {
 		return
 	}
@@ -140,7 +143,8 @@ func (s *sendToDeviceStatements) SelectSendToDeviceMessages(
 func (s *sendToDeviceStatements) DeleteSendToDeviceMessages(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, pos types.StreamPosition,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteSendToDeviceMessagesStmt).ExecContext(ctx, userID, deviceID, pos)
+	deleteSendToDeviceMessagesStmt := sqlutil.TxStmt(txn, s.deleteSendToDeviceMessagesStmt)
+	_, err = deleteSendToDeviceMessagesStmt.ExecContext(ctx, userID, deviceID, pos)
 	return
 }
 

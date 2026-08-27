@@ -12,14 +12,15 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type stateEventInStateResp struct {
@@ -33,7 +34,7 @@ type stateEventInStateResp struct {
 // append the necessary keys to them if applicable before returning them.
 // Returns an error if something went wrong in the process.
 // TODO: Check if the user is in the room. If not, check if the room's history
-// is publicly visible. Current behaviour is returning an empty array if the
+// is publicly visible. Current behavior is returning an empty array if the
 // user cannot see the room's history.
 func OnIncomingStateRequest(ctx context.Context, device *userapi.Device, rsAPI api.ClientRoomserverAPI, roomID string) util.JSONResponse {
 	var worldReadable bool
@@ -96,7 +97,7 @@ func OnIncomingStateRequest(ctx context.Context, device *userapi.Device, rsAPI a
 			util.GetLogger(ctx).WithError(err).Error("UserID is invalid")
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
-				JSON: spec.Unknown("Device UserID is invalid"),
+				JSON: spec.InvalidParam("Device UserID is invalid"),
 			}
 		}
 		err = rsAPI.QueryMembershipForUser(ctx, &api.QueryMembershipForUserRequest{
@@ -222,7 +223,7 @@ func OnIncomingStateTypeRequest(
 			util.GetLogger(ctx).WithError(err).Error("synctypes.FromClientStateKey failed")
 			return util.JSONResponse{
 				Code: http.StatusInternalServerError,
-				JSON: spec.Unknown("internal server error"),
+				JSON: spec.InternalServerError{},
 			}
 		}
 		stateKey = *newStateKey
@@ -294,7 +295,7 @@ func OnIncomingStateTypeRequest(
 			util.GetLogger(ctx).WithError(err).Error("UserID is invalid")
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
-				JSON: spec.Unknown("Device UserID is invalid"),
+				JSON: spec.InvalidParam("Device UserID is invalid"),
 			}
 		}
 		// The room isn't world-readable so try to work out based on the
@@ -388,7 +389,7 @@ func OnIncomingStateTypeRequest(
 		}, event),
 	}
 
-	var res interface{}
+	var res any
 	if eventFormat {
 		res = stateEvent
 	} else {

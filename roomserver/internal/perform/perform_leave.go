@@ -13,21 +13,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rsAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type Leaver struct {
@@ -39,12 +38,12 @@ type Leaver struct {
 	Inputer *input.Inputer
 }
 
-// WriteOutputEvents implements OutputRoomEventWriter
+// WriteOutputEvents implements OutputRoomEventWriter.
 func (r *Leaver) PerformLeave(
 	ctx context.Context,
-	req *api.PerformLeaveRequest,
-	res *api.PerformLeaveResponse,
-) ([]api.OutputEvent, error) {
+	req *rsAPI.PerformLeaveRequest,
+	res *rsAPI.PerformLeaveResponse,
+) ([]rsAPI.OutputEvent, error) {
 	if !r.Cfg.Matrix.IsLocalServerName(req.Leaver.Domain()) {
 		return nil, fmt.Errorf("user %q does not belong to this homeserver", req.Leaver.String())
 	}
@@ -52,9 +51,9 @@ func (r *Leaver) PerformLeave(
 		"room_id": req.RoomID,
 		"user_id": req.Leaver.String(),
 	})
-	logger.Info("User requested to leave join")
+	logger.Info("User requested to leave room")
 	if strings.HasPrefix(req.RoomID, "!") {
-		output, err := r.performLeaveRoomByID(context.Background(), req, res)
+		output, err := r.performLeaveRoomByID(context.Background(), req, res) //nolint:contextcheck
 		if err != nil {
 			logger.WithError(err).Error("Failed to leave room")
 		} else {
@@ -62,15 +61,15 @@ func (r *Leaver) PerformLeave(
 		}
 		return output, err
 	}
-	return nil, fmt.Errorf("room ID %q is invalid", req.RoomID)
+	return nil, spec.InvalidParam(fmt.Sprintf("room ID %q is invalid", req.RoomID))
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (r *Leaver) performLeaveRoomByID(
 	ctx context.Context,
-	req *api.PerformLeaveRequest,
-	res *api.PerformLeaveResponse, // nolint:unparam
-) ([]api.OutputEvent, error) {
+	req *rsAPI.PerformLeaveRequest,
+	res *rsAPI.PerformLeaveResponse,
+) ([]rsAPI.OutputEvent, error) {
 	roomID, err := spec.NewRoomID(req.RoomID)
 	if err != nil {
 		return nil, err
@@ -130,7 +129,7 @@ func (r *Leaver) performLeaveRoomByID(
 
 	// There's no invite pending, so first of all we want to find out
 	// if the room exists and if the user is actually in it.
-	latestReq := api.QueryLatestEventsAndStateRequest{
+	latestReq := rsAPI.QueryLatestEventsAndStateRequest{
 		RoomID: req.RoomID,
 		StateToFetch: []gomatrixserverlib.StateKeyTuple{
 			{
@@ -139,24 +138,24 @@ func (r *Leaver) performLeaveRoomByID(
 			},
 		},
 	}
-	latestRes := api.QueryLatestEventsAndStateResponse{}
+	latestRes := rsAPI.QueryLatestEventsAndStateResponse{}
 	if err = helpers.QueryLatestEventsAndState(ctx, r.DB, r.RSAPI, &latestReq, &latestRes); err != nil {
 		return nil, err
 	}
 	if !latestRes.RoomExists {
-		return nil, fmt.Errorf("room %q does not exist", req.RoomID)
+		return nil, spec.NotFound(fmt.Sprintf("room %q does not exist", req.RoomID))
 	}
 
 	// Now let's see if the user is in the room.
 	if len(latestRes.StateEvents) == 0 {
-		return nil, fmt.Errorf("user %q is not a member of room %q", req.Leaver.String(), req.RoomID)
+		return nil, spec.Forbidden(fmt.Sprintf("user %q is not a member of room %q", req.Leaver.String(), req.RoomID))
 	}
 	membership, err := latestRes.StateEvents[0].Membership()
 	if err != nil {
 		return nil, fmt.Errorf("error getting membership: %w", err)
 	}
 	if membership != spec.Join && membership != spec.Invite {
-		return nil, fmt.Errorf("user %q is not joined to the room (membership is %q)", req.Leaver.String(), membership)
+		return nil, spec.Forbidden(fmt.Sprintf("user %q is not joined to the room (membership is %q)", req.Leaver.String(), membership))
 	}
 
 	// Prepare the template for the leave event.
@@ -168,7 +167,7 @@ func (r *Leaver) performLeaveRoomByID(
 		RoomID:   req.RoomID,
 		Redacts:  "",
 	}
-	if err = proto.SetContent(map[string]interface{}{"membership": "leave"}); err != nil {
+	if err = proto.SetContent(map[string]any{"membership": "leave"}); err != nil {
 		return nil, fmt.Errorf("eb.SetContent: %w", err)
 	}
 	if err = proto.SetUnsigned(struct{}{}); err != nil {
@@ -198,17 +197,21 @@ func (r *Leaver) performLeaveRoomByID(
 	// Give our leave event to the roomserver input stream. The
 	// roomserver will process the membership change and notify
 	// downstream automatically.
-	inputReq := api.InputRoomEventsRequest{
-		InputRoomEvents: []api.InputRoomEvent{
+	// We set SkipMissingEvents to true because we don't want to block
+	// the leave request waiting for federation to fetch missing events.
+	// The user wants to leave now, not after we've caught up with history.
+	inputReq := rsAPI.InputRoomEventsRequest{
+		InputRoomEvents: []rsAPI.InputRoomEvent{
 			{
-				Kind:         api.KindNew,
-				Event:        event,
-				Origin:       req.Leaver.Domain(),
-				SendAsServer: string(req.Leaver.Domain()),
+				Kind:              rsAPI.KindNew,
+				Event:             event,
+				Origin:            req.Leaver.Domain(),
+				SendAsServer:      string(req.Leaver.Domain()),
+				SkipMissingEvents: true,
 			},
 		},
 	}
-	inputRes := api.InputRoomEventsResponse{}
+	inputRes := rsAPI.InputRoomEventsResponse{}
 	r.Inputer.InputRoomEvents(ctx, &inputReq, &inputRes)
 	if err = inputRes.Err(); err != nil {
 		return nil, fmt.Errorf("r.InputRoomEvents: %w", err)
@@ -219,11 +222,11 @@ func (r *Leaver) performLeaveRoomByID(
 
 func (r *Leaver) performFederatedRejectInvite(
 	ctx context.Context,
-	req *api.PerformLeaveRequest,
-	res *api.PerformLeaveResponse, // nolint:unparam
+	req *rsAPI.PerformLeaveRequest,
+	res *rsAPI.PerformLeaveResponse, //nolint:unparam
 	inviteDomain spec.ServerName, eventID string,
 	leaver spec.SenderID,
-) ([]api.OutputEvent, error) {
+) ([]rsAPI.OutputEvent, error) {
 	// Ask the federation sender to perform a federated leave for us.
 	leaveReq := fsAPI.PerformLeaveRequest{
 		RoomID:      req.RoomID,
@@ -261,10 +264,10 @@ func (r *Leaver) performFederatedRejectInvite(
 
 	// Withdraw the invite, so that the sync API etc are
 	// notified that we rejected it.
-	return []api.OutputEvent{
+	return []rsAPI.OutputEvent{
 		{
-			Type: api.OutputTypeRetireInviteEvent,
-			RetireInviteEvent: &api.OutputRetireInviteEvent{
+			Type: rsAPI.OutputTypeRetireInviteEvent,
+			RetireInviteEvent: &rsAPI.OutputRetireInviteEvent{
 				EventID:        eventID,
 				RoomID:         req.RoomID,
 				Membership:     "leave",

@@ -9,9 +9,9 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 )
 
 const backwardExtremitiesSchema = `
@@ -68,14 +68,16 @@ func NewSqliteBackwardsExtremitiesTable(db *sql.DB) (tables.BackwardsExtremities
 func (s *backwardExtremitiesStatements) InsertsBackwardExtremity(
 	ctx context.Context, txn *sql.Tx, roomID, eventID string, prevEventID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.insertBackwardExtremityStmt).ExecContext(ctx, roomID, eventID, prevEventID)
+	insertStmt := sqlutil.TxStmt(txn, s.insertBackwardExtremityStmt)
+	_, err = insertStmt.ExecContext(ctx, roomID, eventID, prevEventID)
 	return err
 }
 
 func (s *backwardExtremitiesStatements) SelectBackwardExtremitiesForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (bwExtrems map[string][]string, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectBackwardExtremitiesForRoomStmt).QueryContext(ctx, roomID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectBackwardExtremitiesForRoomStmt)
+	rows, err := selectStmt.QueryContext(ctx, roomID)
 	if err != nil {
 		return
 	}
@@ -97,13 +99,15 @@ func (s *backwardExtremitiesStatements) SelectBackwardExtremitiesForRoom(
 func (s *backwardExtremitiesStatements) DeleteBackwardExtremity(
 	ctx context.Context, txn *sql.Tx, roomID, knownEventID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteBackwardExtremityStmt).ExecContext(ctx, roomID, knownEventID)
+	deleteStmt := sqlutil.TxStmt(txn, s.deleteBackwardExtremityStmt)
+	_, err = deleteStmt.ExecContext(ctx, roomID, knownEventID)
 	return err
 }
 
 func (s *backwardExtremitiesStatements) PurgeBackwardExtremities(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeBackwardExtremitiesStmt).ExecContext(ctx, roomID)
+	purgeStmt := sqlutil.TxStmt(txn, s.purgeBackwardExtremitiesStmt)
+	_, err := purgeStmt.ExecContext(ctx, roomID)
 	return err
 }

@@ -11,14 +11,25 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
-// PrevEventRef represents a reference to a previous event in a state event upgrade
+// EventUnsignedFields contains field names found in the 'unsigned' data on events.
+const (
+	// UnsignedFieldMembership is the user's membership state at the time of the event, per MSC4115
+	// This is the stable field name (MSC4115 completed FCP June 2024).
+	UnsignedFieldMembership = "membership"
+
+	// UnsignedFieldMSC4115Membership is the unstable field name for MSC4115
+	// Kept for backwards compatibility during transition period.
+	UnsignedFieldMSC4115Membership = "io.element.msc4115.membership"
+)
+
+// PrevEventRef represents a reference to a previous event in a state event upgrade.
 type PrevEventRef struct {
 	PrevContent   json.RawMessage `json:"prev_content"`
 	ReplacesState string          `json:"replaces_state"`
@@ -28,7 +39,7 @@ type PrevEventRef struct {
 type ClientEventFormat int
 
 const (
-	// FormatAll will include all client event keys
+	// FormatAll will include all client event keys.
 	FormatAll ClientEventFormat = iota
 	// FormatSync will include only the event keys required by the /sync API. Notably, this
 	// means the 'room_id' will be missing from the events.
@@ -103,15 +114,15 @@ func FromClientStateKey(roomID spec.RoomID, stateKey string, senderIDQuery spec.
 		parsedStateKey, err := spec.NewUserID(stateKey, true)
 		if err != nil {
 			// If invalid user ID, then there is no associated state event.
-			return nil, fmt.Errorf("Provided state key begins with @ but is not a valid user ID: %w", err)
+			return nil, fmt.Errorf("provided state key begins with @ but is not a valid user ID: %w", err)
 		}
 		senderID, err := senderIDQuery(roomID, *parsedStateKey)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to query sender ID: %w", err)
+			return nil, fmt.Errorf("failed to query sender ID: %w", err)
 		}
 		if senderID == nil {
 			// If no sender ID, then there is no associated state event.
-			return nil, fmt.Errorf("No associated sender ID found.")
+			return nil, fmt.Errorf("no associated sender ID found")
 		}
 		newStateKey := string(*senderID)
 		return &newStateKey, nil
@@ -187,7 +198,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 		}
 		ce.Unsigned, err = json.Marshal(prev)
 		if err != nil {
-			err = fmt.Errorf("Failed to marshal unsigned content for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to marshal unsigned content for ClientEvent: %w", err)
 			return err
 		}
 	}
@@ -196,14 +207,14 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	case spec.MRoomCreate:
 		updatedContent, err := updateCreateEvent(se.Content(), userIDForSender, se.RoomID())
 		if err != nil {
-			err = fmt.Errorf("Failed to update m.room.create event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to update m.room.create event for ClientEvent: %w", err)
 			return err
 		}
 		ce.Content = updatedContent
 	case spec.MRoomMember:
 		updatedEvent, err := updateInviteEvent(userIDForSender, se, format)
 		if err != nil {
-			err = fmt.Errorf("Failed to update m.room.member event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to update m.room.member event for ClientEvent: %w", err)
 			return err
 		}
 		if updatedEvent != nil {
@@ -212,7 +223,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	case spec.MRoomPowerLevels:
 		updatedEvent, err := updatePowerLevelEvent(userIDForSender, se, format)
 		if err != nil {
-			err = fmt.Errorf("Failed update m.room.power_levels event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed update m.room.power_levels event for ClientEvent: %w", err)
 			return err
 		}
 		if updatedEvent != nil {
@@ -229,7 +240,7 @@ func updateCreateEvent(content spec.RawJSON, userIDForSender spec.UserIDForSende
 		oldCreator := creator.Str
 		userID, err := userIDForSender(roomID, spec.SenderID(oldCreator))
 		if err != nil {
-			err = fmt.Errorf("Failed to find userID for creator in ClientEvent: %w", err)
+			err = fmt.Errorf("failed to find userID for creator in ClientEvent: %w", err)
 			return nil, err
 		}
 
@@ -237,13 +248,13 @@ func updateCreateEvent(content spec.RawJSON, userIDForSender spec.UserIDForSende
 			var newCreatorBytes, newContent []byte
 			newCreatorBytes, err = json.Marshal(userID.String())
 			if err != nil {
-				err = fmt.Errorf("Failed to marshal new creator for ClientEvent: %w", err)
+				err = fmt.Errorf("failed to marshal new creator for ClientEvent: %w", err)
 				return nil, err
 			}
 
 			newContent, err = sjson.SetRawBytes([]byte(content), "creator", newCreatorBytes)
 			if err != nil {
-				err = fmt.Errorf("Failed to set new creator for ClientEvent: %w", err)
+				err = fmt.Errorf("failed to set new creator for ClientEvent: %w", err)
 				return nil, err
 			}
 
@@ -319,7 +330,7 @@ func GetUpdatedInviteRoomState(userIDForSender spec.UserIDForSender, inviteRoomS
 
 			updatedContent, updateErr := updateCreateEvent(ev.Content, userIDForSender, roomID)
 			if updateErr != nil {
-				updateErr = fmt.Errorf("Failed to update m.room.create event for ClientEvent: %w", userIDErr)
+				updateErr = fmt.Errorf("failed to update m.room.create event for ClientEvent: %w", userIDErr)
 				return nil, updateErr
 			}
 			inviteStateEvents[i].Content = updatedContent
@@ -419,4 +430,112 @@ func updatePowerLevelEvent(userIDForSender spec.UserIDForSender, se gomatrixserv
 	}
 
 	return evNew, err
+}
+
+// AnnotateEventWithMembership adds the requesting user's membership state to the event's unsigned field.
+// This implements MSC4115: Membership metadata on events.
+//
+// The membership parameter should be the user's membership state at the time of the event:
+// - "join" if the user was joined
+// - "invite" if the user was invited
+// - "leave" if the user had not yet joined, been invited, or had left
+// - "ban" if the user was banned
+// - "knock" if the user was knocking
+//
+// This function modifies the ClientEvent in place by adding the membership field to unsigned.
+// It supports both the stable field name ("membership") and unstable field name
+// ("io.element.msc4115.membership") for backwards compatibility.
+//
+// Returns an error if the unsigned field cannot be modified.
+func AnnotateEventWithMembership(event *ClientEvent, membership string, useStableIdentifier bool) error {
+	if event == nil {
+		return fmt.Errorf("cannot annotate nil event")
+	}
+
+	// Choose field name based on stability preference
+	// For sjson, dots in field names need to be escaped with backslashes
+	// to prevent them from being interpreted as nested paths
+	sjsonFieldName := "io\\.element\\.msc4115\\.membership"
+	if useStableIdentifier {
+		sjsonFieldName = UnsignedFieldMembership
+	}
+
+	// If unsigned is empty, create a minimal JSON object
+	unsigned := event.Unsigned
+	if len(unsigned) == 0 {
+		unsigned = spec.RawJSON("{}")
+	}
+
+	// Add membership field to unsigned using sjson
+	membershipJSON, err := json.Marshal(membership)
+	if err != nil {
+		return fmt.Errorf("failed to marshal membership value: %w", err)
+	}
+
+	newUnsigned, err := sjson.SetRawBytes(unsigned, sjsonFieldName, membershipJSON)
+	if err != nil {
+		return fmt.Errorf("failed to set membership in unsigned: %w", err)
+	}
+
+	event.Unsigned = newUnsigned
+	return nil
+}
+
+// DetermineMembershipAtEvent determines what the user's membership was at the time of the given event.
+// This follows MSC4115's algorithm:
+//
+// 1. If the event is the user's own membership event, use that event's membership
+// 2. Otherwise, look up the membership from the provided state (state after event)
+// 3. Default to "leave" if no membership found
+//
+// Parameters:
+//   - event: The PDU event we're determining membership for
+//   - userID: The user whose membership we're checking
+//   - stateAfterEvent: Map of (event_type, state_key) -> PDU representing state after this event
+//
+// Returns the membership string ("join", "invite", "leave", "ban", "knock").
+func DetermineMembershipAtEvent(
+	event gomatrixserverlib.PDU,
+	userID string,
+	stateAfterEvent map[string]gomatrixserverlib.PDU,
+) string {
+	// Case 1: This is the user's own membership event
+	if event.Type() == spec.MRoomMember && event.StateKey() != nil && *event.StateKey() == userID {
+		membership := gjson.GetBytes(event.Content(), "membership")
+		if membership.Exists() {
+			return membership.String()
+		}
+	}
+
+	// Case 2: Look up membership from state after event
+	if stateAfterEvent != nil {
+		stateKey := spec.MRoomMember + "|" + userID
+		if memberEvent, ok := stateAfterEvent[stateKey]; ok {
+			membership := gjson.GetBytes(memberEvent.Content(), "membership")
+			if membership.Exists() {
+				return membership.String()
+			}
+		}
+	}
+
+	// Case 3: Default to "leave"
+	return "leave"
+}
+
+// AnnotateEventsWithMembership adds membership metadata to a list of ClientEvents.
+// This is a convenience function for annotating multiple events with the same membership.
+//
+// Parameters:
+//   - events: Slice of ClientEvent pointers to annotate
+//   - membership: The membership state to add to all events
+//   - useStableIdentifier: Whether to use stable ("membership") or unstable field name
+//
+// Returns an error if any event fails to be annotated.
+func AnnotateEventsWithMembership(events []ClientEvent, membership string, useStableIdentifier bool) error {
+	for i := range events {
+		if err := AnnotateEventWithMembership(&events[i], membership, useStableIdentifier); err != nil {
+			return fmt.Errorf("failed to annotate event %d: %w", i, err)
+		}
+	}
+	return nil
 }

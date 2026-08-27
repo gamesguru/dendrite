@@ -9,7 +9,7 @@ package helpers
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 func benchmarkStateEntryMapLookup(entries, lookups int64, b *testing.B) {
@@ -124,5 +124,4 @@ func TestEventMap(t *testing.T) {
 			t.Fatalf("eventMap lookup(%v): want event to be %v, got %v", testCase.inputEventNID, testCase.wantEvent, gotEvent)
 		}
 	}
-
 }

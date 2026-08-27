@@ -11,15 +11,16 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // OutputTypingConsumer consumes events that originate in the clientapi.
@@ -52,7 +53,7 @@ func NewOutputTypingConsumer(
 	}
 }
 
-// Start consuming from the clientapi
+// Start consuming from the clientapi.
 func (t *OutputTypingConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1, t.onMessage,
@@ -96,7 +97,7 @@ func (t *OutputTypingConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) 
 	}
 
 	edu := &gomatrixserverlib.EDU{Type: "m.typing"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
+	if edu.Content, err = json.Marshal(map[string]any{
 		"room_id": roomID,
 		"user_id": userID,
 		"typing":  typing,
@@ -104,7 +105,7 @@ func (t *OutputTypingConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) 
 		log.WithError(err).Error("failed to marshal EDU JSON")
 		return true
 	}
-	if err := t.queues.SendEDU(edu, typingServerName, names); err != nil {
+	if err := t.queues.SendEDU(edu, typingServerName, names); err != nil { //nolint:contextcheck
 		log.WithError(err).Error("failed to send EDU")
 		return false
 	}

@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const keyBackupVersionTableSchema = `
@@ -80,7 +80,9 @@ func (s *keyBackupVersionStatements) InsertKeyBackup(
 	ctx context.Context, txn *sql.Tx, userID, algorithm string, authData json.RawMessage, etag string,
 ) (version string, err error) {
 	var versionInt int64
-	err = txn.Stmt(s.insertKeyBackupStmt).QueryRowContext(ctx, userID, algorithm, string(authData), etag).Scan(&versionInt)
+	insertKeyBackupStmt := txn.Stmt(s.insertKeyBackupStmt)
+	defer insertKeyBackupStmt.Close()
+	err = insertKeyBackupStmt.QueryRowContext(ctx, userID, algorithm, string(authData), etag).Scan(&versionInt)
 	return strconv.FormatInt(versionInt, 10), err
 }
 
@@ -91,7 +93,9 @@ func (s *keyBackupVersionStatements) UpdateKeyBackupAuthData(
 	if err != nil {
 		return fmt.Errorf("invalid version")
 	}
-	_, err = txn.Stmt(s.updateKeyBackupAuthDataStmt).ExecContext(ctx, string(authData), userID, versionInt)
+	updateKeyBackupAuthDataStmt := txn.Stmt(s.updateKeyBackupAuthDataStmt)
+	defer updateKeyBackupAuthDataStmt.Close()
+	_, err = updateKeyBackupAuthDataStmt.ExecContext(ctx, string(authData), userID, versionInt)
 	return err
 }
 
@@ -102,7 +106,9 @@ func (s *keyBackupVersionStatements) UpdateKeyBackupETag(
 	if err != nil {
 		return fmt.Errorf("invalid version")
 	}
-	_, err = txn.Stmt(s.updateKeyBackupETagStmt).ExecContext(ctx, etag, userID, versionInt)
+	updateKeyBackupETagStmt := txn.Stmt(s.updateKeyBackupETagStmt)
+	defer updateKeyBackupETagStmt.Close()
+	_, err = updateKeyBackupETagStmt.ExecContext(ctx, etag, userID, versionInt)
 	return err
 }
 
@@ -113,7 +119,9 @@ func (s *keyBackupVersionStatements) DeleteKeyBackup(
 	if err != nil {
 		return false, fmt.Errorf("invalid version")
 	}
-	result, err := txn.Stmt(s.deleteKeyBackupStmt).ExecContext(ctx, userID, versionInt)
+	deleteKeyBackupStmt := txn.Stmt(s.deleteKeyBackupStmt)
+	defer deleteKeyBackupStmt.Close()
+	result, err := deleteKeyBackupStmt.ExecContext(ctx, userID, versionInt)
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +138,9 @@ func (s *keyBackupVersionStatements) SelectKeyBackup(
 	var versionInt int64
 	if version == "" {
 		var v *int64 // allows nulls
-		if err = txn.Stmt(s.selectLatestVersionStmt).QueryRowContext(ctx, userID).Scan(&v); err != nil {
+		selectLatestVersionStmt := txn.Stmt(s.selectLatestVersionStmt)
+		defer selectLatestVersionStmt.Close()
+		if err = selectLatestVersionStmt.QueryRowContext(ctx, userID).Scan(&v); err != nil {
 			return
 		}
 		if v == nil {
@@ -146,7 +156,9 @@ func (s *keyBackupVersionStatements) SelectKeyBackup(
 	versionResult = strconv.FormatInt(versionInt, 10)
 	var deletedInt int
 	var authDataStr string
-	err = txn.Stmt(s.selectKeyBackupStmt).QueryRowContext(ctx, userID, versionInt).Scan(&algorithm, &authDataStr, &etag, &deletedInt)
+	selectKeyBackupStmt := txn.Stmt(s.selectKeyBackupStmt)
+	defer selectKeyBackupStmt.Close()
+	err = selectKeyBackupStmt.QueryRowContext(ctx, userID, versionInt).Scan(&algorithm, &authDataStr, &etag, &deletedInt)
 	deleted = deletedInt == 1
 	authData = json.RawMessage(authDataStr)
 	return

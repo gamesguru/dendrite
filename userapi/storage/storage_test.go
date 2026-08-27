@@ -10,23 +10,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/userapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/pushrules"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/pushrules"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 const loginTokenLifetime = time.Minute
@@ -50,7 +50,7 @@ func mustCreateUserDatabase(t *testing.T, dbType test.DBType) (storage.UserDatab
 	}
 }
 
-// Tests storing and getting account data
+// Tests storing and getting account data.
 func Test_AccountData(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
@@ -81,17 +81,24 @@ func Test_AccountData(t *testing.T) {
 	})
 }
 
-// Tests the creation of accounts
+// Tests the creation of accounts.
 func Test_Accounts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
+		count, err := db.CountAccounts(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+
 		alice := test.NewUser(t)
 		aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
 		assert.NoError(t, err)
 
 		accAlice, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
 		assert.NoError(t, err, "failed to create account")
+		count, err = db.CountAccounts(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), count)
 		// verify the newly create account is the same as returned by CreateAccount
 		var accGet *api.Account
 		accGet, err = db.GetAccountByPassword(ctx, aliceLocalpart, aliceDomain, "testing")
@@ -418,11 +425,10 @@ func Test_Profile(t *testing.T) {
 }
 
 func Test_Pusher(t *testing.T) {
-	alice := test.NewUser(t)
-	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
-	assert.NoError(t, err)
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+		assert.NoError(t, err)
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
 
@@ -455,7 +461,7 @@ func Test_Pusher(t *testing.T) {
 		// remove single pusher
 		err = db.RemovePusher(ctx, appID, pushKeys[0], aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unable to remove pusher")
-		gotPushers, err := db.GetPushers(ctx, aliceLocalpart, aliceDomain)
+		gotPushers, err = db.GetPushers(ctx, aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unable to get pushers")
 		assert.Equal(t, 1, len(gotPushers))
 
@@ -536,8 +542,8 @@ func Test_Notification(t *testing.T) {
 				RoomID: roomID,
 				TS:     spec.AsTimestamp(ts),
 			}
-			err = db.InsertNotification(ctx, aliceLocalpart, aliceDomain, eventID, uint64(i+1), nil, notification)
-			assert.NoError(t, err, "unable to insert notification")
+			insertErr := db.InsertNotification(ctx, aliceLocalpart, aliceDomain, eventID, uint64(i+1), nil, notification)
+			assert.NoError(t, insertErr, "unable to insert notification")
 		}
 
 		// get notifications
@@ -668,8 +674,10 @@ func TestKeyChangesUpperLimit(t *testing.T) {
 	})
 }
 
-var dbLock sync.Mutex
-var deviceArray = []string{"AAA", "another_device"}
+var (
+	dbLock      sync.Mutex
+	deviceArray = []string{"AAA", "another_device"}
+)
 
 // The purpose of this test is to make sure that the storage layer is generating sequential stream IDs per user,
 // and that they are returned correctly when querying for device keys.
@@ -741,7 +749,6 @@ func TestDeviceKeysStreamIDGeneration(t *testing.T) {
 		defer dbLock.Unlock()
 		// Querying for device keys returns the latest stream IDs
 		msgs, err = db.DeviceKeysForUser(ctx, alice, deviceArray, false)
-
 		if err != nil {
 			t.Fatalf("DeviceKeysForUser returned error: %s", err)
 		}

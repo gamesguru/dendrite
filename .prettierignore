@@ -1,0 +1,10 @@
+build/
+dist/
+CHANGELOG.md
+
+# web/ and docs/ must be directly formatted from there
+# to prevent conflicts with different prettier version
+docs/
+venv/
+web/src/assets/locales/*.json
+!web/src/assets/locales/en.json

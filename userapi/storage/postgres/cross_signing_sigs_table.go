@@ -11,13 +11,14 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 var crossSigningSigsSchema = `
@@ -80,7 +81,8 @@ func NewPostgresCrossSigningSigsTable(db *sql.DB) (tables.CrossSigningSigs, erro
 func (s *crossSigningSigsStatements) SelectCrossSigningSigsForTarget(
 	ctx context.Context, txn *sql.Tx, originUserID, targetUserID string, targetKeyID gomatrixserverlib.KeyID,
 ) (r types.CrossSigningSigMap, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectCrossSigningSigsForTargetStmt).QueryContext(ctx, originUserID, targetUserID, targetKeyID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectCrossSigningSigsForTargetStmt)
+	rows, err := selectStmt.QueryContext(ctx, originUserID, targetUserID, targetKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +110,8 @@ func (s *crossSigningSigsStatements) UpsertCrossSigningSigsForTarget(
 	targetUserID string, targetKeyID gomatrixserverlib.KeyID,
 	signature spec.Base64Bytes,
 ) error {
-	if _, err := sqlutil.TxStmt(txn, s.upsertCrossSigningSigsForTargetStmt).ExecContext(ctx, originUserID, originKeyID, targetUserID, targetKeyID, signature); err != nil {
+	upsertCrossSigningSigsForTargetStmt := sqlutil.TxStmt(txn, s.upsertCrossSigningSigsForTargetStmt)
+	if _, err := upsertCrossSigningSigsForTargetStmt.ExecContext(ctx, originUserID, originKeyID, targetUserID, targetKeyID, signature); err != nil {
 		return fmt.Errorf("s.upsertCrossSigningSigsForTargetStmt: %w", err)
 	}
 	return nil
@@ -118,7 +121,8 @@ func (s *crossSigningSigsStatements) DeleteCrossSigningSigsForTarget(
 	ctx context.Context, txn *sql.Tx,
 	targetUserID string, targetKeyID gomatrixserverlib.KeyID,
 ) error {
-	if _, err := sqlutil.TxStmt(txn, s.deleteCrossSigningSigsForTargetStmt).ExecContext(ctx, targetUserID, targetKeyID); err != nil {
+	deleteCrossSigningSigsForTargetStmt := sqlutil.TxStmt(txn, s.deleteCrossSigningSigsForTargetStmt)
+	if _, err := deleteCrossSigningSigsForTargetStmt.ExecContext(ctx, targetUserID, targetKeyID); err != nil {
 		return fmt.Errorf("s.deleteCrossSigningSigsForTargetStmt: %w", err)
 	}
 	return nil

@@ -11,9 +11,10 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 )
 
 func TestOpenACLsWithBlacklist(t *testing.T) {
@@ -101,9 +102,7 @@ func TestDefaultACLsWithWhitelist(t *testing.T) {
 	}
 }
 
-var (
-	content1 = `{"allow":["*"],"allow_ip_literals":false,"deny":["hello.world", "*.hello.world"]}`
-)
+var content1 = `{"allow":["*"],"allow_ip_literals":false,"deny":["hello.world", "*.hello.world"]}`
 
 type dummyACLDB struct{}
 

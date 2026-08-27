@@ -7,25 +7,26 @@
 package relayapi
 
 import (
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/relayapi/api"
-	"github.com/element-hq/dendrite/relayapi/internal"
-	"github.com/element-hq/dendrite/relayapi/routing"
-	"github.com/element-hq/dendrite/relayapi/storage"
-	rsAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/api"
+	"codefloe.com/pat-s/zendrite/relayapi/internal"
+	"codefloe.com/pat-s/zendrite/relayapi/routing"
+	"codefloe.com/pat-s/zendrite/relayapi/storage"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.
 func AddPublicRoutes(
 	routers httputil.Routers,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	keyRing gomatrixserverlib.JSONVerifier,
 	relayAPI api.RelayInternalAPI,
 ) {
@@ -37,14 +38,14 @@ func AddPublicRoutes(
 
 	routing.Setup(
 		routers.Federation,
-		&dendriteCfg.FederationAPI,
+		&zendriteCfg.FederationAPI,
 		relay,
 		keyRing,
 	)
 }
 
 func NewRelayInternalAPI(
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	fedClient fclient.FederationClient,
 	rsAPI rsAPI.RoomserverInternalAPI,
@@ -53,7 +54,7 @@ func NewRelayInternalAPI(
 	relayingEnabled bool,
 	caches caching.FederationCache,
 ) api.RelayInternalAPI {
-	relayDB, err := storage.NewDatabase(cm, &dendriteCfg.RelayAPI.Database, caches, dendriteCfg.Global.IsLocalServerName)
+	relayDB, err := storage.NewDatabase(cm, &zendriteCfg.RelayAPI.Database, caches, zendriteCfg.Global.IsLocalServerName)
 	if err != nil {
 		logrus.WithError(err).Panic("failed to connect to relay db")
 	}
@@ -64,8 +65,8 @@ func NewRelayInternalAPI(
 		rsAPI,
 		keyRing,
 		producer,
-		dendriteCfg.Global.Presence.EnableInbound,
-		dendriteCfg.Global.ServerName,
+		zendriteCfg.Global.Presence.EnableInbound,
+		zendriteCfg.Global.ServerName,
 		relayingEnabled,
 	)
 }

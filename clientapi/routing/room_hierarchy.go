@@ -7,57 +7,92 @@
 package routing
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/google/uuid"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// For storing pagination information for room hierarchies
+// TTL for hierarchy pagination tokens (prevents resource exhaustion).
+const hierarchyPaginationTTL = 5 * time.Minute
+
+// For storing pagination information for room hierarchies.
 type RoomHierarchyPaginationCache struct {
-	cache map[string]roomserverAPI.RoomHierarchyWalker
+	cache map[string]hierarchyCacheEntry
 	mu    sync.Mutex
+}
+
+type hierarchyCacheEntry struct {
+	walker    roomserverAPI.RoomHierarchyWalker
+	expiresAt time.Time
 }
 
 // Create a new, empty, pagination cache.
 func NewRoomHierarchyPaginationCache() RoomHierarchyPaginationCache {
 	return RoomHierarchyPaginationCache{
-		cache: map[string]roomserverAPI.RoomHierarchyWalker{},
+		cache: map[string]hierarchyCacheEntry{},
 	}
 }
 
-// Get a cached page, or nil if there is no associated page in the cache.
+// Get a cached page, or nil if there is no associated page in the cache or it has expired.
 func (c *RoomHierarchyPaginationCache) Get(token string) *roomserverAPI.RoomHierarchyWalker {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	line, ok := c.cache[token]
-	if ok {
-		return &line
-	} else {
+
+	entry, ok := c.cache[token]
+	if !ok {
 		return nil
 	}
+
+	// Check if expired
+	if time.Now().After(entry.expiresAt) {
+		delete(c.cache, token)
+		return nil
+	}
+
+	return &entry.walker
 }
 
-// Add a cache line to the pagination cache.
+// Add a cache line to the pagination cache with TTL.
 func (c *RoomHierarchyPaginationCache) AddLine(line roomserverAPI.RoomHierarchyWalker) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Clean up expired entries opportunistically (limit to 10 to avoid long locks)
+	now := time.Now()
+	cleaned := 0
+	for token, entry := range c.cache {
+		if now.After(entry.expiresAt) {
+			delete(c.cache, token)
+			cleaned++
+			if cleaned >= 10 { //nolint:mnd
+				break
+			}
+		}
+	}
+
 	token := uuid.NewString()
-	c.cache[token] = line
+	c.cache[token] = hierarchyCacheEntry{
+		walker:    line,
+		expiresAt: now.Add(hierarchyPaginationTTL),
+	}
 	return token
 }
 
 // Query the hierarchy of a room/space
 //
-// Implements /_matrix/client/v1/rooms/{roomID}/hierarchy
+// Implements /_matrix/client/v1/rooms/{roomID}/hierarchy.
 func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr string, rsAPI roomserverAPI.ClientRoomserverAPI, paginationCache *RoomHierarchyPaginationCache) util.JSONResponse {
 	parsedRoomID, err := spec.NewRoomID(roomIDStr)
 	if err != nil {
@@ -81,7 +116,7 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 		}
 	}
 
-	limit := 1000 // Default to 1000
+	limit := 50 // Default to 50 (matches Synapse MAX_ROOMS)
 	limitStr := req.URL.Query().Get("limit")
 	if limitStr != "" {
 		var maybeLimit int
@@ -93,8 +128,8 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 			}
 		}
 		limit = maybeLimit
-		if limit > 1000 {
-			limit = 1000 // Maximum limit of 1000
+		if limit > 50 { //nolint:mnd
+			limit = 50 // Maximum limit of 50 per page (matches Synapse)
 		}
 	}
 
@@ -131,20 +166,16 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 	}
 
 	discoveredRooms, _, nextWalker, err := rsAPI.QueryNextRoomHierarchyPage(req.Context(), walker, limit)
-
 	if err != nil {
-		switch err.(type) {
-		case roomserverAPI.ErrRoomUnknownOrNotAllowed:
-			util.GetLogger(req.Context()).WithError(err).Debugln("room unknown/forbidden when handling CS room hierarchy request")
-			return util.JSONResponse{
-				Code: http.StatusForbidden,
-				JSON: spec.Forbidden("room is unknown/forbidden"),
-			}
-		default:
-			log.WithError(err).Errorf("failed to fetch next page of room hierarchy (CS API)")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.Unknown("internal server error"),
+		{
+			var errCase0 roomserverAPI.ErrRoomUnknownOrNotAllowed
+			switch {
+			case errors.As(err, &errCase0):
+				util.GetLogger(req.Context()).WithError(err).Debugln("room unknown/forbidden when handling CS room hierarchy request")
+				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("room is unknown/forbidden")}
+			default:
+				log.WithError(err).Errorf("failed to fetch next page of room hierarchy (CS API)")
+				return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 			}
 		}
 	}
@@ -162,10 +193,9 @@ func QueryRoomHierarchy(req *http.Request, device *userapi.Device, roomIDStr str
 			NextBatch: nextBatch,
 		},
 	}
-
 }
 
-// Success response for /_matrix/client/v1/rooms/{roomID}/hierarchy
+// Success response for /_matrix/client/v1/rooms/{roomID}/hierarchy.
 type RoomHierarchyClientResponse struct {
 	Rooms     []fclient.RoomHierarchyRoom `json:"rooms"`
 	NextBatch string                      `json:"next_batch,omitempty"`

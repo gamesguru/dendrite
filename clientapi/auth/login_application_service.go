@@ -9,26 +9,27 @@ package auth
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/setup/config"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // LoginTypeApplicationService describes how to authenticate as an
-// application service
+// application service.
 type LoginTypeApplicationService struct {
 	Config *config.ClientAPI
 	Token  string
 }
 
-// Name implements Type
+// Name implements Type.
 func (t *LoginTypeApplicationService) Name() string {
 	return authtypes.LoginTypeApplicationService
 }
 
-// LoginFromJSON implements Type
+// LoginFromJSON implements Type.
 func (t *LoginTypeApplicationService) LoginFromJSON(
 	ctx context.Context, reqBytes []byte,
 ) (*Login, LoginCleanupFunc, *util.JSONResponse) {

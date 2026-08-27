@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"reflect"
 	"regexp"
@@ -14,33 +15,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi"
-	uapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/appservice"
-	"github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/appservice/consumers"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver"
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/userapi"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/element-hq/dendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/appservice"
+	"codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/appservice/consumers"
+	"codefloe.com/pat-s/zendrite/clientapi"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -48,7 +48,6 @@ var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerS
 }
 
 func TestAppserviceInternalAPI(t *testing.T) {
-
 	// Set expected results
 	existingProtocol := "irc"
 	wantLocationResponse := []api.ASLocationResponse{{Protocol: existingProtocol, Fields: []byte("{}")}}
@@ -150,7 +149,7 @@ func TestAppserviceInternalAPI(t *testing.T) {
 		as.CreateHTTPClient(cfg.AppServiceAPI.DisableTLSValidation)
 		cfg.AppServiceAPI.Derived.ApplicationServices = []config.ApplicationService{*as}
 		t.Cleanup(func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForShutdown()
 		})
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
@@ -167,7 +166,6 @@ func TestAppserviceInternalAPI(t *testing.T) {
 }
 
 func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
-
 	// Set expected results
 	existingProtocol := "irc"
 	wantLocationResponse := []api.ASLocationResponse{{Protocol: existingProtocol, Fields: []byte("{}")}}
@@ -216,8 +214,10 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 		}
 	}))
 
-	tmpDir := t.TempDir()
-	socket := path.Join(tmpDir, "socket")
+	tmpDir, err := os.MkdirTemp("/tmp", "as-sock-") //nolint:usetesting // t.TempDir() path exceeds macOS Unix socket limit
+	assert.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	socket := path.Join(tmpDir, "s")
 	l, err := net.Listen("unix", socket)
 	assert.NoError(t, err)
 	_ = srv.Listener.Close()
@@ -245,7 +245,7 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 	cfg.AppServiceAPI.Derived.ApplicationServices = []config.ApplicationService{*as}
 
 	t.Cleanup(func() {
-		ctx.ShutdownDendrite()
+		ctx.ShutdownZendrite()
 		ctx.WaitForShutdown()
 	})
 	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
@@ -261,7 +261,6 @@ func TestAppserviceInternalAPI_UnixSocket_Simple(t *testing.T) {
 		testUserIDExists(t, asAPI, "@as-testing:test", true)
 		testUserIDExists(t, asAPI, "@as1-testing:test", false)
 	})
-
 }
 
 func testUserIDExists(t *testing.T, asAPI api.AppServiceInternalAPI, userID string, wantExists bool) {
@@ -334,15 +333,14 @@ func testProtocol(t *testing.T, asAPI api.AppServiceInternalAPI, proto string, w
 	}
 }
 
-// Tests that the roomserver consumer only receives one invite
+// Tests that the roomserver consumer only receives one invite.
 func TestRoomserverConsumerOneInvite(t *testing.T) {
-
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 
 	// Invite Bob
-	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
 
@@ -419,7 +417,7 @@ func TestRoomserverConsumerOneInvite(t *testing.T) {
 }
 
 // Note: If this test panics, it is because we timed out waiting for the
-// join event to come through to the appservice and we close the DB/shutdown Dendrite. This makes the
+// join event to come through to the appservice and we close the DB/shutdown Zendrite. This makes the
 // syncAPI unhappy, as it is unable to write to the database.
 func TestOutputAppserviceEvent(t *testing.T) {
 	alice := test.NewUser(t)
@@ -446,13 +444,13 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		usrAPI := userapi.NewInternalAPI(processCtx, cfg, cm, natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		clientapi.AddPublicRoutes(processCtx, routers, cfg, natsInstance, nil, rsAPI, nil, nil, nil, usrAPI, nil, nil, caching.DisableMetrics)
+		clientapi.AddPublicRoutes(processCtx, routers, cfg, natsInstance, nil, rsAPI, nil, nil, nil, usrAPI, nil, nil, nil, caching.DisableMetrics)
 		createAccessTokens(t, accessTokens, usrAPI, processCtx.Context(), routers)
 
 		room := test.NewRoom(t, alice)
 
 		// Invite Bob
-		room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+		room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 			"membership": "invite",
 		}, test.WithStateKey(bob.ID))
 
@@ -473,11 +471,11 @@ func TestOutputAppserviceEvent(t *testing.T) {
 					switch membership {
 					case spec.Invite:
 						// Accept the invite
-						joinEv := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+						joinEv := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 							"membership": "join",
 						}, test.WithStateKey(bob.ID))
 
-						if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, []*types.HeaderedEvent{joinEv}, "test", "test", "test", nil, false); err != nil {
+						if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, []*types.HeaderedEvent{joinEv}, "test", "test", "test", nil, false); err != nil { //nolint:contextcheck
 							t.Fatalf("failed to send events: %v", err)
 						}
 					case spec.Join: // the AS has received the join event, now hit `/joined_members` to validate that
@@ -555,8 +553,8 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		select {
-		// Pretty generous timeout duration...
-		case <-time.After(time.Millisecond * 1000): // wait for the AS to process the events
+		// Generous timeout for slow CI environments with race detector
+		case <-time.After(time.Millisecond * 5000): // wait for the AS to process the events
 			t.Errorf("Timed out waiting for join event")
 		case <-evChan:
 		}
@@ -584,9 +582,9 @@ func createAccessTokens(t *testing.T, accessTokens map[*test.User]userDevice, us
 		}, userRes); err != nil {
 			t.Errorf("failed to create account: %s", err)
 		}
-		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]interface{}{
+		req := test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/login", test.WithJSONBody(t, map[string]any{
 			"type": authtypes.LoginTypePassword,
-			"identifier": map[string]interface{}{
+			"identifier": map[string]any{
 				"type": "m.id.user",
 				"user": u.ID,
 			},

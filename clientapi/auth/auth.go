@@ -15,13 +15,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // OWASP recommends at least 128 bits of entropy for tokens: https://www.owasp.org/index.php/Insufficient_Session-ID_Length
-// 32 bytes => 256 bits
+// 32 bytes => 256 bits.
 var tokenByteLength = 32
 
 // DeviceDatabase represents a device database.
@@ -74,6 +75,22 @@ func VerifyUserFromRequest(
 		}
 	}
 	if res.Device == nil {
+		if res.SoftLogout {
+			// The token expired but the session is intact; the client should
+			// refresh its token (OAuth 2.0 API) instead of logging out.
+			return nil, &util.JSONResponse{
+				Code: http.StatusUnauthorized,
+				JSON: struct {
+					ErrCode    string `json:"errcode"`
+					Err        string `json:"error"`
+					SoftLogout bool   `json:"soft_logout"`
+				}{
+					ErrCode:    "M_UNKNOWN_TOKEN",
+					Err:        "Access token expired",
+					SoftLogout: true,
+				},
+			}
+		}
 		return nil, &util.JSONResponse{
 			Code: http.StatusUnauthorized,
 			JSON: spec.UnknownToken("Unknown token"),

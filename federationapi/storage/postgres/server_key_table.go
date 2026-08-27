@@ -11,11 +11,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const serverSigningKeysSchema = `
@@ -80,7 +80,7 @@ func (s *serverSigningKeyStatements) BulkSelectServerKeys(
 		nameAndKeyIDs = append(nameAndKeyIDs, nameAndKeyID(request))
 	}
 	stmt := s.bulkSelectServerKeysStmt
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(nameAndKeyIDs))
+	rows, err := stmt.QueryContext(ctx, nameAndKeyIDs)
 	if err != nil {
 		return nil, err
 	}

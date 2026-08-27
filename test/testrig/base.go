@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
-func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.ProcessContext, func()) {
-	var cfg config.Dendrite
+func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.ProcessContext, func()) {
+	var cfg config.Zendrite
 	cfg.Defaults(config.DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -48,13 +48,14 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		connStr, closeDb := test.PrepareDBConnectionString(t, dbType)
 		cfg.Global.DatabaseOptions = config.DatabaseOptions{
 			ConnectionString:       config.DataSource(connStr),
-			MaxOpenConnections:     10,
-			MaxIdleConnections:     2,
-			ConnMaxLifetimeSeconds: 60,
+			MaxOpenConnections:     10, //nolint:mnd
+			MaxIdleConnections:     2,  //nolint:mnd
+			ConnMaxLifetimeSeconds: 60, //nolint:mnd
 		}
+		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
-			ctx.WaitForShutdown()
+			ctx.ShutdownZendrite()
+			ctx.WaitForComponentsToFinish()
 			closeDb()
 		}
 	case test.DBTypeSQLite:
@@ -80,13 +81,24 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		cfg.UserAPI.AccountDatabase.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "userapi.db"))
 		cfg.RelayAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "relayapi.db"))
 
+		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
-			ctx.WaitForShutdown()
-			t.Cleanup(func() {}) // removes t.TempDir, where all database files are created
+			ctx.ShutdownZendrite()
+			ctx.WaitForComponentsToFinish()
 		}
 	default:
 		t.Fatalf("unknown db type: %v", dbType)
 	}
-	return &config.Dendrite{}, nil, func() {}
+	return &config.Zendrite{}, nil, func() {}
+}
+
+// applyTestOverrides applies overrides that diverge from the production
+// defaults to keep tests deterministic. Called after the dbType-specific
+// cfg.Defaults() calls in CreateConfig.
+func applyTestOverrides(cfg *config.Zendrite) {
+	// Disable automatic empty-room purging. Many tests have a local user
+	// leave a room and then continue to act in or observe it, which is
+	// incompatible with auto-purging. Tests that exercise the feature
+	// explicitly opt in by setting cfg.RoomServer.AutoPurgeMode.
+	cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
 }

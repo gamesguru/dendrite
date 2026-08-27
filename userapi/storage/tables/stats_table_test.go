@@ -8,17 +8,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/postgres"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 func mustMakeDBs(t *testing.T, dbType test.DBType) (
@@ -79,7 +79,7 @@ func mustMakeAccountAndDevice(
 	accDB tables.AccountsTable,
 	devDB tables.DevicesTable,
 	localpart string,
-	serverName spec.ServerName, // nolint:unparam
+	serverName spec.ServerName, //nolint:unparam
 	accType api.AccountType,
 	userAgent string,
 ) {
@@ -127,12 +127,11 @@ func mustUserUpdateRegistered(
 	}
 }
 
-// These tests must run sequentially, as they build up on each other
+// These tests must run sequentially, as they build up on each other.
 func Test_UserStatistics(t *testing.T) {
-
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, accDB, devDB, statsDB, close := mustMakeDBs(t, dbType)
+		db, accDB, devDB, statsDB, close := mustMakeDBs(t, dbType) //nolint:contextcheck
 		defer close()
 		wantType := "SQLite"
 		if dbType == test.DBTypePostgres {
@@ -317,5 +316,4 @@ func Test_UserStatistics(t *testing.T) {
 			}
 		})
 	})
-
 }

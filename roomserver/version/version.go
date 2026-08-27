@@ -9,7 +9,7 @@ package version
 import (
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 )
 
 // RoomVersions returns a map of all known room versions to this

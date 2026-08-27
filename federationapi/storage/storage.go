@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package storage
 
@@ -13,15 +12,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres"
-	"github.com/element-hq/dendrite/federationapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, cache caching.FederationCache, isLocalServerName func(spec.ServerName) bool) (Database, error) {
 	switch {
 	case dbProperties.ConnectionString.IsSQLite():

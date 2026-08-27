@@ -11,10 +11,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const inviteSchema = `
@@ -30,6 +30,7 @@ const inviteSchema = `
 	CREATE INDEX IF NOT EXISTS roomserver_invites_active_idx ON roomserver_invites (target_nid, room_nid)
 		WHERE NOT retired;
 `
+
 const insertInviteEventSQL = "" +
 	"INSERT INTO roomserver_invites (invite_event_id, room_nid, target_nid," +
 	" sender_nid, invite_event_json) VALUES ($1, $2, $3, $4, $5)" +
@@ -127,7 +128,7 @@ func (s *inviteStatements) UpdateInviteRetired(
 	return
 }
 
-// selectInviteActiveForUserInRoom returns a list of sender state key NIDs
+// selectInviteActiveForUserInRoom returns a list of sender state key NIDs.
 func (s *inviteStatements) SelectInviteActiveForUserInRoom(
 	ctx context.Context, txn *sql.Tx,
 	targetUserNID types.EventStateKeyNID, roomNID types.RoomNID,

@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Package input contains the code processes new room events
+// Package input contains the code processes new room events.
 package input
 
 import (
@@ -15,27 +15,25 @@ import (
 	"sync"
 	"time"
 
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/Arceliar/phony"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	fedapi "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/acls"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/query"
-	"github.com/element-hq/dendrite/roomserver/producers"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
+	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/acls"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/producers"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Inputer is responsible for consuming from the roomserver input
@@ -85,7 +83,21 @@ type Inputer struct {
 	Queryer       *query.Queryer
 	UserAPI       userapi.RoomserverUserAPI
 	EnableMetrics bool
+
+	// missingStateCooldown tracks rooms where state resolution recently failed.
+	// When state resolution via federation fails for a room, we record the failure
+	// time and skip further expensive federation lookups until the cooldown expires.
+	// This prevents a broken room from burning CPU and memory on every incoming
+	// transaction by repeatedly loading and discarding thousands of state events.
+	missingStateCooldown sync.Map // room ID (string) -> time.Time
 }
+
+// missingStateCooldownDuration is how long we skip expensive federation state
+// lookups after a failed attempt for a room. This prevents broken rooms (where
+// state resolution always fails) from burning CPU and memory on every incoming
+// transaction. After this duration, the next event will retry the full state
+// resolution.
+const missingStateCooldownDuration = 5 * time.Minute
 
 // If a room consumer is inactive for a while then we will allow NATS
 // to clean it up. This stops us from holding onto durable consumers
@@ -95,15 +107,53 @@ type Inputer struct {
 const inactiveThreshold = time.Hour * 24
 
 type worker struct {
-	phony.Inbox
 	sync.Mutex
 	r            *Inputer
 	roomID       string
 	subscription *nats.Subscription
 	sentryHub    *sentry.Hub
+	ch           chan struct{}
+	ctx          context.Context
+	cancel       context.CancelCauseFunc
 	ephemeralSeq uint64
 	// last seq we fully processed
 	durableSeq uint64
+}
+
+// notify queues a call to _next in the worker's goroutine.
+func (w *worker) notify() {
+	select {
+	case w.ch <- struct{}{}:
+	default:
+	}
+}
+
+// start launches the worker goroutine that processes events serially.
+// The caller should take a lock before calling start.
+func (w *worker) start() {
+	// Worker is already running
+	if w.ctx != nil {
+		return
+	}
+
+	w.ctx, w.cancel = context.WithCancelCause(context.Background())
+
+	go func() {
+		logrus.Debugf("worker for room %q started", w.roomID)
+		for {
+			select {
+			case <-w.ctx.Done():
+				// Cleanup after the context is canceled, so we still can log the reason for cancellation.
+				logrus.WithError(w.ctx.Err()).Debugf("worker for room %q stopped", w.roomID)
+				w.Lock()
+				w.ctx = nil
+				w.Unlock()
+				return
+			case <-w.ch:
+				w._next()
+			}
+		}
+	}()
 }
 
 func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
@@ -111,13 +161,17 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 		r:         r,
 		roomID:    roomID,
 		sentryHub: sentry.CurrentHub().Clone(),
+		ch:        make(chan struct{}, 1),
 	})
-	w := v.(*worker)
+	w, ok := v.(*worker)
+	if !ok {
+		return
+	}
 	w.Lock()
 	defer w.Unlock()
 
 	w.ephemeralSeq = seq
-
+	logrus.Debugf("loaded worker for room %q at seq %d (loaded=%t, subscription=%v)", roomID, seq, loaded, w.subscription)
 	if !loaded || w.subscription == nil {
 		streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
 		consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
@@ -153,7 +207,7 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 			AckPolicy:         nats.AckExplicitPolicy,
 			DeliverPolicy:     nats.DeliverAllPolicy,
 			FilterSubject:     subject,
-			AckWait:           MaximumMissingProcessingTime + (time.Second * 10),
+			AckWait:           MaximumMissingProcessingTime + (time.Second * 10), //nolint:mnd
 			InactiveThreshold: inactiveThreshold,
 		}
 
@@ -203,7 +257,7 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 			subject, consumer,
 			nats.ManualAck(),
 			nats.DeliverAll(),
-			nats.AckWait(MaximumMissingProcessingTime+(time.Second*10)),
+			nats.AckWait(MaximumMissingProcessingTime+(time.Second*10)), //nolint:mnd
 			nats.Bind(r.InputRoomEventTopic, consumer),
 			nats.InactiveThreshold(inactiveThreshold),
 		)
@@ -214,7 +268,8 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 
 		// Go and start pulling messages off the queue.
 		w.subscription = sub
-		w.Act(nil, w._next)
+		w.start()
+		w.notify()
 	}
 }
 
@@ -261,7 +316,7 @@ func (r *Inputer) Start() error {
 }
 
 // _next is called by the worker for the room. It must only be called
-// by the actor embedded into the worker.
+// by the worker's goroutine.
 func (w *worker) _next() {
 	// Look up what the next event is that's waiting to be processed.
 	ctx, cancel := context.WithTimeout(w.r.ProcessContext.Context(), time.Minute)
@@ -270,16 +325,16 @@ func (w *worker) _next() {
 		scope.SetTag("room_id", w.roomID)
 	})
 	msgs, err := w.subscription.Fetch(1, nats.Context(ctx))
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {
 			return
 		}
 		// Make sure that once we're done here, we queue up another call
-		// to _next in the inbox.
-		defer w.Act(nil, w._next)
-	case nats.ErrTimeout, context.DeadlineExceeded, context.Canceled:
+		// to _next in the worker goroutine.
+		defer w.notify()
+	case errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {
 			return
@@ -293,17 +348,18 @@ func (w *worker) _next() {
 		// If so, we do have new messages after all, they just came at a bad time.
 		if w.ephemeralSeq > w.durableSeq {
 			w.Unlock()
-			w.Act(nil, w._next)
+			w.notify()
 			return
 		}
 
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(errors.New("inactivity timeout"))
 		w.subscription = nil
 		w.Unlock()
 		return
-	case nats.ErrConsumerDeleted, nats.ErrConsumerNotFound:
+	case errors.Is(err, nats.ErrConsumerDeleted) || errors.Is(err, nats.ErrConsumerNotFound):
 		w.Lock()
 		defer w.Unlock()
 		// The consumer is gone, therefore it's reached the inactivity
@@ -313,6 +369,7 @@ func (w *worker) _next() {
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(errors.New("consumer deleted by NATS due to inactivity"))
 		w.subscription = nil
 		return
 	default:
@@ -327,6 +384,7 @@ func (w *worker) _next() {
 		if err = w.subscription.Unsubscribe(); err != nil {
 			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
+		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.subscription = nil
 		w.Unlock()
 		return
@@ -351,7 +409,7 @@ func (w *worker) _next() {
 	var inputRoomEvent api.InputRoomEvent
 	if err = json.Unmarshal(msg.Data, &inputRoomEvent); err != nil {
 		// using AckWait here makes the call synchronous; 5 seconds is the default value used by NATS
-		_ = msg.Term(nats.AckWait(time.Second * 5))
+		_ = msg.Term(nats.AckWait(time.Second * 5)) //nolint:mnd
 		return
 	}
 
@@ -370,8 +428,8 @@ func (w *worker) _next() {
 		spec.ServerName(msg.Header.Get("virtual_host")),
 		&inputRoomEvent,
 	); err != nil {
-		switch err.(type) {
-		case types.RejectedError:
+		var rejErr types.RejectedError
+		if errors.As(err, &rejErr) {
 			// Don't send events that were rejected to Sentry
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  w.roomID,
@@ -379,7 +437,7 @@ func (w *worker) _next() {
 				"type":     inputRoomEvent.Event.Type(),
 			}).Warn("Roomserver rejected event")
 			wasRejected = true
-		default:
+		} else {
 			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 				w.sentryHub.CaptureException(err)
 			}
@@ -389,7 +447,7 @@ func (w *worker) _next() {
 				"type":     inputRoomEvent.Event.Type(),
 			}).Warn("Roomserver failed to process event")
 		}
-		// Even though we failed to process this message (e.g. due to Dendrite restarting and receiving a context canceled),
+		// Even though we failed to process this message (e.g. due to Zendrite restarting and receiving a context canceled),
 		// the message may already have been queued for redelivery or will be, so this makes sure that we still reprocess the msg
 		// after restarting. We only Ack if the context was not yet canceled.
 		if w.r.ProcessContext.Context().Err() == nil {
@@ -479,7 +537,7 @@ func (r *Inputer) queueInputRoomEvents(
 	return
 }
 
-// InputRoomEvents implements api.RoomserverInternalAPI
+// InputRoomEvents implements api.RoomserverInternalAPI.
 func (r *Inputer) InputRoomEvents(
 	ctx context.Context,
 	request *api.InputRoomEventsRequest,
@@ -502,7 +560,7 @@ func (r *Inputer) InputRoomEvents(
 	// from the roomserver. There will be one response for every
 	// input we submitted. The last error value we receive will
 	// be the one returned as the error string.
-	defer replySub.Drain() // nolint:errcheck
+	defer replySub.Drain() //nolint:errcheck
 	for i := 0; i < len(request.InputRoomEvents); i++ {
 		msg, err := replySub.NextMsgWithContext(ctx)
 		if err != nil {
@@ -517,7 +575,7 @@ func (r *Inputer) InputRoomEvents(
 
 var roomserverInputBackpressure = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "input_backpressure",
 		Help:      "How many events are queued for input for a given room",
