@@ -14,10 +14,13 @@ import (
 	"time"
 
 	"github.com/element-hq/dendrite/internal/eventutil"
+	"github.com/element-hq/dendrite/internal/sqlutil"
 	"github.com/element-hq/dendrite/roomserver/api"
 	"github.com/element-hq/dendrite/roomserver/internal/input"
 	"github.com/element-hq/dendrite/roomserver/internal/query"
 	"github.com/element-hq/dendrite/roomserver/storage"
+	"github.com/element-hq/dendrite/roomserver/storage/shared"
+	"github.com/element-hq/dendrite/roomserver/storage/tables"
 	"github.com/element-hq/dendrite/roomserver/types"
 	"github.com/element-hq/dendrite/setup/config"
 	"github.com/matrix-org/gomatrixserverlib"
@@ -222,12 +225,6 @@ func (r *Admin) PerformAdminDownloadState(
 	ctx context.Context,
 	roomID, userID string, serverName spec.ServerName,
 ) error {
-	fullUserID, err := spec.NewUserID(userID, true)
-	if err != nil {
-		return err
-	}
-	senderDomain := fullUserID.Domain()
-
 	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
 	if err != nil {
 		return err
@@ -260,55 +257,8 @@ func (r *Admin) PerformAdminDownloadState(
 		return err
 	}
 
-	validRoomID, err := spec.NewRoomID(roomID)
-	if err != nil {
-		return err
-	}
-	senderID, err := r.Queryer.QuerySenderIDForUser(ctx, *validRoomID, *fullUserID)
-	if err != nil {
-		return err
-	} else if senderID == nil {
-		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
-	}
-	proto := &gomatrixserverlib.ProtoEvent{
-		Type:     "org.matrix.dendrite.state_download",
-		SenderID: string(*senderID),
-		RoomID:   roomID,
-		Content:  spec.RawJSON("{}"),
-	}
-
-	eventsNeeded, err := gomatrixserverlib.StateNeededForProtoEvent(proto)
-	if err != nil {
-		return fmt.Errorf("gomatrixserverlib.StateNeededForProtoEvent: %w", err)
-	}
-
-	// Build/auth this event against den's own current, locally-resolved
-	// state (fetched above as localState) - NOT the state we just fetched
-	// from serverName in fetchStateToInstall. That remote state can predate
-	// the requester's own membership, which would make this event fail its
-	// own auth check before it can apply anything.
-	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
-	if err != nil {
-		return err
-	}
-
-	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, &localState)
-	if err != nil {
-		return fmt.Errorf("eventutil.BuildEvent: %w", err)
-	}
-
-	// Submit the outliers (auth chain + state events) as their own request
-	// first, and check the result before touching the state snapshot. If
-	// we folded these into the same InputRoomEvents call as the final
-	// KindNew event below, a failure fetching/storing any individual
-	// outlier would be masked: InputRoomEvents only reports back the last
-	// error it saw across the whole batch, so a late success (e.g. the
-	// final state_download event, which doesn't depend on every outlier
-	// having stored cleanly) could silently swallow an earlier outlier
-	// failure. That would let this "heal" operation report success while
-	// quietly building the new state snapshot on top of missing data -
-	// exactly the kind of silent partial failure that got a real room
-	// stuck in the first place. Fail loudly instead.
+	// Store the fetched auth/state events first so the repair snapshot can be
+	// built from local data only. We do not create a synthetic event here.
 	outlierReq := &api.InputRoomEventsRequest{Asynchronous: false}
 	outlierRes := &api.InputRoomEventsResponse{}
 	for _, authEvent := range append(authEvents, stateEvents...) {
@@ -319,25 +269,248 @@ func (r *Admin) PerformAdminDownloadState(
 	}
 	r.Inputer.InputRoomEvents(ctx, outlierReq, outlierRes)
 	if outlierRes.ErrMsg != "" {
-		return fmt.Errorf("failed to store %d auth/state events needed to rebuild room state, aborting before touching the current snapshot: %w", len(outlierReq.InputRoomEvents), outlierRes.Err())
+		return fmt.Errorf("failed to store %d auth/state events needed to rebuild room state: %w", len(outlierReq.InputRoomEvents), outlierRes.Err())
 	}
 
-	stateReq := &api.InputRoomEventsRequest{Asynchronous: false}
-	stateRes := &api.InputRoomEventsResponse{}
-	stateReq.InputRoomEvents = append(stateReq.InputRoomEvents, api.InputRoomEvent{
-		Kind:          api.KindNew,
-		Event:         ev,
-		Origin:        r.Cfg.Matrix.ServerName,
-		HasState:      true,
-		StateEventIDs: stateIDs,
-		SendAsServer:  string(r.Cfg.Matrix.ServerName),
-	})
-	r.Inputer.InputRoomEvents(ctx, stateReq, stateRes)
-	if stateRes.ErrMsg != "" {
-		return stateRes.Err()
+	if err := r.installRepairedState(ctx, roomID, roomInfo, localState.StateEvents, stateIDs); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func (r *Admin) installRepairedState(
+	ctx context.Context,
+	roomID string,
+	roomInfo *types.RoomInfo,
+	oldStateEvents []*types.HeaderedEvent,
+	newStateEventIDs []string,
+) (err error) {
+	oldStateEntryIDs := make([]string, 0, len(oldStateEvents))
+	for _, ev := range oldStateEvents {
+		oldStateEntryIDs = append(oldStateEntryIDs, ev.EventID())
+	}
+
+	oldStateEntries, err := r.DB.StateEntriesForEventIDs(ctx, oldStateEntryIDs, true)
+	if err != nil {
+		return fmt.Errorf("r.DB.StateEntriesForEventIDs(old): %w", err)
+	}
+	newStateEntries, err := r.DB.StateEntriesForEventIDs(ctx, newStateEventIDs, true)
+	if err != nil {
+		return fmt.Errorf("r.DB.StateEntriesForEventIDs(new): %w", err)
+	}
+
+	oldStateEntries = types.DeduplicateStateEntries(append([]types.StateEntry(nil), oldStateEntries...))
+	newStateEntries = types.DeduplicateStateEntries(append([]types.StateEntry(nil), newStateEntries...))
+
+	removed, added := diffStateEntries(oldStateEntries, newStateEntries)
+
+	updater, err := r.DB.GetRoomUpdater(ctx, roomInfo)
+	if err != nil {
+		return fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
+	}
+	var succeeded bool
+	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
+
+	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, nil, newStateEntries)
+	if err != nil {
+		return fmt.Errorf("updater.AddState: %w", err)
+	}
+
+	latestEvents := updater.LatestEvents()
+	for _, latest := range latestEvents {
+		if err = updater.SetState(ctx, latest.EventNID, stateSnapshotNID); err != nil {
+			return fmt.Errorf("updater.SetState(%d): %w", latest.EventNID, err)
+		}
+	}
+
+	if err = updater.SetCurrentStateSnapshotNID(stateSnapshotNID); err != nil {
+		return fmt.Errorf("updater.SetCurrentStateSnapshotNID: %w", err)
+	}
+
+	if err = r.repairMemberships(ctx, roomID, roomInfo, updater, removed, added); err != nil {
+		return err
+	}
+
+	succeeded = true
+	return nil
+}
+
+func (r *Admin) repairMemberships(
+	ctx context.Context,
+	roomID string,
+	roomInfo *types.RoomInfo,
+	updater *shared.RoomUpdater,
+	removed, added []types.StateEntry,
+) error {
+	changes := pairUpStateEntries(removed, added)
+	if len(changes) == 0 {
+		return nil
+	}
+
+	var eventNIDs []types.EventNID
+	stateKeyNIDs := make(map[types.EventStateKeyNID]struct{})
+	for _, change := range changes {
+		if change.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+		if change.removedEventNID != 0 {
+			eventNIDs = append(eventNIDs, change.removedEventNID)
+		}
+		if change.addedEventNID != 0 {
+			eventNIDs = append(eventNIDs, change.addedEventNID)
+		}
+		stateKeyNIDs[change.EventStateKeyNID] = struct{}{}
+	}
+
+	membershipEvents, err := r.DB.Events(ctx, roomInfo.RoomVersion, eventNIDs)
+	if err != nil {
+		return fmt.Errorf("r.DB.Events: %w", err)
+	}
+
+	membershipEventMap := make(map[types.EventNID]types.Event, len(membershipEvents))
+	for _, event := range membershipEvents {
+		membershipEventMap[event.EventNID] = event
+	}
+
+	stateKeyList := make([]types.EventStateKeyNID, 0, len(stateKeyNIDs))
+	for nid := range stateKeyNIDs {
+		stateKeyList = append(stateKeyList, nid)
+	}
+	stateKeyMap, err := r.DB.EventStateKeys(ctx, stateKeyList)
+	if err != nil {
+		return fmt.Errorf("r.DB.EventStateKeys: %w", err)
+	}
+
+	validRoomID, err := spec.NewRoomID(roomID)
+	if err != nil {
+		return err
+	}
+
+	for _, change := range changes {
+		if change.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+
+		stateKey, ok := stateKeyMap[change.EventStateKeyNID]
+		if !ok {
+			continue
+		}
+
+		targetLocal := false
+		if userID, queryErr := r.Queryer.QueryUserIDForSender(ctx, *validRoomID, spec.SenderID(stateKey)); queryErr == nil && userID != nil {
+			targetLocal = userID.Domain() == r.Cfg.Matrix.ServerName
+		}
+
+		targetUpdater, err := updater.MembershipUpdater(change.EventStateKeyNID, targetLocal)
+		if err != nil {
+			return fmt.Errorf("updater.MembershipUpdater: %w", err)
+		}
+
+		switch {
+		case change.addedEventNID != 0:
+			event, ok := membershipEventMap[change.addedEventNID]
+			if !ok {
+				return fmt.Errorf("missing membership event for event NID %d", change.addedEventNID)
+			}
+			newMembership, membershipErr := membershipStateForEvent(event)
+			if membershipErr != nil {
+				return membershipErr
+			}
+			if _, _, err = targetUpdater.Update(newMembership, &event); err != nil {
+				return fmt.Errorf("targetUpdater.Update: %w", err)
+			}
+		case change.removedEventNID != 0:
+			if err = targetUpdater.Delete(); err != nil {
+				return fmt.Errorf("targetUpdater.Delete: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func pairUpStateEntries(removed, added []types.StateEntry) []stateChange {
+	tuples := make(map[types.StateKeyTuple]stateChange)
+	changes := []stateChange{}
+
+	for _, add := range added {
+		if change, ok := tuples[add.StateKeyTuple]; ok {
+			change.addedEventNID = add.EventNID
+			tuples[add.StateKeyTuple] = change
+		} else {
+			tuples[add.StateKeyTuple] = stateChange{StateKeyTuple: add.StateKeyTuple, addedEventNID: add.EventNID}
+		}
+	}
+
+	for _, remove := range removed {
+		if change, ok := tuples[remove.StateKeyTuple]; ok {
+			change.removedEventNID = remove.EventNID
+			tuples[remove.StateKeyTuple] = change
+		} else {
+			tuples[remove.StateKeyTuple] = stateChange{StateKeyTuple: remove.StateKeyTuple, removedEventNID: remove.EventNID}
+		}
+	}
+
+	for _, change := range tuples {
+		changes = append(changes, change)
+	}
+
+	return changes
+}
+
+func diffStateEntries(oldEntries, newEntries []types.StateEntry) (removed, added []types.StateEntry) {
+	oldMap := make(map[types.StateKeyTuple]types.StateEntry, len(oldEntries))
+	for _, entry := range oldEntries {
+		oldMap[entry.StateKeyTuple] = entry
+	}
+	newMap := make(map[types.StateKeyTuple]types.StateEntry, len(newEntries))
+	for _, entry := range newEntries {
+		newMap[entry.StateKeyTuple] = entry
+	}
+
+	for key, oldEntry := range oldMap {
+		newEntry, ok := newMap[key]
+		if !ok {
+			removed = append(removed, oldEntry)
+			continue
+		}
+		if oldEntry.EventNID != newEntry.EventNID {
+			removed = append(removed, oldEntry)
+			added = append(added, newEntry)
+		}
+	}
+	for key, newEntry := range newMap {
+		if _, ok := oldMap[key]; !ok {
+			added = append(added, newEntry)
+		}
+	}
+	return
+}
+
+type stateChange struct {
+	types.StateKeyTuple
+	removedEventNID types.EventNID
+	addedEventNID   types.EventNID
+}
+
+func membershipStateForEvent(event types.Event) (tables.MembershipState, error) {
+	membership, err := event.Membership()
+	if err != nil {
+		return 0, err
+	}
+	switch membership {
+	case spec.Join:
+		return tables.MembershipStateJoin, nil
+	case spec.Invite:
+		return tables.MembershipStateInvite, nil
+	case spec.Leave, spec.Ban:
+		return tables.MembershipStateLeaveOrBan, nil
+	case spec.Knock:
+		return tables.MembershipStateKnock, nil
+	default:
+		return 0, fmt.Errorf("unsupported membership state %q", membership)
+	}
 }
 
 // fetchStateToInstall fetches the room's state from serverName at each of

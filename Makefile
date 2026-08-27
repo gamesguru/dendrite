@@ -4,13 +4,22 @@ SHELL := /bin/bash
 STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || printf '\033[36m')
 STYLE_RESET := $(shell tput sgr0 2>/dev/null || printf '\033[0m')
 
+GO_TOOLCHAIN := $(HOME)/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.3.linux-amd64/bin/go
+ifeq ($(wildcard $(GO_TOOLCHAIN)),)
 GO ?= go
+else
+GO ?= $(GO_TOOLCHAIN)
+export PATH := $(dir $(GO_TOOLCHAIN)):$(PATH)
+endif
 STATICCHECK ?= staticcheck
 GOLANGCI_LINT ?= golangci-lint
 DOCKER ?= docker
 VETFLAGS ?=
 STATICCHECKFLAGS ?=
-GOLANGCI_LINTFLAGS ?=
+# Allow concurrent local lint runs to share the workspace cache without lock failures.
+GOLANGCI_LINTFLAGS ?= --allow-parallel-runners
+GOCACHE ?= $(CURDIR)/.cache/go-build
+GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
 DENDRITE_TEST_SKIP_NODB ?= 1
 DIFF_BASE ?= origin/main
 PKGS := ./...
@@ -30,6 +39,9 @@ COMPLEMENT_TIMEOUT ?= 1h
 DENDRITE_INSTALL_PATH ?= /usr/local/bin/dendrite
 DENDRITE_SYSTEMD_SERVICE ?= dendrite
 SUDO ?= sudo
+
+export GOCACHE
+export GOLANGCI_LINT_CACHE
 
 .PHONY: help
 help: ## Show available targets
