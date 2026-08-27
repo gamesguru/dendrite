@@ -164,11 +164,11 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 			want: []byte("{}"),
 		},
 		{
-			name: "empty ephemeral is removed",
+			name: "empty ephemeral is kept",
 			fields: fields{
 				Ephemeral: &ClientEvents{},
 			},
-			want: []byte("{}"),
+			want: []byte(`{"ephemeral":{"events":[]}}`),
 		},
 		{
 			name: "empty timeline is removed",
@@ -190,6 +190,14 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 				UnreadNotifications: &UnreadNotifications{},
 			},
 			want: []byte("{}"),
+		},
+		{
+			name: "unread notifications are removed, if only ephemeral is empty",
+			fields: fields{
+				Ephemeral:           &ClientEvents{},
+				UnreadNotifications: &UnreadNotifications{},
+			},
+			want: []byte(`{"ephemeral":{"events":[]}}`),
 		},
 		{
 			name: "unread notifications are NOT removed, if state is set",

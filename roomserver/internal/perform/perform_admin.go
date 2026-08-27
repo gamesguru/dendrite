@@ -10,31 +10,35 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/element-hq/dendrite/internal/eventutil"
+	"github.com/element-hq/dendrite/internal/sqlutil"
+	"github.com/element-hq/dendrite/roomserver/api"
+	"github.com/element-hq/dendrite/roomserver/internal/input"
+	"github.com/element-hq/dendrite/roomserver/internal/query"
+	"github.com/element-hq/dendrite/roomserver/storage"
+	"github.com/element-hq/dendrite/roomserver/storage/shared"
+	"github.com/element-hq/dendrite/roomserver/storage/tables"
+	"github.com/element-hq/dendrite/roomserver/types"
+	"github.com/element-hq/dendrite/setup/config"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
-
-	"codefloe.com/pat-s/zendrite/internal/eventutil"
-	"codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
-	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
-	"codefloe.com/pat-s/zendrite/roomserver/storage"
-	"codefloe.com/pat-s/zendrite/roomserver/types"
-	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Admin struct {
-	DB           storage.Database
-	Cfg          *config.RoomServer
-	Queryer      *query.Queryer
-	Inputer      *input.Inputer
-	Leaver       *Leaver
-	PurgeTracker *PurgeTracker
+	DB      storage.Database
+	Cfg     *config.RoomServer
+	Queryer *query.Queryer
+	Inputer *input.Inputer
+	Leaver  *Leaver
+	// RSAPI is used where a signing identity must be resolved per-room
+	// rather than per-server-domain (see PerformAdminBridgeState) - pseudo-ID
+	// rooms sign events with a per-room identity, not the server's own.
+	RSAPI api.RoomserverInternalAPI
 }
 
 // PerformAdminEvacuateRoom will remove all local users from the given room.
@@ -140,10 +144,6 @@ func (r *Admin) PerformAdminEvacuateRoom(
 	}
 	inputRes := &api.InputRoomEventsResponse{}
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
-	if inputRes.ErrMsg != "" {
-		return nil, inputRes.Err()
-	}
-
 	return affected, nil
 }
 
@@ -166,13 +166,11 @@ func (r *Admin) PerformAdminEvacuateUser(
 	}
 
 	inviteRoomIDs, err := r.DB.GetRoomsByMembership(ctx, *fullUserID, spec.Invite)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 
-	allRooms := make([]string, 0, len(roomIDs)+len(inviteRoomIDs))
-	allRooms = append(allRooms, roomIDs...)
-	allRooms = append(allRooms, inviteRoomIDs...)
+	allRooms := append(roomIDs, inviteRoomIDs...)
 	affected = make([]string, 0, len(allRooms))
 	for _, roomID := range allRooms {
 		leaveReq := &api.PerformLeaveRequest{
@@ -205,25 +203,13 @@ func (r *Admin) PerformAdminPurgeRoom(
 		return err
 	}
 
-	// Evacuate the room before purging it from the database
-	evacAffected, err := r.PerformAdminEvacuateRoom(ctx, roomID)
-	if err != nil {
-		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to evacuate room before purging")
-		// Continue with deleting the room (it's probably broken)
-	} else {
-		logrus.WithFields(logrus.Fields{
-			"room_id":         roomID,
-			"evacuated_users": evacAffected,
-		}).Infof("Evacuated %d users from room before purging", len(evacAffected))
-	}
-
-	logrus.WithField("room_id", roomID).Info("Purging room from roomserver")
+	logrus.WithField("room_id", roomID).Warn("Purging room from roomserver")
 	if err := r.DB.PurgeRoom(ctx, roomID); err != nil {
-		logrus.WithField("room_id", roomID).WithError(err).Error("Failed to purge room from roomserver")
+		logrus.WithField("room_id", roomID).WithError(err).Warn("Failed to purge room from roomserver")
 		return err
 	}
 
-	logrus.WithField("room_id", roomID).Info("Room purged from roomserver, informing other components")
+	logrus.WithField("room_id", roomID).Warn("Room purged from roomserver, informing other components")
 
 	return r.Inputer.OutputProducer.ProduceRoomEvents(roomID, []api.OutputEvent{
 		{
@@ -235,47 +221,10 @@ func (r *Admin) PerformAdminPurgeRoom(
 	})
 }
 
-// AutoPurgeRoom asynchronously purges roomID via PerformAdminPurgeRoom,
-// tracking it in the PurgeTracker so that concurrent rejoin attempts can
-// wait for the purge to complete. Coalesces concurrent calls for the same
-// roomID. The flag check is the caller's responsibility — see
-// ScheduleAutoPurgeIfEmpty and the startup sweep.
-//
-// The ctx parameter exists for the api.RoomserverInternalAPI interface;
-// the spawned goroutine intentionally uses context.Background() so the
-// purge cannot be canceled by a short-lived caller (e.g. a NATS message
-// handler whose context is canceled when the handler returns).
-func (r *Admin) AutoPurgeRoom(ctx context.Context, roomID, reason string) {
-	_, owner := r.PurgeTracker.BeginPurge(roomID)
-	if !owner {
-		return
-	}
-	go func() { //nolint:contextcheck
-		defer r.PurgeTracker.FinishPurge(roomID)
-		// Detach from the caller's context: the caller may be a short-lived
-		// handler (e.g. NATS message dispatch) whose ctx is canceled as soon
-		// as the handler returns. The purge itself is an autonomous, in-flight
-		// operation and must run to completion.
-		ctx := context.Background()
-		fields := logrus.Fields{"room_id": roomID, "reason": reason}
-		if err := r.PerformAdminPurgeRoom(ctx, roomID); err != nil {
-			logrus.WithError(err).WithFields(fields).Warn("Auto-purge of empty room failed")
-			return
-		}
-		logrus.WithFields(fields).Info("Auto-purged empty room")
-	}()
-}
-
 func (r *Admin) PerformAdminDownloadState(
 	ctx context.Context,
 	roomID, userID string, serverName spec.ServerName,
 ) error {
-	fullUserID, err := spec.NewUserID(userID, true)
-	if err != nil {
-		return err
-	}
-	senderDomain := fullUserID.Domain()
-
 	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
 	if err != nil {
 		return err
@@ -285,27 +234,333 @@ func (r *Admin) PerformAdminDownloadState(
 		return eventutil.ErrRoomNoExists{}
 	}
 
-	fwdExtremities, _, depth, err := r.DB.LatestEventIDs(ctx, roomInfo.RoomNID)
+	fwdExtremities, _, _, err := r.DB.LatestEventIDs(ctx, roomInfo.RoomNID)
 	if err != nil {
 		return err
 	}
 
-	// Resolve forward extremities: replace any local-only
-	// org.matrix.zendrite.state_download events (from previous runs) with
-	// their prev events, which the remote server will actually know about.
-	fwdExtremities, err = r.resolveLocalExtremities(ctx, roomInfo, fwdExtremities)
-	if err != nil {
-		return fmt.Errorf("resolveLocalExtremities: %w", err)
+	// Fetch den's own current, locally-resolved state up front. We need it
+	// for two things: (1) as the basis for building/authing the corrective
+	// event itself, and (2) merged into the state we install, so that state
+	// keys den already has right (most notably its own users' memberships)
+	// aren't clobbered/dropped just because serverName's snapshot predates
+	// them - see fetchStateToInstall for why that matters.
+	var localState api.QueryLatestEventsAndStateResponse
+	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+	}, &localState); err != nil {
+		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
 	}
 
+	authEvents, stateEvents, stateIDs, err := r.fetchStateToInstall(ctx, roomID, serverName, roomInfo, fwdExtremities, localState.StateEvents)
+	if err != nil {
+		return err
+	}
+
+	// Store the fetched auth/state events first so the repair snapshot can be
+	// built from local data only. We do not create a synthetic event here.
+	outlierReq := &api.InputRoomEventsRequest{Asynchronous: false}
+	outlierRes := &api.InputRoomEventsResponse{}
+	for _, authEvent := range append(authEvents, stateEvents...) {
+		outlierReq.InputRoomEvents = append(outlierReq.InputRoomEvents, api.InputRoomEvent{
+			Kind:  api.KindOutlier,
+			Event: authEvent,
+		})
+	}
+	r.Inputer.InputRoomEvents(ctx, outlierReq, outlierRes)
+	if outlierRes.ErrMsg != "" {
+		return fmt.Errorf("failed to store %d auth/state events needed to rebuild room state: %w", len(outlierReq.InputRoomEvents), outlierRes.Err())
+	}
+
+	if err := r.installRepairedState(ctx, roomID, roomInfo, localState.StateEvents, stateIDs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Admin) installRepairedState(
+	ctx context.Context,
+	roomID string,
+	roomInfo *types.RoomInfo,
+	oldStateEvents []*types.HeaderedEvent,
+	newStateEventIDs []string,
+) (err error) {
+	oldStateEntryIDs := make([]string, 0, len(oldStateEvents))
+	for _, ev := range oldStateEvents {
+		oldStateEntryIDs = append(oldStateEntryIDs, ev.EventID())
+	}
+
+	oldStateEntries, err := r.DB.StateEntriesForEventIDs(ctx, oldStateEntryIDs, true)
+	if err != nil {
+		return fmt.Errorf("r.DB.StateEntriesForEventIDs(old): %w", err)
+	}
+	newStateEntries, err := r.DB.StateEntriesForEventIDs(ctx, newStateEventIDs, true)
+	if err != nil {
+		return fmt.Errorf("r.DB.StateEntriesForEventIDs(new): %w", err)
+	}
+
+	oldStateEntries = types.DeduplicateStateEntries(append([]types.StateEntry(nil), oldStateEntries...))
+	newStateEntries = types.DeduplicateStateEntries(append([]types.StateEntry(nil), newStateEntries...))
+
+	removed, added := diffStateEntries(oldStateEntries, newStateEntries)
+
+	updater, err := r.DB.GetRoomUpdater(ctx, roomInfo)
+	if err != nil {
+		return fmt.Errorf("r.DB.GetRoomUpdater: %w", err)
+	}
+	var succeeded bool
+	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
+
+	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, nil, newStateEntries)
+	if err != nil {
+		return fmt.Errorf("updater.AddState: %w", err)
+	}
+
+	latestEvents := updater.LatestEvents()
+	for _, latest := range latestEvents {
+		if err = updater.SetState(ctx, latest.EventNID, stateSnapshotNID); err != nil {
+			return fmt.Errorf("updater.SetState(%d): %w", latest.EventNID, err)
+		}
+	}
+
+	if err = updater.SetCurrentStateSnapshotNID(stateSnapshotNID); err != nil {
+		return fmt.Errorf("updater.SetCurrentStateSnapshotNID: %w", err)
+	}
+
+	if err = r.repairMemberships(ctx, roomID, roomInfo, updater, removed, added); err != nil {
+		return err
+	}
+
+	succeeded = true
+	return nil
+}
+
+func (r *Admin) repairMemberships(
+	ctx context.Context,
+	roomID string,
+	roomInfo *types.RoomInfo,
+	updater *shared.RoomUpdater,
+	removed, added []types.StateEntry,
+) error {
+	changes := pairUpStateEntries(removed, added)
+	if len(changes) == 0 {
+		return nil
+	}
+
+	var eventNIDs []types.EventNID
+	stateKeyNIDs := make(map[types.EventStateKeyNID]struct{})
+	for _, change := range changes {
+		if change.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+		if change.removedEventNID != 0 {
+			eventNIDs = append(eventNIDs, change.removedEventNID)
+		}
+		if change.addedEventNID != 0 {
+			eventNIDs = append(eventNIDs, change.addedEventNID)
+		}
+		stateKeyNIDs[change.EventStateKeyNID] = struct{}{}
+	}
+
+	membershipEvents, err := r.DB.Events(ctx, roomInfo.RoomVersion, eventNIDs)
+	if err != nil {
+		return fmt.Errorf("r.DB.Events: %w", err)
+	}
+
+	membershipEventMap := make(map[types.EventNID]types.Event, len(membershipEvents))
+	for _, event := range membershipEvents {
+		membershipEventMap[event.EventNID] = event
+	}
+
+	stateKeyList := make([]types.EventStateKeyNID, 0, len(stateKeyNIDs))
+	for nid := range stateKeyNIDs {
+		stateKeyList = append(stateKeyList, nid)
+	}
+	stateKeyMap, err := r.DB.EventStateKeys(ctx, stateKeyList)
+	if err != nil {
+		return fmt.Errorf("r.DB.EventStateKeys: %w", err)
+	}
+
+	validRoomID, err := spec.NewRoomID(roomID)
+	if err != nil {
+		return err
+	}
+
+	for _, change := range changes {
+		if change.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+
+		stateKey, ok := stateKeyMap[change.EventStateKeyNID]
+		if !ok {
+			continue
+		}
+
+		targetLocal := false
+		if userID, queryErr := r.Queryer.QueryUserIDForSender(ctx, *validRoomID, spec.SenderID(stateKey)); queryErr == nil && userID != nil {
+			targetLocal = userID.Domain() == r.Cfg.Matrix.ServerName
+		}
+
+		targetUpdater, err := updater.MembershipUpdater(change.EventStateKeyNID, targetLocal)
+		if err != nil {
+			return fmt.Errorf("updater.MembershipUpdater: %w", err)
+		}
+
+		switch {
+		case change.addedEventNID != 0:
+			event, ok := membershipEventMap[change.addedEventNID]
+			if !ok {
+				return fmt.Errorf("missing membership event for event NID %d", change.addedEventNID)
+			}
+			newMembership, membershipErr := membershipStateForEvent(event)
+			if membershipErr != nil {
+				return membershipErr
+			}
+			if _, _, err = targetUpdater.Update(newMembership, &event); err != nil {
+				return fmt.Errorf("targetUpdater.Update: %w", err)
+			}
+		case change.removedEventNID != 0:
+			if err = targetUpdater.Delete(); err != nil {
+				return fmt.Errorf("targetUpdater.Delete: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func pairUpStateEntries(removed, added []types.StateEntry) []stateChange {
+	tuples := make(map[types.StateKeyTuple]stateChange)
+	changes := []stateChange{}
+
+	for _, add := range added {
+		if change, ok := tuples[add.StateKeyTuple]; ok {
+			change.addedEventNID = add.EventNID
+			tuples[add.StateKeyTuple] = change
+		} else {
+			tuples[add.StateKeyTuple] = stateChange{StateKeyTuple: add.StateKeyTuple, addedEventNID: add.EventNID}
+		}
+	}
+
+	for _, remove := range removed {
+		if change, ok := tuples[remove.StateKeyTuple]; ok {
+			change.removedEventNID = remove.EventNID
+			tuples[remove.StateKeyTuple] = change
+		} else {
+			tuples[remove.StateKeyTuple] = stateChange{StateKeyTuple: remove.StateKeyTuple, removedEventNID: remove.EventNID}
+		}
+	}
+
+	for _, change := range tuples {
+		changes = append(changes, change)
+	}
+
+	return changes
+}
+
+func diffStateEntries(oldEntries, newEntries []types.StateEntry) (removed, added []types.StateEntry) {
+	oldMap := make(map[types.StateKeyTuple]types.StateEntry, len(oldEntries))
+	for _, entry := range oldEntries {
+		oldMap[entry.StateKeyTuple] = entry
+	}
+	newMap := make(map[types.StateKeyTuple]types.StateEntry, len(newEntries))
+	for _, entry := range newEntries {
+		newMap[entry.StateKeyTuple] = entry
+	}
+
+	for key, oldEntry := range oldMap {
+		newEntry, ok := newMap[key]
+		if !ok {
+			removed = append(removed, oldEntry)
+			continue
+		}
+		if oldEntry.EventNID != newEntry.EventNID {
+			removed = append(removed, oldEntry)
+			added = append(added, newEntry)
+		}
+	}
+	for key, newEntry := range newMap {
+		if _, ok := oldMap[key]; !ok {
+			added = append(added, newEntry)
+		}
+	}
+	return
+}
+
+type stateChange struct {
+	types.StateKeyTuple
+	removedEventNID types.EventNID
+	addedEventNID   types.EventNID
+}
+
+func membershipStateForEvent(event types.Event) (tables.MembershipState, error) {
+	membership, err := event.Membership()
+	if err != nil {
+		return 0, err
+	}
+	switch membership {
+	case spec.Join:
+		return tables.MembershipStateJoin, nil
+	case spec.Invite:
+		return tables.MembershipStateInvite, nil
+	case spec.Leave, spec.Ban:
+		return tables.MembershipStateLeaveOrBan, nil
+	case spec.Knock:
+		return tables.MembershipStateKnock, nil
+	default:
+		return 0, fmt.Errorf("unsupported membership state %q", membership)
+	}
+}
+
+// fetchStateToInstall fetches the room's state from serverName at each of
+// the given forward extremities, verifies signatures, and merges it with
+// den's own local state (localStateEvents), preferring *local* wherever
+// local has an entry for a given (type, state_key) tuple and only falling
+// back to the remote-fetched value for tuples local doesn't have at all.
+//
+// That priority matters because GET /state returns the room's state as of
+// *before* the queried event. If a forward extremity is itself a recent
+// membership change - e.g. the admin operation's own requester having only
+// just joined - the remote server's response reflects the state *before*
+// that join, i.e. it can still show the requester as merely invited, not
+// joined. Preferring remote there would silently regress the requester's
+// own membership and make the corrective event fail its own auth check
+// before it can apply anything - confirmed in production: this exact
+// scenario ("eventauth: sender ... not in room") survived an earlier
+// version of this fix that only filled gaps missing from remote, because
+// remote wasn't missing that tuple - it just had a stale (pre-join) value
+// for it. Local is always at least as fresh as remote for anything den has
+// already legitimately processed, so local should win on conflicts; remote
+// is only needed to fill in tuples (like other users' memberships den never
+// received) that local doesn't have at all.
+func (r *Admin) fetchStateToInstall(
+	ctx context.Context,
+	roomID string,
+	serverName spec.ServerName,
+	roomInfo *types.RoomInfo,
+	fwdExtremities []string,
+	localStateEvents []*types.HeaderedEvent,
+) (authEvents, stateEvents []*types.HeaderedEvent, stateIDs []string, err error) {
+	// Keyed by "type\x00state_key". stateEventMap is seeded from local state
+	// first so local always wins ties; remote-fetched events below only fill
+	// in tuples this map doesn't already have a state_key entry for.
+	stateTupleOf := make(map[string]string) // "type\x00state_key" -> event ID, for events currently in stateEventMap
 	authEventMap := map[string]gomatrixserverlib.PDU{}
 	stateEventMap := map[string]gomatrixserverlib.PDU{}
+
+	for _, ev := range localStateEvents {
+		stateEventMap[ev.EventID()] = ev.PDU
+		if sk := ev.StateKey(); sk != nil {
+			stateTupleOf[ev.Type()+"\x00"+*sk] = ev.EventID()
+		}
+	}
 
 	for _, fwdExtremity := range fwdExtremities {
 		var state gomatrixserverlib.StateResponse
 		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
 		if err != nil {
-			return fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %w", fwdExtremity, err)
+			return nil, nil, nil, fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
 		}
 		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -321,13 +576,25 @@ func (r *Admin) PerformAdminDownloadState(
 			}); err != nil {
 				continue
 			}
+			sk := stateEvent.StateKey()
+			if sk == nil {
+				stateEventMap[stateEvent.EventID()] = stateEvent
+				continue
+			}
+			tuple := stateEvent.Type() + "\x00" + *sk
+			if _, haveLocal := stateTupleOf[tuple]; haveLocal {
+				// Local already covers this slot - it wins, per the
+				// function comment. Don't add the remote version at all.
+				continue
+			}
 			stateEventMap[stateEvent.EventID()] = stateEvent
+			stateTupleOf[tuple] = stateEvent.EventID()
 		}
 	}
 
-	authEvents := make([]*types.HeaderedEvent, 0, len(authEventMap))
-	stateEvents := make([]*types.HeaderedEvent, 0, len(stateEventMap))
-	stateIDs := make([]string, 0, len(stateEventMap))
+	authEvents = make([]*types.HeaderedEvent, 0, len(authEventMap))
+	stateEvents = make([]*types.HeaderedEvent, 0, len(stateEventMap))
+	stateIDs = make([]string, 0, len(stateEventMap))
 
 	for _, authEvent := range authEventMap {
 		authEvents = append(authEvents, &types.HeaderedEvent{PDU: authEvent})
@@ -337,6 +604,98 @@ func (r *Admin) PerformAdminDownloadState(
 		stateIDs = append(stateIDs, stateEvent.EventID())
 	}
 
+	return authEvents, stateEvents, stateIDs, nil
+}
+
+// PerformAdminBridgeState submits an ordinary new event from userID whose
+// prev_events explicitly include den's current forward extremities AND the
+// given extraEventIDs: events den already holds, with ancestry den can
+// verify, but which aren't currently ancestors of den's forward
+// extremities (the shape of the three stuck den.nutra.tk events after
+// backfill connected them to the room's graph without making them part of
+// current state).
+//
+// Unlike PerformAdminDownloadState, this does NOT set HasState. It goes
+// through completely ordinary state resolution - the same code path a real
+// client message uses - which correctly folds both branches together when
+// neither side has a competing value for a given state key (see
+// roomState.LoadCombinedStateAfterEvents / calculateStateAfterManyEvents).
+//
+// This only works for a userID den currently recognises as a room member:
+// helpers.CheckForSoftFail authorises the event against den's CURRENT state
+// snapshot, independent of the event's own prev_events, so an event from a
+// user den doesn't currently recognise will always soft-fail regardless of
+// ancestry - confirmed locally via TestDisconnectedJoinerSendsMessage,
+// where an event from the disconnected user soft-fails but an otherwise
+// identical event from a currently-recognised member is accepted and
+// correctly restores the disconnected user to current state.
+//
+// This is genuinely ordinary, not a fabricated DAG edge: every ID in
+// extraEventIDs must already be present in den's database as a connected
+// part of the room's graph (state_snapshot_nid != 0, i.e. state resolution
+// has already run for it) - enforced below by refusing anything den can't
+// verify. It's exactly what a client naturally produces when its
+// prev_events happen to span a branch that's been sitting disconnected.
+//
+// It IS outward-facing: the resulting event is signed by den and federated
+// to every other server in the room like any other event. Call sites should
+// treat this as an irreversible, visible action, not a local repair.
+func (r *Admin) PerformAdminBridgeState(
+	ctx context.Context,
+	roomID, userID string,
+	extraEventIDs []string,
+) error {
+	fullUserID, err := spec.NewUserID(userID, true)
+	if err != nil {
+		return err
+	}
+
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return eventutil.ErrRoomNoExists{}
+	}
+
+	var localState api.QueryLatestEventsAndStateResponse
+	if err = r.Queryer.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+	}, &localState); err != nil {
+		return fmt.Errorf("r.Queryer.QueryLatestEventsAndState: %w", err)
+	}
+
+	// Refuse anything den can't verify is actually connected to the room's
+	// graph - this is what keeps this from being a way to smuggle in a
+	// fabricated ancestry claim. First confirm den actually has each event
+	// at all (EventsFromIDs silently omits IDs it doesn't have, so a length
+	// mismatch means at least one is unknown).
+	knownExtra, err := r.DB.EventsFromIDs(ctx, roomInfo, extraEventIDs)
+	if err != nil {
+		return fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+	}
+	if len(knownExtra) != len(extraEventIDs) {
+		return fmt.Errorf("one or more of the given event IDs are not known to den - refusing to reference them")
+	}
+	// EventsFromIDs looks up by event ID alone - it isn't room-scoped, and
+	// parses each event using roomID's room version regardless of which room
+	// it actually belongs to. Refuse anything that isn't genuinely in this
+	// room; otherwise a foreign-room event ID could pass every check above
+	// and end up referenced as this room's ancestry.
+	for _, ev := range knownExtra {
+		if ev.RoomID().String() != roomID {
+			return fmt.Errorf("event %s belongs to room %s, not %s - refusing to reference it", ev.EventID(), ev.RoomID().String(), roomID)
+		}
+	}
+	// Then confirm each is a connected part of the room's graph, not a bare
+	// outlier. StateAtEventIDs itself errors loudly (MissingStateError) if
+	// any non-create event it finds has BeforeStateSnapshotNID == 0, i.e.
+	// state resolution has never run for it - exactly the "not vouched for"
+	// case this guard exists to catch.
+	if _, err = r.DB.StateAtEventIDs(ctx, extraEventIDs); err != nil {
+		return fmt.Errorf("one or more of the given event IDs are not a connected part of the room's graph den can verify: %w", err)
+	}
+
 	validRoomID, err := spec.NewRoomID(roomID)
 	if err != nil {
 		return err
@@ -344,16 +703,18 @@ func (r *Admin) PerformAdminDownloadState(
 	senderID, err := r.Queryer.QuerySenderIDForUser(ctx, *validRoomID, *fullUserID)
 	if err != nil {
 		return err
+	} else if senderID == nil {
+		return fmt.Errorf("sender ID not found for %s in %s", *fullUserID, *validRoomID)
 	}
-	// Fall back to the user ID as sender if no sender ID mapping exists
-	// (e.g. admin is not a member of the room).
-	senderIDStr := userID
-	if senderID != nil {
-		senderIDStr = string(*senderID)
-	}
+
+	// Custom, non-message type (matching PerformAdminDownloadState's
+	// org.matrix.dendrite.state_download below) - ordinary clients don't
+	// recognise it and won't render it in the timeline. Nothing about the
+	// bridging mechanism requires a message specifically; only that this be
+	// an ordinary, non-state KindNew event (see the function doc comment).
 	proto := &gomatrixserverlib.ProtoEvent{
-		Type:     "org.matrix.zendrite.state_download",
-		SenderID: senderIDStr,
+		Type:     "org.matrix.dendrite.state_bridge",
+		SenderID: string(*senderID),
 		RoomID:   roomID,
 		Content:  spec.RawJSON("{}"),
 	}
@@ -363,84 +724,51 @@ func (r *Admin) PerformAdminDownloadState(
 		return fmt.Errorf("gomatrixserverlib.StateNeededForProtoEvent: %w", err)
 	}
 
-	queryRes := &api.QueryLatestEventsAndStateResponse{
-		RoomExists:   true,
-		RoomVersion:  roomInfo.RoomVersion,
-		LatestEvents: fwdExtremities,
-		StateEvents:  stateEvents,
-		Depth:        depth,
+	// Extend den's own latest events with the extra IDs so
+	// eventutil.BuildEvent's prev_events span both branches. addPrevEventsToEvent
+	// silently truncates to 20 prev_events (truncateAuthAndPrevEvents in
+	// internal/eventutil/events.go) - since extraEventIDs are appended after
+	// den's own latest events, a truncation would silently drop the very IDs
+	// this call exists to bridge in. Refuse loudly instead of building an
+	// event that quietly doesn't do what was asked.
+	const maxPrevEvents = 20
+	bridgingState := localState
+	bridgingState.LatestEvents = append(append([]string{}, localState.LatestEvents...), extraEventIDs...)
+	if len(bridgingState.LatestEvents) > maxPrevEvents {
+		return fmt.Errorf(
+			"room's current extremities (%d) plus the requested extra event IDs (%d) exceed the %d prev_events an event can carry - reduce extraEventIDs or bridge in smaller batches",
+			len(localState.LatestEvents), len(extraEventIDs), maxPrevEvents,
+		)
 	}
 
-	identity, err := r.Cfg.Matrix.SigningIdentityFor(senderDomain)
+	// Room-aware, not r.Cfg.Matrix.SigningIdentityFor(senderDomain): pseudo-ID
+	// rooms sign events with a per-room identity that the plain server-domain
+	// lookup won't resolve correctly.
+	identity, err := r.RSAPI.SigningIdentityFor(ctx, *validRoomID, *fullUserID)
 	if err != nil {
-		return err
+		return fmt.Errorf("r.RSAPI.SigningIdentityFor: %w", err)
 	}
 
-	ev, err := eventutil.BuildEvent(ctx, proto, identity, time.Now(), &eventsNeeded, queryRes)
+	ev, err := eventutil.BuildEvent(ctx, proto, &identity, time.Now(), &eventsNeeded, &bridgingState)
 	if err != nil {
 		return fmt.Errorf("eventutil.BuildEvent: %w", err)
 	}
 
 	inputReq := &api.InputRoomEventsRequest{
+		InputRoomEvents: []api.InputRoomEvent{{
+			Kind:         api.KindNew,
+			Event:        ev,
+			Origin:       r.Cfg.Matrix.ServerName,
+			SendAsServer: string(r.Cfg.Matrix.ServerName),
+		}},
 		Asynchronous: false,
 	}
 	inputRes := &api.InputRoomEventsResponse{}
-
-	for _, authEvent := range append(authEvents, stateEvents...) {
-		inputReq.InputRoomEvents = append(inputReq.InputRoomEvents, api.InputRoomEvent{
-			Kind:  api.KindOutlier,
-			Event: authEvent,
-		})
-	}
-
-	inputReq.InputRoomEvents = append(inputReq.InputRoomEvents, api.InputRoomEvent{
-		Kind:          api.KindNew,
-		Event:         ev,
-		Origin:        r.Cfg.Matrix.ServerName,
-		HasState:      true,
-		StateEventIDs: stateIDs,
-		SendAsServer:  api.DoNotSendToOtherServers,
-		SkipEventAuth: true,
-	})
-
 	r.Inputer.InputRoomEvents(ctx, inputReq, inputRes)
-
 	if inputRes.ErrMsg != "" {
 		return inputRes.Err()
 	}
-
 	return nil
-}
-
-// resolveLocalExtremities replaces forward extremities that remote servers
-// won't know about with their prev events. This includes:
-//   - org.matrix.zendrite.state_download marker events (local-only)
-//   - Rejected events (stored locally but not accepted by remote servers)
-func (r *Admin) resolveLocalExtremities(ctx context.Context, roomInfo *types.RoomInfo, extremities []string) ([]string, error) {
-	events, err := r.DB.EventsFromIDs(ctx, roomInfo, extremities)
-	if err != nil {
-		return nil, err
-	}
-
-	resolved := make([]string, 0, len(extremities))
-	for _, ev := range events {
-		if ev.Type() == "org.matrix.zendrite.state_download" {
-			resolved = append(resolved, ev.PrevEventIDs()...)
-			continue
-		}
-		isRejected, rejErr := r.DB.IsEventRejected(ctx, roomInfo.RoomNID, ev.EventID())
-		if rejErr == nil && isRejected {
-			logrus.WithField("event_id", ev.EventID()).Info("Replacing rejected forward extremity with its prev_events")
-			resolved = append(resolved, ev.PrevEventIDs()...)
-			continue
-		}
-		resolved = append(resolved, ev.EventID())
-	}
-
-	if len(resolved) == 0 {
-		return nil, fmt.Errorf("no usable forward extremities found in room %d", roomInfo.RoomNID)
-	}
-	return resolved, nil
 }
 
 func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error {

@@ -40,6 +40,137 @@ func TestLoadConfigRelative(t *testing.T) {
 	}
 }
 
+func TestGlobalKeyPerspectivesAreWiredToFederationAPI(t *testing.T) {
+	var cfg Dendrite
+	cfg.Defaults(DefaultOpts{
+		Generate:       false,
+		SingleDatabase: true,
+	})
+	if err := yaml.Unmarshal([]byte(`
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+  prefer_direct_fetch: true
+`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Wiring()
+
+	if got := len(cfg.FederationAPI.KeyPerspectives); got != 1 {
+		t.Fatalf("expected 1 federation key perspective, got %d", got)
+	}
+	if got := cfg.FederationAPI.KeyPerspectives[0].ServerName; got != "matrix.org" {
+		t.Fatalf("expected matrix.org perspective, got %q", got)
+	}
+	if !cfg.FederationAPI.PreferDirectFetch {
+		t.Fatal("expected prefer_direct_fetch to be copied as true")
+	}
+}
+
+func TestFederationAPIKeyPerspectivesEmptyOverridesGlobal(t *testing.T) {
+	var cfg Dendrite
+	cfg.Defaults(DefaultOpts{
+		Generate:       false,
+		SingleDatabase: true,
+	})
+	if err := yaml.Unmarshal([]byte(`
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+federation_api:
+  key_perspectives: []
+`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Wiring()
+
+	if cfg.FederationAPI.KeyPerspectives == nil {
+		t.Fatal("expected federation key perspectives to remain explicitly set")
+	}
+	if got := len(cfg.FederationAPI.KeyPerspectives); got != 0 {
+		t.Fatalf("expected empty federation key perspectives override, got %d", got)
+	}
+}
+
+func TestFederationAPIPreferDirectFetchOverridesGlobal(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{
+			name: "federation true overrides unset global",
+			yaml: `
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+federation_api:
+  prefer_direct_fetch: true
+`,
+			want: true,
+		},
+		{
+			name: "federation false overrides global true",
+			yaml: `
+global:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+  prefer_direct_fetch: true
+federation_api:
+  prefer_direct_fetch: false
+`,
+			want: false,
+		},
+		{
+			name: "global true applies when federation key perspectives are set",
+			yaml: `
+global:
+  prefer_direct_fetch: true
+federation_api:
+  key_perspectives:
+  - server_name: matrix.org
+    keys:
+    - key_id: ed25519:auto
+      public_key: abc
+`,
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg Dendrite
+			cfg.Defaults(DefaultOpts{
+				Generate:       false,
+				SingleDatabase: true,
+			})
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Wiring()
+
+			if got := len(cfg.FederationAPI.KeyPerspectives); got != 1 {
+				t.Fatalf("expected 1 federation key perspective, got %d", got)
+			}
+			if got := cfg.FederationAPI.PreferDirectFetch; got != tc.want {
+				t.Fatalf("expected federation prefer_direct_fetch %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
 const testConfig = `
 version: 2
 global:

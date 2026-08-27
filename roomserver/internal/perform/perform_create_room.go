@@ -219,13 +219,9 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 			}
 		}
 
-		mapping := &gomatrixserverlib.MXIDMapping{
-			UserRoomKey: spec.SenderIDFromPseudoIDKey(pseudoIDKey),
-			UserID:      userID.String(),
-		}
-
-		// Sign the mapping with the server identity
-		if err = mapping.Sign(identity.ServerName, identity.KeyID, identity.PrivateKey); err != nil {
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
+		if err != nil {
 			return "", &util.JSONResponse{
 				Code: http.StatusInternalServerError,
 				JSON: spec.InternalServerError{},
@@ -236,7 +232,7 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		// sign all events with the pseudo ID key
 		identity = &fclient.SigningIdentity{
 			ServerName: spec.ServerName(spec.SenderIDFromPseudoIDKey(pseudoIDKey)),
-			KeyID:      "ed25519:1",
+			KeyID:      pseudoIDRoomKeyID,
 			PrivateKey: pseudoIDKey,
 		}
 	}

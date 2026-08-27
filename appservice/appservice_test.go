@@ -350,7 +350,7 @@ func TestRoomserverConsumerOneInvite(t *testing.T) {
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
 
-		evChan := make(chan struct{})
+		evChan := make(chan struct{}, 1)
 		// create a dummy AS url, handling the events
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var txn consumers.ApplicationServiceTransaction
@@ -494,7 +494,10 @@ func TestOutputAppserviceEvent(t *testing.T) {
 						if !gjson.GetBytes(rec.Body.Bytes(), "joined."+bob.ID).Exists() {
 							t.Errorf("Bob is not joined to the room")
 						}
-						evChan <- struct{}{}
+						select {
+						case evChan <- struct{}{}:
+						default:
+						}
 					default:
 						t.Fatalf("Unexpected membership: %s", membership)
 					}

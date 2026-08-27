@@ -24,16 +24,19 @@ import (
 	"syscall"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	sentryhttp "github.com/getsentry/sentry-go/http"
-	"github.com/kardianos/minwinsvc"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/element-hq/dendrite/internal"
+	"github.com/element-hq/dendrite/internal/httputil"
+	"github.com/gorilla/mux"
+	"github.com/kardianos/minwinsvc"
+
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/zendrite/internal"
-	"codefloe.com/pat-s/zendrite/internal/httputil"
-	"codefloe.com/pat-s/zendrite/setup/config"
-	"codefloe.com/pat-s/zendrite/setup/process"
+	"github.com/element-hq/dendrite/setup/config"
+	"github.com/element-hq/dendrite/setup/process"
 )
 
 //go:embed static/*.gotmpl
@@ -47,7 +50,7 @@ const HTTPServerTimeout = time.Minute * 5
 
 // CreateClient creates a new client (normally used for media fetch requests).
 // Should only be called once per component.
-func CreateClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) *fclient.Client {
+func CreateClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) *fclient.Client {
 	if cfg.Global.DisableFederation {
 		return fclient.NewClient(
 			fclient.WithTransport(noOpHTTPTransport),
@@ -61,13 +64,13 @@ func CreateClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) *fclient.Cli
 		opts = append(opts, fclient.WithDNSCache(dnsCache))
 	}
 	client := fclient.NewClient(opts...)
-	client.SetUserAgent(fmt.Sprintf("Zendrite/%s", internal.VersionString()))
+	client.SetUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString()))
 	return client
 }
 
 // CreateFederationClient creates a new federation client. Should only be called
 // once per component.
-func CreateFederationClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) fclient.FederationClient {
+func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fclient.FederationClient {
 	identities := cfg.Global.SigningIdentities()
 	if cfg.Global.DisableFederation {
 		return fclient.NewFederationClient(
@@ -75,10 +78,10 @@ func CreateFederationClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) fc
 		)
 	}
 	opts := []fclient.ClientOption{
-		fclient.WithTimeout(time.Minute * 5), //nolint:mnd
+		fclient.WithTimeout(time.Minute * 5),
 		fclient.WithSkipVerify(cfg.FederationAPI.DisableTLSValidation),
 		fclient.WithKeepAlives(!cfg.FederationAPI.DisableHTTPKeepalives),
-		fclient.WithUserAgent(fmt.Sprintf("Zendrite/%s", internal.VersionString())),
+		fclient.WithUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString())),
 		fclient.WithAllowDenyNetworks(cfg.FederationAPI.AllowNetworkCIDRs, cfg.FederationAPI.DenyNetworkCIDRs),
 	}
 	if cfg.Global.DNSCache.Enabled {
@@ -91,12 +94,12 @@ func CreateFederationClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) fc
 }
 
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
-	routers.ZendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}).Methods(http.MethodGet)
-	routers.ZendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
+	routers.DendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+	routers.DendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(503)
 			_ = json.NewEncoder(w).Encode(struct {
 				Warnings []string `json:"warnings"`
 			}{
@@ -104,20 +107,90 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 			})
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-	}).Methods(http.MethodGet)
+		w.WriteHeader(200)
+	})
+}
+
+func createBaseAdminRouter(processContext *process.ProcessContext, upstream *mux.Router) *mux.Router {
+	adminRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.DendriteAdminPathPrefix).Subrouter().UseEncodedPath()
+	ConfigureAdminEndpoints(processContext, httputil.Routers{DendriteAdmin: adminRouter})
+	if upstream != nil {
+		adminRouter.PathPrefix("/").Handler(upstream)
+	}
+	adminRouter.NotFoundHandler = httputil.NotFoundCORSHandler
+	adminRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	return adminRouter
+}
+
+func createBaseStaticRouter(landingPage *bytes.Buffer, loginFS fs.FS, upstream *mux.Router) *mux.Router {
+	staticRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.PublicStaticPath).Subrouter().UseEncodedPath()
+	staticRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(landingPage.Bytes())
+	})
+	staticRouter.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(loginFS))))
+	if upstream != nil {
+		staticRouter.PathPrefix("/").Handler(upstream)
+	}
+	staticRouter.NotFoundHandler = httputil.NotFoundCORSHandler
+	staticRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	return staticRouter
+}
+
+func normalizeRouters(routers httputil.Routers) httputil.Routers {
+	var defaults httputil.Routers
+	getDefaults := func() httputil.Routers {
+		if defaults.Client == nil {
+			defaults = httputil.NewRouters()
+		}
+		return defaults
+	}
+	if routers.Client == nil {
+		defaults := getDefaults()
+		routers.Client = defaults.Client
+	}
+	if routers.Federation == nil {
+		defaults := getDefaults()
+		routers.Federation = defaults.Federation
+	}
+	if routers.Keys == nil {
+		defaults := getDefaults()
+		routers.Keys = defaults.Keys
+	}
+	if routers.Media == nil {
+		defaults := getDefaults()
+		routers.Media = defaults.Media
+	}
+	if routers.WellKnown == nil {
+		defaults := getDefaults()
+		routers.WellKnown = defaults.WellKnown
+	}
+	if routers.Static == nil {
+		defaults := getDefaults()
+		routers.Static = defaults.Static
+	}
+	if routers.DendriteAdmin == nil {
+		defaults := getDefaults()
+		routers.DendriteAdmin = defaults.DendriteAdmin
+	}
+	if routers.SynapseAdmin == nil {
+		defaults := getDefaults()
+		routers.SynapseAdmin = defaults.SynapseAdmin
+	}
+	return routers
 }
 
 // SetupAndServeHTTP sets up the HTTP server to serve client & federation APIs
-// and adds a prometheus handler under /_zendrite/metrics.
+// and adds a prometheus handler under /_dendrite/metrics.
 func SetupAndServeHTTP(
 	processContext *process.ProcessContext,
-	cfg *config.Zendrite,
+	cfg *config.Dendrite,
 	routers httputil.Routers,
 	externalHTTPAddr config.ServerAddress,
 	certFile, keyFile *string,
 ) {
-	externalRouter := httputil.NewRouter("")
+	routers = normalizeRouters(routers)
+
+	externalRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
 
 	externalServ := &http.Server{
 		Addr:         externalHTTPAddr.Address,
@@ -128,16 +201,14 @@ func SetupAndServeHTTP(
 		},
 	}
 
-	// Redirect for Landing Page
+	//Redirect for Landing Page
 	externalRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, httputil.PublicStaticPath, http.StatusFound)
-	}).Methods(http.MethodGet)
+	})
 
 	if cfg.Global.Metrics.Enabled {
-		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth)).Methods(http.MethodGet)
+		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth))
 	}
-
-	ConfigureAdminEndpoints(processContext, routers)
 
 	// Parse and execute the landing page template
 	tmpl := template.Must(template.ParseFS(staticContent, "static/*.gotmpl"))
@@ -148,17 +219,13 @@ func SetupAndServeHTTP(
 		logrus.WithError(err).Fatal("failed to execute landing page template")
 	}
 
-	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(landingPage.Bytes())
-	}).Methods(http.MethodGet)
-
 	// We only need the files beneath the static/client/login folder.
 	sub, err := fs.Sub(loginFallback, "static/client/login")
 	if err != nil {
 		logrus.Panicf("unable to read embedded files, this should never happen: %s", err)
 	}
-	// Serve a static page for login fallback
-	routers.Static.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(sub))))
+	baseAdminRouter := createBaseAdminRouter(processContext, routers.DendriteAdmin)
+	baseStaticRouter := createBaseStaticRouter(landingPage, sub, routers.Static)
 
 	var clientHandler http.Handler
 	clientHandler = routers.Client
@@ -176,7 +243,7 @@ func SetupAndServeHTTP(
 		})
 		federationHandler = sentryHandler.Handle(routers.Federation)
 	}
-	externalRouter.PathPrefix(httputil.ZendriteAdminPathPrefix).Handler(routers.ZendriteAdmin)
+	externalRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(baseAdminRouter)
 	externalRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(clientHandler)
 	if !cfg.Global.DisableFederation {
 		externalRouter.PathPrefix(httputil.PublicKeyPathPrefix).Handler(routers.Keys)
@@ -185,7 +252,10 @@ func SetupAndServeHTTP(
 	externalRouter.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 	externalRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
-	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
+	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(baseStaticRouter)
+
+	externalRouter.NotFoundHandler = httputil.NotFoundCORSHandler
+	externalRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
 
 	if externalHTTPAddr.Enabled() {
 		go func() {
@@ -235,7 +305,7 @@ func SetupAndServeHTTP(
 		}()
 	}
 
-	minwinsvc.SetOnExit(processContext.ShutdownZendrite)
+	minwinsvc.SetOnExit(processContext.ShutdownDendrite)
 	<-processContext.WaitForShutdown()
 
 	logrus.Infof("Stopping HTTP listeners")
@@ -254,8 +324,8 @@ func WaitForShutdown(processCtx *process.ProcessContext) {
 
 	logrus.Warnf("Shutdown signal received")
 
-	processCtx.ShutdownZendrite()
+	processCtx.ShutdownDendrite()
 	processCtx.WaitForComponentsToFinish()
 
-	logrus.Warnf("Zendrite is exiting now")
+	logrus.Warnf("Dendrite is exiting now")
 }

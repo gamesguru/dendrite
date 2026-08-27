@@ -8,8 +8,6 @@ package config
 
 import (
 	"bytes"
-	"context"
-	"crypto/ed25519"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -18,16 +16,15 @@ import (
 	"regexp"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"github.com/goccy/go-yaml"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/crypto/ed25519"
+	"gopkg.in/yaml.v2"
 
-	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	jaegerconfig "github.com/uber/jaeger-client-go/config"
+	jaegermetrics "github.com/uber/jaeger-lib/metrics"
 )
 
 // keyIDRegexp defines allowable characters in Key IDs.
@@ -37,11 +34,11 @@ var keyIDRegexp = regexp.MustCompile("^ed25519:[a-zA-Z0-9_]+$")
 // This will change whenever we make breaking changes to the config format.
 const Version = 2
 
-// Zendrite contains all the config used by a zendrite process.
-// Relative paths are resolved relative to the current working directory.
-type Zendrite struct {
+// Dendrite contains all the config used by a dendrite process.
+// Relative paths are resolved relative to the current working directory
+type Dendrite struct {
 	// The version of the configuration file.
-	// If the version in a file doesn't match the current zendrite config
+	// If the version in a file doesn't match the current dendrite config
 	// version then we can give a clear error message telling the user
 	// to update their config file to the current version.
 	// The version of the file should only be different if there has
@@ -61,14 +58,12 @@ type Zendrite struct {
 
 	MSCs MSCs `yaml:"mscs"`
 
-	// The config for tracing the zendrite servers.
+	// The config for tracing the dendrite servers.
 	Tracing struct {
 		// Set to true to enable tracer hooks. If false, no tracing is set up.
 		Enabled bool `yaml:"enabled"`
-		// OTLP gRPC endpoint, e.g. "localhost:4317".
-		Endpoint string `yaml:"endpoint"`
-		// Use insecure gRPC connection (no TLS).
-		Insecure bool `yaml:"insecure"`
+		// The config for the jaeger opentracing reporter.
+		Jaeger jaegerconfig.Configuration `yaml:"jaeger"`
 	} `yaml:"tracing"`
 
 	// The config for logging informations. Each hook will be added to logrus.
@@ -89,7 +84,7 @@ type Derived struct {
 
 		// Params that need to be returned to the client during
 		// registration in order to complete registration stages.
-		Params map[string]any `json:"params"`
+		Params map[string]interface{} `json:"params"`
 	}
 
 	// Application services parsed from their config files
@@ -112,7 +107,7 @@ type Derived struct {
 // A Path on the filesystem.
 type Path string
 
-// A DataSource for opening a postgresql database using pgx.
+// A DataSource for opening a postgresql database using lib/pq.
 type DataSource string
 
 func (d DataSource) IsSQLite() bool {
@@ -125,10 +120,13 @@ func (d DataSource) IsPostgres() bool {
 	return !d.IsSQLite()
 }
 
-// FileSizeBytes is a file size in bytes.
+// A Topic in kafka.
+type Topic string
+
+// FileSizeBytes is a file size in bytes
 type FileSizeBytes int64
 
-// ThumbnailSize contains a single thumbnail size configuration.
+// ThumbnailSize contains a single thumbnail size configuration
 type ThumbnailSize struct {
 	// Maximum width of the thumbnail image
 	Width int `yaml:"width"`
@@ -151,7 +149,7 @@ type LogrusHook struct {
 	Level string `yaml:"level"`
 
 	// The parameters for this hook.
-	Params map[string]any `yaml:"params"`
+	Params map[string]interface{} `yaml:"params"`
 }
 
 // ConfigErrors stores problems encountered when parsing a config file.
@@ -160,7 +158,7 @@ type ConfigErrors []string
 
 // Load a yaml config file for a server run as multiple processes or as a monolith.
 // Checks the config to ensure that it is valid.
-func Load(configPath string) (*Zendrite, error) {
+func Load(configPath string) (*Dendrite, error) {
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -178,8 +176,8 @@ func loadConfig(
 	basePath string,
 	configData []byte,
 	readFile func(string) ([]byte, error),
-) (*Zendrite, error) {
-	var c Zendrite
+) (*Dendrite, error) {
+	var c Dendrite
 	c.Defaults(DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -234,11 +232,7 @@ func loadConfig(
 
 			key.KeyID = keyID
 			key.PrivateKey = privateKey
-			pubKey, ok := privateKey.Public().(ed25519.PublicKey)
-			if !ok {
-				return nil, fmt.Errorf("failed to convert public key to ed25519.PublicKey")
-			}
-			key.PublicKey = spec.Base64Bytes(pubKey)
+			key.PublicKey = spec.Base64Bytes(privateKey.Public().(ed25519.PublicKey))
 
 		case key.KeyID == "":
 			return nil, fmt.Errorf("'key_id' must be specified if 'public_key' is specified")
@@ -254,17 +248,7 @@ func loadConfig(
 		}
 	}
 
-	if c.MediaAPI.Storage.Type == "" {
-		c.MediaAPI.Storage.Type = "local"
-	}
-	if c.MediaAPI.StorageType() == "local" {
-		if c.MediaAPI.Storage.Local.BasePath == "" {
-			c.MediaAPI.Storage.Local.BasePath = c.MediaAPI.BasePath
-		}
-		c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.Storage.Local.BasePath))
-	} else {
-		c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.BasePath))
-	}
+	c.MediaAPI.AbsBasePath = Path(absPath(basePath, c.MediaAPI.BasePath))
 
 	// Generate data from config options
 	err = c.Derive()
@@ -286,33 +270,20 @@ func LoadMatrixKey(privateKeyPath string, readFile func(string) ([]byte, error))
 
 // Derive generates data that is derived from various values provided in
 // the config file.
-func (config *Zendrite) Derive() error {
+func (config *Dendrite) Derive() error {
 	// Determine registrations flows based off config values
 
-	config.Derived.Registration.Params = make(map[string]any)
+	config.Derived.Registration.Params = make(map[string]interface{})
 
 	// TODO: Add email auth type
 	// TODO: Add MSISDN auth type
 
-	switch {
-	case config.ClientAPI.RecaptchaEnabled && config.ClientAPI.CaptchaProvider == "altcha":
-		// Use a vendor-specific login type so Matrix clients that
-		// handle m.login.recaptcha natively (e.g. Element) don't try
-		// to render a Google reCAPTCHA widget and instead open the
-		// auth fallback page.
-		config.Derived.Registration.Flows = []authtypes.Flow{
-			{Stages: []authtypes.LoginType{authtypes.LoginTypeAltcha}},
-		}
-	case config.ClientAPI.RecaptchaEnabled:
+	if config.ClientAPI.RecaptchaEnabled {
 		config.Derived.Registration.Params[authtypes.LoginTypeRecaptcha] = map[string]string{"public_key": config.ClientAPI.RecaptchaPublicKey}
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeRecaptcha}},
 		}
-	case config.ClientAPI.RegistrationRequiresToken:
-		config.Derived.Registration.Flows = []authtypes.Flow{
-			{Stages: []authtypes.LoginType{authtypes.LoginTypeRegistrationToken}},
-		}
-	default:
+	} else {
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}},
 		}
@@ -332,7 +303,7 @@ type DefaultOpts struct {
 }
 
 // SetDefaults sets default config values if they are not explicitly set.
-func (c *Zendrite) Defaults(opts DefaultOpts) {
+func (c *Dendrite) Defaults(opts DefaultOpts) {
 	c.Version = Version
 
 	c.Global.Defaults(opts)
@@ -349,7 +320,7 @@ func (c *Zendrite) Defaults(opts DefaultOpts) {
 	c.Wiring()
 }
 
-func (c *Zendrite) Verify(configErrs *ConfigErrors) {
+func (c *Dendrite) Verify(configErrs *ConfigErrors) {
 	type verifiable interface {
 		Verify(configErrs *ConfigErrors)
 	}
@@ -363,7 +334,14 @@ func (c *Zendrite) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-func (c *Zendrite) Wiring() {
+func (c *Dendrite) Wiring() {
+	if c.FederationAPI.KeyPerspectives == nil && len(c.Global.KeyPerspectives) > 0 {
+		c.FederationAPI.KeyPerspectives = c.Global.KeyPerspectives
+	}
+	if !c.FederationAPI.preferDirectFetchSet {
+		c.FederationAPI.PreferDirectFetch = c.Global.PreferDirectFetch
+	}
+
 	c.Global.JetStream.Matrix = &c.Global
 	c.ClientAPI.Matrix = &c.Global
 	c.FederationAPI.Matrix = &c.Global
@@ -379,7 +357,6 @@ func (c *Zendrite) Wiring() {
 	c.ClientAPI.Derived = &c.Derived
 	c.AppServiceAPI.Derived = &c.Derived
 	c.ClientAPI.MSCs = &c.MSCs
-	c.UserAPI.MSCs = &c.MSCs
 }
 
 // Error returns a string detailing how many errors were contained within a
@@ -419,21 +396,21 @@ func checkPositive(configErrs *ConfigErrors, key string, value int64) {
 }
 
 // checkLogging verifies the parameters logging.* are valid.
-func (config *Zendrite) checkLogging(configErrs *ConfigErrors) {
+func (config *Dendrite) checkLogging(configErrs *ConfigErrors) {
 	for _, logrusHook := range config.Logging {
-		checkNotEmpty(configErrs, "logging.type", logrusHook.Type)
-		checkNotEmpty(configErrs, "logging.level", logrusHook.Level)
+		checkNotEmpty(configErrs, "logging.type", string(logrusHook.Type))
+		checkNotEmpty(configErrs, "logging.level", string(logrusHook.Level))
 	}
 }
 
 // check returns an error type containing all errors found within the config
 // file.
-func (config *Zendrite) check() error { // monolithic
+func (config *Dendrite) check() error { // monolithic
 	var configErrs ConfigErrors
 
 	if config.Version != Version {
 		configErrs.Add(fmt.Sprintf(
-			"config version is %d, expected %d - this means that the format of the configuration "+
+			"config version is %q, expected %q - this means that the format of the configuration "+
 				"file has changed in some significant way, so please revisit the sample config "+
 				"and ensure you are not missing any important options that may have been added "+
 				"or changed recently!",
@@ -445,7 +422,7 @@ func (config *Zendrite) check() error { // monolithic
 	config.checkLogging(&configErrs)
 
 	// Due to how Golang manages its interface types, this condition is not redundant.
-	// In order to get the proper behavior, it is necessary to return an explicit nil
+	// In order to get the proper behaviour, it is necessary to return an explicit nil
 	// and not a nil configErrors.
 	// This is because the following equalities hold:
 	// error(nil) == nil
@@ -495,41 +472,27 @@ func readKeyPEM(path string, data []byte, enforceKeyIDFormat bool) (gomatrixserv
 	}
 }
 
-// SetupTracing configures OpenTelemetry tracing using the supplied configuration.
-func (config *Zendrite) SetupTracing() (closer io.Closer, err error) {
+// SetupTracing configures the opentracing using the supplied configuration.
+func (config *Dendrite) SetupTracing() (closer io.Closer, err error) {
 	if !config.Tracing.Enabled {
 		return io.NopCloser(bytes.NewReader([]byte{})), nil
 	}
-
-	ctx := context.Background()
-
-	dialOpts := []grpc.DialOption{}
-	if config.Tracing.Insecure {
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}
-
-	exporter, err := otlptracegrpc.New(
-		ctx,
-		otlptracegrpc.WithEndpoint(config.Tracing.Endpoint),
-		otlptracegrpc.WithDialOption(dialOpts...),
+	return config.Tracing.Jaeger.InitGlobalTracer(
+		"Dendrite",
+		jaegerconfig.Logger(logrusLogger{logrus.StandardLogger()}),
+		jaegerconfig.Metrics(jaegermetrics.NullFactory),
 	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-	)
-	otel.SetTracerProvider(tp)
-
-	return &tracerProviderCloser{tp: tp}, nil
 }
 
-// tracerProviderCloser wraps a TracerProvider so it satisfies io.Closer.
-type tracerProviderCloser struct {
-	tp *sdktrace.TracerProvider
+// logrusLogger is a small wrapper that implements jaeger.Logger using logrus.
+type logrusLogger struct {
+	l *logrus.Logger
 }
 
-func (c *tracerProviderCloser) Close() error {
-	return c.tp.Shutdown(context.Background())
+func (l logrusLogger) Error(msg string) {
+	l.l.Error(msg)
+}
+
+func (l logrusLogger) Infof(msg string, args ...interface{}) {
+	l.l.Infof(msg, args...)
 }

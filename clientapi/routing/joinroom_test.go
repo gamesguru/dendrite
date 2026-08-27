@@ -3,23 +3,27 @@ package routing
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/element-hq/dendrite/federationapi/statistics"
+	"github.com/element-hq/dendrite/internal/caching"
+	"github.com/element-hq/dendrite/internal/sqlutil"
+	"github.com/element-hq/dendrite/setup/jetstream"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/zendrite/appservice"
-	"codefloe.com/pat-s/zendrite/federationapi/statistics"
-	"codefloe.com/pat-s/zendrite/internal/caching"
-	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/roomserver"
-	"codefloe.com/pat-s/zendrite/setup/jetstream"
-	"codefloe.com/pat-s/zendrite/test"
-	"codefloe.com/pat-s/zendrite/test/testrig"
-	"codefloe.com/pat-s/zendrite/userapi"
-	uapi "codefloe.com/pat-s/zendrite/userapi/api"
+	"github.com/element-hq/dendrite/appservice"
+	"github.com/element-hq/dendrite/roomserver"
+	"github.com/element-hq/dendrite/test"
+	"github.com/element-hq/dendrite/test/testrig"
+	"github.com/element-hq/dendrite/userapi"
+	uapi "github.com/element-hq/dendrite/userapi/api"
+	"golang.org/x/sync/singleflight"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -42,7 +46,7 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil) // creates the rs.Inputer etc
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI) //nolint:contextcheck
+		asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI)
 
 		// Create the users in the userapi
 		for _, u := range []*test.User{alice, bob, charlie} {
@@ -56,6 +60,7 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			}, userRes); err != nil {
 				t.Errorf("failed to create account: %s", err)
 			}
+
 		}
 
 		aliceDev := &uapi.Device{UserID: alice.ID}
@@ -89,13 +94,6 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 		crRespWithGuestAccess, ok := resp.JSON.(createRoomResponse)
 		if !ok {
 			t.Fatalf("response is not a createRoomResponse: %+v", resp)
-		}
-
-		// Dummy request
-		body := &bytes.Buffer{}
-		req, err := http.NewRequest(http.MethodPost, "/?server_name=test", body)
-		if err != nil {
-			t.Fatal(err)
 		}
 
 		testCases := []struct {
@@ -155,11 +153,83 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				joinResp := JoinRoomByIDOrAlias(req, tc.device, rsAPI, userAPI, tc.roomID)
+				req, err := http.NewRequest(http.MethodPost, "/?server_name=test", &bytes.Buffer{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				content, serverNames, resErr := joinRequestContentAndServers(req)
+				if resErr != nil {
+					t.Fatalf("joinRequestContentAndServers returned error: %+v", resErr)
+				}
+				joinResp := JoinRoomByIDOrAlias(context.Background(), tc.device, rsAPI, userAPI, tc.roomID, content, serverNames)
 				if tc.wantHTTP200 && !joinResp.Is2xx() {
 					t.Fatalf("expected join room to succeed, but didn't: %+v", joinResp)
 				}
 			})
 		}
 	})
+}
+
+func TestJoinRoomMalformedJSONDoesNotStartJoin(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", strings.NewReader("{"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := joinRoomByIDOrAliasWithTimeout(
+		req,
+		&uapi.Device{UserID: "@alice:test"},
+		&singleflight.Group{},
+		nil,
+		nil,
+		"!room:test",
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed JSON to return HTTP 400, got %+v", resp)
+	}
+}
+
+func TestJoinRoomSlowBodyReturnsAsyncResponse(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Body = newBlockingReadCloser()
+
+	start := time.Now()
+	resp := joinRoomByIDOrAliasWithTimeoutDuration(
+		req,
+		&uapi.Device{UserID: "@alice:test"},
+		&singleflight.Group{},
+		nil,
+		nil,
+		"!room:test",
+		10*time.Millisecond,
+	)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("expected slow body to return HTTP 202, got %+v", resp)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("slow body timeout took too long: %s", elapsed)
+	}
+}
+
+type blockingReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingReadCloser() *blockingReadCloser {
+	return &blockingReadCloser{closed: make(chan struct{})}
+}
+
+func (b *blockingReadCloser) Read(_ []byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingReadCloser) Close() error {
+	b.once.Do(func() {
+		close(b.closed)
+	})
+	return nil
 }

@@ -7,80 +7,53 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"io"
 	"net/http"
-	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
+	"github.com/element-hq/dendrite/clientapi/httputil"
+	"github.com/element-hq/dendrite/internal/eventutil"
+	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
+	"github.com/element-hq/dendrite/userapi/api"
 	"github.com/matrix-org/gomatrix"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
-
-	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
-	"codefloe.com/pat-s/zendrite/clientapi/httputil"
-	"codefloe.com/pat-s/zendrite/internal/eventutil"
-	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func JoinRoomByIDOrAlias(
-	req *http.Request,
+	joinCtx context.Context,
 	device *api.Device,
 	rsAPI roomserverAPI.ClientRoomserverAPI,
 	profileAPI api.ClientUserAPI,
 	roomIDOrAlias string,
+	content map[string]interface{},
+	serverNames []spec.ServerName,
 ) util.JSONResponse {
-	// MSC3706: Trace join timing for diagnostics
-	joinStartTime := time.Now()
-	logger := util.GetLogger(req.Context()).WithFields(map[string]any{
-		"room_id_or_alias": roomIDOrAlias,
-		"user_id":          device.UserID,
-		"trace":            "join_timing",
-	})
-	logger.Debug("Join request received")
-
 	// Prepare to ask the roomserver to perform the room join.
+	if content == nil {
+		content = map[string]interface{}{}
+	}
 	joinReq := roomserverAPI.PerformJoinRequest{
 		RoomIDOrAlias: roomIDOrAlias,
 		UserID:        device.UserID,
 		IsGuest:       device.AccountType == api.AccountTypeGuest,
-		Content:       map[string]any{},
+		Content:       content,
+		ServerNames:   serverNames,
 	}
-
-	// Check to see if any ?via= or ?server_name= query parameters
-	// were given in the request.
-	if serverNames, ok := req.URL.Query()["via"]; ok {
-		for _, serverName := range serverNames {
-			joinReq.ServerNames = append(
-				joinReq.ServerNames,
-				spec.ServerName(serverName),
-			)
-		}
-	} else if serverNames, ok := req.URL.Query()["server_name"]; ok {
-		for _, serverName := range serverNames {
-			joinReq.ServerNames = append(
-				joinReq.ServerNames,
-				spec.ServerName(serverName),
-			)
-		}
-	}
-
-	// If content was provided in the request then include that
-	// in the request. It'll get used as a part of the membership
-	// event content.
-	_ = httputil.UnmarshalJSONRequest(req, &joinReq.Content)
 
 	// Work out our localpart for the client profile request.
 
 	// Request our profile content to populate the request content with.
-	profile, err := profileAPI.QueryProfile(req.Context(), device.UserID)
+	profile, err := profileAPI.QueryProfile(joinCtx, device.UserID)
 
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		joinReq.Content["displayname"] = profile.DisplayName
 		joinReq.Content["avatar_url"] = profile.AvatarURL
-	case errors.Is(err, appserviceAPI.ErrProfileNotExists):
-		util.GetLogger(req.Context()).Error("Unable to query user profile, no profile found.")
+	case appserviceAPI.ErrProfileNotExists:
+		util.GetLogger(joinCtx).Error("Unable to query user profile, no profile found.")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.Unknown("Unable to query user profile, no profile found."),
@@ -88,64 +61,88 @@ func JoinRoomByIDOrAlias(
 	default:
 	}
 
-	// Ask the roomserver to perform the join.
-	roomID, _, err := rsAPI.PerformJoin(req.Context(), &joinReq)
-	var response util.JSONResponse
-
-	var errInvalidID roomserverAPI.ErrInvalidID
-	var errNotAllowed roomserverAPI.ErrNotAllowed
-	var errHTTP *gomatrix.HTTPError
-	var errRoomNoExists eventutil.ErrRoomNoExists
-	switch {
-	case err == nil: // success case
-		response = util.JSONResponse{
+	roomID, _, err := rsAPI.PerformJoin(joinCtx, &joinReq)
+	switch e := err.(type) {
+	case nil: // success case
+		return util.JSONResponse{
 			Code: http.StatusOK,
 			// TODO: Put the response struct somewhere internal.
 			JSON: struct {
 				RoomID string `json:"room_id"`
 			}{roomID},
 		}
-	case errors.As(err, &errInvalidID):
-		response = util.JSONResponse{
+	case roomserverAPI.ErrInvalidID:
+		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.InvalidParam(errInvalidID.Error()),
+			JSON: spec.Unknown(e.Error()),
 		}
-	case errors.As(err, &errNotAllowed):
-		jsonErr := spec.Forbidden(errNotAllowed.Error())
+	case roomserverAPI.ErrNotAllowed:
+		jsonErr := spec.Forbidden(e.Error())
 		if device.AccountType == api.AccountTypeGuest {
-			jsonErr = spec.GuestAccessForbidden(errNotAllowed.Error())
+			jsonErr = spec.GuestAccessForbidden(e.Error())
 		}
-		response = util.JSONResponse{
+		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: jsonErr,
 		}
-	case errors.As(err, &errHTTP): // this ensures we proxy responses over federation to the client
-		response = util.JSONResponse{
-			Code: errHTTP.Code,
-			JSON: json.RawMessage(errHTTP.Message),
+	case *gomatrix.HTTPError: // this ensures we proxy responses over federation to the client
+		return util.JSONResponse{
+			Code: e.Code,
+			JSON: json.RawMessage(e.Message),
 		}
-	case errors.As(err, &errRoomNoExists):
-		response = util.JSONResponse{
+	case eventutil.ErrRoomNoExists:
+		return util.JSONResponse{
 			Code: http.StatusNotFound,
-			JSON: spec.NotFound(errRoomNoExists.Error()),
+			JSON: spec.NotFound(e.Error()),
 		}
 	default:
-		// Check if this is already a Matrix error and preserve its error code
-		if resp := httputil.MatrixErrorResponse(err); resp != nil {
-			response = *resp
-		} else {
-			response = util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+}
+
+func joinRequestContentAndServers(req *http.Request) (map[string]interface{}, []spec.ServerName, *util.JSONResponse) {
+	content := map[string]interface{}{}
+	if req.Body == nil {
+		return content, joinRequestServerNames(req), nil
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("io.ReadAll failed")
+		return nil, nil, &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if len(body) == 0 {
+		return content, joinRequestServerNames(req), nil
+	}
+	if resErr := httputil.UnmarshalJSON(body, &content); resErr != nil {
+		return nil, nil, resErr
+	}
+	return content, joinRequestServerNames(req), nil
+}
+
+func joinRequestServerNames(req *http.Request) []spec.ServerName {
+	var serverNames []spec.ServerName
+	if via, ok := req.URL.Query()["via"]; ok {
+		for _, serverName := range via {
+			serverNames = append(serverNames, spec.ServerName(serverName))
+		}
+	} else if queryServerNames, ok := req.URL.Query()["server_name"]; ok {
+		for _, serverName := range queryServerNames {
+			serverNames = append(serverNames, spec.ServerName(serverName))
 		}
 	}
 
-	// Wait as long as it takes for the join to finish (should be reasonable with MSC3706),
-	// the spec doesn't mention this but it seems to be what clients expect.
-	logger.WithFields(map[string]any{
-		"duration_ms": time.Since(joinStartTime).Milliseconds(),
-		"result_code": response.Code,
-	}).Debug("Join request completed")
-	return response
+	return serverNames
+}
+
+func asyncJoinResponse(_ string) util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusAccepted,
+		JSON: spec.Unknown("The room join is still in progress."),
+	}
 }

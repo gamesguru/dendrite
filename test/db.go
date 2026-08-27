@@ -53,8 +53,11 @@ func createLocalDB(t *testing.T, dbName string) {
 		createDB.Stderr = os.Stderr
 	}
 	err := createDB.Run()
-	if err != nil && !Quiet {
-		fmt.Println("createLocalDB returned error:", err)
+	if err != nil {
+		if !Quiet {
+			fmt.Println("createLocalDB returned error:", err)
+		}
+		fatalError(t, "failed to create local postgres test database %q: %s", dbName, err)
 	}
 }
 

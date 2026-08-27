@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
@@ -22,7 +23,9 @@ func (p *TypingStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+	p.addTypingEvents(req, 0)
+	return to
 }
 
 func (p *TypingStreamProvider) IncrementalSync(
@@ -31,7 +34,58 @@ func (p *TypingStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) types.StreamPosition {
+	if p.addTypingEvents(req, from) {
+		return to
+	}
+	if to > from {
+		return to
+	}
+	return p.waitForTypingEvents(ctx, req, from, true)
+}
+
+func (p *TypingStreamProvider) waitForTypingEvents(
+	ctx context.Context,
+	req *types.SyncRequest,
+	from types.StreamPosition,
+	allowImmediate bool,
+) types.StreamPosition {
+	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+	if p.addTypingEvents(req, from) {
+		return to
+	}
+	if allowImmediate && req.Timeout <= 0 {
+		return to
+	}
+
+	wait := 50 * time.Millisecond
+	if req.Timeout > 0 && req.Timeout < wait {
+		wait = req.Timeout
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return to
+		case <-timer.C:
+			return to
+		case <-ticker.C:
+			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+			if p.addTypingEvents(req, from) {
+				return to
+			}
+		}
+	}
+}
+
+func (p *TypingStreamProvider) addTypingEvents(
+	req *types.SyncRequest,
+	from types.StreamPosition,
+) bool {
 	var err error
+	added := false
 	for roomID, membership := range req.Rooms {
 		if membership != spec.Join {
 			continue
@@ -60,13 +114,13 @@ func (p *TypingStreamProvider) IncrementalSync(
 			})
 			if err != nil {
 				req.Log.WithError(err).Error("json.Marshal failed")
-				return from
+				return added
 			}
 
 			jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
 			req.Response.Rooms.Join[roomID] = jr
+			added = true
 		}
 	}
-
-	return to
+	return added
 }

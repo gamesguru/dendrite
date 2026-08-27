@@ -3,38 +3,33 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
-	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
+	"github.com/matrix-org/gomatrixserverlib"
+	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
-	asAPI "codefloe.com/pat-s/zendrite/appservice/api"
-	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
-	"codefloe.com/pat-s/zendrite/internal/caching"
-	"codefloe.com/pat-s/zendrite/roomserver/acls"
-	"codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
-	"codefloe.com/pat-s/zendrite/roomserver/internal/perform"
-	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
-	"codefloe.com/pat-s/zendrite/roomserver/producers"
-	"codefloe.com/pat-s/zendrite/roomserver/storage"
-	"codefloe.com/pat-s/zendrite/roomserver/types"
-	"codefloe.com/pat-s/zendrite/setup/config"
-	"codefloe.com/pat-s/zendrite/setup/jetstream"
-	"codefloe.com/pat-s/zendrite/setup/process"
-	userapi "codefloe.com/pat-s/zendrite/userapi/api"
+	asAPI "github.com/element-hq/dendrite/appservice/api"
+	fsAPI "github.com/element-hq/dendrite/federationapi/api"
+	"github.com/element-hq/dendrite/internal/caching"
+	"github.com/element-hq/dendrite/roomserver/acls"
+	"github.com/element-hq/dendrite/roomserver/api"
+	"github.com/element-hq/dendrite/roomserver/internal/input"
+	"github.com/element-hq/dendrite/roomserver/internal/perform"
+	"github.com/element-hq/dendrite/roomserver/internal/query"
+	"github.com/element-hq/dendrite/roomserver/producers"
+	"github.com/element-hq/dendrite/roomserver/storage"
+	"github.com/element-hq/dendrite/roomserver/types"
+	"github.com/element-hq/dendrite/setup/config"
+	"github.com/element-hq/dendrite/setup/jetstream"
+	"github.com/element-hq/dendrite/setup/process"
+	userapi "github.com/element-hq/dendrite/userapi/api"
 )
 
-// defaultPurgeWaitTimeout is the maximum time a rejoin attempt will wait for
-// an in-flight auto-purge to complete before proceeding.
-const defaultPurgeWaitTimeout = 30 * time.Second
-
-// RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI.
+// RoomserverInternalAPI is an implementation of api.RoomserverInternalAPI
 type RoomserverInternalAPI struct {
 	*input.Inputer
 	*query.Queryer
@@ -52,7 +47,7 @@ type RoomserverInternalAPI struct {
 	*perform.Creator
 	ProcessContext         *process.ProcessContext
 	DB                     storage.Database
-	Cfg                    *config.Zendrite
+	Cfg                    *config.Dendrite
 	Cache                  caching.RoomServerCaches
 	ServerName             spec.ServerName
 	KeyRing                gomatrixserverlib.JSONVerifier
@@ -67,43 +62,39 @@ type RoomserverInternalAPI struct {
 	PerspectiveServerNames []spec.ServerName
 	enableMetrics          bool
 	defaultRoomVersion     gomatrixserverlib.RoomVersion
-	PartialStateTracker    *PartialStateTracker
-	PurgeTracker           *perform.PurgeTracker
 }
 
 func NewRoomserverAPI(
-	processContext *process.ProcessContext, zendriteCfg *config.Zendrite, roomserverDB storage.Database,
+	processContext *process.ProcessContext, dendriteCfg *config.Dendrite, roomserverDB storage.Database,
 	js nats.JetStreamContext, nc *nats.Conn, caches caching.RoomServerCaches, enableMetrics bool,
 ) *RoomserverInternalAPI {
 	var perspectiveServerNames []spec.ServerName
-	for _, kp := range zendriteCfg.FederationAPI.KeyPerspectives {
+	for _, kp := range dendriteCfg.FederationAPI.KeyPerspectives {
 		perspectiveServerNames = append(perspectiveServerNames, kp.ServerName)
 	}
 
 	serverACLs := acls.NewServerACLs(roomserverDB)
 	producer := &producers.RoomEventProducer{
-		Topic:     zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent),
+		Topic:     string(dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent)),
 		JetStream: js,
 		ACLs:      serverACLs,
 	}
 	a := &RoomserverInternalAPI{
 		ProcessContext:         processContext,
 		DB:                     roomserverDB,
-		Cfg:                    zendriteCfg,
+		Cfg:                    dendriteCfg,
 		Cache:                  caches,
-		ServerName:             zendriteCfg.Global.ServerName,
+		ServerName:             dendriteCfg.Global.ServerName,
 		PerspectiveServerNames: perspectiveServerNames,
-		InputRoomEventTopic:    zendriteCfg.Global.JetStream.Prefixed(jetstream.InputRoomEvent),
+		InputRoomEventTopic:    dendriteCfg.Global.JetStream.Prefixed(jetstream.InputRoomEvent),
 		OutputProducer:         producer,
 		JetStream:              js,
 		NATSClient:             nc,
-		Durable:                zendriteCfg.Global.JetStream.Durable("RoomserverInputConsumer"),
+		Durable:                dendriteCfg.Global.JetStream.Durable("RoomserverInputConsumer"),
 		ServerACLs:             serverACLs,
 		enableMetrics:          enableMetrics,
-		defaultRoomVersion:     zendriteCfg.RoomServer.DefaultRoomVersion,
-		PartialStateTracker:    NewPartialStateTracker(),
-		PurgeTracker:           perform.NewPurgeTracker(),
-		// perform-er structs + queryer struct get initialized when we have a federation sender to use
+		defaultRoomVersion:     dendriteCfg.RoomServer.DefaultRoomVersion,
+		// perform-er structs + queryer struct get initialised when we have a federation sender to use
 	}
 	return a
 }
@@ -150,14 +141,12 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		Inputer: r.Inputer,
 	}
 	r.Joiner = &perform.Joiner{
-		Cfg:              &r.Cfg.RoomServer,
-		DB:               r.DB,
-		FSAPI:            r.fsAPI,
-		RSAPI:            r,
-		Inputer:          r.Inputer,
-		Queryer:          r.Queryer,
-		PurgeTracker:     r.PurgeTracker,
-		PurgeWaitTimeout: defaultPurgeWaitTimeout,
+		Cfg:     &r.Cfg.RoomServer,
+		DB:      r.DB,
+		FSAPI:   r.fsAPI,
+		RSAPI:   r,
+		Inputer: r.Inputer,
+		Queryer: r.Queryer,
 	}
 	r.Peeker = &perform.Peeker{
 		ServerName: r.ServerName,
@@ -198,20 +187,19 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		PreferServers: r.PerspectiveServerNames,
 	}
 	r.Forgetter = &perform.Forgetter{
-		DB:    r.DB,
-		RSAPI: r,
+		DB: r.DB,
 	}
 	r.Upgrader = &perform.Upgrader{
 		Cfg:    &r.Cfg.RoomServer,
 		URSAPI: r,
 	}
 	r.Admin = &perform.Admin{
-		DB:           r.DB,
-		Cfg:          &r.Cfg.RoomServer,
-		Inputer:      r.Inputer,
-		Queryer:      r.Queryer,
-		Leaver:       r.Leaver,
-		PurgeTracker: r.PurgeTracker,
+		DB:      r.DB,
+		Cfg:     &r.Cfg.RoomServer,
+		Inputer: r.Inputer,
+		Queryer: r.Queryer,
+		Leaver:  r.Leaver,
+		RSAPI:   r,
 	}
 	r.Creator = &perform.Creator{
 		DB:    r.DB,
@@ -219,57 +207,9 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		RSAPI: r,
 	}
 
-	if err := r.Start(); err != nil {
+	if err := r.Inputer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start roomserver input API")
 	}
-
-	// When auto-purge is enabled, sweep any rooms that are already eligible
-	// at startup (e.g. left over from a previous run, or from a crash
-	// mid-purge during the previous shutdown).
-	if r.Cfg.RoomServer.AutoPurgeEnabled() {
-		go func() {
-			if _, err := r.RunEmptyRoomsSweep(r.ProcessContext.Context()); err != nil {
-				logrus.WithError(err).Warn("startup empty-rooms sweep failed")
-			}
-		}()
-	}
-}
-
-// RunEmptyRoomsSweep enumerates all rooms eligible for auto-purge under
-// the configured mode and schedules an async auto-purge for each. Returns
-// the number of rooms scheduled. Safe to call multiple times;
-// AutoPurgeRoom coalesces duplicates. Returns 0 for AutoPurgeNever.
-func (r *RoomserverInternalAPI) RunEmptyRoomsSweep(ctx context.Context) (int, error) {
-	rooms, err := r.DB.PurgeableRooms(ctx, r.Cfg.RoomServer.AutoPurgeMode)
-	if err != nil {
-		return 0, err
-	}
-	for _, roomID := range rooms {
-		r.AutoPurgeRoom(ctx, roomID, "startup_sweep")
-	}
-	if len(rooms) > 0 {
-		logrus.WithField("count", len(rooms)).Info("startup empty-rooms sweep scheduled purges")
-	}
-	return len(rooms), nil
-}
-
-// ScheduleAutoPurgeIfEligible looks up the roomInfo for the given roomID
-// and dispatches to Inputer.ScheduleAutoPurgeIfEmpty which respects the
-// configured AutoPurgeMode. This is the entry point used from non-event
-// code paths such as /forget where there is no roomInfo on hand.
-func (r *RoomserverInternalAPI) ScheduleAutoPurgeIfEligible(ctx context.Context, roomID string) {
-	if !r.Cfg.RoomServer.AutoPurgeEnabled() {
-		return
-	}
-	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
-	if err != nil {
-		logrus.WithError(err).WithField("room_id", roomID).Warn("auto-purge: failed to fetch room info")
-		return
-	}
-	if roomInfo == nil {
-		return
-	}
-	r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
 }
 
 func (r *RoomserverInternalAPI) SetUserAPI(userAPI userapi.RoomserverUserAPI) {
@@ -285,14 +225,6 @@ func (r *RoomserverInternalAPI) DefaultRoomVersion() gomatrixserverlib.RoomVersi
 	return r.defaultRoomVersion
 }
 
-// AutoForgetOnLeaveEnabled reports whether the server is configured to
-// automatically forget rooms when a local user transitions to leave or
-// ban. Used by the /capabilities endpoint to advertise
-// m.forget_forced_upon_leave.
-func (r *RoomserverInternalAPI) AutoForgetOnLeaveEnabled() bool {
-	return r.Cfg.RoomServer.AutoForgetOnLeave
-}
-
 func (r *RoomserverInternalAPI) IsKnownRoom(ctx context.Context, roomID spec.RoomID) (bool, error) {
 	return r.Inviter.IsKnownRoom(ctx, roomID)
 }
@@ -304,7 +236,7 @@ func (r *RoomserverInternalAPI) StateQuerier() gomatrixserverlib.StateQuerier {
 func (r *RoomserverInternalAPI) HandleInvite(
 	ctx context.Context, inviteEvent *types.HeaderedEvent,
 ) error {
-	outputEvents, err := r.ProcessInviteMembership(ctx, inviteEvent)
+	outputEvents, err := r.Inviter.ProcessInviteMembership(ctx, inviteEvent)
 	if err != nil {
 		return err
 	}
@@ -416,148 +348,4 @@ func (r *RoomserverInternalAPI) InsertReportedEvent(
 	score int64,
 ) (int64, error) {
 	return r.DB.InsertReportedEvent(ctx, roomID, eventID, reportingUserID, reason, score)
-}
-
-// MSC3706 Partial State Join methods.
-
-// SetRoomPartialState marks a room as having partial state after a faster join.
-func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
-	return r.DB.SetRoomPartialState(ctx, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
-}
-
-// IsRoomPartialState returns true if the room has partial state.
-func (r *RoomserverInternalAPI) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error) {
-	return r.DB.IsRoomPartialState(ctx, roomNID)
-}
-
-// ClearRoomPartialState removes the partial state flag from a room
-// Returns the device list stream ID that was stored at join time for device list replay.
-func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
-	return r.DB.ClearRoomPartialState(ctx, roomNID)
-}
-
-// GetPartialStateServers returns servers known to be in a partial state room.
-func (r *RoomserverInternalAPI) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
-	return r.DB.GetPartialStateServers(ctx, roomNID)
-}
-
-// GetPartialStateJoinServer returns the server we joined through for a partial state room.
-func (r *RoomserverInternalAPI) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
-	return r.DB.GetPartialStateJoinServer(ctx, roomNID)
-}
-
-// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room.
-func (r *RoomserverInternalAPI) GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error) {
-	return r.DB.GetPartialStateDeviceListStreamID(ctx, roomNID)
-}
-
-// GetAllPartialStateRooms returns all rooms with partial state.
-func (r *RoomserverInternalAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
-	return r.DB.GetAllPartialStateRooms(ctx)
-}
-
-// RoomInfoByNID returns room information for the given room NID.
-func (r *RoomserverInternalAPI) RoomInfoByNID(ctx context.Context, roomNID types.RoomNID) (*types.RoomInfo, error) {
-	return r.DB.RoomInfoByNID(ctx, roomNID)
-}
-
-// LatestEventIDs returns the latest event IDs and state snapshot for a room.
-func (r *RoomserverInternalAPI) LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error) {
-	return r.DB.LatestEventIDs(ctx, roomNID)
-}
-
-// RoomIDFromNID returns the room ID for a given room NID.
-func (r *RoomserverInternalAPI) RoomIDFromNID(ctx context.Context, roomNID types.RoomNID) (string, error) {
-	return r.DB.RoomIDFromNID(ctx, roomNID)
-}
-
-// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state (MSC3706 faster joins).
-// This is used by sync to filter rooms that may have incomplete state.
-func (r *RoomserverInternalAPI) GetPartialStateRoomIDs(ctx context.Context) ([]string, error) {
-	roomNIDs, err := r.DB.GetAllPartialStateRooms(ctx)
-	if err != nil {
-		return nil, err
-	}
-	roomIDs := make([]string, 0, len(roomNIDs))
-	for _, nid := range roomNIDs {
-		roomID, err := r.DB.RoomIDFromNID(ctx, nid)
-		if err != nil {
-			// Skip rooms we can't look up
-			continue
-		}
-		roomIDs = append(roomIDs, roomID)
-	}
-	return roomIDs, nil
-}
-
-// NotifyUnPartialStated notifies observers that a room has completed its partial state resync.
-// This wakes up any callers waiting in AwaitFullState for this room and emits an output
-// event to notify downstream components (like syncapi) about the completion.
-func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
-	// Wake up any callers waiting for full state
-	if r.PartialStateTracker != nil {
-		r.PartialStateTracker.NotifyUnPartialStated(roomID)
-	}
-
-	// Query local joined members to notify downstream components
-	ctx := context.Background()
-	membershipsReq := &api.QueryMembershipsForRoomRequest{
-		RoomID:     roomID,
-		JoinedOnly: true,
-		LocalOnly:  true,
-	}
-	membershipsRes := &api.QueryMembershipsForRoomResponse{}
-	if err := r.QueryMembershipsForRoom(ctx, membershipsReq, membershipsRes); err != nil {
-		logrus.WithError(err).WithField("room_id", roomID).Error("Failed to query memberships for un-partial-stated room")
-		return
-	}
-
-	// Extract user IDs from membership events
-	var joinedUserIDs []string
-	for _, ev := range membershipsRes.JoinEvents {
-		if ev.StateKey != nil && *ev.StateKey != "" {
-			joinedUserIDs = append(joinedUserIDs, *ev.StateKey)
-		}
-	}
-
-	if len(joinedUserIDs) == 0 {
-		logrus.WithField("room_id", roomID).Debug("No local members in un-partial-stated room, skipping output event")
-		return
-	}
-
-	// Emit output event to notify downstream components
-	outputEvent := api.OutputEvent{
-		Type: api.OutputTypeUnPartialStatedRoom,
-		UnPartialStatedRoom: &api.OutputUnPartialStatedRoom{
-			RoomID:        roomID,
-			JoinedUserIDs: joinedUserIDs,
-		},
-	}
-
-	if err := r.OutputProducer.ProduceRoomEvents(roomID, []api.OutputEvent{outputEvent}); err != nil {
-		logrus.WithError(err).WithField("room_id", roomID).Error("Failed to produce un-partial-stated room event")
-		return
-	}
-
-	logrus.WithFields(logrus.Fields{
-		"room_id":    roomID,
-		"user_count": len(joinedUserIDs),
-	}).Info("Room completed partial state resync, notified downstream components")
-}
-
-// UpdateCurrentStateAfterResync updates the current state and memberships after a partial state resync.
-// This is called after state events have been stored as outliers via SendStateAsOutliers.
-// It creates a new state snapshot from the stored events, calculates the state delta,
-// updates the membership table, and notifies downstream components (syncapi).
-func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {
-	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
-	if err != nil {
-		return err
-	}
-	// ScheduleAutoPurgeIfEmpty is called here, after UpdateStateAfterResync's
-	// deferred EndTransactionWithCheck has committed the membership changes.
-	if localLeftJoin {
-		r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
-	}
-	return nil
 }

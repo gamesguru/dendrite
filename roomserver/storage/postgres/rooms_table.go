@@ -63,6 +63,9 @@ const selectLatestEventNIDsForUpdateSQL = "" +
 const updateLatestEventNIDsSQL = "" +
 	"UPDATE roomserver_rooms SET latest_event_nids = $2, last_event_sent_nid = $3, state_snapshot_nid = $4 WHERE room_nid = $1"
 
+const updateStateSnapshotNIDSQL = "" +
+	"UPDATE roomserver_rooms SET state_snapshot_nid = $2 WHERE room_nid = $1"
+
 const selectRoomVersionsForRoomNIDsSQL = "" +
 	"SELECT room_nid, room_version FROM roomserver_rooms WHERE room_nid = ANY($1)"
 
@@ -88,6 +91,7 @@ type roomStatements struct {
 	selectLatestEventNIDsStmt          *sql.Stmt
 	selectLatestEventNIDsForUpdateStmt *sql.Stmt
 	updateLatestEventNIDsStmt          *sql.Stmt
+	updateStateSnapshotNIDStmt         *sql.Stmt
 	selectRoomVersionsForRoomNIDsStmt  *sql.Stmt
 	selectRoomInfoStmt                 *sql.Stmt
 	bulkSelectRoomIDsStmt              *sql.Stmt
@@ -119,6 +123,7 @@ func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
 		{&s.selectLatestEventNIDsStmt, selectLatestEventNIDsSQL},
 		{&s.selectLatestEventNIDsForUpdateStmt, selectLatestEventNIDsForUpdateSQL},
 		{&s.updateLatestEventNIDsStmt, updateLatestEventNIDsSQL},
+		{&s.updateStateSnapshotNIDStmt, updateStateSnapshotNIDSQL},
 		{&s.selectRoomVersionsForRoomNIDsStmt, selectRoomVersionsForRoomNIDsSQL},
 		{&s.selectRoomInfoStmt, selectRoomInfoSQL},
 		{&s.bulkSelectRoomIDsStmt, bulkSelectRoomIDsSQL},
@@ -223,6 +228,17 @@ func (s *roomStatements) UpdateLatestEventNIDs(
 		int64(lastEventSentNID),
 		int64(stateSnapshotNID),
 	)
+	return err
+}
+
+func (s *roomStatements) UpdateStateSnapshotNID(
+	ctx context.Context,
+	txn *sql.Tx,
+	roomNID types.RoomNID,
+	stateSnapshotNID types.StateSnapshotNID,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateStateSnapshotNIDStmt)
+	_, err := stmt.ExecContext(ctx, roomNID, int64(stateSnapshotNID))
 	return err
 }
 

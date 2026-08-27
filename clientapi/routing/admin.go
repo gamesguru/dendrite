@@ -495,6 +495,64 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 	}
 }
 
+// AdminBridgeState submits an ordinary new event from the requesting user
+// whose prev_events span both the room's current forward extremities and
+// the given extraEventIDs - events den already holds, connected to the
+// room's graph, but not currently part of current state. Unlike
+// AdminDownloadState this does not override state; it's a real event that
+// goes through ordinary state resolution, and it only works if the
+// requesting user is currently recognised as a room member. It is
+// outward-facing: the resulting event is signed by this server and
+// federated to every other server in the room.
+func AdminBridgeState(req *http.Request, device *api.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, ok := vars["roomID"]
+	if !ok {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting room ID."),
+		}
+	}
+
+	var body struct {
+		EventIDs []string `json:"event_ids"`
+	}
+	if err = json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error()),
+		}
+	}
+	if len(body.EventIDs) == 0 {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting a non-empty \"event_ids\" array in the request body."),
+		}
+	}
+
+	if err = rsAPI.PerformAdminBridgeState(req.Context(), roomID, device.UserID, body.EventIDs); err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{
+				Code: 200,
+				JSON: spec.NotFound(err.Error()),
+			}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"userID":   device.UserID,
+			"roomID":   roomID,
+			"eventIDs": body.EventIDs,
+		}).Error("failed to bridge state")
+		return util.ErrorResponse(err)
+	}
+	return util.JSONResponse{
+		Code: 200,
+		JSON: struct{}{},
+	}
+}
+
 // GetEventReports returns reported events for a given user/room.
 func GetEventReports(
 	req *http.Request,

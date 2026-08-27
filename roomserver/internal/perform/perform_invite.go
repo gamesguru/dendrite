@@ -32,6 +32,21 @@ type QueryState struct {
 	querier api.QuerySenderIDAPI
 }
 
+const pseudoIDRoomKeyID = gomatrixserverlib.KeyID("ed25519:1")
+
+// signedMXIDMapping signs the pseudo-ID to MXID mapping with the server
+// federation key, not the per-room pseudo-ID signing key.
+func signedMXIDMapping(userID spec.UserID, senderID spec.SenderID, serverName spec.ServerName, keyID gomatrixserverlib.KeyID, privateKey ed25519.PrivateKey) (*gomatrixserverlib.MXIDMapping, error) {
+	mapping := &gomatrixserverlib.MXIDMapping{
+		UserRoomKey: senderID,
+		UserID:      userID.String(),
+	}
+	if err := mapping.Sign(serverName, keyID, privateKey); err != nil {
+		return nil, err
+	}
+	return mapping, nil
+}
+
 func (q *QueryState) GetAuthEvents(ctx context.Context, event gomatrixserverlib.PDU) (gomatrixserverlib.AuthEventProvider, error) {
 	authEventIDs := event.AuthEventIDs()
 	if gomatrixserverlib.MustGetRoomVersion(event.Version()).DomainlessRoomIDs() {
@@ -124,15 +139,35 @@ func (r *Inviter) PerformInvite(
 	ctx context.Context,
 	req *api.PerformInviteRequest,
 ) error {
+	info, err := r.DB.RoomInfo(ctx, req.InviteInput.RoomID.String())
+	if err != nil {
+		return err
+	} else if info == nil {
+		return fmt.Errorf("room %s not found", req.InviteInput.RoomID)
+	}
+
+	if !r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Inviter.Domain()) {
+		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
+	}
+
 	senderID, err := r.RSAPI.QuerySenderIDForUser(ctx, req.InviteInput.RoomID, req.InviteInput.Inviter)
 	if err != nil {
 		return err
 	} else if senderID == nil {
 		return fmt.Errorf("sender ID not found for %s in %s", req.InviteInput.Inviter, req.InviteInput.RoomID)
 	}
-	info, err := r.DB.RoomInfo(ctx, req.InviteInput.RoomID.String())
-	if err != nil {
-		return err
+
+	signingKey := req.InviteInput.PrivateKey
+	keyID := req.InviteInput.KeyID
+	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
+		signingKey, err = r.RSAPI.GetOrCreateUserRoomPrivateKey(ctx, req.InviteInput.Inviter, req.InviteInput.RoomID)
+		if err != nil {
+			return err
+		}
+		keyID = pseudoIDRoomKeyID
+		if err = r.RSAPI.StoreUserRoomPublicKey(ctx, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter, req.InviteInput.RoomID); err != nil {
+			return err
+		}
 	}
 
 	proto := gomatrixserverlib.ProtoEvent{
@@ -146,24 +181,20 @@ func (r *Inviter) PerformInvite(
 		Reason:     req.InviteInput.Reason,
 		IsDirect:   req.InviteInput.IsDirect,
 	}
+	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(req.InviteInput.Inviter, spec.SenderIDFromPseudoIDKey(signingKey), req.InviteInput.Inviter.Domain(), req.InviteInput.KeyID, req.InviteInput.PrivateKey)
+		if err != nil {
+			return err
+		}
+		content.MXIDMapping = mapping
+	}
 
 	if err = proto.SetContent(content); err != nil {
 		return err
 	}
 
-	if !r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Inviter.Domain()) {
-		return api.ErrInvalidID{Err: fmt.Errorf("the invite must be from a local user")}
-	}
-
 	isTargetLocal := r.Cfg.Matrix.IsLocalServerName(req.InviteInput.Invitee.Domain())
-
-	signingKey := req.InviteInput.PrivateKey
-	if info.RoomVersion == gomatrixserverlib.RoomVersionPseudoIDs {
-		signingKey, err = r.RSAPI.GetOrCreateUserRoomPrivateKey(ctx, req.InviteInput.Inviter, req.InviteInput.RoomID)
-		if err != nil {
-			return err
-		}
-	}
 
 	input := gomatrixserverlib.PerformInviteInput{
 		RoomID:            req.InviteInput.RoomID,
@@ -173,7 +204,7 @@ func (r *Inviter) PerformInvite(
 		IsTargetLocal:     isTargetLocal,
 		EventTemplate:     proto,
 		StrippedState:     req.InviteRoomState,
-		KeyID:             req.InviteInput.KeyID,
+		KeyID:             keyID,
 		SigningKey:        signingKey,
 		EventTime:         req.InviteInput.EventTime,
 		MembershipQuerier: &api.MembershipQuerier{Roomserver: r.RSAPI},

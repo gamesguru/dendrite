@@ -742,7 +742,7 @@ Event:
 
 	// If our backward extremity was not a known event to us then we obviously didn't
 	// close the gap.
-	if state, err := t.db.StateAtEventIDs(ctx, []string{earliestNewEvent.EventID()}); err != nil || len(state) == 0 && state[0].BeforeStateSnapshotNID == 0 {
+	if state, err := t.db.StateAtEventIDs(ctx, []string{earliestNewEvent.EventID()}); err != nil || len(state) == 0 || state[0].BeforeStateSnapshotNID == 0 {
 		return newEvents, false, false, nil
 	}
 

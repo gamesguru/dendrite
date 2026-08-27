@@ -154,6 +154,24 @@ func (u *RoomUpdater) SetState(
 	})
 }
 
+// SetCurrentStateSnapshotNID updates the room's current state pointer without
+// changing its latest events.
+func (u *RoomUpdater) SetCurrentStateSnapshotNID(stateSnapshotNID types.StateSnapshotNID) error {
+	if u.roomInfo == nil {
+		return types.ErrorInvalidRoomInfo
+	}
+	return u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
+		if err := u.d.RoomsTable.UpdateStateSnapshotNID(u.ctx, txn, u.roomInfo.RoomNID, stateSnapshotNID); err != nil {
+			return err
+		}
+		if u.roomInfo != nil {
+			u.roomInfo.SetStateSnapshotNID(stateSnapshotNID)
+			u.roomInfo.SetIsStub(false)
+		}
+		return nil
+	})
+}
+
 func (u *RoomUpdater) EventTypeNIDs(
 	ctx context.Context, eventTypes []string,
 ) (map[string]types.EventTypeNID, error) {
