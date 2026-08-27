@@ -11,16 +11,16 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	clientapi "github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/pushrules"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
+	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/pushrules"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 type RegistrationTokens interface {
@@ -29,7 +29,7 @@ type RegistrationTokens interface {
 	ListRegistrationTokens(ctx context.Context, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	GetRegistrationToken(ctx context.Context, tokenString string) (*clientapi.RegistrationToken, error)
 	DeleteRegistrationToken(ctx context.Context, tokenString string) error
-	UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]interface{}) (*clientapi.RegistrationToken, error)
+	UpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 }
 
 type Profile interface {
@@ -44,10 +44,12 @@ type Account interface {
 	// for this account. If no password is supplied, the account will be a passwordless account. If the
 	// account already exists, it will return nil, ErrUserExists.
 	CreateAccount(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string, appserviceID string, accountType api.AccountType) (*api.Account, error)
+	CountAccounts(ctx context.Context) (int64, error)
 	GetAccountByPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) (*api.Account, error)
 	GetNewNumericLocalpart(ctx context.Context, serverName spec.ServerName) (int64, error)
 	CheckAccountAvailability(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	GetAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
+	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SetPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) error
 }
@@ -76,6 +78,10 @@ type Device interface {
 	// Returns the device on success.
 	CreateDevice(ctx context.Context, localpart string, serverName spec.ServerName, deviceID *string, accessToken string, displayName *string, ipAddr, userAgent string) (dev *api.Device, returnErr error)
 	UpdateDevice(ctx context.Context, localpart string, serverName spec.ServerName, deviceID string, displayName *string) error
+	// UpdateDeviceAccessToken replaces the access token of an existing device without
+	// recreating it, so the session ID and display name are preserved. Used for OIDC
+	// access token rotation, where the device is unchanged but the token is not.
+	UpdateDeviceAccessToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, accessToken string) error
 	UpdateDeviceLastSeen(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
 	RemoveDevices(ctx context.Context, localpart string, serverName spec.ServerName, devices []string) error
 	// RemoveAllDevices deleted all devices for this user. Returns the devices deleted.
@@ -124,8 +130,13 @@ type ThreePID interface {
 	GetThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 }
 
+type ExternalID interface {
+	GetLocalpartByExternalID(ctx context.Context, providerID, externalID string) (localpart string, serverName spec.ServerName, err error)
+	CreateExternalIDMapping(ctx context.Context, localpart string, serverName spec.ServerName, providerID, externalID string) error
+}
+
 type Notification interface {
-	InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]interface{}, n *api.Notification) error
+	InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
 	SetNotificationsRead(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64, read bool) (affected bool, err error)
 	GetNotifications(ctx context.Context, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error)
@@ -134,10 +145,18 @@ type Notification interface {
 	DeleteOldNotifications(ctx context.Context) error
 }
 
+type DehydratedDevice interface {
+	StoreDehydratedDevice(ctx context.Context, userID, deviceID string, deviceData json.RawMessage) error
+	GetDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error)
+	DeleteDehydratedDevice(ctx context.Context, userID string) (deviceID string, err error)
+}
+
 type UserDatabase interface {
 	Account
 	AccountData
+	DehydratedDevice
 	Device
+	ExternalID
 	KeyBackup
 	LoginToken
 	Notification

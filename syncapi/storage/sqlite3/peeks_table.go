@@ -11,10 +11,10 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const peeksSchema = `
@@ -99,7 +99,8 @@ func (s *peekStatements) InsertPeek(
 		return
 	}
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
-	_, err = sqlutil.TxStmt(txn, s.insertPeekStmt).ExecContext(ctx, streamPos, roomID, userID, deviceID, nowMilli)
+	insertPeekStmt := sqlutil.TxStmt(txn, s.insertPeekStmt)
+	_, err = insertPeekStmt.ExecContext(ctx, streamPos, roomID, userID, deviceID, nowMilli)
 	return
 }
 
@@ -110,7 +111,8 @@ func (s *peekStatements) DeletePeek(
 	if err != nil {
 		return
 	}
-	_, err = sqlutil.TxStmt(txn, s.deletePeekStmt).ExecContext(ctx, streamPos, roomID, userID, deviceID)
+	deletePeekStmt := sqlutil.TxStmt(txn, s.deletePeekStmt)
+	_, err = deletePeekStmt.ExecContext(ctx, streamPos, roomID, userID, deviceID)
 	return
 }
 
@@ -121,7 +123,8 @@ func (s *peekStatements) DeletePeeks(
 	if err != nil {
 		return 0, err
 	}
-	result, err := sqlutil.TxStmt(txn, s.deletePeeksStmt).ExecContext(ctx, streamPos, roomID, userID)
+	deletePeeksStmt := sqlutil.TxStmt(txn, s.deletePeeksStmt)
+	result, err := deletePeeksStmt.ExecContext(ctx, streamPos, roomID, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -138,7 +141,8 @@ func (s *peekStatements) DeletePeeks(
 func (s *peekStatements) SelectPeeksInRange(
 	ctx context.Context, txn *sql.Tx, userID, deviceID string, r types.Range,
 ) (peeks []types.Peek, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectPeeksInRangeStmt).QueryContext(ctx, userID, deviceID, r.Low(), r.High())
+	selectPeeksInRangeStmt := sqlutil.TxStmt(txn, s.selectPeeksInRangeStmt)
+	rows, err := selectPeeksInRangeStmt.QueryContext(ctx, userID, deviceID, r.Low(), r.High())
 	if err != nil {
 		return
 	}
@@ -160,7 +164,8 @@ func (s *peekStatements) SelectPeeksInRange(
 func (s *peekStatements) SelectPeekingDevices(
 	ctx context.Context, txn *sql.Tx,
 ) (peekingDevices map[string][]types.PeekingDevice, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectPeekingDevicesStmt).QueryContext(ctx)
+	selectPeekingDevicesStmt := sqlutil.TxStmt(txn, s.selectPeekingDevicesStmt)
+	rows, err := selectPeekingDevicesStmt.QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +199,7 @@ func (s *peekStatements) SelectMaxPeekID(
 func (s *peekStatements) PurgePeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgePeeksStmt).ExecContext(ctx, roomID)
+	purgePeeksStmt := sqlutil.TxStmt(txn, s.purgePeeksStmt)
+	_, err := purgePeeksStmt.ExecContext(ctx, roomID)
 	return err
 }

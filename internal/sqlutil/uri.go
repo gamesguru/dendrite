@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // ParseFileURI returns the filepath in the given file: URI. Specifically, this will handle
@@ -25,11 +25,12 @@ func ParseFileURI(dataSourceName config.DataSource) (string, error) {
 		return "", err
 	}
 	var cs string
-	if uri.Opaque != "" { // file:filename.db
+	switch {
+	case uri.Opaque != "": // file:filename.db
 		cs = uri.Opaque
-	} else if uri.Path != "" { // file:///path/to/filename.db
+	case uri.Path != "": // file:///path/to/filename.db
 		cs = uri.Path
-	} else {
+	default:
 		return "", fmt.Errorf("invalid file uri: %s", dataSourceName)
 	}
 	return cs, nil

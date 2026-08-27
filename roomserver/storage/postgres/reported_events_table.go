@@ -11,12 +11,13 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const reportedEventsScheme = `
@@ -34,7 +35,7 @@ CREATE TABLE IF NOT EXISTS roomserver_reported_events
 );`
 
 const insertReportedEventSQL = `
-	INSERT INTO roomserver_reported_events (room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts) 
+	INSERT INTO roomserver_reported_events (room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts)
 	VALUES ($1, $2, $3, $4, $5, $6, $7)
 	RETURNING id
 `
@@ -43,11 +44,11 @@ const selectReportedEventsDescSQL = `
 WITH countReports AS (
     SELECT count(*) as report_count
     FROM roomserver_reported_events
-    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 )
 SELECT report_count, id, room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts
 FROM roomserver_reported_events, countReports
-WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 ORDER BY received_ts DESC
 OFFSET $3
 LIMIT $4
@@ -57,11 +58,11 @@ const selectReportedEventsAscSQL = `
 WITH countReports AS (
     SELECT count(*) as report_count
     FROM roomserver_reported_events
-    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+    WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 )
 SELECT report_count, id, room_nid, event_nid, reporting_user_nid, event_sender_nid, reason, score, received_ts
 FROM roomserver_reported_events, countReports
-WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::TEXT IS NULL OR reporting_user_nid = $2::BIGINT)
+WHERE ($1::BIGINT IS NULL OR room_nid = $1::BIGINT) AND ($2::BIGINT IS NULL OR reporting_user_nid = $2::BIGINT)
 ORDER BY received_ts ASC
 OFFSET $3
 LIMIT $4
@@ -140,13 +141,15 @@ func (r *reportedEventsStatements) SelectReportedEvents(
 		stmt = sqlutil.TxStmt(txn, r.selectReportedEventsAscStmt)
 	}
 
-	var qryRoomNID *types.RoomNID
+	var qryRoomNID *int64
 	if roomNID > 0 {
-		qryRoomNID = &roomNID
+		v := int64(roomNID)
+		qryRoomNID = &v
 	}
-	var qryReportingUser *types.EventStateKeyNID
+	var qryReportingUser *int64
 	if reportingUserID > 0 {
-		qryReportingUser = &reportingUserID
+		v := int64(reportingUserID)
+		qryReportingUser = &v
 	}
 
 	rows, err := stmt.QueryContext(ctx,

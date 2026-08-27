@@ -6,14 +6,14 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var (
@@ -33,29 +33,35 @@ func (k *mockKeyAPI) PerformUploadKeys(ctx context.Context, req *userapi.Perform
 
 func (k *mockKeyAPI) SetUserAPI(i userapi.UserInternalAPI) {}
 
-// PerformClaimKeys claims one-time keys for use in pre-key messages
+// PerformClaimKeys claims one-time keys for use in pre-key messages.
 func (k *mockKeyAPI) PerformClaimKeys(ctx context.Context, req *userapi.PerformClaimKeysRequest, res *userapi.PerformClaimKeysResponse) {
 }
+
 func (k *mockKeyAPI) PerformDeleteKeys(ctx context.Context, req *userapi.PerformDeleteKeysRequest, res *userapi.PerformDeleteKeysResponse) error {
 	return nil
 }
+
 func (k *mockKeyAPI) PerformUploadDeviceKeys(ctx context.Context, req *userapi.PerformUploadDeviceKeysRequest, res *userapi.PerformUploadDeviceKeysResponse) {
 }
+
 func (k *mockKeyAPI) PerformUploadDeviceSignatures(ctx context.Context, req *userapi.PerformUploadDeviceSignaturesRequest, res *userapi.PerformUploadDeviceSignaturesResponse) {
 }
+
 func (k *mockKeyAPI) QueryKeys(ctx context.Context, req *userapi.QueryKeysRequest, res *userapi.QueryKeysResponse) {
 }
+
 func (k *mockKeyAPI) QueryKeyChanges(ctx context.Context, req *userapi.QueryKeyChangesRequest, res *userapi.QueryKeyChangesResponse) error {
 	return nil
 }
+
 func (k *mockKeyAPI) QueryOneTimeKeys(ctx context.Context, req *userapi.QueryOneTimeKeysRequest, res *userapi.QueryOneTimeKeysResponse) error {
 	return nil
-
 }
+
 func (k *mockKeyAPI) QueryDeviceMessages(ctx context.Context, req *userapi.QueryDeviceMessagesRequest, res *userapi.QueryDeviceMessagesResponse) error {
 	return nil
-
 }
+
 func (k *mockKeyAPI) QuerySignatures(ctx context.Context, req *userapi.QuerySignaturesRequest, res *userapi.QuerySignaturesResponse) {
 }
 
@@ -204,8 +210,9 @@ func leaveResponseWithRooms(syncResponse *types.Response, userID string, roomIDs
 	return syncResponse
 }
 
-// tests that joining a room which results in sharing a new user includes that user in `changed`
+// tests that joining a room which results in sharing a new user includes that user in `changed`.
 func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@bill:localhost"
 	newlyJoinedRoom := "!TestKeyChangeCatchupOnJoinShareNewUser:bar"
 	syncResponse := types.NewResponse()
@@ -227,8 +234,9 @@ func TestKeyChangeCatchupOnJoinShareNewUser(t *testing.T) {
 	})
 }
 
-// tests that leaving a room which results in sharing no rooms with a user includes that user in `left`
+// tests that leaving a room which results in sharing no rooms with a user includes that user in `left`.
 func TestKeyChangeCatchupOnLeaveShareLeftUser(t *testing.T) {
+	t.Parallel()
 	removeUser := "@bill:localhost"
 	newlyLeftRoom := "!TestKeyChangeCatchupOnLeaveShareLeftUser:bar"
 	syncResponse := types.NewResponse()
@@ -252,6 +260,7 @@ func TestKeyChangeCatchupOnLeaveShareLeftUser(t *testing.T) {
 
 // tests that joining a room which doesn't result in sharing a new user results in no changes.
 func TestKeyChangeCatchupOnJoinShareNoNewUsers(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob:localhost"
 	newlyJoinedRoom := "!TestKeyChangeCatchupOnJoinShareNoNewUsers:bar"
 	syncResponse := types.NewResponse()
@@ -274,6 +283,7 @@ func TestKeyChangeCatchupOnJoinShareNoNewUsers(t *testing.T) {
 
 // tests that leaving a room which doesn't result in sharing no rooms with a user results in no changes.
 func TestKeyChangeCatchupOnLeaveShareNoUsers(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob:localhost"
 	newlyLeftRoom := "!TestKeyChangeCatchupOnLeaveShareNoUsers:bar"
 	syncResponse := types.NewResponse()
@@ -296,6 +306,7 @@ func TestKeyChangeCatchupOnLeaveShareNoUsers(t *testing.T) {
 
 // tests that not joining any rooms (but having messages in the response) do not result in changes.
 func TestKeyChangeCatchupNoNewJoinsButMessages(t *testing.T) {
+	t.Parallel()
 	existingUser := "@bob1:localhost"
 	roomID := "!TestKeyChangeCatchupNoNewJoinsButMessages:bar"
 	syncResponse := types.NewResponse()
@@ -359,6 +370,7 @@ func TestKeyChangeCatchupNoNewJoinsButMessages(t *testing.T) {
 
 // tests that joining/leaving multiple rooms can result in both `changed` and `left` and they are not duplicated.
 func TestKeyChangeCatchupChangeAndLeft(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@berta:localhost"
 	newShareUser2 := "@bobby:localhost"
 	newlyLeftUser := "@charlie:localhost"
@@ -399,6 +411,7 @@ func TestKeyChangeCatchupChangeAndLeft(t *testing.T) {
 //
 // Ergo, we put them in `left` as it is simpler.
 func TestKeyChangeCatchupChangeAndLeftSameRoom(t *testing.T) {
+	t.Parallel()
 	newShareUser := "@berta:localhost"
 	newShareUser2 := "@bobby:localhost"
 	roomID := "!join:bar"

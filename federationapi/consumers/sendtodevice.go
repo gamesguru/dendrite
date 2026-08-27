@@ -10,19 +10,19 @@ import (
 	"context"
 	"encoding/json"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	syncTypes "github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	syncTypes "codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputSendToDeviceConsumer consumes events that originate in the clientapi.
@@ -55,7 +55,7 @@ func NewOutputSendToDeviceConsumer(
 	}
 }
 
-// Start consuming from the client api
+// Start consuming from the client api.
 func (t *OutputSendToDeviceConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1,
@@ -106,7 +106,7 @@ func (t *OutputSendToDeviceConsumer) onMessage(ctx context.Context, msgs []*nats
 	tdm := gomatrixserverlib.ToDeviceMessage{
 		Sender:    ote.Sender,
 		Type:      ote.Type,
-		MessageID: util.RandomString(32),
+		MessageID: util.RandomString(32), //nolint:mnd
 		Messages: map[string]map[string]json.RawMessage{
 			ote.UserID: {
 				ote.DeviceID: ote.Content,
@@ -120,7 +120,7 @@ func (t *OutputSendToDeviceConsumer) onMessage(ctx context.Context, msgs []*nats
 	}
 
 	log.Debugf("Sending send-to-device message into %q destination queue", destServerName)
-	if err := t.queues.SendEDU(edu, originServerName, []spec.ServerName{destServerName}); err != nil {
+	if err := t.queues.SendEDU(edu, originServerName, []spec.ServerName{destServerName}); err != nil { //nolint:contextcheck
 		log.WithError(err).Error("failed to send EDU")
 		return false
 	}

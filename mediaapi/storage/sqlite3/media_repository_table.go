@@ -12,10 +12,11 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/storage/tables"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 const mediaSchema = `
@@ -57,11 +58,16 @@ const selectMediaByHashSQL = `
 SELECT content_type, file_size_bytes, creation_ts, upload_name, media_id, user_id FROM mediaapi_media_repository WHERE base64hash = $1 AND media_origin = $2
 `
 
+const deleteMediaSQL = `
+DELETE FROM mediaapi_media_repository WHERE media_id = $1 AND media_origin = $2
+`
+
 type mediaStatements struct {
 	db                    *sql.DB
 	insertMediaStmt       *sql.Stmt
 	selectMediaStmt       *sql.Stmt
 	selectMediaByHashStmt *sql.Stmt
+	deleteMediaStmt       *sql.Stmt
 }
 
 func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
@@ -77,6 +83,7 @@ func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
 		{&s.insertMediaStmt, insertMediaSQL},
 		{&s.selectMediaStmt, selectMediaSQL},
 		{&s.selectMediaByHashStmt, selectMediaByHashSQL},
+		{&s.deleteMediaStmt, deleteMediaSQL},
 	}.Prepare(db)
 }
 
@@ -84,7 +91,8 @@ func (s *mediaStatements) InsertMedia(
 	ctx context.Context, txn *sql.Tx, mediaMetadata *types.MediaMetadata,
 ) error {
 	mediaMetadata.CreationTimestamp = spec.AsTimestamp(time.Now())
-	_, err := sqlutil.TxStmtContext(ctx, txn, s.insertMediaStmt).ExecContext(
+	insertStmt := sqlutil.TxStmtContext(ctx, txn, s.insertMediaStmt)
+	_, err := insertStmt.ExecContext(
 		ctx,
 		mediaMetadata.MediaID,
 		mediaMetadata.Origin,
@@ -105,7 +113,8 @@ func (s *mediaStatements) SelectMedia(
 		MediaID: mediaID,
 		Origin:  mediaOrigin,
 	}
-	err := sqlutil.TxStmtContext(ctx, txn, s.selectMediaStmt).QueryRowContext(
+	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectMediaStmt)
+	err := selectStmt.QueryRowContext(
 		ctx, mediaMetadata.MediaID, mediaMetadata.Origin,
 	).Scan(
 		&mediaMetadata.ContentType,
@@ -118,6 +127,14 @@ func (s *mediaStatements) SelectMedia(
 	return &mediaMetadata, err
 }
 
+func (s *mediaStatements) DeleteMedia(
+	ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName,
+) error {
+	stmt := sqlutil.TxStmtContext(ctx, txn, s.deleteMediaStmt)
+	_, err := stmt.ExecContext(ctx, mediaID, mediaOrigin)
+	return err
+}
+
 func (s *mediaStatements) SelectMediaByHash(
 	ctx context.Context, txn *sql.Tx, mediaHash types.Base64Hash, mediaOrigin spec.ServerName,
 ) (*types.MediaMetadata, error) {
@@ -125,7 +142,8 @@ func (s *mediaStatements) SelectMediaByHash(
 		Base64Hash: mediaHash,
 		Origin:     mediaOrigin,
 	}
-	err := sqlutil.TxStmtContext(ctx, txn, s.selectMediaByHashStmt).QueryRowContext(
+	selectByHashStmt := sqlutil.TxStmtContext(ctx, txn, s.selectMediaByHashStmt)
+	err := selectByHashStmt.QueryRowContext(
 		ctx, mediaMetadata.Base64Hash, mediaMetadata.Origin,
 	).Scan(
 		&mediaMetadata.ContentType,

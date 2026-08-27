@@ -11,12 +11,13 @@ import (
 	"context"
 	"database/sql"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	// Import the postgres database driver.
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/syncapi/storage/shared"
-	_ "github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
 )
 
 // SyncServerDatasource represents a sync server datasource which manages
@@ -27,7 +28,7 @@ type SyncServerDatasource struct {
 	writer sqlutil.Writer
 }
 
-// NewDatabase creates a new sync server database
+// NewDatabase creates a new sync server database.
 func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*SyncServerDatasource, error) {
 	var d SyncServerDatasource
 	var err error
@@ -38,11 +39,11 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	events, err := NewPostgresEventsTable(d.db)
+	events, err := NewPostgresEventsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
-	currState, err := NewPostgresCurrentRoomStateTable(d.db)
+	currState, err := NewPostgresCurrentRoomStateTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +63,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	sendToDevice, err := NewPostgresSendToDeviceTable(d.db)
+	sendToDevice, err := NewPostgresSendToDeviceTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	receipts, err := NewPostgresReceiptsTable(d.db)
+	receipts, err := NewPostgresReceiptsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +95,14 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
+	slidingSync, err := NewPostgresSlidingSyncTable(d.db)
+	if err != nil {
+		return nil, err
+	}
+	unPartialStatedRooms, err := NewPostgresUnPartialStatedRoomsTable(d.db)
+	if err != nil {
+		return nil, err
+	}
 
 	// apply migrations which need multiple tables
 	m := sqlutil.NewMigrator(d.db)
@@ -102,30 +111,43 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 			Version: "syncapi: set history visibility for existing events",
 			Up:      deltas.UpSetHistoryVisibility, // Requires current_room_state and output_room_events to be created.
 		},
+		sqlutil.Migration{
+			Version: "syncapi: create sliding sync room metadata tables",
+			Up:      deltas.UpCreateSlidingSyncRoomMetadata,
+		},
 	)
 	err = m.Up(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	// Create sliding sync room metadata table after migration creates the tables
+	slidingSyncRoomMetadata, err := NewPostgresSlidingSyncRoomMetadataTable(d.db)
+	if err != nil {
+		return nil, err
+	}
+
 	d.Database = shared.Database{
-		DB:                  d.db,
-		Writer:              d.writer,
-		Invites:             invites,
-		Peeks:               peeks,
-		AccountData:         accountData,
-		OutputEvents:        events,
-		Topology:            topology,
-		CurrentRoomState:    currState,
-		BackwardExtremities: backwardExtremities,
-		Filter:              filter,
-		SendToDevice:        sendToDevice,
-		Receipts:            receipts,
-		Memberships:         memberships,
-		NotificationData:    notificationData,
-		Ignores:             ignores,
-		Presence:            presence,
-		Relations:           relations,
+		DB:                      d.db,
+		Writer:                  d.writer,
+		Invites:                 invites,
+		Peeks:                   peeks,
+		AccountData:             accountData,
+		OutputEvents:            events,
+		Topology:                topology,
+		CurrentRoomState:        currState,
+		BackwardExtremities:     backwardExtremities,
+		Filter:                  filter,
+		SendToDevice:            sendToDevice,
+		Receipts:                receipts,
+		Memberships:             memberships,
+		NotificationData:        notificationData,
+		Ignores:                 ignores,
+		Presence:                presence,
+		Relations:               relations,
+		SlidingSync:             slidingSync,
+		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
+		UnPartialStatedRooms:    unPartialStatedRooms,
 	}
 	return &d, nil
 }

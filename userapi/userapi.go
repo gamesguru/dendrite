@@ -7,25 +7,28 @@
 package userapi
 
 import (
+	"math"
+	"net/http"
 	"time"
 
-	fedsenderapi "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/consumers"
-	"github.com/element-hq/dendrite/userapi/internal"
-	"github.com/element-hq/dendrite/userapi/producers"
-	"github.com/element-hq/dendrite/userapi/storage"
-	"github.com/element-hq/dendrite/userapi/util"
+	fedsenderapi "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/consumers"
+	"codefloe.com/pat-s/zendrite/userapi/internal"
+	"codefloe.com/pat-s/zendrite/userapi/producers"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/userapi/util"
 )
 
 // NewInternalAPI returns a concrete implementation of the internal API. Callers
@@ -35,7 +38,7 @@ import (
 // using its `SetFederationAPI` method, other you may get nil-dereference errors.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
 	rsAPI rsapi.UserRoomserverAPI,
@@ -43,26 +46,38 @@ func NewInternalAPI(
 	enableMetrics bool,
 	blacklistedOrBackingOffFn func(s spec.ServerName) (*statistics.ServerStatistics, error),
 ) *internal.UserInternalAPI {
-	js, _ := natsInstance.Prepare(processContext, &dendriteCfg.Global.JetStream)
-	appServices := dendriteCfg.Derived.ApplicationServices
+	js, _ := natsInstance.Prepare(processContext, &zendriteCfg.Global.JetStream)
+	appServices := zendriteCfg.Derived.ApplicationServices
 
-	pgClient := pushgateway.NewHTTPClient(dendriteCfg.UserAPI.PushGatewayDisableTLSValidation)
+	pgClient := pushgateway.NewHTTPClient(zendriteCfg.UserAPI.PushGatewayDisableTLSValidation)
 
 	db, err := storage.NewUserDatabase(
 		processContext.Context(),
 		cm,
-		&dendriteCfg.UserAPI.AccountDatabase,
-		dendriteCfg.Global.ServerName,
-		dendriteCfg.UserAPI.BCryptCost,
-		dendriteCfg.UserAPI.OpenIDTokenLifetimeMS,
+		&zendriteCfg.UserAPI.AccountDatabase,
+		zendriteCfg.Global.ServerName,
+		zendriteCfg.UserAPI.BCryptCost,
+		zendriteCfg.UserAPI.OpenIDTokenLifetimeMS,
 		api.DefaultLoginTokenLifetime,
-		dendriteCfg.UserAPI.Matrix.ServerNotices.LocalPart,
+		zendriteCfg.UserAPI.Matrix.ServerNotices.LocalPart,
 	)
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to connect to accounts db")
 	}
+	var registeredUsersGauge prometheus.Gauge
+	if enableMetrics {
+		registeredUsersGauge = newRegisteredUsersGauge()
+		count, countErr := db.CountAccounts(processContext.Context())
+		if countErr != nil {
+			logrus.WithError(countErr).Error("failed to count registered users for Prometheus")
+			registeredUsersGauge.Set(math.NaN())
+		} else {
+			registeredUsersGauge.Set(float64(count))
+		}
+		prometheus.MustRegister(registeredUsersGauge)
+	}
 
-	keyDB, err := storage.NewKeyDatabase(cm, &dendriteCfg.KeyServer.Database)
+	keyDB, err := storage.NewKeyDatabase(cm, &zendriteCfg.KeyServer.Database)
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to connect to key db")
 	}
@@ -73,11 +88,11 @@ func NewInternalAPI(
 		// it's handled by clientapi, and hence uses its topic. When user
 		// API handles it for all account data, we can remove it from
 		// here.
-		dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputClientData),
-		dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputNotificationData),
+		zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputClientData),
+		zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputNotificationData),
 	)
 	keyChangeProducer := &producers.KeyChange{
-		Topic:     dendriteCfg.Global.JetStream.Prefixed(jetstream.OutputKeyChangeEvent),
+		Topic:     zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputKeyChangeEvent),
 		JetStream: js,
 		DB:        keyDB,
 	}
@@ -87,15 +102,17 @@ func NewInternalAPI(
 		KeyDatabase:          keyDB,
 		SyncProducer:         syncProducer,
 		KeyChangeProducer:    keyChangeProducer,
-		Config:               &dendriteCfg.UserAPI,
+		Config:               &zendriteCfg.UserAPI,
+		HTTPClient:           &http.Client{Timeout: 10 * time.Second}, //nolint:mnd
 		AppServices:          appServices,
 		RSAPI:                rsAPI,
-		DisableTLSValidation: dendriteCfg.UserAPI.PushGatewayDisableTLSValidation,
+		DisableTLSValidation: zendriteCfg.UserAPI.PushGatewayDisableTLSValidation,
 		PgClient:             pgClient,
 		FedClient:            fedClient,
+		RegisteredUsersGauge: registeredUsersGauge,
 	}
 
-	updater := internal.NewDeviceListUpdater(processContext, keyDB, userAPI, keyChangeProducer, fedClient, dendriteCfg.UserAPI.WorkerCount, rsAPI, dendriteCfg.Global.ServerName, enableMetrics, blacklistedOrBackingOffFn)
+	updater := internal.NewDeviceListUpdater(processContext, keyDB, userAPI, keyChangeProducer, fedClient, zendriteCfg.UserAPI.WorkerCount, rsAPI, zendriteCfg.Global.ServerName, enableMetrics, blacklistedOrBackingOffFn)
 	userAPI.Updater = updater
 	// Remove users which we don't share a room with anymore
 	if err := updater.CleanUp(); err != nil {
@@ -109,28 +126,28 @@ func NewInternalAPI(
 	}()
 
 	dlConsumer := consumers.NewDeviceListUpdateConsumer(
-		processContext, &dendriteCfg.UserAPI, js, updater,
+		processContext, &zendriteCfg.UserAPI, js, updater,
 	)
 	if err := dlConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start device list consumer")
 	}
 
 	sigConsumer := consumers.NewSigningKeyUpdateConsumer(
-		processContext, &dendriteCfg.UserAPI, js, userAPI,
+		processContext, &zendriteCfg.UserAPI, js, userAPI,
 	)
 	if err := sigConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start signing key consumer")
 	}
 
 	receiptConsumer := consumers.NewOutputReceiptEventConsumer(
-		processContext, &dendriteCfg.UserAPI, js, db, syncProducer, pgClient,
+		processContext, &zendriteCfg.UserAPI, js, db, syncProducer, pgClient,
 	)
 	if err := receiptConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start user API receipt consumer")
 	}
 
 	eventConsumer := consumers.NewOutputRoomEventConsumer(
-		processContext, &dendriteCfg.UserAPI, js, db, pgClient, rsAPI, syncProducer,
+		processContext, &zendriteCfg.UserAPI, js, db, pgClient, rsAPI, syncProducer,
 	)
 	if err := eventConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start user API streamed event consumer")
@@ -146,9 +163,18 @@ func NewInternalAPI(
 	}
 	time.AfterFunc(time.Minute, cleanOldNotifs)
 
-	if dendriteCfg.Global.ReportStats.Enabled {
-		go util.StartPhoneHomeCollector(time.Now(), dendriteCfg, db)
+	if zendriteCfg.Global.ReportStats.Enabled {
+		go util.StartPhoneHomeCollector(time.Now(), zendriteCfg, db)
 	}
 
 	return userAPI
+}
+
+func newRegisteredUsersGauge() prometheus.Gauge {
+	return prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "zendrite_clientapi_reg_users_total",
+			Help: "Total number of registered users",
+		},
+	)
 }

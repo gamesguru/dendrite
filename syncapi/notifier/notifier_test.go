@@ -14,12 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var (
@@ -29,7 +30,7 @@ var (
 	syncPositionVeryOld = types.StreamingToken{PDUPosition: 5}
 	syncPositionBefore  = types.StreamingToken{PDUPosition: 11}
 	syncPositionAfter   = types.StreamingToken{PDUPosition: 12}
-	//syncPositionNewEDU  = types.NewStreamToken(syncPositionAfter.PDUPosition, 1, 0, 0, nil)
+	// SyncPositionNewEDU  = types.NewStreamToken(syncPositionAfter.PDUPosition, 1, 0, 0, nil).
 	syncPositionAfter2 = types.StreamingToken{PDUPosition: 13}
 )
 
@@ -41,6 +42,7 @@ var (
 	bobDev   = "bobdev"
 )
 
+//nolint:gochecknoinits
 func init() {
 	var err error
 	err = json.Unmarshal([]byte(`{
@@ -182,7 +184,7 @@ func TestCorrectStreamWakeup(t *testing.T) {
 	}
 }
 
-// Test that an invite unblocks the request
+// Test that an invite unblocks the request.
 func TestNewInviteEventForUser(t *testing.T) {
 	n := NewNotifier(&TestRoomServer{})
 	n.SetCurrentPosition(syncPositionBefore)
@@ -236,7 +238,7 @@ func TestEDUWakeup(t *testing.T) {
 	n.OnNewEvent(&aliceInviteBobEvent, "", nil, syncPositionNewEDU)
 
 	wg.Wait()
-}
+}.
 */
 
 // Test that all blocked requests get woken up on a new event.
@@ -351,7 +353,7 @@ func waitForEvents(n *Notifier, req types.SyncRequest) (types.StreamingToken, er
 // Wait until something is Wait()ing on the user stream.
 func waitForBlocking(s *UserDeviceStream, numBlocking uint) {
 	for numBlocking != s.NumWaiting() {
-		// This is horrible but I don't want to add a signalling mechanism JUST for testing.
+		// This is horrible but I don't want to add a signaling mechanism JUST for testing.
 		time.Sleep(1 * time.Microsecond)
 	}
 }

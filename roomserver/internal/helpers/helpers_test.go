@@ -5,16 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, func()) {
@@ -29,19 +28,20 @@ func mustCreateDatabase(t *testing.T, dbType test.DBType) (storage.Database, fun
 }
 
 func TestIsInvitePendingWithoutNID(t *testing.T) {
-
-	alice := test.NewUser(t)
-	bob := test.NewUser(t)
-	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
-	_ = bob
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create users and room inside each parallel subtest to avoid
+		// data races on shared event objects (eventV2.EventID() lazily
+		// caches the ID, which races when called concurrently).
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+
 		db, close := mustCreateDatabase(t, dbType)
 		defer close()
 
 		// store all events
 		var authNIDs []types.EventNID
 		for _, x := range room.Events() {
-
 			roomInfo, err := db.GetOrCreateRoomInfo(context.Background(), x.PDU)
 			assert.NoError(t, err)
 			assert.NotNil(t, roomInfo)

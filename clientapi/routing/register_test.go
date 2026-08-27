@@ -19,40 +19,42 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
-	"github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/assert"
+
+	capi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-var (
-	// Registration Flows that the server allows.
-	allowedFlows = []authtypes.Flow{
-		{
-			Stages: []authtypes.LoginType{
-				authtypes.LoginType("stage1"),
-				authtypes.LoginType("stage2"),
-			},
+func ptrTo[T any](v T) *T { return &v }
+
+// Registration Flows that the server allows.
+var allowedFlows = []authtypes.Flow{
+	{
+		Stages: []authtypes.LoginType{
+			authtypes.LoginType("stage1"),
+			authtypes.LoginType("stage2"),
 		},
-		{
-			Stages: []authtypes.LoginType{
-				authtypes.LoginType("stage1"),
-				authtypes.LoginType("stage3"),
-			},
+	},
+	{
+		Stages: []authtypes.LoginType{
+			authtypes.LoginType("stage1"),
+			authtypes.LoginType("stage3"),
 		},
-	}
-)
+	},
+}
 
 // Should return true as we're completing all the stages of a single flow in
 // order.
@@ -163,7 +165,7 @@ func TestEmptyCompletedFlows(t *testing.T) {
 }
 
 // This method tests validation of the provided Application Service token and
-// username that they're registering
+// username that they're registering.
 func TestValidationOfApplicationServices(t *testing.T) {
 	// Set up application service namespaces
 	regex := "@_appservice_.*"
@@ -193,7 +195,7 @@ func TestValidationOfApplicationServices(t *testing.T) {
 	}
 
 	// Set up a config
-	fakeConfig := &config.Dendrite{}
+	fakeConfig := &config.Zendrite{}
 	fakeConfig.Defaults(config.DefaultOpts{
 		Generate:       true,
 		SingleDatabase: true,
@@ -434,11 +436,10 @@ func Test_register(t *testing.T) {
 						// Respond with valid JSON or no JSON at all to test happy/error cases
 						switch response {
 						case "success":
-							json.NewEncoder(w).Encode(recaptchaResponse{Success: true})
+							_ = json.NewEncoder(w).Encode(recaptchaResponse{Success: true})
 						case "notvalid":
-							json.NewEncoder(w).Encode(recaptchaResponse{Success: false})
+							_ = json.NewEncoder(w).Encode(recaptchaResponse{Success: false})
 						default:
-
 						}
 					}))
 					defer srv.Close()
@@ -626,7 +627,7 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		defer close()
 		natsInstance := jetstream.NATSInstance{}
 		cfg.Global.ServerName = "server"
-		sharedSecret := "dendritetest"
+		sharedSecret := "zendritetest"
 		cfg.ClientAPI.RegistrationSharedSecret = sharedSecret
 
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -636,7 +637,7 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 		expectedDisplayName := "rabbit"
-		jsonStr := []byte(`{"admin":true,"mac":"24dca3bba410e43fe64b9b5c28306693bf3baa9f","nonce":"759f047f312b99ff428b21d581256f8592b8976e58bc1b543972dc6147e529a79657605b52d7becd160ff5137f3de11975684319187e06901955f79e5a6c5a79","password":"wonderland","username":"alice","displayname":"rabbit"}`)
+		jsonStr := []byte(`{"admin":true,"mac":"8a433a45485068a83bfb36687641c98bfbd34eca","nonce":"759f047f312b99ff428b21d581256f8592b8976e58bc1b543972dc6147e529a79657605b52d7becd160ff5137f3de11975684319187e06901955f79e5a6c5a79","password":"wonderland","username":"alice","displayname":"rabbit"}`)
 		req, err := NewSharedSecretRegistrationRequest(io.NopCloser(bytes.NewBuffer(jsonStr)))
 		assert.NoError(t, err)
 		if err != nil {
@@ -646,15 +647,12 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		r := NewSharedSecretRegistration(sharedSecret)
 
 		// force the nonce to be known
-		r.nonces.Set(req.Nonce, true, cache.DefaultExpiration)
+		r.nonces.Set(req.Nonce, true, ttlcache.DefaultTTL)
 
 		_, err = r.IsValidMacLogin(req.Nonce, req.User, req.Password, req.Admin, req.MacBytes)
 		assert.NoError(t, err)
 
-		body := &bytes.Buffer{}
-		err = json.NewEncoder(body).Encode(req)
-		assert.NoError(t, err)
-		ssrr := httptest.NewRequest(http.MethodPost, "/", body)
+		ssrr := httptest.NewRequest(http.MethodPost, "/", bytes.NewBuffer(jsonStr))
 
 		response := handleSharedSecretRegistration(
 			&cfg.ClientAPI,
@@ -665,7 +663,245 @@ func TestRegisterAdminUsingSharedSecret(t *testing.T) {
 		assert.Equal(t, http.StatusOK, response.Code)
 
 		profile, err := userAPI.QueryProfile(processCtx.Context(), "@alice:server")
-		assert.NoError(t, err)
-		assert.Equal(t, expectedDisplayName, profile.DisplayName)
+		if assert.NoError(t, err) {
+			assert.Equal(t, expectedDisplayName, profile.DisplayName)
+		}
+	})
+}
+
+// registerWithToken drives the two-step UIA registration flow for the
+// `m.login.registration_token` stage and returns the final response.
+func registerWithToken(t *testing.T, userAPI api.ClientUserAPI, cfg *config.ClientAPI, username, password, token string) util.JSONResponse {
+	t.Helper()
+	deviceID := "device-" + username
+	displayName := "Device " + username
+
+	first := registerRequest{Username: username, Password: password}
+	body := &bytes.Buffer{}
+	if err := json.NewEncoder(body).Encode(first); err != nil {
+		t.Fatalf("encode first request: %s", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	resp := Register(req, userAPI, cfg)
+	uia, ok := resp.JSON.(userInteractiveResponse)
+	if !ok {
+		return resp
+	}
+
+	second := registerRequest{
+		Username:           username,
+		Password:           password,
+		DeviceID:           &deviceID,
+		InitialDisplayName: &displayName,
+		Auth: authDict{
+			Type:    authtypes.LoginTypeRegistrationToken,
+			Session: uia.Session,
+			Token:   token,
+		},
+	}
+	body.Reset()
+	if err := json.NewEncoder(body).Encode(second); err != nil {
+		t.Fatalf("encode second request: %s", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/", body)
+	return Register(req, userAPI, cfg)
+}
+
+func TestRegisterWithRegistrationToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeFn := testrig.CreateConfig(t, dbType)
+		defer closeFn()
+		cfg.ClientAPI.RegistrationRequiresToken = true
+		cfg.ClientAPI.RegistrationDisabled = false
+		cfg.Global.ServerName = "test"
+		if err := cfg.Derive(); err != nil {
+			t.Fatalf("derive config: %s", err)
+		}
+
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		natsInstance := jetstream.NATSInstance{}
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+		ctx := processCtx.Context()
+
+		futureMillis := time.Now().Add(24*time.Hour).UnixNano() / int64(time.Millisecond)
+		pastMillis := time.Now().Add(-24*time.Hour).UnixNano() / int64(time.Millisecond)
+
+		mustCreateToken := func(t *testing.T, tkn capi.RegistrationToken) {
+			t.Helper()
+			if _, err := userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn); err != nil {
+				t.Fatalf("create token %s: %s", *tkn.Token, err)
+			}
+		}
+		mustGetToken := func(t *testing.T, name string) *capi.RegistrationToken {
+			t.Helper()
+			tk, err := userAPI.PerformAdminGetRegistrationToken(ctx, name)
+			if err != nil {
+				t.Fatalf("get token %s: %s", name, err)
+			}
+			return tk
+		}
+		assertCounters := func(t *testing.T, name string, wantPending, wantCompleted int32) {
+			t.Helper()
+			tk := mustGetToken(t, name)
+			pending, completed := int32(0), int32(0)
+			if tk.Pending != nil {
+				pending = *tk.Pending
+			}
+			if tk.Completed != nil {
+				completed = *tk.Completed
+			}
+			if pending != wantPending || completed != wantCompleted {
+				t.Errorf("token %s counters = (pending=%d, completed=%d), want (pending=%d, completed=%d)",
+					name, pending, completed, wantPending, wantCompleted)
+			}
+		}
+
+		mustCreateToken(t, capi.RegistrationToken{
+			Token:       ptrTo("happy"),
+			UsesAllowed: ptrTo(int32(2)),
+			ExpiryTime:  ptrTo(futureMillis),
+			Pending:     ptrTo(int32(0)),
+			Completed:   ptrTo(int32(0)),
+		})
+		mustCreateToken(t, capi.RegistrationToken{
+			Token:     ptrTo("unlimited"),
+			Pending:   ptrTo(int32(0)),
+			Completed: ptrTo(int32(0)),
+		})
+		mustCreateToken(t, capi.RegistrationToken{
+			Token:       ptrTo("expired"),
+			UsesAllowed: ptrTo(int32(10)),
+			ExpiryTime:  ptrTo(pastMillis),
+			Pending:     ptrTo(int32(0)),
+			Completed:   ptrTo(int32(0)),
+		})
+		mustCreateToken(t, capi.RegistrationToken{
+			Token:       ptrTo("exhausted"),
+			UsesAllowed: ptrTo(int32(1)),
+			ExpiryTime:  ptrTo(futureMillis),
+			Pending:     ptrTo(int32(0)),
+			Completed:   ptrTo(int32(1)),
+		})
+
+		t.Run("successful registration increments completed", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "alice", "password-alice", "happy")
+			if _, ok := resp.JSON.(registerResponse); !ok {
+				t.Fatalf("expected successful registerResponse, got: %+v", resp)
+			}
+			assertCounters(t, "happy", 0, 1)
+		})
+
+		t.Run("nil expiry and nil uses_allowed do not panic and accept registration", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "carol", "password-carol", "unlimited")
+			if _, ok := resp.JSON.(registerResponse); !ok {
+				t.Fatalf("expected successful registerResponse, got: %+v", resp)
+			}
+			assertCounters(t, "unlimited", 0, 1)
+		})
+
+		t.Run("expired token is rejected and counters unchanged", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "dave", "password-dave", "expired")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 for expired token, got %d: %+v", resp.Code, resp.JSON)
+			}
+			assertCounters(t, "expired", 0, 0)
+		})
+
+		t.Run("exhausted token is rejected and counters unchanged", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "eve", "password-eve", "exhausted")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 for exhausted token, got %d: %+v", resp.Code, resp.JSON)
+			}
+			assertCounters(t, "exhausted", 0, 1)
+		})
+
+		t.Run("unknown token is rejected", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "frank", "password-frank", "nope")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 for unknown token, got %d: %+v", resp.Code, resp.JSON)
+			}
+		})
+
+		t.Run("empty token is rejected", func(t *testing.T) {
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "gina", "password-gina", "")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 for empty token, got %d: %+v", resp.Code, resp.JSON)
+			}
+		})
+
+		t.Run("failed registration rolls pending back", func(t *testing.T) {
+			mustCreateToken(t, capi.RegistrationToken{
+				Token:       ptrTo("rollback"),
+				UsesAllowed: ptrTo(int32(3)),
+				ExpiryTime:  ptrTo(futureMillis),
+				Pending:     ptrTo(int32(0)),
+				Completed:   ptrTo(int32(0)),
+			})
+			// "1337" is a numeric username which is forbidden by completeRegistration,
+			// so the auth stage will pass but account creation will fail.
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "1337", "long-password", "rollback")
+			if resp.Code == http.StatusOK {
+				t.Fatalf("expected registration to fail for numeric username, got 200: %+v", resp.JSON)
+			}
+			assertCounters(t, "rollback", 0, 0)
+		})
+
+		t.Run("uses_allowed enforced across sequential registrations", func(t *testing.T) {
+			mustCreateToken(t, capi.RegistrationToken{
+				Token:       ptrTo("two"),
+				UsesAllowed: ptrTo(int32(2)),
+				ExpiryTime:  ptrTo(futureMillis),
+				Pending:     ptrTo(int32(0)),
+				Completed:   ptrTo(int32(0)),
+			})
+			for i, user := range []string{"hugo", "ida"} {
+				resp := registerWithToken(t, userAPI, &cfg.ClientAPI, user, "long-password", "two")
+				if _, ok := resp.JSON.(registerResponse); !ok {
+					t.Fatalf("registration %d for %s failed: %+v", i, user, resp.JSON)
+				}
+			}
+			resp := registerWithToken(t, userAPI, &cfg.ClientAPI, "jack", "long-password", "two")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected third registration to be rejected, got %d: %+v", resp.Code, resp.JSON)
+			}
+			assertCounters(t, "two", 0, 2)
+		})
+
+		t.Run("single-shot token auth works with registration_disabled=true", func(t *testing.T) {
+			// Canonical token-only config: clients submit the token in a single POST,
+			// bypassing the registration_disabled check via LoginTypeRegistrationToken.
+			cfg.ClientAPI.RegistrationDisabled = true
+			defer func() { cfg.ClientAPI.RegistrationDisabled = false }()
+			mustCreateToken(t, capi.RegistrationToken{
+				Token:       ptrTo("single-shot"),
+				UsesAllowed: ptrTo(int32(1)),
+				ExpiryTime:  ptrTo(futureMillis),
+				Pending:     ptrTo(int32(0)),
+				Completed:   ptrTo(int32(0)),
+			})
+			deviceID, displayName := "dev", "Device"
+			body := &bytes.Buffer{}
+			if err := json.NewEncoder(body).Encode(registerRequest{
+				Username:           "kate",
+				Password:           "long-password",
+				DeviceID:           &deviceID,
+				InitialDisplayName: &displayName,
+				Auth: authDict{
+					Type:  authtypes.LoginTypeRegistrationToken,
+					Token: "single-shot",
+				},
+			}); err != nil {
+				t.Fatalf("encode request: %s", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/", body)
+			resp := Register(req, userAPI, &cfg.ClientAPI)
+			if _, ok := resp.JSON.(registerResponse); !ok {
+				t.Fatalf("expected successful registerResponse, got: %+v", resp)
+			}
+			assertCounters(t, "single-shot", 0, 1)
+		})
 	})
 }

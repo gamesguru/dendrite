@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 // I know what you're thinking: you're wondering "why doesn't this use $1
@@ -18,7 +19,7 @@ func UpServerNamesPopulate(ctx context.Context, tx *sql.Tx, serverName spec.Serv
 	for _, table := range serverNamesTables {
 		q := fmt.Sprintf(
 			"UPDATE %s SET server_name = %s WHERE server_name = '';",
-			pq.QuoteIdentifier(table), pq.QuoteLiteral(string(serverName)),
+			sqlutil.QuoteIdentifier(table), sqlutil.QuoteLiteral(string(serverName)),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("write server names to %q error: %w", table, err)

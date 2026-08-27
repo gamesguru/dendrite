@@ -10,10 +10,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // NewPublicRoomsServerDatabase opens a database connection.

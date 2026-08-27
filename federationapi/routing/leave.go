@@ -6,22 +6,24 @@
 package routing
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// MakeLeave implements the /make_leave API
+// MakeLeave implements the /make_leave API.
 func MakeLeave(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -51,7 +53,7 @@ func MakeLeave(
 		}
 	}
 
-	createLeaveTemplate := func(proto *gomatrixserverlib.ProtoEvent) (gomatrixserverlib.PDU, []gomatrixserverlib.PDU, error) {
+	createLeaveTemplate := func(proto *gomatrixserverlib.ProtoEvent) (gomatrixserverlib.PDU, []gomatrixserverlib.PDU, error) { //nolint:contextcheck
 		identity, signErr := cfg.Matrix.SigningIdentityFor(request.Destination())
 		if signErr != nil {
 			util.GetLogger(httpReq.Context()).WithError(signErr).Errorf("obtaining signing identity for %s failed", request.Destination())
@@ -60,17 +62,20 @@ func MakeLeave(
 
 		queryRes := api.QueryLatestEventsAndStateResponse{}
 		event, buildErr := eventutil.QueryAndBuildEvent(httpReq.Context(), proto, identity, time.Now(), rsAPI, &queryRes)
-		switch e := buildErr.(type) {
-		case nil:
-		case eventutil.ErrRoomNoExists:
-			util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
-			return nil, nil, spec.NotFound("Room does not exist")
-		case gomatrixserverlib.BadJSONError:
-			util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
-			return nil, nil, spec.BadJSON(e.Error())
-		default:
-			util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
-			return nil, nil, spec.InternalServerError{}
+		if buildErr != nil {
+			var errNoExists eventutil.ErrRoomNoExists
+			var badJSON gomatrixserverlib.BadJSONError
+			switch {
+			case errors.As(buildErr, &errNoExists):
+				util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
+				return nil, nil, spec.NotFound("Room does not exist")
+			case errors.As(buildErr, &badJSON):
+				util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
+				return nil, nil, spec.BadJSON(badJSON.Error())
+			default:
+				util.GetLogger(httpReq.Context()).WithError(buildErr).Error("eventutil.BuildEvent failed")
+				return nil, nil, spec.InternalServerError{}
+			}
 		}
 
 		stateEvents := make([]gomatrixserverlib.PDU, len(queryRes.StateEvents))
@@ -104,37 +109,40 @@ func MakeLeave(
 		LocalServerName:    cfg.Matrix.ServerName,
 		LocalServerInRoom:  res.RoomExists && res.IsInRoom,
 		BuildEventTemplate: createLeaveTemplate,
-		UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		UserIDQuerier: func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 		},
 	}
 
 	response, internalErr := gomatrixserverlib.HandleMakeLeave(input)
-	switch e := internalErr.(type) {
-	case nil:
-	case spec.InternalServerError:
+	switch {
+	case internalErr == nil:
+		// Success case handled below
+	case errors.As(internalErr, new(spec.InternalServerError)):
 		util.GetLogger(httpReq.Context()).WithError(internalErr).Error("failed to handle make_leave request")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
-	case spec.MatrixError:
-		util.GetLogger(httpReq.Context()).WithError(internalErr).Error("failed to handle make_leave request")
-		code := http.StatusInternalServerError
-		switch e.ErrCode {
-		case spec.ErrorForbidden:
-			code = http.StatusForbidden
-		case spec.ErrorNotFound:
-			code = http.StatusNotFound
-		case spec.ErrorBadJSON:
-			code = http.StatusBadRequest
-		}
-
-		return util.JSONResponse{
-			Code: code,
-			JSON: e,
-		}
 	default:
+		var matrixErr spec.MatrixError
+		if errors.As(internalErr, &matrixErr) {
+			util.GetLogger(httpReq.Context()).WithError(internalErr).Error("failed to handle make_leave request")
+			code := http.StatusInternalServerError
+			switch matrixErr.ErrCode {
+			case spec.ErrorForbidden:
+				code = http.StatusForbidden
+			case spec.ErrorNotFound:
+				code = http.StatusNotFound
+			case spec.ErrorBadJSON:
+				code = http.StatusBadRequest
+			}
+
+			return util.JSONResponse{
+				Code: code,
+				JSON: matrixErr,
+			}
+		}
 		util.GetLogger(httpReq.Context()).WithError(internalErr).Error("failed to handle make_leave request")
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -152,15 +160,16 @@ func MakeLeave(
 
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: map[string]interface{}{
+		JSON: map[string]any{
 			"event":        response.LeaveTemplateEvent,
 			"room_version": response.RoomVersion,
 		},
 	}
 }
 
-// SendLeave implements the /send_leave API
-// nolint:gocyclo
+// SendLeave implements the /send_leave API.
+//
+//nolint:gocyclo
 func SendLeave(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -189,13 +198,14 @@ func SendLeave(
 
 	// Decode the event JSON from the request.
 	event, err := verImpl.NewEventFromUntrustedJSON(request.Content())
-	switch err.(type) {
-	case gomatrixserverlib.BadJSONError:
+	var badJSONErr gomatrixserverlib.BadJSONError
+	switch {
+	case err == nil:
+	case errors.As(err, &badJSONErr):
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON(err.Error()),
 		}
-	case nil:
 	default:
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,

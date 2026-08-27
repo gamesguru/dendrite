@@ -28,13 +28,13 @@ func TestUnixSocketAddress_Network(t *testing.T) {
 func TestUnixSocketAddress_Permission_LeadingZero_Ok(t *testing.T) {
 	address, err := UnixSocketAddress("/tmp", "0755")
 	assert.NoError(t, err)
-	assert.Equal(t, fs.FileMode(0755), address.UnixSocketPermission)
+	assert.Equal(t, fs.FileMode(0o755), address.UnixSocketPermission)
 }
 
 func TestUnixSocketAddress_Permission_NoLeadingZero_Ok(t *testing.T) {
 	address, err := UnixSocketAddress("/tmp", "755")
 	assert.NoError(t, err)
-	assert.Equal(t, fs.FileMode(0755), address.UnixSocketPermission)
+	assert.Equal(t, fs.FileMode(0o755), address.UnixSocketPermission)
 }
 
 func TestUnixSocketAddress_Permission_NonOctal_Bad(t *testing.T) {

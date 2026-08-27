@@ -9,15 +9,18 @@ package routing
 import (
 	"net/http"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/version"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
+
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/version"
 )
 
 // GetCapabilities returns information about the server's supported feature set
-// and other relevant capabilities to an authenticated user.
-func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+// and other relevant capabilities to an authenticated user. When oidcEnabled is
+// true (MSC3861 delegated authentication), password and 3PID management are
+// delegated to the OIDC provider and reported as unavailable.
+func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool) util.JSONResponse {
 	versionsMap := map[gomatrixserverlib.RoomVersion]string{}
 	for v, desc := range version.SupportedRoomVersions() {
 		if desc.Stable() {
@@ -27,14 +30,20 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse 
 		}
 	}
 
-	response := map[string]interface{}{
-		"capabilities": map[string]interface{}{
+	response := map[string]any{
+		"capabilities": map[string]any{
 			"m.change_password": map[string]bool{
-				"enabled": true,
+				"enabled": !oidcEnabled,
 			},
-			"m.room_versions": map[string]interface{}{
+			"m.room_versions": map[string]any{
 				"default":   rsAPI.DefaultRoomVersion(),
 				"available": versionsMap,
+			},
+			"m.forget_forced_upon_leave": map[string]bool{
+				"enabled": rsAPI.AutoForgetOnLeaveEnabled(),
+			},
+			"m.3pid_changes": map[string]bool{
+				"enabled": !oidcEnabled,
 			},
 		},
 	}

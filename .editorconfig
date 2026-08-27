@@ -1,0 +1,29 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 2
+tab_width = 2
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[stepBuilder_test.go, network_test.go, container_test.go, matrix_test.go, linter_test.go param_test.go common_test.go network_test.go parse_test.go]
+indent_style = space
+
+[*.go]
+indent_style = tab
+
+[go.mod]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false
+indent_size = 1
+
+[Makefile]
+indent_style = tab
+
+[{Justfile,justfile}]
+indent_style = tab

@@ -9,16 +9,18 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // SendEvents to the roomserver The events are written with KindNew.
@@ -39,6 +41,37 @@ func SendEvents(
 			TransactionID: txnID,
 		}
 	}
+	return SendInputRoomEvents(ctx, rsAPI, virtualHost, ires, async)
+}
+
+// SendStateAsOutliers writes state events to the roomserver as outliers.
+// This is used during MSC3706 partial state resync to add full room state
+// without having a new event to add.
+func SendStateAsOutliers(
+	ctx context.Context, rsAPI InputRoomEventsAPI,
+	virtualHost spec.ServerName, roomID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	state gomatrixserverlib.StateResponse,
+	origin spec.ServerName, haveEventIDs map[string]bool, async bool,
+) error {
+	outliers := gomatrixserverlib.LineariseStateResponse(roomVersion, state)
+	ires := make([]InputRoomEvent, 0, len(outliers))
+	for _, outlier := range outliers {
+		if haveEventIDs != nil && haveEventIDs[outlier.EventID()] {
+			continue
+		}
+		ires = append(ires, InputRoomEvent{
+			Kind:   KindOutlier,
+			Event:  &types.HeaderedEvent{PDU: outlier},
+			Origin: origin,
+		})
+	}
+
+	logrus.WithContext(ctx).WithFields(logrus.Fields{
+		"room_id":  roomID,
+		"outliers": len(ires),
+	}).Info("Submitting state events to roomserver as outliers (partial state resync)")
+
 	return SendInputRoomEvents(ctx, rsAPI, virtualHost, ires, async)
 }
 
@@ -64,10 +97,25 @@ func SendEventWithState(
 		})
 	}
 
+	// Build state event IDs from state events. When members_omitted=true in
+	// send_join response (MSC3706), member events are only in auth_events,
+	// not state_events. We need to include them in the state snapshot.
 	stateEvents := state.GetStateEvents().UntrustedEvents(event.Version())
-	stateEventIDs := make([]string, len(stateEvents))
-	for i := range stateEvents {
-		stateEventIDs[i] = stateEvents[i].EventID()
+	stateEventIDSet := make(map[string]bool, len(stateEvents))
+	for _, ev := range stateEvents {
+		stateEventIDSet[ev.EventID()] = true
+	}
+	// Also include any member events from auth_events that have state_keys
+	// (i.e., are state events). This handles the members_omitted case.
+	authEvents := state.GetAuthEvents().UntrustedEvents(event.Version())
+	for _, ev := range authEvents {
+		if ev.StateKey() != nil && ev.Type() == spec.MRoomMember {
+			stateEventIDSet[ev.EventID()] = true
+		}
+	}
+	stateEventIDs := make([]string, 0, len(stateEventIDSet))
+	for id := range stateEventIDSet {
+		stateEventIDs = append(stateEventIDs, id)
 	}
 
 	logrus.WithContext(ctx).WithFields(logrus.Fields{
@@ -155,7 +203,7 @@ func IsServerBannedFromRoom(ctx context.Context, rsAPI FederationRoomserverAPI, 
 
 // PopulatePublicRooms extracts PublicRoom information for all the provided room IDs. The IDs are not checked to see if they are visible in the
 // published room directory.
-// due to lots of switches
+// Due to lots of switches.
 func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]fclient.PublicRoom, error) {
 	avatarTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.avatar", StateKey: ""}
 	nameTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.name", StateKey: ""}
@@ -225,7 +273,7 @@ func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVe
 	createContent := map[string]any{}
 	if len(createContentJSON) > 0 {
 		if err := json.Unmarshal(createContentJSON, &createContent); err != nil {
-			return nil, fmt.Errorf("invalid create content: %s", err)
+			return nil, fmt.Errorf("invalid create content: %w", err)
 		}
 	}
 	// TODO: Maybe, at some point, GMSL should return the events to create, so we can define the version
@@ -264,7 +312,7 @@ func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVe
 			}
 			_, err := spec.NewUserID(add, true)
 			if err != nil {
-				return nil, fmt.Errorf("invalid additional creator: '%s': %s", add, err)
+				return nil, fmt.Errorf("invalid additional creator: '%s': %w", add, err)
 			}
 			finalAdditionalCreators = append(finalAdditionalCreators, add)
 			creatorsSet[add] = struct{}{}
@@ -320,8 +368,8 @@ func GeneratePDU(
 		return queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("gomatrixserverlib.Allowed failed")
-		validationErr, ok := err.(*gomatrixserverlib.EventValidationError)
-		if ok {
+		var validationErr *gomatrixserverlib.EventValidationError
+		if errors.As(err, &validationErr) {
 			return nil, &util.JSONResponse{
 				Code: validationErr.Code,
 				JSON: spec.Forbidden(err.Error()),

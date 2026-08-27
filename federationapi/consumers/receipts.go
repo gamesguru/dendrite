@@ -11,18 +11,19 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	fedTypes "github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	syncTypes "github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	fedTypes "codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	syncTypes "codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputReceiptConsumer consumes events that originate in the clientapi.
@@ -55,7 +56,7 @@ func NewOutputReceiptConsumer(
 	}
 }
 
-// Start consuming from the clientapi
+// Start consuming from the clientapi.
 func (t *OutputReceiptConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1, t.onMessage,
@@ -134,7 +135,7 @@ func (t *OutputReceiptConsumer) onMessage(ctx context.Context, msgs []*nats.Msg)
 		return true
 	}
 
-	if err := t.queues.SendEDU(edu, receiptServerName, names); err != nil {
+	if err := t.queues.SendEDU(edu, receiptServerName, names); err != nil { //nolint:contextcheck
 		log.WithError(err).Error("failed to send EDU")
 		return false
 	}

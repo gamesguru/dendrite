@@ -10,16 +10,16 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type roomDirectoryResponse struct {
@@ -34,7 +34,7 @@ func (r *roomDirectoryResponse) fillServers(servers []spec.ServerName) {
 	}
 }
 
-// DirectoryRoom looks up a room alias
+// DirectoryRoom looks up a room alias.
 func DirectoryRoom(
 	req *http.Request,
 	roomAlias string,
@@ -114,7 +114,7 @@ func DirectoryRoom(
 	}
 }
 
-// SetLocalAlias implements PUT /directory/room/{roomAlias}
+// SetLocalAlias implements PUT /directory/room/{roomAlias}.
 func SetLocalAlias(
 	req *http.Request,
 	device *userapi.Device,
@@ -151,7 +151,7 @@ func SetLocalAlias(
 	}
 	for _, appservice := range cfg.Derived.ApplicationServices {
 		// Don't prevent AS from creating aliases in its own namespace
-		// Note that Dendrite uses SenderLocalpart as UserID for AS users
+		// Note that Zendrite uses SenderLocalpart as UserID for AS users
 		if reqUserID != appservice.SenderLocalpart {
 			if aliasNamespaces, ok := appservice.NamespaceMap["aliases"]; ok {
 				for _, namespace := range aliasNamespaces {
@@ -185,7 +185,7 @@ func SetLocalAlias(
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -194,13 +194,13 @@ func SetLocalAlias(
 		util.GetLogger(req.Context()).WithError(err).Error("QuerySenderIDForUser failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	} else if senderID == nil {
 		util.GetLogger(req.Context()).WithField("roomID", *roomID).WithField("userID", *userID).Error("Sender ID not found")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -216,7 +216,7 @@ func SetLocalAlias(
 	if aliasAlreadyExists {
 		return util.JSONResponse{
 			Code: http.StatusConflict,
-			JSON: spec.Unknown("The alias " + alias + " already exists."),
+			JSON: spec.RoomInUse("The alias " + alias + " already exists."),
 		}
 	}
 
@@ -226,7 +226,7 @@ func SetLocalAlias(
 	}
 }
 
-// RemoveLocalAlias implements DELETE /directory/room/{roomAlias}
+// RemoveLocalAlias implements DELETE /directory/room/{roomAlias}.
 func RemoveLocalAlias(
 	req *http.Request,
 	device *userapi.Device,
@@ -273,7 +273,7 @@ func RemoveLocalAlias(
 		util.GetLogger(req.Context()).WithError(err).Error("roomserverAPI.QueryMembershipForUser failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 	if !queryResp.IsInRoom {
@@ -294,7 +294,7 @@ func RemoveLocalAlias(
 	if deviceSenderID == nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -303,7 +303,7 @@ func RemoveLocalAlias(
 		util.GetLogger(req.Context()).WithError(err).Error("aliasAPI.RemoveRoomAlias failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}
 	}
 
@@ -331,7 +331,7 @@ type roomVisibility struct {
 	Visibility string `json:"visibility"`
 }
 
-// GetVisibility implements GET /directory/list/room/{roomID}
+// GetVisibility implements GET /directory/list/room/{roomID}.
 func GetVisibility(
 	req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI,
 	roomID string,

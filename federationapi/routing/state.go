@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-// GetState returns state events & auth events for the roomID, eventID
+// GetState returns state events & auth events for the roomID, eventID.
 func GetState(
 	ctx context.Context,
 	request *fclient.FederationRequest,
@@ -40,7 +41,7 @@ func GetState(
 	}}
 }
 
-// GetStateIDs returns state event IDs & auth event IDs for the roomID, eventID
+// GetStateIDs returns state event IDs & auth event IDs for the roomID, eventID.
 func GetStateIDs(
 	ctx context.Context,
 	request *fclient.FederationRequest,
@@ -60,10 +61,11 @@ func GetStateIDs(
 	stateEventIDs := getIDsFromEvent(stateEvents)
 	authEventIDs := getIDsFromEvent(authEvents)
 
-	return util.JSONResponse{Code: http.StatusOK, JSON: fclient.RespStateIDs{
-		StateEventIDs: stateEventIDs,
-		AuthEventIDs:  authEventIDs,
-	},
+	return util.JSONResponse{
+		Code: http.StatusOK, JSON: fclient.RespStateIDs{
+			StateEventIDs: stateEventIDs,
+			AuthEventIDs:  authEventIDs,
+		},
 	}
 }
 

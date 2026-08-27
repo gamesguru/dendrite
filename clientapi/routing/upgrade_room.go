@@ -10,16 +10,17 @@ import (
 	"errors"
 	"net/http"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/version"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type upgradeRoomRequest struct {
@@ -31,7 +32,7 @@ type upgradeRoomResponse struct {
 	ReplacementRoom string `json:"replacement_room"`
 }
 
-// UpgradeRoom implements /upgrade
+// UpgradeRoom implements /upgrade.
 func UpgradeRoom(
 	req *http.Request, device *userapi.Device,
 	cfg *config.ClientAPI,
@@ -71,23 +72,17 @@ func UpgradeRoom(
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("PerformRoomUpgrade failed")
 	}
-	switch e := err.(type) {
-	case nil:
-	case roomserverAPI.ErrNotAllowed:
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(e.Error()),
-		}
-	default:
-		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
-			return util.JSONResponse{
-				Code: http.StatusNotFound,
-				JSON: spec.NotFound("Room does not exist"),
+	{
+		var e roomserverAPI.ErrNotAllowed
+		switch {
+		case err == nil:
+		case errors.As(err, &e):
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(e.Error())}
+		default:
+			if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+				return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room does not exist")}
 			}
-		}
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 

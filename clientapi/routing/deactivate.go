@@ -4,14 +4,15 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// Deactivate handles POST requests to /account/deactivate
+// Deactivate handles POST requests to /account/deactivate.
 func Deactivate(
 	req *http.Request,
 	userInteractiveAuth *auth.UserInteractive,
@@ -19,7 +20,7 @@ func Deactivate(
 	deviceAPI *api.Device,
 ) util.JSONResponse {
 	ctx := req.Context()
-	defer req.Body.Close() // nolint:errcheck
+	defer req.Body.Close()
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{

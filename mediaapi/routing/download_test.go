@@ -7,8 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/element-hq/dendrite/mediaapi/types"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 func Test_dispositionFor(t *testing.T) {

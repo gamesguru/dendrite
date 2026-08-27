@@ -7,20 +7,21 @@
 package routing
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"time"
 
-	clienthttputil "github.com/element-hq/dendrite/clientapi/httputil"
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/crypto/ed25519"
+
+	clienthttputil "codefloe.com/pat-s/zendrite/clientapi/httputil"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type queryKeysRequest struct {
@@ -65,11 +66,11 @@ func QueryDeviceKeys(
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: struct {
-			DeviceKeys      interface{} `json:"device_keys"`
-			MasterKeys      interface{} `json:"master_keys"`
-			SelfSigningKeys interface{} `json:"self_signing_keys"`
+			DeviceKeys      any `json:"device_keys"`
+			MasterKeys      any `json:"master_keys"`
+			SelfSigningKeys any `json:"self_signing_keys"`
 		}{
 			queryRes.DeviceKeys,
 			queryRes.MasterKeys,
@@ -120,9 +121,9 @@ func ClaimOneTimeKeys(
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: struct {
-			OneTimeKeys interface{} `json:"one_time_keys"`
+			OneTimeKeys any `json:"one_time_keys"`
 		}{claimRes.OneTimeKeys},
 	}
 }
@@ -145,7 +146,10 @@ func localKeys(cfg *config.FederationAPI, serverName spec.ServerName) (*gomatrix
 		if identity, err = cfg.Matrix.SigningIdentityFor(cfg.Matrix.ServerName); err != nil {
 			return nil, err
 		}
-		publicKey := cfg.Matrix.PrivateKey.Public().(ed25519.PublicKey)
+		publicKey, ok := cfg.Matrix.PrivateKey.Public().(ed25519.PublicKey)
+		if !ok {
+			panic("unexpected key type for matrix private key")
+		}
 		keys.ServerName = cfg.Matrix.ServerName
 		keys.ValidUntilTS = spec.AsTimestamp(time.Now().Add(cfg.Matrix.KeyValidityPeriod))
 		keys.VerifyKeys = map[gomatrixserverlib.KeyID]gomatrixserverlib.VerifyKey{
@@ -166,7 +170,10 @@ func localKeys(cfg *config.FederationAPI, serverName spec.ServerName) (*gomatrix
 		if identity, err = cfg.Matrix.SigningIdentityFor(virtualHost.ServerName); err != nil {
 			return nil, err
 		}
-		publicKey := virtualHost.PrivateKey.Public().(ed25519.PublicKey)
+		publicKey, ok := virtualHost.PrivateKey.Public().(ed25519.PublicKey)
+		if !ok {
+			panic("unexpected key type for virtual host private key")
+		}
 		keys.ServerName = virtualHost.ServerName
 		keys.ValidUntilTS = spec.AsTimestamp(time.Now().Add(virtualHost.KeyValidityPeriod))
 		keys.VerifyKeys = map[gomatrixserverlib.KeyID]gomatrixserverlib.VerifyKey{

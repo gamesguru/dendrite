@@ -7,32 +7,33 @@
 package setup
 
 import (
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi"
-	"github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/federationapi"
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/internal/transactions"
-	"github.com/element-hq/dendrite/mediaapi"
-	"github.com/element-hq/dendrite/relayapi"
-	relayAPI "github.com/element-hq/dendrite/relayapi/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi"
+	"codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/transactions"
+	"codefloe.com/pat-s/zendrite/mediaapi"
+	"codefloe.com/pat-s/zendrite/relayapi"
+	relayAPI "codefloe.com/pat-s/zendrite/relayapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Monolith represents an instantiation of all dependencies required to build
-// all components of Dendrite, for use in monolith mode.
+// all components of Zendrite, for use in monolith mode.
 type Monolith struct {
-	Config    *config.Dendrite
+	Config    *config.Zendrite
 	KeyRing   *gomatrixserverlib.KeyRing
 	Client    *fclient.Client
 	FedClient fclient.FederationClient
@@ -48,10 +49,10 @@ type Monolith struct {
 	ExtUserDirectoryProvider userapi.QuerySearchProfilesAPI
 }
 
-// AddAllPublicRoutes attaches all public paths to the given router
+// AddAllPublicRoutes attaches all public paths to the given router.
 func (m *Monolith) AddAllPublicRoutes(
 	processCtx *process.ProcessContext,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	routers httputil.Routers,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
@@ -65,7 +66,7 @@ func (m *Monolith) AddAllPublicRoutes(
 	clientapi.AddPublicRoutes(
 		processCtx, routers, cfg, natsInstance, m.FedClient, m.RoomserverAPI, m.AppserviceAPI, transactions.New(),
 		m.FederationAPI, m.UserAPI, userDirectoryProvider,
-		m.ExtPublicRoomsProvider, enableMetrics,
+		m.ExtPublicRoomsProvider, caches, enableMetrics,
 	)
 	federationapi.AddPublicRoutes(
 		processCtx, routers, cfg, natsInstance, m.UserAPI, m.FedClient, m.KeyRing, m.RoomserverAPI, m.FederationAPI, enableMetrics,

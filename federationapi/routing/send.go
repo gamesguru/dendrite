@@ -13,38 +13,38 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userAPI "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (
-	// Event was passed to the Roomserver
+	// Event was passed to the Roomserver.
 	MetricsOutcomeOK = "ok"
-	// Event failed to be processed
+	// Event failed to be processed.
 	MetricsOutcomeFail = "fail"
-	// Event failed auth checks
+	// Event failed auth checks.
 	MetricsOutcomeRejected = "rejected"
-	// Terminated the transaction
+	// Terminated the transaction.
 	MetricsOutcomeFatal = "fatal"
-	// The event has missing auth_events we need to fetch
+	// The event has missing auth_events we need to fetch.
 	MetricsWorkMissingAuthEvents = "missing_auth_events"
-	// No work had to be done as we had all prev/auth events
+	// No work had to be done as we had all prev/auth events.
 	MetricsWorkDirect = "direct"
-	// The event has missing prev_events we need to call /g_m_e for
+	// The event has missing prev_events we need to call /g_m_e for.
 	MetricsWorkMissingPrevEvents = "missing_prev_events"
 )
 
 var inFlightTxnsPerOrigin sync.Map // transaction ID -> chan util.JSONResponse
 
-// Send implements /_matrix/federation/v1/send/{txnID}
+// Send implements /_matrix/federation/v1/send/{txnID}.
 func Send(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -62,12 +62,15 @@ func Send(
 	// the transaction is still being worked on. The new client can wait
 	// for it to complete rather than creating more work.
 	index := string(request.Origin()) + "\000" + string(txnID)
-	v, ok := inFlightTxnsPerOrigin.LoadOrStore(index, make(chan util.JSONResponse, 1))
-	ch := v.(chan util.JSONResponse)
-	if ok {
+	v, loaded := inFlightTxnsPerOrigin.LoadOrStore(index, make(chan util.JSONResponse, 1))
+	ch, ok := v.(chan util.JSONResponse)
+	if !ok {
+		panic("unexpected type in inFlightTxnsPerOrigin")
+	}
+	if loaded {
 		// This origin already submitted this txn ID to us, and the work
 		// is still taking place, so we'll just wait for it to finish.
-		ctx, cancel := context.WithTimeout(httpReq.Context(), time.Minute*5)
+		ctx, cancel := context.WithTimeout(httpReq.Context(), time.Minute*5) //nolint:mnd
 		defer cancel()
 		select {
 		case <-ctx.Done():

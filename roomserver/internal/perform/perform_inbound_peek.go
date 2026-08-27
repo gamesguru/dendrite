@@ -8,15 +8,16 @@ package perform
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
-	"github.com/element-hq/dendrite/roomserver/internal/query"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type InboundPeeker struct {
@@ -25,7 +26,7 @@ type InboundPeeker struct {
 }
 
 // PerformInboundPeek handles peeking into matrix rooms, including over
-// federation by talking to the federationapi. called when a remote server
+// federation by talking to the federationapi. Called when a remote server
 // initiates a /peek over federation.
 //
 // It should atomically figure out the current state of the room (for the
@@ -50,8 +51,7 @@ func (r *InboundPeeker) PerformInboundPeek(
 	var stateEvents []gomatrixserverlib.PDU
 
 	var currentStateSnapshotNID types.StateSnapshotNID
-	latestEventRefs, currentStateSnapshotNID, _, err :=
-		r.DB.LatestEventIDs(ctx, info.RoomNID)
+	latestEventRefs, currentStateSnapshotNID, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
 	if err != nil {
 		return err
 	}

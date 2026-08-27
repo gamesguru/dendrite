@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // UserDeviceStream represents a communication mechanism between the /sync request goroutine
@@ -42,7 +42,7 @@ type UserDeviceStreamListener struct {
 	hasClosed bool
 }
 
-// NewUserDeviceStream creates a new user stream
+// NewUserDeviceStream creates a new user stream.
 func NewUserDeviceStream(userID, deviceID string, currPos types.StreamingToken) *UserDeviceStream {
 	return &UserDeviceStream{
 		UserID:            userID,
@@ -55,7 +55,7 @@ func NewUserDeviceStream(userID, deviceID string, currPos types.StreamingToken) 
 
 // GetListener returns UserStreamListener that a sync request can use to wait
 // for new updates with.
-// UserStreamListener must be closed
+// UserStreamListener must be closed.
 func (s *UserDeviceStream) GetListener(ctx context.Context) UserDeviceStreamListener {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -117,7 +117,7 @@ func (s *UserDeviceStream) ch() <-chan struct{} {
 }
 
 // GetSyncPosition returns last sync position which the UserStream was
-// notified about
+// notified about.
 func (s *UserDeviceStreamListener) GetSyncPosition() types.StreamingToken {
 	s.userStream.lock.Lock()
 	defer s.userStream.lock.Unlock()
@@ -127,7 +127,7 @@ func (s *UserDeviceStreamListener) GetSyncPosition() types.StreamingToken {
 
 // GetNotifyChannel returns a channel that is closed when there may be an
 // update for the user.
-// sincePos specifies from which point we want to be notified about. If there
+// SincePos specifies from which point we want to be notified about. If there
 // has already been an update after sincePos we'll return a closed channel
 // immediately.
 func (s *UserDeviceStreamListener) GetNotifyChannel(sincePos types.StreamingToken) <-chan struct{} {
@@ -146,7 +146,7 @@ func (s *UserDeviceStreamListener) GetNotifyChannel(sincePos types.StreamingToke
 	return s.userStream.signalChannel
 }
 
-// Close cleans up resources used
+// Close cleans up resources used.
 func (s *UserDeviceStreamListener) Close() {
 	s.userStream.lock.Lock()
 	defer s.userStream.lock.Unlock()

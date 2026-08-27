@@ -11,11 +11,11 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // The memberships table is designed to track the last time that
@@ -62,8 +62,8 @@ const purgeMembershipsSQL = "" +
 
 const selectMembersSQL = `
 	SELECT event_id FROM (
-		SELECT DISTINCT ON (room_id, user_id) room_id, user_id, event_id, membership FROM syncapi_memberships WHERE room_id = $1 AND topological_pos <= $2 ORDER BY room_id, user_id, stream_pos DESC  
-	) t 
+		SELECT DISTINCT ON (room_id, user_id) room_id, user_id, event_id, membership FROM syncapi_memberships WHERE room_id = $1 AND topological_pos <= $2 ORDER BY room_id, user_id, stream_pos DESC
+	) t
 	WHERE ($3::text IS NULL OR t.membership = $3)
 		AND ($4::text IS NULL OR t.membership <> $4)
 `
@@ -99,7 +99,8 @@ func (s *membershipsStatements) UpsertMembership(
 	if err != nil {
 		return fmt.Errorf("event.Membership: %w", err)
 	}
-	_, err = sqlutil.TxStmt(txn, s.upsertMembershipStmt).ExecContext(
+	upsertMembershipStmt := sqlutil.TxStmt(txn, s.upsertMembershipStmt)
+	_, err = upsertMembershipStmt.ExecContext(
 		ctx,
 		event.RoomID().String(),
 		event.StateKeyResolved,
@@ -139,7 +140,8 @@ func (s *membershipsStatements) SelectMembershipForUser(
 func (s *membershipsStatements) PurgeMemberships(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeMembershipsStmt).ExecContext(ctx, roomID)
+	purgeMembershipsStmt := sqlutil.TxStmt(txn, s.purgeMembershipsStmt)
+	_, err := purgeMembershipsStmt.ExecContext(ctx, roomID)
 	return err
 }
 
@@ -154,9 +156,7 @@ func (s *membershipsStatements) SelectMemberships(
 		return
 	}
 	defer internal.CloseAndLogIfError(ctx, rows, "SelectMemberships: failed to close rows")
-	var (
-		eventID string
-	)
+	var eventID string
 	for rows.Next() {
 		if err = rows.Scan(&eventID); err != nil {
 			return

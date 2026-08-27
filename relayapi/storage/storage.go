@@ -5,22 +5,22 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package storage
 
 import (
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/relayapi/storage/postgres"
-	"github.com/element-hq/dendrite/relayapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(
 	conMan *sqlutil.Connections,
 	dbProperties *config.DatabaseOptions,

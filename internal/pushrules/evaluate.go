@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 // A RuleSetEvaluator encapsulates context to evaluate an event
@@ -103,7 +103,7 @@ func ruleMatches(rule *Rule, kind Kind, event gomatrixserverlib.PDU, ec Evaluati
 		return true, nil
 
 	case ContentKind:
-		// TODO: "These configure behaviour for (unencrypted) messages
+		// TODO: "These configure behavior for (unencrypted) messages
 		// that match certain patterns." - Does that mean "content.body"?
 		if rule.Pattern == nil {
 			return false, nil
@@ -167,7 +167,7 @@ func patternMatches(key, pattern string, event gomatrixserverlib.PDU) (bool, err
 		return false, err
 	}
 
-	var eventMap map[string]interface{}
+	var eventMap map[string]any
 	if err = json.Unmarshal(event.JSON(), &eventMap); err != nil {
 		return false, fmt.Errorf("parsing event: %w", err)
 	}

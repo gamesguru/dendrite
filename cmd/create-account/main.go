@@ -20,13 +20,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/tidwall/gjson"
-
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"golang.org/x/term"
 
-	"github.com/element-hq/dendrite/setup"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup"
 )
 
 const usage = `Usage: %s
@@ -36,14 +35,14 @@ Creates a new user account on the homeserver.
 Example:
 
 	# provide password by parameter
-  	%s --config dendrite.yaml -username alice -password foobarbaz
+  	%s --config zendrite.yaml -username alice -password foobarbaz
 	# use password from file
-  	%s --config dendrite.yaml -username alice -passwordfile my.pass
+  	%s --config zendrite.yaml -username alice -passwordfile my.pass
 	# ask user to provide password
-	%s --config dendrite.yaml -username alice
+	%s --config zendrite.yaml -username alice
 	# read password from stdin
-	%s --config dendrite.yaml -username alice -passwordstdin < my.pass
-	cat my.pass | %s --config dendrite.yaml -username alice -passwordstdin
+	%s --config zendrite.yaml -username alice -passwordstdin < my.pass
+	cat my.pass | %s --config zendrite.yaml -username alice -passwordstdin
 
 Arguments:
 
@@ -57,11 +56,11 @@ var (
 	isAdmin       = flag.Bool("admin", false, "Create an admin account")
 	resetPassword = flag.Bool("reset-password", false, "Deprecated")
 	serverURL     = flag.String("url", "http://localhost:8008", "The URL to connect to.")
-	timeout       = flag.Duration("timeout", time.Second*30, "Timeout for the http client when connecting to the server")
+	timeout       = flag.Duration("timeout", time.Second*30, "Timeout for the http client when connecting to the server") //nolint:mnd
 )
 
 var cl = http.Client{
-	Timeout:   time.Second * 30,
+	Timeout:   time.Second * 30, //nolint:mnd
 	Transport: http.DefaultTransport,
 }
 
@@ -74,7 +73,7 @@ func main() {
 	cfg := setup.ParseFlags(true)
 
 	if *resetPassword {
-		logrus.Fatalf("The reset-password flag has been replaced by the POST /_dendrite/admin/resetPassword/{localpart} admin API.")
+		logrus.Fatalf("The reset-password flag has been replaced by the POST /_zendrite/admin/resetPassword/{localpart} admin API.")
 	}
 
 	if cfg.ClientAPI.RegistrationSharedSecret == "" {
@@ -133,7 +132,7 @@ func sharedSecretRegister(sharedSecret, serverURL, localpart, password string, a
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
-	defer nonceResp.Body.Close() // nolint: errcheck
+	defer nonceResp.Body.Close()
 
 	nonce := gjson.GetBytes(body, "nonce").Str
 
@@ -160,13 +159,12 @@ func sharedSecretRegister(sharedSecret, serverURL, localpart, password string, a
 	registerReq, err := http.NewRequest(http.MethodPost, registerURL, bytes.NewBuffer(js))
 	if err != nil {
 		return "", fmt.Errorf("unable to create http request: %w", err)
-
 	}
 	regResp, err := cl.Do(registerReq)
 	if err != nil {
 		return "", fmt.Errorf("unable to create account: %w", err)
 	}
-	defer regResp.Body.Close() // nolint: errcheck
+	defer regResp.Body.Close()
 	if regResp.StatusCode < 200 || regResp.StatusCode >= 300 {
 		body, _ = io.ReadAll(regResp.Body)
 		return "", fmt.Errorf("got HTTP %d error from server: %s", regResp.StatusCode, string(body))
@@ -196,7 +194,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdFile != "" {
 		pw, err := os.ReadFile(pwdFile)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from file: %v", err)
+			return "", fmt.Errorf("unable to read password from file: %w", err)
 		}
 		return strings.TrimSpace(string(pw)), nil
 	}
@@ -205,7 +203,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdStdin {
 		data, err := io.ReadAll(r)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from stdin: %v", err)
+			return "", fmt.Errorf("unable to read password from stdin: %w", err)
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
@@ -215,17 +213,17 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 		fmt.Print("Enter Password: ")
 		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %w", err)
 		}
 		fmt.Println()
 		fmt.Print("Confirm Password: ")
 		bytePassword2, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %w", err)
 		}
 		fmt.Println()
 		if strings.TrimSpace(string(bytePassword)) != strings.TrimSpace(string(bytePassword2)) {
-			return "", fmt.Errorf("Entered passwords don't match")
+			return "", fmt.Errorf("entered passwords don't match")
 		}
 		return strings.TrimSpace(string(bytePassword)), nil
 	}

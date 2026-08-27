@@ -1,0 +1,111 @@
+version: '2'
+run:
+  build-tags:
+    - test
+    - goolm
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - dogsled
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - forbidigo
+    - forcetypeassert
+    - gochecknoinits
+    - gocritic
+    - godot
+    - gomoddirectives
+    - goprintffuncname
+    - govet
+    - importas
+    - ineffassign
+    - makezero
+    - misspell
+    - mnd
+    - nolintlint
+    - rowserrcheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+    - wastedassign
+    - whitespace
+    - zerologlint
+  settings:
+    errorlint:
+      errorf-multi: true
+    forbidigo:
+      forbid:
+        - pattern: context\.WithCancel$
+        - pattern: ^print.*$
+        - pattern: ^log.Fatal().*$
+    godot:
+      scope: toplevel
+      exclude:
+        - '^\s*TODO:'
+        - '^\s*FIXME:'
+        - '^\s*NOTSPEC:'
+      capital: true
+      period: true
+    misspell:
+      locale: US
+    mnd:
+      ignored-numbers:
+        - '0o600'
+        - '0o660'
+        - '0o644'
+        - '0o755'
+        - '0o700'
+      ignored-functions:
+        - make
+        - time.*
+        - strings.Split
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - mnd
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - vendor$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(codefloe.com/pat-s/zendrite)
+      custom-order: true
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+    gofumpt:
+      extra-rules: false
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - vendor$

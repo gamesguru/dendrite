@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
 )
 
 // A Database implements gomatrixserverlib.KeyDatabase and is used to store
@@ -29,12 +30,12 @@ func NewKeyDatabase(inner gomatrixserverlib.KeyDatabase, cache caching.ServerKey
 	}, nil
 }
 
-// FetcherName implements KeyFetcher
+// FetcherName implements KeyFetcher.
 func (d KeyDatabase) FetcherName() string {
 	return "InMemoryKeyCache"
 }
 
-// FetchKeys implements gomatrixserverlib.KeyDatabase
+// FetchKeys implements gomatrixserverlib.KeyDatabase.
 func (d *KeyDatabase) FetchKeys(
 	ctx context.Context,
 	requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
@@ -61,7 +62,7 @@ func (d *KeyDatabase) FetchKeys(
 	return results, nil
 }
 
-// StoreKeys implements gomatrixserverlib.KeyDatabase
+// StoreKeys implements gomatrixserverlib.KeyDatabase.
 func (d *KeyDatabase) StoreKeys(
 	ctx context.Context,
 	keyMap map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult,

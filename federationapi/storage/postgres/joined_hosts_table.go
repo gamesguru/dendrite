@@ -11,11 +11,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const joinedHostsSchema = `
@@ -108,7 +108,7 @@ func (s *joinedHostsStatements) DeleteJoinedHosts(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.deleteJoinedHostsStmt)
-	_, err := stmt.ExecContext(ctx, pq.StringArray(eventIDs))
+	_, err := stmt.ExecContext(ctx, eventIDs)
 	return err
 }
 
@@ -161,7 +161,7 @@ func (s *joinedHostsStatements) SelectJoinedHostsForRooms(
 	if excludingBlacklisted {
 		stmt = s.selectJoinedHostsForRoomsExcludingBlacklistedStmt
 	}
-	rows, err := stmt.QueryContext(ctx, pq.StringArray(roomIDs))
+	rows, err := stmt.QueryContext(ctx, roomIDs)
 	if err != nil {
 		return nil, err
 	}

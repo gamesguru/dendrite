@@ -11,15 +11,14 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/element-hq/dendrite/userapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 const userDailyVisitsSchema = `
@@ -72,21 +71,21 @@ const countUsersLastSeenAfterSQL = "" +
 	" ) u"
 
 // Note on the following countR30UsersSQL and countR30UsersV2SQL: The different checks are intentional.
-// This is to ensure the values reported by Dendrite are the same as by Synapse.
+// This is to ensure the values reported by Zendrite are the same as by Synapse.
 // Queries are taken from: https://github.com/matrix-org/synapse/blob/9ce51a47f6e37abd0a1275281806399d874eb026/synapse/storage/databases/main/stats.py
 
 /*
 R30Users counts the number of 30 day retained users, defined as:
 - Users who have created their accounts more than 30 days ago
 - Where last seen at most 30 days ago
-- Where account creation and last_seen are > 30 days apart
+- Where account creation and last_seen are > 30 days apart.
 */
 const countR30UsersSQL = `
 SELECT platform, COUNT(*) FROM (
 	SELECT users.localpart, platform, users.created_ts, MAX(uip.last_seen_ts)
 	FROM userapi_accounts users
 	INNER JOIN
-	(SELECT 
+	(SELECT
 		localpart, last_seen_ts,
 		CASE
 	    	WHEN user_agent LIKE '%%Android%%' THEN 'android'
@@ -117,7 +116,7 @@ const countR30UsersV2SQL = `
 SELECT
 	client_type,
     count(client_type)
-FROM 
+FROM
 	(
     	SELECT
         	localpart,
@@ -147,7 +146,7 @@ SELECT COUNT(*) FROM userapi_accounts WHERE account_type = ANY($1)
 `
 
 // $1 = All non guest AccountType IDs
-// $2 = Guest AccountType
+// $2 = Guest AccountType.
 const countRegisteredUserByTypeStmt = `
 SELECT user_type, COUNT(*) AS count FROM (
 	SELECT
@@ -161,7 +160,7 @@ SELECT user_type, COUNT(*) AS count FROM (
 ) AS t GROUP BY user_type
 `
 
-// account_type 1 = users; 3 = admins
+// account_type 1 = users; 3 = admins.
 const updateUserDailyVisitsSQL = `
 INSERT INTO userapi_daily_visits(localpart, device_id, timestamp, user_agent)
 	SELECT u.localpart, u.device_id, $1, MAX(u.user_agent)
@@ -239,7 +238,7 @@ func (s *statsStatements) startTimers() {
 func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUserByAccountTypeStmt)
 	err = stmt.QueryRowContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
@@ -252,7 +251,7 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.countUserByAccountTypeStmt)
 	err = stmt.QueryRowContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
@@ -266,7 +265,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 	registeredAfter := time.Now().AddDate(0, 0, -30)
 
 	rows, err := stmt.QueryContext(ctx,
-		pq.Int64Array{
+		[]int64{
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),
@@ -281,7 +280,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 
 	var userType string
 	var count int64
-	var result = make(map[string]int64)
+	result := make(map[string]int64)
 	for rows.Next() {
 		if err = rows.Scan(&userType, &count); err != nil {
 			return nil, err
@@ -314,12 +313,12 @@ func (s *statsStatements) monthlyUsers(ctx context.Context, txn *sql.Tx) (result
 R30Users counts the number of 30 day retained users, defined as:
 - Users who have created their accounts more than 30 days ago
 - Where last seen at most 30 days ago
-- Where account creation and last_seen are > 30 days apart
+- Where account creation and last_seen are > 30 days apart.
 */
 func (s *statsStatements) r30Users(ctx context.Context, txn *sql.Tx) (map[string]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.countR30UsersStmt)
 	lastSeenAfter := time.Now().AddDate(0, 0, -30)
-	diff := time.Hour * 24 * 30
+	diff := time.Hour * 24 * 30 //nolint:mnd
 
 	rows, err := stmt.QueryContext(ctx,
 		spec.AsTimestamp(lastSeenAfter),
@@ -332,7 +331,7 @@ func (s *statsStatements) r30Users(ctx context.Context, txn *sql.Tx) (map[string
 
 	var platform string
 	var count int64
-	var result = make(map[string]int64)
+	result := make(map[string]int64)
 	for rows.Next() {
 		if err = rows.Scan(&platform, &count); err != nil {
 			return nil, err
@@ -355,8 +354,8 @@ R30UsersV2 counts the number of 30 day retained users, defined as users that:
 func (s *statsStatements) r30UsersV2(ctx context.Context, txn *sql.Tx) (map[string]int64, error) {
 	stmt := sqlutil.TxStmt(txn, s.countR30UsersV2Stmt)
 	sixtyDaysAgo := time.Now().AddDate(0, 0, -60)
-	diff := time.Hour * 24 * 30
-	tomorrow := time.Now().Add(time.Hour * 24)
+	diff := time.Hour * 24 * 30                //nolint:mnd
+	tomorrow := time.Now().Add(time.Hour * 24) //nolint:mnd
 
 	rows, err := stmt.QueryContext(ctx,
 		spec.AsTimestamp(sixtyDaysAgo),
@@ -370,7 +369,7 @@ func (s *statsStatements) r30UsersV2(ctx context.Context, txn *sql.Tx) (map[stri
 
 	var platform string
 	var count int64
-	var result = map[string]int64{
+	result := map[string]int64{
 		"ios":      0,
 		"android":  0,
 		"web":      0,
@@ -449,7 +448,7 @@ func (s *statsStatements) UpdateUserDailyVisits(
 	startTime, lastUpdate time.Time,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateUserDailyVisitsStmt)
-	startTime = startTime.Truncate(time.Hour * 24)
+	startTime = startTime.Truncate(time.Hour * 24) //nolint:mnd
 
 	// edge case
 	if startTime.After(s.lastUpdate) {
@@ -472,7 +471,7 @@ func (s *statsStatements) UpsertDailyStats(
 	activeRooms, activeE2EERooms int64,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.upsertMessagesStmt)
-	timestamp := time.Now().Truncate(time.Hour * 24)
+	timestamp := time.Now().Truncate(time.Hour * 24) //nolint:mnd
 	_, err := stmt.ExecContext(ctx,
 		spec.AsTimestamp(timestamp),
 		serverName,
@@ -487,7 +486,7 @@ func (s *statsStatements) DailyRoomsMessages(
 	serverName spec.ServerName,
 ) (msgStats types.MessageStats, activeRooms, activeE2EERooms int64, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectDailyMessagesStmt)
-	timestamp := time.Now().Truncate(time.Hour * 24)
+	timestamp := time.Now().Truncate(time.Hour * 24) //nolint:mnd
 
 	err = stmt.QueryRowContext(ctx, serverName, spec.AsTimestamp(timestamp)).
 		Scan(&msgStats.Messages, &msgStats.SentMessages, &msgStats.MessagesE2EE, &msgStats.SentMessagesE2EE, &activeRooms, &activeE2EERooms)

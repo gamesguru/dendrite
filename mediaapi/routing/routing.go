@@ -11,20 +11,21 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/element-hq/dendrite/federationapi/routing"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/gorilla/mux"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	federationrouting "codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // configResponse is the response to GET /_matrix/media/r0/config
@@ -37,11 +38,13 @@ type configResponse struct {
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
 // applied:
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	db storage.Database,
+	fileStore filestore.FileStore,
 	userAPI userapi.MediaUserAPI,
 	client *fclient.Client,
 	federationClient fclient.FederationClient,
@@ -63,7 +66,7 @@ func Setup(
 			if r := rateLimits.Limit(req, dev); r != nil {
 				return *r
 			}
-			return Upload(req, &cfg.MediaAPI, dev, db, activeThumbnailGeneration)
+			return Upload(req, &cfg.MediaAPI, dev, db, fileStore, activeThumbnailGeneration)
 		},
 	)
 
@@ -88,36 +91,40 @@ func Setup(
 		MXCToResult: map[string]*types.RemoteRequestResult{},
 	}
 
-	downloadHandler := makeDownloadAPI("download_unauthed", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false)
+	downloadHandler := makeDownloadAPI("download_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false)
 	v3mux.Handle("/download/{serverName}/{mediaId}", downloadHandler).Methods(http.MethodGet, http.MethodOptions)
 	v3mux.Handle("/download/{serverName}/{mediaId}/{downloadName}", downloadHandler).Methods(http.MethodGet, http.MethodOptions)
 
-	v3mux.Handle("/thumbnail/{serverName}/{mediaId}",
-		makeDownloadAPI("thumbnail_unauthed", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false),
+	v3mux.Handle(
+		"/thumbnail/{serverName}/{mediaId}",
+		makeDownloadAPI("thumbnail_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false),
 	).Methods(http.MethodGet, http.MethodOptions)
 
 	// v1 client endpoints requiring auth
-	downloadHandlerAuthed := httputil.MakeHTTPAPI("download", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("download_authed_client", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth())
+	downloadHandlerAuthed := httputil.MakeHTTPAPI("download", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("download_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth())
 	v1mux.Handle("/config", configHandler).Methods(http.MethodGet, http.MethodOptions)
 	v1mux.Handle("/download/{serverName}/{mediaId}", downloadHandlerAuthed).Methods(http.MethodGet, http.MethodOptions)
 	v1mux.Handle("/download/{serverName}/{mediaId}/{downloadName}", downloadHandlerAuthed).Methods(http.MethodGet, http.MethodOptions)
 
-	v1mux.Handle("/thumbnail/{serverName}/{mediaId}",
-		httputil.MakeHTTPAPI("thumbnail", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("thumbnail_authed_client", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth()),
+	v1mux.Handle(
+		"/thumbnail/{serverName}/{mediaId}",
+		httputil.MakeHTTPAPI("thumbnail", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("thumbnail_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
 	// same, but for federation
-	v1fedMux.Handle("/download/{mediaId}", routing.MakeFedHTTPAPI(cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
-		makeDownloadAPI("download_authed_federation", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
+	v1fedMux.Handle("/download/{mediaId}", federationrouting.MakeFedHTTPAPI(
+		cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
+		makeDownloadAPI("download_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
 	)).Methods(http.MethodGet, http.MethodOptions)
-	v1fedMux.Handle("/thumbnail/{mediaId}", routing.MakeFedHTTPAPI(cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
-		makeDownloadAPI("thumbnail_authed_federation", &cfg.MediaAPI, rateLimits, db, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
+	v1fedMux.Handle("/thumbnail/{mediaId}", federationrouting.MakeFedHTTPAPI(
+		cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
+		makeDownloadAPI("thumbnail_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
 	)).Methods(http.MethodGet, http.MethodOptions)
 }
 
 var thumbnailCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "thumbnail",
 		Help:      "Total number of media_api requests for thumbnails",
@@ -127,7 +134,7 @@ var thumbnailCounter = promauto.NewCounterVec(
 
 var thumbnailSize = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "thumbnail_size_bytes",
 		Help:      "Total size of media_api requests for thumbnails",
@@ -138,7 +145,7 @@ var thumbnailSize = promauto.NewHistogramVec(
 
 var downloadCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "download",
 		Help:      "Total size of media_api requests for full downloads",
@@ -148,7 +155,7 @@ var downloadCounter = promauto.NewCounterVec(
 
 var downloadSize = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "mediaapi",
 		Name:      "download_size_bytes",
 		Help:      "Total size of media_api requests for full downloads",
@@ -162,6 +169,7 @@ func makeDownloadAPI(
 	cfg *config.MediaAPI,
 	rateLimits *httputil.RateLimits,
 	db storage.Database,
+	fileStore filestore.FileStore,
 	client *fclient.Client,
 	fedClient fclient.FederationClient,
 	activeRemoteRequests *types.ActiveRemoteRequests,
@@ -199,16 +207,15 @@ func makeDownloadAPI(
 		// NOTSPEC: The spec says everything at /media/ should be rate limited, but this causes issues with thumbnails (#2243)
 		if name != "thumbnail" {
 			if r := rateLimits.Limit(req, nil); r != nil {
+				w.WriteHeader(http.StatusTooManyRequests)
 				if err := json.NewEncoder(w).Encode(r); err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
-				w.WriteHeader(http.StatusTooManyRequests)
 				return
 			}
 		}
 
-		vars, _ := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, _ := httputil.URLDecodeMapValues(httputil.Vars(req))
 		serverName := spec.ServerName(vars["serverName"])
 
 		// For the purposes of loop avoidance, we will return a 404 if allow_remote is set to
@@ -231,6 +238,7 @@ func makeDownloadAPI(
 			types.MediaID(vars["mediaId"]),
 			cfg,
 			db,
+			fileStore,
 			client,
 			fedClient,
 			activeRemoteRequests,

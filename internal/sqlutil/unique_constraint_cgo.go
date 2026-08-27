@@ -5,24 +5,29 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm && cgo
-// +build !wasm,cgo
 
 package sqlutil
 
 import (
-	"github.com/lib/pq"
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mattn/go-sqlite3"
 )
 
-// IsUniqueConstraintViolationErr returns true if the error is an unique_violation error
+// IsUniqueConstraintViolationErr returns true if the error is an unique_violation error.
 func IsUniqueConstraintViolationErr(err error) bool {
-	switch e := err.(type) {
-	case *pq.Error:
-		return e.Code == "23505"
-	case *sqlite3.Error:
-		return e.Code == sqlite3.ErrConstraint
-	case sqlite3.Error:
-		return e.Code == sqlite3.ErrConstraint
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrConstraint
+	}
+	var sqliteErrVal sqlite3.Error
+	if errors.As(err, &sqliteErrVal) {
+		return sqliteErrVal.Code == sqlite3.ErrConstraint
 	}
 	return false
 }

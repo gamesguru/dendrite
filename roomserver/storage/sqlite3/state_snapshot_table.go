@@ -14,11 +14,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateSnapshotSchema = `
@@ -26,7 +27,7 @@ const stateSnapshotSchema = `
 	-- The state snapshot NID that identifies this snapshot.
     state_snapshot_nid INTEGER PRIMARY KEY AUTOINCREMENT,
 	-- The hash of the state snapshot, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over 
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_snapshot_hash BLOB UNIQUE,
 	-- The room NID that the snapshot belongs to.
@@ -103,7 +104,7 @@ func (s *stateSnapshotStatements) InsertState(
 func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 	ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID,
 ) ([]types.StateBlockNIDList, error) {
-	nids := make([]interface{}, len(stateNIDs))
+	nids := make([]any, len(stateNIDs))
 	for k, v := range stateNIDs {
 		nids[k] = v
 	}
@@ -112,7 +113,7 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 	if err != nil {
 		return nil, err
 	}
-	defer selectPrep.Close() // nolint:errcheck
+	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
 
 	rows, err := selectStmt.QueryContext(ctx, nids...)
@@ -144,18 +145,19 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 func (s *stateSnapshotStatements) BulkSelectStateForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, stateSnapshotNID types.StateSnapshotNID, domain string,
 ) ([]types.EventNID, error) {
-	return nil, tables.OptimisationNotSupportedError
+	return nil, tables.ErrOptimisationNotSupported
 }
 
 func (s *stateSnapshotStatements) BulkSelectMembershipForHistoryVisibility(ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string) (map[string]*types.HeaderedEvent, error) {
-	return nil, tables.OptimisationNotSupportedError
+	return nil, tables.ErrOptimisationNotSupported
 }
 
 func (s *stateSnapshotStatements) selectStateBlockNIDsForRoomNID(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
 ) ([]types.StateBlockNID, error) {
 	var res []types.StateBlockNID
-	rows, err := sqlutil.TxStmt(txn, s.selectStateBlockNIDsStmt).QueryContext(ctx, roomNID)
+	selectStateBlockNIDsStmt := sqlutil.TxStmt(txn, s.selectStateBlockNIDsStmt)
+	rows, err := selectStateBlockNIDsStmt.QueryContext(ctx, roomNID)
 	if err != nil {
 		return res, nil
 	}

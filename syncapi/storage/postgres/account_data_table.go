@@ -11,12 +11,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const accountDataSchema = `
@@ -94,10 +93,11 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 	data = make(map[string][]string)
 	pos = r.Low()
 
-	rows, err := sqlutil.TxStmt(txn, s.selectAccountDataInRangeStmt).QueryContext(
+	stmt := sqlutil.TxStmt(txn, s.selectAccountDataInRangeStmt)
+	rows, err := stmt.QueryContext(
 		ctx, userID, r.Low(), r.High(),
-		pq.StringArray(filterConvertTypeWildcardToSQL(accountDataEventFilter.Types)),
-		pq.StringArray(filterConvertTypeWildcardToSQL(accountDataEventFilter.NotTypes)),
+		filterConvertTypeWildcardToSQL(accountDataEventFilter.Types),
+		filterConvertTypeWildcardToSQL(accountDataEventFilter.NotTypes),
 		accountDataEventFilter.Limit,
 	)
 	if err != nil {

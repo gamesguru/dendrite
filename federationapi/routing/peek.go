@@ -8,16 +8,17 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// Peek implements the SS /peek API, handling inbound peeks
+// Peek implements the SS /peek API, handling inbound peeks.
 func Peek(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -56,7 +57,7 @@ func Peek(
 	// TODO: Check history visibility
 
 	// tell the peeking server to renew every hour
-	renewalInterval := int64(60 * 60 * 1000 * 1000)
+	renewalInterval := int64(60 * 60 * 1000 * 1000) //nolint:mnd
 
 	var response api.PerformInboundPeekResponse
 	err = rsAPI.PerformInboundPeek(

@@ -1,16 +1,22 @@
+// Copyright 2026 The Zendrite Authors
+// Copyright 2024 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+// Please see LICENSE files in the repository root for full details.
+
 package config
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"golang.org/x/crypto/ed25519"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 type Global struct {
@@ -52,7 +58,11 @@ type Global struct {
 	// Requires `well_known_client_name` to also be configured.
 	WellKnownSlidingSyncProxy string `yaml:"well_known_sliding_sync_proxy"`
 
-	// Disables federation. Dendrite will not be able to make any outbound HTTP requests
+	// MatrixRTC focus servers for VoIP/video calls (MSC4143).
+	// Advertised in .well-known/matrix/client as org.matrix.msc4143.rtc_foci
+	RTCFoci []RTCFocus `yaml:"rtc_foci,omitempty"`
+
+	// Disables federation. Zendrite will not be able to make any outbound HTTP requests
 	// to other servers and the federation API will not be exposed.
 	DisableFederation bool `yaml:"disable_federation"`
 
@@ -90,16 +100,16 @@ func (c *Global) Defaults(opts DefaultOpts) {
 	if opts.Generate {
 		c.ServerName = "localhost"
 		c.PrivateKeyPath = "matrix_key.pem"
-		_, c.PrivateKey, _ = ed25519.GenerateKey(rand.New(rand.NewSource(0)))
+		_, c.PrivateKey, _ = ed25519.GenerateKey(rand.Reader)
 		c.KeyID = "ed25519:auto"
 		c.TrustedIDServers = []string{
 			"matrix.org",
 			"vector.im",
 		}
 	}
-	c.KeyValidityPeriod = time.Hour * 24 * 7
+	c.KeyValidityPeriod = time.Hour * 24 * 7 //nolint:mnd
 	if opts.SingleDatabase {
-		c.DatabaseOptions.Defaults(90)
+		c.DatabaseOptions.Defaults(90) //nolint:mnd
 	}
 	c.JetStream.Defaults(opts)
 	c.Metrics.Defaults(opts)
@@ -121,6 +131,15 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 
 	for _, v := range c.VirtualHosts {
 		v.Verify(configErrs)
+	}
+
+	for i, focus := range c.RTCFoci {
+		if focus.Type == "" {
+			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].type is required", i))
+		}
+		if focus.Type == "livekit" && (focus.LiveKit == nil || focus.LiveKit.ServiceURL == "") {
+			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].livekit.service_url is required for type \"livekit\"", i))
+		}
 	}
 
 	c.JetStream.Verify(configErrs)
@@ -256,7 +275,7 @@ type OldVerifyKeys struct {
 	ExpiredAt spec.Timestamp `yaml:"expired_at"`
 }
 
-// The configuration to use for Prometheus metrics
+// The configuration to use for Prometheus metrics.
 type Metrics struct {
 	// Whether or not the metrics are enabled
 	Enabled bool `yaml:"enabled"`
@@ -280,7 +299,7 @@ func (c *Metrics) Defaults(opts DefaultOpts) {
 func (c *Metrics) Verify(configErrs *ConfigErrors) {
 }
 
-// ServerNotices defines the configuration used for sending server notices
+// ServerNotices defines the configuration used for sending server notices.
 type ServerNotices struct {
 	Enabled bool `yaml:"enabled"`
 	// The localpart to be used when sending notices
@@ -311,7 +330,7 @@ type Cache struct {
 }
 
 func (c *Cache) Defaults() {
-	c.EstimatedMaxSize = 1024 * 1024 * 1024 // 1GB
+	c.EstimatedMaxSize = 1024 * 1024 * 1024 //nolint:mnd // 1GB
 	c.MaxAge = time.Hour
 }
 
@@ -344,7 +363,7 @@ func (c *ReportStats) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-// The configuration to use for Sentry error reporting
+// The configuration to use for Sentry error reporting.
 type Sentry struct {
 	Enabled bool `yaml:"enabled"`
 	// The DSN to connect to e.g "https://examplePublicKey@o0.ingest.sentry.io/0"
@@ -381,17 +400,17 @@ func (c *DatabaseOptions) Defaults(conns int) {
 
 func (c *DatabaseOptions) Verify(configErrs *ConfigErrors) {}
 
-// MaxIdleConns returns maximum idle connections to the DB
+// MaxIdleConns returns maximum idle connections to the DB.
 func (c DatabaseOptions) MaxIdleConns() int {
 	return c.MaxIdleConnections
 }
 
-// MaxOpenConns returns maximum open connections to the DB
+// MaxOpenConns returns maximum open connections to the DB.
 func (c DatabaseOptions) MaxOpenConns() int {
 	return c.MaxOpenConnections
 }
 
-// ConnMaxLifetime returns maximum amount of time a connection may be reused
+// ConnMaxLifetime returns maximum amount of time a connection may be reused.
 func (c DatabaseOptions) ConnMaxLifetime() time.Duration {
 	return time.Duration(c.ConnMaxLifetimeSeconds) * time.Second
 }
@@ -408,7 +427,7 @@ type DNSCacheOptions struct {
 func (c *DNSCacheOptions) Defaults() {
 	c.Enabled = false
 	c.CacheSize = 256
-	c.CacheLifetime = time.Minute * 5
+	c.CacheLifetime = time.Minute * 5 //nolint:mnd
 }
 
 func (c *DNSCacheOptions) Verify(configErrs *ConfigErrors) {
@@ -424,6 +443,20 @@ type PresenceOptions struct {
 	EnableOutbound bool `yaml:"enable_outbound"`
 }
 
+// RTCFocus represents a MatrixRTC focus server configuration (MSC4143).
+type RTCFocus struct {
+	// Type of focus server (e.g., "livekit")
+	Type string `json:"type" yaml:"type"`
+	// LiveKit focus configuration
+	LiveKit *LiveKitFocus `json:"livekit,omitempty" yaml:"livekit,omitempty"`
+}
+
+// LiveKitFocus represents LiveKit-specific focus configuration.
+type LiveKitFocus struct {
+	// ServiceURL is the lk-jwt-service URL (not LiveKit SFU URL)
+	ServiceURL string `json:"service_url" yaml:"service_url"`
+}
+
 type DataUnit int64
 
 func (d *DataUnit) UnmarshalText(text []byte) error {
@@ -431,11 +464,11 @@ func (d *DataUnit) UnmarshalText(text []byte) error {
 	s := strings.ToLower(string(text))
 	switch {
 	case strings.HasSuffix(s, "tb"):
-		s, magnitude = s[:len(s)-2], 1024*1024*1024*1024
+		s, magnitude = s[:len(s)-2], 1024*1024*1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "gb"):
-		s, magnitude = s[:len(s)-2], 1024*1024*1024
+		s, magnitude = s[:len(s)-2], 1024*1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "mb"):
-		s, magnitude = s[:len(s)-2], 1024*1024
+		s, magnitude = s[:len(s)-2], 1024*1024 //nolint:mnd
 	case strings.HasSuffix(s, "kb"):
 		s, magnitude = s[:len(s)-2], 1024
 	default:

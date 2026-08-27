@@ -8,11 +8,12 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/userapi/api"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// whoamiResponse represents an response for a `whoami` request
+// whoamiResponse represents an response for a `whoami` request.
 type whoamiResponse struct {
 	UserID   string `json:"user_id"`
 	DeviceID string `json:"device_id"`

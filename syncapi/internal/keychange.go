@@ -8,29 +8,31 @@ package internal
 
 import (
 	"context"
-	"strings"
+	"fmt"
 
-	keytypes "github.com/element-hq/dendrite/userapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/userapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	keytypes "codefloe.com/pat-s/zendrite/userapi/types"
 )
 
-// DeviceOTKCounts adds one-time key counts to the /sync response
+// DeviceOTKCounts adds one-time key counts to the /sync response.
 func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceID string, res *types.Response) error {
 	var queryRes api.QueryOneTimeKeysResponse
-	_ = keyAPI.QueryOneTimeKeys(ctx, &api.QueryOneTimeKeysRequest{
+	if err := keyAPI.QueryOneTimeKeys(ctx, &api.QueryOneTimeKeysRequest{
 		UserID:   userID,
 		DeviceID: deviceID,
-	}, &queryRes)
+	}, &queryRes); err != nil {
+		return fmt.Errorf("keyAPI.QueryOneTimeKeys: %w", err)
+	}
 	if queryRes.Error != nil {
 		return queryRes.Error
 	}
@@ -39,14 +41,13 @@ func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceI
 	return nil
 }
 
-// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. hasNew=true if the response
+// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. HasNew=true if the response
 // was filled in, else false if there are no new device list changes because there is nothing to catch up on. The response MUST
 // be already filled in with join/leave information.
 func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
 ) (newPos types.StreamPosition, hasNew bool, err error) {
-
 	// Track users who we didn't track before but now do by virtue of sharing a room with them, or not.
 	newlyJoinedRooms := joinedRooms(res, userID)
 	newlyLeftRooms := leftRooms(res)
@@ -70,10 +71,13 @@ func DeviceListCatchup(
 		offset = int64(from)
 	}
 	var queryRes api.QueryKeyChangesResponse
-	_ = userAPI.QueryKeyChanges(ctx, &api.QueryKeyChangesRequest{
+	if err := userAPI.QueryKeyChanges(ctx, &api.QueryKeyChangesRequest{
 		Offset:   offset,
 		ToOffset: toOffset,
-	}, &queryRes)
+	}, &queryRes); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryKeyChanges failed")
+		return to, hasNew, nil
+	}
 	if queryRes.Error != nil {
 		// don't fail the catchup because we may have got useful information by tracking membership
 		util.GetLogger(ctx).WithError(queryRes.Error).Error("QueryKeyChanges failed")
@@ -304,22 +308,20 @@ func membershipEventPresent(events []synctypes.ClientEvent, userID string) bool 
 	return false
 }
 
-// returns the user IDs of anyone joining or leaving a room in this response. These users will be added to
+// Returns the user IDs of anyone joining or leaving a room in this response. These users will be added to
 // the 'changed' property because of https://matrix.org/docs/spec/client_server/r0.6.1#id84
 // "For optimal performance, Alice should be added to changed in Bob's sync only when she adds a new device,
 // or when Alice and Bob now share a room but didn't share any room previously. However, for the sake of simpler
-// logic, a server may add Alice to changed when Alice and Bob share a new room, even if they previously already shared a room."
+// logic, a server may add Alice to changed when Alice and Bob share a new room, even if they previously already shared a room.".
 func membershipEvents(res *types.Response) (joinUserIDs, leaveUserIDs []string) {
 	for _, room := range res.Rooms.Join {
 		for _, ev := range room.Timeline.Events {
 			if ev.Type == spec.MRoomMember && ev.StateKey != nil {
-				if strings.Contains(string(ev.Content), `"join"`) {
+				membership := gjson.GetBytes(ev.Content, "membership").Str
+				switch membership {
+				case spec.Join, spec.Invite:
 					joinUserIDs = append(joinUserIDs, *ev.StateKey)
-				} else if strings.Contains(string(ev.Content), `"invite"`) {
-					joinUserIDs = append(joinUserIDs, *ev.StateKey)
-				} else if strings.Contains(string(ev.Content), `"leave"`) {
-					leaveUserIDs = append(leaveUserIDs, *ev.StateKey)
-				} else if strings.Contains(string(ev.Content), `"ban"`) {
+				case spec.Leave, spec.Ban:
 					leaveUserIDs = append(leaveUserIDs, *ev.StateKey)
 				}
 			}

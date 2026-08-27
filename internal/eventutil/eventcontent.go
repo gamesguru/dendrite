@@ -6,7 +6,7 @@
 
 package eventutil
 
-import "github.com/matrix-org/gomatrixserverlib"
+import "codefloe.com/pat-s/gomatrixserverlib"
 
 // NameContent is the event content for https://matrix.org/docs/spec/client_server/r0.2.0.html#m-room-name
 type NameContent struct {
@@ -40,14 +40,14 @@ type CanonicalAlias struct {
 func InitialPowerLevelsContent(roomVersion gomatrixserverlib.IRoomVersion, roomCreator string) (c gomatrixserverlib.PowerLevelContent) {
 	c.Defaults()
 	c.Events = map[string]int64{
-		"m.room.name":               50,
-		"m.room.power_levels":       100,
-		"m.room.history_visibility": 100,
-		"m.room.canonical_alias":    50,
-		"m.room.avatar":             50,
-		"m.room.tombstone":          100,
-		"m.room.encryption":         100,
-		"m.room.server_acl":         100,
+		"m.room.name":               50,  //nolint:mnd
+		"m.room.power_levels":       100, //nolint:mnd
+		"m.room.history_visibility": 100, //nolint:mnd
+		"m.room.canonical_alias":    50,  //nolint:mnd
+		"m.room.avatar":             50,  //nolint:mnd
+		"m.room.tombstone":          100, //nolint:mnd
+		"m.room.encryption":         100, //nolint:mnd
+		"m.room.server_acl":         100, //nolint:mnd
 	}
 	c.Users = map[string]int64{}
 	if roomVersion.PrivilegedCreators() {

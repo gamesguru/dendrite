@@ -12,14 +12,14 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	clientapi "github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/userapi/types"
+	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/types"
 )
 
 type RegistrationTokensTable interface {
@@ -28,7 +28,7 @@ type RegistrationTokensTable interface {
 	ListRegistrationTokens(ctx context.Context, txn *sql.Tx, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	GetRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string) (*clientapi.RegistrationToken, error)
 	DeleteRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string) error
-	UpdateRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string, newAttributes map[string]interface{}) (*clientapi.RegistrationToken, error)
+	UpdateRegistrationToken(ctx context.Context, txn *sql.Tx, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 }
 
 type AccountDataTable interface {
@@ -39,10 +39,12 @@ type AccountDataTable interface {
 
 type AccountsTable interface {
 	InsertAccount(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, hash, appserviceID string, accountType api.AccountType) (*api.Account, error)
+	CountAccounts(ctx context.Context) (int64, error)
 	UpdatePassword(ctx context.Context, localpart string, serverName spec.ServerName, passwordHash string) (err error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SelectPasswordHash(ctx context.Context, localpart string, serverName spec.ServerName) (hash string, err error)
 	SelectAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
+	SelectIsDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
 }
 
@@ -53,6 +55,7 @@ type DevicesTable interface {
 	DeleteDevices(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, devices []string) error
 	DeleteDevicesByLocalpart(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, exceptDeviceID string) error
 	UpdateDeviceName(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID string, displayName *string) error
+	UpdateDeviceAccessToken(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, accessToken string) error
 	SelectDeviceByToken(ctx context.Context, accessToken string) (*api.Device, error)
 	SelectDeviceByID(ctx context.Context, localpart string, serverName spec.ServerName, deviceID string) (*api.Device, error)
 	SelectDevicesByLocalpart(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, exceptDeviceID string) ([]api.Device, error)
@@ -147,7 +150,7 @@ const (
 	// notifications in Notifications.Select*. Note that PostgreSQL
 	// balks if this doesn't fit in INTEGER, even though we use
 	// uint32.
-	AllNotifications NotificationFilter = (1 << 31) - 1
+	AllNotifications NotificationFilter = (1 << 31) - 1 //nolint:mnd
 )
 
 type OneTimeKeys interface {
@@ -199,4 +202,15 @@ type CrossSigningSigs interface {
 	SelectCrossSigningSigsForTarget(ctx context.Context, txn *sql.Tx, originUserID, targetUserID string, targetKeyID gomatrixserverlib.KeyID) (r types.CrossSigningSigMap, err error)
 	UpsertCrossSigningSigsForTarget(ctx context.Context, txn *sql.Tx, originUserID string, originKeyID gomatrixserverlib.KeyID, targetUserID string, targetKeyID gomatrixserverlib.KeyID, signature spec.Base64Bytes) error
 	DeleteCrossSigningSigsForTarget(ctx context.Context, txn *sql.Tx, targetUserID string, targetKeyID gomatrixserverlib.KeyID) error
+}
+
+type ExternalIDsTable interface {
+	SelectLocalpartForExternalID(ctx context.Context, txn *sql.Tx, providerID, externalID string) (localpart string, serverName spec.ServerName, err error)
+	InsertExternalID(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, providerID, externalID string) error
+}
+
+type DehydratedDevicesTable interface {
+	InsertDehydratedDevice(ctx context.Context, txn *sql.Tx, userID, deviceID string, deviceData json.RawMessage) error
+	SelectDehydratedDevice(ctx context.Context, userID string) (deviceID string, deviceData json.RawMessage, err error)
+	DeleteDehydratedDevice(ctx context.Context, txn *sql.Tx, userID string) (deviceID string, err error)
 }

@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 var deviceKeysSchema = `
@@ -91,12 +91,14 @@ func NewSqliteDeviceKeysTable(db *sql.DB) (tables.DeviceKeys, error) {
 }
 
 func (s *deviceKeysStatements) DeleteDeviceKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt).ExecContext(ctx, userID, deviceID)
+	stmt := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt)
+	_, err := stmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
 
 func (s *deviceKeysStatements) DeleteAllDeviceKeys(ctx context.Context, txn *sql.Tx, userID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt).ExecContext(ctx, userID)
+	stmt := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt)
+	_, err := stmt.ExecContext(ctx, userID)
 	return err
 }
 
@@ -162,7 +164,8 @@ func (s *deviceKeysStatements) SelectDeviceKeysJSON(ctx context.Context, keys []
 func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn *sql.Tx, userID string) (streamID int64, err error) {
 	// nullable if there are no results
 	var nullStream sql.NullInt64
-	err = sqlutil.TxStmt(txn, s.selectMaxStreamForUserStmt).QueryRowContext(ctx, userID).Scan(&nullStream)
+	maxStmt := sqlutil.TxStmt(txn, s.selectMaxStreamForUserStmt)
+	err = maxStmt.QueryRowContext(ctx, userID).Scan(&nullStream)
 	if err == sql.ErrNoRows {
 		err = nil
 	}
@@ -173,7 +176,7 @@ func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn
 }
 
 func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID string, streamIDs []int64) (int, error) {
-	iStreamIDs := make([]interface{}, len(streamIDs)+1)
+	iStreamIDs := make([]any, len(streamIDs)+1)
 	iStreamIDs[0] = userID
 	for i := range streamIDs {
 		iStreamIDs[i+1] = streamIDs[i]
@@ -192,9 +195,10 @@ func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID
 }
 
 func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx, keys []api.DeviceMessage) error {
+	upsertStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
 	for _, key := range keys {
 		now := time.Now().Unix()
-		_, err := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt).ExecContext(
+		_, err := upsertStmt.ExecContext(
 			ctx, key.UserID, key.DeviceID, now, string(key.KeyJSON), key.StreamID, key.DisplayName,
 		)
 		if err != nil {

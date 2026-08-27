@@ -9,15 +9,15 @@ package types
 import (
 	"math"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 const (
-	// OffsetNewest tells e.g. the database to get the most current data
+	// OffsetNewest tells e.g. the database to get the most current data.
 	OffsetNewest int64 = math.MaxInt64
-	// OffsetOldest tells e.g. the database to get the oldest data
+	// OffsetOldest tells e.g. the database to get the oldest data.
 	OffsetOldest int64 = 0
 )
 
@@ -25,8 +25,8 @@ const (
 // database to reduce the amount of space taken up by this column.
 var KeyTypePurposeToInt = map[fclient.CrossSigningKeyPurpose]int16{
 	fclient.CrossSigningKeyPurposeMaster:      1,
-	fclient.CrossSigningKeyPurposeSelfSigning: 2,
-	fclient.CrossSigningKeyPurposeUserSigning: 3,
+	fclient.CrossSigningKeyPurposeSelfSigning: 2, //nolint:mnd
+	fclient.CrossSigningKeyPurposeUserSigning: 3, //nolint:mnd
 }
 
 // KeyTypeIntToPurpose maps an integer to a purpose, which is used in the
@@ -37,8 +37,8 @@ var KeyTypeIntToPurpose = map[int16]fclient.CrossSigningKeyPurpose{
 	3: fclient.CrossSigningKeyPurposeUserSigning,
 }
 
-// Map of purpose -> public key
+// Map of purpose -> public key.
 type CrossSigningKeyMap map[fclient.CrossSigningKeyPurpose]spec.Base64Bytes
 
-// Map of user ID -> key ID -> signature
+// Map of user ID -> key ID -> signature.
 type CrossSigningSigMap map[string]map[gomatrixserverlib.KeyID]spec.Base64Bytes

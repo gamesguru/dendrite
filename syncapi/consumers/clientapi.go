@@ -12,22 +12,21 @@ import (
 	"strings"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputClientDataConsumer consumes events that originated in the client API server.
@@ -73,32 +72,32 @@ func NewOutputClientDataConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputClientDataConsumer) Start() error {
 	_, err := s.nats.Subscribe(s.topicReIndex, func(msg *nats.Msg) {
 		if err := msg.Ack(); err != nil {
 			return
 		}
 		if !s.cfg.Fulltext.Enabled {
-			logrus.Warn("Fulltext indexing is disabled")
+			log.Warn("Fulltext indexing is disabled")
 			return
 		}
 		ctx := context.Background()
-		logrus.Infof("Starting to index events")
+		log.Infof("Starting to index events")
 		var offset int
 		start := time.Now()
 		count := 0
 		var id int64 = 0
 		for {
-			evs, err := s.db.ReIndex(ctx, 1000, id)
+			evs, err := s.db.ReIndex(ctx, 1000, id) //nolint:mnd
 			if err != nil {
-				logrus.WithError(err).Errorf("unable to get events to index")
+				log.WithError(err).Errorf("unable to get events to index")
 				return
 			}
 			if len(evs) == 0 {
 				break
 			}
-			logrus.Debugf("Indexing %d events", len(evs))
+			log.Debugf("Indexing %d events", len(evs))
 			elements := make([]fulltext.IndexElement, 0, len(evs))
 
 			for streamPos, ev := range evs {
@@ -127,13 +126,13 @@ func (s *OutputClientDataConsumer) Start() error {
 				elements = append(elements, e)
 			}
 			if err = s.fts.Index(elements...); err != nil {
-				logrus.WithError(err).Error("unable to index events")
+				log.WithError(err).Error("unable to index events")
 				continue
 			}
 			offset += len(evs)
 			count += len(elements)
 		}
-		logrus.Infof("Indexed %d events in %v", count, time.Since(start))
+		log.Infof("Indexed %d events in %v", count, time.Since(start))
 	})
 	if err != nil {
 		return err
@@ -164,7 +163,7 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 		"room_id": output.RoomID,
 	}).Debug("Received data from client API server")
 
-	streamPos, err := s.db.UpsertAccountData(
+	streamPos, err := s.db.UpsertAccountData( //nolint:contextcheck
 		s.ctx, userID, output.RoomID, output.Type,
 	)
 	if err != nil {
@@ -179,7 +178,7 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 
 	if output.IgnoredUsers != nil {
 		if err := s.db.UpdateIgnoresForUser(ctx, userID, output.IgnoredUsers); err != nil {
-			log.WithError(err).WithFields(logrus.Fields{
+			log.WithError(err).WithFields(log.Fields{
 				"user_id": userID,
 			}).Errorf("Failed to update ignored users")
 			sentry.CaptureException(err)

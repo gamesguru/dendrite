@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
-	userUtil "github.com/element-hq/dendrite/userapi/util"
+	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	userUtil "codefloe.com/pat-s/zendrite/userapi/util"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
@@ -39,14 +39,14 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Create a test room, just used to provide events
-	room := test.NewRoom(t, alice)
-	dummyEvent := room.Events()[len(room.Events())-1]
-
 	appID := util.RandomString(8)
 	pushKey := util.RandomString(8)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Create a test room inside the callback to avoid data races
+		// (EventID() caches on first access)
+		room := test.NewRoom(t, alice)
+		dummyEvent := room.Events()[len(room.Events())-1]
 		receivedRequest := make(chan bool, 1)
 		// create a test server which responds to our /notify call
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +84,7 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		// Create DB and Dendrite base
+		// Create DB and Zendrite base
 		connStr, close := test.PrepareDBConnectionString(t, dbType)
 		defer close()
 		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
@@ -100,7 +100,7 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 			Kind:    api.HTTPKind,
 			AppID:   appID,
 			PushKey: pushKey,
-			Data: map[string]interface{}{
+			Data: map[string]any{
 				"url": srv.URL,
 			},
 		}, aliceLocalpart, serverName); err != nil {
@@ -130,5 +130,4 @@ func TestNotifyUserCountsAsync(t *testing.T) {
 		case <-receivedRequest:
 		}
 	})
-
 }

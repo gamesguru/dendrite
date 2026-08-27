@@ -1,4 +1,4 @@
-#syntax=docker/dockerfile:1.2
+#syntax=docker/dockerfile:1.26
 
 # A local development Complement dockerfile, to be used with host mounts
 # /cache -> Contains the entire dendrite code at Dockerfile build time. Builds binaries but only keeps the generate-* ones. Pre-compilation saves time.
@@ -8,11 +8,7 @@
 #
 # Use these mounts to make use of this dockerfile:
 # COMPLEMENT_HOST_MOUNTS='/your/local/dendrite:/dendrite:ro;/your/go/path:/go:ro'
-#
-# NOTE:
-# If you update this Dockerfile, ensure to sync your changes to the other
-# Dockerfiles in this repo (search *Dockerfile).
-FROM golang:1.25-bookworm
+FROM golang:1.26-trixie
 RUN apt-get update && apt-get install -y sqlite3
 
 ENV SERVER_NAME=localhost

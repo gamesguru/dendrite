@@ -5,11 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/pushgateway"
-	"github.com/element-hq/dendrite/userapi/storage"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 // NotifyUserCountsAsync sends notifications to a local user's
@@ -40,9 +41,9 @@ func NotifyUserCountsAsync(ctx context.Context, pgClient pushgateway.Client, loc
 
 	// TODO: think about bounding this to one per user, and what
 	// ordering guarantees we must provide.
-	go func() {
+	go func() { //nolint:contextcheck
 		// This background processing cannot be tied to a request.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) //nolint:mnd
 		defer cancel()
 
 		// TODO: we could batch all devices with the same URL, but

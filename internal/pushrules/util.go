@@ -10,16 +10,16 @@ import (
 // ActionsToTweaks converts a list of actions into a primary action
 // kind and a tweaks map. Returns a nil map if it would have been
 // empty.
-func ActionsToTweaks(as []*Action) (ActionKind, map[string]interface{}, error) {
+func ActionsToTweaks(as []*Action) (ActionKind, map[string]any, error) {
 	var kind ActionKind
-	var tweaks map[string]interface{}
+	var tweaks map[string]any
 
 	for _, a := range as {
 		switch a.Kind {
 		case DontNotifyAction: // Ignored
 		case SetTweakAction:
 			if tweaks == nil {
-				tweaks = map[string]interface{}{}
+				tweaks = map[string]any{}
 			}
 			tweaks[string(a.Tweak)] = a.Value
 
@@ -36,7 +36,7 @@ func ActionsToTweaks(as []*Action) (ActionKind, map[string]interface{}, error) {
 
 // BoolTweakOr returns the named tweak as a boolean, and returns `def`
 // on failure.
-func BoolTweakOr(tweaks map[string]interface{}, key TweakKey, def bool) bool {
+func BoolTweakOr(tweaks map[string]any, key TweakKey, def bool) bool {
 	v, ok := tweaks[string(key)]
 	if !ok {
 		return def
@@ -61,8 +61,8 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 	// characters, which makes this a straight-forward
 	// replace-after-quote.
 	pattern = globNonMetaRegexp.ReplaceAllStringFunc(pattern, regexp.QuoteMeta)
-	pattern = strings.Replace(pattern, "*", ".*", -1)
-	pattern = strings.Replace(pattern, "?", ".", -1)
+	pattern = strings.ReplaceAll(pattern, "*", ".*")
+	pattern = strings.ReplaceAll(pattern, "?", ".")
 	return regexp.Compile("^(" + pattern + ")$")
 }
 
@@ -73,14 +73,14 @@ var globNonMetaRegexp = regexp.MustCompile("[^*?]+")
 // lookupMapPath traverses a hierarchical map structure, like the one
 // produced by json.Unmarshal, to return the leaf value. Traversing
 // arrays/slices is not supported, only objects/maps.
-func lookupMapPath(path []string, m map[string]interface{}) (interface{}, error) {
+func lookupMapPath(path []string, m map[string]any) (any, error) {
 	if len(path) == 0 {
 		return nil, fmt.Errorf("empty path")
 	}
 
-	var v interface{} = m
+	var v any = m
 	for i, key := range path {
-		m, ok := v.(map[string]interface{})
+		m, ok := v.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("expected an object for path %q, but got %T", strings.Join(path[:i+1], "."), v)
 		}
@@ -95,11 +95,11 @@ func lookupMapPath(path []string, m map[string]interface{}) (interface{}, error)
 }
 
 // parseRoomMemberCountCondition parses a string like "2", "==2", "<2"
-// into a function that checks if the argument to it fulfils the
+// into a function that checks if the argument to it fulfills the
 // condition.
 func parseRoomMemberCountCondition(s string) (func(int) bool, error) {
 	var b int
-	var cmp = func(a int) bool { return a == b }
+	cmp := func(a int) bool { return a == b }
 	switch {
 	case strings.HasPrefix(s, "<="):
 		cmp = func(a int) bool { return a <= b }

@@ -9,18 +9,20 @@ package routing
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/roomserver/api"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type UserDirectoryResponse struct {
@@ -38,7 +40,7 @@ func SearchUserDirectory(
 	federation fclient.FederationClient,
 	localServerName spec.ServerName,
 ) util.JSONResponse {
-	if limit < 10 {
+	if limit < 10 { //nolint:mnd
 		limit = 10
 	}
 
@@ -54,7 +56,7 @@ func SearchUserDirectory(
 		Limit:  limit,
 	}
 	knownUsersRes := &api.QueryKnownUsersResponse{}
-	if err := rsAPI.QueryKnownUsers(ctx, knownUsersReq, knownUsersRes); err != nil && err != sql.ErrNoRows {
+	if err := rsAPI.QueryKnownUsers(ctx, knownUsersReq, knownUsersRes); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return util.ErrorResponse(fmt.Errorf("rsAPI.QueryKnownUsers: %w", err))
 	}
 
@@ -102,7 +104,8 @@ knownUsersLoop:
 			// TODO: We should probably cache/store this
 			fedProfile, fedErr := federation.LookupProfile(ctx, localServerName, serverName, userID, "")
 			if fedErr != nil {
-				if x, ok := fedErr.(gomatrix.HTTPError); ok {
+				var x gomatrix.HTTPError
+				if errors.As(fedErr, &x) {
 					if x.Code == http.StatusNotFound {
 						continue
 					}
@@ -125,7 +128,7 @@ knownUsersLoop:
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: response,
 	}
 }

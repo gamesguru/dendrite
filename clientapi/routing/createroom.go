@@ -14,17 +14,17 @@ import (
 	"strings"
 	"time"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	roomserverVersion "github.com/element-hq/dendrite/roomserver/version"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	roomserverVersion "codefloe.com/pat-s/zendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-createroom
@@ -69,8 +69,8 @@ func (r createRoomRequest) Validate() *util.JSONResponse {
 		}
 	}
 
-	// Validate creation_content fields defined in the spec by marshalling the
-	// creation_content map into bytes and then unmarshalling the bytes into
+	// Validate creation_content fields defined in the spec by marshaling the
+	// creation_content map into bytes and then unmarshaling the bytes into
 	// eventutil.CreateContent.
 
 	creationContentBytes, err := json.Marshal(r.CreationContent)
@@ -99,7 +99,7 @@ type createRoomResponse struct {
 	RoomAlias string `json:"room_alias,omitempty"` // in synapse not spec
 }
 
-// CreateRoom implements /createRoom
+// CreateRoom implements /createRoom.
 func CreateRoom(
 	req *http.Request, device *api.Device,
 	cfg *config.ClientAPI,
@@ -124,7 +124,7 @@ func CreateRoom(
 	return createRoom(req.Context(), createRequest, device, cfg, profileAPI, rsAPI, asAPI, evTime)
 }
 
-// createRoom implements /createRoom
+// createRoom implements /createRoom.
 func createRoom(
 	ctx context.Context,
 	createRequest createRoomRequest, device *api.Device,
@@ -152,7 +152,7 @@ func createRoom(
 
 	// TODO: Check room ID doesn't clash with an existing one, and we
 	//       probably shouldn't be using pseudo-random strings, maybe GUIDs?
-	roomID, err := spec.NewRoomID(fmt.Sprintf("!%s:%s", util.RandomString(16), userID.Domain()))
+	roomID, err := spec.NewRoomID(fmt.Sprintf("!%s:%s", util.RandomString(16), userID.Domain())) //nolint:mnd
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("invalid roomID")
 		return util.JSONResponse{
@@ -165,7 +165,7 @@ func createRoom(
 
 	roomVersion := rsAPI.DefaultRoomVersion()
 	if createRequest.RoomVersion != "" {
-		candidateVersion := gomatrixserverlib.RoomVersion(createRequest.RoomVersion)
+		candidateVersion := createRequest.RoomVersion
 		_, roomVersionError := roomserverVersion.SupportedRoomVersion(candidateVersion)
 		if roomVersionError != nil {
 			return util.JSONResponse{
@@ -272,7 +272,7 @@ func createRoom(
 	}
 
 	return util.JSONResponse{
-		Code: 200,
+		Code: 200, //nolint:mnd
 		JSON: response,
 	}
 }

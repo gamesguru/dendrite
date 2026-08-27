@@ -9,8 +9,7 @@ import (
 // interface but, unlike ExclusiveWriter, it will not guarantee
 // writer exclusivity. This is fine in PostgreSQL where overlapping
 // transactions and writes are acceptable.
-type DummyWriter struct {
-}
+type DummyWriter struct{}
 
 // NewDummyWriter returns a new dummy writer.
 func NewDummyWriter() Writer {

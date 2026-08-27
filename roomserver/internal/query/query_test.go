@@ -12,17 +12,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
-// used to implement RoomserverInternalAPIEventDB to test getAuthChain
+// used to implement RoomserverInternalAPIEventDB to test getAuthChain.
 type getEventDB struct {
 	eventMap map[string]gomatrixserverlib.PDU
 }
@@ -39,7 +40,7 @@ func (db *getEventDB) addFakeEvent(eventID string, authIDs []string) error {
 	for _, authID := range authIDs {
 		authEvents = append(authEvents, []any{authID, struct{}{}})
 	}
-	builder := map[string]interface{}{
+	builder := map[string]any{
 		"event_id":    eventID,
 		"room_id":     "!room:a",
 		"auth_events": authEvents,
@@ -75,7 +76,7 @@ func (db *getEventDB) addFakeEvents(graph map[string][]string) error {
 	return nil
 }
 
-// EventsFromIDs implements RoomserverInternalAPIEventDB
+// EventsFromIDs implements RoomserverInternalAPIEventDB.
 func (db *getEventDB) EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) (res []types.Event, err error) {
 	for _, evID := range eventIDs {
 		res = append(res, types.Event{
@@ -97,7 +98,6 @@ func TestGetAuthChainSingle(t *testing.T) {
 		"d": {"b", "c"},
 		"e": {"a", "d"},
 	})
-
 	if err != nil {
 		t.Fatalf("Failed to add events to db: %v", err)
 	}
@@ -130,7 +130,6 @@ func TestGetAuthChainMultiple(t *testing.T) {
 		"e": {"a", "d"},
 		"f": {"a", "b", "c"},
 	})
-
 	if err != nil {
 		t.Fatalf("Failed to add events to db: %v", err)
 	}
@@ -149,6 +148,29 @@ func TestGetAuthChainMultiple(t *testing.T) {
 
 	if !test.UnsortedStringSliceEqual(expectedIDs, returnedIDs) {
 		t.Fatalf("returnedIDs got '%v', expected '%v'", returnedIDs, expectedIDs)
+	}
+}
+
+func TestMissingEventsResponseWithUnloadedFilterEvents(t *testing.T) {
+	db := createEventDB()
+	if err := db.addFakeEvent("loaded", nil); err != nil {
+		t.Fatalf("failed to create event: %v", err)
+	}
+
+	events := missingEventsResponse(
+		[]gomatrixserverlib.PDU{db.eventMap["loaded"]},
+		map[string]bool{
+			"unloaded-1": true,
+			"unloaded-2": true,
+		},
+		nil,
+	)
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].EventID() != "loaded" {
+		t.Fatalf("got event %q, want %q", events[0].EventID(), "loaded")
 	}
 }
 

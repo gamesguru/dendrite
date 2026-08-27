@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const inboundPeeksSchema = `
@@ -90,14 +91,16 @@ func (s *inboundPeeksStatements) RenewInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string, renewalInterval int64,
 ) (err error) {
 	nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
-	_, err = sqlutil.TxStmt(txn, s.renewInboundPeekStmt).ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
+	renewStmt := sqlutil.TxStmt(txn, s.renewInboundPeekStmt)
+	_, err = renewStmt.ExecContext(ctx, nowMilli, renewalInterval, roomID, serverName, peekID)
 	return
 }
 
 func (s *inboundPeeksStatements) SelectInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (*types.InboundPeek, error) {
-	row := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt).QueryRowContext(ctx, roomID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
+	row := selectStmt.QueryRowContext(ctx, roomID)
 	inboundPeek := types.InboundPeek{}
 	err := row.Scan(
 		&inboundPeek.RoomID,
@@ -119,7 +122,8 @@ func (s *inboundPeeksStatements) SelectInboundPeek(
 func (s *inboundPeeksStatements) SelectInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (inboundPeeks []types.InboundPeek, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt).QueryContext(ctx, roomID)
+	selectAllStmt := sqlutil.TxStmt(txn, s.selectInboundPeeksStmt)
+	rows, err := selectAllStmt.QueryContext(ctx, roomID)
 	if err != nil {
 		return
 	}
@@ -146,13 +150,15 @@ func (s *inboundPeeksStatements) SelectInboundPeeks(
 func (s *inboundPeeksStatements) DeleteInboundPeek(
 	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, roomID, peekID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteInboundPeekStmt).ExecContext(ctx, roomID, serverName, peekID)
+	deleteStmt := sqlutil.TxStmt(txn, s.deleteInboundPeekStmt)
+	_, err = deleteStmt.ExecContext(ctx, roomID, serverName, peekID)
 	return
 }
 
 func (s *inboundPeeksStatements) DeleteInboundPeeks(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteInboundPeeksStmt).ExecContext(ctx, roomID)
+	deleteAllStmt := sqlutil.TxStmt(txn, s.deleteInboundPeeksStmt)
+	_, err = deleteAllStmt.ExecContext(ctx, roomID)
 	return
 }

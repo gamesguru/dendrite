@@ -14,22 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
 	"gotest.tools/v3/poll"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 )
 
 func mustCreateFederationDatabase(t *testing.T, dbType test.DBType, realDatabase bool) (storage.Database, *process.ProcessContext, func()) {
@@ -110,6 +109,8 @@ func testSetup(failuresUntilBlacklist uint32, failuresUntilAssumedOffline uint32
 	}
 
 	stats := statistics.NewStatistics(db, failuresUntilBlacklist, failuresUntilAssumedOffline, false)
+	// Use a very short backoff for tests (2^0 = 1 second base)
+	stats.MinBackoffExponent = 0
 	signingInfo := []*fclient.SigningIdentity{
 		{
 			KeyID:      "ed21019:auto",
@@ -129,7 +130,7 @@ func TestSendPDUOnSuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -158,7 +159,7 @@ func TestSendEDUOnSuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -187,7 +188,7 @@ func TestSendPDUOnFailStoredInDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -217,7 +218,7 @@ func TestSendEDUOnFailStoredInDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -247,7 +248,7 @@ func TestSendPDUAgainDoesntInterruptBackoff(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -298,7 +299,7 @@ func TestSendEDUAgainDoesntInterruptBackoff(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -349,7 +350,7 @@ func TestSendPDUMultipleFailuresBlacklisted(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -381,7 +382,7 @@ func TestSendEDUMultipleFailuresBlacklisted(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -413,7 +414,7 @@ func TestSendPDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -423,8 +424,11 @@ func TestSendPDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	err := queues.SendEvent(ev, "localhost", []spec.ServerName{destination})
 	assert.NoError(t, err)
 
+	// With a prior external failure, only failuresUntilBlacklist-1 transactions are needed
+	// to reach the blacklist threshold
+	expectedTxCount := failuresUntilBlacklist - 1
 	check := func(log poll.LogT) poll.Result {
-		if fc.txCount.Load() == failuresUntilBlacklist {
+		if fc.txCount.Load() >= expectedTxCount {
 			data, dbErr := db.GetPendingPDUs(pc.Context(), destination, 100)
 			assert.NoError(t, dbErr)
 			if len(data) == 1 {
@@ -447,7 +451,7 @@ func TestSendEDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -457,8 +461,11 @@ func TestSendEDUBlacklistedWithPriorExternalFailure(t *testing.T) {
 	err := queues.SendEDU(ev, "localhost", []spec.ServerName{destination})
 	assert.NoError(t, err)
 
+	// With a prior external failure, only failuresUntilBlacklist-1 transactions are needed
+	// to reach the blacklist threshold
+	expectedTxCount := failuresUntilBlacklist - 1
 	check := func(log poll.LogT) poll.Result {
-		if fc.txCount.Load() == failuresUntilBlacklist {
+		if fc.txCount.Load() >= expectedTxCount {
 			data, dbErr := db.GetPendingEDUs(pc.Context(), destination, 100)
 			assert.NoError(t, dbErr)
 			if len(data) == 1 {
@@ -481,7 +488,7 @@ func TestRetryServerSendsPDUSuccessfully(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -532,7 +539,7 @@ func TestRetryServerSendsEDUSuccessfully(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -586,7 +593,7 @@ func TestSendPDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -595,9 +602,10 @@ func TestSendPDUBatches(t *testing.T) {
 	pduMultiplier := uint32(3)
 	for i := 0; i < maxPDUsPerTransaction*int(pduMultiplier); i++ {
 		ev := mustCreatePDU(t)
-		headeredJSON, _ := json.Marshal(ev)
+		headeredJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal PDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-		err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+		err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 		assert.NoError(t, err, "failed to associate PDU with destinations")
 	}
 
@@ -630,7 +638,7 @@ func TestSendEDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -639,9 +647,10 @@ func TestSendEDUBatches(t *testing.T) {
 	eduMultiplier := uint32(3)
 	for i := 0; i < maxEDUsPerTransaction*int(eduMultiplier); i++ {
 		ev := mustCreateEDU(t)
-		ephemeralJSON, _ := json.Marshal(ev)
+		ephemeralJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal EDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(ephemeralJSON))
-		err := db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
+		err = db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
 		assert.NoError(t, err, "failed to associate EDU with destinations")
 	}
 
@@ -674,7 +683,7 @@ func TestSendPDUAndEDUBatches(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -683,17 +692,19 @@ func TestSendPDUAndEDUBatches(t *testing.T) {
 	multiplier := uint32(3)
 	for i := 0; i < maxPDUsPerTransaction*int(multiplier)+1; i++ {
 		ev := mustCreatePDU(t)
-		headeredJSON, _ := json.Marshal(ev)
+		headeredJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal PDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-		err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+		err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 		assert.NoError(t, err, "failed to associate PDU with destinations")
 	}
 
 	for i := 0; i < maxEDUsPerTransaction*int(multiplier); i++ {
 		ev := mustCreateEDU(t)
-		ephemeralJSON, _ := json.Marshal(ev)
+		ephemeralJSON, err := json.Marshal(ev)
+		assert.NoError(t, err, "failed to marshal EDU")
 		nid, _ := db.StoreJSON(pc.Context(), string(ephemeralJSON))
-		err := db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
+		err = db.AssociateEDUWithDestinations(pc.Context(), destinations, nid, ev.Type, nil)
 		assert.NoError(t, err, "failed to associate EDU with destinations")
 	}
 
@@ -725,7 +736,7 @@ func TestExternalFailureBackoffDoesntStartQueue(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilBlacklist+1, true, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -733,9 +744,10 @@ func TestExternalFailureBackoffDoesntStartQueue(t *testing.T) {
 	queues.statistics.ForServer(destination).Failure()
 	destinations := map[spec.ServerName]struct{}{destination: {}}
 	ev := mustCreatePDU(t)
-	headeredJSON, _ := json.Marshal(ev)
+	headeredJSON, err := json.Marshal(ev)
+	assert.NoError(t, err, "failed to marshal PDU")
 	nid, _ := db.StoreJSON(pc.Context(), string(headeredJSON))
-	err := db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
+	err = db.AssociatePDUWithDestinations(pc.Context(), destinations, nid)
 	assert.NoError(t, err, "failed to associate PDU with destinations")
 
 	pollEnd := time.Now().Add(3 * time.Second)
@@ -764,7 +776,7 @@ func TestQueueInteractsWithRealDatabasePDUAndEDU(t *testing.T) {
 		// NOTE : These defers aren't called if go test is killed so the dbs may not get cleaned up.
 		defer close()
 		defer func() {
-			pc.ShutdownDendrite()
+			pc.ShutdownZendrite()
 			<-pc.WaitForShutdown()
 		}()
 
@@ -829,7 +841,7 @@ func TestSendPDUMultipleFailuresAssumedOffline(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -862,7 +874,7 @@ func TestSendEDUMultipleFailuresAssumedOffline(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, false, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -895,7 +907,7 @@ func TestSendPDUOnRelaySuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, true, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 
@@ -934,7 +946,7 @@ func TestSendEDUOnRelaySuccessRemovedFromDB(t *testing.T) {
 	db, fc, queues, pc, close := testSetup(failuresUntilBlacklist, failuresUntilAssumedOffline, false, true, t, test.DBTypeSQLite, false)
 	defer close()
 	defer func() {
-		pc.ShutdownDendrite()
+		pc.ShutdownZendrite()
 		<-pc.WaitForShutdown()
 	}()
 

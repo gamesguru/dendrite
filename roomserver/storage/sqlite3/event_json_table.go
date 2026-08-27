@@ -12,10 +12,10 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const eventJSONSchema = `
@@ -63,14 +63,15 @@ func PrepareEventJSONTable(db *sql.DB) (tables.EventJSON, error) {
 func (s *eventJSONStatements) InsertEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.insertEventJSONStmt).ExecContext(ctx, int64(eventNID), eventJSON)
+	insertStmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
+	_, err := insertStmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }
 
 func (s *eventJSONStatements) BulkSelectEventJSON(
 	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
 ) ([]tables.EventJSONPair, error) {
-	iEventNIDs := make([]interface{}, len(eventNIDs))
+	iEventNIDs := make([]any, len(eventNIDs))
 	for k, v := range eventNIDs {
 		iEventNIDs[k] = v
 	}

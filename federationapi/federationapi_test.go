@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,28 +13,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/routing"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/federationapi"
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/internal"
-	rsapi "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/internal"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type fedRoomserverAPI struct {
@@ -51,7 +51,7 @@ func (f *fedRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spec
 	return &senderID, nil
 }
 
-// PerformJoin will call this function
+// PerformJoin will call this function.
 func (f *fedRoomserverAPI) InputRoomEvents(ctx context.Context, req *rsapi.InputRoomEventsRequest, res *rsapi.InputRoomEventsResponse) {
 	if f.inputRoomEvents == nil {
 		return
@@ -59,12 +59,17 @@ func (f *fedRoomserverAPI) InputRoomEvents(ctx context.Context, req *rsapi.Input
 	f.inputRoomEvents(ctx, req, res)
 }
 
-// keychange consumer calls this
+// Keychange consumer calls this.
 func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error) {
 	if f.queryRoomsForUser == nil {
 		return nil, nil
 	}
 	return f.queryRoomsForUser(ctx, userID, desiredMembership)
+}
+
+// GetAllPartialStateRooms is called by PartialStateWorker.
+func (f *fedRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
+	return []types.RoomNID{}, nil
 }
 
 // TODO: This struct isn't generic, only works for TestFederationAPIJoinThenKeyUpdate
@@ -100,7 +105,10 @@ func (f *fedClient) GetServerKeys(ctx context.Context, matrixServer spec.ServerN
 
 	keys.ServerName = matrixServer
 	keys.ValidUntilTS = spec.AsTimestamp(time.Now().Add(10 * time.Hour))
-	publicKey := pkey.Public().(ed25519.PublicKey)
+	publicKey, ok := pkey.Public().(ed25519.PublicKey)
+	if !ok {
+		panic("unexpected key type")
+	}
 	keys.VerifyKeys = map[gomatrixserverlib.KeyID]gomatrixserverlib.VerifyKey{
 		keyID: {
 			Key: spec.Base64Bytes(publicKey),
@@ -148,6 +156,7 @@ func (f *fedClient) MakeJoin(ctx context.Context, origin, s spec.ServerName, roo
 	}
 	return
 }
+
 func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
 	f.fedClientMutex.Lock()
 	defer f.fedClientMutex.Unlock()
@@ -160,6 +169,11 @@ func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, eve
 		}
 	}
 	return
+}
+
+func (f *fedClient) SendJoinPartialState(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
+	// Delegate to SendJoin - partial state join uses the same response format
+	return f.SendJoin(ctx, origin, s, event)
 }
 
 func (f *fedClient) SendTransaction(ctx context.Context, t gomatrixserverlib.Transaction) (res fclient.RespSend, err error) {
@@ -357,9 +371,9 @@ func TestRoomsV3URLEscapeDoNot404(t *testing.T) {
 			t.Errorf("expected an error, got none")
 			continue
 		}
-		gerr, ok := err.(gomatrix.HTTPError)
-		if !ok {
-			t.Errorf("failed to cast response error as gomatrix.HTTPError: %s", err)
+		var gerr spec.HTTPError
+		if !errors.As(err, &gerr) {
+			t.Errorf("failed to cast response error as spec.HTTPError: %s", err)
 			continue
 		}
 		t.Logf("Error: %+v", gerr)
@@ -488,6 +502,5 @@ func TestNotaryServer(t *testing.T) {
 				tc.validateFunc(t, resp)
 			})
 		}
-
 	})
 }

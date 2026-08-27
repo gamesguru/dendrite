@@ -11,15 +11,16 @@ import (
 	"fmt"
 	"strings"
 
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/input"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Peeker struct {
@@ -143,7 +144,7 @@ func (r *Peeker) performPeekRoomByID(
 	// XXX: would be nicer to call this with NIDs
 	// XXX: we should probably factor out history_visibility checks into a common utility method somewhere
 	// which handles the default value etc.
-	var worldReadable = false
+	worldReadable := false
 	if ev, _ := r.DB.GetStateEvent(ctx, roomID, "m.room.history_visibility", ""); ev != nil {
 		content := map[string]string{}
 		if err = json.Unmarshal(ev.Content(), &content); err != nil {
@@ -160,7 +161,7 @@ func (r *Peeker) performPeekRoomByID(
 	}
 
 	if ev, _ := r.DB.GetStateEvent(ctx, roomID, "m.room.encryption", ""); ev != nil {
-		return "", api.ErrNotAllowed{Err: fmt.Errorf("Cannot peek into an encrypted room")}
+		return "", api.ErrNotAllowed{Err: fmt.Errorf("cannot peek into an encrypted room")}
 	}
 
 	// TODO: handle federated peeks

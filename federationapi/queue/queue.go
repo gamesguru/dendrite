@@ -12,23 +12,22 @@ import (
 	"sync"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // OutgoingQueues is a collection of queues for sending transactions to other
-// matrix servers
+// matrix servers.
 type OutgoingQueues struct {
 	db          storage.Database
 	process     *process.ProcessContext
@@ -41,7 +40,7 @@ type OutgoingQueues struct {
 	queues      map[spec.ServerName]*destinationQueue
 }
 
-func init() {
+func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		destinationQueueTotal, destinationQueueRunning,
 		destinationQueueBackingOff,
@@ -50,7 +49,7 @@ func init() {
 
 var destinationQueueTotal = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_total",
 	},
@@ -58,7 +57,7 @@ var destinationQueueTotal = prometheus.NewGauge(
 
 var destinationQueueRunning = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_running",
 	},
@@ -66,13 +65,13 @@ var destinationQueueRunning = prometheus.NewGauge(
 
 var destinationQueueBackingOff = prometheus.NewGauge(
 	prometheus.GaugeOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "federationapi",
 		Name:      "destination_queues_backing_off",
 	},
 )
 
-// NewOutgoingQueues makes a new OutgoingQueues
+// NewOutgoingQueues makes a new OutgoingQueues.
 func NewOutgoingQueues(
 	db storage.Database,
 	process *process.ProcessContext,
@@ -112,9 +111,9 @@ func NewOutgoingQueues(
 		} else {
 			log.WithError(err).Error("Failed to get EDU server names for destination queue hydration")
 		}
-		offset, step := time.Second*5, time.Second
-		if max := len(serverNames); max > 120 {
-			step = (time.Second * 120) / time.Duration(max)
+		offset, step := time.Second*5, time.Second //nolint:mnd
+		if max := len(serverNames); max > 120 {    //nolint:mnd
+			step = (time.Second * 120) / time.Duration(max) //nolint:mnd
 		}
 		for serverName := range serverNames {
 			if queue := queues.getQueue(serverName); queue != nil {
@@ -172,7 +171,7 @@ func (oqs *OutgoingQueues) clearQueue(oq *destinationQueue) {
 	destinationQueueTotal.Dec()
 }
 
-// SendEvent sends an event to the destinations
+// SendEvent sends an event to the destinations.
 func (oqs *OutgoingQueues) SendEvent(
 	ev *types.HeaderedEvent, origin spec.ServerName,
 	destinations []spec.ServerName,
@@ -235,7 +234,7 @@ func (oqs *OutgoingQueues) SendEvent(
 		destmap,
 		nid, // NIDs from federationapi_queue_json table
 	); err != nil {
-		logrus.WithError(err).Errorf("failed to associate PDUs %q with destinations", nid)
+		log.WithError(err).Errorf("failed to associate PDUs %q with destinations", nid)
 		return err
 	}
 
@@ -317,7 +316,7 @@ func (oqs *OutgoingQueues) SendEDU(
 		e.Type,
 		nil, // this will use the default expireEDUTypes map
 	); err != nil {
-		logrus.WithError(err).Errorf("failed to associate EDU with destinations")
+		log.WithError(err).Errorf("failed to associate EDU with destinations")
 		return err
 	}
 

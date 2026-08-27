@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 type FakeQuerier struct {
@@ -69,7 +70,7 @@ func TestIsServerAllowed(t *testing.T) {
 			roomFunc: func() *test.Room {
 				bob := test.User{ID: "@bob:test2"}
 				r := test.NewRoom(t, alice, test.RoomHistoryVisibility(gomatrixserverlib.HistoryVisibilityInvited))
-				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]interface{}{
+				r.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{
 					"membership": spec.Invite,
 				}, test.WithStateKey(bob.ID))
 				return r

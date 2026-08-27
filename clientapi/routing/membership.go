@@ -9,27 +9,27 @@ package routing
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/threepid"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
 	"github.com/matrix-org/util"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/threepid"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func SendBan(
@@ -94,8 +94,8 @@ func SendBan(
 
 func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, device *userapi.Device,
 	roomID, membership, reason string, cfg *config.ClientAPI, targetUserID string, evTime time.Time,
-	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI) util.JSONResponse {
-
+	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
+) util.JSONResponse {
 	event, err := buildMembershipEvent(
 		ctx, targetUserID, reason, profileAPI, device, membership,
 		roomID, false, cfg, evTime, rsAPI, asAPI,
@@ -120,7 +120,7 @@ func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, devic
 		false,
 	); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
-		if err.Error() == api.InputWasRejected {
+		if err.Error() == roomserverAPI.InputWasRejected {
 			return util.JSONResponse{
 				Code: http.StatusForbidden,
 				JSON: spec.Forbidden("the event was rejected"),
@@ -214,7 +214,7 @@ func SendKick(
 	if queryRes.Membership != spec.Join && queryRes.Membership != spec.Invite {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: spec.Unknown("cannot /kick banned or left users"),
+			JSON: spec.Forbidden("cannot /kick banned or left users"),
 		}
 	}
 	// TODO: should we be using SendLeave instead?
@@ -269,8 +269,8 @@ func SendUnban(
 	// unban is only valid if the user is currently banned
 	if queryRes.Membership != spec.Ban {
 		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.Unknown("can only /unban users that are banned"),
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden("can only /unban users that are banned"),
 		}
 	}
 	// TODO: should we be using SendLeave instead?
@@ -329,7 +329,7 @@ func SendInvite(
 	return response
 }
 
-// sendInvite sends an invitation to a user. Returns a JSONResponse and an error
+// sendInvite sends an invitation to a user. Returns a JSONResponse and an error.
 func sendInvite(
 	ctx context.Context,
 	device *userapi.Device,
@@ -367,7 +367,7 @@ func sendInvite(
 			JSON: spec.InternalServerError{},
 		}, err
 	}
-	err = rsAPI.PerformInvite(ctx, &api.PerformInviteRequest{
+	err = rsAPI.PerformInvite(ctx, &roomserverAPI.PerformInviteRequest{
 		InviteInput: roomserverAPI.InviteInput{
 			RoomID:     *validRoomID,
 			Inviter:    *inviter,
@@ -382,25 +382,20 @@ func sendInvite(
 		SendAsServer:    string(device.UserDomain()),
 	})
 
-	switch e := err.(type) {
-	case roomserverAPI.ErrInvalidID:
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.Unknown(e.Error()),
-		}, e
-	case roomserverAPI.ErrNotAllowed:
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(e.Error()),
-		}, e
-	case nil:
-	default:
-		util.GetLogger(ctx).WithError(err).Error("PerformInvite failed")
-		sentry.CaptureException(err)
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}, err
+	{
+		var e roomserverAPI.ErrInvalidID
+		var e1 roomserverAPI.ErrNotAllowed
+		switch {
+		case errors.As(err, &e):
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam(e.Error())}, e
+		case errors.As(err, &e1):
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(e1.Error())}, e1
+		case err == nil:
+		default:
+			util.GetLogger(ctx).WithError(err).Error("PerformInvite failed")
+			sentry.CaptureException(err)
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}, err
+		}
 	}
 
 	return util.JSONResponse{
@@ -520,7 +515,6 @@ func loadProfile(
 }
 
 func extractRequestData(req *http.Request) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
-
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		resErr = reqErr
 		return
@@ -547,42 +541,32 @@ func checkAndProcessThreepid(
 	roomID string,
 	evTime time.Time,
 ) (inviteStored bool, errRes *util.JSONResponse) {
-
 	inviteStored, err := threepid.CheckAndProcessInvite(
 		req.Context(), device, body, cfg, rsAPI, profileAPI,
 		roomID, evTime,
 	)
-	switch e := err.(type) {
-	case nil:
-	case threepid.ErrMissingParameter:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(err.Error()),
-		}
-	case threepid.ErrNotTrusted:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.NotTrusted(body.IDServer),
-		}
-	case eventutil.ErrRoomNoExists:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound(err.Error()),
-		}
-	case gomatrixserverlib.BadJSONError:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(e.Error()),
-		}
-	default:
-		util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-		return inviteStored, &util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+	{
+		var e threepid.ErrMissingParameter
+		var e1 threepid.ErrNotTrusted
+		var e2 eventutil.ErrRoomNoExists
+		var e3 gomatrixserverlib.BadJSONError
+		switch {
+		case err == nil:
+		case errors.As(err, &e):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
+		case errors.As(err, &e1):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.IDServer)}
+		case errors.As(err, &e2):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		case errors.As(err, &e3):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(e3.Error())}
+		default:
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 	}
 	return
@@ -647,7 +631,7 @@ func SendForget(
 	if membershipRes.IsInRoom {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.Unknown(fmt.Sprintf("User %s is in room %s", device.UserID, roomID)),
+			JSON: spec.Forbidden(fmt.Sprintf("User %s is still in room %s", device.UserID, roomID)),
 		}
 	}
 

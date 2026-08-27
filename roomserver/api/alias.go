@@ -10,7 +10,7 @@ import (
 	"regexp"
 )
 
-// GetRoomIDForAliasRequest is a request to GetRoomIDForAlias
+// GetRoomIDForAliasRequest is a request to GetRoomIDForAlias.
 type GetRoomIDForAliasRequest struct {
 	// Alias we want to lookup
 	Alias string `json:"alias"`
@@ -19,19 +19,19 @@ type GetRoomIDForAliasRequest struct {
 	IncludeAppservices bool `json:"include_appservices"`
 }
 
-// GetRoomIDForAliasResponse is a response to GetRoomIDForAlias
+// GetRoomIDForAliasResponse is a response to GetRoomIDForAlias.
 type GetRoomIDForAliasResponse struct {
 	// The room ID the alias refers to
 	RoomID string `json:"room_id"`
 }
 
-// GetAliasesForRoomIDRequest is a request to GetAliasesForRoomID
+// GetAliasesForRoomIDRequest is a request to GetAliasesForRoomID.
 type GetAliasesForRoomIDRequest struct {
 	// The room ID we want to find aliases for
 	RoomID string `json:"room_id"`
 }
 
-// GetAliasesForRoomIDResponse is a response to GetAliasesForRoomID
+// GetAliasesForRoomIDResponse is a response to GetAliasesForRoomID.
 type GetAliasesForRoomIDResponse struct {
 	// The aliases the alias refers to
 	Aliases []string `json:"aliases"`

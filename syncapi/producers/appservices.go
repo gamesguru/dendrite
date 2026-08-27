@@ -10,7 +10,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// AppserviceEventProducer produces events for the appservice API to consume
+// AppserviceEventProducer produces events for the appservice API to consume.
 type AppserviceEventProducer struct {
 	Topic     string
 	JetStream nats.JetStreamContext

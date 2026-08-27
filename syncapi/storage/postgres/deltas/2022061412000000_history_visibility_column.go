@@ -12,8 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 func UpAddHistoryVisibilityColumnOutputRoomEvents(ctx context.Context, tx *sql.Tx) error {
@@ -38,7 +39,7 @@ func UpSetHistoryVisibility(ctx context.Context, tx *sql.Tx) error {
 
 	// update the history visibility
 	for roomID, hisVis := range historyVisibilities {
-		_, err = tx.ExecContext(ctx, `UPDATE syncapi_output_room_events SET history_visibility = $1 
+		_, err = tx.ExecContext(ctx, `UPDATE syncapi_output_room_events SET history_visibility = $1
                         WHERE type IN ('m.room.message', 'm.room.encrypted') AND room_id = $2 AND history_visibility <> $1`, hisVis, roomID)
 		if err != nil {
 			return fmt.Errorf("failed to update history visibility: %w", err)
@@ -69,7 +70,7 @@ func currentHistoryVisibilities(ctx context.Context, tx *sql.Tx) (map[string]gom
 	if err != nil {
 		return nil, fmt.Errorf("failed to query current room state: %w", err)
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	var eventBytes []byte
 	var roomID string
 	var event types.HeaderedEvent
@@ -86,6 +87,9 @@ func currentHistoryVisibilities(ctx context.Context, tx *sql.Tx) (map[string]gom
 		if hisVis, err = event.HistoryVisibility(); err == nil && event.Depth() < 10 {
 			historyVisibilities[roomID] = hisVis
 		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate rows: %w", err)
 	}
 	return historyVisibilities, nil
 }

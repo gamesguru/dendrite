@@ -14,7 +14,7 @@ func UnsortedStringSliceEqual(first, second []string) bool {
 		return false
 	}
 
-	a, b := first[:], second[:]
+	a, b := first, second
 	sort.Strings(a)
 	sort.Strings(b)
 	for i := range a {

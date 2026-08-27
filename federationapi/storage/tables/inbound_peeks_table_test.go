@@ -5,15 +5,16 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres"
-	"github.com/element-hq/dendrite/federationapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/federationapi/storage/tables"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateInboundpeeksTable(t *testing.T, dbType test.DBType) (tables.FederationInboundPeeks, func()) {
@@ -144,6 +145,5 @@ func TestInboundPeeksTable(t *testing.T) {
 		if len(inboundPeeks) > 0 {
 			t.Fatal("got inbound peeks which should be deleted")
 		}
-
 	})
 }

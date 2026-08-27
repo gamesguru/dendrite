@@ -13,16 +13,17 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type invite struct {
@@ -45,7 +46,7 @@ var (
 	errNotInRoom    = errors.New("the server isn't currently in the room")
 )
 
-// CreateInvitesFrom3PIDInvites implements POST /_matrix/federation/v1/3pid/onbind
+// CreateInvitesFrom3PIDInvites implements POST /_matrix/federation/v1/3pid/onbind.
 func CreateInvitesFrom3PIDInvites(
 	req *http.Request, rsAPI api.FederationRoomserverAPI,
 	cfg *config.FederationAPI,
@@ -107,7 +108,7 @@ func CreateInvitesFrom3PIDInvites(
 	}
 }
 
-// ExchangeThirdPartyInvite implements PUT /_matrix/federation/v1/exchange_third_party_invite/{roomID}
+// ExchangeThirdPartyInvite implements PUT /_matrix/federation/v1/exchange_third_party_invite/{roomID}.
 func ExchangeThirdPartyInvite(
 	httpReq *http.Request,
 	request *fclient.FederationRequest,
@@ -176,7 +177,7 @@ func ExchangeThirdPartyInvite(
 
 	// Auth and build the event from what the remote server sent us
 	event, err := buildMembershipEvent(httpReq.Context(), &proto, rsAPI, cfg)
-	if err == errNotInRoom {
+	if errors.Is(err, errNotInRoom) {
 		return util.JSONResponse{
 			Code: http.StatusNotFound,
 			JSON: spec.NotFound("Unknown room " + roomID),
@@ -296,7 +297,7 @@ func createInviteFrom3PIDInvite(
 	}
 
 	event, err := buildMembershipEvent(ctx, proto, rsAPI, cfg)
-	if err == errNotInRoom {
+	if errors.Is(err, errNotInRoom) {
 		return nil, sendToRemoteServer(ctx, inv, federation, cfg, *proto)
 	}
 	if err != nil {

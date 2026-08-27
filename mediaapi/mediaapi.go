@@ -7,23 +7,26 @@
 package mediaapi
 
 import (
+	"context"
+
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/routing"
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/routing"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers for the MediaAPI component.
 func AddPublicRoutes(
 	routers httputil.Routers,
 	cm *sqlutil.Connections,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	userAPI userapi.MediaUserAPI,
 	client *fclient.Client,
 	fedClient fclient.FederationClient,
@@ -34,7 +37,12 @@ func AddPublicRoutes(
 		logrus.WithError(err).Panicf("failed to connect to media db")
 	}
 
+	fileStore, err := filestore.NewFileStore(context.Background(), &cfg.MediaAPI)
+	if err != nil {
+		logrus.WithError(err).Panicf("failed to create media file store")
+	}
+
 	routing.Setup(
-		routers, cfg, mediaDB, userAPI, client, fedClient, keyRing,
+		routers, cfg, mediaDB, fileStore, userAPI, client, fedClient, keyRing,
 	)
 }

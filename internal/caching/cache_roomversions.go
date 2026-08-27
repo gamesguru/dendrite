@@ -1,6 +1,6 @@
 package caching
 
-import "github.com/matrix-org/gomatrixserverlib"
+import "codefloe.com/pat-s/gomatrixserverlib"
 
 // RoomVersionsCache contains the subset of functions needed for
 // a room version cache.

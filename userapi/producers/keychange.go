@@ -10,21 +10,22 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
-// KeyChange produces key change events for the sync API and federation sender to consume
+// KeyChange produces key change events for the sync API and federation sender to consume.
 type KeyChange struct {
 	Topic     string
 	JetStream JetStreamPublisher
 	DB        storage.KeyChangeDatabase
 }
 
-// ProduceKeyChanges creates new change events for each key
+// ProduceKeyChanges creates new change events for each key.
 func (p *KeyChange) ProduceKeyChanges(keys []api.DeviceMessage) error {
 	userToDeviceCount := make(map[string]int)
 	for _, key := range keys {

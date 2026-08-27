@@ -15,21 +15,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"gotest.tools/v3/poll"
 
-	"github.com/element-hq/dendrite/federationapi/producers"
-	rsAPI "github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
-	keyAPI "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	rsAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
+	keyAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (
@@ -175,8 +175,8 @@ func TestProcessTransactionRequestPDUInvalidSignature(t *testing.T) {
 	}
 }
 
-func createTransactionWithEDU(ctx *process.ProcessContext, edus []gomatrixserverlib.EDU) (TxnReq, nats.JetStreamContext, *config.Dendrite) {
-	cfg := &config.Dendrite{}
+func createTransactionWithEDU(ctx *process.ProcessContext, edus []gomatrixserverlib.EDU) (TxnReq, nats.JetStreamContext, *config.Zendrite) {
+	cfg := &config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{
 		Generate:       true,
 		SingleDatabase: true,
@@ -206,7 +206,7 @@ func TestProcessTransactionRequestEDUTyping(t *testing.T) {
 	userID := "@userid:kaer.morhen"
 	typing := true
 	edu := gomatrixserverlib.EDU{Type: "m.typing"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
+	if edu.Content, err = json.Marshal(map[string]any{
 		"room_id": roomID,
 		"user_id": userID,
 		"typing":  typing,
@@ -218,7 +218,7 @@ func TestProcessTransactionRequestEDUTyping(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -260,15 +260,15 @@ func TestProcessTransactionRequestEDUToDevice(t *testing.T) {
 	var err error
 	sender := "@userid:kaer.morhen"
 	messageID := "$x4MKEPRSF6OGlo0qpnsP3BfSmYX5HhVlykOsQH3ECyg"
-	msgType := "m.dendrite.test"
+	msgType := "m.zendrite.test"
 	edu := gomatrixserverlib.EDU{Type: "m.direct_to_device"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
+	if edu.Content, err = json.Marshal(map[string]any{
 		"sender":     sender,
 		"type":       msgType,
 		"message_id": messageID,
-		"messages": map[string]interface{}{
-			"@alice:example.org": map[string]interface{}{
-				"IWHQUZUIAH": map[string]interface{}{
+		"messages": map[string]any{
+			"@alice:example.org": map[string]any{
+				"IWHQUZUIAH": map[string]any{
 					"algorithm":   "m.megolm.v1.aes-sha2",
 					"room_id":     "!Cuyf34gef24t:localhost",
 					"session_id":  "X3lUlvLELLYxeTx4yOVu6UDpasGEVO0Jbu+QFnm0cKQ",
@@ -284,7 +284,7 @@ func TestProcessTransactionRequestEDUToDevice(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -293,7 +293,7 @@ func TestProcessTransactionRequestEDUToDevice(t *testing.T) {
 		var output types.OutputSendToDeviceEvent
 		if err = json.Unmarshal(msg.Data, &output); err != nil {
 			// If the message was invalid, log it and move on to the next message in the stream
-			println(err.Error())
+			t.Log(err.Error())
 			return true
 		}
 		assert.Equal(t, sender, output.Sender)
@@ -327,22 +327,22 @@ func TestProcessTransactionRequestEDUDeviceListUpdate(t *testing.T) {
 	deviceID := "QBUAZIFURK"
 	userID := "@john:example.com"
 	edu := gomatrixserverlib.EDU{Type: "m.device_list_update"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
+	if edu.Content, err = json.Marshal(map[string]any{
 		"device_display_name": "Mobile",
 		"device_id":           deviceID,
 		"key":                 "value",
-		"keys": map[string]interface{}{
+		"keys": map[string]any{
 			"algorithms": []string{
 				"m.olm.v1.curve25519-aes-sha2",
 				"m.megolm.v1.aes-sha2",
 			},
 			"device_id": "JLAFKJWSCS",
-			"keys": map[string]interface{}{
+			"keys": map[string]any{
 				"curve25519:JLAFKJWSCS": "3C5BFWi2Y8MaVvjM8M22DBmh24PmgR0nPvJOIArzgyI",
 				"ed25519:JLAFKJWSCS":    "lEuiRJBit0IG6nUf5pUzWTUEsRVVe/HJkoKuEww9ULI",
 			},
-			"signatures": map[string]interface{}{
-				"@alice:example.com": map[string]interface{}{
+			"signatures": map[string]any{
+				"@alice:example.com": map[string]any{
 					"ed25519:JLAFKJWSCS": "dSO80A01XiigH3uBiDVx/EjzaoycHcjq9lfQX0uWsqxl2giMIiSPR8a4d291W1ihKJL/a+myXS367WT6NAIcBA",
 				},
 			},
@@ -361,7 +361,7 @@ func TestProcessTransactionRequestEDUDeviceListUpdate(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -370,7 +370,7 @@ func TestProcessTransactionRequestEDUDeviceListUpdate(t *testing.T) {
 		var output gomatrixserverlib.DeviceListUpdateEvent
 		if err = json.Unmarshal(msg.Data, &output); err != nil {
 			// If the message was invalid, log it and move on to the next message in the stream
-			println(err.Error())
+			t.Log(err.Error())
 			return true
 		}
 		assert.Equal(t, userID, output.UserID)
@@ -403,10 +403,10 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 	var err error
 	roomID := "!some_room:example.org"
 	edu := gomatrixserverlib.EDU{Type: "m.receipt"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
-		roomID: map[string]interface{}{
-			"m.read": map[string]interface{}{
-				"@john:kaer.morhen": map[string]interface{}{
+	if edu.Content, err = json.Marshal(map[string]any{
+		roomID: map[string]any{
+			"m.read": map[string]any{
+				"@john:kaer.morhen": map[string]any{
 					"data": map[string]int64{
 						"ts": 1533358089009,
 					},
@@ -422,10 +422,10 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 	badEDU := gomatrixserverlib.EDU{Type: "m.receipt"}
 	badEDU.Content = spec.RawJSON("badjson")
 	badUser := gomatrixserverlib.EDU{Type: "m.receipt"}
-	if badUser.Content, err = json.Marshal(map[string]interface{}{
-		roomID: map[string]interface{}{
-			"m.read": map[string]interface{}{
-				"johnkaer.morhen": map[string]interface{}{
+	if badUser.Content, err = json.Marshal(map[string]any{
+		roomID: map[string]any{
+			"m.read": map[string]any{
+				"johnkaer.morhen": map[string]any{
 					"data": map[string]int64{
 						"ts": 1533358089009,
 					},
@@ -439,10 +439,10 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 		t.Errorf("failed to marshal EDU JSON")
 	}
 	badDomain := gomatrixserverlib.EDU{Type: "m.receipt"}
-	if badDomain.Content, err = json.Marshal(map[string]interface{}{
-		roomID: map[string]interface{}{
-			"m.read": map[string]interface{}{
-				"@john:bad.domain": map[string]interface{}{
+	if badDomain.Content, err = json.Marshal(map[string]any{
+		roomID: map[string]any{
+			"m.read": map[string]any{
+				"@john:bad.domain": map[string]any{
 					"data": map[string]int64{
 						"ts": 1533358089009,
 					},
@@ -458,7 +458,7 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, badUser, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -494,7 +494,7 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 func TestProcessTransactionRequestEDUSigningKeyUpdate(t *testing.T) {
 	var err error
 	edu := gomatrixserverlib.EDU{Type: "m.signing_key_update"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{}); err != nil {
+	if edu.Content, err = json.Marshal(map[string]any{}); err != nil {
 		t.Errorf("failed to marshal EDU JSON")
 	}
 	badEDU := gomatrixserverlib.EDU{Type: "m.signing_key_update"}
@@ -502,7 +502,7 @@ func TestProcessTransactionRequestEDUSigningKeyUpdate(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -511,7 +511,7 @@ func TestProcessTransactionRequestEDUSigningKeyUpdate(t *testing.T) {
 		var output keyAPI.CrossSigningKeyUpdate
 		if err = json.Unmarshal(msg.Data, &output); err != nil {
 			// If the message was invalid, log it and move on to the next message in the stream
-			println(err.Error())
+			t.Log(err.Error())
 			return true
 		}
 
@@ -543,8 +543,8 @@ func TestProcessTransactionRequestEDUPresence(t *testing.T) {
 	userID := "@john:kaer.morhen"
 	presence := "online"
 	edu := gomatrixserverlib.EDU{Type: "m.presence"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{
-		"push": []map[string]interface{}{{
+	if edu.Content, err = json.Marshal(map[string]any{
+		"push": []map[string]any{{
 			"currently_active": true,
 			"last_active_ago":  5000,
 			"presence":         presence,
@@ -559,7 +559,7 @@ func TestProcessTransactionRequestEDUPresence(t *testing.T) {
 	edus := []gomatrixserverlib.EDU{badEDU, edu}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, js, cfg := createTransactionWithEDU(ctx, edus)
 	received := atomic.Bool{}
 	onMessage := func(ctx context.Context, msgs []*nats.Msg) bool {
@@ -596,12 +596,12 @@ func TestProcessTransactionRequestEDUPresence(t *testing.T) {
 func TestProcessTransactionRequestEDUUnhandled(t *testing.T) {
 	var err error
 	edu := gomatrixserverlib.EDU{Type: "m.unhandled"}
-	if edu.Content, err = json.Marshal(map[string]interface{}{}); err != nil {
+	if edu.Content, err = json.Marshal(map[string]any{}); err != nil {
 		t.Errorf("failed to marshal EDU JSON")
 	}
 
 	ctx := process.NewProcessContext()
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	txn, _, _ := createTransactionWithEDU(ctx, []gomatrixserverlib.EDU{edu})
 	txnRes, jsonRes := txn.ProcessTransaction(ctx.Context())
 
@@ -609,6 +609,7 @@ func TestProcessTransactionRequestEDUUnhandled(t *testing.T) {
 	assert.Zero(t, len(txnRes.PDUs))
 }
 
+//nolint:gochecknoinits
 func init() {
 	for _, j := range testData {
 		e, err := gomatrixserverlib.MustGetRoomVersion(testRoomVersion).NewEventFromTrustedJSON(j, false)
@@ -689,7 +690,7 @@ func (t *testRoomserverAPI) QueryEventsByID(
 	return nil
 }
 
-// Query if a server is joined to a room
+// Query if a server is joined to a room.
 func (t *testRoomserverAPI) QueryServerJoinedToRoom(
 	ctx context.Context,
 	request *rsAPI.QueryServerJoinedToRoomRequest,

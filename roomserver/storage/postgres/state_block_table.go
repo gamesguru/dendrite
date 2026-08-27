@@ -12,12 +12,12 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/lib/pq"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateDataSchema = `
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS roomserver_state_block (
 	-- The state snapshot NID that identifies this snapshot.
 	state_block_nid bigint PRIMARY KEY DEFAULT nextval('roomserver_state_block_nid_seq'),
 	-- The hash of the state block, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over 
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_block_hash BYTEA UNIQUE,
 	-- The event NIDs contained within the state block.
@@ -105,7 +105,7 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	results := make([][]types.EventNID, len(stateBlockNIDs))
 	i := 0
 	var stateBlockNID types.StateBlockNID
-	var result pq.Int64Array
+	var result sqlutil.Int64Array
 	for ; rows.Next(); i++ {
 		if err = rows.Scan(&stateBlockNID, &result); err != nil {
 			return nil, err
@@ -125,10 +125,10 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	return results, err
 }
 
-func stateBlockNIDsAsArray(stateBlockNIDs []types.StateBlockNID) pq.Int64Array {
+func stateBlockNIDsAsArray(stateBlockNIDs []types.StateBlockNID) []int64 {
 	nids := make([]int64, len(stateBlockNIDs))
 	for i := range stateBlockNIDs {
 		nids[i] = int64(stateBlockNIDs[i])
 	}
-	return pq.Int64Array(nids)
+	return nids
 }

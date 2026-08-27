@@ -10,20 +10,20 @@ import (
 	"context"
 	"encoding/json"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/federationapi/types"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // KeyChangeConsumer consumes events that originate in key server.
@@ -59,7 +59,7 @@ func NewKeyChangeConsumer(
 	}
 }
 
-// Start consuming from key servers
+// Start consuming from key servers.
 func (t *KeyChangeConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1,
@@ -84,11 +84,11 @@ func (t *KeyChangeConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) boo
 	}
 	switch m.Type {
 	case api.TypeCrossSigningUpdate:
-		return t.onCrossSigningMessage(m)
+		return t.onCrossSigningMessage(m) //nolint:contextcheck
 	case api.TypeDeviceKeyUpdate:
 		fallthrough
 	default:
-		return t.onDeviceKeyMessage(m)
+		return t.onDeviceKeyMessage(m) //nolint:contextcheck
 	}
 }
 

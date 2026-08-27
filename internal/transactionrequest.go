@@ -12,25 +12,26 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	syncTypes "github.com/element-hq/dendrite/syncapi/types"
-	userAPI "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	syncTypes "codefloe.com/pat-s/zendrite/syncapi/types"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 var (
 	PDUCountTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "federationapi",
 			Name:      "recv_pdus",
 			Help:      "Number of incoming PDUs from remote servers with labels for success",
@@ -39,7 +40,7 @@ var (
 	)
 	EDUCountTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "dendrite",
+			Namespace: "zendrite",
 			Subsystem: "federationapi",
 			Name:      "recv_edus",
 			Help:      "Number of incoming EDUs from remote servers",
@@ -141,7 +142,7 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 				// on PDUs.
 				//
 				// This enforces that the entire transaction is rejected if a single bad PDU is
-				// sent. It is unclear if this is the correct behaviour or not.
+				// sent. It is unclear if this is the correct behavior or not.
 				//
 				// See https://github.com/matrix-org/synapse/issues/7543
 				return nil, &util.JSONResponse{
@@ -202,7 +203,7 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 	return &fclient.RespSend{PDUs: results}, nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (t *TxnReq) processEDUs(ctx context.Context) {
 	for _, e := range t.EDUs {
 		EDUCountTotal.Inc()
@@ -219,17 +220,18 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 				continue
 			}
 			_, serverName, err := gomatrixserverlib.SplitID('@', typingPayload.UserID)
-			if err != nil {
+			switch {
+			case err != nil:
 				continue
-			} else if serverName == t.ourServerName {
+			case serverName == t.ourServerName:
 				continue
-			} else if serverName != t.Origin {
+			case serverName != t.Origin:
 				continue
 			}
 			if api.IsServerBannedFromRoom(ctx, t.rsAPI, typingPayload.RoomID, serverName) {
 				continue
 			}
-			if err := t.producer.SendTyping(ctx, typingPayload.UserID, typingPayload.RoomID, typingPayload.Typing, 30*1000); err != nil {
+			if err := t.producer.SendTyping(ctx, typingPayload.UserID, typingPayload.RoomID, typingPayload.Typing, 30*1000); err != nil { //nolint:mnd
 				util.GetLogger(ctx).WithError(err).Error("Failed to send typing event to JetStream")
 			}
 		case spec.MDirectToDevice:
@@ -315,7 +317,7 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 	}
 }
 
-// processPresence handles m.receipt events
+// processPresence handles m.receipt events.
 func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) error {
 	payload := types.Presence{}
 	if err := json.Unmarshal(e.Content, &payload); err != nil {
@@ -340,7 +342,7 @@ func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) e
 	return nil
 }
 
-// processReceiptEvent sends receipt events to JetStream
+// processReceiptEvent sends receipt events to JetStream.
 func (t *TxnReq) processReceiptEvent(ctx context.Context,
 	userID, roomID, receiptType string,
 	timestamp spec.Timestamp,

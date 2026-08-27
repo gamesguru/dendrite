@@ -10,12 +10,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 var fallbackKeysSchema = `
@@ -96,9 +97,10 @@ func (s *fallbackKeysStatements) SelectUnusedFallbackKeyAlgorithms(ctx context.C
 
 func (s *fallbackKeysStatements) InsertFallbackKeys(ctx context.Context, txn *sql.Tx, keys api.FallbackKeys) ([]string, error) {
 	now := time.Now().Unix()
+	upsertKeysStmt := sqlutil.TxStmt(txn, s.upsertKeysStmt)
 	for keyIDWithAlgo, keyJSON := range keys.KeyJSON {
 		algo, keyID := keys.Split(keyIDWithAlgo)
-		_, err := sqlutil.TxStmt(txn, s.upsertKeysStmt).ExecContext(
+		_, err := upsertKeysStmt.ExecContext(
 			ctx, keys.UserID, keys.DeviceID, keyID, algo, now, string(keyJSON),
 		)
 		if err != nil {
@@ -109,7 +111,8 @@ func (s *fallbackKeysStatements) InsertFallbackKeys(ctx context.Context, txn *sq
 }
 
 func (s *fallbackKeysStatements) DeleteFallbackKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteFallbackKeysStmt).ExecContext(ctx, userID, deviceID)
+	deleteFallbackKeysStmt := sqlutil.TxStmt(txn, s.deleteFallbackKeysStmt)
+	_, err := deleteFallbackKeysStmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
 
@@ -118,14 +121,16 @@ func (s *fallbackKeysStatements) SelectAndUpdateFallbackKey(
 ) (map[string]json.RawMessage, error) {
 	var keyID string
 	var keyJSON string
-	err := sqlutil.TxStmtContext(ctx, txn, s.selectKeyByAlgorithmStmt).QueryRowContext(ctx, userID, deviceID, algorithm).Scan(&keyID, &keyJSON)
+	selectStmt := sqlutil.TxStmtContext(ctx, txn, s.selectKeyByAlgorithmStmt)
+	err := selectStmt.QueryRowContext(ctx, userID, deviceID, algorithm).Scan(&keyID, &keyJSON)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	_, err = sqlutil.TxStmtContext(ctx, txn, s.updateFallbackKeyUsedStmt).ExecContext(ctx, userID, deviceID, algorithm, keyID)
+	updateFallbackKeyUsedStmt := sqlutil.TxStmtContext(ctx, txn, s.updateFallbackKeyUsedStmt)
+	_, err = updateFallbackKeyUsedStmt.ExecContext(ctx, userID, deviceID, algorithm, keyID)
 	return map[string]json.RawMessage{
 		algorithm + ":" + keyID: json.RawMessage(keyJSON),
 	}, err

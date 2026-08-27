@@ -10,13 +10,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lib/pq"
-
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 func NewPostgresNotificationDataTable(db *sql.DB) (tables.NotificationData, error) {
@@ -75,7 +73,8 @@ func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context,
 func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 	ctx context.Context, txn *sql.Tx, userID string, roomIDs []string,
 ) (map[string]*eventutil.NotificationData, error) {
-	rows, err := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms).QueryContext(ctx, userID, pq.Array(roomIDs))
+	selectStmt := sqlutil.TxStmt(txn, r.selectUserUnreadCountsForRooms)
+	rows, err := selectStmt.QueryContext(ctx, userID, roomIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -100,13 +99,15 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 
 func (r *notificationDataStatements) SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error) {
 	var id int64
-	err := sqlutil.TxStmt(txn, r.selectMaxID).QueryRowContext(ctx).Scan(&id)
+	selectStmt := sqlutil.TxStmt(txn, r.selectMaxID)
+	err := selectStmt.QueryRowContext(ctx).Scan(&id)
 	return id, err
 }
 
 func (s *notificationDataStatements) PurgeNotificationData(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeNotificationData).ExecContext(ctx, roomID)
+	purgeNotificationData := sqlutil.TxStmt(txn, s.purgeNotificationData)
+	_, err := purgeNotificationData.ExecContext(ctx, roomID)
 	return err
 }

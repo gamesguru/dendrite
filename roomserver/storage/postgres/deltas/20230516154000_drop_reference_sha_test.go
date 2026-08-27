@@ -3,15 +3,14 @@ package deltas
 import (
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 )
 
 func TestUpDropEventReferenceSHAPrevEvents(t *testing.T) {
-
 	cfg, ctx, close := testrig.CreateConfig(t, test.DBTypePostgres)
 	defer close()
 
@@ -46,15 +45,16 @@ INSERT INTO roomserver_events (event_nid, room_nid) VALUES (1, 1)
 	stmt, err := db.PrepareContext(ctx.Context(), `INSERT INTO roomserver_previous_events (previous_event_id, event_nids, previous_reference_sha256) VALUES ($1, $2, $3)`)
 	assert.Nil(t, err)
 	assert.NotNil(t, stmt)
-	_, err = stmt.ExecContext(ctx.Context(), "1", pq.Array([]int64{1, 2}), "a")
+	defer stmt.Close()
+	_, err = stmt.ExecContext(ctx.Context(), "1", []int64{1, 2}, "a")
 	assert.Nil(t, err)
-	_, err = stmt.ExecContext(ctx.Context(), "1", pq.Array([]int64{1, 2, 3}), "b")
+	_, err = stmt.ExecContext(ctx.Context(), "1", []int64{1, 2, 3}, "b")
 	assert.Nil(t, err)
 	// execute the migration
 	txn, err := db.Begin()
 	assert.Nil(t, err)
 	assert.NotNil(t, txn)
-	defer txn.Rollback()
+	defer func() { _ = txn.Rollback() }()
 	err = UpDropEventReferenceSHAPrevEvents(ctx.Context(), txn)
 	assert.NoError(t, err)
 }

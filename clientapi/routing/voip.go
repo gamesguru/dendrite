@@ -14,12 +14,12 @@ import (
 	"net/http"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // RequestTurnServer implements:
@@ -44,12 +44,12 @@ func RequestTurnServer(req *http.Request, device *api.Device, cfg *config.Client
 		TTL:  int(duration.Seconds()),
 	}
 
-	if turnConfig.SharedSecret != "" {
+	switch {
+	case turnConfig.SharedSecret != "":
 		expiry := time.Now().Add(duration).Unix()
 		resp.Username = fmt.Sprintf("%d:%s", expiry, device.UserID)
 		mac := hmac.New(sha1.New, []byte(turnConfig.SharedSecret))
 		_, err := mac.Write([]byte(resp.Username))
-
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("mac.Write failed")
 			return util.JSONResponse{
@@ -59,10 +59,10 @@ func RequestTurnServer(req *http.Request, device *api.Device, cfg *config.Client
 		}
 
 		resp.Password = base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	} else if turnConfig.Username != "" && turnConfig.Password != "" {
+	case turnConfig.Username != "" && turnConfig.Password != "":
 		resp.Username = turnConfig.Username
 		resp.Password = turnConfig.Password
-	} else {
+	default:
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: struct{}{},

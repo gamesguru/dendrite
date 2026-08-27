@@ -56,5 +56,4 @@ func Test_Filter(t *testing.T) {
 			}
 		})
 	}
-
 }

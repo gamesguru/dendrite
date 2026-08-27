@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,18 +18,23 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type DBType int
 
-var DBTypeSQLite DBType = 1
-var DBTypePostgres DBType = 2
+var (
+	DBTypeSQLite   DBType = 1
+	DBTypePostgres DBType = 2
+)
 
-var Quiet = false
-var Required = os.Getenv("DENDRITE_TEST_SKIP_NODB") == ""
+var (
+	Quiet    = false
+	Required = os.Getenv("ZENDRITE_TEST_SKIP_NODB") == ""
+)
 
-func fatalError(t *testing.T, format string, args ...interface{}) {
+func fatalErrorf(t *testing.T, format string, args ...any) {
 	if Required {
 		t.Fatalf(format, args...)
 	} else {
@@ -38,7 +44,7 @@ func fatalError(t *testing.T, format string, args ...interface{}) {
 
 func createLocalDB(t *testing.T, dbName string) {
 	if _, err := exec.LookPath("createdb"); err != nil {
-		fatalError(t, "Note: tests require a postgres install accessible to the current user")
+		fatalErrorf(t, "Note: tests require a postgres install accessible to the current user")
 		return
 	}
 	createDB := exec.Command("createdb", dbName)
@@ -53,22 +59,22 @@ func createLocalDB(t *testing.T, dbName string) {
 }
 
 func createRemoteDB(t *testing.T, dbName, user, connStr string) {
-	db, err := sql.Open("postgres", connStr+" dbname=postgres")
+	db, err := sql.Open("pgx", connStr+" dbname=postgres")
 	if err != nil {
-		fatalError(t, "failed to open postgres conn with connstr=%s : %s", connStr, err)
+		fatalErrorf(t, "failed to open postgres conn with connstr=%s : %s", connStr, err)
 	}
 	if err = db.Ping(); err != nil {
-		fatalError(t, "failed to open postgres conn with connstr=%s : %s", connStr, err)
+		fatalErrorf(t, "failed to open postgres conn with connstr=%s : %s", connStr, err)
 	}
 	_, err = db.Exec(fmt.Sprintf(`CREATE DATABASE %s;`, dbName))
 	if err != nil {
-		pqErr, ok := err.(*pq.Error)
-		if !ok {
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
 			t.Fatalf("failed to CREATE DATABASE: %s", err)
 		}
 		// we ignore duplicate database error as we expect this
-		if pqErr.Code != "42P04" {
-			t.Fatalf("failed to CREATE DATABASE with code=%s msg=%s", pqErr.Code, pqErr.Message)
+		if pgErr.Code != "42P04" {
+			t.Fatalf("failed to CREATE DATABASE with code=%s msg=%s", pgErr.Code, pgErr.Message)
 		}
 	}
 	_, err = db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, dbName, user))
@@ -84,7 +90,7 @@ func currentUser() string {
 		if !Quiet {
 			fmt.Println("cannot get current user: ", err)
 		}
-		os.Exit(2)
+		os.Exit(2) //nolint:mnd
 	}
 	return user.Username
 }
@@ -96,7 +102,7 @@ func currentUser() string {
 func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, close func()) {
 	if dbType == DBTypeSQLite {
 		// this will be made in the t.TempDir, which is unique per test
-		dbname := filepath.Join(t.TempDir(), "dendrite_test.db")
+		dbname := filepath.Join(t.TempDir(), "zendrite_test.db")
 		return fmt.Sprintf("file:%s", dbname), func() {
 			t.Cleanup(func() {}) // removes the t.TempDir
 		}
@@ -124,8 +130,8 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 
 	// superuser database
 	postgresDB := os.Getenv("POSTGRES_DB")
-	// we cannot use 'dendrite_test' here else 2x concurrently running packages will try to use the same db.
-	// instead, hash the current working directory, snaffle the first 16 bytes and append that to dendrite_test
+	// we cannot use 'zendrite_test' here else 2x concurrently running packages will try to use the same db.
+	// instead, hash the current working directory, snaffle the first 16 bytes and append that to zendrite_test
 	// and use that as the unique db name. We do this because packages are per-directory hence by hashing the
 	// working (test) directory we ensure we get a consistent hash and don't hash against concurrent packages.
 	wd, err := os.Getwd()
@@ -133,7 +139,7 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 		t.Fatalf("cannot get working directory: %s", err)
 	}
 	hash := sha256.Sum256([]byte(wd))
-	dbName := fmt.Sprintf("dendrite_test_%s", hex.EncodeToString(hash[:16]))
+	dbName := fmt.Sprintf("zendrite_test_%s", hex.EncodeToString(hash[:16]))
 	if postgresDB == "" { // local server, use createdb
 		createLocalDB(t, dbName)
 	} else { // remote server, shell into the postgres user and CREATE DATABASE
@@ -143,7 +149,7 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 
 	return connStr, func() {
 		// Drop all tables on the database to get a fresh instance
-		db, err := sql.Open("postgres", connStr)
+		db, err := sql.Open("pgx", connStr)
 		if err != nil {
 			t.Fatalf("failed to connect to postgres db '%s': %s", connStr, err)
 		}
@@ -156,7 +162,7 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 	}
 }
 
-// Creates subtests with each known DBType
+// WithAllDatabases creates subtests with each known DBType.
 func WithAllDatabases(t *testing.T, testFn func(t *testing.T, db DBType)) {
 	dbs := map[string]DBType{
 		"postgres": DBTypePostgres,

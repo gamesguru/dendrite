@@ -14,10 +14,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // TODO: previous_reference_sha256 was NOT NULL before but it broke sytest because
@@ -113,7 +113,7 @@ func (s *previousEventStatements) InsertPreviousEvent(
 	eventNIDAsString := fmt.Sprintf("%d", eventNID)
 	selectStmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
 	err := selectStmt.QueryRowContext(ctx, previousEventID).Scan(&eventNIDs)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("selectStmt.QueryRowContext.Scan: %w", err)
 	}
 	var nids []string

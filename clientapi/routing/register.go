@@ -22,34 +22,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/internal"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/tokens"
+	"github.com/matrix-org/util"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/setup/config"
-
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-	"github.com/matrix-org/gomatrixserverlib/tokens"
-	"github.com/matrix-org/util"
-	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
-
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/userutil"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-)
-
-var (
-	// Prometheus metrics
-	amtRegUsers = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "dendrite_clientapi_reg_users_total",
-			Help: "Total number of registered users",
-		},
-	)
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const sessionIDLength = 24
@@ -66,9 +53,17 @@ type sessionsDict struct {
 	// If a UIA session is started by trying to delete device1, and then UIA is completed by deleting device2,
 	// the delete request will fail for device2 since the UIA was initiated by trying to delete device1.
 	deleteSessionToDeviceID map[string]string
+	// pendingTokens records the registration token (if any) whose pending counter is
+	// currently held for a session, so it can be reconciled when the flow finishes.
+	pendingTokens map[string]string
+	// oauthSessions records server-issued m.oauth UIA challenges, mapping the
+	// session ID to the user ID the challenge was issued for. This prevents
+	// clients from completing the m.oauth stage with a session ID that was
+	// never issued, or one issued for a different user.
+	oauthSessions map[string]string
 }
 
-// defaultTimeout is the timeout used to clean up sessions
+// defaultTimeout is the timeout used to clean up sessions.
 const defaultTimeOut = time.Minute * 5
 
 // getCompletedStages returns the completed stages for a session.
@@ -83,7 +78,7 @@ func (d *sessionsDict) getCompletedStages(sessionID string) []authtypes.LoginTyp
 	return make([]authtypes.LoginType, 0)
 }
 
-// addParams adds a registerRequest to a sessionID and starts a timer to delete that registerRequest
+// addParams adds a registerRequest to a sessionID and starts a timer to delete that registerRequest.
 func (d *sessionsDict) addParams(sessionID string, r registerRequest) {
 	d.startTimer(defaultTimeOut, sessionID)
 	d.Lock()
@@ -107,6 +102,8 @@ func (d *sessionsDict) deleteSession(sessionID string) {
 	delete(d.sessions, sessionID)
 	delete(d.deleteSessionToDeviceID, sessionID)
 	delete(d.sessionCompletedResult, sessionID)
+	delete(d.pendingTokens, sessionID)
+	delete(d.oauthSessions, sessionID)
 	// stop the timer, e.g. because the registration was completed
 	if t, ok := d.timer[sessionID]; ok {
 		if !t.Stop() {
@@ -126,7 +123,31 @@ func newSessionsDict() *sessionsDict {
 		params:                  make(map[string]registerRequest),
 		timer:                   make(map[string]*time.Timer),
 		deleteSessionToDeviceID: make(map[string]string),
+		pendingTokens:           make(map[string]string),
+		oauthSessions:           make(map[string]string),
 	}
+}
+
+// setPendingToken records that this session has incremented the `pending` counter
+// for the given registration token. It must be paired with takePendingToken once
+// the registration flow finishes so the counter is reconciled.
+func (d *sessionsDict) setPendingToken(sessionID, token string) {
+	d.startTimer(defaultTimeOut, sessionID)
+	d.Lock()
+	defer d.Unlock()
+	d.pendingTokens[sessionID] = token
+}
+
+// takePendingToken returns and clears any registration token whose pending counter
+// is held by this session.
+func (d *sessionsDict) takePendingToken(sessionID string) (string, bool) {
+	d.Lock()
+	defer d.Unlock()
+	token, ok := d.pendingTokens[sessionID]
+	if ok {
+		delete(d.pendingTokens, sessionID)
+	}
+	return token, ok
 }
 
 func (d *sessionsDict) startTimer(duration time.Duration, sessionID string) {
@@ -159,6 +180,28 @@ func (d *sessionsDict) addCompletedSessionStage(sessionID string, stage authtype
 	d.sessions[sessionID] = append(d.sessions[sessionID], stage)
 }
 
+// addOAuthSession records a server-issued m.oauth UIA challenge, binding the
+// session to the user it was issued for.
+func (d *sessionsDict) addOAuthSession(sessionID, userID string) {
+	d.startTimer(defaultTimeOut, sessionID)
+	d.Lock()
+	defer d.Unlock()
+	d.oauthSessions[sessionID] = userID
+}
+
+// completeOAuthSession consumes a server-issued m.oauth challenge, returning
+// true only if the session was issued by this server for the given user.
+func (d *sessionsDict) completeOAuthSession(sessionID, userID string) bool {
+	d.Lock()
+	defer d.Unlock()
+	issuedFor, ok := d.oauthSessions[sessionID]
+	if !ok || issuedFor != userID {
+		return false
+	}
+	delete(d.oauthSessions, sessionID)
+	return true
+}
+
 func (d *sessionsDict) addDeviceToDelete(sessionID, deviceID string) {
 	d.startTimer(defaultTimeOut, sessionID)
 	d.Lock()
@@ -186,9 +229,7 @@ func (d *sessionsDict) getDeviceToDelete(sessionID string) (string, bool) {
 	return deviceID, ok
 }
 
-var (
-	sessions = newSessionsDict()
-)
+var sessions = newSessionsDict()
 
 // registerRequest represents the submitted registration request.
 // It can be broken down into 2 sections: the auth dictionary and registration parameters.
@@ -226,14 +267,15 @@ type authDict struct {
 	// Recaptcha
 	Response string `json:"response"`
 	// TODO: Lots of custom keys depending on the type
+	Token string `json:"token"`
 }
 
 // https://spec.matrix.org/v1.7/client-server-api/#user-interactive-authentication-api
 type userInteractiveResponse struct {
-	Flows     []authtypes.Flow       `json:"flows"`
-	Completed []authtypes.LoginType  `json:"completed"`
-	Params    map[string]interface{} `json:"params"`
-	Session   string                 `json:"session"`
+	Flows     []authtypes.Flow      `json:"flows"`
+	Completed []authtypes.LoginType `json:"completed"`
+	Params    map[string]any        `json:"params"`
+	Session   string                `json:"session"`
 }
 
 // newUserInteractiveResponse will return a struct to be sent back to the client
@@ -241,7 +283,7 @@ type userInteractiveResponse struct {
 func newUserInteractiveResponse(
 	sessionID string,
 	fs []authtypes.Flow,
-	params map[string]interface{},
+	params map[string]any,
 ) userInteractiveResponse {
 	return userInteractiveResponse{
 		fs, sessions.getCompletedStages(sessionID), params, sessionID,
@@ -255,7 +297,7 @@ type registerResponse struct {
 	DeviceID    string `json:"device_id,omitempty"`
 }
 
-// recaptchaResponse represents the HTTP response from a Google Recaptcha server
+// recaptchaResponse represents the HTTP response from a Google Recaptcha server.
 type recaptchaResponse struct {
 	Success     bool      `json:"success"`
 	ChallengeTS time.Time `json:"challenge_ts"`
@@ -269,7 +311,7 @@ var (
 	ErrCaptchaDisabled = errors.New("captcha registration is disabled")
 )
 
-// validateRecaptcha returns an error response if the captcha response is invalid
+// validateRecaptcha returns an error response if the captcha response is invalid.
 func validateRecaptcha(
 	cfg *config.ClientAPI,
 	response string,
@@ -292,13 +334,12 @@ func validateRecaptcha(
 			"remoteip": {ip},
 		},
 	)
-
 	if err != nil {
 		return err
 	}
 
 	// Close the request once we're finishing reading from it
-	defer resp.Body.Close() // nolint: errcheck
+	defer resp.Body.Close()
 
 	// Grab the body of the response from the captcha server
 	var r recaptchaResponse
@@ -327,8 +368,7 @@ func UserIDIsWithinApplicationServiceNamespace(
 	userID string,
 	appservice *config.ApplicationService,
 ) bool {
-
-	var local, domain, err = gomatrixserverlib.SplitID('@', userID)
+	local, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		// Not a valid userID
 		return false
@@ -369,7 +409,7 @@ func UserIDIsWithinApplicationServiceNamespace(
 }
 
 // UsernameMatchesMultipleExclusiveNamespaces will check if a given username matches
-// more than one exclusive namespace. More than one is not allowed
+// more than one exclusive namespace. More than one is not allowed.
 func UsernameMatchesMultipleExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	username string,
@@ -389,7 +429,7 @@ func UsernameMatchesMultipleExclusiveNamespaces(
 }
 
 // UsernameMatchesExclusiveNamespaces will check if a given username matches any
-// application service's exclusive users namespace
+// application service's exclusive users namespace.
 func UsernameMatchesExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	username string,
@@ -460,7 +500,7 @@ func Register(
 	userAPI userapi.ClientUserAPI,
 	cfg *config.ClientAPI,
 ) util.JSONResponse {
-	defer req.Body.Close() // nolint: errcheck
+	defer req.Body.Close()
 	reqBody, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{
@@ -606,14 +646,13 @@ func handleGuestRegistration(
 		ServerName:       string(res.Account.ServerName),
 		UserID:           res.Account.UserID,
 	})
-
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.Unknown("Failed to generate access token"),
 		}
 	}
-	//we don't allow guests to specify their own device_id
+	// we don't allow guests to specify their own device_id
 	var devRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(req.Context(), &userapi.PerformDeviceCreationRequest{
 		Localpart:         res.Account.Localpart,
@@ -641,7 +680,7 @@ func handleGuestRegistration(
 }
 
 // localpartMatchesExclusiveNamespaces will check if a given username matches any
-// application service's exclusive users namespace
+// application service's exclusive users namespace.
 func localpartMatchesExclusiveNamespaces(
 	cfg *config.ClientAPI,
 	localpart string,
@@ -652,7 +691,8 @@ func localpartMatchesExclusiveNamespaces(
 
 // handleRegistrationFlow will direct and complete registration flow stages
 // that the client has requested.
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func handleRegistrationFlow(
 	req *http.Request,
 	r registerRequest,
@@ -684,7 +724,7 @@ func handleRegistrationFlow(
 	if v := cfg.Matrix.VirtualHost(r.ServerName); v != nil {
 		registrationEnabled, _ = v.RegistrationAllowed()
 	}
-	if !registrationEnabled && r.Auth.Type != authtypes.LoginTypeSharedSecret {
+	if !registrationEnabled && r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(
@@ -707,28 +747,49 @@ func handleRegistrationFlow(
 
 	switch r.Auth.Type {
 	case authtypes.LoginTypeRecaptcha:
-		// Check given captcha response
+		// Check given captcha response (reCAPTCHA or hCaptcha).
 		err := validateRecaptcha(cfg, r.Auth.Response, req.RemoteAddr)
-		switch err {
-		case ErrCaptchaDisabled:
+		switch {
+		case errors.Is(err, ErrCaptchaDisabled):
 			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Unknown(err.Error())}
-		case ErrMissingResponse:
+		case errors.Is(err, ErrMissingResponse):
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
-		case ErrInvalidCaptcha:
+		case errors.Is(err, ErrInvalidCaptcha):
 			return util.JSONResponse{Code: http.StatusUnauthorized, JSON: spec.BadJSON(err.Error())}
-		case nil:
-		default:
-			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
+		case err != nil:
+			util.GetLogger(req.Context()).WithError(err).Error("failed to validate captcha")
 			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 		}
 
-		// Add Recaptcha to the list of completed registration stages
 		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRecaptcha)
+
+	case authtypes.LoginTypeAltcha:
+		// Check given ALTCHA proof-of-work response.
+		err := validateAltcha(cfg, r.Auth.Response)
+		switch {
+		case errors.Is(err, ErrCaptchaDisabled):
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Unknown(err.Error())}
+		case errors.Is(err, ErrMissingResponse):
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
+		case errors.Is(err, ErrInvalidCaptcha):
+			return util.JSONResponse{Code: http.StatusUnauthorized, JSON: spec.BadJSON(err.Error())}
+		case err != nil:
+			util.GetLogger(req.Context()).WithError(err).Error("failed to validate captcha")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
+
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeAltcha)
 
 	case authtypes.LoginTypeDummy:
 		// there is nothing to do
 		// Add Dummy to the list of completed registration stages
 		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeDummy)
+
+	case authtypes.LoginTypeRegistrationToken:
+		if resp, ok := claimRegistrationToken(req, userAPI, r.Auth.Token, sessionID); !ok {
+			return resp
+		}
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRegistrationToken)
 
 	case "":
 		// An empty auth type means that we want to fetch the available
@@ -794,7 +855,7 @@ func handleApplicationServiceRegistration(
 
 // checkAndCompleteFlow checks if a given registration flow is completed given
 // a set of allowed flows. If so, registration is completed, otherwise a
-// response with
+// response with.
 func checkAndCompleteFlow(
 	flow []authtypes.LoginType,
 	req *http.Request,
@@ -805,11 +866,13 @@ func checkAndCompleteFlow(
 ) util.JSONResponse {
 	if checkFlowCompleted(flow, cfg.Derived.Registration.Flows) {
 		// This flow was completed, registration can continue
-		return completeRegistration(
+		resp := completeRegistration(
 			req.Context(), userAPI, r.Username, r.ServerName, "", r.Password, "", req.RemoteAddr,
 			req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
 			userapi.AccountTypeUser,
 		)
+		finaliseRegistrationToken(req, userAPI, sessionID, resp.Code == http.StatusOK)
+		return resp
 	}
 	sessions.addParams(sessionID, r)
 	// There are still more stages to complete.
@@ -821,12 +884,90 @@ func checkAndCompleteFlow(
 	}
 }
 
+// claimRegistrationToken validates a registration token submitted as part of a
+// UIA stage and, if it is acceptable, increments its `pending` counter. The
+// session is updated so the pending hold can be reconciled (markUsed or
+// decrementPending) once the wider registration flow finishes.
+//
+// On rejection the returned response describes the failure and ok is false.
+func claimRegistrationToken(
+	req *http.Request,
+	userAPI userapi.ClientUserAPI,
+	tokenString, sessionID string,
+) (util.JSONResponse, bool) {
+	if tokenString == "" {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.MissingParam("missing registration token"),
+		}, false
+	}
+	token, err := userAPI.PerformAdminGetRegistrationToken(req.Context(), tokenString)
+	if err != nil {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("unknown registration token"),
+		}, false
+	}
+	if token.ExpiryTime != nil && !time.UnixMilli(*token.ExpiryTime).After(time.Now()) {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("token expired"),
+		}, false
+	}
+	var pending, completed int32
+	if token.Pending != nil {
+		pending = *token.Pending
+	}
+	if token.Completed != nil {
+		completed = *token.Completed
+	}
+	if token.UsesAllowed != nil && *token.UsesAllowed <= pending+completed {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.InvalidParam("token used up"),
+		}, false
+	}
+	if _, err := userAPI.PerformAdminUpdateRegistrationToken(req.Context(), tokenString, map[string]any{"incrementPending": true}); err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("failed to reserve registration token")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}, false
+	}
+	sessions.setPendingToken(sessionID, tokenString)
+	return util.JSONResponse{}, true
+}
+
+// finaliseRegistrationToken reconciles the pending counter held by this session
+// once the registration flow has finished: on success the token is marked used
+// (pending--, completed++); on any other outcome the pending counter is rolled
+// back. It is a no-op when the session did not hold a token.
+func finaliseRegistrationToken(
+	req *http.Request,
+	userAPI userapi.ClientUserAPI,
+	sessionID string,
+	success bool,
+) {
+	tokenString, ok := sessions.takePendingToken(sessionID)
+	if !ok {
+		return
+	}
+	attr := map[string]any{"decrementPending": true}
+	if success {
+		attr = map[string]any{"markUsed": true}
+	}
+	if _, err := userAPI.PerformAdminUpdateRegistrationToken(req.Context(), tokenString, attr); err != nil {
+		util.GetLogger(req.Context()).WithError(err).WithField("success", success).
+			Error("failed to finalize registration token")
+	}
+}
+
 // completeRegistration runs some rudimentary checks against the submitted
 // input, then if successful creates an account and a newly associated device
 // We pass in each individual part of the request here instead of just passing a
 // registerRequest, as this function serves requests encoded as both
 // registerRequests and legacyRegisterRequests, which share some attributes but
-// not all
+// not all.
 func completeRegistration(
 	ctx context.Context,
 	userAPI userapi.ClientUserAPI,
@@ -859,7 +1000,8 @@ func completeRegistration(
 		OnConflict:   userapi.ConflictAbort,
 	}, &accRes)
 	if err != nil {
-		if _, ok := err.(*userapi.ErrorConflict); ok { // user already exists
+		var conflictErr *userapi.ErrorConflict
+		if errors.As(err, &conflictErr) { // user already exists
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.UserInUse("Desired user ID is already taken."),
@@ -870,9 +1012,6 @@ func completeRegistration(
 			JSON: spec.Unknown("failed to create account: " + err.Error()),
 		}
 	}
-
-	// Increment prometheus counter for created users
-	amtRegUsers.Inc()
 
 	// Check whether inhibit_login option is set. If so, don't create an access
 	// token or a device for this user
@@ -1062,10 +1201,10 @@ func RegisterAvailable(
 }
 
 func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, sr *SharedSecretRegistration, req *http.Request) util.JSONResponse {
-	ssrr, err := NewSharedSecretRegistrationRequest(req.Body)
+	ssrr, err := NewSharedSecretRegistrationRequest(req.Body) //nolint:contextcheck
 	if err != nil {
 		return util.JSONResponse{
-			Code: 400,
+			Code: 400, //nolint:mnd
 			JSON: spec.BadJSON(fmt.Sprintf("malformed json: %s", err)),
 		}
 	}
@@ -1075,7 +1214,7 @@ func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.Clien
 	}
 	if !valid {
 		return util.JSONResponse{
-			Code: 403,
+			Code: 403, //nolint:mnd
 			JSON: spec.Forbidden("bad mac"),
 		}
 	}

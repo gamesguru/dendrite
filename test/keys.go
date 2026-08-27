@@ -41,7 +41,7 @@ func NewMatrixKey(matrixKeyPath string) (err error) {
 }
 
 func SaveMatrixKey(matrixKeyPath string, data ed25519.PrivateKey) error {
-	keyOut, err := os.OpenFile(matrixKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	keyOut, err := os.OpenFile(matrixKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func generateTLSTemplate(dnsNames []string, bitSize int) (*rsa.PrivateKey, *x509
 
 	notBefore := time.Now()
 	notAfter := notBefore.Add(certificateDuration)
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128) //nolint:mnd
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
 		return nil, nil, err
@@ -97,16 +97,16 @@ func writeCertificate(tlsCertPath string, derBytes []byte) error {
 	if err != nil {
 		return err
 	}
-	defer certOut.Close() // nolint: errcheck
+	defer certOut.Close()
 	return pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 }
 
 func writePrivateKey(tlsKeyPath string, priv *rsa.PrivateKey) error {
-	keyOut, err := os.OpenFile(tlsKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	keyOut, err := os.OpenFile(tlsKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	defer keyOut.Close() // nolint: errcheck
+	defer keyOut.Close()
 	err = pem.Encode(keyOut, &pem.Block{
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(priv),
@@ -144,7 +144,7 @@ func NewTLSKeyWithAuthority(serverName, tlsKeyPath, tlsCertPath, authorityKeyPat
 	if err != nil {
 		return err
 	}
-	block, _ := pem.Decode([]byte(dat))
+	block, _ := pem.Decode(dat)
 	if block == nil || block.Type != "RSA PRIVATE KEY" {
 		return errors.New("authority .key is not a valid pem encoded rsa private key")
 	}
@@ -158,7 +158,7 @@ func NewTLSKeyWithAuthority(serverName, tlsKeyPath, tlsCertPath, authorityKeyPat
 	if err != nil {
 		return err
 	}
-	block, _ = pem.Decode([]byte(dat))
+	block, _ = pem.Decode(dat)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return errors.New("authority .crt is not a valid pem encoded x509 cert")
 	}

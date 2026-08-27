@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 )
 
 func newSyncDB(t *testing.T, dbType test.DBType) (storage.Database, func()) {
@@ -76,9 +76,9 @@ func TestIgnores(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tab.Rollback() // nolint: errcheck
+		defer tab.Rollback() //nolint:errcheck
 
-		ignoredUsers := &types.IgnoredUsers{List: map[string]interface{}{
+		ignoredUsers := &types.IgnoredUsers{List: map[string]any{
 			bob.ID: "",
 		}}
 		if err = tab.UpdateIgnoresForUser(context.Background(), alice.ID, ignoredUsers); err != nil {

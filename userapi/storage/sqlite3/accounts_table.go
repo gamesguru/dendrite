@@ -11,14 +11,14 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/userutil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const accountsSchema = `
@@ -56,18 +56,25 @@ const deactivateAccountSQL = "" +
 const selectAccountByLocalpartSQL = "" +
 	"SELECT localpart, server_name, appservice_id, account_type FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
 
+const selectIsDeactivatedSQL = "" +
+	"SELECT is_deactivated FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+
 const selectPasswordHashSQL = "" +
 	"SELECT password_hash FROM userapi_accounts WHERE localpart = $1 AND server_name = $2 AND is_deactivated = 0"
 
 const selectNewNumericLocalpartSQL = "" +
 	"SELECT COALESCE(MAX(CAST(localpart AS INT)), 0) FROM userapi_accounts WHERE CAST(localpart AS INT) <> 0 AND server_name = $1"
 
+const countAccountsSQL = "SELECT COUNT(*) FROM userapi_accounts"
+
 type accountsStatements struct {
 	db                            *sql.DB
 	insertAccountStmt             *sql.Stmt
+	countAccountsStmt             *sql.Stmt
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
+	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
 	serverName                    spec.ServerName
@@ -101,12 +108,20 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertAccountStmt, insertAccountSQL},
+		{&s.countAccountsStmt, countAccountsSQL},
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
+		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
 	}.Prepare(db)
+}
+
+func (s *accountsStatements) CountAccounts(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.countAccountsStmt.QueryRowContext(ctx).Scan(&count)
+	return count, err
 }
 
 // insertAccount creates a new account. 'hash' should be the password hash for this account. If it is missing,
@@ -116,14 +131,15 @@ func (s *accountsStatements) InsertAccount(
 	ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName,
 	hash, appserviceID string, accountType api.AccountType,
 ) (*api.Account, error) {
-	createdTimeMS := time.Now().UnixNano() / 1000000
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := s.insertAccountStmt
 
+	txnStmt := sqlutil.TxStmt(txn, stmt)
 	var err error
 	if accountType != api.AccountTypeAppService {
-		_, err = sqlutil.TxStmt(txn, stmt).ExecContext(ctx, localpart, serverName, createdTimeMS, hash, nil, accountType)
+		_, err = txnStmt.ExecContext(ctx, localpart, serverName, createdTimeMS, hash, nil, accountType)
 	} else {
-		_, err = sqlutil.TxStmt(txn, stmt).ExecContext(ctx, localpart, serverName, createdTimeMS, hash, appserviceID, accountType)
+		_, err = txnStmt.ExecContext(ctx, localpart, serverName, createdTimeMS, hash, appserviceID, accountType)
 	}
 	if err != nil {
 		return nil, err
@@ -180,6 +196,14 @@ func (s *accountsStatements) SelectAccountByLocalpart(
 
 	acc.UserID = userutil.MakeUserID(acc.Localpart, acc.ServerName)
 	return &acc, nil
+}
+
+func (s *accountsStatements) SelectIsDeactivated(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+) (bool, error) {
+	var deactivated bool
+	err := s.selectIsDeactivatedStmt.QueryRowContext(ctx, localpart, serverName).Scan(&deactivated)
+	return deactivated, err
 }
 
 func (s *accountsStatements) SelectNewNumericLocalpart(

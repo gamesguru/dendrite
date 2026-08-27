@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm && !windows
-// +build !wasm,!windows
 
 package util
 
@@ -31,8 +30,7 @@ func getMemoryStats(p *phoneHomeStats) error {
 	if usedCPUTime == 0 || newData.timestamp == oldUsage.timestamp {
 		p.stats["cpu_average"] = 0
 	} else {
-		// conversion to int64 required for GOARCH=386
-		p.stats["cpu_average"] = int64(usedCPUTime) / (newData.timestamp - oldUsage.timestamp) * 100
+		p.stats["cpu_average"] = usedCPUTime / (newData.timestamp - oldUsage.timestamp) * 100 //nolint:mnd
 	}
 	p.stats["memory_rss"] = newUsage.Maxrss
 	return nil

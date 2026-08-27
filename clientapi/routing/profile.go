@@ -8,27 +8,28 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
+
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// GetProfile implements GET /profile/{userID}
+// GetProfile implements GET /profile/{userID}.
 func GetProfile(
 	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
 	userID string,
@@ -37,7 +38,7 @@ func GetProfile(
 ) util.JSONResponse {
 	profile, err := getProfile(req.Context(), profileAPI, cfg, userID, asAPI, federation)
 	if err != nil {
-		if err == appserviceAPI.ErrProfileNotExists {
+		if errors.Is(err, appserviceAPI.ErrProfileNotExists) {
 			return util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound("The user does not exist or does not have a profile"),
@@ -60,7 +61,7 @@ func GetProfile(
 	}
 }
 
-// GetAvatarURL implements GET /profile/{userID}/avatar_url
+// GetAvatarURL implements GET /profile/{userID}/avatar_url.
 func GetAvatarURL(
 	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
 	userID string, asAPI appserviceAPI.AppServiceInternalAPI,
@@ -81,7 +82,7 @@ func GetAvatarURL(
 	}
 }
 
-// SetAvatarURL implements PUT /profile/{userID}/avatar_url
+// SetAvatarURL implements PUT /profile/{userID}/avatar_url.
 func SetAvatarURL(
 	req *http.Request, profileAPI userapi.ProfileAPI,
 	device *userapi.Device, userID string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
@@ -149,7 +150,7 @@ func SetAvatarURL(
 	}
 }
 
-// GetDisplayName implements GET /profile/{userID}/displayname
+// GetDisplayName implements GET /profile/{userID}/displayname.
 func GetDisplayName(
 	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
 	userID string, asAPI appserviceAPI.AppServiceInternalAPI,
@@ -170,7 +171,7 @@ func GetDisplayName(
 	}
 }
 
-// SetDisplayName implements PUT /profile/{userID}/displayname
+// SetDisplayName implements PUT /profile/{userID}/displayname.
 func SetDisplayName(
 	req *http.Request, profileAPI userapi.ProfileAPI,
 	device *userapi.Device, userID string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
@@ -247,7 +248,7 @@ func updateProfile(
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("internal server error"),
+			JSON: spec.InternalServerError{},
 		}, err
 	}
 
@@ -277,19 +278,16 @@ func updateProfile(
 	events, err := buildMembershipEvents(
 		ctx, roomIDStrs, *profile, userID, evTime, rsAPI,
 	)
-	switch e := err.(type) {
-	case nil:
-	case gomatrixserverlib.BadJSONError:
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON(e.Error()),
-		}, e
-	default:
-		util.GetLogger(ctx).WithError(err).Error("buildMembershipEvents failed")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}, e
+	{
+		var e gomatrixserverlib.BadJSONError
+		switch {
+		case err == nil:
+		case errors.As(err, &e):
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(e.Error())}, e
+		default:
+			util.GetLogger(ctx).WithError(err).Error("buildMembershipEvents failed")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}, e
+		}
 	}
 
 	if err := api.SendEvents(ctx, rsAPI, api.KindNew, events, device.UserDomain(), domain, domain, nil, false); err != nil {
@@ -320,7 +318,8 @@ func getProfile(
 	if !cfg.Matrix.IsLocalServerName(domain) {
 		profile, fedErr := federation.LookupProfile(ctx, cfg.Matrix.ServerName, domain, userID, "")
 		if fedErr != nil {
-			if x, ok := fedErr.(gomatrix.HTTPError); ok {
+			var x gomatrix.HTTPError
+			if errors.As(fedErr, &x) {
 				if x.Code == http.StatusNotFound {
 					return nil, appserviceAPI.ErrProfileNotExists
 				}

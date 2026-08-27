@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// GetPushers handles /_matrix/client/r0/pushers
+// GetPushers handles /_matrix/client/r0/pushers.
 func GetPushers(
 	req *http.Request, device *userapi.Device,
 	userAPI userapi.ClientUserAPI,
@@ -53,7 +54,7 @@ func GetPushers(
 
 // SetPusher handles /_matrix/client/r0/pushers/set
 // This endpoint allows the creation, modification and deletion of pushers for this user ID.
-// The behaviour of this endpoint varies depending on the values in the JSON body.
+// The behavior of this endpoint varies depending on the values in the JSON body.
 func SetPusher(
 	req *http.Request, device *userapi.Device,
 	userAPI userapi.ClientUserAPI,
@@ -70,10 +71,10 @@ func SetPusher(
 	if resErr := httputil.UnmarshalJSONRequest(req, &body); resErr != nil {
 		return *resErr
 	}
-	if len(body.AppID) > 64 {
+	if len(body.AppID) > 64 { //nolint:mnd
 		return invalidParam("length of app_id must be no more than 64 characters")
 	}
-	if len(body.PushKey) > 512 {
+	if len(body.PushKey) > 512 { //nolint:mnd
 		return invalidParam("length of pushkey must be no more than 512 bytes")
 	}
 	uInt := body.Data["url"]
@@ -92,7 +93,6 @@ func SetPusher(
 				return invalidParam("only https scheme is allowed")
 			}
 		}
-
 	}
 	body.Localpart = localpart
 	body.ServerName = domain

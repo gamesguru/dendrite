@@ -11,15 +11,15 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/element-hq/dendrite/userapi/internal"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/userapi/internal"
 )
 
 // DeviceListUpdateConsumer consumes device list updates that came in over federation.
@@ -49,7 +49,7 @@ func NewDeviceListUpdateConsumer(
 	}
 }
 
-// Start consuming from key servers
+// Start consuming from key servers.
 func (t *DeviceListUpdateConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1,
@@ -75,7 +75,7 @@ func (t *DeviceListUpdateConsumer) onMessage(ctx context.Context, msgs []*nats.M
 		return true
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*30)
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 	defer cancel()
 
 	err := t.updater.Update(timeoutCtx, m)

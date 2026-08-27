@@ -8,29 +8,30 @@ package userapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
-	api2 "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/producers"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/internal"
-	"github.com/element-hq/dendrite/userapi/storage"
+	api2 "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/internal"
+	"codefloe.com/pat-s/zendrite/userapi/producers"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
 const (
@@ -52,7 +53,7 @@ func (d *dummyProducer) PublishMsg(msg *nats.Msg, opts ...nats.PubOpt) (*nats.Pu
 	if loaded {
 		c, ok := count.(int)
 		if !ok {
-			d.t.Fatalf("unexpected type: %T with value %q", c, c)
+			d.t.Fatalf("unexpected type: %T with value %v", c, c)
 		}
 		d.callCount.Store(msg.Subject, c+1)
 		d.t.Logf("Incrementing call counter for %s", msg.Subject)
@@ -62,7 +63,7 @@ func (d *dummyProducer) PublishMsg(msg *nats.Msg, opts ...nats.PubOpt) (*nats.Pu
 
 func MustMakeInternalAPI(t *testing.T, opts apiTestOpts, dbType test.DBType, publisher producers.JetStreamPublisher) (api.UserInternalAPI, storage.UserDatabase, func()) {
 	if opts.loginTokenLifetime == 0 {
-		opts.loginTokenLifetime = api.DefaultLoginTokenLifetime * time.Millisecond
+		opts.loginTokenLifetime = api.DefaultLoginTokenLifetime
 	}
 	cfg, ctx, close := testrig.CreateConfig(t, dbType)
 	sName := serverName
@@ -136,7 +137,6 @@ func TestQueryProfile(t *testing.T) {
 			mode = "HTTP"
 		}
 		for _, tc := range testCases {
-
 			profile, gotErr := testAPI.QueryProfile(context.TODO(), tc.userID)
 			if tc.wantErr == nil && gotErr != nil || tc.wantErr != nil && gotErr == nil {
 				t.Errorf("QueryProfile %s error, got %s want %s", mode, gotErr, tc.wantErr)
@@ -168,11 +168,11 @@ func TestQueryProfile(t *testing.T) {
 
 // TestPasswordlessLoginFails ensures that a passwordless account cannot
 // be logged into using an arbitrary password (effectively a regression test
-// for https://github.com/element-hq/dendrite/issues/2780).
+// for https://codefloe.com/pat-s/zendrite/issues/2780).
 func TestPasswordlessLoginFails(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+		userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 		defer close()
 		_, err := accountDB.CreateAccount(ctx, "auser", serverName, "", "", api.AccountTypeAppService)
 		if err != nil {
@@ -198,7 +198,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("tokenLoginFlow", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 			_, err := accountDB.CreateAccount(ctx, "auser", serverName, "apassword", "", api.AccountTypeUser)
 			if err != nil {
@@ -248,7 +248,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("expiredTokenIsNotReturned", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{loginTokenLifetime: -1 * time.Second}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{loginTokenLifetime: -1 * time.Second}, dbType, nil) //nolint:contextcheck
 			defer close()
 
 			creq := api.PerformLoginTokenCreationRequest{
@@ -273,7 +273,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("deleteWorks", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 
 			creq := api.PerformLoginTokenCreationRequest{
@@ -304,7 +304,7 @@ func TestLoginToken(t *testing.T) {
 
 	t.Run("deleteUnknownIsNoOp", func(t *testing.T) {
 		test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+			userAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 			defer close()
 			dreq := api.PerformLoginTokenDeletionRequest{Token: "non-existent token"}
 			var dresp api.PerformLoginTokenDeletionResponse
@@ -322,7 +322,7 @@ func TestQueryAccountByLocalpart(t *testing.T) {
 
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, db, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil)
+		intAPI, db, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		createdAcc, err := db.CreateAccount(ctx, localpart, userServername, "", "", alice.AccountType)
@@ -401,7 +401,7 @@ func TestAccountData(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		for _, tc := range testCases {
@@ -517,18 +517,24 @@ func TestDevices(t *testing.T) {
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, nil) //nolint:contextcheck
 		defer close()
 
 		for _, tc := range creationTests {
 			t.Run(tc.name, func(t *testing.T) {
+				// Copy inputData to avoid a data race: WithAllDatabases runs
+				// sqlite and postgres subtests in parallel, and both iterate
+				// the same creationTests slice. Without copying, concurrent
+				// writes to inputData.DeviceID cause the other goroutine to
+				// query the wrong device ID.
+				inputData := *tc.inputData
 				res := api.PerformDeviceCreationResponse{}
 				deviceID := util.RandomString(8)
-				tc.inputData.DeviceID = &deviceID
+				inputData.DeviceID = &deviceID
 				if tc.wantNewDevID {
-					tc.inputData.DeviceID = nil
+					inputData.DeviceID = nil
 				}
-				err := intAPI.PerformDeviceCreation(ctx, tc.inputData, &res)
+				err := intAPI.PerformDeviceCreation(ctx, &inputData, &res)
 				if tc.wantErr && err == nil {
 					t.Fatalf("expected an error, but got none")
 				}
@@ -556,10 +562,10 @@ func TestDevices(t *testing.T) {
 				}
 
 				newDisplayName := "new name"
-				if tc.inputData.DeviceDisplayName == nil {
+				if inputData.DeviceDisplayName == nil {
 					updateRes := api.PerformDeviceUpdateResponse{}
 					updateReq := api.PerformDeviceUpdateRequest{
-						RequestingUserID: fmt.Sprintf("@%s:%s", tc.inputData.Localpart, "test"),
+						RequestingUserID: fmt.Sprintf("@%s:%s", inputData.Localpart, "test"),
 						DeviceID:         deviceID,
 						DisplayName:      &newDisplayName,
 					}
@@ -570,13 +576,13 @@ func TestDevices(t *testing.T) {
 				}
 
 				queryDeviceInfosRes := api.QueryDeviceInfosResponse{}
-				queryDeviceInfosReq := api.QueryDeviceInfosRequest{DeviceIDs: []string{*tc.inputData.DeviceID}}
+				queryDeviceInfosReq := api.QueryDeviceInfosRequest{DeviceIDs: []string{deviceID}}
 				if err = intAPI.QueryDeviceInfos(ctx, &queryDeviceInfosReq, &queryDeviceInfosRes); err != nil {
 					t.Fatal(err)
 				}
-				gotDisplayName := queryDeviceInfosRes.DeviceInfo[*tc.inputData.DeviceID].DisplayName
-				if tc.inputData.DeviceDisplayName != nil {
-					wantDisplayName := *tc.inputData.DeviceDisplayName
+				gotDisplayName := queryDeviceInfosRes.DeviceInfo[deviceID].DisplayName
+				if inputData.DeviceDisplayName != nil {
+					wantDisplayName := *inputData.DeviceDisplayName
 					if wantDisplayName != gotDisplayName {
 						t.Fatalf("expected displayName to be %s, got %s", wantDisplayName, gotDisplayName)
 					}
@@ -612,7 +618,6 @@ func TestDevices(t *testing.T) {
 				if len(queryDevicesRes.Devices) != tc.wantDevices {
 					t.Fatalf("expected %d devices, got %d", tc.wantDevices, len(queryDevicesRes.Devices))
 				}
-
 			})
 		}
 	})
@@ -623,7 +628,7 @@ func TestDeviceIDReuse(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		publisher := &dummyProducer{t: t}
-		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, publisher)
+		intAPI, _, close := MustMakeInternalAPI(t, apiTestOpts{serverName: "test"}, dbType, publisher) //nolint:contextcheck
 		defer close()
 
 		res := api.PerformDeviceCreationResponse{}
@@ -655,5 +660,136 @@ func TestDeviceIDReuse(t *testing.T) {
 			}
 			return true
 		})
+	})
+}
+
+func TestDehydratedDevice(t *testing.T) {
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		intAPI, accountDB, close := MustMakeInternalAPI(t, apiTestOpts{}, dbType, nil) //nolint:contextcheck
+		defer close()
+
+		// Create the user.
+		_, err := accountDB.CreateAccount(ctx, "dehydrated_user", serverName, "", "", api.AccountTypeUser)
+		if err != nil {
+			t.Fatalf("failed to create account: %s", err)
+		}
+		userID := fmt.Sprintf("@dehydrated_user:%s", serverName)
+
+		// Query should return not found initially.
+		var queryRes api.QueryDehydratedDeviceResponse
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if queryRes.Found {
+			t.Fatal("expected no dehydrated device initially")
+		}
+
+		// Store a dehydrated device.
+		deviceData := json.RawMessage(`{"algorithm":"m.dehydration.v1.olm"}`)
+		var storeRes api.PerformStoreDehydratedDeviceResponse
+		if err = intAPI.PerformStoreDehydratedDevice(ctx, &api.PerformStoreDehydratedDeviceRequest{
+			UserID:     userID,
+			DeviceID:   "DEHYDRATED_1",
+			DeviceData: deviceData,
+		}, &storeRes); err != nil {
+			t.Fatalf("PerformStoreDehydratedDevice failed: %s", err)
+		}
+		if storeRes.DeviceID != "DEHYDRATED_1" {
+			t.Fatalf("expected device ID DEHYDRATED_1, got %q", storeRes.DeviceID)
+		}
+
+		// Query should now return the device.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if !queryRes.Found {
+			t.Fatal("expected dehydrated device to be found")
+		}
+		if queryRes.DeviceID != "DEHYDRATED_1" {
+			t.Fatalf("expected device ID DEHYDRATED_1, got %q", queryRes.DeviceID)
+		}
+		if string(queryRes.DeviceData) != string(deviceData) {
+			t.Fatalf("expected device data %s, got %s", deviceData, queryRes.DeviceData)
+		}
+
+		// The device should exist as a real device.
+		var devicesRes api.QueryDevicesResponse
+		if err = intAPI.QueryDevices(ctx, &api.QueryDevicesRequest{UserID: userID}, &devicesRes); err != nil {
+			t.Fatalf("QueryDevices failed: %s", err)
+		}
+		foundDevice := false
+		for _, d := range devicesRes.Devices {
+			if d.ID == "DEHYDRATED_1" {
+				foundDevice = true
+				break
+			}
+		}
+		if !foundDevice {
+			t.Fatal("dehydrated device should appear in the device list")
+		}
+
+		// Storing a new dehydrated device should replace the old one.
+		storeRes = api.PerformStoreDehydratedDeviceResponse{}
+		if err = intAPI.PerformStoreDehydratedDevice(ctx, &api.PerformStoreDehydratedDeviceRequest{
+			UserID:     userID,
+			DeviceID:   "DEHYDRATED_2",
+			DeviceData: deviceData,
+		}, &storeRes); err != nil {
+			t.Fatalf("PerformStoreDehydratedDevice (replace) failed: %s", err)
+		}
+		if storeRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected device ID DEHYDRATED_2, got %q", storeRes.DeviceID)
+		}
+
+		// Old device should be deleted.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice failed: %s", err)
+		}
+		if queryRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected device ID DEHYDRATED_2 after replacement, got %q", queryRes.DeviceID)
+		}
+
+		// Delete the dehydrated device.
+		var deleteRes api.PerformDeleteDehydratedDeviceResponse
+		if err = intAPI.PerformDeleteDehydratedDevice(ctx, &api.PerformDeleteDehydratedDeviceRequest{
+			UserID: userID,
+		}, &deleteRes); err != nil {
+			t.Fatalf("PerformDeleteDehydratedDevice failed: %s", err)
+		}
+		if deleteRes.DeviceID != "DEHYDRATED_2" {
+			t.Fatalf("expected deleted device ID DEHYDRATED_2, got %q", deleteRes.DeviceID)
+		}
+
+		// Query should return not found after deletion.
+		queryRes = api.QueryDehydratedDeviceResponse{}
+		if err = intAPI.QueryDehydratedDevice(ctx, &api.QueryDehydratedDeviceRequest{
+			UserID: userID,
+		}, &queryRes); err != nil {
+			t.Fatalf("QueryDehydratedDevice after delete failed: %s", err)
+		}
+		if queryRes.Found {
+			t.Fatal("expected no dehydrated device after deletion")
+		}
+
+		// Deleting when nothing exists should succeed with empty device ID.
+		deleteRes = api.PerformDeleteDehydratedDeviceResponse{}
+		if err = intAPI.PerformDeleteDehydratedDevice(ctx, &api.PerformDeleteDehydratedDeviceRequest{
+			UserID: userID,
+		}, &deleteRes); err != nil {
+			t.Fatalf("PerformDeleteDehydratedDevice (no-op) failed: %s", err)
+		}
+		if deleteRes.DeviceID != "" {
+			t.Fatalf("expected empty device ID on no-op delete, got %q", deleteRes.DeviceID)
+		}
 	})
 }

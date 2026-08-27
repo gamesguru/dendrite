@@ -13,15 +13,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/federationapi/types"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-var nidMutex sync.Mutex
-var nid = int64(0)
+var (
+	nidMutex sync.Mutex
+	nid      = int64(0)
+)
 
 type InMemoryFederationDatabase struct {
 	dbMutex            sync.Mutex
@@ -34,6 +37,7 @@ type InMemoryFederationDatabase struct {
 	associatedPDUs     map[spec.ServerName]map[*receipt.Receipt]struct{}
 	associatedEDUs     map[spec.ServerName]map[*receipt.Receipt]struct{}
 	relayServers       map[spec.ServerName][]spec.ServerName
+	retryStates        map[spec.ServerName]types.RetryState
 }
 
 func NewInMemoryFederationDatabase() *InMemoryFederationDatabase {
@@ -47,6 +51,7 @@ func NewInMemoryFederationDatabase() *InMemoryFederationDatabase {
 		associatedPDUs:     make(map[spec.ServerName]map[*receipt.Receipt]struct{}),
 		associatedEDUs:     make(map[spec.ServerName]map[*receipt.Receipt]struct{}),
 		relayServers:       make(map[spec.ServerName][]spec.ServerName),
+		retryStates:        make(map[spec.ServerName]types.RetryState),
 	}
 }
 
@@ -77,7 +82,7 @@ func (d *InMemoryFederationDatabase) StoreJSON(
 		return &newReceipt, nil
 	}
 
-	return nil, errors.New("Failed to determine type of json to store")
+	return nil, errors.New("failed to determine type of json to store")
 }
 
 func (d *InMemoryFederationDatabase) GetPendingPDUs(
@@ -501,5 +506,59 @@ func (d *InMemoryFederationDatabase) DeleteExpiredEDUs(ctx context.Context) erro
 }
 
 func (d *InMemoryFederationDatabase) PurgeRoom(ctx context.Context, roomID string) error {
+	return nil
+}
+
+func (d *InMemoryFederationDatabase) SetServerRetryState(
+	ctx context.Context,
+	serverName spec.ServerName,
+	failureCount uint32,
+	retryUntil time.Time,
+) error {
+	d.dbMutex.Lock()
+	defer d.dbMutex.Unlock()
+
+	d.retryStates[serverName] = types.RetryState{
+		FailureCount: failureCount,
+		RetryUntil:   spec.AsTimestamp(retryUntil),
+	}
+	return nil
+}
+
+func (d *InMemoryFederationDatabase) GetServerRetryState(
+	ctx context.Context,
+	serverName spec.ServerName,
+) (failureCount uint32, retryUntil time.Time, exists bool, err error) {
+	d.dbMutex.Lock()
+	defer d.dbMutex.Unlock()
+
+	state, ok := d.retryStates[serverName]
+	if !ok {
+		return 0, time.Time{}, false, nil
+	}
+	return state.FailureCount, state.RetryUntil.Time(), true, nil
+}
+
+func (d *InMemoryFederationDatabase) GetAllServerRetryStates(
+	ctx context.Context,
+) (map[spec.ServerName]types.RetryState, error) {
+	d.dbMutex.Lock()
+	defer d.dbMutex.Unlock()
+
+	result := make(map[spec.ServerName]types.RetryState)
+	for k, v := range d.retryStates {
+		result[k] = v
+	}
+	return result, nil
+}
+
+func (d *InMemoryFederationDatabase) ClearServerRetryState(
+	ctx context.Context,
+	serverName spec.ServerName,
+) error {
+	d.dbMutex.Lock()
+	defer d.dbMutex.Unlock()
+
+	delete(d.retryStates, serverName)
 	return nil
 }

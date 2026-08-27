@@ -10,25 +10,31 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/internal/helpers"
-	"github.com/element-hq/dendrite/roomserver/storage/shared"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// updateMembership updates the current membership and the invites for each
+// updateMemberships updates the current membership and the invites for each
 // user affected by a change in the current state of the room.
-// Returns a list of output events to write to the kafka log to inform the
-// consumers about the invites added or retired by the change in current state.
+// Returns:
+//   - the list of output events for invites added/retired
+//   - a bool indicating that at least one local user transitioned out of join,
+//     which the caller uses (after committing) to decide whether to evaluate
+//     the room for auto-purge
+//   - an error
 func (r *Inputer) updateMemberships(
 	ctx context.Context,
 	updater *shared.RoomUpdater,
 	removed, added []types.StateEntry,
-) ([]api.OutputEvent, error) {
+) ([]api.OutputEvent, bool, error) {
 	trace, ctx := internal.StartRegion(ctx, "updateMemberships")
 	defer trace.EndRegion()
 
@@ -48,10 +54,11 @@ func (r *Inputer) updateMemberships(
 	// key without having to load the entire event JSON?
 	events, err := updater.Events(ctx, "", eventNIDs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var updates []api.OutputEvent
+	localLeftJoin := false
 
 	for _, change := range changes {
 		var ae *types.Event
@@ -64,10 +71,73 @@ func (r *Inputer) updateMemberships(
 			ae, _ = helpers.EventMap(events).Lookup(change.addedEventNID)
 		}
 		if updates, err = r.updateMembership(ctx, updater, targetUserNID, re, ae, updates); err != nil {
-			return nil, err
+			return nil, localLeftJoin, err
+		}
+		if !localLeftJoin && r.isLocalLeavingJoin(ctx, re, ae) {
+			localLeftJoin = true
 		}
 	}
-	return updates, nil
+
+	return updates, localLeftJoin, nil
+}
+
+// isLocalLeavingJoin reports whether this membership change moved a local
+// user out of the `join` state. Used to decide whether to evaluate the room
+// for auto-purge.
+func (r *Inputer) isLocalLeavingJoin(ctx context.Context, re, ae *types.Event) bool {
+	if re == nil || !r.isLocalTarget(ctx, re) {
+		return false
+	}
+	oldMembership, err := re.Membership()
+	if err != nil || oldMembership != spec.Join {
+		return false
+	}
+	newMembership := spec.Leave
+	if ae != nil {
+		if m, mErr := ae.Membership(); mErr == nil {
+			newMembership = m
+		}
+	}
+	return newMembership != spec.Join
+}
+
+// ScheduleAutoPurgeIfEmpty evaluates the room against the configured
+// AutoPurgeMode and, if it is eligible, asks the API to start an async
+// auto-purge. Safe to call regardless of mode — it returns early when the
+// mode is "never". Should be called AFTER the parent transaction commits,
+// so that the membership query sees the latest event.
+func (r *Inputer) ScheduleAutoPurgeIfEmpty(ctx context.Context, roomInfo *types.RoomInfo) {
+	if roomInfo == nil {
+		return
+	}
+	switch r.Cfg.AutoPurgeMode {
+	case config.AutoPurgeOnEmpty:
+		members, err := r.DB.GetMembershipEventNIDsForRoom(ctx, roomInfo.RoomNID, true, true)
+		if err != nil {
+			logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to query local members")
+			return
+		}
+		if len(members) != 0 {
+			return
+		}
+	case config.AutoPurgeOnAllForgotten:
+		anyMember, err := r.DB.AnyLocalMemberNotForgotten(ctx, roomInfo.RoomNID)
+		if err != nil {
+			logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to query non-forgotten local members")
+			return
+		}
+		if anyMember {
+			return
+		}
+	default:
+		return
+	}
+	roomID, err := r.RSAPI.RoomIDFromNID(ctx, roomInfo.RoomNID)
+	if err != nil {
+		logrus.WithError(err).WithField("room_nid", roomInfo.RoomNID).Warn("auto-purge: failed to resolve room ID")
+		return
+	}
+	r.RSAPI.AutoPurgeRoom(ctx, roomID, "event")
 }
 
 func (r *Inputer) updateMembership(
@@ -118,7 +188,30 @@ func (r *Inputer) updateMembership(
 	case spec.Join:
 		return updateToJoinMembership(mu, add, updates)
 	case spec.Leave, spec.Ban:
-		return updateToLeaveMembership(mu, add, newMembership, updates)
+		// Decide whether the leave/ban row should be marked forgotten. Only
+		// local users matter here, since auto-purge and history visibility key
+		// off local membership rows.
+		//
+		//   - AutoForgetOnLeave forgets on every local leave/ban (matches the
+		//     Matrix 1.18 m.forget_forced_upon_leave capability advertised by
+		//     /capabilities).
+		//   - A row with no prior membership event is a "ghost": a local user
+		//     learned purely from federated state as already left/banned (e.g.
+		//     after the room was purged and re-learned, per issue #225). They
+		//     hold no local history, so forget the row; otherwise it would
+		//     block on_all_forgotten auto-purge forever.
+		//   - Otherwise preserve the existing forgotten flag so that
+		//     re-processing an unchanged leave during a state resync neither
+		//     resurrects a room the user already forgot nor drops the pre-leave
+		//     history of a user who genuinely left without forgetting.
+		forget := false
+		if targetLocal {
+			forget = mu.OldForgotten()
+			if r.Cfg.AutoForgetOnLeave || !mu.HasMembershipEvent() {
+				forget = true
+			}
+		}
+		return updateToLeaveMembership(mu, add, newMembership, updates, forget)
 	case spec.Knock:
 		return updateToKnockMembership(mu, add, updates)
 	default:
@@ -147,7 +240,7 @@ func updateToJoinMembership(
 	// are active for that user. We notify the consumers that the invites have
 	// been retired using a special event, even though they could infer this
 	// by studying the state changes in the room event stream.
-	_, retired, err := mu.Update(tables.MembershipStateJoin, add)
+	_, retired, err := mu.Update(tables.MembershipStateJoin, add, false)
 	if err != nil {
 		return nil, err
 	}
@@ -168,13 +261,13 @@ func updateToJoinMembership(
 
 func updateToLeaveMembership(
 	mu *shared.MembershipUpdater, add *types.Event,
-	newMembership string, updates []api.OutputEvent,
+	newMembership string, updates []api.OutputEvent, forget bool,
 ) ([]api.OutputEvent, error) {
 	// When we mark a user as having left we will invalidate any invites that
 	// are active for that user. We notify the consumers that the invites have
 	// been retired using a special event, even though they could infer this
 	// by studying the state changes in the room event stream.
-	_, retired, err := mu.Update(tables.MembershipStateLeaveOrBan, add)
+	_, retired, err := mu.Update(tables.MembershipStateLeaveOrBan, add, forget)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +289,7 @@ func updateToLeaveMembership(
 func updateToKnockMembership(
 	mu *shared.MembershipUpdater, add *types.Event, updates []api.OutputEvent,
 ) ([]api.OutputEvent, error) {
-	if _, _, err := mu.Update(tables.MembershipStateKnock, add); err != nil {
+	if _, _, err := mu.Update(tables.MembershipStateKnock, add, false); err != nil {
 		return nil, err
 	}
 	return updates, nil

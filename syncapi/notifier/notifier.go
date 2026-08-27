@@ -11,13 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // NOTE: ALL FUNCTIONS IN THIS FILE PREFIXED WITH _ ARE NOT THREAD-SAFE
@@ -63,7 +64,7 @@ func NewNotifier(rsAPI api.SyncRoomserverAPI) *Notifier {
 }
 
 // SetCurrentPosition sets the current streaming positions.
-// This must be called directly after NewNotifier and initialising the streams.
+// This must be called directly after NewNotifier and initializing the streams.
 func (n *Notifier) SetCurrentPosition(currPos types.StreamingToken) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
@@ -72,12 +73,12 @@ func (n *Notifier) SetCurrentPosition(currPos types.StreamingToken) {
 }
 
 // OnNewEvent is called when a new event is received from the room server. Must only be
-// called from a single goroutine, to avoid races between updates which could set the
+// Called from a single goroutine, to avoid races between updates which could set the
 // current sync position incorrectly.
 // Chooses which user sync streams to update by a provided gomatrixserverlib.PDU
 // (based on the users in the event's room),
-// a roomID directly, or a list of user IDs, prioritised by parameter ordering.
-// posUpdate contains the latest position(s) for one or more types of events.
+// a roomID directly, or a list of user IDs, prioritized by parameter ordering.
+// The posUpdate contains the latest position(s) for one or more types of events.
 // If a position in posUpdate is 0, it means no updates are available of that type.
 // Typically a consumer supplies a posUpdate with the latest sync position for the
 // event type it handles, leaving other fields as 0.
@@ -92,7 +93,8 @@ func (n *Notifier) OnNewEvent(
 	n.currPos.ApplyUpdates(posUpdate)
 	n._removeEmptyUserStreams()
 
-	if ev != nil {
+	switch {
+	case ev != nil:
 		// Map this event's room_id to a list of joined users, and wake them up.
 		usersToNotify := n._joinedUsers(ev.RoomID().String())
 		// Map this event's room_id to a list of peeking devices, and wake them up.
@@ -130,11 +132,11 @@ func (n *Notifier) OnNewEvent(
 		}
 
 		n._wakeupUsers(usersToNotify, peekingDevicesToNotify, n.currPos)
-	} else if roomID != "" {
+	case roomID != "":
 		n._wakeupUsers(n._joinedUsers(roomID), n._peekingDevices(roomID), n.currPos)
-	} else if len(userIDs) > 0 {
+	case len(userIDs) > 0:
 		n._wakeupUsers(userIDs, nil, n.currPos)
-	} else {
+	default:
 		log.WithFields(log.Fields{
 			"posUpdate": posUpdate.String,
 		}).Warn("Notifier.OnNewEvent called but caller supplied no user to wake up")
@@ -190,7 +192,7 @@ func (n *Notifier) OnNewSendToDevice(
 	n._wakeupUserDevice(userID, deviceIDs, n.currPos)
 }
 
-// OnNewReceipt updates the current position
+// OnNewReceipt updates the current position.
 func (n *Notifier) OnNewTyping(
 	roomID string,
 	posUpdate types.StreamingToken,
@@ -202,7 +204,7 @@ func (n *Notifier) OnNewTyping(
 	n._wakeupUsers(n._joinedUsers(roomID), nil, n.currPos)
 }
 
-// OnNewReceipt updates the current position
+// OnNewReceipt updates the current position.
 func (n *Notifier) OnNewReceipt(
 	roomID string,
 	posUpdate types.StreamingToken,
@@ -301,7 +303,7 @@ func (n *Notifier) IsSharedUser(userA, userB string) bool {
 
 // GetListener returns a UserStreamListener that can be used to wait for
 // updates for a user. Must be closed.
-// notify for anything before sincePos
+// Notify for anything before sincePos.
 func (n *Notifier) GetListener(req types.SyncRequest) UserDeviceStreamListener {
 	// Do what synapse does: https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/notifier.py#L298
 	// - Bucket request into a lookup map keyed off a list of joined room IDs and separately a user ID
@@ -369,7 +371,7 @@ func (n *Notifier) LoadRooms(ctx context.Context, db storage.Database, roomIDs [
 	return nil
 }
 
-// CurrentPosition returns the current sync position
+// CurrentPosition returns the current sync position.
 func (n *Notifier) CurrentPosition() types.StreamingToken {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
@@ -409,7 +411,7 @@ func (n *Notifier) setPeekingDevices(roomIDToPeekingDevices map[string][]types.P
 }
 
 // _wakeupUsers will wake up the sync strems for all of the devices for all of the
-// specified user IDs, and also the specified peekingDevices
+// specified user IDs, and also the specified peekingDevices.
 func (n *Notifier) _wakeupUsers(userIDs []string, peekingDevices []types.PeekingDevice, newPos types.StreamingToken) {
 	for _, userID := range userIDs {
 		n._wakeupUserMap[userID] = struct{}{}
@@ -434,7 +436,6 @@ func (n *Notifier) _wakeupUsers(userIDs []string, peekingDevices []types.Peeking
 
 // _wakeupUserDevice will wake up the sync stream for a specific user device. Other
 // device streams will be left alone.
-// nolint:unused
 func (n *Notifier) _wakeupUserDevice(userID string, deviceIDs []string, newPos types.StreamingToken) {
 	for _, deviceID := range deviceIDs {
 		if stream := n._fetchUserDeviceStream(userID, deviceID, false); stream != nil {
@@ -484,7 +485,7 @@ func (n *Notifier) _fetchUserStreams(userID string) []*UserDeviceStream {
 
 func (n *Notifier) _addJoinedUser(roomID, userID string) {
 	if _, ok := n.roomIDToJoinedUsers[roomID]; !ok {
-		n.roomIDToJoinedUsers[roomID] = newUserIDSet(8)
+		n.roomIDToJoinedUsers[roomID] = newUserIDSet(8) //nolint:mnd
 	}
 	n.roomIDToJoinedUsers[roomID].add(userID)
 	n.roomIDToJoinedUsers[roomID].precompute()
@@ -492,7 +493,7 @@ func (n *Notifier) _addJoinedUser(roomID, userID string) {
 
 func (n *Notifier) _removeJoinedUser(roomID, userID string) {
 	if _, ok := n.roomIDToJoinedUsers[roomID]; !ok {
-		n.roomIDToJoinedUsers[roomID] = newUserIDSet(8)
+		n.roomIDToJoinedUsers[roomID] = newUserIDSet(8) //nolint:mnd
 	}
 	n.roomIDToJoinedUsers[roomID].remove(userID)
 	n.roomIDToJoinedUsers[roomID].precompute()
@@ -618,7 +619,7 @@ func (s *userIDSet) values() (vals []string) {
 	return
 }
 
-// A set of PeekingDevices, similar to userIDSet
+// A set of PeekingDevices, similar to userIDSet.
 
 type peekingDeviceSet map[types.PeekingDevice]struct{}
 
@@ -626,7 +627,6 @@ func (s peekingDeviceSet) add(d types.PeekingDevice) {
 	s[d] = struct{}{}
 }
 
-// nolint:unused
 func (s peekingDeviceSet) remove(d types.PeekingDevice) {
 	delete(s, d)
 }
