@@ -9,10 +9,10 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type adminWhoisResponse struct {
@@ -34,7 +34,7 @@ type connectionInfo struct {
 	UserAgent string `json:"user_agent"`
 }
 
-// GetAdminWhois implements GET /admin/whois/{userId}
+// GetAdminWhois implements GET /admin/whois/{userId}.
 func GetAdminWhois(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	userID string,

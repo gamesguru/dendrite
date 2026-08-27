@@ -11,11 +11,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const accountDataSchema = `
@@ -33,7 +33,7 @@ const insertAccountDataSQL = "" +
 	" ON CONFLICT (user_id, room_id, type) DO UPDATE" +
 	" SET id = $5"
 
-// further parameters are added by prepareWithFilters
+// further parameters are added by prepareWithFilters.
 const selectAccountDataInRangeSQL = "" +
 	"SELECT id, room_id, type FROM syncapi_account_data_type" +
 	" WHERE user_id = $1 AND id > $2 AND id <= $3"
@@ -73,7 +73,8 @@ func (s *accountDataStatements) InsertAccountData(
 	if err != nil {
 		return
 	}
-	_, err = sqlutil.TxStmt(txn, s.insertAccountDataStmt).ExecContext(ctx, pos, userID, roomID, dataType, pos)
+	insertStmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
+	_, err = insertStmt.ExecContext(ctx, pos, userID, roomID, dataType, pos)
 	return
 }
 
@@ -88,7 +89,7 @@ func (s *accountDataStatements) SelectAccountDataInRange(
 
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectAccountDataInRangeSQL,
-		[]interface{}{
+		[]any{
 			userID, r.Low(), r.High(),
 		},
 		filter.Senders, filter.NotSenders,
@@ -131,7 +132,8 @@ func (s *accountDataStatements) SelectMaxAccountDataID(
 	ctx context.Context, txn *sql.Tx,
 ) (id int64, err error) {
 	var nullableID sql.NullInt64
-	err = sqlutil.TxStmt(txn, s.selectMaxAccountDataIDStmt).QueryRowContext(ctx).Scan(&nullableID)
+	maxStmt := sqlutil.TxStmt(txn, s.selectMaxAccountDataIDStmt)
+	err = maxStmt.QueryRowContext(ctx).Scan(&nullableID)
 	if nullableID.Valid {
 		id = nullableID.Int64
 	}

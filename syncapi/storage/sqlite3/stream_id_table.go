@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const streamIDTableSchema = `
@@ -29,6 +29,8 @@ INSERT INTO syncapi_stream_id (stream_name, stream_id) VALUES ("presence", 0)
 INSERT INTO syncapi_stream_id (stream_name, stream_id) VALUES ("notification", 0)
   ON CONFLICT DO NOTHING;
 INSERT INTO syncapi_stream_id (stream_name, stream_id) VALUES ("relation", 0)
+  ON CONFLICT DO NOTHING;
+INSERT INTO syncapi_stream_id (stream_name, stream_id) VALUES ("unpartialstated", 0)
   ON CONFLICT DO NOTHING;
 `
 
@@ -91,5 +93,11 @@ func (s *StreamIDStatements) nextNotificationID(ctx context.Context, txn *sql.Tx
 func (s *StreamIDStatements) nextRelationID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
 	err = increaseStmt.QueryRowContext(ctx, "relation").Scan(&pos)
+	return
+}
+
+func (s *StreamIDStatements) nextUnPartialStatedID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
+	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
+	err = increaseStmt.QueryRowContext(ctx, "unpartialstated").Scan(&pos)
 	return
 }

@@ -11,18 +11,18 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/sync"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/sync"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// GetFilter implements GET /_matrix/client/r0/user/{userId}/filter/{filterId}
+// GetFilter implements GET /_matrix/client/r0/user/{userId}/filter/{filterId}.
 func GetFilter(
 	req *http.Request, device *api.Device, syncDB storage.Database, userID string, filterID string,
 ) util.JSONResponse {
@@ -43,7 +43,7 @@ func GetFilter(
 
 	filter := synctypes.DefaultFilter()
 	if err := syncDB.GetFilter(req.Context(), &filter, localpart, filterID); err != nil {
-		//TODO better error handling. This error message is *probably* right,
+		// TODO better error handling. This error message is *probably* right,
 		// but if there are obscure db errors, this will also be returned,
 		// even though it is not correct.
 		return util.JSONResponse{
@@ -86,7 +86,7 @@ func PutFilter(
 
 	var filter synctypes.Filter
 
-	defer req.Body.Close() // nolint:errcheck
+	defer req.Body.Close()
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return util.JSONResponse{

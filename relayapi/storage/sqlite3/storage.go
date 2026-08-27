@@ -9,21 +9,22 @@ package sqlite3
 import (
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/relayapi/storage/shared"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// Database stores information needed by the federation sender
+// Database stores information needed by the federation sender.
 type Database struct {
 	shared.Database
 	db     *sql.DB
 	writer sqlutil.Writer
 }
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(
 	conMan *sqlutil.Connections,
 	dbProperties *config.DatabaseOptions,

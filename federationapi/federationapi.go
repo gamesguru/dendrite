@@ -9,35 +9,33 @@ package federationapi
 import (
 	"time"
 
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/consumers"
-	"github.com/element-hq/dendrite/federationapi/internal"
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/internal/caching"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-
-	"github.com/matrix-org/gomatrixserverlib"
-
-	"github.com/element-hq/dendrite/federationapi/routing"
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/consumers"
+	"codefloe.com/pat-s/zendrite/federationapi/internal"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AddPublicRoutes sets up and registers HTTP handlers on the base API muxes for the FederationAPI component.
 func AddPublicRoutes(
 	processContext *process.ProcessContext,
 	routers httputil.Routers,
-	dendriteConfig *config.Dendrite,
+	zendriteConfig *config.Zendrite,
 	natsInstance *jetstream.NATSInstance,
 	userAPI userapi.FederationUserAPI,
 	federation fclient.FederationClient,
@@ -46,8 +44,8 @@ func AddPublicRoutes(
 	fedAPI federationAPI.FederationInternalAPI,
 	enableMetrics bool,
 ) {
-	cfg := &dendriteConfig.FederationAPI
-	mscCfg := &dendriteConfig.MSCs
+	cfg := &zendriteConfig.FederationAPI
+	mscCfg := &zendriteConfig.MSCs
 	js, _ := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 	producer := &producers.SyncAPIProducer{
 		JetStream:              js,
@@ -74,7 +72,7 @@ func AddPublicRoutes(
 
 	routing.Setup(
 		routers,
-		dendriteConfig,
+		zendriteConfig,
 		rsAPI, f, keyRing,
 		federation, userAPI, mscCfg,
 		producer, enableMetrics,
@@ -85,7 +83,7 @@ func AddPublicRoutes(
 // can call functions directly on the returned API or via an HTTP interface using AddInternalRoutes.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	cm *sqlutil.Connections,
 	natsInstance *jetstream.NATSInstance,
 	federation fclient.FederationClient,
@@ -94,9 +92,9 @@ func NewInternalAPI(
 	keyRing *gomatrixserverlib.KeyRing,
 	resetBlacklist bool,
 ) *internal.FederationInternalAPI {
-	cfg := &dendriteCfg.FederationAPI
+	cfg := &zendriteCfg.FederationAPI
 
-	federationDB, err := storage.NewDatabase(processContext.Context(), cm, &cfg.Database, caches, dendriteCfg.Global.IsLocalServerName)
+	federationDB, err := storage.NewDatabase(processContext.Context(), cm, &cfg.Database, caches, zendriteCfg.Global.IsLocalServerName)
 	if err != nil {
 		logrus.WithError(err).Panic("failed to connect to federation sender db")
 	}
@@ -109,7 +107,7 @@ func NewInternalAPI(
 
 	js, nats := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 
-	signingInfo := dendriteCfg.Global.SigningIdentities()
+	signingInfo := zendriteCfg.Global.SigningIdentities()
 
 	queues := queue.NewOutgoingQueues(
 		federationDB, processContext,
@@ -144,7 +142,7 @@ func NewInternalAPI(
 		logrus.WithError(err).Panic("failed to start typing consumer")
 	}
 	keyConsumer := consumers.NewKeyChangeConsumer(
-		processContext, &dendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
+		processContext, &zendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
 	)
 	if err = keyConsumer.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start key server consumer")
@@ -167,5 +165,14 @@ func NewInternalAPI(
 	}
 	time.AfterFunc(time.Minute, cleanExpiredEDUs)
 
-	return internal.NewFederationInternalAPI(federationDB, cfg, rsAPI, federation, &stats, caches, queues, keyRing)
+	fedAPI := internal.NewFederationInternalAPI(federationDB, cfg, rsAPI, federation, &stats, caches, queues, keyRing)
+
+	// Start the partial state worker for MSC3706 faster joins
+	partialStateWorker := internal.NewPartialStateWorker(processContext, rsAPI, fedAPI)
+	fedAPI.SetPartialStateWorker(partialStateWorker)
+	if err := partialStateWorker.Start(); err != nil {
+		logrus.WithError(err).Warn("failed to start partial state worker")
+	}
+
+	return fedAPI
 }

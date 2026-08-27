@@ -9,9 +9,10 @@ package storage
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
 )
 
 type Database interface {

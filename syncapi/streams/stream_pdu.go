@@ -3,22 +3,23 @@ package streams
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/internal"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // The max number of per-room goroutines to have running.
@@ -54,6 +55,7 @@ func (p *PDUStreamProvider) Setup(
 	p.latest = id
 }
 
+//nolint:gocyclo
 func (p *PDUStreamProvider) CompleteSync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -80,6 +82,30 @@ func (p *PDUStreamProvider) CompleteSync(
 
 	stateFilter := req.Filter.Room.State
 	eventFilter := req.Filter.Room.Timeline
+
+	// MSC3706: Filter out partial state rooms for non-lazy syncs
+	// Partial state rooms may have incomplete state which can cause issues for clients
+	// expecting full room state. Lazy-load syncs can include partial state rooms.
+	if !stateFilter.LazyLoadMembers {
+		partialStateRoomIDs, partialErr := p.rsAPI.GetPartialStateRoomIDs(ctx)
+		if partialErr != nil {
+			req.Log.WithError(partialErr).Warn("Failed to get partial state rooms")
+		} else if len(partialStateRoomIDs) > 0 {
+			partialStateRooms := make(map[string]bool, len(partialStateRoomIDs))
+			for _, roomID := range partialStateRoomIDs {
+				partialStateRooms[roomID] = true
+			}
+			filteredRoomIDs := make([]string, 0, len(joinedRoomIDs))
+			for _, roomID := range joinedRoomIDs {
+				if !partialStateRooms[roomID] {
+					filteredRoomIDs = append(filteredRoomIDs, roomID)
+				} else {
+					req.Log.WithField("room_id", roomID).Debug("Excluding partial state room from non-lazy sync")
+				}
+			}
+			joinedRoomIDs = filteredRoomIDs
+		}
+	}
 
 	if err = p.addIgnoredUsersToFilter(ctx, snapshot, req, &eventFilter); err != nil {
 		req.Log.WithError(err).Error("unable to update event filter with ignored users")
@@ -111,7 +137,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		)
 		if jerr != nil {
 			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
-			if ctxErr := req.Context.Err(); ctxErr != nil || jerr == sql.ErrTxDone {
+			if ctxErr := req.Context.Err(); ctxErr != nil || errors.Is(jerr, sql.ErrTxDone) {
 				return from
 			}
 			continue
@@ -148,7 +174,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			)
 			if err != nil {
 				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
-				if err == context.DeadlineExceeded || err == context.Canceled || err == sql.ErrTxDone {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
 					return from
 				}
 				continue
@@ -160,6 +186,7 @@ func (p *PDUStreamProvider) CompleteSync(
 	return to
 }
 
+//nolint:gocyclo
 func (p *PDUStreamProvider) IncrementalSync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -188,6 +215,35 @@ func (p *PDUStreamProvider) IncrementalSync(
 		if stateDeltas, syncJoinedRooms, err = snapshot.GetStateDeltas(ctx, req.Device, r, req.Device.UserID, &stateFilter, p.rsAPI); err != nil {
 			req.Log.WithError(err).Error("p.DB.GetStateDeltas failed")
 			return from
+		}
+	}
+
+	// MSC3706: Filter out partial state rooms for non-lazy syncs
+	if !stateFilter.LazyLoadMembers && len(stateDeltas) > 0 {
+		partialStateRoomIDs, partialErr := p.rsAPI.GetPartialStateRoomIDs(ctx)
+		if partialErr != nil {
+			req.Log.WithError(partialErr).Warn("Failed to get partial state rooms")
+		} else if len(partialStateRoomIDs) > 0 {
+			partialStateRooms := make(map[string]bool, len(partialStateRoomIDs))
+			for _, roomID := range partialStateRoomIDs {
+				partialStateRooms[roomID] = true
+			}
+			filteredDeltas := make([]types.StateDelta, 0, len(stateDeltas))
+			filteredJoinedRooms := make([]string, 0, len(syncJoinedRooms))
+			for _, delta := range stateDeltas {
+				if !partialStateRooms[delta.RoomID] {
+					filteredDeltas = append(filteredDeltas, delta)
+				} else {
+					req.Log.WithField("room_id", delta.RoomID).Debug("Excluding partial state room from non-lazy incremental sync")
+				}
+			}
+			for _, roomID := range syncJoinedRooms {
+				if !partialStateRooms[roomID] {
+					filteredJoinedRooms = append(filteredJoinedRooms, roomID)
+				}
+			}
+			stateDeltas = filteredDeltas
+			syncJoinedRooms = filteredJoinedRooms
 		}
 	}
 
@@ -226,7 +282,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 		var pos types.StreamPosition
 		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents); err != nil {
 			req.Log.WithError(err).Error("d.addRoomDeltaToResponse failed")
-			if err == context.DeadlineExceeded || err == context.Canceled || err == sql.ErrTxDone {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
 				return newPos
 			}
 			continue
@@ -263,7 +319,7 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 			&eventFilter, true, true,
 		)
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
 		}
@@ -294,7 +350,7 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 			&filter, true, true,
 		)
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
 		}
@@ -306,10 +362,10 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 	return dbEvents, nil
 }
 
-// Limit the recent events to X when going backwards
+// Limit the recent events to X when going backwards.
 const recentEventBackwardsLimit = 100
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -331,7 +387,11 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	)
 	recentEvents := make([]*rstypes.HeaderedEvent, len(recEvents))
 	for i := range recEvents {
-		recentEvents[i] = recEvents[i].(*rstypes.HeaderedEvent)
+		he, ok := recEvents[i].(*rstypes.HeaderedEvent)
+		if !ok {
+			continue
+		}
+		recentEvents[i] = he
 	}
 
 	// If we didn't return any events at all then don't bother doing anything else.
@@ -362,7 +422,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			ctx, snapshot, delta.RoomID, true, limited, stateFilter,
 			device, recentEvents, delta.StateEvents,
 		)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return r.From, fmt.Errorf("p.lazyLoadMembers: %w", err)
 		}
 	}
@@ -374,6 +434,27 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 				req.MembershipChanges[*recentEvent.StateKey()] = struct{}{}
 			}
 			hasMembershipChange = true
+		}
+	}
+
+	// MSC3706: Check if this room became un-partial-stated (completed partial state resync)
+	// in the sync range. If so, we need to send the room summary with updated member counts.
+	// This is similar to Synapse's forced_newly_joined_room_ids mechanism.
+	if !hasMembershipChange {
+		unPartialStatedRooms, unPartialErr := snapshot.UnPartialStatedRoomsInRange(ctx, device.UserID, r)
+		if unPartialErr != nil {
+			logrus.WithError(unPartialErr).Warn("failed to get un-partial-stated rooms")
+		} else {
+			for _, roomID := range unPartialStatedRooms {
+				if roomID == delta.RoomID {
+					hasMembershipChange = true
+					logrus.WithFields(logrus.Fields{
+						"room_id": delta.RoomID,
+						"user_id": device.UserID,
+					}).Debug("Room became un-partial-stated, forcing summary update")
+					break
+				}
+			}
 		}
 	}
 
@@ -451,6 +532,15 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
+
+		// MSC4115: Add membership metadata to events (stable feature, enabled by default)
+		if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, "join", true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate incremental timeline events with membership")
+		}
+		if err := synctypes.AnnotateEventsWithMembership(jr.State.Events, "join", true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate incremental state events with membership")
+		}
+
 		req.Response.Rooms.Join[delta.RoomID] = jr
 
 	case spec.Peek:
@@ -464,6 +554,15 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
+
+		// MSC4115: For peeked rooms, user is not joined (membership is "leave")
+		if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, "leave", true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate peek timeline events with membership")
+		}
+		if err := synctypes.AnnotateEventsWithMembership(jr.State.Events, "leave", true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate peek state events with membership")
+		}
+
 		req.Response.Rooms.Peek[delta.RoomID] = jr
 
 	case spec.Leave:
@@ -481,6 +580,19 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		lr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
+
+		// MSC4115: Annotate with appropriate membership ("leave" or "ban")
+		membership := "leave"
+		if delta.Membership == spec.Ban {
+			membership = "ban"
+		}
+		if err := synctypes.AnnotateEventsWithMembership(lr.Timeline.Events, membership, true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate leave/ban timeline events with membership")
+		}
+		if err := synctypes.AnnotateEventsWithMembership(lr.State.Events, membership, true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate leave/ban state events with membership")
+		}
+
 		req.Response.Rooms.Leave[delta.RoomID] = lr
 	}
 
@@ -541,7 +653,7 @@ func applyHistoryVisibilityFilter(
 	return events, nil
 }
 
-// nolint: gocyclo
+//nolint:gocyclo
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -609,7 +721,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			false, limited, stateFilter,
 			device, recentEvents, stateEvents,
 		)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
 	}
@@ -646,6 +758,19 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(stateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
+
+	// MSC4115: Add membership metadata to events
+	// TODO: Add config check for MSC enablement (currently enabled by default as it's stable)
+	// For joined rooms, annotate all events with "join" membership
+	// This is a simplified implementation - a full implementation would look up
+	// historical membership for each event, but this covers the common case
+	if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, "join", true); err != nil {
+		logrus.WithError(err).Warn("Failed to annotate timeline events with membership")
+	}
+	if err := synctypes.AnnotateEventsWithMembership(jr.State.Events, "join", true); err != nil {
+		logrus.WithError(err).Warn("Failed to annotate state events with membership")
+	}
+
 	return jr, nil
 }
 
@@ -714,7 +839,9 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	for _, membership := range memberships {
 		p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), membership.EventID())
 	}
-	stateEvents = append(newStateEvents, memberships...)
+	stateEvents = make([]*rstypes.HeaderedEvent, 0, len(newStateEvents)+len(memberships))
+	stateEvents = append(stateEvents, newStateEvents...)
+	stateEvents = append(stateEvents, memberships...)
 	return stateEvents, nil
 }
 
@@ -723,7 +850,7 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 func (p *PDUStreamProvider) addIgnoredUsersToFilter(ctx context.Context, snapshot storage.DatabaseTransaction, req *types.SyncRequest, eventFilter *synctypes.RoomEventFilter) error {
 	ignores, err := snapshot.IgnoresForUser(ctx, req.Device.UserID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err

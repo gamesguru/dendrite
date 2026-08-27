@@ -6,22 +6,24 @@
 package routing
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
-	federationAPI "github.com/element-hq/dendrite/federationapi/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// RoomAliasToID converts the queried alias into a room ID and returns it
+// RoomAliasToID converts the queried alias into a room ID and returns it.
 func RoomAliasToID(
 	httpReq *http.Request,
 	federation fclient.FederationClient,
@@ -85,13 +87,11 @@ func RoomAliasToID(
 	} else {
 		resp, err = federation.LookupRoomAlias(httpReq.Context(), domain, cfg.Matrix.ServerName, roomAlias)
 		if err != nil {
-			switch x := err.(type) {
-			case gomatrix.HTTPError:
-				if x.Code == http.StatusNotFound {
-					return util.JSONResponse{
-						Code: http.StatusNotFound,
-						JSON: spec.NotFound("Room alias not found"),
-					}
+			var httpErr gomatrix.HTTPError
+			if errors.As(err, &httpErr) && httpErr.Code == http.StatusNotFound {
+				return util.JSONResponse{
+					Code: http.StatusNotFound,
+					JSON: spec.NotFound("Room alias not found"),
 				}
 			}
 			// TODO: Return 502 if the remote server errored.
@@ -112,7 +112,7 @@ func RoomAliasToID(
 
 // Query the immediate children of a room/space
 //
-// Implements /_matrix/federation/v1/hierarchy/{roomID}
+// Implements /_matrix/federation/v1/hierarchy/{roomID}.
 func QueryRoomHierarchy(httpReq *http.Request, request *fclient.FederationRequest, roomIDStr string, rsAPI roomserverAPI.FederationRoomserverAPI) util.JSONResponse {
 	parsedRoomID, err := spec.NewRoomID(roomIDStr)
 	if err != nil {
@@ -138,33 +138,31 @@ func QueryRoomHierarchy(httpReq *http.Request, request *fclient.FederationReques
 
 	walker := roomserverAPI.NewRoomHierarchyWalker(types.NewServerNameNotDevice(request.Origin()), roomID, suggestedOnly, 1)
 	discoveredRooms, inaccessibleRooms, _, err := rsAPI.QueryNextRoomHierarchyPage(httpReq.Context(), walker, -1)
-
 	if err != nil {
-		switch err.(type) {
-		case roomserverAPI.ErrRoomUnknownOrNotAllowed:
+		var errUnknown roomserverAPI.ErrRoomUnknownOrNotAllowed
+		if errors.As(err, &errUnknown) {
 			util.GetLogger(httpReq.Context()).WithError(err).Debugln("room unknown/forbidden when handling SS room hierarchy request")
 			return util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound("room is unknown/forbidden"),
 			}
-		default:
-			log.WithError(err).Errorf("failed to fetch next page of room hierarchy (SS API)")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.Unknown("internal server error"),
-			}
+		}
+		log.WithError(err).Errorf("failed to fetch next page of room hierarchy (SS API)")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
 		}
 	}
 
 	if len(discoveredRooms) == 0 {
 		util.GetLogger(httpReq.Context()).Debugln("no rooms found when handling SS room hierarchy request")
 		return util.JSONResponse{
-			Code: 404,
+			Code: 404, //nolint:mnd
 			JSON: spec.NotFound("room is unknown/forbidden"),
 		}
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: fclient.RoomHierarchyResponse{
 			Room:                 discoveredRooms[0],
 			Children:             discoveredRooms[1:],

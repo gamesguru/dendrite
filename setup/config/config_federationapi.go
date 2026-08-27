@@ -1,8 +1,8 @@
 package config
 
 import (
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 type FederationAPI struct {
@@ -14,8 +14,10 @@ type FederationAPI struct {
 
 	// Federation failure threshold. How many consecutive failures that we should
 	// tolerate when sending federation requests to a specific server. The backoff
-	// is 2**x seconds, so 1 = 2 seconds, 2 = 4 seconds, 3 = 8 seconds, etc.
-	// The default value is 16 if not specified, which is circa 18 hours.
+	// is exponential with 2**(x+7) seconds, starting at ~4 minutes and capping at ~6 days:
+	// 1 = 256s (~4min), 2 = 512s (~8min), ..., 12+ = 524288s (~6 days).
+	// The default value is 11 if not specified, giving roughly 2 weeks of retry attempts
+	// before the server is blacklisted.
 	FederationMaxRetries uint32 `yaml:"send_max_retries"`
 
 	// P2P Feature: Whether relaying to specific nodes should be enabled.
@@ -35,7 +37,7 @@ type FederationAPI struct {
 	// on remote federation endpoints. This is not recommended in production!
 	DisableTLSValidation bool `yaml:"disable_tls_validation"`
 
-	// DisableHTTPKeepalives prevents Dendrite from keeping HTTP connections
+	// DisableHTTPKeepalives prevents Zendrite from keeping HTTP connections
 	// open for reuse for future requests. Connections will be closed quicker
 	// but we may spend more time on TLS handshakes instead.
 	DisableHTTPKeepalives bool `yaml:"disable_http_keepalives"`
@@ -71,7 +73,7 @@ func (c *FederationAPI) UnmarshalYAML(unmarshal func(any) error) error {
 }
 
 func (c *FederationAPI) Defaults(opts DefaultOpts) {
-	c.FederationMaxRetries = 16
+	c.FederationMaxRetries = 11
 	c.P2PFederationRetriesUntilAssumedOffline = 1
 	c.DisableTLSValidation = false
 	c.DisableHTTPKeepalives = false
@@ -88,6 +90,7 @@ func (c *FederationAPI) Defaults(opts DefaultOpts) {
 	}
 	c.AllowNetworkCIDRs = []string{
 		"0.0.0.0/0",
+		"::/0",
 	}
 	if opts.Generate {
 		c.KeyPerspectives = KeyPerspectives{
@@ -117,7 +120,7 @@ func (c *FederationAPI) Verify(configErrs *ConfigErrors) {
 	}
 }
 
-// The config for setting a proxy to use for server->server requests
+// The config for setting a proxy to use for server->server requests.
 type Proxy struct {
 	// Is the proxy enabled?
 	Enabled bool `yaml:"enabled"`

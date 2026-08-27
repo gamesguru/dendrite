@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package storage
 
@@ -14,16 +13,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/storage/postgres"
-	"github.com/element-hq/dendrite/userapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3"
 )
 
 // NewUserDatabase opens a new Postgres or Sqlite database (based on dataSourceName scheme)
-// and sets postgres connection parameters
+// and sets postgres connection parameters.
 func NewUserDatabase(
 	ctx context.Context,
 	conMan *sqlutil.Connections,
@@ -45,7 +44,7 @@ func NewUserDatabase(
 }
 
 // NewKeyDatabase opens a new Postgres or Sqlite database (base on dataSourceName) scheme)
-// and sets postgres connection parameters.
+// and sets postgres connection parameters..
 func NewKeyDatabase(conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions) (KeyDatabase, error) {
 	switch {
 	case dbProperties.ConnectionString.IsSQLite():

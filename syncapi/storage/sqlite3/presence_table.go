@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const presenceSchema = `
@@ -142,12 +142,13 @@ func (p *presenceStatements) GetPresenceForUsers(
 	}
 	defer internal.CloseAndLogIfError(ctx, prepStmt, "GetPresenceForUsers: stmt.close() failed")
 
-	params := make([]interface{}, len(userIDs))
+	params := make([]any, len(userIDs))
 	for i := range userIDs {
 		params[i] = userIDs[i]
 	}
 
-	rows, err := sqlutil.TxStmt(txn, prepStmt).QueryContext(ctx, params...)
+	selectStmt := sqlutil.TxStmt(txn, prepStmt)
+	rows, err := selectStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ func (p *presenceStatements) GetMaxPresenceID(ctx context.Context, txn *sql.Tx) 
 	return
 }
 
-// GetPresenceAfter returns the changes presences after a given stream id
+// GetPresenceAfter returns the changes presences after a given stream id.
 func (p *presenceStatements) GetPresenceAfter(
 	ctx context.Context, txn *sql.Tx,
 	after types.StreamPosition, filter synctypes.EventFilter,

@@ -4,18 +4,18 @@ import (
 	"context"
 	"crypto/ed25519"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	asAPI "github.com/element-hq/dendrite/appservice/api"
-	fsAPI "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	asAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// ErrInvalidID is an error returned if the userID is invalid
+// ErrInvalidID is an error returned if the userID is invalid.
 type ErrInvalidID struct {
 	Err error
 }
@@ -25,7 +25,7 @@ func (e ErrInvalidID) Error() string {
 }
 
 // ErrNotAllowed is an error returned if the user is not allowed
-// to execute some action (e.g. invite)
+// to execute some action (e.g. invite).
 type ErrNotAllowed struct {
 	Err error
 }
@@ -60,6 +60,14 @@ type DefaultRoomVersionAPI interface {
 	DefaultRoomVersion() gomatrixserverlib.RoomVersion
 }
 
+// CapabilitiesAPI exposes server-configured Matrix capabilities to clients.
+type CapabilitiesAPI interface {
+	// AutoForgetOnLeaveEnabled reports whether the server automatically
+	// marks rooms as forgotten when a local user transitions to leave or
+	// ban. Backs the m.forget_forced_upon_leave capability.
+	AutoForgetOnLeaveEnabled() bool
+}
+
 // RoomserverInputAPI is used to write events to the room server.
 type RoomserverInternalAPI interface {
 	SyncRoomserverAPI
@@ -91,6 +99,16 @@ type RoomserverInternalAPI interface {
 	RoomsWithACLs(ctx context.Context) ([]string, error)
 	// EmptyRooms returns all rooms that the local server has left.
 	EmptyRooms(ctx context.Context) ([]string, error)
+	// AutoPurgeRoom asynchronously purges the given room and tracks it as
+	// in-flight in the PurgeTracker. Idempotent: subsequent calls for the
+	// same room while a purge is running are coalesced. reason is a short
+	// label included in log lines (e.g. "event", "startup_sweep").
+	AutoPurgeRoom(ctx context.Context, roomID, reason string)
+	// ScheduleAutoPurgeIfEligible evaluates the given room against the
+	// configured AutoPurgeMode and schedules an async purge if eligible.
+	// Used by /forget to fire a check after the last non-forgotten
+	// membership disappears under on_all_forgotten.
+	ScheduleAutoPurgeIfEligible(ctx context.Context, roomID string)
 }
 
 type UserRoomPrivateKeyCreator interface {
@@ -167,7 +185,7 @@ type QueryMembershipAPI interface {
 	) (map[string]*types.HeaderedEvent, error)
 }
 
-// API functions required by the syncapi
+// API functions required by the syncapi.
 type SyncRoomserverAPI interface {
 	QueryLatestEventsAndStateAPI
 	QueryBulkStateContentAPI
@@ -196,6 +214,10 @@ type SyncRoomserverAPI interface {
 		req *PerformBackfillRequest,
 		res *PerformBackfillResponse,
 	) error
+
+	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state (MSC3706 faster joins).
+	// Used by sync to filter rooms that may have incomplete state.
+	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
 }
 
 type AppserviceRoomserverAPI interface {
@@ -230,6 +252,7 @@ type ClientRoomserverAPI interface {
 	UserRoomPrivateKeyCreator
 	QueryRoomHierarchyAPI
 	DefaultRoomVersionAPI
+	CapabilitiesAPI
 
 	QueryMembershipForUser(ctx context.Context, req *QueryMembershipForUserRequest, res *QueryMembershipForUserResponse) error
 	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error
@@ -333,6 +356,39 @@ type FederationRoomserverAPI interface {
 
 	IsKnownRoom(ctx context.Context, roomID spec.RoomID) (bool, error)
 	StateQuerier() gomatrixserverlib.StateQuerier
+
+	// MSC3706 Partial State Join methods
+	// SetRoomPartialState marks a room as having partial state after a faster join
+	// deviceListStreamID is the current device list stream position at join time (for device list replay)
+	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// IsRoomPartialState returns true if the room has partial state
+	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
+	// ClearRoomPartialState removes the partial state flag from a room
+	// Returns the device list stream ID that was stored at join time for device list replay
+	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
+	// GetPartialStateServers returns servers known to be in a partial state room
+	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
+	// GetPartialStateJoinServer returns the server we joined through for a partial state room
+	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
+	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
+	// GetAllPartialStateRooms returns all rooms with partial state
+	GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error)
+	// RoomInfoByNID returns room information for the given room NID
+	RoomInfoByNID(ctx context.Context, roomNID types.RoomNID) (*types.RoomInfo, error)
+	// LatestEventIDs returns the latest event IDs and state snapshot for a room
+	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)
+	// RoomIDFromNID returns the room ID for a given room NID
+	RoomIDFromNID(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// NotifyUnPartialStated notifies observers that a room has completed its partial state resync
+	// This wakes up any callers waiting in AwaitFullState for this room
+	NotifyUnPartialStated(roomID string)
+	// UpdateCurrentStateAfterResync updates the current state and memberships after a partial state resync.
+	// This is called after state events have been stored as outliers via SendStateAsOutliers.
+	// It creates a new state snapshot from the stored events, calculates the state delta,
+	// updates the membership table, and notifies downstream components (syncapi).
+	// stateEventIDs are the event IDs of the state events that were fetched during resync.
+	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error
 }
 
 type KeyserverRoomserverAPI interface {

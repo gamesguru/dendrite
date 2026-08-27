@@ -14,14 +14,14 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputNotificationDataConsumer consumes events that originated in
@@ -72,7 +72,7 @@ func (s *OutputNotificationDataConsumer) Start() error {
 // be incorrectly calculated.
 func (s *OutputNotificationDataConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
-	userID := string(msg.Header.Get(jetstream.UserID))
+	userID := msg.Header.Get(jetstream.UserID)
 
 	// Parse out the event JSON
 	var data eventutil.NotificationData

@@ -6,7 +6,7 @@
 
 package authtypes
 
-// ThreePID represents a third-party identifier
+// ThreePID represents a third-party identifier.
 type ThreePID struct {
 	Address     string `json:"address"`
 	Medium      string `json:"medium"`

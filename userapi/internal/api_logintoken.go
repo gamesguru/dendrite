@@ -9,11 +9,13 @@ package internal
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // PerformLoginTokenCreation creates a new login token and associates it with the provided data.
@@ -46,7 +48,7 @@ func (a *UserInternalAPI) QueryLoginToken(ctx context.Context, req *api.QueryLog
 	tokenData, err := a.DB.GetLoginTokenDataByToken(ctx, req.Token)
 	if err != nil {
 		res.Data = nil
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err
@@ -60,7 +62,7 @@ func (a *UserInternalAPI) QueryLoginToken(ctx context.Context, req *api.QueryLog
 	}
 	if _, err := a.DB.GetAccountByLocalpart(ctx, localpart, domain); err != nil {
 		res.Data = nil
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err

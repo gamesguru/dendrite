@@ -9,12 +9,12 @@ package postgres
 import (
 	"strings"
 
-	"github.com/element-hq/dendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // filterConvertWildcardToSQL converts wildcards as defined in
 // https://matrix.org/docs/spec/client_server/r0.3.0.html#post-matrix-client-r0-user-userid-filter
-// to SQL wildcards that can be used with LIKE()
+// to SQL wildcards that can be used with LIKE().
 func filterConvertTypeWildcardToSQL(values *[]string) []string {
 	if values == nil {
 		// Return nil instead of []string{} so IS NULL can work correctly when
@@ -25,12 +25,12 @@ func filterConvertTypeWildcardToSQL(values *[]string) []string {
 	v := *values
 	ret := make([]string, len(v))
 	for i := range v {
-		ret[i] = strings.Replace(v[i], "*", "%", -1)
+		ret[i] = strings.ReplaceAll(v[i], "*", "%")
 	}
 	return ret
 }
 
-// TODO: Replace when Dendrite uses Go 1.18
+// TODO: Replace when Zendrite uses Go 1.18
 func getSendersRoomEventFilter(filter *synctypes.RoomEventFilter) (senders []string, notSenders []string) {
 	if filter.Senders != nil {
 		senders = *filter.Senders

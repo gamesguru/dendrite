@@ -9,11 +9,12 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	userAPI "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type reportEventRequest struct {
@@ -27,7 +28,7 @@ func ReportEvent(
 	roomID, eventID string,
 	rsAPI api.ClientRoomserverAPI,
 ) util.JSONResponse {
-	defer req.Body.Close() // nolint: errcheck
+	defer req.Body.Close()
 
 	deviceUserID, err := spec.NewUserID(device.UserID, true)
 	if err != nil {

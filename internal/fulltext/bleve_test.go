@@ -10,12 +10,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 func mustOpenIndex(t *testing.T, tempDir string) (*fulltext.Search, *process.ProcessContext) {
@@ -88,16 +88,16 @@ func mustAddTestData(t *testing.T, fts *fulltext.Search, firstStreamPos int64) (
 func TestOpen(t *testing.T) {
 	dataDir := t.TempDir()
 	_, ctx := mustOpenIndex(t, dataDir)
-	ctx.ShutdownDendrite()
+	ctx.ShutdownZendrite()
 
 	// open existing index
 	_, ctx = mustOpenIndex(t, dataDir)
-	ctx.ShutdownDendrite()
+	ctx.ShutdownZendrite()
 }
 
 func TestIndex(t *testing.T) {
 	fts, ctx := mustOpenIndex(t, "")
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 
 	// add some data
 	var streamPos int64 = 1
@@ -121,7 +121,7 @@ func TestIndex(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	fts, ctx := mustOpenIndex(t, "")
-	defer ctx.ShutdownDendrite()
+	defer ctx.ShutdownZendrite()
 	eventIDs, roomIDs := mustAddTestData(t, fts, 0)
 	res1, err := fts.Search("lorem", roomIDs[:1], nil, 50, 0, false)
 	if err != nil {
@@ -225,7 +225,7 @@ func TestSearch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, ctx := mustOpenIndex(t, "")
-			defer ctx.ShutdownDendrite()
+			defer ctx.ShutdownZendrite()
 			eventIDs, roomIDs := mustAddTestData(t, f, 0)
 			var searchRooms []string
 			for _, x := range tt.args.roomIndex {

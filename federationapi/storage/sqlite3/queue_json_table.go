@@ -13,13 +13,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const queueJSONSchema = `
 -- The queue_retry_json table contains event contents that
--- we failed to send. 
+-- we failed to send.
 CREATE TABLE IF NOT EXISTS federationsender_queue_json (
 	-- The JSON NID. This allows the federationsender_queue_retry table to
 	-- cross-reference to find the JSON blob.
@@ -46,8 +46,8 @@ const selectJSONSQL = "" +
 type queueJSONStatements struct {
 	db             *sql.DB
 	insertJSONStmt *sql.Stmt
-	//deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
-	//selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// deleteJSONStmt *sql.Stmt - prepared at runtime due to variadic
+	// selectJSONStmt *sql.Stmt - prepared at runtime due to variadic
 }
 
 func NewSQLiteQueueJSONTable(db *sql.DB) (s *queueJSONStatements, err error) {
@@ -88,7 +88,7 @@ func (s *queueJSONStatements) DeleteQueueJSON(
 		return fmt.Errorf("s.deleteQueueJSON s.db.Prepare: %w", err)
 	}
 
-	iNIDs := make([]interface{}, len(nids))
+	iNIDs := make([]any, len(nids))
 	for k, v := range nids {
 		iNIDs[k] = v
 	}
@@ -107,7 +107,7 @@ func (s *queueJSONStatements) SelectQueueJSON(
 		return nil, fmt.Errorf("s.selectQueueJSON s.db.Prepare: %w", err)
 	}
 
-	iNIDs := make([]interface{}, len(jsonNIDs))
+	iNIDs := make([]any, len(jsonNIDs))
 	for k, v := range jsonNIDs {
 		iNIDs[k] = v
 	}

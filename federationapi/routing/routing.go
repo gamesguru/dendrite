@@ -14,22 +14,21 @@ import (
 	"sync"
 	"time"
 
-	fedInternal "github.com/element-hq/dendrite/federationapi/internal"
-	"github.com/element-hq/dendrite/federationapi/producers"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/gorilla/mux"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	fedInternal "codefloe.com/pat-s/zendrite/federationapi/internal"
+	"codefloe.com/pat-s/zendrite/federationapi/producers"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 const (
@@ -44,11 +43,12 @@ const (
 // so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz]
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
-// applied:
-// nolint: gocyclo
+// applied.
+//
+//nolint:gocyclo
 func Setup(
 	routers httputil.Routers,
-	dendriteCfg *config.Dendrite,
+	zendriteCfg *config.Zendrite,
 	rsAPI roomserverAPI.FederationRoomserverAPI,
 	fsAPI *fedInternal.FederationInternalAPI,
 	keys gomatrixserverlib.JSONVerifier,
@@ -60,7 +60,7 @@ func Setup(
 	fedMux := routers.Federation
 	keyMux := routers.Keys
 	wkMux := routers.WellKnown
-	cfg := &dendriteCfg.FederationAPI
+	cfg := &zendriteCfg.FederationAPI
 
 	if enableMetrics {
 		prometheus.MustRegister(
@@ -82,7 +82,7 @@ func Setup(
 	})
 
 	notaryKeys := httputil.MakeExternalAPI("notarykeys", func(req *http.Request) util.JSONResponse {
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
@@ -412,8 +412,8 @@ func Setup(
 				httpReq, request, cfg, rsAPI, keys, *roomID, eventID,
 			)
 			// not all responses get wrapped in [code, body]
-			var body interface{}
-			body = []interface{}{
+			var body any
+			body = []any{
 				res.Code, res.JSON,
 			}
 			jerr, ok := res.JSON.(spec.MatrixError)
@@ -497,8 +497,8 @@ func Setup(
 				httpReq, request, cfg, rsAPI, keys, roomID, eventID,
 			)
 			// not all responses get wrapped in [code, body]
-			var body interface{}
-			body = []interface{}{
+			var body any
+			body = []any{
 				res.Code, res.JSON,
 			}
 			jerr, ok := res.JSON.(spec.MatrixError)
@@ -598,17 +598,40 @@ func Setup(
 	)).Methods(http.MethodGet)
 }
 
+// ErrorIfLocalServerNotInRoom returns an error response if this server is not in the room.
+// If the room is in partial state (MSC3706 faster joins), it returns an MSC3895 error
+// unless allowPartialState is true.
 func ErrorIfLocalServerNotInRoom(
 	ctx context.Context,
-	rsAPI api.FederationRoomserverAPI,
+	rsAPI roomserverAPI.FederationRoomserverAPI,
 	roomID string,
+) *util.JSONResponse {
+	return errorIfLocalServerNotInRoomWithPartialState(ctx, rsAPI, roomID, false)
+}
+
+// ErrorIfLocalServerNotInRoomAllowPartialState returns an error response if this server
+// is not in the room. Unlike ErrorIfLocalServerNotInRoom, this function allows the request
+// to proceed even if the room is in partial state (MSC3706 faster joins).
+func ErrorIfLocalServerNotInRoomAllowPartialState(
+	ctx context.Context,
+	rsAPI roomserverAPI.FederationRoomserverAPI,
+	roomID string,
+) *util.JSONResponse {
+	return errorIfLocalServerNotInRoomWithPartialState(ctx, rsAPI, roomID, true)
+}
+
+func errorIfLocalServerNotInRoomWithPartialState(
+	ctx context.Context,
+	rsAPI roomserverAPI.FederationRoomserverAPI,
+	roomID string,
+	allowPartialState bool,
 ) *util.JSONResponse {
 	// Check if we think we're in this room. If we aren't then
 	// we won't waste CPU cycles serving this request.
-	joinedReq := &api.QueryServerJoinedToRoomRequest{
+	joinedReq := &roomserverAPI.QueryServerJoinedToRoomRequest{
 		RoomID: roomID,
 	}
-	joinedRes := &api.QueryServerJoinedToRoomResponse{}
+	joinedRes := &roomserverAPI.QueryServerJoinedToRoomResponse{}
 	if err := rsAPI.QueryServerJoinedToRoom(ctx, joinedReq, joinedRes); err != nil {
 		res := util.ErrorResponse(err)
 		return &res
@@ -617,6 +640,13 @@ func ErrorIfLocalServerNotInRoom(
 		return &util.JSONResponse{
 			Code: http.StatusNotFound,
 			JSON: spec.NotFound(fmt.Sprintf("This server is not joined to room %s", roomID)),
+		}
+	}
+	// MSC3895: If room is in partial state, return error unless allowed
+	if joinedRes.IsPartialState && !allowPartialState {
+		return &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.MatrixError{ErrCode: "ORG.MATRIX.MSC3895_UNABLE_DUE_TO_PARTIAL_STATE", Err: "Unable to process request; room is in partial state during faster join resynchronization"},
 		}
 	}
 	return nil
@@ -635,7 +665,7 @@ func MakeFedAPI(
 			req, time.Now(), serverName, isLocalServerName, keyRing,
 		)
 		if fedReq == nil {
-			return errResp
+			return util.JSONResponse{Code: errResp.Code, JSON: errResp.JSON, Headers: errResp.Headers}
 		}
 		// add the user to Sentry, if enabled
 		hub := sentry.GetHubFromContext(req.Context())
@@ -655,15 +685,15 @@ func MakeFedAPI(
 			}
 		}()
 		go wakeup.Wakeup(req.Context(), fedReq.Origin())
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
-			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
+			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params") //nolint:mnd
 		}
 
 		jsonRes := f(req, fedReq, vars)
 		// do not log 4xx as errors as they are client fails, not server fails
 		if hub != nil && jsonRes.Code >= 500 {
-			hub.Scope().SetExtra("response", jsonRes)
+			hub.Scope().SetContext("response", map[string]any{"json_response": jsonRes})
 			hub.CaptureException(fmt.Errorf("%s returned HTTP %d", req.URL.Path, jsonRes.Code))
 		}
 		return jsonRes
@@ -686,7 +716,6 @@ func MakeFedHTTPAPI(
 		enc := json.NewEncoder(w)
 		logger := util.GetLogger(req.Context())
 		if fedReq == nil {
-
 			logger.Debugf("VerifyUserFromRequest %s -> HTTP %d", req.RemoteAddr, errResp.Code)
 			w.WriteHeader(errResp.Code)
 			if err := enc.Encode(errResp); err != nil {
@@ -731,6 +760,6 @@ func (f *FederationWakeups) Wakeup(ctx context.Context, origin spec.ServerName) 
 			return
 		}
 	}
-	f.FsAPI.MarkServersAlive([]spec.ServerName{origin})
+	f.FsAPI.MarkServersAlive([]spec.ServerName{origin}) //nolint:contextcheck
 	f.origins.Store(origin, time.Now())
 }

@@ -3,11 +3,11 @@ package streams
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/syncapi/internal"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/types"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type DeviceListStreamProvider struct {
@@ -31,12 +31,12 @@ func (p *DeviceListStreamProvider) IncrementalSync(
 	from, to types.StreamPosition,
 ) types.StreamPosition {
 	var err error
-	to, _, err = internal.DeviceListCatchup(context.Background(), snapshot, p.userAPI, p.rsAPI, req.Device.UserID, req.Response, from, to)
+	to, _, err = internal.DeviceListCatchup(context.Background(), snapshot, p.userAPI, p.rsAPI, req.Device.UserID, req.Response, from, to) //nolint:contextcheck
 	if err != nil {
 		req.Log.WithError(err).Error("internal.DeviceListCatchup failed")
 		return from
 	}
-	err = internal.DeviceOTKCounts(req.Context, p.userAPI, req.Device.UserID, req.Device.ID, req.Response)
+	err = internal.DeviceOTKCounts(req.Context, p.userAPI, req.Device.UserID, req.Device.ID, req.Response) //nolint:contextcheck
 	if err != nil {
 		req.Log.WithError(err).Error("internal.DeviceListCatchup failed")
 		return from

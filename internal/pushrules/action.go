@@ -16,7 +16,7 @@ type Action struct {
 	Tweak TweakKey `json:"-"`
 
 	// Value is some value interpreted according to Kind and Tweak.
-	Value interface{} `json:"value"`
+	Value any `json:"value"`
 }
 
 func (a *Action) MarshalJSON() ([]byte, error) {
@@ -28,7 +28,7 @@ func (a *Action) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("only set_tweak actions may have a value, but got kind %q", a.Kind)
 	}
 
-	m := map[string]interface{}{
+	m := map[string]any{
 		string(a.Kind): a.Tweak,
 	}
 	if a.Value != nil {
@@ -44,8 +44,8 @@ func (a *Action) UnmarshalJSON(bs []byte) error {
 	}
 
 	var raw struct {
-		SetTweak TweakKey    `json:"set_tweak"`
-		Value    interface{} `json:"value"`
+		SetTweak TweakKey `json:"set_tweak"`
+		Value    any      `json:"value"`
 	}
 	if err := json.Unmarshal(bs, &raw); err != nil {
 		return err
@@ -76,7 +76,7 @@ const (
 
 	// CoalesceAction tells the clients to show a notification, and
 	// tells both servers and clients that multiple events can be
-	// coalesced into a single notification. The behaviour is
+	// coalesced into a single notification. The behavior is
 	// implementation-specific.
 	CoalesceAction ActionKind = "coalesce"
 

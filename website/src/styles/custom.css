@@ -1,0 +1,10 @@
+:root {
+  --sl-text-base: 0.875rem;
+  --sl-text-sm: 0.8125rem;
+  --sl-text-xs: 0.75rem;
+  --sl-text-lg: 1rem;
+  --sl-text-xl: 1.125rem;
+  --sl-text-2xl: 1.375rem;
+  --sl-text-3xl: 1.625rem;
+  --sl-text-4xl: 2rem;
+}

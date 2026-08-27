@@ -49,6 +49,19 @@ type ClientAPI struct {
 	// was successful
 	RecaptchaSiteVerifyAPI string `yaml:"recaptcha_siteverify_api"`
 
+	// CaptchaProvider selects which CAPTCHA backend to use:
+	// "recaptcha" (default), "hcaptcha", or "altcha".
+	CaptchaProvider string `yaml:"captcha_provider"`
+	// AltchaHMACKey is the server-side HMAC secret used to sign and
+	// verify ALTCHA proof-of-work challenges.
+	AltchaHMACKey string `yaml:"altcha_hmac_key"`
+	// AltchaMaxNumber controls the difficulty of the proof-of-work
+	// challenge (default 50000).
+	AltchaMaxNumber int64 `yaml:"altcha_max_number"`
+	// AltchaExpiry is how long an ALTCHA challenge remains valid
+	// (default "5m"). Parsed as a time.Duration string.
+	AltchaExpiry string `yaml:"altcha_expiry"`
+
 	// TURN options
 	TURN TURN `yaml:"turn"`
 
@@ -66,6 +79,10 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 	c.RecaptchaEnabled = false
 	c.RecaptchaBypassSecret = ""
 	c.RecaptchaSiteVerifyAPI = ""
+	c.CaptchaProvider = "recaptcha"
+	c.AltchaHMACKey = ""
+	c.AltchaMaxNumber = 50000
+	c.AltchaExpiry = "5m"
 	c.RegistrationDisabled = true
 	c.OpenRegistrationWithoutVerificationEnabled = false
 	c.RateLimiting.Defaults()
@@ -75,32 +92,41 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 	c.TURN.Verify(configErrs)
 	c.RateLimiting.Verify(configErrs)
 	if c.RecaptchaEnabled {
-		if c.RecaptchaSiteVerifyAPI == "" {
-			c.RecaptchaSiteVerifyAPI = "https://www.google.com/recaptcha/api/siteverify"
+		if c.CaptchaProvider == "altcha" {
+			checkNotEmpty(configErrs, "client_api.altcha_hmac_key", c.AltchaHMACKey)
+			if c.AltchaExpiry != "" {
+				if _, err := time.ParseDuration(c.AltchaExpiry); err != nil {
+					configErrs.Add(fmt.Sprintf("invalid duration for config key %q: %s", "client_api.altcha_expiry", c.AltchaExpiry))
+				}
+			}
+		} else {
+			if c.RecaptchaSiteVerifyAPI == "" {
+				c.RecaptchaSiteVerifyAPI = "https://www.google.com/recaptcha/api/siteverify"
+			}
+			if c.RecaptchaApiJsUrl == "" {
+				c.RecaptchaApiJsUrl = "https://www.google.com/recaptcha/api.js"
+			}
+			if c.RecaptchaFormField == "" {
+				c.RecaptchaFormField = "g-recaptcha-response"
+			}
+			if c.RecaptchaSitekeyClass == "" {
+				c.RecaptchaSitekeyClass = "g-recaptcha"
+			}
+			checkNotEmpty(configErrs, "client_api.recaptcha_public_key", c.RecaptchaPublicKey)
+			checkNotEmpty(configErrs, "client_api.recaptcha_private_key", c.RecaptchaPrivateKey)
+			checkNotEmpty(configErrs, "client_api.recaptcha_siteverify_api", c.RecaptchaSiteVerifyAPI)
+			checkNotEmpty(configErrs, "client_api.recaptcha_sitekey_class", c.RecaptchaSitekeyClass)
 		}
-		if c.RecaptchaApiJsUrl == "" {
-			c.RecaptchaApiJsUrl = "https://www.google.com/recaptcha/api.js"
-		}
-		if c.RecaptchaFormField == "" {
-			c.RecaptchaFormField = "g-recaptcha-response"
-		}
-		if c.RecaptchaSitekeyClass == "" {
-			c.RecaptchaSitekeyClass = "g-recaptcha"
-		}
-		checkNotEmpty(configErrs, "client_api.recaptcha_public_key", c.RecaptchaPublicKey)
-		checkNotEmpty(configErrs, "client_api.recaptcha_private_key", c.RecaptchaPrivateKey)
-		checkNotEmpty(configErrs, "client_api.recaptcha_siteverify_api", c.RecaptchaSiteVerifyAPI)
-		checkNotEmpty(configErrs, "client_api.recaptcha_sitekey_class", c.RecaptchaSitekeyClass)
 	}
 	// Ensure there is any spam counter measure when enabling registration
-	if !c.RegistrationDisabled && !c.OpenRegistrationWithoutVerificationEnabled && !c.RecaptchaEnabled {
+	if !c.RegistrationDisabled && !c.OpenRegistrationWithoutVerificationEnabled && !c.RecaptchaEnabled && !c.RegistrationRequiresToken {
 		configErrs.Add(
 			"You have tried to enable open registration without any secondary verification methods " +
 				"(such as reCAPTCHA). By enabling open registration, you are SIGNIFICANTLY " +
 				"increasing the risk that your server will be used to send spam or abuse, and may result in " +
 				"your server being banned from some rooms. If you are ABSOLUTELY CERTAIN you want to do this, " +
-				"start Dendrite with the -really-enable-open-registration command line flag. Otherwise, you " +
-				"should set the registration_disabled option in your Dendrite config.",
+				"start Zendrite with the -really-enable-open-registration command line flag. Otherwise, you " +
+				"should set the registration_disabled option in your Zendrite config.",
 		)
 	}
 }

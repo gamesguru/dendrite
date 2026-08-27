@@ -13,23 +13,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal"
 )
 
 const createDBMigrationsSQL = "" +
 	"CREATE TABLE IF NOT EXISTS db_migrations (" +
 	" version TEXT PRIMARY KEY NOT NULL," +
 	" time TEXT NOT NULL," +
-	" dendrite_version TEXT NOT NULL" +
+	" zendrite_version TEXT NOT NULL" +
 	");"
 
+const renameDBMigrationsColumnSQL = "" +
+	"ALTER TABLE db_migrations RENAME COLUMN dendrite_version TO zendrite_version"
+
 const insertVersionSQL = "" +
-	"INSERT INTO db_migrations (version, time, dendrite_version)" +
+	"INSERT INTO db_migrations (version, time, zendrite_version)" +
 	" VALUES ($1, $2, $3)"
 
 const selectDBMigrationsSQL = "SELECT version FROM db_migrations"
+
+var dbMigrationsSetupMutex sync.Mutex
 
 // Migration defines a migration to be run.
 type Migration struct {
@@ -81,7 +87,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 		return fmt.Errorf("unable to create/get migrations: %w", err)
 	}
 	// ensure we close the insert statement, as it's not needed anymore
-	defer m.close()
+	defer m.close() //nolint:contextcheck
 	return WithTransaction(m.db, func(txn *sql.Tx) error {
 		for i := range m.migrations {
 			migration := m.migrations[i]
@@ -117,6 +123,7 @@ func (m *Migrator) insertMigration(ctx context.Context, txn *sql.Tx, migrationNa
 		m.insertStmt = stmt
 	}
 	stmt := TxStmtContext(ctx, txn, m.insertStmt)
+	defer stmt.Close()
 	_, err := stmt.ExecContext(ctx,
 		migrationName,
 		time.Now().Format(time.RFC3339),
@@ -129,9 +136,8 @@ func (m *Migrator) insertMigration(ctx context.Context, txn *sql.Tx, migrationNa
 // migrations table, if it doesn't exist.
 func (m *Migrator) ExecutedMigrations(ctx context.Context) (map[string]struct{}, error) {
 	result := make(map[string]struct{})
-	_, err := m.db.ExecContext(ctx, createDBMigrationsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create db_migrations: %w", err)
+	if err := m.ensureMigrationsTable(ctx); err != nil {
+		return nil, err
 	}
 	rows, err := m.db.QueryContext(ctx, selectDBMigrationsSQL)
 	if err != nil {
@@ -149,12 +155,60 @@ func (m *Migrator) ExecutedMigrations(ctx context.Context) (map[string]struct{},
 	return result, rows.Err()
 }
 
+func (m *Migrator) ensureMigrationsTable(ctx context.Context) error {
+	// Each component has its own Migrator, so serialize the one-time schema
+	// inspection and legacy rename within this process.
+	dbMigrationsSetupMutex.Lock()
+	defer dbMigrationsSetupMutex.Unlock()
+
+	if _, err := m.db.ExecContext(ctx, createDBMigrationsSQL); err != nil {
+		return fmt.Errorf("unable to create db_migrations: %w", err)
+	}
+
+	columnsQuery := "SELECT name FROM pragma_table_info('db_migrations')"
+	if _, ok := m.db.Driver().(*stdlib.Driver); ok {
+		columnsQuery = "" +
+			"SELECT column_name FROM information_schema.columns" +
+			" WHERE table_schema = current_schema()" +
+			" AND table_name = 'db_migrations'"
+	}
+	rows, err := m.db.QueryContext(ctx, columnsQuery)
+	if err != nil {
+		return fmt.Errorf("unable to inspect db_migrations: %w", err)
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "ensureMigrationsTable: rows.close() failed")
+
+	var hasDendriteVersion, hasZendriteVersion bool
+	for rows.Next() {
+		var column string
+		if err = rows.Scan(&column); err != nil {
+			return fmt.Errorf("unable to inspect db_migrations columns: %w", err)
+		}
+		switch column {
+		case "dendrite_version":
+			hasDendriteVersion = true
+		case "zendrite_version":
+			hasZendriteVersion = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("unable to inspect db_migrations columns: %w", err)
+	}
+
+	if hasDendriteVersion && !hasZendriteVersion {
+		if _, err = m.db.ExecContext(ctx, renameDBMigrationsColumnSQL); err != nil {
+			return fmt.Errorf("unable to migrate db_migrations column: %w", err)
+		}
+	}
+	return nil
+}
+
 // InsertMigration creates the migrations table if it doesn't exist and
 // inserts a migration given their name to the database.
 // This should only be used when manually inserting migrations.
 func InsertMigration(ctx context.Context, db *sql.DB, migrationName string) error {
 	m := NewMigrator(db)
-	defer m.close()
+	defer m.close() //nolint:contextcheck
 	existingMigrations, err := m.ExecutedMigrations(ctx)
 	if err != nil {
 		return err

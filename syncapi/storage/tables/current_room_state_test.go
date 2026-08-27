@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func newCurrentRoomStateTable(t *testing.T, dbType test.DBType) (tables.CurrentRoomState, *sql.DB, func()) {
@@ -49,12 +50,11 @@ func TestCurrentRoomStateTable(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, db, close := newCurrentRoomStateTable(t, dbType)
+		tab, db, close := newCurrentRoomStateTable(t, dbType) //nolint:contextcheck
 		defer close()
 		events := room.CurrentState()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for i, ev := range events {
-				ev.StateKeyResolved = ev.StateKey()
 				userID, err := spec.NewUserID(string(ev.SenderID()), true)
 				if err != nil {
 					return err
@@ -131,5 +131,4 @@ func testCurrentState(t *testing.T, ctx context.Context, txn *sql.Tx, tab tables
 			t.Fatalf("expected %d state events, got %d", expectCount, gotCount)
 		}
 	})
-
 }

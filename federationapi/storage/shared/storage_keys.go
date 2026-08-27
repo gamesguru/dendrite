@@ -11,16 +11,16 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
-// FetcherName implements KeyFetcher
+// FetcherName implements KeyFetcher.
 func (d Database) FetcherName() string {
 	return "FederationAPIKeyDatabase"
 }
 
-// FetchKeys implements gomatrixserverlib.KeyDatabase
+// FetchKeys implements gomatrixserverlib.KeyDatabase.
 func (d *Database) FetchKeys(
 	ctx context.Context,
 	requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
@@ -28,7 +28,7 @@ func (d *Database) FetchKeys(
 	return d.ServerSigningKeys.BulkSelectServerKeys(ctx, nil, requests)
 }
 
-// StoreKeys implements gomatrixserverlib.KeyDatabase
+// StoreKeys implements gomatrixserverlib.KeyDatabase.
 func (d *Database) StoreKeys(
 	ctx context.Context,
 	keyMap map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult,
@@ -43,7 +43,7 @@ func (d *Database) StoreKeys(
 				// possible for some of the inserts to succeed even though some
 				// of the inserts have failed.
 				// Ensuring that we always insert all the keys we can means that
-				// this behaviour won't depend on the iteration order of the map.
+				// this behavior won't depend on the iteration order of the map.
 				lastErr = err
 			}
 		}

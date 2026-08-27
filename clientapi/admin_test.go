@@ -11,26 +11,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver"
-	"github.com/element-hq/dendrite/roomserver/api"
-	basepkg "github.com/element-hq/dendrite/setup/base"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/syncapi"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
-	capi "github.com/element-hq/dendrite/clientapi/api"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi"
-	uapi "github.com/element-hq/dendrite/userapi/api"
+	capi "codefloe.com/pat-s/zendrite/clientapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	basepkg "codefloe.com/pat-s/zendrite/setup/base"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/syncapi"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi"
+	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func TestAdminCreateToken(t *testing.T) {
@@ -48,7 +48,7 @@ func TestAdminCreateToken(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 		accessTokens := map[*test.User]userDevice{
 			aliceAdmin: {},
 			bob:        {},
@@ -65,7 +65,7 @@ func TestAdminCreateToken(t *testing.T) {
 				name:           "Missing auth",
 				requestingUser: bob,
 				wantOK:         false,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token": "token1",
 				},
 				),
@@ -75,7 +75,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: bob,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token": "token2",
 				},
 				),
@@ -85,14 +85,14 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         true,
 				withHeader:     true,
-				requestOpt:     test.WithJSONBody(t, map[string]interface{}{}),
+				requestOpt:     test.WithJSONBody(t, map[string]any{}),
 			},
 			{
 				name:           "Alice can to create a token specifying a name",
 				requestingUser: aliceAdmin,
 				wantOK:         true,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token": "token3",
 				},
 				),
@@ -102,7 +102,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token": "token3",
 				},
 				),
@@ -112,7 +112,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         true,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token":        "token4",
 					"uses_allowed": 5,
 					"expiry_time":  time.Now().Add(5*24*time.Hour).UnixNano() / int64(time.Millisecond),
@@ -124,7 +124,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token": "token@",
 				},
 				),
@@ -134,7 +134,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token":        "token5",
 					"uses_allowed": -1,
 				},
@@ -145,7 +145,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"token":       "token6",
 					"expiry_time": time.Now().Add(-1*5*24*time.Hour).UnixNano() / int64(time.Millisecond),
 				},
@@ -156,7 +156,7 @@ func TestAdminCreateToken(t *testing.T) {
 				requestingUser: aliceAdmin,
 				wantOK:         false,
 				withHeader:     true,
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"length": 80,
 				},
 				),
@@ -166,15 +166,15 @@ func TestAdminCreateToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/registrationTokens/new")
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/registrationTokens/new")
 				if tc.requestOpt != nil {
-					req = test.NewRequest(t, http.MethodPost, "/_dendrite/admin/registrationTokens/new", tc.requestOpt)
+					req = test.NewRequest(t, http.MethodPost, "/_zendrite/admin/registrationTokens/new", tc.requestOpt)
 				}
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -199,7 +199,7 @@ func TestAdminListRegistrationTokens(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 		accessTokens := map[*test.User]userDevice{
 			aliceAdmin: {},
 			bob:        {},
@@ -222,7 +222,10 @@ func TestAdminListRegistrationTokens(t *testing.T) {
 		}
 		for _, tkn := range tokens {
 			tkn := tkn
-			userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			_, err := userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			if err != nil {
+				t.Fatalf("failed to create registration token: %s", err)
+			}
 		}
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 		testCases := []struct {
@@ -283,16 +286,16 @@ func TestAdminListRegistrationTokens(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				var path string
 				if tc.isValidSpecified {
-					path = fmt.Sprintf("/_dendrite/admin/registrationTokens?valid=%v", tc.valid)
+					path = fmt.Sprintf("/_zendrite/admin/registrationTokens?valid=%v", tc.valid)
 				} else {
-					path = "/_dendrite/admin/registrationTokens"
+					path = "/_zendrite/admin/registrationTokens"
 				}
 				req := test.NewRequest(t, http.MethodGet, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -317,7 +320,7 @@ func TestAdminGetRegistrationToken(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 		accessTokens := map[*test.User]userDevice{
 			aliceAdmin: {},
 			bob:        {},
@@ -340,7 +343,10 @@ func TestAdminGetRegistrationToken(t *testing.T) {
 		}
 		for _, tkn := range tokens {
 			tkn := tkn
-			userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			_, err := userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			if err != nil {
+				t.Fatalf("failed to create registration token: %s", err)
+			}
 		}
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 		testCases := []struct {
@@ -387,13 +393,13 @@ func TestAdminGetRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodGet, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -418,7 +424,7 @@ func TestAdminDeleteRegistrationToken(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 		accessTokens := map[*test.User]userDevice{
 			aliceAdmin: {},
 			bob:        {},
@@ -441,7 +447,10 @@ func TestAdminDeleteRegistrationToken(t *testing.T) {
 		}
 		for _, tkn := range tokens {
 			tkn := tkn
-			userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			_, err := userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			if err != nil {
+				t.Fatalf("failed to create registration token: %s", err)
+			}
 		}
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 		testCases := []struct {
@@ -481,13 +490,13 @@ func TestAdminDeleteRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodDelete, path)
 				if tc.withHeader {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -512,7 +521,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 		accessTokens := map[*test.User]userDevice{
 			aliceAdmin: {},
 			bob:        {},
@@ -536,7 +545,10 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 		}
 		for _, tkn := range tokens {
 			tkn := tkn
-			userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			_, err := userAPI.PerformAdminCreateRegistrationToken(ctx, &tkn)
+			if err != nil {
+				t.Fatalf("failed to create registration token: %s", err)
+			}
 		}
 		testCases := []struct {
 			name           string
@@ -552,7 +564,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				requestingUser: bob,
 				wantOK:         false,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": 10,
 				},
 				),
@@ -563,7 +575,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": 10,
 				},
 				),
@@ -574,7 +586,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         true,
 				withHeader:     true,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": 10,
 				}),
 			},
@@ -584,7 +596,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         true,
 				withHeader:     true,
 				token:          "alice_token2",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"expiry_time": time.Now().Add(5*24*time.Hour).UnixNano() / int64(time.Millisecond),
 				},
 				),
@@ -595,7 +607,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": 20,
 					"expiry_time":  time.Now().Add(10*24*time.Hour).UnixNano() / int64(time.Millisecond),
 				},
@@ -607,7 +619,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token2",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": -5,
 					"expiry_time":  time.Now().Add(-1*5*24*time.Hour).UnixNano() / int64(time.Millisecond),
 				},
@@ -619,7 +631,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token9",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": 100,
 				},
 				),
@@ -630,7 +642,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"uses_allowed": nil,
 				},
 				),
@@ -641,7 +653,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 				wantOK:         false,
 				withHeader:     true,
 				token:          "alice_token1",
-				requestOpt: test.WithJSONBody(t, map[string]interface{}{
+				requestOpt: test.WithJSONBody(t, map[string]any{
 					"expiry_time": nil,
 				},
 				),
@@ -651,7 +663,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				path := fmt.Sprintf("/_dendrite/admin/registrationTokens/%s", tc.token)
+				path := fmt.Sprintf("/_zendrite/admin/registrationTokens/%s", tc.token)
 				req := test.NewRequest(t, http.MethodPut, path)
 				if tc.requestOpt != nil {
 					req = test.NewRequest(t, http.MethodPut, path, tc.requestOpt)
@@ -660,7 +672,7 @@ func TestAdminUpdateRegistrationToken(t *testing.T) {
 					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.requestingUser].accessToken)
 				}
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -697,7 +709,7 @@ func TestAdminResetPassword(t *testing.T) {
 		// Needed for changing the password/login
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		// We mostly need the userAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -717,25 +729,25 @@ func TestAdminResetPassword(t *testing.T) {
 		}{
 			{name: "Missing auth", requestingUser: bob, wantOK: false, userID: bob.ID},
 			{name: "Bob is denied access", requestingUser: bob, wantOK: false, withHeader: true, userID: bob.ID},
-			{name: "Alice is allowed access", requestingUser: aliceAdmin, wantOK: true, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]interface{}{
+			{name: "Alice is allowed access", requestingUser: aliceAdmin, wantOK: true, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]any{
 				"password": util.RandomString(8),
 			})},
 			{name: "missing userID does not call function", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: ""}, // this 404s
-			{name: "rejects empty password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]interface{}{
+			{name: "rejects empty password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]any{
 				"password": "",
 			})},
-			{name: "rejects unknown server name", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "@doesnotexist:localhost", requestOpt: test.WithJSONBody(t, map[string]interface{}{})},
-			{name: "rejects unknown user", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "@doesnotexist:test", requestOpt: test.WithJSONBody(t, map[string]interface{}{})},
-			{name: "allows changing password for different vhost", requestingUser: aliceAdmin, wantOK: true, withHeader: true, userID: vhUser.ID, requestOpt: test.WithJSONBody(t, map[string]interface{}{
+			{name: "rejects unknown server name", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "@doesnotexist:localhost", requestOpt: test.WithJSONBody(t, map[string]any{})},
+			{name: "rejects unknown user", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "@doesnotexist:test", requestOpt: test.WithJSONBody(t, map[string]any{})},
+			{name: "allows changing password for different vhost", requestingUser: aliceAdmin, wantOK: true, withHeader: true, userID: vhUser.ID, requestOpt: test.WithJSONBody(t, map[string]any{
 				"password": util.RandomString(8),
 			})},
 			{name: "rejects existing user, missing body", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID},
-			{name: "rejects invalid userID", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "!notauserid:test", requestOpt: test.WithJSONBody(t, map[string]interface{}{})},
+			{name: "rejects invalid userID", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: "!notauserid:test", requestOpt: test.WithJSONBody(t, map[string]any{})},
 			{name: "rejects invalid json", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, `{invalidJSON}`)},
-			{name: "rejects too weak password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]interface{}{
+			{name: "rejects too weak password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]any{
 				"password": util.RandomString(6),
 			})},
-			{name: "rejects too long password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]interface{}{
+			{name: "rejects too long password", requestingUser: aliceAdmin, wantOK: false, withHeader: true, userID: bob.ID, requestOpt: test.WithJSONBody(t, map[string]any{
 				"password": util.RandomString(513),
 			})},
 		}
@@ -743,9 +755,9 @@ func TestAdminResetPassword(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc // ensure we don't accidentally only test the last test case
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/resetPassword/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/resetPassword/"+tc.userID)
 				if tc.requestOpt != nil {
-					req = test.NewRequest(t, http.MethodPost, "/_dendrite/admin/resetPassword/"+tc.userID, tc.requestOpt)
+					req = test.NewRequest(t, http.MethodPost, "/_zendrite/admin/resetPassword/"+tc.userID, tc.requestOpt)
 				}
 
 				if tc.withHeader {
@@ -753,7 +765,7 @@ func TestAdminResetPassword(t *testing.T) {
 				}
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -769,7 +781,7 @@ func TestPurgeRoom(t *testing.T) {
 	room := test.NewRoom(t, aliceAdmin, test.RoomPreset(test.PresetTrustedPrivateChat))
 
 	// Invite Bob
-	room.CreateAndInsert(t, aliceAdmin, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, aliceAdmin, spec.MRoomMember, map[string]any{
 		"membership": "invite",
 	}, test.WithStateKey(bob.ID))
 
@@ -794,7 +806,7 @@ func TestPurgeRoom(t *testing.T) {
 		rsAPI.SetFederationAPI(fsAPI, nil)
 
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the room
 		if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
@@ -802,7 +814,7 @@ func TestPurgeRoom(t *testing.T) {
 		}
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -823,19 +835,18 @@ func TestPurgeRoom(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc // ensure we don't accidentally only test the last test case
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/purgeRoom/"+tc.roomID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/purgeRoom/"+tc.roomID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 				}
 			})
 		}
-
 	})
 }
 
@@ -845,7 +856,7 @@ func TestAdminEvacuateRoom(t *testing.T) {
 	room := test.NewRoom(t, aliceAdmin)
 
 	// Join Bob
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
@@ -873,7 +884,7 @@ func TestAdminEvacuateRoom(t *testing.T) {
 		}
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -893,12 +904,12 @@ func TestAdminEvacuateRoom(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/evacuateRoom/"+tc.roomID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/evacuateRoom/"+tc.roomID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -943,10 +954,10 @@ func TestAdminEvacuateUser(t *testing.T) {
 	room2 := test.NewRoom(t, aliceAdmin)
 
 	// Join Bob
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
-	room2.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room2.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
@@ -977,7 +988,7 @@ func TestAdminEvacuateUser(t *testing.T) {
 		}
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -999,12 +1010,12 @@ func TestAdminEvacuateUser(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/evacuateUser/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/evacuateUser/"+tc.userID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1018,7 +1029,6 @@ func TestAdminEvacuateUser(t *testing.T) {
 				if !reflect.DeepEqual(affected, tc.wantAffectedRooms) {
 					t.Fatalf("expected affected %#v, but got %#v", tc.wantAffectedRooms, affected)
 				}
-
 			})
 		}
 		// Wait for the FS API to have consumed every message
@@ -1060,7 +1070,7 @@ func TestAdminMarkAsStale(t *testing.T) {
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics) //nolint:contextcheck
 
 		// Create the users in the userapi and login
 		accessTokens := map[*test.User]userDevice{
@@ -1080,12 +1090,12 @@ func TestAdminMarkAsStale(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_dendrite/admin/refreshDevices/"+tc.userID)
+				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/refreshDevices/"+tc.userID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.DendriteAdmin.ServeHTTP(rec, req)
+				routers.ZendriteAdmin.ServeHTTP(rec, req)
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1106,26 +1116,23 @@ func TestAdminQueryEventReports(t *testing.T) {
 	room2.CreateAndInsert(t, alice, spec.MRoomCanonicalAlias, map[string]string{"alias": "#testing"}, test.WithStateKey(""))
 
 	// Join the rooms with Bob
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
-	room2.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room2.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
 	// Create a few events to report
 	eventsToReportPerRoom := make(map[string][]string)
 	for i := 0; i < 10; i++ {
-		ev1 := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
-		ev2 := room2.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
+		ev1 := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
+		ev2 := room2.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
 		eventsToReportPerRoom[room.ID] = append(eventsToReportPerRoom[room.ID], ev1.EventID())
 		eventsToReportPerRoom[room2.ID] = append(eventsToReportPerRoom[room2.ID], ev2.EventID())
 	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		/*if dbType == test.DBTypeSQLite {
-			t.Skip()
-		}*/
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		routers := httputil.NewRouters()
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -1148,7 +1155,7 @@ func TestAdminQueryEventReports(t *testing.T) {
 		}
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
 
 		accessTokens := map[*test.User]userDevice{
 			alice: {},
@@ -1318,7 +1325,7 @@ func TestAdminQueryEventReports(t *testing.T) {
 				if len(resp.EventReports) != wantCount {
 					t.Fatalf("expected %d events, got %d", wantCount, len(resp.EventReports))
 				}
-				if resp.Total != int64(wantTotal) {
+				if resp.Total != wantTotal {
 					t.Fatalf("expected total to be %d, got %d", wantCount, resp.Total)
 				}
 
@@ -1349,13 +1356,13 @@ func TestEventReportsGetDelete(t *testing.T) {
 	room.CreateAndInsert(t, alice, spec.MRoomCanonicalAlias, map[string]string{"alias": alias}, test.WithStateKey(""))
 
 	// Join the rooms with Bob
-	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]interface{}{
+	room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID))
 
 	// Create a few events to report
 
-	eventIDToReport := room.CreateAndInsert(t, alice, "m.room.message", map[string]interface{}{"body": "hello world"})
+	eventIDToReport := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello world"})
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
@@ -1377,7 +1384,7 @@ func TestEventReportsGetDelete(t *testing.T) {
 		}
 
 		// We mostly need the rsAPI for this test, so nil for other APIs/caches etc.
-		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
 
 		accessTokens := map[*test.User]userDevice{
 			alice: {},

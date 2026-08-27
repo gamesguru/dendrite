@@ -12,14 +12,16 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
-var requestFrom = flag.String("from", "", "the server name that the request should originate from")
-var requestKey = flag.String("key", "matrix_key.pem", "the private key to use when signing the request")
-var requestPost = flag.Bool("post", false, "send a POST request instead of GET (pipe input into stdin or type followed by Ctrl-D)")
+var (
+	requestFrom = flag.String("from", "", "the server name that the request should originate from")
+	requestKey  = flag.String("key", "matrix_key.pem", "the private key to use when signing the request")
+	requestPost = flag.Bool("post", false, "send a POST request instead of GET (pipe input into stdin or type followed by Ctrl-D)")
+)
 
 func main() {
 	flag.Parse()
@@ -66,7 +68,7 @@ func main() {
 		panic(err)
 	}
 
-	var bodyObj interface{}
+	var bodyObj any
 	var bodyBytes []byte
 	method := "GET"
 	if *requestPost {
@@ -110,7 +112,7 @@ func main() {
 		panic(err)
 	}
 
-	var res interface{}
+	var res any
 	err = client.DoRequestAndParseResponse(
 		context.TODO(),
 		httpReq,

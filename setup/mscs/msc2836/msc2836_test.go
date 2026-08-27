@@ -14,27 +14,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/gorilla/mux"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal/hooks"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	roomserver "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/mscs/msc2836"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal/hooks"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/mscs/msc2836"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-var (
-	client = &http.Client{
-		Timeout: 10 * time.Second,
-	}
-)
+var client = &http.Client{
+	Timeout: 10 * time.Second,
+}
 
 // Basic sanity check of MSC2836 logic. Injects a thread that looks like:
 //
@@ -48,7 +45,7 @@ var (
 //	  |
 //	  H
 //
-// And makes sure POST /event_relationships works with various parameters
+// And makes sure POST /event_relationships works with various parameters.
 func TestMSC2836(t *testing.T) {
 	alice := "@alice:localhost"
 	bob := "@bob:localhost"
@@ -77,7 +74,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: alice,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[A] Do you know shelties?",
 		},
 	})
@@ -85,7 +82,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: bob,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[B] I <3 shelties",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -97,7 +94,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: bob,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[C] like so much",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -109,7 +106,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: alice,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[D] but what are shelties???",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -121,7 +118,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: bob,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[E] seriously???",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -133,7 +130,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: charlie,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[F] omg how do you not know what shelties are",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -145,7 +142,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: alice,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[G] looked it up, it's a sheltered person?",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -157,7 +154,7 @@ func TestMSC2836(t *testing.T) {
 		RoomID: roomID,
 		Sender: bob,
 		Type:   "m.room.message",
-		Content: map[string]interface{}{
+		Content: map[string]any{
 			"body": "[H] it's a dog!!!!!",
 			"m.relationship": map[string]string{
 				"rel_type": "m.reference",
@@ -190,7 +187,7 @@ func TestMSC2836(t *testing.T) {
 	defer cancel()
 
 	t.Run("returns 403 on invalid event IDs", func(t *testing.T) {
-		_ = postRelationships(t, 403, "alice", newReq(t, map[string]interface{}{
+		_ = postRelationships(t, 403, "alice", newReq(t, map[string]any{
 			"event_id": "$invalid",
 		}))
 	})
@@ -200,14 +197,14 @@ func TestMSC2836(t *testing.T) {
 			DisplayName: "Frank Not In Room",
 			UserID:      "@frank:localhost",
 		}
-		_ = postRelationships(t, 403, "frank", newReq(t, map[string]interface{}{
+		_ = postRelationships(t, 403, "frank", newReq(t, map[string]any{
 			"event_id":       eventB.EventID(),
 			"limit":          1,
 			"include_parent": true,
 		}))
 	})
 	t.Run("returns the parent if include_parent is true", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":       eventB.EventID(),
 			"include_parent": true,
 			"limit":          2,
@@ -215,14 +212,14 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventA.EventID()})
 	})
 	t.Run("returns the children in the right order if include_children is true", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":         eventD.EventID(),
 			"include_children": true,
 			"recent_first":     true,
 			"limit":            4,
 		}))
 		assertContains(t, body, []string{eventD.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":         eventD.EventID(),
 			"include_children": true,
 			"recent_first":     false,
@@ -231,7 +228,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
 	})
 	t.Run("walks the graph depth first", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  true,
@@ -248,7 +245,7 @@ func TestMSC2836(t *testing.T) {
 		//   |
 		//  5H
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventH.EventID(), eventF.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": true,
 			"depth_first":  true,
@@ -267,7 +264,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventD.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID(), eventH.EventID()})
 	})
 	t.Run("walks the graph breadth first", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -284,7 +281,7 @@ func TestMSC2836(t *testing.T) {
 		//   |
 		//   H
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": true,
 			"depth_first":  false,
@@ -303,7 +300,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventD.EventID(), eventC.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID()})
 	})
 	t.Run("caps via max_breadth", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -314,7 +311,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventH.EventID()})
 	})
 	t.Run("caps via max_depth", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -325,7 +322,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
 	})
 	t.Run("terminates when reaching the limit", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -334,7 +331,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID()})
 	})
 	t.Run("returns all events with a high enough limit", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -352,7 +349,7 @@ func TestMSC2836(t *testing.T) {
 		//   E F1 G
 		//   |
 		//   H
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventF.EventID(),
 			"recent_first": false,
 			"depth_first":  true,
@@ -361,7 +358,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventF.EventID(), eventD.EventID(), eventB.EventID(), eventA.EventID()})
 	})
 	t.Run("includes children and children_hash in unsigned", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, 200, "alice", newReq(t, map[string]any{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -381,7 +378,7 @@ func TestMSC2836(t *testing.T) {
 // TODO: TestMSC2836UnknownEventsSkipped
 // TODO: TestMSC2836SkipEventIfNotInRoom
 
-func newReq(t *testing.T, jsonBody map[string]interface{}) *msc2836.EventRelationshipRequest {
+func newReq(t *testing.T, jsonBody map[string]any) *msc2836.EventRelationshipRequest {
 	t.Helper()
 	b, err := json.Marshal(jsonBody)
 	if err != nil {
@@ -394,7 +391,7 @@ func newReq(t *testing.T, jsonBody map[string]interface{}) *msc2836.EventRelatio
 	return r
 }
 
-func runServer(t *testing.T, router *mux.Router) func() {
+func runServer(t *testing.T, router *httputil.Router) func() {
 	t.Helper()
 	externalServ := &http.Server{
 		Addr:         string("127.0.0.1:8009"),
@@ -402,12 +399,12 @@ func runServer(t *testing.T, router *mux.Router) func() {
 		Handler:      router,
 	}
 	go func() {
-		externalServ.ListenAndServe()
+		_ = externalServ.ListenAndServe()
 	}()
 	// wait to listen on the port
 	time.Sleep(500 * time.Millisecond)
 	return func() {
-		externalServ.Shutdown(context.TODO())
+		_ = externalServ.Shutdown(context.TODO())
 	}
 }
 
@@ -431,6 +428,7 @@ func postRelationships(t *testing.T, expectCode int, accessToken string, req *ms
 	if err != nil {
 		t.Fatalf("failed to do request: %s", err)
 	}
+	defer res.Body.Close()
 	if res.StatusCode != expectCode {
 		body, _ := io.ReadAll(res.Body)
 		t.Fatalf("wrong response code, got %d want %d - body: %s", res.StatusCode, expectCode, string(body))
@@ -557,9 +555,9 @@ func (r *testRoomserverAPI) QueryMembershipForUser(ctx context.Context, req *roo
 	return nil
 }
 
-func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserver.RoomserverInternalAPI, events []*types.HeaderedEvent) *mux.Router {
+func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserver.RoomserverInternalAPI, events []*types.HeaderedEvent) *httputil.Router {
 	t.Helper()
-	cfg := &config.Dendrite{}
+	cfg := &config.Zendrite{}
 	cfg.Defaults(config.DefaultOpts{
 		Generate:       true,
 		SingleDatabase: true,
@@ -584,7 +582,7 @@ func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserve
 type fledglingEvent struct {
 	Type     string
 	StateKey *string
-	Content  interface{}
+	Content  any
 	Sender   string
 	RoomID   string
 }

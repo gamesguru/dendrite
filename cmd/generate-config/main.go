@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/goccy/go-yaml"
 	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/yaml.v2"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func main() {
@@ -20,9 +20,9 @@ func main() {
 	normalise := flag.String("normalise", "", "Normalise an existing configuration file by adding new/missing options and defaults")
 	flag.Parse()
 
-	var cfg *config.Dendrite
+	var cfg *config.Zendrite
 	if *normalise == "" {
-		cfg = &config.Dendrite{
+		cfg = &config.Zendrite{
 			Version: config.Version,
 		}
 		cfg.Defaults(config.DefaultOpts{
@@ -45,7 +45,7 @@ func main() {
 				"relayapi":      &cfg.RelayAPI.Database,
 			} {
 				if uri == "" {
-					path := filepath.Join(*dirPath, fmt.Sprintf("dendrite_%s.db", name))
+					path := filepath.Join(*dirPath, fmt.Sprintf("zendrite_%s.db", name))
 					db.ConnectionString = config.DataSource(fmt.Sprintf("file:%s", path))
 				} else {
 					db.ConnectionString = uri
@@ -54,14 +54,15 @@ func main() {
 		} else {
 			cfg.Global.DatabaseOptions.ConnectionString = uri
 		}
-		cfg.MediaAPI.BasePath = config.Path(filepath.Join(*dirPath, "media"))
+		cfg.MediaAPI.Storage.Type = "local"
+		cfg.MediaAPI.Storage.Local.BasePath = config.Path(filepath.Join(*dirPath, "media"))
 		cfg.Global.JetStream.StoragePath = config.Path(*dirPath)
 		cfg.SyncAPI.Fulltext.IndexPath = config.Path(filepath.Join(*dirPath, "searchindex"))
 		cfg.Logging = []config.LogrusHook{
 			{
 				Type:  "file",
 				Level: "info",
-				Params: map[string]interface{}{
+				Params: map[string]any{
 					"path": filepath.Join(*dirPath, "log"),
 				},
 			},
@@ -77,7 +78,8 @@ func main() {
 			cfg.FederationAPI.AllowNetworkCIDRs = []string{}
 			// don't hit matrix.org when running tests!!!
 			cfg.FederationAPI.KeyPerspectives = config.KeyPerspectives{}
-			cfg.MediaAPI.BasePath = config.Path(filepath.Join(*dirPath, "media"))
+			cfg.MediaAPI.Storage.Type = "local"
+			cfg.MediaAPI.Storage.Local.BasePath = config.Path(filepath.Join(*dirPath, "media"))
 			cfg.MSCs.MSCs = []string{"msc2836", "msc2444", "msc2753"}
 			cfg.Logging[0].Level = "trace"
 			cfg.Logging[0].Type = "std"

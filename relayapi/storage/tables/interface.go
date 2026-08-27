@@ -10,8 +10,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 // RelayQueue table contains a mapping of server name to transaction id and the corresponding nid.

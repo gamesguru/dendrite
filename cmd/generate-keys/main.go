@@ -9,15 +9,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 const usage = `Usage: %s
 
-Generate key files which are required by dendrite.
+Generate key files which are required by zendrite.
 
 Arguments:
 
@@ -30,7 +29,7 @@ var (
 	authorityCertFile = flag.String("tls-authority-cert", "", "Optional: Create TLS certificate/keys based on this CA authority. Useful for integration testing.")
 	authorityKeyFile  = flag.String("tls-authority-key", "", "Optional: Create TLS certificate/keys based on this CA authority. Useful for integration testing.")
 	serverName        = flag.String("server", "", "Optional: Create TLS certificate/keys with this domain name set. Useful for integration testing.")
-	keySize           = flag.Int("keysize", 4096, "Optional: Create TLS RSA private key with the given key size")
+	keySize           = flag.Int("keysize", 4096, "Optional: Create TLS RSA private key with the given key size") //nolint:mnd
 )
 
 func main() {
@@ -48,7 +47,8 @@ func main() {
 
 	if *tlsCertFile != "" || *tlsKeyFile != "" {
 		if *tlsCertFile == "" || *tlsKeyFile == "" {
-			log.Fatal("Zero or both of --tls-key and --tls-cert must be supplied")
+			fmt.Fprintln(os.Stderr, "Zero or both of --tls-key and --tls-cert must be supplied")
+			os.Exit(1)
 		}
 		if *authorityCertFile == "" && *authorityKeyFile == "" {
 			if err := test.NewTLSKey(*tlsKeyFile, *tlsCertFile, *keySize); err != nil {

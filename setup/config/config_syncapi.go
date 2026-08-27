@@ -30,7 +30,7 @@ type Fulltext struct {
 	Enabled   bool   `yaml:"enabled"`
 	IndexPath Path   `yaml:"index_path"`
 	InMemory  bool   `yaml:"in_memory"` // only useful in tests
-	Language  string `yaml:"language"`  // the language to use when analysing content
+	Language  string `yaml:"language"`  // the language to use when analyzing content
 }
 
 func (f *Fulltext) Defaults(opts DefaultOpts) {

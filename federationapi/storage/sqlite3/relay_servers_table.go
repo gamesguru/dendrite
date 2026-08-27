@@ -11,9 +11,10 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const relayServersSchema = `
@@ -117,7 +118,7 @@ func (s *relayServersStatements) DeleteRelayServers(
 	}
 
 	stmt := sqlutil.TxStmt(txn, deleteStmt)
-	params := make([]interface{}, len(relayServers)+1)
+	params := make([]any, len(relayServers)+1)
 	params[0] = serverName
 	for i, v := range relayServers {
 		params[i+1] = v

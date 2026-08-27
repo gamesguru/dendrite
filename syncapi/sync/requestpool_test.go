@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 type dummyPublisher struct {
@@ -45,7 +46,6 @@ func (d dummyDB) MaxStreamPositionForPresence(ctx context.Context) (types.Stream
 type dummyConsumer struct{}
 
 func (d dummyConsumer) EmitPresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool) {
-
 }
 
 func TestRequestPool_updatePresence(t *testing.T) {
@@ -119,7 +119,7 @@ func TestRequestPool_updatePresence(t *testing.T) {
 		cfg: &config.SyncAPI{
 			Matrix: &config.Global{
 				JetStream: config.JetStream{
-					TopicPrefix: "Dendrite",
+					TopicPrefix: "Zendrite",
 				},
 				Presence: config.PresenceOptions{
 					EnableInbound:  true,

@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type Connections struct {
@@ -52,7 +52,10 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 	existing, loaded := c.existingConnections.LoadOrStore(dbProperties.ConnectionString, &con{})
 	if loaded {
 		// We found an existing connection
-		ex := existing.(*con)
+		ex, ok := existing.(*con)
+		if !ok {
+			return nil, nil, fmt.Errorf("unexpected type for existing connection")
+		}
 		return ex.db, ex.writer, nil
 	}
 
@@ -62,17 +65,15 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 		return nil, nil, err
 	}
 	c.existingConnections.Store(dbProperties.ConnectionString, &con{db: db, writer: writer})
-	go func() {
-		if c.processContext == nil {
-			return
-		}
-		// If we have a ProcessContext, start a component and wait for
-		// Dendrite to shut down to cleanly close the database connection.
+	if c.processContext != nil {
+		// Register the component before starting the goroutine to avoid
+		// a race between ComponentStarted() and WaitForComponentsToFinish().
 		c.processContext.ComponentStarted()
-		<-c.processContext.WaitForShutdown()
-		_ = db.Close()
-		c.processContext.ComponentFinished()
-	}()
+		go func() {
+			<-c.processContext.WaitForShutdown()
+			_ = db.Close()
+			c.processContext.ComponentFinished()
+		}()
+	}
 	return db, writer, nil
-
 }

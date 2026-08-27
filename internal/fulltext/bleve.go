@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package fulltext
 
@@ -13,11 +12,9 @@ import (
 	"regexp"
 	"strings"
 
+	// Side effect imports to allow all possible languages.
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/blevesearch/bleve/v2"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	// side effect imports to allow all possible languages
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ar"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/cjk"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ckb"
@@ -41,10 +38,11 @@ import (
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/tr"
 	"github.com/blevesearch/bleve/v2/mapping"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
-// Search contains all existing bleve.Index
+// Search contains all existing bleve.Index.
 type Search struct {
 	FulltextIndex bleve.Index
 }
@@ -57,7 +55,7 @@ type Indexer interface {
 	Close() error
 }
 
-// IndexElement describes the layout of an element to index
+// IndexElement describes the layout of an element to index.
 type IndexElement struct {
 	EventID        string
 	RoomID         string
@@ -66,7 +64,7 @@ type IndexElement struct {
 	StreamPosition int64
 }
 
-// SetContentType sets i.ContentType given an identifier
+// SetContentType sets i.ContentType given an identifier.
 func (i *IndexElement) SetContentType(v string) {
 	switch v {
 	case "m.room.message":
@@ -78,29 +76,32 @@ func (i *IndexElement) SetContentType(v string) {
 	}
 }
 
-// New opens a new/existing fulltext index
+// New opens a new/existing fulltext index.
 func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, err error) {
 	fts = &Search{}
 	fts.FulltextIndex, err = openIndex(cfg)
 	if err != nil {
 		return nil, err
 	}
-	go func() {
+	if processCtx != nil {
+		// Register the component before starting the goroutine to avoid
+		// a race between ComponentStarted() and WaitForComponentsToFinish().
 		processCtx.ComponentStarted()
-		// Wait for the processContext to be done, indicating that Dendrite is shutting down.
-		<-processCtx.WaitForShutdown()
-		_ = fts.Close()
-		processCtx.ComponentFinished()
-	}()
+		go func() {
+			<-processCtx.WaitForShutdown()
+			_ = fts.Close()
+			processCtx.ComponentFinished()
+		}()
+	}
 	return fts, nil
 }
 
-// Close closes the fulltext index
+// Close closes the fulltext index.
 func (f *Search) Close() error {
 	return f.FulltextIndex.Close()
 }
 
-// Index indexes the given elements
+// Index indexes the given elements.
 func (f *Search) Index(elements ...IndexElement) error {
 	batch := f.FulltextIndex.NewBatch()
 
@@ -113,7 +114,7 @@ func (f *Search) Index(elements ...IndexElement) error {
 	return f.FulltextIndex.Batch(batch)
 }
 
-// Delete deletes an indexed element by the eventID
+// Delete deletes an indexed element by the eventID.
 func (f *Search) Delete(eventID string) error {
 	return f.FulltextIndex.Delete(eventID)
 }

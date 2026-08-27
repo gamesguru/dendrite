@@ -11,11 +11,11 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // The memberships table is designed to track the last time that
@@ -71,7 +71,7 @@ type membershipsStatements struct {
 	db                        *sql.DB
 	upsertMembershipStmt      *sql.Stmt
 	selectMembershipCountStmt *sql.Stmt
-	//selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
+	// selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
 	selectMembershipForUserStmt *sql.Stmt
 	selectMembersStmt           *sql.Stmt
 	purgeMembershipsStmt        *sql.Stmt
@@ -102,7 +102,8 @@ func (s *membershipsStatements) UpsertMembership(
 	if err != nil {
 		return fmt.Errorf("event.Membership: %w", err)
 	}
-	_, err = sqlutil.TxStmt(txn, s.upsertMembershipStmt).ExecContext(
+	upsertMembershipStmt := sqlutil.TxStmt(txn, s.upsertMembershipStmt)
+	_, err = upsertMembershipStmt.ExecContext(
 		ctx,
 		event.RoomID().String(),
 		event.StateKeyResolved,
@@ -142,7 +143,8 @@ func (s *membershipsStatements) SelectMembershipForUser(
 func (s *membershipsStatements) PurgeMemberships(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeMembershipsStmt).ExecContext(ctx, roomID)
+	purgeMembershipsStmt := sqlutil.TxStmt(txn, s.purgeMembershipsStmt)
+	_, err := purgeMembershipsStmt.ExecContext(ctx, roomID)
 	return err
 }
 

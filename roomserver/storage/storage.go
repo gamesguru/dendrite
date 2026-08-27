@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package storage
 
@@ -13,11 +12,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Open opens a database connection.

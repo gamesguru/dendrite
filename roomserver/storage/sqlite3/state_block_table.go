@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/types"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateDataSchema = `
@@ -25,7 +26,7 @@ const stateDataSchema = `
 	-- The state snapshot NID that identifies this snapshot.
     state_block_nid INTEGER PRIMARY KEY AUTOINCREMENT,
 	-- The hash of the state block, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over 
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_block_hash BLOB UNIQUE,
 	-- The event NIDs contained within the state block, encoded as JSON.
@@ -93,7 +94,7 @@ func (s *stateBlockStatements) BulkInsertStateData(
 func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs,
 ) ([][]types.EventNID, error) {
-	intfs := make([]interface{}, len(stateBlockNIDs))
+	intfs := make([]any, len(stateBlockNIDs))
 	for i := range stateBlockNIDs {
 		intfs[i] = int64(stateBlockNIDs[i])
 	}
@@ -102,7 +103,7 @@ func (s *stateBlockStatements) BulkSelectStateBlockEntries(
 	if err != nil {
 		return nil, err
 	}
-	defer selectPrep.Close() // nolint:errcheck
+	defer selectPrep.Close()
 	selectStmt := sqlutil.TxStmt(txn, selectPrep)
 	rows, err := selectStmt.QueryContext(ctx, intfs...)
 	if err != nil {

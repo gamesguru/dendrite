@@ -11,24 +11,24 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/httputil"
-	relayInternal "github.com/element-hq/dendrite/relayapi/internal"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/gorilla/mux"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	relayInternal "codefloe.com/pat-s/zendrite/relayapi/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Setup registers HTTP handlers with the given ServeMux.
 // The provided publicAPIMux MUST have `UseEncodedPath()` enabled or else routes will incorrectly
 // path unescape twice (once from the router, once from MakeRelayAPI). We need to have this enabled
-// so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz]
+// so we can decode paths like foo/bar%2Fbaz as [foo, bar/baz] - by default it will decode to [foo, bar, baz].
 func Setup(
-	fedMux *mux.Router,
+	fedMux *httputil.Router,
 	cfg *config.FederationAPI,
 	relayAPI *relayInternal.RelayInternalAPI,
 	keys gomatrixserverlib.JSONVerifier,
@@ -95,7 +95,7 @@ func MakeRelayAPI(
 			req, time.Now(), serverName, isLocalServerName, keyRing,
 		)
 		if fedReq == nil {
-			return errResp
+			return util.JSONResponse{Code: errResp.Code, JSON: errResp.JSON, Headers: errResp.Headers}
 		}
 		// add the user to Sentry, if enabled
 		hub := sentry.GetHubFromContext(req.Context())
@@ -114,15 +114,15 @@ func MakeRelayAPI(
 				panic(r)
 			}
 		}()
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
-			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params")
+			return util.MatrixErrorResponse(400, string(spec.ErrorUnrecognized), "badly encoded query params") //nolint:mnd
 		}
 
 		jsonRes := f(req, fedReq, vars)
 		// do not log 4xx as errors as they are client fails, not server fails
 		if hub != nil && jsonRes.Code >= 500 {
-			hub.Scope().SetExtra("response", jsonRes)
+			hub.Scope().SetContext("response", map[string]any{"json_response": jsonRes})
 			hub.CaptureException(fmt.Errorf("%s returned HTTP %d", req.URL.Path, jsonRes.Code))
 		}
 		return jsonRes

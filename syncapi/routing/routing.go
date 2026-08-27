@@ -9,27 +9,27 @@ package routing
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/internal/httputil"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/sync"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/sync"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Setup configures the given mux with sync-server listeners
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
 // applied:
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func Setup(
-	csMux *mux.Router, srp *sync.RequestPool, syncDB storage.Database,
+	csMux *httputil.Router, srp *sync.RequestPool, syncDB storage.Database,
 	userAPI userapi.SyncUserAPI,
 	rsAPI api.SyncRoomserverAPI,
 	cfg *config.SyncAPI,
@@ -39,6 +39,20 @@ func Setup(
 ) {
 	v1unstablemux := csMux.PathPrefix("/{apiversion:(?:v1|unstable)}/").Subrouter()
 	v3mux := csMux.PathPrefix("/{apiversion:(?:r0|v3)}/").Subrouter()
+	v4mux := csMux.PathPrefix("/v4/").Subrouter()
+
+	// MSC4186: Simplified Sliding Sync
+	// Official endpoint path per MSC4186: /_matrix/client/v4/sync
+	v4mux.Handle("/sync", httputil.MakeAuthAPI("sliding_sync_v4", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		return srp.OnIncomingSyncRequestV4(req, device)
+	}, httputil.WithAllowGuests())).Methods(http.MethodPost, http.MethodOptions)
+
+	// MSC4186: Simplified Sliding Sync - Synapse compatibility endpoint
+	// Synapse uses this unstable path for MSC4186: /_matrix/client/unstable/org.matrix.simplified_msc3575/sync
+	// We support both paths for client compatibility
+	v1unstablemux.Handle("/org.matrix.simplified_msc3575/sync", httputil.MakeAuthAPI("sliding_sync_unstable", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		return srp.OnIncomingSyncRequestV4(req, device)
+	}, httputil.WithAllowGuests())).Methods(http.MethodPost, http.MethodOptions)
 
 	// TODO: Add AS support for all handlers below.
 	v3mux.Handle("/sync", httputil.MakeAuthAPI("sync", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
@@ -50,7 +64,7 @@ func Setup(
 		if r := rateLimits.Limit(req, device); r != nil {
 			return *r
 		}
-		vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 		if err != nil {
 			return util.ErrorResponse(err)
 		}
@@ -59,7 +73,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomID}/event/{eventID}",
 		httputil.MakeAuthAPI("rooms_get_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -69,7 +83,7 @@ func Setup(
 
 	v3mux.Handle("/user/{userId}/filter",
 		httputil.MakeAuthAPI("put_filter", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -79,7 +93,7 @@ func Setup(
 
 	v3mux.Handle("/user/{userId}/filter/{filterId}",
 		httputil.MakeAuthAPI("get_filter", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -93,7 +107,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomId}/context/{eventId}",
 		httputil.MakeAuthAPI("context", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -109,7 +123,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}",
 		httputil.MakeAuthAPI("relations", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -123,7 +137,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}/{relType}",
 		httputil.MakeAuthAPI("relation_type", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -137,7 +151,7 @@ func Setup(
 
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}/{relType}/{eventType}",
 		httputil.MakeAuthAPI("relation_type_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
@@ -154,7 +168,7 @@ func Setup(
 			if !cfg.Fulltext.Enabled {
 				return util.JSONResponse{
 					Code: http.StatusNotImplemented,
-					JSON: spec.Unknown("Search has been disabled by the server administrator."),
+					JSON: spec.Unrecognized("Search has been disabled by the server administrator."),
 				}
 			}
 			var nextBatch *string
@@ -174,7 +188,7 @@ func Setup(
 
 	v3mux.Handle("/rooms/{roomID}/members",
 		httputil.MakeAuthAPI("rooms_members", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}

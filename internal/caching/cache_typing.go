@@ -20,7 +20,7 @@ type userSet map[string]*time.Timer
 
 // TimeoutCallbackFn is a function called right after the removal of a user
 // from the typing user list due to timeout.
-// latestSyncPosition is the typing sync position after the removal.
+// LatestSyncPosition is the typing sync position after the removal.
 type TimeoutCallbackFn func(userID, roomID string, latestSyncPosition int64)
 
 type roomData struct {
@@ -45,7 +45,7 @@ func (t *EDUCache) newRoomData() *roomData {
 	}
 }
 
-// NewTypingCache returns a new EDUCache initialised for use.
+// NewTypingCache returns a new EDUCache initialized for use.
 func NewTypingCache() *EDUCache {
 	return &EDUCache{data: make(map[string]*roomData)}
 }
@@ -86,8 +86,8 @@ func (t *EDUCache) GetTypingUsersIfUpdatedAfter(
 }
 
 // AddTypingUser sets an user as typing in a room.
-// expire is the time when the user typing should time out.
-// if expire is nil, defaultTypingTimeout is assumed.
+// Expire is the time when the user typing should time out.
+// If expire is nil, defaultTypingTimeout is assumed.
 // Returns the latest sync position for typing after update.
 func (t *EDUCache) AddTypingUser(
 	userID, roomID string, expire *time.Time,

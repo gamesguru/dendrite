@@ -12,17 +12,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/routing"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/routing"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type server struct {
@@ -77,14 +77,14 @@ func TestMain(m *testing.M) {
 			}
 			defer os.RemoveAll(d)
 
-			// Draw up just enough Dendrite config for the server key
+			// Draw up just enough Zendrite config for the server key
 			// API to work.
-			cfg := &config.Dendrite{}
+			cfg := &config.Zendrite{}
 			cfg.Defaults(config.DefaultOpts{
 				Generate:       true,
 				SingleDatabase: false,
 			})
-			cfg.Global.ServerName = spec.ServerName(s.name)
+			cfg.Global.ServerName = s.name
 			cfg.Global.PrivateKey = testPriv
 			cfg.Global.JetStream.InMemory = true
 			cfg.Global.JetStream.TopicPrefix = string(s.name[:1])

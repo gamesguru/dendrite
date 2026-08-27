@@ -15,21 +15,19 @@ import (
 	"strconv"
 	"time"
 
-	syncAPITypes "github.com/element-hq/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/federationapi/queue"
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/federationapi/types"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/federationapi/queue"
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	syncAPITypes "codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -70,7 +68,7 @@ func NewOutputRoomEventConsumer(
 	}
 }
 
-// Start consuming from room servers
+// Start consuming from room servers.
 func (s *OutputRoomEventConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
@@ -81,7 +79,7 @@ func (s *OutputRoomEventConsumer) Start() error {
 // onMessage is called when the federation server receives a new event from the room server output log.
 // It is unsafe to call this with messages for the same room in multiple gorountines
 // because updates it will likely fail with a types.EventIDMismatchError when it
-// realises that it cannot update the room state using the deltas.
+// realizes that it cannot update the room state using the deltas.
 func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	receivedType := api.OutputType(msg.Header.Get(jetstream.RoomEventType))
@@ -104,7 +102,20 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	switch output.Type {
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
-		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil {
+		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
+			// A room purge evacuates the room (producing leave events) and then
+			// deletes the room's state, all before the OutputTypePurgeRoom message
+			// reaches us. Those leave events can therefore arrive here after the
+			// state they reference has already been deleted, making processMessage
+			// fail. That is expected for a purged room, not the database
+			// inconsistency the panic below guards against, so skip the event.
+			if s.roomPurged(ctx, ev.RoomID().String()) {
+				log.WithFields(log.Fields{
+					"event_id": ev.EventID(),
+					"room_id":  ev.RoomID().String(),
+				}).Warn("Skipping federation output for purged room")
+				return true
+			}
 			// panic rather than continue with an inconsistent database
 			log.WithFields(log.Fields{
 				"event_id":   ev.EventID(),
@@ -125,11 +136,11 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 
 	case api.OutputTypePurgeRoom:
-		log.WithField("room_id", output.PurgeRoom.RoomID).Warn("Purging room from federation API")
+		log.WithField("room_id", output.PurgeRoom.RoomID).Info("Purging room from federation API")
 		if err := s.db.PurgeRoom(ctx, output.PurgeRoom.RoomID); err != nil {
-			logrus.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from federation API")
+			log.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from federation API")
 		} else {
-			logrus.WithField("room_id", output.PurgeRoom.RoomID).Warn("Room purged from federation API")
+			log.WithField("room_id", output.PurgeRoom.RoomID).Info("Room purged from federation API")
 		}
 
 	default:
@@ -142,9 +153,8 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 }
 
 // processInboundPeek starts tracking a new federated inbound peek (replacing the existing one if any)
-// causing the federationapi to start sending messages to the peeking server
+// causing the federationapi to start sending messages to the peeking server.
 func (s *OutputRoomEventConsumer) processInboundPeek(orp api.OutputNewInboundPeek) error {
-
 	// FIXME: there's a race here - we should start /sending new peeked events
 	// atomically after the orp.LatestEventID to ensure there are no gaps between
 	// the peek beginning and the send stream beginning.
@@ -161,7 +171,6 @@ func (s *OutputRoomEventConsumer) processInboundPeek(orp api.OutputNewInboundPee
 // processMessage updates the list of currently joined hosts in the room
 // and then sends the event to the hosts that were joined before the event.
 func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rewritesState bool) error {
-
 	addsStateEvents, missingEventIDs := ore.NeededStateEventIDs()
 
 	// Ask the roomserver and add in the rest of the results into the set.
@@ -217,7 +226,7 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if oldJoinedHosts == nil {
 		// This means that there is nothing to update as this is a duplicate
 		// message.
-		// This can happen if dendrite crashed between reading the message and
+		// This can happen if zendrite crashed between reading the message and
 		// persisting the stream position.
 		return nil
 	}
@@ -227,11 +236,44 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 		return nil
 	}
 
+	// MSC3706: While a room is in partial state our joined_hosts table only holds
+	// the subset of servers from the partial /send_join response. Remote events
+	// are not forwarded with this incomplete context; local events are still sent
+	// but must also reach every server the resident server reported was in the
+	// room, otherwise leaves never propagate and other servers keep us listed as
+	// joined (issue #186).
+	isLocalEvent := spec.ServerName(ore.SendAsServer) == s.cfg.Matrix.ServerName
+	var partialStateServers []spec.ServerName
+	if roomID, roomIDErr := spec.NewRoomID(ore.Event.RoomID().String()); roomIDErr == nil {
+		servers, skip, psErr := s.partialStateServersForEvent(*roomID, isLocalEvent)
+		switch {
+		case psErr != nil:
+			log.WithError(psErr).WithFields(log.Fields{
+				"event_id": ore.Event.EventID(),
+				"room_id":  ore.Event.RoomID().String(),
+			}).Warn("Failed to determine partial state servers for outbound event")
+		case skip:
+			log.WithFields(log.Fields{
+				"event_id": ore.Event.EventID(),
+				"room_id":  ore.Event.RoomID().String(),
+				"origin":   ore.SendAsServer,
+			}).Debug("Skipping federation send for remote event in partial state room")
+			return nil
+		default:
+			partialStateServers = servers
+		}
+	}
+
 	// Work out which hosts were joined at the event itself.
 	joinedHostsAtEvent, err := s.joinedHostsAtEvent(ore, oldJoinedHosts)
 	if err != nil {
 		return err
 	}
+
+	// During a partial state join joinedHostsAtEvent is derived from the
+	// incomplete joined_hosts table, so also target the servers reported by the
+	// partial join. SendEvent deduplicates and drops our own server name.
+	joinedHostsAtEvent = append(joinedHostsAtEvent, partialStateServers...)
 
 	// TODO: do housekeeping to evict unrenewed peeking hosts
 
@@ -268,7 +310,7 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 		msg.Header.Set(jetstream.UserID, ev.Sender)
 
 		var presence *nats.Msg
-		presence, err = s.natsClient.RequestMsg(msg, time.Second*10)
+		presence, err = s.natsClient.RequestMsg(msg, time.Second*10) //nolint:mnd
 		if err != nil {
 			log.WithError(err).Errorf("unable to get presence")
 			continue
@@ -311,6 +353,51 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 	if err := s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, joined); err != nil {
 		log.WithError(err).Error("failed to send EDU")
 	}
+}
+
+// roomPurged reports whether the roomserver no longer knows about roomID, which
+// is the case once the room has been purged. It is used to distinguish an
+// expected missing-state failure (the room was purged out from under a queued
+// event) from genuine database inconsistency. On any error determining room
+// existence it returns false so the caller falls back to its default handling.
+func (s *OutputRoomEventConsumer) roomPurged(ctx context.Context, roomIDStr string) bool {
+	roomID, err := spec.NewRoomID(roomIDStr)
+	if err != nil {
+		return false
+	}
+	roomInfo, err := s.rsAPI.QueryRoomInfo(ctx, *roomID)
+	return err == nil && roomInfo == nil
+}
+
+// partialStateServersForEvent reports the additional servers an outbound event
+// must be sent to because the room is still in partial state (MSC3706 faster
+// join). While a room is in partial state our federation joined_hosts table
+// only holds the subset of servers from the partial /send_join response, so the
+// returned servers are the ones the resident server reported were in the room.
+// Remote events are not forwarded during partial state, signaled by skip=true.
+func (s *OutputRoomEventConsumer) partialStateServersForEvent(
+	roomID spec.RoomID, isLocalEvent bool,
+) (servers []spec.ServerName, skip bool, err error) {
+	roomInfo, err := s.rsAPI.QueryRoomInfo(s.ctx, roomID)
+	if err != nil || roomInfo == nil {
+		return nil, false, err
+	}
+	isPartialState, err := s.rsAPI.IsRoomPartialState(s.ctx, roomInfo.RoomNID)
+	if err != nil || !isPartialState {
+		return nil, false, err
+	}
+	if !isLocalEvent {
+		return nil, true, nil
+	}
+	knownServers, err := s.rsAPI.GetPartialStateServers(s.ctx, roomInfo.RoomNID)
+	if err != nil {
+		return nil, false, err
+	}
+	servers = make([]spec.ServerName, 0, len(knownServers))
+	for _, server := range knownServers {
+		servers = append(servers, spec.ServerName(server))
+	}
+	return servers, false, nil
 }
 
 // joinedHostsAtEvent works out a list of matrix servers that were joined to

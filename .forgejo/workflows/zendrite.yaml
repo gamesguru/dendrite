@@ -1,0 +1,132 @@
+name: Zendrite
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Detect whether Go-related files changed. Lint/test are gated on this so
+  # they appear as skipped (rather than missing) status checks on PRs that
+  # only touch unrelated paths like website/, which avoids blocking merges
+  # on required checks that would otherwise never run.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: https://github.com/dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.pre-commit-config.yaml'
+              - '.forgejo/workflows/**'
+              - 'Dockerfile'
+
+  # Run golangci-lint
+  lint:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    # Dependency bumps invalidate the golangci-lint cache key (it hashes go.mod
+    # and go.sum), so those PRs always lint from cold and can exceed a 5 minute
+    # budget even though warm runs finish in ~3 minutes.
+    timeout-minutes: 15
+    name: Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        env:
+          CGO_ENABLED: 1
+
+  # Run tests split by package groups for parallelism
+  test:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    timeout-minutes: 15
+    name: Tests (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: syncapi
+            packages: ./syncapi/...
+          - group: clientapi
+            packages: ./clientapi/...
+          - group: roomserver
+            packages: ./roomserver/...
+          - group: userapi
+            packages: ./userapi/...
+          - group: federationapi
+            packages: ./federationapi/...
+          - group: other
+            packages: ./appservice/... ./mediaapi/... ./relayapi/... ./internal/... ./setup/... ./test/...
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dendrite
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libolm-dev libolm3 build-essential
+      - name: Setup go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Run tests
+        # -p 4 caps the number of concurrent test binaries; with -race each binary
+        # uses ~5-10x normal memory, so the default (GOMAXPROCS) can OOM the runner
+        # under groups with many packages (e.g. userapi has 6).
+        run: go test -race -v -p 4 ${{ matrix.packages }}
+        env:
+          POSTGRES_HOST: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dendrite
+          # pgx forwards PGOPTIONS to every connection; caps per-session memory to avoid OOMs under parallel test load.
+          PGOPTIONS: '-c work_mem=2MB -c maintenance_work_mem=32MB'
+
+  tests-done:
+    name: Tests passed
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Check tests passed
+        run: |
+          echo "Checking job results..."
+          results='${{ toJSON(needs.*.result) }}'
+          echo "Job results: $results"
+          if echo "$results" | grep -qE '"(failure|cancelled)"'; then
+            echo "Some jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All tests passed!"

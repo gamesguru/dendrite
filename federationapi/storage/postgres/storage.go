@@ -12,22 +12,23 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/federationapi/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/federationapi/storage/shared"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// Database stores information needed by the federation sender
+// Database stores information needed by the federation sender.
 type Database struct {
 	shared.Database
 	db     *sql.DB
 	writer sqlutil.Writer
 }
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, cache caching.FederationCache, isLocalServerName func(spec.ServerName) bool) (*Database, error) {
 	var d Database
 	var err error
@@ -46,7 +47,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, err
 	}
-	queueEDUs, err := NewPostgresQueueEDUsTable(d.db)
+	queueEDUs, err := NewPostgresQueueEDUsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +73,17 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	}
 	notaryJSON, err := NewPostgresNotaryServerKeysTable(d.db)
 	if err != nil {
-		return nil, fmt.Errorf("NewPostgresNotaryServerKeysTable: %s", err)
+		return nil, fmt.Errorf("NewPostgresNotaryServerKeysTable: %w", err)
 	}
 	notaryMetadata, err := NewPostgresNotaryServerKeysMetadataTable(d.db)
 	if err != nil {
-		return nil, fmt.Errorf("NewPostgresNotaryServerKeysMetadataTable: %s", err)
+		return nil, fmt.Errorf("NewPostgresNotaryServerKeysMetadataTable: %w", err)
 	}
 	serverSigningKeys, err := NewPostgresServerSigningKeysTable(d.db)
+	if err != nil {
+		return nil, err
+	}
+	retryState, err := NewPostgresRetryStateTable(d.db)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +116,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		NotaryServerKeysJSON:     notaryJSON,
 		NotaryServerKeysMetadata: notaryMetadata,
 		ServerSigningKeys:        serverSigningKeys,
+		FederationRetryState:     retryState,
 	}
 	return &d, nil
 }

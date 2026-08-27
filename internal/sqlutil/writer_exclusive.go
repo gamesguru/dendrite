@@ -36,7 +36,7 @@ type transactionWriterTask struct {
 // parameter. Either way, this will block until the task is done.
 func (w *ExclusiveWriter) Do(db *sql.DB, txn *sql.Tx, f func(txn *sql.Tx) error) error {
 	if w.todo == nil {
-		return errors.New("not initialised")
+		return errors.New("not initialized")
 	}
 	if !w.running.Load() {
 		go w.run()
@@ -62,13 +62,14 @@ func (w *ExclusiveWriter) run() {
 
 	defer w.running.Store(false)
 	for task := range w.todo {
-		if task.db != nil && task.txn != nil {
+		switch {
+		case task.db != nil && task.txn != nil:
 			task.wait <- task.f(task.txn)
-		} else if task.db != nil && task.txn == nil {
+		case task.db != nil && task.txn == nil:
 			task.wait <- WithTransaction(task.db, func(txn *sql.Tx) error {
 				return task.f(txn)
 			})
-		} else {
+		default:
 			task.wait <- task.f(nil)
 		}
 		close(task.wait)

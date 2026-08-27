@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 var serverNamesTables = []string{
@@ -46,7 +47,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for _, table := range serverNamesTables {
 		q := fmt.Sprintf(
 			"ALTER TABLE IF EXISTS %s ADD COLUMN IF NOT EXISTS server_name TEXT NOT NULL DEFAULT '';",
-			pq.QuoteIdentifier(table),
+			sqlutil.QuoteIdentifier(table),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("add server name to %q error: %w", table, err)
@@ -55,14 +56,14 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for newTable, oldTable := range serverNamesDropPK {
 		q := fmt.Sprintf(
 			"ALTER TABLE IF EXISTS %s DROP CONSTRAINT IF EXISTS %s;",
-			pq.QuoteIdentifier(newTable), pq.QuoteIdentifier(newTable+"_pkey"),
+			sqlutil.QuoteIdentifier(newTable), sqlutil.QuoteIdentifier(newTable+"_pkey"),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("drop new PK from %q error: %w", newTable, err)
 		}
 		q = fmt.Sprintf(
 			"ALTER TABLE IF EXISTS %s DROP CONSTRAINT IF EXISTS %s;",
-			pq.QuoteIdentifier(newTable), pq.QuoteIdentifier(oldTable+"_pkey"),
+			sqlutil.QuoteIdentifier(newTable), sqlutil.QuoteIdentifier(oldTable+"_pkey"),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("drop old PK from %q error: %w", newTable, err)
@@ -71,7 +72,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for _, index := range serverNamesDropIndex {
 		q := fmt.Sprintf(
 			"DROP INDEX IF EXISTS %s;",
-			pq.QuoteIdentifier(index),
+			sqlutil.QuoteIdentifier(index),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("drop index %q error: %w", index, err)

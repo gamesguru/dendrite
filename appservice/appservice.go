@@ -10,29 +10,28 @@ import (
 	"context"
 	"sync"
 
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
-	appserviceAPI "github.com/element-hq/dendrite/appservice/api"
-	"github.com/element-hq/dendrite/appservice/consumers"
-	"github.com/element-hq/dendrite/appservice/query"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
+	"codefloe.com/pat-s/zendrite/appservice/consumers"
+	"codefloe.com/pat-s/zendrite/appservice/query"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // NewInternalAPI returns a concerete implementation of the internal API. Callers
 // can call functions directly on the returned API or via an HTTP interface using AddInternalRoutes.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
-	cfg *config.Dendrite,
+	cfg *config.Zendrite,
 	natsInstance *jetstream.NATSInstance,
 	userAPI userapi.AppserviceUserAPI,
 	rsAPI roomserverAPI.RoomserverInternalAPI,
 ) appserviceAPI.AppServiceInternalAPI {
-
 	// Create appserivce query API with an HTTP client that will be used for all
 	// outbound and inbound requests (inbound only for the internal API)
 	appserviceQueryAPI := &query.AppServiceQueryAPI{
@@ -73,7 +72,7 @@ func NewInternalAPI(
 
 // generateAppServiceAccounts creates a dummy account based off the
 // `sender_localpart` field of each application service if it doesn't
-// exist already
+// exist already.
 func generateAppServiceAccount(
 	userAPI userapi.AppserviceUserAPI,
 	as config.ApplicationService,

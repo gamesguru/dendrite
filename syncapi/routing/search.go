@@ -13,24 +13,24 @@ import (
 	"strconv"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/blevesearch/bleve/v2/search"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal/fulltext"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// nolint:gocyclo
+//nolint:gocyclo
 func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts fulltext.Indexer, from *string, rsAPI roomserverAPI.SyncRoomserverAPI) util.JSONResponse {
 	start := time.Now()
 	var (
@@ -101,7 +101,7 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 	if len(rooms) == 0 {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: spec.Unknown("User not allowed to search in this room(s)."),
+			JSON: spec.Forbidden("User not allowed to search in this room(s)."),
 		}
 	}
 
@@ -234,10 +234,10 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 			Context: SearchContextResponse{
 				Start: startToken.String(),
 				End:   endToken.String(),
-				EventsAfter: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				EventsAfter: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 				}),
-				EventsBefore: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				EventsBefore: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 				}),
 				ProfileInfo: profileInfos,
@@ -258,7 +258,7 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 					JSON: spec.InternalServerError{},
 				}
 			}
-			stateForRooms[event.RoomID().String()] = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(state), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			stateForRooms[event.RoomID().String()] = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(state), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
 				return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 			})
 		}
@@ -296,7 +296,7 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 	}
 }
 
-// contextEvents returns the events around a given eventID
+// contextEvents returns the events around a given eventID.
 func contextEvents(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,

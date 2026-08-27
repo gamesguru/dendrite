@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 var serverNamesTables = []string{
@@ -46,7 +47,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for _, table := range serverNamesTables {
 		q := fmt.Sprintf(
 			"SELECT COUNT(name) FROM sqlite_schema WHERE type='table' AND name=%s;",
-			pq.QuoteIdentifier(table),
+			sqlutil.QuoteIdentifier(table),
 		)
 		var c int
 		if err := tx.QueryRowContext(ctx, q).Scan(&c); err != nil || c == 0 {
@@ -54,7 +55,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 		}
 		q = fmt.Sprintf(
 			"SELECT COUNT(*) FROM pragma_table_info(%s) WHERE name='server_name'",
-			pq.QuoteIdentifier(table),
+			sqlutil.QuoteIdentifier(table),
 		)
 		if err := tx.QueryRowContext(ctx, q).Scan(&c); err != nil || c == 1 {
 			logrus.Infof("Table %s already has column, skipping", table)
@@ -63,7 +64,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 		if c == 0 {
 			q = fmt.Sprintf(
 				"ALTER TABLE %s ADD COLUMN server_name TEXT NOT NULL DEFAULT '';",
-				pq.QuoteIdentifier(table),
+				sqlutil.QuoteIdentifier(table),
 			)
 			if _, err := tx.ExecContext(ctx, q); err != nil {
 				return fmt.Errorf("add server name to %q error: %w", table, err)
@@ -73,7 +74,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for _, table := range serverNamesDropPK {
 		q := fmt.Sprintf(
 			"SELECT COUNT(name), sql FROM sqlite_schema WHERE type='table' AND name=%s;",
-			pq.QuoteIdentifier(table),
+			sqlutil.QuoteIdentifier(table),
 		)
 		var c int
 		var sql string
@@ -98,7 +99,7 @@ func UpServerNames(ctx context.Context, tx *sql.Tx, serverName spec.ServerName) 
 	for _, index := range serverNamesDropIndex {
 		q := fmt.Sprintf(
 			"DROP INDEX IF EXISTS %s;",
-			pq.QuoteIdentifier(index),
+			sqlutil.QuoteIdentifier(index),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("drop index %q error: %w", index, err)

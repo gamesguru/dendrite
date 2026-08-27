@@ -10,18 +10,19 @@ import (
 	"context"
 	"encoding/json"
 
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/userapi/api"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
+
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // OutputKeyChangeEventConsumer consumes events that originated in the key server.
@@ -62,7 +63,7 @@ func NewOutputKeyChangeEventConsumer(
 	return s
 }
 
-// Start consuming from the key server
+// Start consuming from the key server.
 func (s *OutputKeyChangeEventConsumer) Start() error {
 	return jetstream.JetStreamConsumer(
 		s.ctx, s.jetstream, s.topic, s.durable, 1,

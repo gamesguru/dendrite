@@ -1,0 +1,13 @@
+diff --git a/src/index.ts b/src/index.ts
+index 92856aca821c5221da2bf3fa21989c740ddf3441..c9b6130935e5cd893a7944581a20744073e08d2c 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -78,7 +78,7 @@ export default function starlightThemeNova(
+             'astro:config:setup': ({ config, updateConfig }) => {
+               updateConfig({
+                 markdown: {
+-                  shikiConfig: createShikiConfig({ twoslash: true }),
++                  shikiConfig: createShikiConfig({ twoslash: false }),
+                 },
+                 vite: {
+                   plugins: [

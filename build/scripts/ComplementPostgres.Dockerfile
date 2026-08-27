@@ -1,22 +1,19 @@
-#syntax=docker/dockerfile:1.2
+#syntax=docker/dockerfile:1.26
 
-# NOTE:
-# If you update this Dockerfile, ensure to sync your changes to the other
-# Dockerfiles in this repo (search *Dockerfile).
-FROM golang:1.25-bookworm as build
+FROM golang:1.26-trixie as build
 RUN apt-get update && apt-get install -y postgresql
 WORKDIR /build
 
 # No password when connecting to Postgres
-RUN sed -i "s%peer%trust%g" /etc/postgresql/15/main/pg_hba.conf && \
+RUN sed -i "s%peer%trust%g" /etc/postgresql/17/main/pg_hba.conf && \
     # Bump up max conns for moar concurrency
-    sed -i 's/max_connections = 100/max_connections = 2000/g' /etc/postgresql/15/main/postgresql.conf
+    sed -i 's/max_connections = 100/max_connections = 2000/g' /etc/postgresql/17/main/postgresql.conf
 
 # This entry script starts postgres, waits for it to be up then starts dendrite
 RUN echo '\
     #!/bin/bash -eu \n\
     pg_lsclusters \n\
-    pg_ctlcluster 15 main start \n\
+    pg_ctlcluster 17 main start \n\
     \n\
     until pg_isready \n\
     do \n\

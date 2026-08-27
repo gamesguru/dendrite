@@ -49,7 +49,7 @@ var streams = []*nats.StreamConfig{
 		Name:      InputRoomEvent,
 		Retention: nats.InterestPolicy,
 		Storage:   nats.FileStorage,
-		MaxAge:    time.Hour * 24,
+		MaxAge:    time.Hour * 24, //nolint:mnd
 	},
 	{
 		Name:      InputDeviceListUpdate,
@@ -85,7 +85,7 @@ var streams = []*nats.StreamConfig{
 		Name:      OutputTypingEvent,
 		Retention: nats.InterestPolicy,
 		Storage:   nats.MemoryStorage,
-		MaxAge:    time.Second * 60,
+		MaxAge:    time.Second * 60, //nolint:mnd
 	},
 	{
 		Name:      OutputClientData,
@@ -106,6 +106,6 @@ var streams = []*nats.StreamConfig{
 		Name:      OutputPresenceEvent,
 		Retention: nats.InterestPolicy,
 		Storage:   nats.MemoryStorage,
-		MaxAge:    time.Minute * 5,
+		MaxAge:    time.Minute * 5, //nolint:mnd
 	},
 }

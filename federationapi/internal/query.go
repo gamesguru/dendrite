@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/federationapi/api"
 )
 
-// QueryJoinedHostServerNamesInRoom implements api.FederationInternalAPI
+// QueryJoinedHostServerNamesInRoom implements api.FederationInternalAPI.
 func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 	ctx context.Context,
 	request *api.QueryJoinedHostServerNamesInRoomRequest,
@@ -27,15 +28,18 @@ func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 }
 
 func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, serverName spec.ServerName) (*gomatrixserverlib.ServerKeys, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 	defer cancel()
-	ires, err := a.doRequestIfNotBackingOffOrBlacklisted(serverName, func() (interface{}, error) {
+	ires, err := a.doFederationRequest(serverName, func() (any, error) { //nolint:contextcheck
 		return a.federation.GetServerKeys(ctx, serverName)
-	})
+	}, true)
 	if err != nil {
 		return nil, err
 	}
-	sks := ires.(gomatrixserverlib.ServerKeys)
+	sks, ok := ires.(gomatrixserverlib.ServerKeys)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for GetServerKeys")
+	}
 	return &sks, nil
 }
 
@@ -92,13 +96,13 @@ func (a *FederationInternalAPI) QueryServerKeys(
 		util.GetLogger(ctx).WithField("server", req.ServerName).WithError(err).Warn("notary: failed to ask server for keys, returning best effort keys")
 		serverKeysResponses, dbErr := a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
 		if dbErr != nil {
-			return fmt.Errorf("notary: server returned %s, and db returned %s", err, dbErr)
+			return fmt.Errorf("notary: server returned %w, and db returned %w", err, dbErr)
 		}
 		res.ServerKeys = serverKeysResponses
 		return nil
 	}
 	// cache it!
-	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil {
+	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil { //nolint:contextcheck
 		// non-fatal, still return the response
 		util.GetLogger(ctx).WithError(err).Warn("failed to UpdateNotaryKeys")
 	}

@@ -11,12 +11,10 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lib/pq"
-
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 var deviceKeysSchema = `
@@ -132,7 +130,7 @@ func (s *deviceKeysStatements) SelectMaxStreamIDForUser(ctx context.Context, txn
 func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID string, streamIDs []int64) (int, error) {
 	// nullable if there are no results
 	var count sql.NullInt32
-	err := s.countStreamIDsForUserStmt.QueryRowContext(ctx, userID, pq.Int64Array(streamIDs)).Scan(&count)
+	err := s.countStreamIDsForUserStmt.QueryRowContext(ctx, userID, streamIDs).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -143,9 +141,10 @@ func (s *deviceKeysStatements) CountStreamIDsForUser(ctx context.Context, userID
 }
 
 func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx, keys []api.DeviceMessage) error {
+	upsertDeviceKeysStmt := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt)
 	for _, key := range keys {
 		now := time.Now().Unix()
-		_, err := sqlutil.TxStmt(txn, s.upsertDeviceKeysStmt).ExecContext(
+		_, err := upsertDeviceKeysStmt.ExecContext(
 			ctx, key.UserID, key.DeviceID, now, string(key.KeyJSON), key.StreamID, key.DisplayName,
 		)
 		if err != nil {
@@ -156,12 +155,14 @@ func (s *deviceKeysStatements) InsertDeviceKeys(ctx context.Context, txn *sql.Tx
 }
 
 func (s *deviceKeysStatements) DeleteDeviceKeys(ctx context.Context, txn *sql.Tx, userID, deviceID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt).ExecContext(ctx, userID, deviceID)
+	deleteDeviceKeysStmt := sqlutil.TxStmt(txn, s.deleteDeviceKeysStmt)
+	_, err := deleteDeviceKeysStmt.ExecContext(ctx, userID, deviceID)
 	return err
 }
 
 func (s *deviceKeysStatements) DeleteAllDeviceKeys(ctx context.Context, txn *sql.Tx, userID string) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt).ExecContext(ctx, userID)
+	deleteAllDeviceKeysStmt := sqlutil.TxStmt(txn, s.deleteAllDeviceKeysStmt)
+	_, err := deleteAllDeviceKeysStmt.ExecContext(ctx, userID)
 	return err
 }
 

@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/test/testrig"
-	"github.com/element-hq/dendrite/userapi/storage"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/test/testrig"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
 func TestCollect(t *testing.T) {
@@ -29,7 +29,7 @@ func TestCollect(t *testing.T) {
 		receivedRequest := make(chan struct{}, 1)
 		// create a test server which responds to our call
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var data map[string]interface{}
+			var data map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 				t.Error(err)
 			}

@@ -12,14 +12,13 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres/deltas"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres/deltas"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const membershipSchema = `
@@ -76,7 +75,7 @@ var selectJoinedUsersSetForRoomsSQL = "" +
 	" GROUP BY target_nid"
 
 // Insert a row in to membership table so that it can be locked by the
-// SELECT FOR UPDATE
+// SELECT FOR UPDATE.
 const insertMembershipSQL = "" +
 	"INSERT INTO roomserver_membership (room_nid, target_nid, target_local)" +
 	" VALUES ($1, $2, $3)" +
@@ -132,7 +131,7 @@ var selectKnownUsersSQL = "" +
 	"  SELECT DISTINCT room_nid FROM roomserver_membership WHERE target_nid=$1 AND membership_nid = " + fmt.Sprintf("%d", tables.MembershipStateJoin) +
 	") AND membership_nid = " + fmt.Sprintf("%d", tables.MembershipStateJoin) + " AND event_state_key LIKE $2 LIMIT $3"
 
-// selectLocalServerInRoomSQL is an optimised case for checking if we, the local server,
+// selectLocalServerInRoomSQL is an optimized case for checking if we, the local server,
 // are in the room by using the target_local column of the membership table. Normally when
 // we want to know if a server is in a room, we have to unmarshal the entire room state which
 // is expensive. The presence of a single row from this query suggests we're still in the
@@ -140,7 +139,7 @@ var selectKnownUsersSQL = "" +
 const selectLocalServerInRoomSQL = "" +
 	"SELECT room_nid FROM roomserver_membership WHERE target_local = true AND membership_nid = $1 AND room_nid = $2 LIMIT 1"
 
-// selectServerMembersInRoomSQL is an optimised case for checking for server members in a room.
+// selectServerMembersInRoomSQL is an optimized case for checking for server members in a room.
 // The JOIN is significantly leaner than the previous case of looking up event NIDs and reading the
 // membership events from the database, as the JOIN query amounts to little more than two index
 // scans which are very fast. The presence of a single row from this query suggests the server is
@@ -155,6 +154,11 @@ SELECT DISTINCT target_nid
 FROM roomserver_membership m
 WHERE membership_nid > $1 AND target_nid = ANY($2)
 `
+
+const selectAnyLocalMemberNotForgottenSQL = "" +
+	"SELECT 1 FROM roomserver_membership" +
+	" WHERE room_nid = $1 AND target_local = TRUE AND forgotten = FALSE" +
+	" LIMIT 1"
 
 type membershipStatements struct {
 	insertMembershipStmt                            *sql.Stmt
@@ -172,6 +176,7 @@ type membershipStatements struct {
 	updateMembershipForgetRoomStmt                  *sql.Stmt
 	selectLocalServerInRoomStmt                     *sql.Stmt
 	selectServerInRoomStmt                          *sql.Stmt
+	selectAnyLocalMemberNotForgottenStmt            *sql.Stmt
 	deleteMembershipStmt                            *sql.Stmt
 	selectJoinedUsersStmt                           *sql.Stmt
 }
@@ -208,6 +213,7 @@ func PrepareMembershipTable(db *sql.DB) (tables.Membership, error) {
 		{&s.updateMembershipForgetRoomStmt, updateMembershipForgetRoom},
 		{&s.selectLocalServerInRoomStmt, selectLocalServerInRoomSQL},
 		{&s.selectServerInRoomStmt, selectServerInRoomSQL},
+		{&s.selectAnyLocalMemberNotForgottenStmt, selectAnyLocalMemberNotForgottenSQL},
 		{&s.deleteMembershipStmt, deleteMembershipSQL},
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 	}.Prepare(db)
@@ -220,7 +226,7 @@ func (s *membershipStatements) SelectJoinedUsers(
 	result := make([]types.EventStateKeyNID, 0, len(targetUserNIDs))
 
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersStmt)
-	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, pq.Array(targetUserNIDs))
+	rows, err := stmt.QueryContext(ctx, tables.MembershipStateLeaveOrBan, targetUserNIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +333,8 @@ func (s *membershipStatements) UpdateMembership(
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, senderUserNID types.EventStateKeyNID, membership tables.MembershipState,
 	eventNID types.EventNID, forgotten bool,
 ) (bool, error) {
-	res, err := sqlutil.TxStmt(txn, s.updateMembershipStmt).ExecContext(
+	updateMembershipStmt := sqlutil.TxStmt(txn, s.updateMembershipStmt)
+	res, err := updateMembershipStmt.ExecContext(
 		ctx, roomNID, targetUserNID, senderUserNID, membership, eventNID, forgotten,
 	)
 	if err != nil {
@@ -371,9 +378,9 @@ func (s *membershipStatements) SelectJoinedUsersSetForRooms(
 	stmt := sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsStmt)
 	if len(userNIDs) > 0 {
 		stmt = sqlutil.TxStmt(txn, s.selectJoinedUsersSetForRoomsAndUserStmt)
-		rows, err = stmt.QueryContext(ctx, localOnly, pq.Array(roomNIDs), pq.Array(userNIDs))
+		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs, userNIDs)
 	} else {
-		rows, err = stmt.QueryContext(ctx, localOnly, pq.Array(roomNIDs))
+		rows, err = stmt.QueryContext(ctx, localOnly, roomNIDs)
 	}
 
 	if err != nil {
@@ -417,7 +424,8 @@ func (s *membershipStatements) UpdateForgetMembership(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, forget bool,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.updateMembershipForgetRoomStmt).ExecContext(
+	updateMembershipForgetRoomStmt := sqlutil.TxStmt(txn, s.updateMembershipForgetRoomStmt)
+	_, err := updateMembershipForgetRoomStmt.ExecContext(
 		ctx, roomNID, targetUserNID, forget,
 	)
 	return err
@@ -460,8 +468,24 @@ func (s *membershipStatements) DeleteMembership(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, targetUserNID types.EventStateKeyNID,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.deleteMembershipStmt).ExecContext(
+	deleteMembershipStmt := sqlutil.TxStmt(txn, s.deleteMembershipStmt)
+	_, err := deleteMembershipStmt.ExecContext(
 		ctx, roomNID, targetUserNID,
 	)
 	return err
+}
+
+func (s *membershipStatements) SelectAnyLocalMemberNotForgotten(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (bool, error) {
+	var found int
+	stmt := sqlutil.TxStmt(txn, s.selectAnyLocalMemberNotForgottenStmt)
+	err := stmt.QueryRowContext(ctx, roomNID).Scan(&found)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

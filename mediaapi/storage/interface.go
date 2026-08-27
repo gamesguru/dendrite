@@ -9,8 +9,9 @@ package storage
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
 
 type Database interface {
@@ -22,6 +23,7 @@ type MediaRepository interface {
 	StoreMediaMetadata(ctx context.Context, mediaMetadata *types.MediaMetadata) error
 	GetMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) (*types.MediaMetadata, error)
 	GetMediaMetadataByHash(ctx context.Context, mediaHash types.Base64Hash, mediaOrigin spec.ServerName) (*types.MediaMetadata, error)
+	DeleteMediaMetadata(ctx context.Context, mediaID types.MediaID, mediaOrigin spec.ServerName) error
 }
 
 type Thumbnails interface {

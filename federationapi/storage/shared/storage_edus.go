@@ -14,19 +14,20 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
 )
 
-// defaultExpiry for EDUs if not listed below
+// defaultExpiry for EDUs if not listed below.
 var defaultExpiry = time.Hour * 24
 
 // defaultExpireEDUTypes contains EDUs which can/should be expired after a given time
 // if the target server isn't reachable for some reason.
 var defaultExpireEDUTypes = map[string]time.Duration{
 	spec.MTyping:   time.Minute,
-	spec.MPresence: time.Minute * 10,
+	spec.MPresence: time.Minute * 10, //nolint:mnd
 }
 
 // AssociateEDUWithDestination creates an association that the
@@ -185,7 +186,6 @@ func (d *Database) DeleteExpiredEDUs(ctx context.Context) error {
 
 		return d.FederationQueueEDUs.DeleteExpiredEDUs(ctx, txn, expiredBefore)
 	})
-
 	if err != nil {
 		return err
 	}

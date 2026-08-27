@@ -12,12 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/relayapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/tables"
 )
 
 type Database struct {
@@ -99,7 +100,7 @@ func (d *Database) CleanTransactions(
 		// So for multiple destinations we would call send_relay multiple times and have multiple
 		// json entries of the same transaction.
 		//
-		// TLDR; this works as expected right now but can easily be optimised in the future.
+		// TLDR; this works as expected right now but can easily be optimized in the future.
 		deleteJSONErr := d.RelayQueueJSON.DeleteQueueJSON(ctx, txn, nids)
 
 		if deleteEntryErr != nil {
@@ -139,12 +140,12 @@ func (d *Database) GetTransaction(
 
 	transaction := &gomatrixserverlib.Transaction{}
 	if _, ok := txns[firstNID]; !ok {
-		return nil, nil, fmt.Errorf("Failed retrieving json blob for transaction: %d", firstNID)
+		return nil, nil, fmt.Errorf("failed retrieving json blob for transaction: %d", firstNID)
 	}
 
 	err = json.Unmarshal(txns[firstNID], transaction)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Unmarshal transaction: %w", err)
+		return nil, nil, fmt.Errorf("unmarshal transaction: %w", err)
 	}
 
 	newReceipt := receipt.NewReceipt(firstNID)

@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	roomserverAPI "github.com/element-hq/dendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 type PublicRoomReq struct {
@@ -28,7 +28,7 @@ type filter struct {
 	RoomTypes   []string `json:"room_types,omitempty"`
 }
 
-// GetPostPublicRooms implements GET and POST /publicRooms
+// GetPostPublicRooms implements GET and POST /publicRooms.
 func GetPostPublicRooms(req *http.Request, rsAPI roomserverAPI.FederationRoomserverAPI) util.JSONResponse {
 	var request PublicRoomReq
 	if fillErr := fillPublicRoomsReq(req, &request); fillErr != nil {
@@ -53,7 +53,6 @@ func GetPostPublicRooms(req *http.Request, rsAPI roomserverAPI.FederationRoomser
 func publicRooms(
 	ctx context.Context, request PublicRoomReq, rsAPI roomserverAPI.FederationRoomserverAPI,
 ) (*fclient.RespPublicRooms, error) {
-
 	var response fclient.RespPublicRooms
 	var limit int16
 	var offset int64
@@ -101,9 +100,10 @@ func publicRooms(
 
 // fillPublicRoomsReq fills the Limit, Since and Filter attributes of a GET or POST request
 // on /publicRooms by parsing the incoming HTTP request
-// Filter is only filled for POST requests
+// Filter is only filled for POST requests.
 func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSONResponse {
-	if httpReq.Method == http.MethodGet {
+	switch httpReq.Method {
+	case http.MethodGet:
 		limit, err := strconv.Atoi(httpReq.FormValue("limit"))
 		// Atoi returns 0 and an error when trying to parse an empty string
 		// In that case, we want to assign 0 so we ignore the error
@@ -117,7 +117,7 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 		request.Limit = int16(limit)
 		request.Since = httpReq.FormValue("since")
 		return nil
-	} else if httpReq.Method == http.MethodPost {
+	case http.MethodPost:
 		return httputil.UnmarshalJSONRequest(httpReq, request)
 	}
 
@@ -127,7 +127,7 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 	}
 }
 
-// due to lots of switches
+// due to lots of switches.
 func fillInRooms(ctx context.Context, roomIDs []string, rsAPI roomserverAPI.FederationRoomserverAPI) ([]fclient.PublicRoom, error) {
 	avatarTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.avatar", StateKey: ""}
 	nameTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.name", StateKey: ""}

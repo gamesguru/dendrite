@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/mediaapi/fileutils"
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 func Test_uploadRequest_doUpload(t *testing.T) {
@@ -28,6 +29,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 		reqReader                 io.Reader
 		cfg                       *config.MediaAPI
 		db                        storage.Database
+		fileStore                 filestore.FileStore
 		activeThumbnailGeneration *types.ActiveThumbnailGeneration
 	}
 
@@ -49,7 +51,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 
 	// create testdata folder and remove when done
 	_ = os.Mkdir(testdataPath, os.ModePerm)
-	defer fileutils.RemoveDir(types.Path(testdataPath), nil)
+	defer filestore.RemoveDir(types.Path(testdataPath))
 	cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
 	db, err := storage.NewMediaAPIDatasource(cm, &config.DatabaseOptions{
 		ConnectionString:       "file::memory:?cache=shared",
@@ -59,6 +61,11 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("error opening mediaapi database: %v", err)
+	}
+
+	fileStore, err := filestore.NewLocalFileStore(testdataPath)
+	if err != nil {
+		t.Fatalf("failed to create local file store: %v", err)
 	}
 
 	tests := []struct {
@@ -74,6 +81,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 				reqReader: strings.NewReader("test"),
 				cfg:       cfg,
 				db:        db,
+				fileStore: fileStore,
 			},
 			fields: fields{
 				Logger: logger,
@@ -91,6 +99,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 				reqReader: strings.NewReader("testtest"),
 				cfg:       cfg,
 				db:        db,
+				fileStore: fileStore,
 			},
 			fields: fields{
 				Logger: logger,
@@ -108,6 +117,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 				reqReader: strings.NewReader("test test test"),
 				cfg:       cfg,
 				db:        db,
+				fileStore: fileStore,
 			},
 			fields: fields{
 				Logger: logger,
@@ -129,7 +139,8 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 					AbsBasePath:       config.Path(testdataPath),
 					DynamicThumbnails: false,
 				},
-				db: db,
+				db:        db,
+				fileStore: fileStore,
 			},
 			fields: fields{
 				Logger: logger,
@@ -146,7 +157,7 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 				MediaMetadata: tt.fields.MediaMetadata,
 				Logger:        tt.fields.Logger,
 			}
-			if got := r.doUpload(tt.args.ctx, tt.args.reqReader, tt.args.cfg, tt.args.db, tt.args.activeThumbnailGeneration); !reflect.DeepEqual(got, tt.want) {
+			if got := r.doUpload(tt.args.ctx, tt.args.reqReader, tt.args.cfg, tt.args.db, tt.args.fileStore, tt.args.activeThumbnailGeneration); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("doUpload() = %+v, want %+v", got, tt.want)
 			}
 		})

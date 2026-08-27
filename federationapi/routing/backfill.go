@@ -12,13 +12,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Backfill implements the /backfill federation endpoint.
@@ -88,7 +89,7 @@ func Backfill(
 
 	// Enforce a limit of 100 events, as not to hit the DB to hard.
 	// Synapse has a hard limit of 100 events as well.
-	if req.Limit > 100 {
+	if req.Limit > 100 { //nolint:mnd
 		req.Limit = 100
 	}
 
@@ -120,7 +121,7 @@ func Backfill(
 	}
 
 	// sytest wants these in reversed order, similar to /messages, so reverse them now.
-	for i := len(eventJSONs)/2 - 1; i >= 0; i-- {
+	for i := len(eventJSONs)/2 - 1; i >= 0; i-- { //nolint:mnd
 		opp := len(eventJSONs) - 1 - i
 		eventJSONs[i], eventJSONs[opp] = eventJSONs[opp], eventJSONs[i]
 	}

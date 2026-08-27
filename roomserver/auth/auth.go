@@ -8,9 +8,10 @@ package auth
 import (
 	"context"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 // TODO: This logic should live in gomatrixserverlib

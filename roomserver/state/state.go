@@ -15,14 +15,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type StateResolutionStorage interface {
@@ -58,6 +58,10 @@ func NewStateResolution(db StateResolutionStorage, roomInfo *types.RoomInfo, que
 
 type PowerLevelResolver interface {
 	Resolve(ctx context.Context, eventID string) (*gomatrixserverlib.PowerLevelContent, error)
+	// CreateEvent returns the m.room.create event from the state at eventID.
+	// Callers need this to evaluate privileged-creator power on v12+ rooms,
+	// where creators have implicit power but are not in m.room.power_levels.
+	CreateEvent(ctx context.Context, eventID string) (gomatrixserverlib.PDU, error)
 }
 
 func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatrixserverlib.PowerLevelContent, error) {
@@ -79,7 +83,46 @@ func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatri
 		}
 	}
 	if plNID == 0 {
-		return nil, fmt.Errorf("unable to find power level event")
+		// No m.room.power_levels event in state. Per spec, the room creator
+		// has implicit power 100 in v1-v11 rooms (see issue #152 /
+		// https://matrix.org/docs/spec-guides/creator-power-level/), so
+		// return defaults with the creator entry populated rather than
+		// erroring out and silently dropping legitimate creator actions
+		// like redactions.
+		var createNID types.EventNID
+		wantCreateTuple := types.StateKeyTuple{
+			EventTypeNID:     types.MRoomCreateNID,
+			EventStateKeyNID: types.EmptyStateKeyNID,
+		}
+		for _, entry := range stateEntries {
+			if entry.StateKeyTuple == wantCreateTuple {
+				createNID = entry.EventNID
+				break
+			}
+		}
+		if createNID == 0 {
+			return nil, fmt.Errorf("no power_levels or create event in state at %s", eventID)
+		}
+		if p.roomInfo == nil {
+			return nil, types.ErrorInvalidRoomInfo
+		}
+		createEvents, err := p.db.Events(ctx, p.roomInfo.RoomVersion, []types.EventNID{createNID})
+		if err != nil {
+			return nil, err
+		}
+		if len(createEvents) == 0 {
+			return nil, fmt.Errorf("create event NID %d not found in events table at %s", createNID, eventID)
+		}
+		createEvent := createEvents[0].PDU
+		auth, err := gomatrixserverlib.NewAuthEvents([]gomatrixserverlib.PDU{createEvent})
+		if err != nil {
+			return nil, err
+		}
+		pl, err := gomatrixserverlib.NewPowerLevelContentFromAuthEvents(auth, string(createEvent.SenderID()))
+		if err != nil {
+			return nil, err
+		}
+		return &pl, nil
 	}
 
 	if p.roomInfo == nil {
@@ -98,6 +141,41 @@ func (p *StateResolution) Resolve(ctx context.Context, eventID string) (*gomatri
 	}
 
 	return powerlevels, nil
+}
+
+func (p *StateResolution) CreateEvent(ctx context.Context, eventID string) (gomatrixserverlib.PDU, error) {
+	stateEntries, err := p.LoadStateAtEvent(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+
+	wantTuple := types.StateKeyTuple{
+		EventTypeNID:     types.MRoomCreateNID,
+		EventStateKeyNID: types.EmptyStateKeyNID,
+	}
+
+	var createNID types.EventNID
+	for _, entry := range stateEntries {
+		if entry.StateKeyTuple == wantTuple {
+			createNID = entry.EventNID
+			break
+		}
+	}
+	if createNID == 0 {
+		return nil, fmt.Errorf("unable to find create event")
+	}
+
+	if p.roomInfo == nil {
+		return nil, types.ErrorInvalidRoomInfo
+	}
+	events, err := p.db.Events(ctx, p.roomInfo.RoomVersion, []types.EventNID{createNID})
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("unable to find create event")
+	}
+	return events[0].PDU, nil
 }
 
 // LoadStateAtSnapshot loads the full state of a room at a particular snapshot.
@@ -600,7 +678,7 @@ func (v *StateResolution) loadStateAfterEventsForNumericTuples(
 
 var calculateStateDurations = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "calculate_state_duration_milliseconds",
 		Help:      "How long it takes to calculate the state after a list of events",
@@ -632,7 +710,7 @@ var calculateStateDurations = prometheus.NewHistogramVec(
 
 var calculateStatePrevEventLength = prometheus.NewSummaryVec(
 	prometheus.SummaryOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "calculate_state_prev_event_length",
 		Help:      "The length of the list of events to calculate the state after",
@@ -642,7 +720,7 @@ var calculateStatePrevEventLength = prometheus.NewSummaryVec(
 
 var calculateStateFullStateLength = prometheus.NewSummaryVec(
 	prometheus.SummaryOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "calculate_state_full_state_length",
 		Help:      "The length of the full room state.",
@@ -652,7 +730,7 @@ var calculateStateFullStateLength = prometheus.NewSummaryVec(
 
 var calculateStateConflictLength = prometheus.NewSummaryVec(
 	prometheus.SummaryOpts{
-		Namespace: "dendrite",
+		Namespace: "zendrite",
 		Subsystem: "roomserver",
 		Name:      "calculate_state_conflict_state_length",
 		Help:      "The length of the conflicted room state.",
@@ -690,7 +768,7 @@ func (c *calculateStateMetrics) stop(stateNID types.StateSnapshotNID, err error)
 	return stateNID, err
 }
 
-func init() {
+func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		calculateStateDurations, calculateStatePrevEventLength,
 		calculateStateFullStateLength, calculateStateConflictLength,
@@ -802,8 +880,7 @@ func (v *StateResolution) calculateAndStoreStateAfterManyEvents(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.calculateAndStoreStateAfterManyEvents")
 	defer trace.EndRegion()
 
-	state, algorithm, conflictLength, err :=
-		v.calculateStateAfterManyEvents(ctx, v.roomInfo.RoomVersion, prevStates)
+	state, algorithm, conflictLength, err := v.calculateStateAfterManyEvents(ctx, v.roomInfo.RoomVersion, prevStates)
 	metrics.algorithm = algorithm
 	if err != nil {
 		return metrics.stop(0, fmt.Errorf("v.calculateStateAfterManyEvents: %w", err))
@@ -890,7 +967,7 @@ func (v *StateResolution) resolveConflicts(
 	case gomatrixserverlib.StateResV2:
 		fallthrough
 	case gomatrixserverlib.StateResV2_1:
-		return v.resolveConflictsV2(ctx, notConflicted, conflicted)
+		return v.resolveConflictsV2(ctx, stateResAlgo, notConflicted, conflicted)
 	}
 	return nil, fmt.Errorf("unsupported state resolution algorithm %v", stateResAlgo)
 }
@@ -971,6 +1048,7 @@ func (v *StateResolution) resolveConflictsV1(
 // Returns an error if there was a problem talking to the database.
 func (v *StateResolution) resolveConflictsV2(
 	ctx context.Context,
+	stateResAlgo gomatrixserverlib.StateResAlgorithm,
 	notConflicted, conflicted []types.StateEntry,
 ) ([]types.StateEntry, error) {
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.resolveConflictsV2")
@@ -1047,16 +1125,49 @@ func (v *StateResolution) resolveConflictsV2(
 
 	// Kill the reference to this so that the GC may pick it up, since we no
 	// longer need this after this point.
-	gotAuthEvents = nil // nolint:ineffassign
+	gotAuthEvents = nil
 
 	// Resolve the conflicts.
+	// Build exactly 2 state sets for the library's splitConflictedUnconflicted.
+	// Both sets contain all non-conflicted events (so they appear in every set
+	// and are correctly identified as unconflicted). Conflicted events are split
+	// across the two sets by state key tuple: the first event per tuple goes in
+	// set 1, the rest in set 2. This ensures the library detects the conflict
+	// (different event IDs for the same tuple across sets) while using O(2N)
+	// memory instead of O(N×C) where C is the number of conflicts.
 	resolvedEvents := func() []gomatrixserverlib.PDU {
 		resolvedTrace, _ := internal.StartRegion(ctx, "StateResolution.ResolveStateConflictsV2")
 		defer resolvedTrace.EndRegion()
 
-		return gomatrixserverlib.ResolveStateConflictsV2(
-			conflictedEvents,
-			nonConflictedEvents,
+		type stateKeyTuple struct {
+			evType   string
+			stateKey string
+		}
+
+		set1 := make([]gomatrixserverlib.PDU, 0, len(nonConflictedEvents)+len(conflictedEvents))
+		set2 := make([]gomatrixserverlib.PDU, 0, len(nonConflictedEvents)+len(conflictedEvents))
+		set1 = append(set1, nonConflictedEvents...)
+		set2 = append(set2, nonConflictedEvents...)
+
+		// Split conflicted events by tuple: first seen goes in set1, rest in set2.
+		seenTuples := make(map[stateKeyTuple]bool, len(conflictedEvents))
+		for _, e := range conflictedEvents {
+			sk := ""
+			if e.StateKey() != nil {
+				sk = *e.StateKey()
+			}
+			tuple := stateKeyTuple{e.Type(), sk}
+			if !seenTuples[tuple] {
+				seenTuples[tuple] = true
+				set1 = append(set1, e)
+			} else {
+				set2 = append(set2, e)
+			}
+		}
+
+		return gomatrixserverlib.ResolveStateConflictsV2New(
+			stateResAlgo,
+			[][]gomatrixserverlib.PDU{set1, set2},
 			authEvents,
 			func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return v.Querier.QueryUserIDForSender(ctx, roomID, senderID)
@@ -1163,7 +1274,7 @@ func (v *StateResolution) loadStateEvents(
 			panic(fmt.Errorf("corrupt DB: Missing event numeric ID %d", entry.EventNID))
 		}
 		result = append(result, event.PDU)
-		eventIDMap[event.PDU.EventID()] = entry
+		eventIDMap[event.EventID()] = entry
 		v.events[entry.EventNID] = event.PDU
 	}
 	return result, eventIDMap, nil

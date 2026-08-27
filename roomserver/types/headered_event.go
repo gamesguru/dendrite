@@ -9,11 +9,11 @@ package types
 import (
 	"unsafe"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
-// HeaderedEvent is an Event which serialises to the headered form, which includes
+// HeaderedEvent is an Event which serializes to the headered form, which includes
 // _room_version and _event_id fields.
 type HeaderedEvent struct {
 	gomatrixserverlib.PDU
@@ -27,13 +27,13 @@ type HeaderedEvent struct {
 func (h *HeaderedEvent) CacheCost() int {
 	return int(unsafe.Sizeof(*h)) +
 		len(h.EventID()) +
-		(cap(h.JSON()) * 2) +
+		(cap(h.JSON()) * 2) + //nolint:mnd
 		len(h.Version()) +
 		1 // redacted bool
 }
 
 func (h *HeaderedEvent) MarshalJSON() ([]byte, error) {
-	return h.PDU.ToHeaderedJSON()
+	return h.ToHeaderedJSON()
 }
 
 func (j *HeaderedEvent) UnmarshalJSON(data []byte) error {

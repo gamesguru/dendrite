@@ -10,8 +10,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const purgeEventJSONSQL = "" +
@@ -97,14 +97,14 @@ func PreparePurgeStatements(db *sql.DB) (*purgeStatements, error) {
 func (s *purgeStatements) PurgeRoom(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, roomID string,
 ) error {
-
 	// purge by roomID
 	purgeByRoomID := []*sql.Stmt{
 		s.purgeRoomAliasesStmt,
 		s.purgePublishedStmt,
 	}
 	for _, stmt := range purgeByRoomID {
-		_, err := sqlutil.TxStmt(txn, stmt).ExecContext(ctx, roomID)
+		execStmt := sqlutil.TxStmt(txn, stmt)
+		_, err := execStmt.ExecContext(ctx, roomID)
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,8 @@ func (s *purgeStatements) PurgeRoom(
 		s.purgeRoomStmt,
 	}
 	for _, stmt := range purgeByRoomNID {
-		_, err := sqlutil.TxStmt(txn, stmt).ExecContext(ctx, roomNID)
+		execStmt := sqlutil.TxStmt(txn, stmt)
+		_, err := execStmt.ExecContext(ctx, roomNID)
 		if err != nil {
 			return err
 		}

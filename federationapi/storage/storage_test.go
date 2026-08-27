@@ -6,15 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/federationapi/storage"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateFederationDatabase(t *testing.T, dbType test.DBType) (storage.Database, func()) {
@@ -34,14 +35,14 @@ func mustCreateFederationDatabase(t *testing.T, dbType test.DBType) (storage.Dat
 }
 
 func TestExpireEDUs(t *testing.T) {
-	var expireEDUTypes = map[string]time.Duration{
+	expireEDUTypes := map[string]time.Duration{
 		spec.MReceipt: 0,
 	}
 
 	ctx := context.Background()
 	destinations := map[spec.ServerName]struct{}{"localhost": {}}
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateFederationDatabase(t, dbType)
+		db, close := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer close()
 		// insert some data
 		for i := 0; i < 100; i++ {
@@ -92,7 +93,7 @@ func TestOutboundPeeking(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, closeDB := mustCreateFederationDatabase(t, dbType)
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer closeDB()
 		peekID := util.RandomString(8)
 		var renewalInterval int64 = 1000
@@ -174,7 +175,7 @@ func TestInboundPeeking(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, closeDB := mustCreateFederationDatabase(t, dbType)
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
 		defer closeDB()
 		peekID := util.RandomString(8)
 		var renewalInterval int64 = 1000

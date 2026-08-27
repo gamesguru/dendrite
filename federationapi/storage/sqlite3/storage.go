@@ -10,22 +10,23 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared"
-	"github.com/element-hq/dendrite/federationapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// Database stores information needed by the federation sender
+// Database stores information needed by the federation sender.
 type Database struct {
 	shared.Database
 	db     *sql.DB
 	writer sqlutil.Writer
 }
 
-// NewDatabase opens a new database
+// NewDatabase opens a new database.
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions, cache caching.FederationCache, isLocalServerName func(spec.ServerName) bool) (*Database, error) {
 	var d Database
 	var err error
@@ -44,7 +45,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, err
 	}
-	queueEDUs, err := NewSQLiteQueueEDUsTable(d.db)
+	queueEDUs, err := NewSQLiteQueueEDUsTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +81,10 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, err
 	}
+	retryState, err := NewSQLiteRetryStateTable(d.db)
+	if err != nil {
+		return nil, err
+	}
 	m := sqlutil.NewMigrator(d.db)
 	m.AddMigrations(sqlutil.Migration{
 		Version: "federationsender: drop federationsender_rooms",
@@ -109,6 +114,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		NotaryServerKeysJSON:     notaryKeys,
 		NotaryServerKeysMetadata: notaryKeysMetadata,
 		ServerSigningKeys:        serverSigningKeys,
+		FederationRetryState:     retryState,
 	}
 	return &d, nil
 }

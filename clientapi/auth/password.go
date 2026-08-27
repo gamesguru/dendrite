@@ -11,13 +11,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/clientapi/userutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type GetAccountByPassword func(ctx context.Context, req *api.QueryAccountByPasswordRequest, res *api.QueryAccountByPasswordResponse) error
@@ -51,8 +52,14 @@ func (t *LoginTypePassword) LoginFromJSON(ctx context.Context, reqBytes []byte) 
 	return login, func(context.Context, *util.JSONResponse) {}, nil
 }
 
-func (t *LoginTypePassword) Login(ctx context.Context, req interface{}) (*Login, *util.JSONResponse) {
-	r := req.(*PasswordRequest)
+func (t *LoginTypePassword) Login(ctx context.Context, req any) (*Login, *util.JSONResponse) {
+	r, ok := req.(*PasswordRequest)
+	if !ok {
+		return nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("unexpected request type"),
+		}
+	}
 	username := r.Username()
 	if username == "" {
 		return nil, &util.JSONResponse{

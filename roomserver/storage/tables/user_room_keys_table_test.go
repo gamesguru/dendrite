@@ -6,16 +6,16 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
-	ed255192 "golang.org/x/crypto/ed25519"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateUserRoomKeysTable(t *testing.T, dbType test.DBType) (tab tables.UserRoomKeys, db *sql.DB, close func()) {
@@ -79,7 +79,9 @@ func TestUserRoomKeysTable(t *testing.T) {
 
 			// try to update an existing key, this should only be done for users NOT on this homeserver
 			var gotPubKey ed25519.PublicKey
-			gotPubKey, err = tab.InsertUserRoomPublicKey(context.Background(), txn, userNID, roomNID, key2.Public().(ed25519.PublicKey))
+			pubKey2, ok := key2.Public().(ed25519.PublicKey)
+			assert.True(t, ok, "expected ed25519.PublicKey type")
+			gotPubKey, err = tab.InsertUserRoomPublicKey(context.Background(), txn, userNID, roomNID, pubKey2)
 			assert.NoError(t, err)
 			assert.Equal(t, key2.Public(), gotPubKey)
 
@@ -93,22 +95,28 @@ func TestUserRoomKeysTable(t *testing.T) {
 
 			// query user NIDs for senderKeys
 			var gotKeys map[string]types.UserRoomKeyPair
+			key2Pub, ok := key2.Public().(ed25519.PublicKey)
+			assert.True(t, ok, "key2.Public() should be ed25519.PublicKey")
+			key3Pub, ok := key3.Public().(ed25519.PublicKey)
+			assert.True(t, ok, "key3.Public() should be ed25519.PublicKey")
+			keyPub, ok := key.Public().(ed25519.PublicKey)
+			assert.True(t, ok, "key.Public() should be ed25519.PublicKey")
 			query := map[types.RoomNID][]ed25519.PublicKey{
-				roomNID:          {key2.Public().(ed25519.PublicKey), key3.Public().(ed25519.PublicKey)},
-				types.RoomNID(2): {key.Public().(ed25519.PublicKey), key3.Public().(ed25519.PublicKey)}, // doesn't exist
+				roomNID:          {key2Pub, key3Pub},
+				types.RoomNID(2): {keyPub, key3Pub}, // doesn't exist
 			}
 			gotKeys, err = tab.BulkSelectUserNIDs(context.Background(), txn, query)
 			assert.NoError(t, err)
 			assert.NotNil(t, gotKeys)
 
 			wantKeys := map[string]types.UserRoomKeyPair{
-				string(spec.Base64Bytes(key2.Public().(ed25519.PublicKey)).Encode()): {RoomNID: roomNID, EventStateKeyNID: userNID},
-				string(spec.Base64Bytes(key3.Public().(ed25519.PublicKey)).Encode()): {RoomNID: roomNID, EventStateKeyNID: userNID2},
+				spec.Base64Bytes(key2Pub).Encode(): {RoomNID: roomNID, EventStateKeyNID: userNID},
+				spec.Base64Bytes(key3Pub).Encode(): {RoomNID: roomNID, EventStateKeyNID: userNID2},
 			}
 			assert.Equal(t, wantKeys, gotKeys)
 
 			// insert key that came in over federation
-			var gotPublicKey, key4 ed255192.PublicKey
+			var gotPublicKey, key4 ed25519.PublicKey
 			key4, _, err = ed25519.GenerateKey(nil)
 			assert.NoError(t, err)
 			gotPublicKey, err = tab.InsertUserRoomPublicKey(context.Background(), txn, userNID, 2, key4)
@@ -118,6 +126,5 @@ func TestUserRoomKeysTable(t *testing.T) {
 			return nil
 		})
 		assert.NoError(t, err)
-
 	})
 }

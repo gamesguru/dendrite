@@ -10,15 +10,15 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/mediaapi/storage"
-	"github.com/element-hq/dendrite/mediaapi/types"
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
+	"codefloe.com/pat-s/zendrite/mediaapi/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type thumbnailFitness struct {
@@ -29,10 +29,10 @@ type thumbnailFitness struct {
 	fileSize       types.FileSizeBytes
 }
 
-// thumbnailTemplate is the filename template for thumbnails
+// thumbnailTemplate is the filename template for thumbnails.
 const thumbnailTemplate = "thumbnail-%vx%v-%v"
 
-// GetThumbnailPath returns the path to a thumbnail given the absolute src path and thumbnail size configuration
+// GetThumbnailPath returns the path to a thumbnail given the absolute src path and thumbnail size configuration.
 func GetThumbnailPath(src types.Path, config types.ThumbnailSize) types.Path {
 	srcDir := filepath.Dir(string(src))
 	return types.Path(filepath.Join(
@@ -50,7 +50,7 @@ func GetThumbnailPath(src types.Path, config types.ThumbnailSize) types.Path {
 // * if a cropped image is desired, prefer the same method, if scaled is desired, absolutely require scaled
 // * has a small file size
 // If a pre-generated thumbnail size is the best match, but it has not been generated yet, the caller can use the returned size to generate it.
-// Returns nil if no thumbnail matches the criteria
+// Returns nil if no thumbnail matches the criteria.
 func SelectThumbnail(desired types.ThumbnailSize, thumbnails []*types.ThumbnailMetadata, thumbnailSizes []config.ThumbnailSize) (*types.ThumbnailMetadata, *types.ThumbnailSize) {
 	var chosenThumbnail *types.ThumbnailMetadata
 	var chosenThumbnailSize *types.ThumbnailSize
@@ -81,13 +81,13 @@ func SelectThumbnail(desired types.ThumbnailSize, thumbnails []*types.ThumbnailM
 	return chosenThumbnail, chosenThumbnailSize
 }
 
-// getActiveThumbnailGeneration checks for active thumbnail generation
-func getActiveThumbnailGeneration(dst types.Path, _ types.ThumbnailSize, activeThumbnailGeneration *types.ActiveThumbnailGeneration, maxThumbnailGenerators int, logger *log.Entry) (isActive bool, busy bool, errorReturn error) {
+// getActiveThumbnailGeneration checks for active thumbnail generation.
+func getActiveThumbnailGeneration(key string, activeThumbnailGeneration *types.ActiveThumbnailGeneration, maxThumbnailGenerators int, logger *log.Entry) (isActive bool, busy bool, errorReturn error) {
 	// Check if there is active thumbnail generation.
 	activeThumbnailGeneration.Lock()
 	defer activeThumbnailGeneration.Unlock()
-	if activeThumbnailGenerationResult, ok := activeThumbnailGeneration.PathToResult[string(dst)]; ok {
-		logger.Debugf("Waiting for another goroutine to generate the thumbnail %q", dst)
+	if activeThumbnailGenerationResult, ok := activeThumbnailGeneration.PathToResult[key]; ok {
+		logger.Debugf("Waiting for another goroutine to generate the thumbnail %q", key)
 
 		// NOTE: Wait unlocks and locks again internally. There is still a deferred Unlock() that will unlock this.
 		activeThumbnailGenerationResult.Cond.Wait()
@@ -103,7 +103,7 @@ func getActiveThumbnailGeneration(dst types.Path, _ types.ThumbnailSize, activeT
 	}
 
 	// No active thumbnail generation so create one
-	activeThumbnailGeneration.PathToResult[string(dst)] = &types.ThumbnailGenerationResult{
+	activeThumbnailGeneration.PathToResult[key] = &types.ThumbnailGenerationResult{
 		Cond: &sync.Cond{L: activeThumbnailGeneration},
 	}
 
@@ -111,25 +111,26 @@ func getActiveThumbnailGeneration(dst types.Path, _ types.ThumbnailSize, activeT
 }
 
 // broadcastGeneration broadcasts that thumbnail generation completed and the error to all waiting goroutines
-// Note: This should only be called by the owner of the activeThumbnailGenerationResult
-func broadcastGeneration(dst types.Path, activeThumbnailGeneration *types.ActiveThumbnailGeneration, _ types.ThumbnailSize, errorReturn error, logger *log.Entry) {
+// Note: This should only be called by the owner of the activeThumbnailGenerationResult.
+func broadcastGeneration(key string, activeThumbnailGeneration *types.ActiveThumbnailGeneration, _ types.ThumbnailSize, errorReturn error, logger *log.Entry) {
 	activeThumbnailGeneration.Lock()
 	defer activeThumbnailGeneration.Unlock()
-	if activeThumbnailGenerationResult, ok := activeThumbnailGeneration.PathToResult[string(dst)]; ok {
-		logger.Debugf("Signalling other goroutines waiting for this goroutine to generate the thumbnail %q", dst)
-		// Note: errorReturn is a named return value error that is signalled from here to waiting goroutines
+	if activeThumbnailGenerationResult, ok := activeThumbnailGeneration.PathToResult[key]; ok {
+		logger.Debugf("Signaling other goroutines waiting for this goroutine to generate the thumbnail %q", key)
+		// Note: errorReturn is a named return value error that is signaled from here to waiting goroutines
 		activeThumbnailGenerationResult.Err = errorReturn
 		activeThumbnailGenerationResult.Cond.Broadcast()
 	}
-	delete(activeThumbnailGeneration.PathToResult, string(dst))
+	delete(activeThumbnailGeneration.PathToResult, key)
 }
 
 func isThumbnailExists(
 	ctx context.Context,
-	dst types.Path,
+	mediaHash types.Base64Hash,
 	config types.ThumbnailSize,
 	mediaMetadata *types.MediaMetadata,
 	db storage.Database,
+	fileStore filestore.FileStore,
 	logger *log.Entry,
 ) (bool, error) {
 	thumbnailMetadata, err := db.GetThumbnail(
@@ -137,22 +138,30 @@ func isThumbnailExists(
 		config.Width, config.Height, config.ResizeMethod,
 	)
 	if err != nil {
-		logger.Errorf("Failed to query database for thumbnail %q", dst)
+		logger.Errorf("Failed to query database for thumbnail %dx%d-%s", config.Width, config.Height, config.ResizeMethod)
 		return false, err
 	}
 	if thumbnailMetadata != nil {
+		// Verify the thumbnail file actually exists in the store.
+		// The DB may have stale records if the media storage was wiped.
+		_, exists, statErr := fileStore.StatThumbnail(ctx, mediaHash, config)
+		if statErr != nil {
+			return false, statErr
+		}
+		if !exists {
+			logger.Warnf("Thumbnail metadata exists in DB but file is missing in store for %s, will regenerate", mediaHash)
+			return false, nil
+		}
 		return true, nil
 	}
-	// Note: The double-negative is intentional as os.IsExist(err) != !os.IsNotExist(err).
-	// The functions are error checkers to be used in different cases.
-	if _, err = os.Stat(string(dst)); !os.IsNotExist(err) {
-		// Thumbnail exists
-		return true, nil
+	_, exists, err := fileStore.StatThumbnail(ctx, mediaHash, config)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return exists, nil
 }
 
-// init with worst values
+// init with worst values.
 func newThumbnailFitness() thumbnailFitness {
 	return thumbnailFitness{
 		isSmaller:      1,

@@ -3,16 +3,17 @@ package routing
 import (
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/clientapi/httputil"
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type newPasswordRequest struct {

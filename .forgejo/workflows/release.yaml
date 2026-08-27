@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: Build release binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y git
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install Docker
+        run: |
+          # Add Docker's official GPG key
+          apt-get install -y ca-certificates curl zip
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          # Add the repository to Apt sources
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+          docker --version
+
+      - name: Build with xgo
+        run: |
+          set -euo pipefail
+
+          CONTAINER_ID=$(docker create \
+            -e PACK=./cmd/zendrite \
+            -e OUT=zendrite \
+            -e FLAG_V=true \
+            -e FLAG_LDFLAGS="-s -w -X codefloe.com/pat-s/zendrite/internal.version=${{ github.ref_name }}" \
+            -e FLAG_TRIMPATH=true \
+            -e FLAG_BUILDMODE=default \
+            -e TARGETS="linux/amd64 linux/arm64 linux/arm-7 darwin/amd64 darwin/arm64 windows/amd64" \
+            ghcr.io/techknowlogick/xgo:go-1.26.x .)
+
+          docker cp . "$CONTAINER_ID:/source"
+          docker start -a "$CONTAINER_ID"
+
+          mkdir -p dist
+          docker cp "$CONTAINER_ID:/build/." dist/
+
+          echo "Contents of dist:"
+          ls -la dist/
+
+          docker rm "$CONTAINER_ID"
+
+      - name: Create archives
+        run: |
+          cd dist
+          for file in zendrite-*; do
+            if [[ "$file" == *.exe ]]; then
+              zip "${file%.exe}.zip" "$file"
+              rm "$file"
+            else
+              tar -czvf "${file}.tar.gz" "$file"
+              rm "$file"
+            fi
+          done
+          ls -la
+
+      - name: Upload artifacts
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/*
+
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: build
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.1
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache curl jq git nodejs
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download binaries
+        uses: forgejo/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: Generate changelog
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git-sv rn -t "${{ github.ref_name }}" -o release-notes.md
+          cat release-notes.md
+
+      - name: Create release
+        env:
+          ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          API_BASE="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+
+          # Delete existing release for this tag if present
+          EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${API_BASE}/releases/tags/${TAG}" \
+            -H "Authorization: token $ISSUE_TOKEN")
+          if [ "$EXISTING" = "200" ]; then
+            EXISTING_ID=$(curl --fail --show-error -s "${API_BASE}/releases/tags/${TAG}" \
+              -H "Authorization: token $ISSUE_TOKEN" | jq -r '.id')
+            echo "Deleting existing release $EXISTING_ID for tag $TAG"
+            curl --fail --show-error -X DELETE "${API_BASE}/releases/${EXISTING_ID}" \
+              -H "Authorization: token $ISSUE_TOKEN"
+          fi
+
+          # Create release
+          RELEASE_RESPONSE=$(curl --fail --show-error -X POST \
+            "${API_BASE}/releases" \
+            -H "Authorization: token $ISSUE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$TAG" \
+              --arg body "$(cat release-notes.md)" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
+
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          echo "Created release with ID: $RELEASE_ID"
+
+          # Upload assets
+          for file in dist/*; do
+            filename=$(basename "$file")
+            echo "Uploading $filename ($(stat -c%s "$file") bytes)..."
+            curl --fail --show-error --retry 3 --retry-delay 5 \
+              -X POST \
+              "${API_BASE}/releases/${RELEASE_ID}/assets?name=${filename}" \
+              -H "Authorization: token $ISSUE_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              -T "$file"
+          done
+
+          echo "Release created: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
+
+  bump-helm:
+    name: Bump Helm chart appVersion
+    runs-on: ubuntu-latest
+    # renovate: datasource=docker depName=thegeeklab/git-sv
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.1
+    needs: release
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache git openssh nodejs
+
+      - name: Clone helm-zendrite and bump appVersion
+        env:
+          DEPLOY_KEY: ${{ secrets.HELM_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Setup SSH with deploy key
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
+
+          # Clone
+          REPO_URL="git@10.10.2.1:devxy/helm-zendrite.git"
+          git clone "$REPO_URL" helm-zendrite
+          cd helm-zendrite
+
+          # Update appVersion
+          VERSION="${GITHUB_REF_NAME#v}"
+          git config user.name "pat-s"
+          git config user.email "patrick.schratz@gmail.com"
+          sed -i "s/^appVersion: .*/appVersion: ${VERSION}/" charts/zendrite/Chart.yaml
+
+          # Commit and push only if there are changes
+          if git diff --quiet charts/zendrite/Chart.yaml; then
+            echo "appVersion already set to ${VERSION}, skipping commit"
+          else
+            git add charts/zendrite/Chart.yaml
+            git commit -m "chore(deps): bump zendrite appVersion to ${VERSION}"
+            git push
+          fi
+
+          # Create semver tag via git-sv and push it
+          NEXT_VERSION=$(git-sv nv)
+          echo "Next version: ${NEXT_VERSION}"
+          git tag "v${NEXT_VERSION}"
+          git push origin "v${NEXT_VERSION}"

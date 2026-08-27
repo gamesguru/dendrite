@@ -19,25 +19,23 @@ import (
 	"testing"
 	"time"
 
-	api2 "github.com/element-hq/dendrite/federationapi/api"
-	"github.com/element-hq/dendrite/federationapi/statistics"
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	roomserver "github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/test"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage"
+	api2 "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
-var (
-	ctx = context.Background()
-)
+var ctx = context.Background()
 
 type mockKeyChangeProducer struct {
 	events []api.DeviceMessage
@@ -117,8 +115,7 @@ func (d *mockDeviceListUpdaterDatabase) DeviceKeysJSON(ctx context.Context, keys
 	return nil
 }
 
-type mockDeviceListUpdaterAPI struct {
-}
+type mockDeviceListUpdaterAPI struct{}
 
 func (d *mockDeviceListUpdaterAPI) PerformUploadDeviceKeys(ctx context.Context, req *api.PerformUploadDeviceKeysRequest, res *api.PerformUploadDeviceKeysResponse) {
 }
@@ -246,7 +243,6 @@ func TestUpdateNoPrevID(t *testing.T) {
 		UserID:            remoteUserID,
 	}
 	err := updater.Update(ctx, event)
-
 	if err != nil {
 		t.Fatalf("Update returned an error: %s", err)
 	}
@@ -275,7 +271,6 @@ func TestUpdateNoPrevID(t *testing.T) {
 	if !reflect.DeepEqual(db.storedKeys, []api.DeviceMessage{want}) {
 		t.Errorf("DB didn't store correct event, got %v want %v", db.storedKeys, want)
 	}
-
 }
 
 // Test that if we make N calls to ManualUpdate for the same user, we only do it once, assuming the
@@ -480,8 +475,7 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	updater := DeviceListUpdater{
 		workerChans: make([]chan spec.ServerName, 1),
 		isBlacklistedOrBackingOffFn: func(s spec.ServerName) (*statistics.ServerStatistics, error) {
-			switch s {
-			case unreachableServer:
+			if s == unreachableServer {
 				return nil, &api2.FederationClientError{Blacklisted: true}
 			}
 			return nil, nil

@@ -23,7 +23,7 @@ type Condition struct {
 
 // ConditionKind represents a kind of condition.
 //
-// SPEC: Unrecognised conditions MUST NOT match any events,
+// SPEC: Unrecognized conditions MUST NOT match any events,
 // effectively making the push rule disabled.
 type ConditionKind string
 

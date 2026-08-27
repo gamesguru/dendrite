@@ -12,12 +12,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/element-hq/dendrite/clientapi/producers"
-	"github.com/matrix-org/gomatrixserverlib/spec"
-
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/clientapi/producers"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 func SetReceipt(req *http.Request, userAPI userapi.ClientUserAPI, syncProducer *producers.SyncAPIProducer, device *userapi.Device, roomID, receiptType, eventID string) util.JSONResponse {
@@ -58,7 +58,7 @@ func SetReceipt(req *http.Request, userAPI userapi.ClientUserAPI, syncProducer *
 		}
 
 	default:
-		return util.MessageResponse(400, fmt.Sprintf("Receipt type '%s' not known", receiptType))
+		return util.MessageResponse(400, fmt.Sprintf("Receipt type '%s' not known", receiptType)) //nolint:mnd
 	}
 
 	return util.JSONResponse{

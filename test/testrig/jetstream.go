@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/element-hq/dendrite/setup/config"
 	"github.com/nats-io/nats.go"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 )
 
 func MustPublishMsgs(t *testing.T, jsctx nats.JetStreamContext, msgs ...*nats.Msg) {
@@ -20,7 +20,7 @@ func MustPublishMsgs(t *testing.T, jsctx nats.JetStreamContext, msgs ...*nats.Ms
 	}
 }
 
-func NewOutputEventMsg(t *testing.T, cfg *config.Dendrite, roomID string, update api.OutputEvent) *nats.Msg {
+func NewOutputEventMsg(t *testing.T, cfg *config.Zendrite, roomID string, update api.OutputEvent) *nats.Msg {
 	t.Helper()
 	msg := nats.NewMsg(cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent))
 	msg.Header.Set(jetstream.RoomEventType, string(update.Type))

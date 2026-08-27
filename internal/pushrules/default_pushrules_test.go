@@ -9,7 +9,7 @@ import (
 
 // Tests that the pre-defined rules as of
 // https://spec.matrix.org/v1.4/client-server-api/#predefined-rules
-// are correct
+// are correct.
 func TestDefaultRules(t *testing.T) {
 	type testCase struct {
 		name       string
@@ -106,6 +106,5 @@ func TestDefaultRules(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, string(got), string(tc.inputBytes))
 		})
-
 	}
 }

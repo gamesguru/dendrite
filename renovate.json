@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["local>codefloe/renovate-config"],
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go dependencies",
+      "schedule": ["* * 1 * *"]
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchPackageNames": ["golang"],
+      "groupName": "go dependencies",
+      "schedule": ["* * 1 * *"]
+    },
+    {
+      "matchManagers": ["pre-commit", "custom.regex"],
+      "schedule": ["* * * * 1"]
+    },
+    {
+      "matchPackageNames": ["forgejo/upload-artifact"],
+      "enabled": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.forgejo/workflows/.*\\.ya?ml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
+      ]
+    }
+  ]
+}

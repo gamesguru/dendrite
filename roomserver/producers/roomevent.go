@@ -9,14 +9,14 @@ package producers
 import (
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/acls"
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/roomserver/acls"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 )
 
 var keyContentFields = map[string]string{

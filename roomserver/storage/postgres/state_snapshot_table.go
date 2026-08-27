@@ -12,12 +12,11 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const stateSnapshotSchema = `
@@ -36,7 +35,7 @@ CREATE TABLE IF NOT EXISTS roomserver_state_snapshots (
 	-- The state snapshot NID that identifies this snapshot.
 	state_snapshot_nid bigint PRIMARY KEY DEFAULT nextval('roomserver_state_snapshot_nid_seq'),
 	-- The hash of the state snapshot, which is used to enforce uniqueness. The hash is
-	-- generated in Dendrite and passed through to the database, as a btree index over 
+	-- generated in Zendrite and passed through to the database, as a btree index over
 	-- this column is cheap and fits within the maximum index size.
 	state_snapshot_hash BYTEA UNIQUE,
 	-- The room NID that the snapshot belongs to.
@@ -66,13 +65,13 @@ const bulkSelectStateBlockNIDsSQL = "" +
 	" WHERE state_snapshot_nid = ANY($1) ORDER BY state_snapshot_nid ASC"
 
 // Looks up both the history visibility event and relevant membership events from
-// a given domain name from a given state snapshot. This is used to optimise the
+// a given domain name from a given state snapshot. This is used to optimize the
 // helpers.CheckServerAllowedToSeeEvent function.
 // TODO: There's a sequence scan here because of the hash join strategy, which is
 // probably O(n) on state key entries, so there must be a way to avoid that somehow.
 // Event type NIDs are:
-// - 5: m.room.member as per https://github.com/element-hq/dendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L40
-// - 7: m.room.history_visibility as per https://github.com/element-hq/dendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L42
+// - 5: m.room.member as per https://codefloe.com/pat-s/zendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L40
+// - 7: m.room.history_visibility as per https://codefloe.com/pat-s/zendrite/blob/c7f7aec4d07d59120d37d5b16a900f6d608a75c4/roomserver/storage/postgres/event_types_table.go#L42
 const bulkSelectStateForHistoryVisibilitySQL = `
 	SELECT event_nid FROM (
 	  SELECT event_nid, event_type_nid, event_state_key_nid FROM roomserver_events
@@ -148,14 +147,14 @@ func (s *stateSnapshotStatements) BulkSelectStateBlockNIDs(
 		nids[i] = int64(stateNIDs[i])
 	}
 	stmt := sqlutil.TxStmt(txn, s.bulkSelectStateBlockNIDsStmt)
-	rows, err := stmt.QueryContext(ctx, pq.Int64Array(nids))
+	rows, err := stmt.QueryContext(ctx, nids)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	results := make([]types.StateBlockNIDList, len(stateNIDs))
 	i := 0
-	var stateBlockNIDs pq.Int64Array
+	var stateBlockNIDs sqlutil.Int64Array
 	for ; rows.Next(); i++ {
 		result := &results[i]
 		if err = rows.Scan(&result.StateSnapshotNID, &stateBlockNIDs); err != nil {
@@ -183,7 +182,7 @@ func (s *stateSnapshotStatements) BulkSelectStateForHistoryVisibility(
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	results := make([]types.EventNID, 0, 16)
 	for rows.Next() {
 		var eventNID types.EventNID
@@ -199,11 +198,11 @@ func (s *stateSnapshotStatements) BulkSelectMembershipForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
 	stmt := sqlutil.TxStmt(txn, s.bulktSelectMembershipForHistoryVisibilityStmt)
-	rows, err := stmt.QueryContext(ctx, userNID, pq.Array(eventIDs), roomInfo.RoomNID)
+	rows, err := stmt.QueryContext(ctx, userNID, eventIDs, roomInfo.RoomNID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	result := make(map[string]*types.HeaderedEvent, len(eventIDs))
 	var evJson []byte
 	var eventID string

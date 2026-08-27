@@ -13,9 +13,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/element-hq/dendrite/federationapi/storage/shared/receipt"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // AssociatePDUWithDestination creates an association that the

@@ -11,25 +11,26 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/relayapi/internal"
-	"github.com/element-hq/dendrite/relayapi/routing"
-	"github.com/element-hq/dendrite/relayapi/storage/shared"
-	"github.com/element-hq/dendrite/test"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/relayapi/internal"
+	"codefloe.com/pat-s/zendrite/relayapi/routing"
+	"codefloe.com/pat-s/zendrite/relayapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func createQuery(
 	userID spec.UserID,
 	prevEntry fclient.RelayEntry,
 ) fclient.FederationRequest {
-	var federationPathPrefixV1 = "/_matrix/federation/v1"
+	federationPathPrefixV1 := "/_matrix/federation/v1"
 	path := federationPathPrefixV1 + "/relay_txn/" + userID.String()
 	request := fclient.NewFederationRequest("GET", userID.Domain(), "relay", path)
-	request.SetContent(prevEntry)
+	_ = request.SetContent(prevEntry)
 
 	return request
 }
@@ -58,7 +59,8 @@ func TestGetEmptyDatabaseReturnsNothing(t *testing.T) {
 	response := routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse := response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok := response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.Equal(t, false, jsonResponse.EntriesQueued)
 	assert.Equal(t, gomatrixserverlib.Transaction{}, jsonResponse.Transaction)
 
@@ -124,7 +126,8 @@ func TestGetReturnsSavedTransaction(t *testing.T) {
 	response := routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse := response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok := response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.True(t, jsonResponse.EntriesQueued)
 	assert.Equal(t, transaction, jsonResponse.Transaction)
 
@@ -133,7 +136,8 @@ func TestGetReturnsSavedTransaction(t *testing.T) {
 	response = routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse = response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok = response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.False(t, jsonResponse.EntriesQueued)
 	assert.Equal(t, gomatrixserverlib.Transaction{}, jsonResponse.Transaction)
 
@@ -187,7 +191,8 @@ func TestGetReturnsMultipleSavedTransactions(t *testing.T) {
 	response := routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse := response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok := response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.True(t, jsonResponse.EntriesQueued)
 	assert.Equal(t, transaction, jsonResponse.Transaction)
 
@@ -195,7 +200,8 @@ func TestGetReturnsMultipleSavedTransactions(t *testing.T) {
 	response = routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse = response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok = response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.True(t, jsonResponse.EntriesQueued)
 	assert.Equal(t, transaction2, jsonResponse.Transaction)
 
@@ -204,7 +210,8 @@ func TestGetReturnsMultipleSavedTransactions(t *testing.T) {
 	response = routing.GetTransactionFromRelay(httpReq, &request, relayAPI, *userID)
 	assert.Equal(t, http.StatusOK, response.Code)
 
-	jsonResponse = response.JSON.(fclient.RespGetRelayTransaction)
+	jsonResponse, ok = response.JSON.(fclient.RespGetRelayTransaction)
+	assert.True(t, ok, "expected RespGetRelayTransaction type")
 	assert.False(t, jsonResponse.EntriesQueued)
 	assert.Equal(t, gomatrixserverlib.Transaction{}, jsonResponse.Transaction)
 

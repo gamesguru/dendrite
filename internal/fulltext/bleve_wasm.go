@@ -9,17 +9,19 @@ package fulltext
 import (
 	"time"
 
-	"github.com/element-hq/dendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-type Search struct{}
-type IndexElement struct {
-	EventID        string
-	RoomID         string
-	Content        string
-	ContentType    string
-	StreamPosition int64
-}
+type (
+	Search       struct{}
+	IndexElement struct {
+		EventID        string
+		RoomID         string
+		Content        string
+		ContentType    string
+		StreamPosition int64
+	}
+)
 
 type Indexer interface {
 	Index(elements ...IndexElement) error

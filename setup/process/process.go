@@ -11,13 +11,13 @@ import (
 type ProcessContext struct {
 	mu       sync.RWMutex
 	wg       sync.WaitGroup      // used to wait for components to shutdown
-	ctx      context.Context     // cancelled when Stop is called
-	shutdown context.CancelFunc  // shut down Dendrite
+	ctx      context.Context     // canceled when Stop is called
+	shutdown context.CancelFunc  // shut down Zendrite
 	degraded map[string]struct{} // reasons why the process is degraded
 }
 
 func NewProcessContext() *ProcessContext {
-	ctx, shutdown := context.WithCancel(context.Background())
+	ctx, shutdown := context.WithCancel(context.Background()) //nolint:forbidigo
 	return &ProcessContext{
 		ctx:      ctx,
 		shutdown: shutdown,
@@ -26,7 +26,7 @@ func NewProcessContext() *ProcessContext {
 }
 
 func (b *ProcessContext) Context() context.Context {
-	return context.WithValue(b.ctx, "scope", "process") // nolint:staticcheck
+	return context.WithValue(b.ctx, "scope", "process") //nolint:staticcheck
 }
 
 func (b *ProcessContext) ComponentStarted() {
@@ -37,7 +37,7 @@ func (b *ProcessContext) ComponentFinished() {
 	b.wg.Done()
 }
 
-func (b *ProcessContext) ShutdownDendrite() {
+func (b *ProcessContext) ShutdownZendrite() {
 	b.shutdown()
 }
 
@@ -53,7 +53,7 @@ func (b *ProcessContext) Degraded(err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, ok := b.degraded[err.Error()]; !ok {
-		logrus.WithError(err).Warn("Dendrite has entered a degraded state")
+		logrus.WithError(err).Warn("Zendrite has entered a degraded state")
 		sentry.CaptureException(err)
 		b.degraded[err.Error()] = struct{}{}
 	}

@@ -7,16 +7,18 @@
 package routing
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	"github.com/element-hq/dendrite/setup/config"
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// recaptchaTemplate is an HTML webpage template for recaptcha auth
+// recaptchaTemplate is an HTML webpage template for recaptcha auth.
 const recaptchaTemplate = `
 <html>
 <head>
@@ -56,8 +58,53 @@ function captchaDone() {
 </html>
 `
 
+// altchaTemplate is an HTML webpage template for ALTCHA proof-of-work auth.
+const altchaTemplate = `
+<html>
+<head>
+<title>Authentication</title>
+<meta name='viewport' content='width=device-width, initial-scale=1,
+    user-scalable=no, minimum-scale=1.0, maximum-scale=1.0'>
+<script async defer src="https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js" type="module"></script>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+</style>
+</head>
+<body>
+<form id="registrationForm" method="post" action="{{.myUrl}}">
+    <div>
+        <p>
+        Hello! We need to prevent computer programs and other automated
+        things from creating accounts on this server.
+        </p>
+        <p>
+        Please complete the verification below.
+        </p>
+        <input type="hidden" name="session" value="{{.session}}" />
+        <input type="hidden" name="altcha" id="altchaPayload" />
+        <altcha-widget challengeurl="{{.challengeUrl}}" auto="onload"></altcha-widget>
+    </div>
+</form>
+<script>
+// Wait for the ALTCHA web component to be defined before adding listeners.
+customElements.whenDefined('altcha-widget').then(function() {
+    document.querySelector('altcha-widget').addEventListener('statechange', function(ev) {
+        if (ev.detail && ev.detail.state === 'verified') {
+            // Copy the payload from the widget into our hidden input
+            // since Shadow DOM ElementInternals may not be included
+            // in traditional form submissions.
+            document.getElementById('altchaPayload').value = ev.detail.payload || '';
+            document.getElementById('registrationForm').submit();
+        }
+    });
+});
+</script>
+</body>
+</html>
+`
+
 // successTemplate is an HTML template presented to the user after successful
-// recaptcha completion
+// recaptcha completion.
 const successTemplate = `
 <html>
 <head>
@@ -81,7 +128,7 @@ if (window.onAuthDone) {
 </html>
 `
 
-// serveTemplate fills template data and serves it using http.ResponseWriter
+// serveTemplate fills template data and serves it using http.ResponseWriter.
 func serveTemplate(w http.ResponseWriter, templateHTML string, data map[string]string) {
 	t := template.Must(template.New("response").Parse(templateHTML))
 	if err := t.Execute(w, data); err != nil {
@@ -89,21 +136,21 @@ func serveTemplate(w http.ResponseWriter, templateHTML string, data map[string]s
 	}
 }
 
-// AuthFallback implements GET and POST /auth/{authType}/fallback/web?session={sessionID}
+// AuthFallback implements GET and POST /auth/{authType}/fallback/web?session={sessionID}.
 func AuthFallback(
 	w http.ResponseWriter, req *http.Request, authType string,
 	cfg *config.ClientAPI,
 ) {
-	// We currently only support "m.login.recaptcha", so fail early if that's not requested
-	if authType == authtypes.LoginTypeRecaptcha {
+	switch authType {
+	case authtypes.LoginTypeRecaptcha, authtypes.LoginTypeAltcha:
 		if !cfg.RecaptchaEnabled {
 			writeHTTPMessage(w, req,
-				"Recaptcha login is disabled on this Homeserver",
+				"Captcha login is disabled on this Homeserver",
 				http.StatusBadRequest,
 			)
 			return
 		}
-	} else {
+	default:
 		writeHTTPMessage(w, req, fmt.Sprintf("Unknown authtype %q", authType), http.StatusNotImplemented)
 		return
 	}
@@ -129,46 +176,69 @@ func AuthFallback(
 		serveTemplate(w, recaptchaTemplate, data)
 	}
 
+	serveAltcha := func() {
+		data := map[string]string{
+			"myUrl":        req.URL.String(),
+			"session":      sessionID,
+			"challengeUrl": "/_zendrite/altcha/challenge",
+		}
+		serveTemplate(w, altchaTemplate, data)
+	}
+
+	serveCaptchaPage := func() {
+		if authType == authtypes.LoginTypeAltcha {
+			serveAltcha()
+		} else {
+			serveRecaptcha()
+		}
+	}
+
 	serveSuccess := func() {
 		data := map[string]string{}
 		serveTemplate(w, successTemplate, data)
 	}
 
-	if req.Method == http.MethodGet {
-		// Handle Recaptcha
-		serveRecaptcha()
+	switch req.Method {
+	case http.MethodGet:
+		serveCaptchaPage()
 		return
-	} else if req.Method == http.MethodPost {
-		// Handle Recaptcha
-		clientIP := req.RemoteAddr
+	case http.MethodPost:
 		err := req.ParseForm()
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("req.ParseForm failed")
 			w.WriteHeader(http.StatusBadRequest)
-			serveRecaptcha()
+			serveCaptchaPage()
 			return
 		}
 
-		response := req.Form.Get(cfg.RecaptchaFormField)
-		err = validateRecaptcha(cfg, response, clientIP)
-		switch err {
-		case ErrMissingResponse:
+		var captchaErr error
+		if authType == authtypes.LoginTypeAltcha {
+			response := req.Form.Get("altcha")
+			captchaErr = validateAltcha(cfg, response)
+		} else {
+			clientIP := req.RemoteAddr
+			response := req.Form.Get(cfg.RecaptchaFormField)
+			captchaErr = validateRecaptcha(cfg, response, clientIP)
+		}
+
+		switch {
+		case errors.Is(captchaErr, ErrMissingResponse):
 			w.WriteHeader(http.StatusBadRequest)
-			serveRecaptcha() // serve the initial page again, instead of nothing
+			serveCaptchaPage()
 			return
-		case ErrInvalidCaptcha:
+		case errors.Is(captchaErr, ErrInvalidCaptcha):
 			w.WriteHeader(http.StatusUnauthorized)
-			serveRecaptcha()
+			serveCaptchaPage()
 			return
-		case nil:
-		default: // something else failed
-			util.GetLogger(req.Context()).WithError(err).Error("failed to validate recaptcha")
-			serveRecaptcha()
+		case captchaErr == nil:
+		default:
+			util.GetLogger(req.Context()).WithError(captchaErr).Error("failed to validate captcha")
+			serveCaptchaPage()
 			return
 		}
 
-		// Success. Add recaptcha as a completed login flow
-		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRecaptcha)
+		// Success. Mark this auth stage as completed.
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginType(authType))
 
 		serveSuccess()
 		return

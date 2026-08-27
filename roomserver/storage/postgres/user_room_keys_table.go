@@ -12,16 +12,16 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/lib/pq"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const userRoomKeysSchema = `
-CREATE TABLE IF NOT EXISTS roomserver_user_room_keys (     
+CREATE TABLE IF NOT EXISTS roomserver_user_room_keys (
     user_nid    INTEGER NOT NULL,
     room_nid    INTEGER NOT NULL,
     pseudo_id_key BYTEA NULL, -- may be null for users not local to the server
@@ -129,7 +129,7 @@ func (s *userRoomKeysStatements) BulkSelectUserNIDs(ctx context.Context, txn *sq
 			senders = append(senders, key)
 		}
 	}
-	rows, err := stmt.QueryContext(ctx, pq.Array(roomNIDs), pq.Array(senders))
+	rows, err := stmt.QueryContext(ctx, roomNIDs, senders)
 	if err != nil {
 		return nil, err
 	}

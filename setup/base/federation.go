@@ -20,12 +20,12 @@ var noOpHTTPTransport = &http.Transport{
 	},
 }
 
+//nolint:gochecknoinits
 func init() {
 	noOpHTTPTransport.RegisterProtocol("matrix", &noOpHTTPRoundTripper{})
 }
 
-type noOpHTTPRoundTripper struct {
-}
+type noOpHTTPRoundTripper struct{}
 
 func (y *noOpHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("federation prohibited by configuration")

@@ -5,7 +5,6 @@
 // Please see LICENSE files in the repository root for full details.
 
 //go:build !wasm
-// +build !wasm
 
 package storage
 
@@ -13,10 +12,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
 )
 
 // NewSyncServerDatasource opens a database connection.

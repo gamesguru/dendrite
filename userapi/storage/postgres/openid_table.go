@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/element-hq/dendrite/userapi/storage/tables"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
 
 const openIDTokenSchema = `
@@ -65,7 +66,7 @@ func (s *openIDTokenStatements) InsertOpenIDToken(
 }
 
 // selectOpenIDTokenAtrributes gets the attributes associated with an OpenID token from the DB
-// Returns the existing token's attributes, or err if no token is found
+// Returns the existing token's attributes, or err if no token is found.
 func (s *openIDTokenStatements) SelectOpenIDTokenAtrributes(
 	ctx context.Context,
 	token string,

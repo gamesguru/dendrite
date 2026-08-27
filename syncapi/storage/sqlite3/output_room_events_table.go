@@ -15,16 +15,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/roomserver/api"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3/deltas"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/synctypes"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const outputRoomEventsSchema = `
@@ -66,13 +66,13 @@ const selectRecentEventsSQL = "" +
 	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
 	" WHERE room_id = $1 AND id > $2 AND id <= $3"
 
-// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters
+// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters.
 
 const selectRecentEventsForSyncSQL = "" +
 	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
 	" WHERE room_id = $1 AND id > $2 AND id <= $3 AND exclude_from_sync = FALSE"
 
-// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters
+// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters.
 
 const selectMaxEventIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_output_room_events"
@@ -87,7 +87,7 @@ const selectStateInRangeSQL = "" +
 	" AND room_id IN ($3)" +
 	" AND ((add_state_ids IS NOT NULL AND add_state_ids != '') OR (remove_state_ids IS NOT NULL AND remove_state_ids != ''))"
 
-// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters
+// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters.
 
 const deleteEventsForRoomSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE room_id = $1"
@@ -98,12 +98,12 @@ const selectContextEventSQL = "" +
 const selectContextBeforeEventSQL = "" +
 	"SELECT headered_event_json, history_visibility FROM syncapi_output_room_events WHERE room_id = $1 AND id < $2"
 
-// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters
+// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters.
 
 const selectContextAfterEventSQL = "" +
 	"SELECT id, headered_event_json, history_visibility FROM syncapi_output_room_events WHERE room_id = $1 AND id > $2"
 
-// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters
+// WHEN, ORDER BY and LIMIT are appended by prepareWithFilters.
 
 const selectSearchSQL = "SELECT id, event_id, headered_event_json FROM syncapi_output_room_events WHERE id > $1 AND type IN ($2)"
 
@@ -121,7 +121,7 @@ type outputRoomEventsStatements struct {
 	selectContextBeforeEventStmt *sql.Stmt
 	selectContextAfterEventStmt  *sql.Stmt
 	purgeEventsStmt              *sql.Stmt
-	//selectSearchStmt             *sql.Stmt - prepared at runtime
+	// selectSearchStmt             *sql.Stmt - prepared at runtime
 }
 
 func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Events, error) {
@@ -155,7 +155,7 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 		{&s.selectContextBeforeEventStmt, selectContextBeforeEventSQL},
 		{&s.selectContextAfterEventStmt, selectContextAfterEventSQL},
 		{&s.purgeEventsStmt, purgeEventsSQL},
-		//{&s.selectSearchStmt, selectSearchSQL}, - prepared at runtime
+		// {&s.selectSearchStmt, selectSearchSQL}, - prepared at runtime
 	}.Prepare(db)
 }
 
@@ -164,7 +164,8 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 	if err != nil {
 		return err
 	}
-	_, err = sqlutil.TxStmt(txn, s.updateEventJSONStmt).ExecContext(ctx, headeredJSON, event.EventID())
+	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
+	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
 	return err
 }
 
@@ -175,8 +176,8 @@ func (s *outputRoomEventsStatements) SelectStateInRange(
 	ctx context.Context, txn *sql.Tx, r types.Range,
 	stateFilter *synctypes.StateFilter, roomIDs []string,
 ) (map[string]map[string]bool, map[string]types.StreamEvent, error) {
-	stmtSQL := strings.Replace(selectStateInRangeSQL, "($3)", sqlutil.QueryVariadicOffset(len(roomIDs), 2), 1)
-	inputParams := []interface{}{
+	stmtSQL := strings.Replace(selectStateInRangeSQL, "($3)", sqlutil.QueryVariadicOffset(len(roomIDs), 2), 1) //nolint:mnd
+	inputParams := []any{
 		r.Low(), r.High(),
 	}
 	for _, roomID := range roomIDs {
@@ -285,7 +286,7 @@ func (s *outputRoomEventsStatements) SelectMaxEventID(
 	return
 }
 
-// InsertEvent into the output_room_events table. addState and removeState are an optional list of state event IDs. Returns the position
+// InsertEvent into the output_room_events table. AddState and removeState are an optional list of state event IDs. Returns the position
 // of the inserted event.
 func (s *outputRoomEventsStatements) InsertEvent(
 	ctx context.Context, txn *sql.Tx,
@@ -301,7 +302,7 @@ func (s *outputRoomEventsStatements) InsertEvent(
 
 	// Parse content as JSON and search for an "url" key
 	containsURL := false
-	var content map[string]interface{}
+	var content map[string]any
 	if json.Unmarshal(event.Content(), &content) == nil {
 		// Set containsURL to true if url is present
 		_, containsURL = content["url"]
@@ -369,7 +370,7 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 	for _, roomID := range roomIDs {
 		stmt, params, err := prepareWithFilters(
 			s.db, txn, query,
-			[]interface{}{
+			[]any{
 				roomID, r.Low(), r.High(),
 			},
 			eventFilter.Senders, eventFilter.NotSenders,
@@ -421,14 +422,14 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 func (s *outputRoomEventsStatements) SelectEvents(
 	ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool,
 ) ([]types.StreamEvent, error) {
-	iEventIDs := make([]interface{}, len(eventIDs))
+	iEventIDs := make([]any, len(eventIDs))
 	for i := range eventIDs {
 		iEventIDs[i] = eventIDs[i]
 	}
 	selectSQL := strings.Replace(selectEventsSQL, "($1)", sqlutil.QueryVariadic(len(eventIDs)), 1)
 
 	if filter == nil {
-		filter = &synctypes.RoomEventFilter{Limit: 20}
+		filter = &synctypes.RoomEventFilter{Limit: 20} //nolint:mnd
 	}
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectSQL, iEventIDs,
@@ -470,8 +471,20 @@ func (s *outputRoomEventsStatements) SelectEvents(
 func (s *outputRoomEventsStatements) DeleteEventsForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (err error) {
-	_, err = sqlutil.TxStmt(txn, s.deleteEventsForRoomStmt).ExecContext(ctx, roomID)
+	deleteEventsForRoomStmt := sqlutil.TxStmt(txn, s.deleteEventsForRoomStmt)
+	_, err = deleteEventsForRoomStmt.ExecContext(ctx, roomID)
 	return err
+}
+
+// SelectRoomsWithEventsSince returns a list of room IDs that have events with stream_position > since
+// TODO: Implement proper SQLite version - for now returns all rooms (no filtering)
+func (s *outputRoomEventsStatements) SelectRoomsWithEventsSince(
+	ctx context.Context, txn *sql.Tx,
+	roomIDs []string, since types.StreamPosition,
+) ([]string, error) {
+	// Stub implementation - returns all rooms
+	// This maintains backward compatibility while postgres gets the optimization
+	return roomIDs, nil
 }
 
 func rowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {
@@ -514,10 +527,12 @@ func rowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {
 	}
 	return result, rows.Err()
 }
+
 func (s *outputRoomEventsStatements) SelectContextEvent(
 	ctx context.Context, txn *sql.Tx, roomID, eventID string,
 ) (id int, evt rstypes.HeaderedEvent, err error) {
-	row := sqlutil.TxStmt(txn, s.selectContextEventStmt).QueryRowContext(ctx, roomID, eventID)
+	selectStmt := sqlutil.TxStmt(txn, s.selectContextEventStmt)
+	row := selectStmt.QueryRowContext(ctx, roomID, eventID)
 	var eventAsString string
 	var historyVisibility gomatrixserverlib.HistoryVisibility
 	if err = row.Scan(&id, &eventAsString, &historyVisibility); err != nil {
@@ -536,7 +551,7 @@ func (s *outputRoomEventsStatements) SelectContextBeforeEvent(
 ) (evts []*rstypes.HeaderedEvent, err error) {
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectContextBeforeEventSQL,
-		[]interface{}{
+		[]any{
 			roomID, id,
 		},
 		filter.Senders, filter.NotSenders,
@@ -578,7 +593,7 @@ func (s *outputRoomEventsStatements) SelectContextAfterEvent(
 ) (lastID int, evts []*rstypes.HeaderedEvent, err error) {
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectContextAfterEventSQL,
-		[]interface{}{
+		[]any{
 			roomID, id,
 		},
 		filter.Senders, filter.NotSenders,
@@ -631,12 +646,13 @@ func unmarshalStateIDs(addIDsJSON, delIDsJSON string) (addIDs []string, delIDs [
 func (s *outputRoomEventsStatements) PurgeEvents(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeEventsStmt).ExecContext(ctx, roomID)
+	purgeEventsStmt := sqlutil.TxStmt(txn, s.purgeEventsStmt)
+	_, err := purgeEventsStmt.ExecContext(ctx, roomID)
 	return err
 }
 
 func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, limit, afterID int64, types []string) (map[int64]rstypes.HeaderedEvent, error) {
-	params := make([]interface{}, len(types)+1)
+	params := make([]any, len(types)+1)
 	params[0] = afterID
 	for i := range types {
 		params[i+1] = types[i]
@@ -649,7 +665,8 @@ func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, l
 	}
 
 	defer internal.CloseAndLogIfError(ctx, stmt, "selectEvents: stmt.close() failed")
-	rows, err := sqlutil.TxStmt(txn, stmt).QueryContext(ctx, params...)
+	queryStmt := sqlutil.TxStmt(txn, stmt)
+	rows, err := queryStmt.QueryContext(ctx, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -668,6 +685,63 @@ func (s *outputRoomEventsStatements) ReIndex(ctx context.Context, txn *sql.Tx, l
 			return nil, err
 		}
 		result[id] = ev
+	}
+	return result, rows.Err()
+}
+
+// BumpEventTypes defines the event types that count as "activity" for bump_stamp calculation
+// Per MSC4186/Synapse, only these events should bump a room to the top of the list.
+var BumpEventTypes = []string{
+	"m.room.create",
+	"m.room.message",
+	"m.room.encrypted",
+	"m.sticker",
+	"m.call.invite",
+	"m.poll.start",
+	"m.beacon_info",
+}
+
+// SelectMaxStreamPositionsForRooms returns the maximum stream position (latest "bump" event) for each room.
+// This is used by sliding sync to sort rooms by activity (bump_stamp).
+// Only events of certain types (messages, encrypted, stickers, etc.) count as "bump" events.
+func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
+	ctx context.Context, txn *sql.Tx, roomIDs []string,
+) (map[string]types.StreamPosition, error) {
+	if len(roomIDs) == 0 {
+		return make(map[string]types.StreamPosition), nil
+	}
+
+	// Build the SQL query with the correct number of placeholders for SQLite
+	// We need placeholders for roomIDs and for event types
+	// Note: QueryVariadic/QueryVariadicOffset already include parentheses
+	roomIDPlaceholders := sqlutil.QueryVariadic(len(roomIDs))
+	eventTypePlaceholders := sqlutil.QueryVariadicOffset(len(BumpEventTypes), len(roomIDs))
+
+	query := "SELECT room_id, MAX(id) AS max_stream_pos FROM syncapi_output_room_events " +
+		"WHERE room_id IN " + roomIDPlaceholders + " AND type IN " + eventTypePlaceholders + " GROUP BY room_id"
+
+	params := make([]any, len(roomIDs)+len(BumpEventTypes))
+	for i, roomID := range roomIDs {
+		params[i] = roomID
+	}
+	for i, eventType := range BumpEventTypes {
+		params[len(roomIDs)+i] = eventType
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectMaxStreamPositionsForRooms: rows.close() failed")
+
+	result := make(map[string]types.StreamPosition)
+	for rows.Next() {
+		var roomID string
+		var maxPos types.StreamPosition
+		if err := rows.Scan(&roomID, &maxPos); err != nil {
+			return nil, err
+		}
+		result[roomID] = maxPos
 	}
 	return result, rows.Err()
 }

@@ -10,10 +10,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/federationapi/storage/tables"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
+	"codefloe.com/pat-s/zendrite/federationapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 const notaryServerKeysJSONSchema = `
@@ -53,5 +54,7 @@ func (s *notaryServerKeysStatements) InsertJSONResponse(
 	ctx context.Context, txn *sql.Tx, keyQueryResponseJSON gomatrixserverlib.ServerKeys, serverName spec.ServerName, validUntil spec.Timestamp,
 ) (tables.NotaryID, error) {
 	var notaryID tables.NotaryID
-	return notaryID, txn.Stmt(s.insertServerKeysJSONStmt).QueryRowContext(ctx, string(keyQueryResponseJSON.Raw), serverName, validUntil).Scan(&notaryID)
+	stmt := txn.Stmt(s.insertServerKeysJSONStmt)
+	defer stmt.Close()
+	return notaryID, stmt.QueryRowContext(ctx, string(keyQueryResponseJSON.Raw), serverName, validUntil).Scan(&notaryID)
 }

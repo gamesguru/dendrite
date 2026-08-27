@@ -14,11 +14,12 @@ import (
 	"strings"
 	"sync"
 
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"golang.org/x/crypto/blake2b"
+
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // EventTypeNID is a numeric ID for an event type.
@@ -162,7 +163,7 @@ func (a StateEntry) LessThan(b StateEntry) bool {
 // duplicate (event type, state key) tuples. If there are then we dedupe
 // them, making sure that the latest/highest NIDs are always chosen.
 func DeduplicateStateEntries(a []StateEntry) []StateEntry {
-	if len(a) < 2 {
+	if len(a) < 2 { //nolint:mnd
 		return a
 	}
 	sort.SliceStable(a, func(i, j int) bool {
@@ -284,7 +285,7 @@ type RejectedError string
 
 func (e RejectedError) Error() string { return string(e) }
 
-// RoomInfo contains metadata about a room
+// RoomInfo contains metadata about a room.
 type RoomInfo struct {
 	mu               sync.RWMutex
 	RoomNID          RoomNID

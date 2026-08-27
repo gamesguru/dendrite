@@ -11,13 +11,13 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/element-hq/dendrite/roomserver/state"
-	"github.com/element-hq/dendrite/roomserver/storage"
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/state"
+	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // CheckForSoftFail returns true if the event should be soft-failed
@@ -117,27 +117,27 @@ func (ae *authEvents) Valid() bool {
 	return ae.valid
 }
 
-// Create implements gomatrixserverlib.AuthEventProvider
+// Create implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) Create() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomCreateNID), nil
 }
 
-// PowerLevels implements gomatrixserverlib.AuthEventProvider
+// PowerLevels implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) PowerLevels() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomPowerLevelsNID), nil
 }
 
-// JoinRules implements gomatrixserverlib.AuthEventProvider
+// JoinRules implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) JoinRules() (gomatrixserverlib.PDU, error) {
 	return ae.lookupEventWithEmptyStateKey(types.MRoomJoinRulesNID), nil
 }
 
-// Memmber implements gomatrixserverlib.AuthEventProvider
+// Memmber implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) Member(stateKey spec.SenderID) (gomatrixserverlib.PDU, error) {
 	return ae.lookupEvent(types.MRoomMemberNID, string(stateKey)), nil
 }
 
-// ThirdPartyInvite implements gomatrixserverlib.AuthEventProvider
+// ThirdPartyInvite implements gomatrixserverlib.AuthEventProvider.
 func (ae *authEvents) ThirdPartyInvite(stateKey string) (gomatrixserverlib.PDU, error) {
 	return ae.lookupEvent(types.MRoomThirdPartyInviteNID, stateKey), nil
 }

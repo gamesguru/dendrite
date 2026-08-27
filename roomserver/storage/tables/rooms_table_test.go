@@ -4,15 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/roomserver/storage/postgres"
-	"github.com/element-hq/dendrite/roomserver/storage/sqlite3"
-	"github.com/element-hq/dendrite/roomserver/storage/tables"
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/test"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
+
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func mustCreateRoomsTable(t *testing.T, dbType test.DBType) (tab tables.Rooms, close func()) {
@@ -42,7 +43,7 @@ func TestRoomsTable(t *testing.T) {
 	room := test.NewRoom(t, alice)
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, close := mustCreateRoomsTable(t, dbType)
+		tab, close := mustCreateRoomsTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		wantRoomNID, err := tab.InsertRoomNID(ctx, nil, room.ID, room.Version)

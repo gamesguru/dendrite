@@ -6,15 +6,15 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/element-hq/dendrite/roomserver/api"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-var OptimisationNotSupportedError = errors.New("optimisation not supported")
+var ErrOptimisationNotSupported = errors.New("optimisation not supported")
 
 type EventJSONPair struct {
 	EventNID  types.EventNID
@@ -86,6 +86,12 @@ type Rooms interface {
 	SelectRoomInfo(ctx context.Context, txn *sql.Tx, roomID string) (*types.RoomInfo, error)
 	BulkSelectRoomIDs(ctx context.Context, txn *sql.Tx, roomNIDs []types.RoomNID) ([]string, error)
 	BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, roomIDs []string) ([]types.RoomNID, error)
+	// SelectResyncStateNID returns the state snapshot NID recorded after a partial state resync completed.
+	// Returns 0 if the room never completed a partial state resync.
+	SelectResyncStateNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (types.StateSnapshotNID, error)
+	// UpdateResyncStateNID records the state snapshot NID after a partial state resync completes.
+	// This is used to detect and prevent state regressions from out-of-order events.
+	UpdateResyncStateNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, resyncStateNID types.StateSnapshotNID) error
 }
 
 type StateSnapshot interface {
@@ -93,7 +99,7 @@ type StateSnapshot interface {
 	BulkSelectStateBlockNIDs(ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	// BulkSelectStateForHistoryVisibility is a PostgreSQL-only optimisation for finding
 	// which users are in a room faster than having to load the entire room state. In the
-	// case of SQLite, this will return tables.OptimisationNotSupportedError.
+	// case of SQLite, this will return tables.ErrOptimisationNotSupported.
 	BulkSelectStateForHistoryVisibility(ctx context.Context, txn *sql.Tx, stateSnapshotNID types.StateSnapshotNID, domain string) ([]types.EventNID, error)
 
 	BulkSelectMembershipForHistoryVisibility(
@@ -104,7 +110,7 @@ type StateSnapshot interface {
 type StateBlock interface {
 	BulkInsertStateData(ctx context.Context, txn *sql.Tx, entries types.StateEntries) (types.StateBlockNID, error)
 	BulkSelectStateBlockEntries(ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs) ([][]types.EventNID, error)
-	//BulkSelectFilteredStateBlockEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
+	// BulkSelectFilteredStateBlockEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
 }
 
 type RoomAliases interface {
@@ -179,6 +185,11 @@ type Membership interface {
 	UpdateForgetMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID, forget bool) error
 	SelectLocalServerInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	SelectServerInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
+	// SelectAnyLocalMemberNotForgotten reports whether the given room has
+	// at least one local membership row where forgotten = false. Any
+	// membership state (join, invite, knock, leave, ban) counts as long as
+	// the user has not forgotten it.
+	SelectAnyLocalMemberNotForgotten(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	DeleteMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID) error
 	SelectJoinedUsers(ctx context.Context, txn *sql.Tx, targetUserNIDs []types.EventStateKeyNID) ([]types.EventStateKeyNID, error)
 }
@@ -215,6 +226,25 @@ type Purge interface {
 	) error
 }
 
+// PartialState tracks rooms with partial state from MSC3706 faster joins.
+type PartialState interface {
+	// InsertPartialStateRoom inserts a new partial state room entry
+	// deviceListStreamID is the current device list stream position at the time of the partial state join
+	InsertPartialStateRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// SelectPartialStateRoom returns true if the room has partial state
+	SelectPartialStateRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
+	// SelectPartialStateServers returns the servers known to be in a partial state room
+	SelectPartialStateServers(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) ([]string, error)
+	// SelectAllPartialStateRooms returns all rooms with partial state
+	SelectAllPartialStateRooms(ctx context.Context, txn *sql.Tx) ([]types.RoomNID, error)
+	// SelectDeviceListStreamID returns the device list stream ID stored when the room entered partial state
+	SelectDeviceListStreamID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
+	// SelectPartialStateJoinedVia returns the server we joined through for a partial state room
+	SelectPartialStateJoinedVia(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (string, error)
+	// DeletePartialStateRoom removes a room from partial state tracking and returns the stored device list stream ID
+	DeletePartialStateRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
+}
+
 type UserRoomKeys interface {
 	// InsertUserRoomPrivatePublicKey inserts the given private key as well as the public key for it. This should be used
 	// when creating keys locally.
@@ -248,7 +278,9 @@ func ExtractContentValue(ev *types.HeaderedEvent) string {
 	key := ""
 	switch ev.Type() {
 	case spec.MRoomCreate:
-		key = "creator"
+		// Return the entire content so consumers can extract room_type, creator, etc.
+		// This is needed for MSC3266 room summary to determine if a room is a space.
+		return string(content)
 	case spec.MRoomCanonicalAlias:
 		key = "alias"
 	case spec.MRoomHistoryVisibility:

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lib/pq"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
 var renameTableMappings = map[string]string{
@@ -43,7 +43,7 @@ func UpRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameTableMappings {
 		q := fmt.Sprintf(
 			"ALTER TABLE IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(old), pq.QuoteIdentifier(new),
+			sqlutil.QuoteIdentifier(old), sqlutil.QuoteIdentifier(new),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", old, new, err)
@@ -52,7 +52,7 @@ func UpRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameSequenceMappings {
 		q := fmt.Sprintf(
 			"ALTER SEQUENCE IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(old), pq.QuoteIdentifier(new),
+			sqlutil.QuoteIdentifier(old), sqlutil.QuoteIdentifier(new),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", old, new, err)
@@ -61,7 +61,7 @@ func UpRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameIndicesMappings {
 		q := fmt.Sprintf(
 			"ALTER INDEX IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(old), pq.QuoteIdentifier(new),
+			sqlutil.QuoteIdentifier(old), sqlutil.QuoteIdentifier(new),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", old, new, err)
@@ -74,7 +74,7 @@ func DownRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameTableMappings {
 		q := fmt.Sprintf(
 			"ALTER TABLE IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(new), pq.QuoteIdentifier(old),
+			sqlutil.QuoteIdentifier(new), sqlutil.QuoteIdentifier(old),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", new, old, err)
@@ -83,7 +83,7 @@ func DownRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameSequenceMappings {
 		q := fmt.Sprintf(
 			"ALTER SEQUENCE IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(new), pq.QuoteIdentifier(old),
+			sqlutil.QuoteIdentifier(new), sqlutil.QuoteIdentifier(old),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", new, old, err)
@@ -92,7 +92,7 @@ func DownRenameTables(ctx context.Context, tx *sql.Tx) error {
 	for old, new := range renameIndicesMappings {
 		q := fmt.Sprintf(
 			"ALTER INDEX IF EXISTS %s RENAME TO %s;",
-			pq.QuoteIdentifier(new), pq.QuoteIdentifier(old),
+			sqlutil.QuoteIdentifier(new), sqlutil.QuoteIdentifier(old),
 		)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("rename table %q to %q error: %w", new, old, err)

@@ -12,11 +12,11 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const inviteEventsSchema = `
@@ -54,15 +54,20 @@ const selectInviteEventsInRangeSQL = "" +
 const selectMaxInviteIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_invite_events"
 
+const selectRoomsWithInvitesSinceSQL = "" +
+	"SELECT DISTINCT room_id FROM syncapi_invite_events" +
+	" WHERE target_user_id = $1 AND room_id = ANY($2) AND id > $3"
+
 const purgeInvitesSQL = "" +
 	"DELETE FROM syncapi_invite_events WHERE room_id = $1"
 
 type inviteEventsStatements struct {
-	insertInviteEventStmt         *sql.Stmt
-	selectInviteEventsInRangeStmt *sql.Stmt
-	deleteInviteEventStmt         *sql.Stmt
-	selectMaxInviteIDStmt         *sql.Stmt
-	purgeInvitesStmt              *sql.Stmt
+	insertInviteEventStmt           *sql.Stmt
+	selectInviteEventsInRangeStmt   *sql.Stmt
+	deleteInviteEventStmt           *sql.Stmt
+	selectMaxInviteIDStmt           *sql.Stmt
+	selectRoomsWithInvitesSinceStmt *sql.Stmt
+	purgeInvitesStmt                *sql.Stmt
 }
 
 func NewPostgresInvitesTable(db *sql.DB) (tables.Invites, error) {
@@ -76,6 +81,7 @@ func NewPostgresInvitesTable(db *sql.DB) (tables.Invites, error) {
 		{&s.selectInviteEventsInRangeStmt, selectInviteEventsInRangeSQL},
 		{&s.deleteInviteEventStmt, deleteInviteEventSQL},
 		{&s.selectMaxInviteIDStmt, selectMaxInviteIDSQL},
+		{&s.selectRoomsWithInvitesSinceStmt, selectRoomsWithInvitesSinceSQL},
 		{&s.purgeInvitesStmt, purgeInvitesSQL},
 	}.Prepare(db)
 }
@@ -172,9 +178,34 @@ func (s *inviteEventsStatements) SelectMaxInviteID(
 	return
 }
 
+// SelectRoomsWithInvitesSince returns a list of room IDs that have invite events with stream position > since
+// This is used for incremental sync to filter rooms that haven't had invite changes.
+func (s *inviteEventsStatements) SelectRoomsWithInvitesSince(
+	ctx context.Context, txn *sql.Tx,
+	targetUserID string, roomIDs []string, since types.StreamPosition,
+) ([]string, error) {
+	stmt := sqlutil.TxStmt(txn, s.selectRoomsWithInvitesSinceStmt)
+	rows, err := stmt.QueryContext(ctx, targetUserID, roomIDs, since)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomsWithInvitesSince: rows.close() failed")
+
+	var result []string
+	for rows.Next() {
+		var roomID string
+		if err := rows.Scan(&roomID); err != nil {
+			return nil, err
+		}
+		result = append(result, roomID)
+	}
+	return result, rows.Err()
+}
+
 func (s *inviteEventsStatements) PurgeInvites(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeInvitesStmt).ExecContext(ctx, roomID)
+	purgeInvitesStmt := sqlutil.TxStmt(txn, s.purgeInvitesStmt)
+	_, err := purgeInvitesStmt.ExecContext(ctx, roomID)
 	return err
 }

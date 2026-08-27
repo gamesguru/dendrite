@@ -12,16 +12,18 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/element-hq/dendrite/roomserver/types"
-	"github.com/matrix-org/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib"
+
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 func UpAddHistoryVisibilityColumnOutputRoomEvents(ctx context.Context, tx *sql.Tx) error {
 	// SQLite doesn't have "if exists", so check if the column exists. If the query doesn't return an error, it already exists.
 	// Required for unit tests, as otherwise a duplicate column error will show up.
-	_, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_output_room_events LIMIT 1")
+	checkRows, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_output_room_events LIMIT 1")
 	if err == nil {
-		return nil
+		defer checkRows.Close()
+		return checkRows.Err()
 	}
 	_, err = tx.ExecContext(ctx, `
 		ALTER TABLE syncapi_output_room_events ADD COLUMN history_visibility SMALLINT NOT NULL DEFAULT 2;
@@ -44,7 +46,7 @@ func UpSetHistoryVisibility(ctx context.Context, tx *sql.Tx) error {
 
 	// update the history visibility
 	for roomID, hisVis := range historyVisibilities {
-		_, err = tx.ExecContext(ctx, `UPDATE syncapi_output_room_events SET history_visibility = $1 
+		_, err = tx.ExecContext(ctx, `UPDATE syncapi_output_room_events SET history_visibility = $1
                         WHERE type IN ('m.room.message', 'm.room.encrypted') AND room_id = $2 AND history_visibility <> $1`, hisVis, roomID)
 		if err != nil {
 			return fmt.Errorf("failed to update history visibility: %w", err)
@@ -57,9 +59,10 @@ func UpSetHistoryVisibility(ctx context.Context, tx *sql.Tx) error {
 func UpAddHistoryVisibilityColumnCurrentRoomState(ctx context.Context, tx *sql.Tx) error {
 	// SQLite doesn't have "if exists", so check if the column exists. If the query doesn't return an error, it already exists.
 	// Required for unit tests, as otherwise a duplicate column error will show up.
-	_, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_current_room_state LIMIT 1")
+	checkRows, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_current_room_state LIMIT 1")
 	if err == nil {
-		return nil
+		defer checkRows.Close()
+		return checkRows.Err()
 	}
 	_, err = tx.ExecContext(ctx, `
 		ALTER TABLE syncapi_current_room_state ADD COLUMN history_visibility SMALLINT NOT NULL DEFAULT 2;
@@ -81,7 +84,7 @@ func currentHistoryVisibilities(ctx context.Context, tx *sql.Tx) (map[string]gom
 	if err != nil {
 		return nil, fmt.Errorf("failed to query current room state: %w", err)
 	}
-	defer rows.Close() // nolint: errcheck
+	defer rows.Close()
 	var eventBytes []byte
 	var roomID string
 	var event types.HeaderedEvent
@@ -99,15 +102,22 @@ func currentHistoryVisibilities(ctx context.Context, tx *sql.Tx) (map[string]gom
 			historyVisibilities[roomID] = hisVis
 		}
 	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate rows: %w", err)
+	}
 	return historyVisibilities, nil
 }
 
 func DownAddHistoryVisibilityColumn(ctx context.Context, tx *sql.Tx) error {
 	// SQLite doesn't have "if exists", so check if the column exists.
-	_, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_output_room_events LIMIT 1")
+	checkRows1, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_output_room_events LIMIT 1")
 	if err != nil {
 		// The column probably doesn't exist
 		return nil
+	}
+	defer checkRows1.Close()
+	if err = checkRows1.Err(); err != nil {
+		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 		ALTER TABLE syncapi_output_room_events DROP COLUMN history_visibility;
@@ -115,10 +125,14 @@ func DownAddHistoryVisibilityColumn(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("failed to execute downgrade: %w", err)
 	}
-	_, err = tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_current_room_state LIMIT 1")
+	checkRows2, err := tx.QueryContext(ctx, "SELECT history_visibility FROM syncapi_current_room_state LIMIT 1")
 	if err != nil {
 		// The column probably doesn't exist
 		return nil
+	}
+	defer checkRows2.Close()
+	if err = checkRows2.Err(); err != nil {
+		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 		ALTER TABLE syncapi_current_room_state DROP COLUMN history_visibility;

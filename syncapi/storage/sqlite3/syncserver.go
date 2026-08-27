@@ -11,10 +11,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/shared"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3/deltas"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 )
 
 // SyncServerDatasource represents a sync server datasource which manages
@@ -27,7 +27,8 @@ type SyncServerDatasource struct {
 }
 
 // NewDatabase creates a new sync server database
-// nolint: gocyclo
+//
+//nolint:gocyclo
 func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*SyncServerDatasource, error) {
 	var d SyncServerDatasource
 	var err error
@@ -63,11 +64,11 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	events, err := NewSqliteEventsTable(d.db, &d.streamID)
+	events, err := NewSqliteEventsTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
-	roomState, err := NewSqliteCurrentRoomStateTable(d.db, &d.streamID)
+	roomState, err := NewSqliteCurrentRoomStateTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
@@ -87,7 +88,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	sendToDevice, err := NewSqliteSendToDeviceTable(d.db)
+	sendToDevice, err := NewSqliteSendToDeviceTable(d.db) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
@@ -95,7 +96,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	receipts, err := NewSqliteReceiptsTable(d.db, &d.streamID)
+	receipts, err := NewSqliteReceiptsTable(d.db, &d.streamID) //nolint:contextcheck
 	if err != nil {
 		return err
 	}
@@ -119,6 +120,14 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	slidingSync, err := NewSqliteSlidingSyncTable(d.db)
+	if err != nil {
+		return err
+	}
+	unPartialStatedRooms, err := NewSqliteUnPartialStatedRoomsTable(d.db, &d.streamID)
+	if err != nil {
+		return err
+	}
 
 	// apply migrations which need multiple tables
 	m := sqlutil.NewMigrator(d.db)
@@ -127,29 +136,43 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 			Version: "syncapi: set history visibility for existing events",
 			Up:      deltas.UpSetHistoryVisibility, // Requires current_room_state and output_room_events to be created.
 		},
+		sqlutil.Migration{
+			Version: "syncapi: create sliding sync room metadata tables",
+			Up:      deltas.UpCreateSlidingSyncRoomMetadata,
+		},
 	)
 	err = m.Up(ctx)
 	if err != nil {
 		return err
 	}
+
+	// Create sliding sync room metadata table after migration creates the tables
+	slidingSyncRoomMetadata, err := NewSqliteSlidingSyncRoomMetadataTable(d.db)
+	if err != nil {
+		return err
+	}
+
 	d.Database = shared.Database{
-		DB:                  d.db,
-		Writer:              d.writer,
-		Invites:             invites,
-		Peeks:               peeks,
-		AccountData:         accountData,
-		OutputEvents:        events,
-		BackwardExtremities: bwExtrem,
-		CurrentRoomState:    roomState,
-		Topology:            topology,
-		Filter:              filter,
-		SendToDevice:        sendToDevice,
-		Receipts:            receipts,
-		Memberships:         memberships,
-		NotificationData:    notificationData,
-		Ignores:             ignores,
-		Presence:            presence,
-		Relations:           relations,
+		DB:                      d.db,
+		Writer:                  d.writer,
+		Invites:                 invites,
+		Peeks:                   peeks,
+		AccountData:             accountData,
+		OutputEvents:            events,
+		BackwardExtremities:     bwExtrem,
+		CurrentRoomState:        roomState,
+		Topology:                topology,
+		Filter:                  filter,
+		SendToDevice:            sendToDevice,
+		Receipts:                receipts,
+		Memberships:             memberships,
+		NotificationData:        notificationData,
+		Ignores:                 ignores,
+		Presence:                presence,
+		Relations:               relations,
+		SlidingSync:             slidingSync,
+		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
+		UnPartialStatedRooms:    unPartialStatedRooms,
 	}
 	return nil
 }

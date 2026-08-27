@@ -8,12 +8,14 @@ package sqlite3
 import (
 	"context"
 	"database/sql"
+	"errors"
 
-	"github.com/element-hq/dendrite/internal"
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/depth"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 const outputRoomEventsTopologySchema = `
@@ -97,10 +99,14 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition,
 ) (types.StreamPosition, error) {
-	_, err := sqlutil.TxStmt(txn, s.insertEventInTopologyStmt).ExecContext(
-		ctx, event.EventID(), event.Depth(), event.RoomID().String(), pos,
+	// Clamp the depth to prevent issues with events that have depth values
+	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
+	depth := depth.Clamp(event.Depth())
+	insertEventInTopologyStmt := sqlutil.TxStmt(txn, s.insertEventInTopologyStmt)
+	_, err := insertEventInTopologyStmt.ExecContext(
+		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	)
-	return types.StreamPosition(event.Depth()), err
+	return types.StreamPosition(depth), err
 }
 
 // SelectEventIDsInRange selects the IDs of events which positions are within a
@@ -123,7 +129,7 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 
 	// Query the event IDs.
 	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, maxDepth, maxStreamPos, limit)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// If no event matched the request, return an empty slice.
 		return []string{}, start, end, nil
 	} else if err != nil {
@@ -178,6 +184,7 @@ func (s *outputRoomEventsTopologyStatements) SelectStreamToTopologicalPosition(
 func (s *outputRoomEventsTopologyStatements) PurgeEventsTopology(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.purgeEventsTopologyStmt).ExecContext(ctx, roomID)
+	purgeEventsTopologyStmt := sqlutil.TxStmt(txn, s.purgeEventsTopologyStmt)
+	_, err := purgeEventsTopologyStmt.ExecContext(ctx, roomID)
 	return err
 }

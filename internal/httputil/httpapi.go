@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,13 +24,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/clientapi/auth"
-	"github.com/element-hq/dendrite/internal"
-	userapi "github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/internal"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// BasicAuth is used for authorization on /metrics handlers
+// BasicAuth is used for authorization on /metrics handlers.
 type BasicAuth struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -44,7 +44,7 @@ type AuthAPIOpts struct {
 // the user is allowed to do specific things.
 type AuthAPIOption func(opts *AuthAPIOpts)
 
-// WithAllowGuests checks that guest users have access to this endpoint
+// WithAllowGuests checks that guest users have access to this endpoint.
 func WithAllowGuests() AuthAPIOption {
 	return func(opts *AuthAPIOpts) {
 		opts.GuestAccessAllowed = true
@@ -111,7 +111,7 @@ func MakeAuthAPI(
 		jsonRes := f(req, device)
 		// do not log 4xx as errors as they are client fails, not server fails
 		if hub != nil && jsonRes.Code >= 500 {
-			hub.Scope().SetExtra("response", jsonRes)
+			hub.Scope().SetContext("response", map[string]any{"json_response": jsonRes})
 			hub.CaptureException(fmt.Errorf("%s returned HTTP %d", req.URL.Path, jsonRes.Code))
 		}
 		return jsonRes
@@ -136,15 +136,61 @@ func MakeAdminAPI(
 	})
 }
 
+// MakeOptionalAuthAPI turns a util.JSONRequestHandler function into an http.Handler
+// which optionally authenticates the request. If authentication fails, the handler
+// is still called with a nil device. This is useful for endpoints that provide
+// different responses for authenticated vs unauthenticated users.
+func MakeOptionalAuthAPI(
+	metricsName string, userAPI userapi.QueryAcccessTokenAPI,
+	f func(*http.Request, *userapi.Device) util.JSONResponse,
+	checks ...AuthAPIOption,
+) http.Handler {
+	h := func(req *http.Request) util.JSONResponse {
+		logger := util.GetLogger(req.Context())
+
+		// Try to authenticate, but don't fail if authentication fails
+		device, err := auth.VerifyUserFromRequest(req, userAPI)
+		if err == nil && device != nil {
+			// add the user ID to the logger
+			logger = logger.WithField("user_id", device.UserID)
+			req = req.WithContext(util.ContextWithLogger(req.Context(), logger))
+			// add the user to Sentry, if enabled
+			hub := sentry.GetHubFromContext(req.Context())
+			if hub != nil {
+				hub = hub.Clone()
+				hub.Scope().SetUser(sentry.User{
+					Username: device.UserID,
+				})
+				hub.Scope().SetTag("user_id", device.UserID)
+				hub.Scope().SetTag("device_id", device.ID)
+			}
+		}
+
+		// apply additional checks, if any
+		opts := AuthAPIOpts{}
+		for _, opt := range checks {
+			opt(&opts)
+		}
+
+		if device != nil && !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest {
+			return util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.GuestAccessForbidden("Guest access not allowed"),
+			}
+		}
+
+		// Call handler with device (may be nil for unauthenticated requests)
+		return f(req, device)
+	}
+	return MakeExternalAPI(metricsName, h)
+}
+
 // MakeExternalAPI turns a util.JSONRequestHandler function into an http.Handler.
 // This is used for APIs that are called from the internet.
 func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse) http.Handler {
 	// TODO: We shouldn't be directly reading env vars here, inject it in instead.
 	// Refactor this when we split out config structs.
-	verbose := false
-	if os.Getenv("DENDRITE_TRACE_HTTP") == "1" {
-		verbose = true
-	}
+	verbose := os.Getenv("ZENDRITE_TRACE_HTTP") == "1" || os.Getenv("DENDRITE_TRACE_HTTP") == "1"
 	h := util.MakeJSONAPI(util.NewJSONRequestHandler(f))
 	withSpan := func(w http.ResponseWriter, req *http.Request) {
 		nextWriter := w
@@ -192,14 +238,13 @@ func MakeExternalAPI(metricsName string, f func(*http.Request) util.JSONResponse
 		defer trace.EndTask()
 		req = req.WithContext(ctx)
 		h.ServeHTTP(nextWriter, req)
-
 	}
 
 	return http.HandlerFunc(withSpan)
 }
 
 // MakeHTTPAPI adds Span metrics to the HTML Handler function
-// This is used to serve HTML alongside JSON error messages
+// This is used to serve HTML alongside JSON error messages.
 func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enableMetrics bool, f func(http.ResponseWriter, *http.Request), checks ...AuthAPIOption) http.Handler {
 	withSpan := func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodOptions {
@@ -242,7 +287,7 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 			prometheus.CounterOpts{
 				Name:      metricsName,
 				Help:      "Total number of http requests for HTML resources",
-				Namespace: "dendrite",
+				Namespace: "zendrite",
 			},
 			[]string{"code"},
 		),
@@ -250,7 +295,7 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 	)
 }
 
-// WrapHandlerInBasicAuth adds basic auth to a handler. Only used for /metrics
+// WrapHandlerInBasicAuth adds basic auth to a handler. Only used for /metrics.
 func WrapHandlerInBasicAuth(h http.Handler, b BasicAuth) http.HandlerFunc {
 	if b.Username == "" || b.Password == "" {
 		logrus.Warn("Metrics are exposed without protection. Make sure you set up protection at proxy level.")

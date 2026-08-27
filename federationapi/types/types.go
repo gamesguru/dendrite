@@ -6,7 +6,7 @@
 
 package types
 
-import "github.com/matrix-org/gomatrixserverlib/spec"
+import "codefloe.com/pat-s/gomatrixserverlib/spec"
 
 const MSigningKeyUpdate = "m.signing_key_update" // TODO: move to gomatrixserverlib
 
@@ -24,7 +24,7 @@ func (s ServerNames) Len() int           { return len(s) }
 func (s ServerNames) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s ServerNames) Less(i, j int) bool { return s[i] < s[j] }
 
-// tracks peeks we're performing on another server over federation
+// OutboundPeek tracks peeks we're performing on another server over federation.
 type OutboundPeek struct {
 	PeekID            string
 	RoomID            string
@@ -34,7 +34,7 @@ type OutboundPeek struct {
 	RenewalInterval   int64
 }
 
-// tracks peeks other servers are performing on us over federation
+// InboundPeek tracks peeks other servers are performing on us over federation.
 type InboundPeek struct {
 	PeekID            string
 	RoomID            string
@@ -67,4 +67,13 @@ type PresenceContent struct {
 	Presence        string  `json:"presence"`
 	StatusMsg       *string `json:"status_msg,omitempty"`
 	UserID          string  `json:"user_id"`
+}
+
+// RetryState represents the persisted backoff/retry state for a federation destination.
+// This allows retry timers to survive server restarts.
+type RetryState struct {
+	// FailureCount is the number of consecutive failures
+	FailureCount uint32
+	// RetryUntil is the timestamp (ms since epoch) when the backoff expires
+	RetryUntil spec.Timestamp
 }

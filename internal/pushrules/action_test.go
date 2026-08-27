@@ -9,6 +9,7 @@ import (
 )
 
 func TestActionJSON(t *testing.T) {
+	t.Parallel()
 	tsts := []struct {
 		Want Action
 	}{
@@ -20,7 +21,9 @@ func TestActionJSON(t *testing.T) {
 		{Action{Kind: SetTweakAction, Tweak: HighlightTweak, Value: "false"}},
 	}
 	for _, tst := range tsts {
+		tst := tst // capture range variable
 		t.Run(fmt.Sprintf("%+v", tst.Want), func(t *testing.T) {
+			t.Parallel()
 			bs, err := json.Marshal(&tst.Want)
 			if err != nil {
 				t.Fatalf("Marshal failed: %v", err)

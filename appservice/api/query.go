@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Package api contains methods used by dendrite components in multi-process
+// Package api contains methods used by zendrite components in multi-process
 // mode to send requests to the appservice component, typically in order to ask
 // an application service for some information.
 package api
@@ -13,12 +13,12 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/element-hq/dendrite/clientapi/auth/authtypes"
-	userapi "github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AppServiceInternalAPI is used to query user and room alias data from application
-// services
+// services.
 type AppServiceInternalAPI interface {
 	// Check whether a room alias exists within any application service namespaces
 	RoomAliasExists(
@@ -39,27 +39,27 @@ type AppServiceInternalAPI interface {
 }
 
 // RoomAliasExistsRequest is a request to an application service
-// about whether a room alias exists
+// about whether a room alias exists.
 type RoomAliasExistsRequest struct {
 	// Alias we want to lookup
 	Alias string `json:"alias"`
 }
 
 // RoomAliasExistsResponse is a response from an application service
-// about whether a room alias exists
+// about whether a room alias exists.
 type RoomAliasExistsResponse struct {
 	AliasExists bool `json:"exists"`
 }
 
 // UserIDExistsRequest is a request to an application service about whether a
-// user ID exists
+// user ID exists.
 type UserIDExistsRequest struct {
 	// UserID we want to lookup
 	UserID string `json:"user_id"`
 }
 
 // UserIDExistsRequestAccessToken is a request to an application service
-// about whether a user ID exists. Includes an access token
+// about whether a user ID exists. Includes an access token.
 type UserIDExistsRequestAccessToken struct {
 	// UserID we want to lookup
 	UserID      string `json:"user_id"`
@@ -67,7 +67,7 @@ type UserIDExistsRequestAccessToken struct {
 }
 
 // UserIDExistsResponse is a response from an application service about
-// whether a user ID exists
+// whether a user ID exists.
 type UserIDExistsResponse struct {
 	UserIDExists bool `json:"exists"`
 }

@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/element-hq/dendrite/internal/sqlutil"
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/syncapi/storage/postgres"
-	"github.com/element-hq/dendrite/syncapi/storage/sqlite3"
-	"github.com/element-hq/dendrite/syncapi/storage/tables"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/test"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func newRelationsTable(t *testing.T, dbType test.DBType) (tables.Relations, *sql.DB, func()) {
@@ -54,14 +54,16 @@ func compareRelationsToExpected(t *testing.T, tab tables.Relations, r types.Rang
 		got := relations[relType][i]
 		want := expected[i]
 		if got != want {
-			t.Fatalf("range %v position %d should have been %q but got %q", r, i, got, want)
+			t.Fatalf("range %v position %d should have been %v but got %v", r, i, got, want)
 		}
 	}
 }
 
-const roomID = "!roomid:server"
-const childType = "m.room.something"
-const relType = "m.reaction"
+const (
+	roomID    = "!roomid:server"
+	childType = "m.room.something"
+	relType   = "m.reaction"
+)
 
 func TestRelationsTable(t *testing.T) {
 	ctx := context.Background()
@@ -108,7 +110,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 1, EventID: "b"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 
 		// Now delete one of the relations
@@ -134,7 +136,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 1, EventID: "b"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 
 		// Insert some new relations
@@ -180,7 +182,7 @@ func TestRelationsTable(t *testing.T) {
 				{Position: 3, EventID: "d"},
 			},
 		} {
-			compareRelationsToExpected(t, tab, r, expected)
+			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
 	})
 }

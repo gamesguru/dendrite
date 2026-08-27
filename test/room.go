@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/internal/eventutil"
-	rstypes "github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type Preset int
@@ -36,12 +36,13 @@ func UserIDForSender(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, 
 }
 
 type Room struct {
-	ID           string
-	Version      gomatrixserverlib.RoomVersion
-	preset       Preset
-	guestCanJoin bool
-	visibility   gomatrixserverlib.HistoryVisibility
-	creator      *User
+	ID            string
+	Version       gomatrixserverlib.RoomVersion
+	preset        Preset
+	guestCanJoin  bool
+	noPowerLevels bool
+	visibility    gomatrixserverlib.HistoryVisibility
+	creator       *User
 
 	authEvents   *gomatrixserverlib.AuthEvents
 	currentState map[string]*rstypes.HeaderedEvent
@@ -49,7 +50,7 @@ type Room struct {
 }
 
 // Create a new test room. Automatically creates the initial create events.
-func NewRoom(t *testing.T, creator *User, modifiers ...roomModifier) *Room {
+func NewRoom(t *testing.T, creator *User, modifiers ...RoomModifier) *Room {
 	t.Helper()
 	counter := atomic.AddInt64(&roomIDCounter, 1)
 	if creator.srvName == "" {
@@ -67,6 +68,11 @@ func NewRoom(t *testing.T, creator *User, modifiers ...roomModifier) *Room {
 	}
 	for _, m := range modifiers {
 		m(t, r)
+	}
+	// Domainless room IDs (v12+) are derived from the create event ID,
+	// so the create event must be built with an empty room ID.
+	if gomatrixserverlib.MustGetRoomVersion(r.Version).DomainlessRoomIDs() {
+		r.ID = ""
 	}
 	r.insertCreateEvents(t)
 	return r
@@ -94,7 +100,8 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 	t.Helper()
 	var joinRule gomatrixserverlib.JoinRuleContent
 	var hisVis gomatrixserverlib.HistoryVisibilityContent
-	plContent := eventutil.InitialPowerLevelsContent(gomatrixserverlib.MustGetRoomVersion(r.Version), r.creator.ID)
+	verImpl := gomatrixserverlib.MustGetRoomVersion(r.Version)
+	plContent := eventutil.InitialPowerLevelsContent(verImpl, r.creator.ID)
 	switch r.preset {
 	case PresetTrustedPrivateChat:
 		fallthrough
@@ -110,14 +117,25 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 		hisVis.HistoryVisibility = r.visibility
 	}
 
-	r.CreateAndInsert(t, r.creator, spec.MRoomCreate, map[string]interface{}{
-		"creator":      r.creator.ID,
+	createContent := map[string]any{
 		"room_version": r.Version,
-	}, WithStateKey(""))
-	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]interface{}{
+	}
+	// v11+ removed the creator field from create event content
+	// (the sender is the implicit creator).
+	if !verImpl.PrivilegedCreators() {
+		createContent["creator"] = r.creator.ID
+	}
+	createEv := r.CreateAndInsert(t, r.creator, spec.MRoomCreate, createContent, WithStateKey(""))
+	// For domainless room IDs (v12+), derive the room ID from the create event.
+	if verImpl.DomainlessRoomIDs() {
+		r.ID = createEv.RoomID().String()
+	}
+	r.CreateAndInsert(t, r.creator, spec.MRoomMember, map[string]any{
 		"membership": "join",
 	}, WithStateKey(r.creator.ID))
-	r.CreateAndInsert(t, r.creator, spec.MRoomPowerLevels, plContent, WithStateKey(""))
+	if !r.noPowerLevels {
+		r.CreateAndInsert(t, r.creator, spec.MRoomPowerLevels, plContent, WithStateKey(""))
+	}
 	r.CreateAndInsert(t, r.creator, spec.MRoomJoinRules, joinRule, WithStateKey(""))
 	r.CreateAndInsert(t, r.creator, spec.MRoomHistoryVisibility, hisVis, WithStateKey(""))
 	if r.guestCanJoin {
@@ -128,7 +146,7 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 }
 
 // Create an event in this room but do not insert it. Does not modify the room in any way (depth, fwd extremities, etc) so is thread-safe.
-func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, content interface{}, mods ...eventModifier) *rstypes.HeaderedEvent {
+func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, content any, mods ...eventModifier) *rstypes.HeaderedEvent {
 	t.Helper()
 	depth := 1 + len(r.events) // depth starts at 1
 
@@ -197,12 +215,27 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 	}
 	headeredEvent := &rstypes.HeaderedEvent{PDU: ev}
 	headeredEvent.Visibility = r.visibility
+	headeredEvent.StateKeyResolved = ev.StateKey()
+	materialiseEventID(headeredEvent)
 	return headeredEvent
+}
+
+// materialiseEventID forces the lazily generated event ID to be computed.
+//
+// PDU.EventID() memoises the ID into the event on first call, which is an
+// unsynchronised read-then-write. Tests routinely build a room once and then
+// share its events across the parallel subtests of WithAllDatabases, so leaving
+// that first call to the subtests makes them race. Doing it while the event is
+// still owned by a single goroutine leaves the subtests with reads only.
+func materialiseEventID(he *rstypes.HeaderedEvent) {
+	_ = he.EventID()
 }
 
 // Add a new event to this room DAG. Not thread-safe.
 func (r *Room) InsertEvent(t *testing.T, he *rstypes.HeaderedEvent) {
 	t.Helper()
+	// Events built outside CreateEvent reach us with the ID still unset.
+	materialiseEventID(he)
 	// Add the event to the list of auth/state events
 	r.events = append(r.events, he)
 	if he.StateKey() != nil {
@@ -228,18 +261,18 @@ func (r *Room) CurrentState() []*rstypes.HeaderedEvent {
 	return events
 }
 
-func (r *Room) CreateAndInsert(t *testing.T, creator *User, eventType string, content interface{}, mods ...eventModifier) *rstypes.HeaderedEvent {
+func (r *Room) CreateAndInsert(t *testing.T, creator *User, eventType string, content any, mods ...eventModifier) *rstypes.HeaderedEvent {
 	t.Helper()
 	he := r.CreateEvent(t, creator, eventType, content, mods...)
 	r.InsertEvent(t, he)
 	return he
 }
 
-// All room modifiers are below
+// All room modifiers are below.
 
-type roomModifier func(t *testing.T, r *Room)
+type RoomModifier func(t *testing.T, r *Room)
 
-func RoomPreset(p Preset) roomModifier {
+func RoomPreset(p Preset) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		switch p {
 		case PresetPrivateChat:
@@ -256,20 +289,29 @@ func RoomPreset(p Preset) roomModifier {
 	}
 }
 
-func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) roomModifier {
+func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.visibility = vis
 	}
 }
 
-func RoomVersion(ver gomatrixserverlib.RoomVersion) roomModifier {
+func RoomVersion(ver gomatrixserverlib.RoomVersion) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.Version = ver
 	}
 }
 
-func GuestsCanJoin(canJoin bool) roomModifier {
+func GuestsCanJoin(canJoin bool) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.guestCanJoin = canJoin
+	}
+}
+
+// WithoutPowerLevels suppresses the initial m.room.power_levels event during
+// room construction. Used to simulate the spec-allowed but rare state of a
+// v1-v11 room whose creator has implicit power 100 because no PL event exists.
+func WithoutPowerLevels() RoomModifier {
+	return func(t *testing.T, r *Room) {
+		r.noPowerLevels = true
 	}
 }

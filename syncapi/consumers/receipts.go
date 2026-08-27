@@ -10,18 +10,18 @@ import (
 	"context"
 	"strconv"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 // OutputReceiptEventConsumer consumes events that originated in the EDU server.
@@ -73,6 +73,13 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		Type:    msg.Header.Get("type"),
 	}
 
+	log.WithFields(log.Fields{
+		"user_id":  output.UserID,
+		"room_id":  output.RoomID,
+		"event_id": output.EventID,
+		"type":     output.Type,
+	}).Debug("SyncAPI receipt consumer received message")
+
 	timestamp, err := strconv.ParseUint(msg.Header.Get("timestamp"), 10, 64)
 	if err != nil {
 		// If the message was invalid, log it and move on to the next message in the stream
@@ -83,7 +90,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 
 	output.Timestamp = spec.Timestamp(timestamp)
 
-	streamPos, err := s.db.StoreReceipt(
+	streamPos, err := s.db.StoreReceipt( //nolint:contextcheck
 		s.ctx,
 		output.RoomID,
 		output.Type,
@@ -92,12 +99,63 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		output.Timestamp,
 	)
 	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"user_id":  output.UserID,
+			"room_id":  output.RoomID,
+			"event_id": output.EventID,
+		}).Error("SyncAPI receipt consumer: failed to store receipt")
 		sentry.CaptureException(err)
 		return true
 	}
 
+	log.WithFields(log.Fields{
+		"user_id":    output.UserID,
+		"room_id":    output.RoomID,
+		"event_id":   output.EventID,
+		"stream_pos": streamPos,
+	}).Debug("SyncAPI receipt consumer: stored receipt successfully")
+
+	// When a user posts an m.read receipt, update their notification count to 0
+	// This ensures the unread badge clears immediately for v4 sync
+	// IMPORTANT: Do this BEFORE calling notifiers to avoid race conditions
+	var notifStreamPos types.StreamPosition
+	if output.Type == "m.read" {
+		log.WithFields(log.Fields{
+			"user_id": output.UserID,
+			"room_id": output.RoomID,
+		}).Debug("SyncAPI receipt consumer: clearing notification count for m.read receipt")
+
+		notifStreamPos, err = s.db.UpsertRoomUnreadNotificationCounts( //nolint:contextcheck
+			s.ctx,
+			output.UserID,
+			output.RoomID,
+			0, // Clear notification count
+			0, // Clear highlight count
+		)
+		if err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"user_id": output.UserID,
+				"room_id": output.RoomID,
+			}).Error("SyncAPI receipt consumer: failed to clear notification counts")
+			// Continue anyway - receipt was still stored successfully
+		} else {
+			log.WithFields(log.Fields{
+				"user_id":            output.UserID,
+				"room_id":            output.RoomID,
+				"notif_stream_pos":   notifStreamPos,
+				"receipt_stream_pos": streamPos,
+			}).Debug("SyncAPI receipt consumer: cleared notification counts successfully")
+		}
+	}
+
+	// Advance streams and notify AFTER all database commits are done
+	// This prevents long-polling connections from waking up between commits
 	s.stream.Advance(streamPos)
 	s.notifier.OnNewReceipt(output.RoomID, types.StreamingToken{ReceiptPosition: streamPos})
+
+	if output.Type == "m.read" && notifStreamPos > 0 {
+		s.notifier.OnNewNotificationData(output.UserID, types.StreamingToken{NotificationDataPosition: notifStreamPos})
+	}
 
 	return true
 }

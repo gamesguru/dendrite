@@ -12,12 +12,13 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/userapi/api"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // Type represents an auth type
@@ -56,7 +57,7 @@ type LoginIdentifier struct {
 
 // Login represents the shared fields used in all forms of login/sudo endpoints.
 type Login struct {
-	LoginIdentifier                 // Flat fields deprecated in favour of `identifier`.
+	LoginIdentifier                 // Flat fields deprecated in favor of `identifier`.
 	Identifier      LoginIdentifier `json:"identifier"`
 
 	// Both DeviceID and InitialDisplayName can be omitted, or empty strings ("")
@@ -144,10 +145,10 @@ type Challenge struct {
 	Flows     []userInteractiveFlow `json:"flows"`
 	Session   string                `json:"session"`
 	// TODO: Return any additional `params`
-	Params map[string]interface{} `json:"params"`
+	Params map[string]any `json:"params"`
 }
 
-// Challenge returns an HTTP 401 with the supported flows for authenticating
+// Challenge returns an HTTP 401 with the supported flows for authenticating.
 func (u *UserInteractive) challenge(sessionID string) *util.JSONResponse {
 	u.RLock()
 	completed := u.Sessions[sessionID]
@@ -155,17 +156,17 @@ func (u *UserInteractive) challenge(sessionID string) *util.JSONResponse {
 	u.RUnlock()
 
 	return &util.JSONResponse{
-		Code: 401,
+		Code: 401, //nolint:mnd
 		JSON: Challenge{
 			Completed: completed,
 			Flows:     flows,
 			Session:   sessionID,
-			Params:    make(map[string]interface{}),
+			Params:    make(map[string]any),
 		},
 	}
 }
 
-// NewSession returns a challenge with a new session ID and remembers the session ID
+// NewSession returns a challenge with a new session ID and remembers the session ID.
 func (u *UserInteractive) NewSession() *util.JSONResponse {
 	sessionID, err := GenerateAccessToken()
 	if err != nil {
@@ -183,8 +184,8 @@ func (u *UserInteractive) NewSession() *util.JSONResponse {
 
 // ResponseWithChallenge mixes together a JSON body (e.g an error with errcode/message) with the
 // standard challenge response.
-func (u *UserInteractive) ResponseWithChallenge(sessionID string, response interface{}) *util.JSONResponse {
-	mixedObjects := make(map[string]interface{})
+func (u *UserInteractive) ResponseWithChallenge(sessionID string, response any) *util.JSONResponse {
+	mixedObjects := make(map[string]any)
 	b, err := json.Marshal(response)
 	if err != nil {
 		return &util.JSONResponse{
@@ -192,7 +193,12 @@ func (u *UserInteractive) ResponseWithChallenge(sessionID string, response inter
 			JSON: spec.InternalServerError{},
 		}
 	}
-	_ = json.Unmarshal(b, &mixedObjects)
+	if err = json.Unmarshal(b, &mixedObjects); err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 	challenge := u.challenge(sessionID)
 	b, err = json.Marshal(challenge.JSON)
 	if err != nil {
@@ -201,10 +207,15 @@ func (u *UserInteractive) ResponseWithChallenge(sessionID string, response inter
 			JSON: spec.InternalServerError{},
 		}
 	}
-	_ = json.Unmarshal(b, &mixedObjects)
+	if err = json.Unmarshal(b, &mixedObjects); err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 
 	return &util.JSONResponse{
-		Code: 401,
+		Code: 401, //nolint:mnd
 		JSON: mixedObjects,
 	}
 }
@@ -248,7 +259,7 @@ func (u *UserInteractive) Verify(ctx context.Context, bodyBytes []byte, device *
 		if !u.IsSingleStageFlow(authType) {
 			return nil, &util.JSONResponse{
 				Code: http.StatusBadRequest,
-				JSON: spec.Unknown("The auth.session is missing or unknown."),
+				JSON: spec.MissingParam("The auth.session is missing or unknown."),
 			}
 		}
 	}

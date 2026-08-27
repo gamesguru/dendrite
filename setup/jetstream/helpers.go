@@ -35,7 +35,7 @@ func JetStreamConsumer(
 		}
 	}(durable)
 
-	durable = durable + "Pull"
+	durable += "Pull"
 	sub, err := js.PullSubscribe(subj, durable, opts...)
 	if err != nil {
 		sentry.CaptureException(err)
@@ -58,14 +58,15 @@ func jetStreamConsumerWorker(
 			return
 		default:
 		}
-		// The context behaviour here is surprising — we supply a context
+		// The context behavior here is surprising — we supply a context
 		// so that we can interrupt the fetch if we want, but NATS will still
 		// enforce its own deadline (roughly 5 seconds by default). Therefore
 		// it is our responsibility to check whether our context expired or
 		// not when a context error is returned. Footguns. Footguns everywhere.
 		msgs, err := sub.Fetch(batch, nats.Context(ctx))
 		if err != nil {
-			if err == context.Canceled || err == context.DeadlineExceeded {
+			switch {
+			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 				// Work out whether it was the JetStream context that expired
 				// or whether it was our supplied context.
 				select {
@@ -78,19 +79,19 @@ func jetStreamConsumerWorker(
 					// just timed out and we should try again.
 					continue
 				}
-			} else if errors.Is(err, nats.ErrTimeout) {
+			case errors.Is(err, nats.ErrTimeout):
 				// Pull request was invalidated, try again.
 				continue
-			} else if errors.Is(err, nats.ErrConsumerLeadershipChanged) {
+			case errors.Is(err, nats.ErrConsumerLeadershipChanged):
 				// Leadership changed so pending pull requests became invalidated,
 				// just try again.
 				continue
-			} else if err.Error() == "nats: Server Shutdown" {
+			case err.Error() == "nats: Server Shutdown":
 				// The server is shutting down, but we'll rely on reconnect
-				// behaviour to try and either connect us to another node (if
+				// behavior to try and either connect us to another node (if
 				// clustered) or to reconnect when the server comes back up.
 				continue
-			} else {
+			default:
 				// Something else went wrong.
 				logrus.WithContext(ctx).WithField("subject", subj).WithError(err).Warn("Error on pull subscriber fetch")
 				return

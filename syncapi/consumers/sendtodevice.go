@@ -10,22 +10,22 @@ import (
 	"context"
 	"encoding/json"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
-	"github.com/element-hq/dendrite/setup/config"
-	"github.com/element-hq/dendrite/setup/jetstream"
-	"github.com/element-hq/dendrite/setup/process"
-	"github.com/element-hq/dendrite/syncapi/notifier"
-	"github.com/element-hq/dendrite/syncapi/storage"
-	"github.com/element-hq/dendrite/syncapi/streams"
-	"github.com/element-hq/dendrite/syncapi/types"
-	"github.com/element-hq/dendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
+	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/streams"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // OutputSendToDeviceEventConsumer consumes events that originated in the EDU server.
@@ -95,7 +95,7 @@ func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []
 		return true
 	}
 
-	logger := util.GetLogger(context.TODO()).WithFields(log.Fields{
+	logger := util.GetLogger(context.TODO()).WithFields(log.Fields{ //nolint:contextcheck
 		"sender":     output.Sender,
 		"user_id":    output.UserID,
 		"device_id":  output.DeviceID,
@@ -118,7 +118,7 @@ func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []
 		}
 	}
 
-	streamPos, err := s.db.StoreNewSendForDeviceMessage(
+	streamPos, err := s.db.StoreNewSendForDeviceMessage( //nolint:contextcheck
 		s.ctx, output.UserID, output.DeviceID, output.SendToDeviceEvent,
 	)
 	if err != nil {
