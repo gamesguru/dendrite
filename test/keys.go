@@ -46,9 +46,9 @@ func SaveMatrixKey(matrixKeyPath string, data ed25519.PrivateKey) error {
 		return err
 	}
 
-	defer (func() {
+	defer func() {
 		err = keyOut.Close()
-	})()
+	}()
 
 	keyID := base64.RawURLEncoding.EncodeToString(data[:])
 	keyID = strings.ReplaceAll(keyID, "-", "")

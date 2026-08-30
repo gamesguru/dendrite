@@ -143,7 +143,7 @@ func checkFileHookParams(params map[string]any) {
 
 // Add a new FSHook to the logger. Each component will log in its own file.
 func setupFileHook(hook config.LogrusHook, level logrus.Level) {
-	dirPath, ok := (hook.Params["path"]).(string)
+	dirPath, ok := hook.Params["path"].(string)
 	if !ok {
 		logrus.Fatal("log hook 'path' param is not a string")
 	}
