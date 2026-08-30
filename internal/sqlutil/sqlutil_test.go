@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -219,4 +220,27 @@ func assertNoError(t *testing.T, err error, msg string) {
 		return
 	}
 	t.Fatal(msg)
+}
+
+func TestErrIsCanceled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"canceled", context.Canceled, true},
+		{"deadline exceeded", context.DeadlineExceeded, true},
+		// database/sql rolls a transaction back as soon as its context is done,
+		// so work still in flight afterwards fails this way instead.
+		{"transaction already done", sql.ErrTxDone, true},
+		{"wrapped transaction already done", fmt.Errorf("p.lazyLoadMembers: %w", sql.ErrTxDone), true},
+		{"unrelated failure", sql.ErrNoRows, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ErrIsCanceled(tc.err); got != tc.want {
+				t.Errorf("ErrIsCanceled(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
@@ -122,6 +123,12 @@ func (p *PDUStreamProvider) CompleteSync(
 	}
 	// Build up a /sync response. Add joined rooms.
 	for _, roomID := range joinedRoomIDs {
+		// There is no point in building responses for the remaining rooms if
+		// the client has already gone away.
+		if ctxErr := req.Context.Err(); ctxErr != nil {
+			req.Log.WithError(ctxErr).Debugln("Abandoning complete sync, the client went away")
+			return from
+		}
 		events := recentEvents[roomID]
 		// Invalidate the lazyLoadCache, otherwise we end up with missing displaynames/avatars
 		// TODO: This might be inefficient, when joined to many and/or large rooms.
@@ -136,10 +143,11 @@ func (p *PDUStreamProvider) CompleteSync(
 			events.Events, events.Limited, eventFormat,
 		)
 		if jerr != nil {
-			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
-			if ctxErr := req.Context.Err(); ctxErr != nil || errors.Is(jerr, sql.ErrTxDone) {
+			if req.Context.Err() != nil || sqlutil.ErrIsCanceled(jerr) {
+				req.Log.WithError(jerr).WithField("room_id", roomID).Debugln("Abandoning complete sync, the client went away")
 				return from
 			}
+			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
 			continue
 		}
 		req.Response.Rooms.Join[roomID] = jr
@@ -173,10 +181,11 @@ func (p *PDUStreamProvider) CompleteSync(
 				events.Events, events.Limited, eventFormat,
 			)
 			if err != nil {
-				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
-				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
+				if req.Context.Err() != nil || sqlutil.ErrIsCanceled(err) {
+					req.Log.WithError(err).WithField("room_id", roomID).Debugln("Abandoning complete sync, the client went away")
 					return from
 				}
+				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
 				continue
 			}
 			req.Response.Rooms.Peek[roomID] = jr
@@ -267,6 +276,12 @@ func (p *PDUStreamProvider) IncrementalSync(
 
 	newPos = from
 	for _, delta := range stateDeltas {
+		// There is no point in building deltas for the remaining rooms if the
+		// client has already gone away.
+		if ctxErr := req.Context.Err(); ctxErr != nil {
+			req.Log.WithError(ctxErr).Debugln("Abandoning incremental sync, the client went away")
+			return newPos
+		}
 		newRange := r
 		// If this room was joined in this sync, try to fetch
 		// as much timeline events as allowed by the filter.
@@ -281,10 +296,11 @@ func (p *PDUStreamProvider) IncrementalSync(
 		}
 		var pos types.StreamPosition
 		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents); err != nil {
-			req.Log.WithError(err).Error("d.addRoomDeltaToResponse failed")
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
+			if req.Context.Err() != nil || sqlutil.ErrIsCanceled(err) {
+				req.Log.WithError(err).WithField("room_id", delta.RoomID).Debugln("Abandoning incremental sync, the client went away")
 				return newPos
 			}
+			req.Log.WithError(err).WithField("room_id", delta.RoomID).Error("d.addRoomDeltaToResponse failed")
 			continue
 		}
 		// Reset the position, as it is only for the special case of newly joined rooms
@@ -442,8 +458,11 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// This is similar to Synapse's forced_newly_joined_room_ids mechanism.
 	if !hasMembershipChange {
 		unPartialStatedRooms, unPartialErr := snapshot.UnPartialStatedRoomsInRange(ctx, device.UserID, r)
+		if unPartialErr != nil && sqlutil.ErrIsCanceled(unPartialErr) {
+			return r.From, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", unPartialErr)
+		}
 		if unPartialErr != nil {
-			logrus.WithError(unPartialErr).Warn("failed to get un-partial-stated rooms")
+			logrus.WithError(unPartialErr).WithField("room_id", delta.RoomID).Warn("failed to get un-partial-stated rooms")
 		} else {
 			for _, roomID := range unPartialStatedRooms {
 				if roomID == delta.RoomID {
@@ -461,7 +480,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// Applies the history visibility rules
 	events, err := applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents)
 	if err != nil {
-		logrus.WithError(err).Error("unable to apply history visibility filter")
+		if sqlutil.ErrIsCanceled(err) {
+			return r.From, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
+		}
+		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
 	}
 
 	if r.Backwards && len(events) > eventFilter.Limit {
@@ -519,7 +541,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		if hasMembershipChange {
 			jr.Summary, err = snapshot.GetRoomSummary(ctx, delta.RoomID, device.UserID)
 			if err != nil {
-				logrus.WithError(err).Warn("failed to get room summary")
+				if sqlutil.ErrIsCanceled(err) {
+					return r.From, fmt.Errorf("snapshot.GetRoomSummary: %w", err)
+				}
+				logrus.WithError(err).WithField("room_id", delta.RoomID).Warn("failed to get room summary")
 			}
 		}
 		jr.Timeline.PrevBatch = &prevBatch
@@ -704,7 +729,10 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if !isPeek {
 		events, err = applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents)
 		if err != nil {
-			logrus.WithError(err).Error("unable to apply history visibility filter")
+			if sqlutil.ErrIsCanceled(err) {
+				return nil, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
+			}
+			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}
 	}
 

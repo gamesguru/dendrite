@@ -361,11 +361,29 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			syncReq.Log.WithField("currentPos", currentPos).Debugln("Responding to sync immediately")
 		}
 
+		// Each stream provider gets its own snapshot, so once the client goes
+		// away every remaining provider would fail to acquire one in exactly
+		// the same way. Remember that we have given up so that we report the
+		// cancellation once rather than once per provider.
+		gaveUp := false
 		withTransaction := func(from types.StreamPosition, f func(snapshot storage.DatabaseTransaction) types.StreamPosition) types.StreamPosition {
+			if gaveUp {
+				return from
+			}
+			if ctxErr := syncReq.Context.Err(); ctxErr != nil {
+				gaveUp = true
+				syncReq.Log.WithError(ctxErr).Debugln("Abandoning sync request, the client went away")
+				return from
+			}
 			var succeeded bool
 			snapshot, err := rp.db.NewDatabaseSnapshot(req.Context())
 			if err != nil {
-				logrus.WithError(err).Error("Failed to acquire database snapshot for sync request")
+				if sqlutil.ErrIsCanceled(err) {
+					gaveUp = true
+					syncReq.Log.WithError(err).Debugln("Abandoning sync request, the client went away")
+					return from
+				}
+				syncReq.Log.WithError(err).Error("Failed to acquire database snapshot for sync request")
 				return from
 			}
 			defer func() {
@@ -549,7 +567,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			// - It's an inefficient use of bandwidth.
 			// - Some sytests which test 'waking up' sync rely on some sync requests to block, which
 			//   they weren't always doing, resulting in flakey tests.
-			if !syncReq.Response.HasUpdates() {
+			if !syncReq.Response.HasUpdates() && syncReq.Context.Err() == nil {
 				syncReq.Since = currentPos
 				// do not loop again if the ?timeout= is 0 as that means "return immediately"
 				if syncReq.Timeout > 0 {

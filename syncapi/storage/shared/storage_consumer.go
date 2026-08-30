@@ -16,6 +16,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
@@ -404,11 +405,7 @@ func (d *Database) fetchStateEvents(
 	if len(missingEvents) > 0 {
 		// This happens when add_state_ids has an event ID which is not in the provided range.
 		// We need to explicitly fetch them.
-		allMissingEventIDs := []string{}
-		for _, missingEvIDs := range missingEvents {
-			allMissingEventIDs = append(allMissingEventIDs, missingEvIDs...)
-		}
-		evs, err := d.fetchMissingStateEvents(ctx, txn, allMissingEventIDs)
+		evs, err := d.fetchMissingStateEvents(ctx, txn, missingEvents)
 		if err != nil {
 			return nil, err
 		}
@@ -421,9 +418,25 @@ func (d *Database) fetchStateEvents(
 	return stateBetween, nil
 }
 
+// fetchMissingStateEvents converts the given event IDs, keyed by the room they
+// belong to, into events. The room IDs are only used to give the caller some
+// context when the mapping turns out to be incomplete.
 func (d *Database) fetchMissingStateEvents(
-	ctx context.Context, txn *sql.Tx, eventIDs []string,
+	ctx context.Context, txn *sql.Tx, roomIDToEventIDs map[string][]string,
 ) ([]types.StreamEvent, error) {
+	total := 0
+	for _, roomEventIDs := range roomIDToEventIDs {
+		total += len(roomEventIDs)
+	}
+	eventIDs := make([]string, 0, total)
+	eventIDToRoomID := make(map[string]string, total)
+	for roomID, roomEventIDs := range roomIDToEventIDs {
+		for _, eventID := range roomEventIDs {
+			eventIDs = append(eventIDs, eventID)
+			eventIDToRoomID[eventID] = roomID
+		}
+	}
+
 	// Fetch from the events table first so we pick up the stream ID for the
 	// event.
 	events, err := d.OutputEvents.SelectEvents(ctx, txn, eventIDs, nil, false)
@@ -453,7 +466,23 @@ func (d *Database) fetchMissingStateEvents(
 		return nil, err
 	}
 	if len(stateEvents) != len(missing) {
-		logrus.WithContext(ctx).Warnf("Failed to map all event IDs to events (got %d, wanted %d)", len(stateEvents), len(missing))
+		// Report which rooms are short of state events, so that a persistently
+		// incomplete room can be identified from the logs. Only room IDs and
+		// counts are logged, never event contents.
+		for _, event := range stateEvents {
+			have[event.EventID()] = true
+		}
+		unresolvedPerRoom := map[string]int{}
+		for _, eventID := range missing {
+			if !have[eventID] {
+				unresolvedPerRoom[eventIDToRoomID[eventID]]++
+			}
+		}
+		util.GetLogger(ctx).WithFields(logrus.Fields{
+			"got":                len(stateEvents),
+			"wanted":             len(missing),
+			"unresolved_by_room": unresolvedPerRoom,
+		}).Warn("Failed to map all event IDs to events")
 
 		// TODO: Why is this happening? It's probably the roomserver. Uncomment
 		// this error again when we work out what it is and fix it, otherwise we
