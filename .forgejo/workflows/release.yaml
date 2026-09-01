@@ -173,7 +173,7 @@ jobs:
           printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
 
           # Clone
-          REPO_URL="git@10.10.2.1:devxy/helm-zendrite.git"
+          REPO_URL="git@codefloe.com:devxy/helm-zendrite.git"
           git clone "$REPO_URL" helm-zendrite
           cd helm-zendrite
 
