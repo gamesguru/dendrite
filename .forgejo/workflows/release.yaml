@@ -168,9 +168,11 @@ jobs:
 
           # Setup SSH with deploy key
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
           # Clone
           REPO_URL="git@codefloe.com:devxy/helm-zendrite.git"
