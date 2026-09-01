@@ -1777,6 +1777,12 @@ func (d dummyStore) GetEncryptionEvent(_ context.Context, _ id.RoomID) (*event.E
 	return &event.EncryptionEventContent{}, nil
 }
 
+func (d dummyStore) GetHistoryVisibility(_ context.Context, _ id.RoomID) (*event.HistoryVisibilityEventContent, error) {
+	return &event.HistoryVisibilityEventContent{
+		HistoryVisibility: event.HistoryVisibilityShared,
+	}, nil
+}
+
 func (d dummyStore) FindSharedRooms(_ context.Context, _ id.UserID) ([]id.RoomID, error) {
 	return []id.RoomID{}, nil
 }

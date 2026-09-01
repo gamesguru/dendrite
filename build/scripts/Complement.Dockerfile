@@ -1,6 +1,6 @@
 #syntax=docker/dockerfile:1.26
 
-FROM golang:1.26-trixie as build
+FROM golang:1.27-trixie as build
 RUN apt-get update && apt-get install -y sqlite3
 WORKDIR /build
 
