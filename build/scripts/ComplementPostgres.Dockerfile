@@ -1,4 +1,4 @@
-#syntax=docker/dockerfile:1.26
+#syntax=docker/dockerfile:1.27
 
 FROM golang:1.27-trixie as build
 RUN apt-get update && apt-get install -y postgresql
