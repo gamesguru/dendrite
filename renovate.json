@@ -20,8 +20,11 @@
       "schedule": ["* * * * 1"]
     },
     {
-      "matchPackageNames": ["forgejo/upload-artifact"],
-      "enabled": false
+      "description": "Look up Forgejo artifact actions on their actual Git host",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["forgejo/upload-artifact", "forgejo/download-artifact"],
+      "overrideDatasource": "git-tags",
+      "overridePackageName": "https://data.forgejo.org/{{{packageName}}}.git"
     }
   ],
   "customManagers": [
