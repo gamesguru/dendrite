@@ -28,6 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/mscs"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/setup/profiling"
 	"codefloe.com/pat-s/zendrite/userapi"
 )
 
@@ -110,6 +111,20 @@ func main() {
 		logrus.WithError(err).Panicf("failed to start tracing")
 	}
 	defer closer.Close()
+
+	profiler, err := profiling.Start(cfg.Global.Pyroscope)
+	if err != nil {
+		logrus.WithError(err).Panic("Failed to start continuous profiling")
+	}
+	if profiler != nil {
+		logrus.Info("Pyroscope continuous profiling enabled")
+		defer func() {
+			profiler.Flush(true)
+			if err := profiler.Stop(); err != nil {
+				logrus.WithError(err).Warn("Failed to stop continuous profiling")
+			}
+		}()
+	}
 
 	// setup sentry
 	if cfg.Global.Sentry.Enabled {

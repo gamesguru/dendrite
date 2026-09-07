@@ -16,6 +16,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
+	github.com/grafana/pyroscope-go v1.4.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/johannesboyne/gofakes3 v1.2.0
@@ -90,6 +91,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.11 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/go-set/v3 v3.0.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

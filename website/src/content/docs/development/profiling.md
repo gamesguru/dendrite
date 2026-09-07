@@ -1,13 +1,48 @@
 ---
 title: Profiling
-description: CPU and memory profiling with pprof
+description: CPU and memory profiling with pprof and Grafana Pyroscope
 ---
 
 If you are running into problems with Zendrite using excessive resources (e.g. CPU or RAM) then you can use the profiler to work out what is happening.
 
 Zendrite contains an embedded profiler called `pprof`, which is a part of the standard Go toolchain.
 
-## Enable the profiler
+## Continuous profiling with Grafana Pyroscope
+
+Zendrite can continuously push CPU and memory profiles to a Pyroscope server or Grafana Cloud Profiles.
+Profiling is disabled by default.
+To enable it, configure `global.pyroscope` in `zendrite.yaml` and restart Zendrite:
+
+```yaml
+global:
+  pyroscope:
+    enabled: true
+    application_name: zendrite
+    server_address: http://localhost:4040
+    basic_auth:
+      username: ''
+      password: ''
+    tenant_id: ''
+    tags:
+      instance: my-homeserver
+```
+
+Set `server_address` to your Pyroscope ingestion URL, reachable from the Zendrite process or container.
+For Grafana Cloud Profiles, use the URL, username and access policy token from your stack's Profiles configuration, placing the token in `basic_auth.password`.
+Use `tenant_id` only if your Pyroscope server requires multi-tenancy.
+The `basic_auth`, `tenant_id` and `tags` settings are optional, and `application_name` defaults to `zendrite`.
+See the [Grafana Go SDK documentation](https://grafana.com/docs/pyroscope/latest/configure-client/language-sdks/go_push/) for backend configuration details.
+
+Zendrite collects CPU samples, allocated objects and bytes, and in-use objects and bytes.
+Profiles are uploaded in the background and remaining data is flushed during graceful shutdown.
+Upload failures are logged without stopping the homeserver.
+In Grafana, select the configured application name to explore its profiles and filter by your tags.
+
+Pyroscope does not require `PPROFLISTEN`.
+While continuous profiling is enabled, avoid requesting a CPU profile from the pprof endpoint, since both use Go's single CPU profiler.
+Disable Pyroscope and restart Zendrite before collecting a manual CPU profile.
+
+## Enable the pprof profiler
 
 To enable the profiler, start Zendrite with the `PPROFLISTEN` environment variable.
 This variable specifies which address and port to listen on, e.g.

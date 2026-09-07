@@ -83,6 +83,9 @@ type Global struct {
 	// Sentry configuration
 	Sentry Sentry `yaml:"sentry"`
 
+	// Continuous profiling configuration.
+	Pyroscope Pyroscope `yaml:"pyroscope"`
+
 	// DNS caching options for all outbound HTTP requests
 	DNSCache DNSCacheOptions `yaml:"dns_cache"`
 
@@ -115,6 +118,7 @@ func (c *Global) Defaults(opts DefaultOpts) {
 	c.Metrics.Defaults(opts)
 	c.DNSCache.Defaults()
 	c.Sentry.Defaults()
+	c.Pyroscope.Defaults()
 	c.ServerNotices.Defaults(opts)
 	c.ReportStats.Defaults()
 	c.Cache.Defaults()
@@ -145,6 +149,7 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 	c.JetStream.Verify(configErrs)
 	c.Metrics.Verify(configErrs)
 	c.Sentry.Verify(configErrs)
+	c.Pyroscope.Verify(configErrs)
 	c.DNSCache.Verify(configErrs)
 	c.ServerNotices.Verify(configErrs)
 	c.ReportStats.Verify(configErrs)
