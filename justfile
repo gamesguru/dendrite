@@ -48,6 +48,10 @@ build-bin name:
 # Run both lint and tests
 check: lint test
 
+# Run the MAS delegated-auth end-to-end integration test (requires Docker)
+mas-integration:
+    bash build/scripts/mas-integration-test.sh
+
 # Clean build artifacts
 clean:
     rm -rf bin/ cover.out

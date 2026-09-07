@@ -53,6 +53,9 @@ const updatePasswordSQL = "" +
 const deactivateAccountSQL = "" +
 	"UPDATE userapi_accounts SET is_deactivated = 1 WHERE localpart = $1 AND server_name = $2"
 
+const reactivateAccountSQL = "" +
+	"UPDATE userapi_accounts SET is_deactivated = 0 WHERE localpart = $1 AND server_name = $2"
+
 const selectAccountByLocalpartSQL = "" +
 	"SELECT localpart, server_name, appservice_id, account_type FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
 
@@ -73,6 +76,7 @@ type accountsStatements struct {
 	countAccountsStmt             *sql.Stmt
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
+	reactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
 	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
@@ -111,6 +115,7 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 		{&s.countAccountsStmt, countAccountsSQL},
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
+		{&s.reactivateAccountStmt, reactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
 		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
@@ -167,6 +172,25 @@ func (s *accountsStatements) DeactivateAccount(
 ) (err error) {
 	_, err = s.deactivateAccountStmt.ExecContext(ctx, localpart, serverName)
 	return
+}
+
+// ReactivateAccount clears the deactivated flag and reports sql.ErrNoRows
+// when no account matches, so callers need no separate existence lookup.
+func (s *accountsStatements) ReactivateAccount(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+) error {
+	result, err := s.reactivateAccountStmt.ExecContext(ctx, localpart, serverName)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *accountsStatements) SelectPasswordHash(

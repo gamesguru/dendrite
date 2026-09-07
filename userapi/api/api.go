@@ -95,6 +95,8 @@ type ClientUserAPI interface {
 	QueryPushers(ctx context.Context, req *QueryPushersRequest, res *QueryPushersResponse) error
 	QueryPushRules(ctx context.Context, userID string) (*pushrules.AccountRuleSets, error)
 	QueryAccountAvailability(ctx context.Context, req *QueryAccountAvailabilityRequest, res *QueryAccountAvailabilityResponse) error
+	QueryAccountByLocalpart(ctx context.Context, req *QueryAccountByLocalpartRequest, res *QueryAccountByLocalpartResponse) (err error)
+	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	PerformAdminCreateRegistrationToken(ctx context.Context, registrationToken *clientapi.RegistrationToken) (bool, error)
 	PerformAdminListRegistrationTokens(ctx context.Context, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	PerformAdminGetRegistrationToken(ctx context.Context, tokenString string) (*clientapi.RegistrationToken, error)
@@ -109,6 +111,7 @@ type ClientUserAPI interface {
 	PerformPusherSet(ctx context.Context, req *PerformPusherSetRequest, res *struct{}) error
 	PerformPushRulesPut(ctx context.Context, userID string, ruleSets *pushrules.AccountRuleSets) error
 	PerformAccountDeactivation(ctx context.Context, req *PerformAccountDeactivationRequest, res *PerformAccountDeactivationResponse) error
+	PerformAccountReactivation(ctx context.Context, req *PerformAccountReactivationRequest, res *PerformAccountReactivationResponse) error
 	PerformOpenIDTokenCreation(ctx context.Context, req *PerformOpenIDTokenCreationRequest, res *PerformOpenIDTokenCreationResponse) error
 	QueryNotifications(ctx context.Context, req *QueryNotificationsRequest, res *QueryNotificationsResponse) error
 	InputAccountData(ctx context.Context, req *InputAccountDataRequest, res *InputAccountDataResponse) error
@@ -405,6 +408,17 @@ type PerformAccountDeactivationResponse struct {
 	AccountDeactivated bool
 }
 
+// PerformAccountReactivationRequest is the request for PerformAccountReactivation.
+type PerformAccountReactivationRequest struct {
+	Localpart  string
+	ServerName spec.ServerName // optional: if blank, default server name used
+}
+
+// PerformAccountReactivationResponse is the response for PerformAccountReactivation.
+type PerformAccountReactivationResponse struct {
+	AccountReactivated bool
+}
+
 // PerformOpenIDTokenCreationRequest is the request for PerformOpenIDTokenCreation.
 type PerformOpenIDTokenCreationRequest struct {
 	UserID string
@@ -510,6 +524,11 @@ type Conflict int
 
 // AccountType is an enum representing the kind of account.
 type AccountType int
+
+// MSC3861FallbackDeviceID is the device ID bound to OIDC access tokens whose
+// scope carries no device. MAS never lists it, so device reconciliation must
+// leave it alone.
+const MSC3861FallbackDeviceID = "OIDC"
 
 const (
 	// ConflictUpdate will update matching records returning no error.

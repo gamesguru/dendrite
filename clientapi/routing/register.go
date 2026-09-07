@@ -1158,38 +1158,8 @@ func RegisterAvailable(
 		}
 	}
 
-	if err := internal.ValidateUsername(username, domain); err != nil {
-		return *internal.UsernameResponse(err)
-	}
-
-	// Check if this username is reserved by an application service
-	userID := userutil.MakeUserID(username, domain)
-	for _, appservice := range cfg.Derived.ApplicationServices {
-		if appservice.OwnsNamespaceCoveringUserId(userID) {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.UserInUse("Desired user ID is reserved by an application service."),
-			}
-		}
-	}
-
-	res := &userapi.QueryAccountAvailabilityResponse{}
-	err := registerAPI.QueryAccountAvailability(req.Context(), &userapi.QueryAccountAvailabilityRequest{
-		Localpart:  username,
-		ServerName: domain,
-	}, res)
-	if err != nil {
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.Unknown("failed to check availability:" + err.Error()),
-		}
-	}
-
-	if !res.Available {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.UserInUse("Desired User ID is already taken."),
-		}
+	if errRes := checkLocalpartRegistrable(req.Context(), cfg, registerAPI, username, domain); errRes != nil {
+		return *errRes
 	}
 
 	return util.JSONResponse{
@@ -1198,6 +1168,54 @@ func RegisterAvailable(
 			Available: true,
 		},
 	}
+}
+
+// validateLocalpartNamespace rejects a localpart that is not a valid username
+// or that falls into an exclusive application service namespace. It is the
+// shared rule set for /register/available and the MAS provisioning API.
+func validateLocalpartNamespace(cfg *config.ClientAPI, localpart string, domain spec.ServerName) *util.JSONResponse {
+	if err := internal.ValidateUsername(localpart, domain); err != nil {
+		return internal.UsernameResponse(err)
+	}
+
+	userID := userutil.MakeUserID(localpart, domain)
+	for _, appservice := range cfg.Derived.ApplicationServices {
+		if appservice.OwnsNamespaceCoveringUserId(userID) {
+			return &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.ASExclusive("Desired user ID is reserved by an application service."),
+			}
+		}
+	}
+	return nil
+}
+
+// checkLocalpartRegistrable applies validateLocalpartNamespace and then
+// verifies that no account owns the localpart yet.
+func checkLocalpartRegistrable(ctx context.Context, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, localpart string, domain spec.ServerName) *util.JSONResponse {
+	if errRes := validateLocalpartNamespace(cfg, localpart, domain); errRes != nil {
+		return errRes
+	}
+
+	res := &userapi.QueryAccountAvailabilityResponse{}
+	err := userAPI.QueryAccountAvailability(ctx, &userapi.QueryAccountAvailabilityRequest{
+		Localpart:  localpart,
+		ServerName: domain,
+	}, res)
+	if err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("failed to check availability:" + err.Error()),
+		}
+	}
+
+	if !res.Available {
+		return &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.UserInUse("Desired User ID is already taken."),
+		}
+	}
+	return nil
 }
 
 func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, sr *SharedSecretRegistration, req *http.Request) util.JSONResponse {

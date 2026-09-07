@@ -51,6 +51,7 @@ type Account interface {
 	GetAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
 	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SetPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) error
 }
 

@@ -45,6 +45,8 @@ type AccountsTable interface {
 	SelectPasswordHash(ctx context.Context, localpart string, serverName spec.ServerName) (hash string, err error)
 	SelectAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
 	SelectIsDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
+	// ReactivateAccount returns sql.ErrNoRows when no account matches.
+	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
 }
 

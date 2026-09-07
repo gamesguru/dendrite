@@ -699,6 +699,25 @@ func (a *UserInternalAPI) PerformAccountDeactivation(ctx context.Context, req *a
 	return err
 }
 
+// PerformAccountReactivation re-enables login for a previously deactivated
+// account. It fails with sql.ErrNoRows when the account does not exist so
+// callers can distinguish "unknown user" from a failed update.
+func (a *UserInternalAPI) PerformAccountReactivation(ctx context.Context, req *api.PerformAccountReactivationRequest, res *api.PerformAccountReactivationResponse) error {
+	serverName := req.ServerName
+	if serverName == "" {
+		serverName = a.Config.Matrix.ServerName
+	}
+	if !a.Config.Matrix.IsLocalServerName(serverName) {
+		return fmt.Errorf("server name %q not locally configured", serverName)
+	}
+
+	if err := a.DB.ReactivateAccount(ctx, req.Localpart, serverName); err != nil {
+		return err
+	}
+	res.AccountReactivated = true
+	return nil
+}
+
 // PerformOpenIDTokenCreation creates a new token that a relying party uses to authenticate a user.
 func (a *UserInternalAPI) PerformOpenIDTokenCreation(ctx context.Context, req *api.PerformOpenIDTokenCreationRequest, res *api.PerformOpenIDTokenCreationResponse) error {
 	token := util.RandomString(24) //nolint:mnd
