@@ -86,8 +86,14 @@ func CreateSession(
 	// Extract the SID from the response and return it
 	var sid SID
 	err = json.NewDecoder(resp.Body).Decode(&sid)
-
-	return sid.SID, err
+	if err != nil {
+		return "", err
+	}
+	if sid.SID == "" {
+		return "", fmt.Errorf("identity server returned an empty session ID")
+	}
+	rememberSession(sid.SID, req.Secret, req.IDServer)
+	return sid.SID, nil
 }
 
 type GetValidatedResponse struct {
@@ -113,7 +119,7 @@ func CheckAssociation(
 		return false, "", "", err
 	}
 
-	requestURL := fmt.Sprintf("https://%s/_matrix/identity/api/v1/3pid/getValidated3pid?sid=%s&client_secret=%s", creds.IDServer, creds.SID, creds.Secret)
+	requestURL := fmt.Sprintf("https://%s/_matrix/identity/api/v1/3pid/getValidated3pid?sid=%s&client_secret=%s", creds.IDServer, url.QueryEscape(creds.SID), url.QueryEscape(creds.Secret))
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return false, "", "", err
@@ -135,6 +141,9 @@ func CheckAssociation(
 		return false, "", "", errors.New(respBody.Error)
 	}
 
+	if resp.StatusCode != http.StatusOK || respBody.Address == "" || (respBody.Medium != "email" && respBody.Medium != "msisdn") {
+		return false, "", "", fmt.Errorf("invalid identity server validation response")
+	}
 	return true, respBody.Address, respBody.Medium, nil
 }
 

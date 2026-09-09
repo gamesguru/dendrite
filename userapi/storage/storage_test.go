@@ -490,6 +490,10 @@ func Test_ThreePID(t *testing.T) {
 		err = db.SaveThreePIDAssociation(ctx, threePID, aliceLocalpart, aliceDomain, medium)
 		assert.NoError(t, err, "unable to save threepid association")
 
+		// Repeating an association for its owner is idempotent.
+		err = db.SaveThreePIDAssociation(ctx, threePID, aliceLocalpart, aliceDomain, medium)
+		assert.NoError(t, err)
+
 		// get the stored threepid
 		gotLocalpart, gotDomain, err := db.GetLocalpartForThreePID(ctx, threePID, medium)
 		assert.NoError(t, err, "unable to get localpart for threepid")
@@ -505,7 +509,20 @@ func Test_ThreePID(t *testing.T) {
 		}, threepids[0])
 
 		// remove threepid association
-		err = db.RemoveThreePIDAssociation(ctx, threePID, medium)
+		for _, owner := range []struct {
+			localpart string
+			domain    spec.ServerName
+		}{{"someone_else", aliceDomain}, {aliceLocalpart, "another.example"}} {
+			err = db.RemoveThreePIDAssociation(ctx, threePID, medium, owner.localpart, owner.domain)
+			assert.NoError(t, err)
+			retained, retainedDomain, queryErr := db.GetLocalpartForThreePID(ctx, threePID, medium)
+			assert.NoError(t, queryErr)
+			assert.Equal(t, aliceLocalpart, retained)
+			assert.Equal(t, aliceDomain, retainedDomain)
+		}
+		err = db.SaveThreePIDAssociation(ctx, threePID, "someone_else", aliceDomain, medium)
+		assert.ErrorIs(t, err, storage.Err3PIDInUse)
+		err = db.RemoveThreePIDAssociation(ctx, threePID, medium, aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unexpected error")
 
 		// verify it was deleted

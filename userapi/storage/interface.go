@@ -9,7 +9,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -19,6 +18,7 @@ import (
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
 	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
 	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/userapi/types"
 )
@@ -126,7 +126,7 @@ type Pusher interface {
 
 type ThreePID interface {
 	SaveThreePIDAssociation(ctx context.Context, threepid, localpart string, serverName spec.ServerName, medium string) (err error)
-	RemoveThreePIDAssociation(ctx context.Context, threepid string, medium string) (err error)
+	RemoveThreePIDAssociation(ctx context.Context, threepid string, medium string, localpart string, serverName spec.ServerName) (err error)
 	GetLocalpartForThreePID(ctx context.Context, threepid string, medium string) (localpart string, serverName spec.ServerName, err error)
 	GetThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 }
@@ -258,4 +258,4 @@ type Statistics interface {
 
 // Err3PIDInUse is the error returned when trying to save an association involving
 // a third-party identifier which is already associated to a local user.
-var Err3PIDInUse = errors.New("this third-party identifier is already in use")
+var Err3PIDInUse = shared.Err3PIDInUse

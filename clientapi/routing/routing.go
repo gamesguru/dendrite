@@ -1149,6 +1149,28 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
+	for _, operation := range []string{"add", "bind", "unbind"} {
+		if oidcEnabled {
+			v3mux.Handle("/account/3pid/"+operation, msc3861ForbiddenHandler("account_3pid_"+operation)).Methods(http.MethodPost, http.MethodOptions)
+			continue
+		}
+		v3mux.Handle("/account/3pid/"+operation, httputil.MakeAuthAPI("account_3pid_"+operation, userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			if operation != "unbind" {
+				if res := rateLimits.Limit(req, device); res != nil {
+					return *res
+				}
+			}
+			switch operation {
+			case "add":
+				return Add3PID(req, userAPI, device, cfg, threePIDClient, userInteractiveAuth)
+			case "bind":
+				return Bind3PID(req, userAPI, device, cfg, threePIDClient)
+			default:
+				return Unbind3PID(req, userAPI, device, cfg, threePIDClient)
+			}
+		})).Methods(http.MethodPost, http.MethodOptions)
+	}
+
 	if oidcEnabled {
 		v3mux.Handle("/account/3pid",
 			msc3861ForbiddenHandler("account_3pid"),
@@ -1175,7 +1197,7 @@ func Setup(
 		v3mux.Handle(
 			"/account/3pid/delete",
 			httputil.MakeAuthAPI("account_3pid", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-				return Forget3PID(req, userAPI)
+				return Forget3PID(req, userAPI, device, cfg, threePIDClient)
 			}),
 		).Methods(http.MethodPost, http.MethodOptions)
 

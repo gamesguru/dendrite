@@ -105,7 +105,7 @@ type ThreePIDTable interface {
 	SelectLocalpartForThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string) (localpart string, serverName spec.ServerName, err error)
 	SelectThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 	InsertThreePID(ctx context.Context, txn *sql.Tx, threepid, medium, localpart string, serverName spec.ServerName) (err error)
-	DeleteThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string) (err error)
+	DeleteThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string, localpart string, serverName spec.ServerName) (err error)
 }
 
 type PusherTable interface {

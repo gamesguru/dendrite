@@ -1005,7 +1005,7 @@ func (a *UserInternalAPI) QueryThreePIDsForLocalpart(ctx context.Context, req *a
 }
 
 func (a *UserInternalAPI) PerformForgetThreePID(ctx context.Context, req *api.PerformForgetThreePIDRequest, res *struct{}) error {
-	return a.DB.RemoveThreePIDAssociation(ctx, req.ThreePID, req.Medium)
+	return a.DB.RemoveThreePIDAssociation(ctx, req.ThreePID, req.Medium, req.Localpart, req.ServerName)
 }
 
 func (a *UserInternalAPI) PerformSaveThreePIDAssociation(ctx context.Context, req *api.PerformSaveThreePIDAssociationRequest, res *struct{}) error {

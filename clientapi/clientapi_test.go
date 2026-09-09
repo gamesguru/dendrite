@@ -1133,6 +1133,7 @@ func Test3PID(t *testing.T) {
 					return
 				case "success":
 					resp.Medium = "email"
+					resp.Address = "alice@example.com"
 				case "success2":
 					resp.Medium = "email"
 					resp.Address = "somerandom@address.com"
@@ -1153,6 +1154,7 @@ func Test3PID(t *testing.T) {
 			wantOK           bool
 			setTrustedServer bool
 			wantLen3PIDs     int
+			wantErrCode      string
 		}{
 			{
 				name:    "can get associated threepid info",
@@ -1160,40 +1162,45 @@ func Test3PID(t *testing.T) {
 				wantOK:  true,
 			},
 			{
-				name:    "can not set threepid info with invalid JSON",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("")),
+				name:        "can not set threepid info with invalid JSON",
+				wantErrCode: "M_BAD_JSON",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("")),
 			},
 			{
-				name:    "can not set threepid info with untrusted server",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("{}")),
+				name:        "can not set threepid info with untrusted server",
+				wantErrCode: "M_SERVER_NOT_TRUSTED",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(`{"three_pid_creds":{"sid":"randomSID","id_server":"untrusted.example","client_secret":"secret"}}`)),
 			},
 			{
 				name:             "can check threepid info with trusted server, but unverified",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail"}}`, identityServerBase))),
+				wantErrCode:      "M_THREEPID_AUTH_FAILED",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can check threepid info with trusted server, but fails for some other reason",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail2"}}`, identityServerBase))),
+				wantErrCode:      "M_UNKNOWN",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail2"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can check threepid info with trusted server, but fails because of invalid json",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail3"}}`, identityServerBase))),
+				wantErrCode:      "M_UNKNOWN",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail3"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can save threepid info with trusted server",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"success"}}`, identityServerBase))),
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"success"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           true,
 			},
 			{
 				name:             "can save threepid info with trusted server using bind=true",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"success2"},"bind":true}`, identityServerBase))),
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"success2"},"bind":true}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           true,
 			},
@@ -1215,12 +1222,14 @@ func Test3PID(t *testing.T) {
 				wantLen3PIDs: 1,
 			},
 			{
-				name:    "can not request emailToken with invalid request body",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader("")),
+				name:        "can not request emailToken with invalid request body",
+				wantErrCode: "M_BAD_JSON",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader("")),
 			},
 			{
-				name:    "can not request emailToken for in use address",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader(fmt.Sprintf(`{"client_secret":"somesecret","email":"","send_attempt":1,"id_server":"%s"}`, identityServerBase))),
+				name:        "can not request emailToken for in use address",
+				wantErrCode: "M_THREEPID_IN_USE",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader(fmt.Sprintf(`{"client_secret":"somesecret","email":"alice@example.com","send_attempt":1,"id_server":"%s"}`, identityServerBase))),
 			},
 			{
 				name:    "can request emailToken",
@@ -1246,7 +1255,14 @@ func Test3PID(t *testing.T) {
 				if !tc.wantOK && rec.Code == http.StatusOK {
 					t.Fatalf("expected request to fail, but didn't: %s", rec.Body.String())
 				}
-				if tc.wantLen3PIDs > 0 {
+				if tc.wantErrCode != "" {
+					var response spec.MatrixError
+					if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+						t.Fatal(err)
+					}
+					assert.Equal(t, tc.wantErrCode, string(response.ErrCode))
+				}
+				if tc.request.Method == http.MethodGet {
 					var resp routing.ThreePIDsResponse
 					if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 						t.Fatal(err)

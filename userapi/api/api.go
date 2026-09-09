@@ -657,7 +657,10 @@ type QueryThreePIDsForLocalpartResponse struct {
 	ThreePIDs []authtypes.ThreePID
 }
 
-type PerformForgetThreePIDRequest QueryLocalpartForThreePIDRequest
+type PerformForgetThreePIDRequest struct {
+	ThreePID, Medium, Localpart string
+	ServerName                  spec.ServerName
+}
 
 type PerformSaveThreePIDAssociationRequest struct {
 	ThreePID   string

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -86,7 +87,7 @@ func SaveAccountData(
 		}
 	}
 
-	if dataType == "m.fully_read" || dataType == "m.push_rules" {
+	if dataType == "m.fully_read" || dataType == "m.push_rules" || strings.HasPrefix(dataType, threePIDBindingPrefix) {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(fmt.Sprintf("Unable to modify %q using this API", dataType)),

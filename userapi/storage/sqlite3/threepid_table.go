@@ -45,7 +45,7 @@ const insertThreePIDSQL = "" +
 	"INSERT INTO userapi_threepids (threepid, medium, localpart, server_name) VALUES ($1, $2, $3, $4)"
 
 const deleteThreePIDSQL = "" +
-	"DELETE FROM userapi_threepids WHERE threepid = $1 AND medium = $2"
+	"DELETE FROM userapi_threepids WHERE threepid = $1 AND medium = $2 AND localpart = $3 AND server_name = $4"
 
 type threepidStatements struct {
 	db                              *sql.DB
@@ -117,9 +117,9 @@ func (s *threepidStatements) InsertThreePID(
 }
 
 func (s *threepidStatements) DeleteThreePID(
-	ctx context.Context, txn *sql.Tx, threepid string, medium string,
+	ctx context.Context, txn *sql.Tx, threepid string, medium string, localpart string, serverName spec.ServerName,
 ) (err error) {
 	stmt := sqlutil.TxStmt(txn, s.deleteThreePIDStmt)
-	_, err = stmt.ExecContext(ctx, threepid, medium)
+	_, err = stmt.ExecContext(ctx, threepid, medium, localpart, serverName)
 	return err
 }

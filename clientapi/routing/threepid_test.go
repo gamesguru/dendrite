@@ -1,0 +1,361 @@
+// Copyright 2026 Patrick Schratz
+//
+// SPDX-License-Identifier: AGPL-3.0-only.
+
+package routing
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/require"
+
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
+	"codefloe.com/pat-s/zendrite/clientapi/threepid"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
+	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
+)
+
+type threePIDUserAPI struct {
+	api.ClientUserAPI
+	saved     []api.PerformSaveThreePIDAssociationRequest
+	forgotten []api.PerformForgetThreePIDRequest
+	saveErr   error
+	data      map[string]json.RawMessage
+}
+
+func (a *threePIDUserAPI) PerformSaveThreePIDAssociation(_ context.Context, req *api.PerformSaveThreePIDAssociationRequest, _ *struct{}) error {
+	if a.saveErr != nil {
+		return a.saveErr
+	}
+	a.saved = append(a.saved, *req)
+	return nil
+}
+
+func (a *threePIDUserAPI) PerformForgetThreePID(_ context.Context, req *api.PerformForgetThreePIDRequest, _ *struct{}) error {
+	a.forgotten = append(a.forgotten, *req)
+	return nil
+}
+
+func (a *threePIDUserAPI) InputAccountData(_ context.Context, req *api.InputAccountDataRequest, _ *api.InputAccountDataResponse) error {
+	a.data[req.UserID+req.DataType] = req.AccountData
+	return nil
+}
+
+func (a *threePIDUserAPI) QueryAccountData(_ context.Context, req *api.QueryAccountDataRequest, res *api.QueryAccountDataResponse) error {
+	res.GlobalAccountData = map[string]json.RawMessage{req.DataType: a.data[req.UserID+req.DataType]}
+	return nil
+}
+
+func (a *threePIDUserAPI) QueryAccountByPassword(_ context.Context, req *api.QueryAccountByPasswordRequest, res *api.QueryAccountByPasswordResponse) error {
+	res.Exists = req.PlaintextPassword == "password"
+	res.Account = &api.Account{UserID: "@" + req.Localpart + ":" + string(req.ServerName)}
+	return nil
+}
+
+type threePIDTransport func(*http.Request) (*http.Response, error)
+
+func (f threePIDTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func identityResponse(code int, body string) *http.Response {
+	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+}
+
+func threePIDConfig() *config.ClientAPI {
+	cfg := &config.Zendrite{}
+	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+	cfg.Global.ServerName = "test"
+	cfg.Global.TrustedIDServers = []string{"id.example"}
+	return &cfg.ClientAPI
+}
+
+func threePIDRequest(body string) *http.Request {
+	return httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+}
+
+func requireThreePIDResponse(t *testing.T, res util.JSONResponse, code int, errcode string) {
+	t.Helper()
+	require.Equal(t, code, res.Code, "%+v", res.JSON)
+	if errcode != "" {
+		data, err := json.Marshal(res.JSON)
+		require.NoError(t, err)
+		var result spec.MatrixError
+		require.NoError(t, json.Unmarshal(data, &result))
+		require.Equal(t, errcode, string(result.ErrCode))
+	}
+}
+
+func TestAdd3PID(t *testing.T) {
+	cfg := threePIDConfig()
+	device := &api.Device{UserID: "@alice:test"}
+	for _, tc := range []struct {
+		name, body, validation, errcode string
+		code                            int
+		saveErr                         error
+		saves                           int
+	}{
+		{name: "challenge", body: `{"sid":"sid","client_secret":"secret"}`, code: 401},
+		{name: "missing", body: `{}`, code: 400, errcode: "M_MISSING_PARAM"},
+		{name: "malformed", body: `{`, code: 400, errcode: "M_BAD_JSON"},
+		{name: "wrong user", body: `{"sid":"sid","client_secret":"secret","auth":{"type":"m.login.password","user":"bob","password":"password"}}`, code: 403, errcode: "M_FORBIDDEN"},
+		{name: "wrong password", body: `{"sid":"sid","client_secret":"secret","auth":{"type":"m.login.password","user":"alice","password":"wrong"}}`, code: 401, errcode: "M_FORBIDDEN"},
+		{name: "unknown session", body: `{"sid":"unknown","client_secret":"secret","auth":{"type":"m.login.password","user":"alice","password":"password"}}`, code: 400, errcode: "M_THREEPID_AUTH_FAILED"},
+		{name: "unvalidated", validation: `{"errcode":"M_SESSION_NOT_VALIDATED"}`, code: 400, errcode: "M_THREEPID_AUTH_FAILED"},
+		{name: "duplicate", code: 400, errcode: "M_THREEPID_IN_USE", saveErr: storage.Err3PIDInUse},
+		{name: "database failure", code: 500, errcode: "M_UNKNOWN", saveErr: errors.New("database unavailable")},
+		{name: "success", code: 200, saves: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userAPI := &threePIDUserAPI{saveErr: tc.saveErr}
+			checks := 0
+			client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+				if strings.HasSuffix(req.URL.Path, "requestToken") {
+					return identityResponse(200, `{"sid":"sid"}`), nil
+				}
+				require.Contains(t, req.URL.Path, "getValidated3pid")
+				checks++
+				if tc.validation != "" {
+					return identityResponse(200, tc.validation), nil
+				}
+				return identityResponse(200, `{"address":"alice@example.com","medium":"email","validated_at":1}`), nil
+			})))
+			_, err := threepid.CreateSession(t.Context(), threepid.EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, cfg, client)
+			require.NoError(t, err)
+			body := tc.body
+			if body == "" {
+				body = `{"sid":"sid","client_secret":"secret","auth":{"type":"m.login.password","user":"alice","password":"password"}}`
+			}
+			res := Add3PID(threePIDRequest(body), userAPI, device, cfg, client, auth.NewUserInteractive(userAPI, cfg))
+			requireThreePIDResponse(t, res, tc.code, tc.errcode)
+			require.Len(t, userAPI.saved, tc.saves)
+			if tc.saves > 0 {
+				require.Equal(t, "alice", userAPI.saved[0].Localpart)
+				require.Equal(t, spec.ServerName("test"), userAPI.saved[0].ServerName)
+			}
+			if tc.body != "" {
+				require.Zero(t, checks)
+			}
+		})
+	}
+}
+
+func TestBindAndUnbind3PID(t *testing.T) {
+	cfg := threePIDConfig()
+	device := &api.Device{UserID: "@alice:test"}
+	userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage), saveErr: storage.Err3PIDInUse}
+	binds, unbinds := 0, 0
+	client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+		require.Equal(t, device.UserID, body["mxid"])
+		switch req.URL.Path {
+		case "/_matrix/identity/v2/3pid/bind":
+			binds++
+			require.Equal(t, "Bearer token", req.Header.Get("Authorization"))
+			require.Equal(t, "secret", body["client_secret"])
+			return identityResponse(200, `{"address":"alice@example.com","medium":"email"}`), nil
+		case "/_matrix/identity/v2/3pid/unbind":
+			unbinds++
+			require.Contains(t, req.Header.Get("Authorization"), "X-Matrix")
+			require.Equal(t, map[string]any{"address": "alice@example.com", "medium": "email"}, body["threepid"])
+			return identityResponse(200, `{}`), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL)
+			return nil, errors.New("unexpected request")
+		}
+	})))
+	bind := `{"sid":"sid","client_secret":"secret","id_server":"id.example","id_access_token":"token"}`
+	requireThreePIDResponse(t, Bind3PID(threePIDRequest(bind), userAPI, device, cfg, client), 200, "")
+	require.Equal(t, 1, binds)
+	require.Empty(t, userAPI.saved)
+	// Resolve the identity server from persisted binding metadata, without a local association.
+	unbind := `{"medium":"email","address":"alice@example.com"}`
+	res := Unbind3PID(threePIDRequest(unbind), userAPI, device, cfg, client)
+	requireThreePIDResponse(t, res, 200, "")
+	require.Equal(t, map[string]string{"id_server_unbind_result": "success"}, res.JSON)
+	require.Equal(t, 1, unbinds)
+	require.Empty(t, userAPI.forgotten)
+	// A second unbind has no known server and must not contact one.
+	res = Unbind3PID(threePIDRequest(unbind), userAPI, device, cfg, client)
+	require.Equal(t, map[string]string{"id_server_unbind_result": "no-support"}, res.JSON)
+	require.Equal(t, 1, unbinds)
+	res = Forget3PID(threePIDRequest(unbind), userAPI, device, cfg, client)
+	requireThreePIDResponse(t, res, 200, "")
+	require.Len(t, userAPI.forgotten, 1)
+	require.Equal(t, "alice", userAPI.forgotten[0].Localpart)
+	require.Equal(t, spec.ServerName("test"), userAPI.forgotten[0].ServerName)
+}
+
+func Test3PIDIdentityFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		status            int
+		response, errcode string
+		code              int
+		transportErr      error
+	}{
+		{name: "forbidden", status: 403, response: `{"errcode":"M_FORBIDDEN","error":"denied"}`, code: 403, errcode: "M_FORBIDDEN"},
+		{name: "unvalidated", status: 400, response: `{"errcode":"M_SESSION_NOT_VALIDATED","error":"not validated"}`, code: 400, errcode: "M_SESSION_NOT_VALIDATED"},
+		{name: "rate limit", status: 429, response: `{"errcode":"M_LIMIT_EXCEEDED","error":"slow down"}`, code: 429, errcode: "M_LIMIT_EXCEEDED"},
+		{name: "invalid response", status: 200, response: `{}`, code: 502, errcode: "M_UNKNOWN"},
+		{name: "unavailable", status: 502, response: `not json`, code: 502, errcode: "M_UNKNOWN"},
+		{name: "network", transportErr: errors.New("unavailable"), code: 502, errcode: "M_UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+			client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(*http.Request) (*http.Response, error) {
+				if tc.transportErr != nil {
+					return nil, tc.transportErr
+				}
+				return identityResponse(tc.status, tc.response), nil
+			})))
+			body := `{"sid":"sid","client_secret":"secret","id_server":"id.example","id_access_token":"token"}`
+			res := Bind3PID(threePIDRequest(body), userAPI, &api.Device{UserID: "@alice:test"}, threePIDConfig(), client)
+			requireThreePIDResponse(t, res, tc.code, tc.errcode)
+			require.Empty(t, userAPI.saved)
+			require.Empty(t, userAPI.data)
+		})
+	}
+}
+
+func Test3PIDValidation(t *testing.T) {
+	for _, operation := range []string{"bind", "unbind", "delete"} {
+		for _, tc := range []struct{ body, errcode string }{
+			{`{}`, "M_MISSING_PARAM"},
+			{`{"sid":4}`, "M_BAD_JSON"},
+			{`{"sid":"s","client_secret":"c","id_server":"untrusted","id_access_token":"t","address":"a","medium":"email"}`, "M_SERVER_NOT_TRUSTED"},
+		} {
+			t.Run(operation+tc.body, func(t *testing.T) {
+				userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+				handler := Bind3PID
+				if operation == "unbind" {
+					handler = Unbind3PID
+				}
+				if operation == "delete" {
+					handler = Forget3PID
+				}
+				// The sid type is not a field of unbind/delete requests.
+				if operation != "bind" && tc.errcode == "M_BAD_JSON" {
+					tc.body = `{"address":4}`
+				}
+				res := handler(threePIDRequest(tc.body), userAPI, &api.Device{UserID: "@alice:test"}, threePIDConfig(), nil)
+				requireThreePIDResponse(t, res, 400, tc.errcode)
+				require.Empty(t, userAPI.forgotten)
+			})
+		}
+	}
+}
+
+func TestUnbind3PIDFailures(t *testing.T) {
+	for _, tc := range []struct {
+		status, code int
+		body, result string
+	}{
+		{200, 200, `{}`, "success"},
+		{400, 200, `{}`, "no-support"},
+		{404, 200, `{}`, "no-support"},
+		{501, 200, `{}`, "no-support"},
+		{500, 502, `not json`, ""},
+		{403, 403, `{"errcode":"M_FORBIDDEN","error":"denied"}`, ""},
+	} {
+		for _, forget := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/delete=%t", tc.status, forget), func(t *testing.T) {
+				userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+				client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(*http.Request) (*http.Response, error) { return identityResponse(tc.status, tc.body), nil })))
+				req := threePIDRequest(`{"medium":"email","address":"alice@example.com","id_server":"id.example"}`)
+				res := remove3PID(req, userAPI, &api.Device{UserID: "@alice:test"}, threePIDConfig(), client, forget)
+				requireThreePIDResponse(t, res, tc.code, "")
+				if tc.result != "" {
+					require.Equal(t, map[string]string{"id_server_unbind_result": tc.result}, res.JSON)
+				}
+				if forget && tc.code == 200 {
+					require.Len(t, userAPI.forgotten, 1)
+				} else {
+					require.Empty(t, userAPI.forgotten)
+				}
+			})
+		}
+	}
+}
+
+func TestLegacy3PID(t *testing.T) {
+	for _, bind := range []bool{false, true} {
+		for _, duplicate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("bind=%t/duplicate=%t", bind, duplicate), func(t *testing.T) {
+				userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+				if duplicate {
+					userAPI.saveErr = storage.Err3PIDInUse
+				}
+				binds := 0
+				client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(req.URL.Path, "/bind") {
+						binds++
+						return identityResponse(200, `{}`), nil
+					}
+					require.Equal(t, "s&sid=injected", req.URL.Query().Get("sid"))
+					require.Equal(t, "c&client_secret=injected", req.URL.Query().Get("client_secret"))
+					return identityResponse(200, `{"address":"alice@example.com","medium":"email"}`), nil
+				})))
+				body := fmt.Sprintf(`{"three_pid_creds":{"sid":"s&sid=injected","client_secret":"c&client_secret=injected","id_server":"id.example"},"bind":%t}`, bind)
+				res := CheckAndSave3PIDAssociation(threePIDRequest(body), userAPI, &api.Device{UserID: "@alice:test"}, threePIDConfig(), client)
+				if duplicate {
+					requireThreePIDResponse(t, res, 400, "M_THREEPID_IN_USE")
+					require.Zero(t, binds)
+				} else {
+					requireThreePIDResponse(t, res, 200, "")
+					require.Len(t, userAPI.saved, 1)
+					if bind {
+						require.Equal(t, 1, binds)
+						require.Len(t, userAPI.data, 1)
+					} else {
+						require.Zero(t, binds)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestNative3PIDAuthentication(t *testing.T) {
+	routers, _, _, cleanup := setupMSC3861Stack(t, test.DBTypeSQLite, func(cfg *config.Zendrite) { cfg.MSCs.MSCs = nil })
+	defer cleanup()
+	for _, operation := range []string{"add", "bind", "unbind"} {
+		t.Run(operation, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/"+operation, strings.NewReader(`{}`))
+			recorder := httptest.NewRecorder()
+			routers.Client.ServeHTTP(recorder, req)
+			require.Equal(t, http.StatusUnauthorized, recorder.Code, recorder.Body.String())
+			require.Contains(t, recorder.Body.String(), "M_MISSING_TOKEN")
+		})
+	}
+}
+
+func Test3PIDBindingMetadata(t *testing.T) {
+	userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+	req := threePIDRequest(`{}`)
+	userID := "@alice:test"
+	require.NoError(t, saveBinding(req, userAPI, userID, "email", "alice@example.com", "first.example", true))
+	require.NoError(t, saveBinding(req, userAPI, userID, "email", "alice@example.com", "second.example", true))
+	require.NoError(t, saveBinding(req, userAPI, userID, "email", "alice@example.com", "first.example", false))
+	servers, err := bindingServers(req, userAPI, userID, "email", "alice@example.com")
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"second.example": true}, servers)
+	servers, err = bindingServers(req, userAPI, "@bob:test", "email", "alice@example.com")
+	require.NoError(t, err)
+	require.Empty(t, servers)
+	key := bindingDataType("email", "alice@example.com")
+	res := SaveAccountData(threePIDRequest(`{}`), userAPI, &api.Device{UserID: userID}, userID, "", key, nil)
+	requireThreePIDResponse(t, res, 403, "M_FORBIDDEN")
+}

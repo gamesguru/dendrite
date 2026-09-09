@@ -377,7 +377,7 @@ var Err3PIDInUse = errors.New("this third-party identifier is already in use")
 
 // SaveThreePIDAssociation saves the association between a third party identifier
 // and a local Matrix user (identified by the user's ID's local part).
-// If the third-party identifier is already part of an association, returns Err3PIDInUse.
+// If the third-party identifier belongs to another account, returns Err3PIDInUse.
 // Returns an error if there was a problem talking to the database.
 func (d *Database) SaveThreePIDAssociation(
 	ctx context.Context, threepid string,
@@ -385,18 +385,25 @@ func (d *Database) SaveThreePIDAssociation(
 	medium string,
 ) (err error) {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		user, _, err := d.ThreePIDs.SelectLocalpartForThreePID(
+		user, domain, err := d.ThreePIDs.SelectLocalpartForThreePID(
 			ctx, txn, threepid, medium,
 		)
 		if err != nil {
 			return err
 		}
 
+		if user == localpart && domain == serverName {
+			return nil
+		}
 		if len(user) > 0 {
 			return Err3PIDInUse
 		}
 
-		return d.ThreePIDs.InsertThreePID(ctx, txn, threepid, medium, localpart, serverName)
+		err = d.ThreePIDs.InsertThreePID(ctx, txn, threepid, medium, localpart, serverName)
+		if sqlutil.IsUniqueConstraintViolationErr(err) {
+			return Err3PIDInUse
+		}
+		return err
 	})
 }
 
@@ -405,10 +412,10 @@ func (d *Database) SaveThreePIDAssociation(
 // If no association exists involving this third-party identifier, returns nothing.
 // If there was a problem talking to the database, returns an error.
 func (d *Database) RemoveThreePIDAssociation(
-	ctx context.Context, threepid string, medium string,
+	ctx context.Context, threepid string, medium string, localpart string, serverName spec.ServerName,
 ) (err error) {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.ThreePIDs.DeleteThreePID(ctx, txn, threepid, medium)
+		return d.ThreePIDs.DeleteThreePID(ctx, txn, threepid, medium, localpart, serverName)
 	})
 }
 
