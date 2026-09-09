@@ -843,7 +843,7 @@ func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyB
 }
 
 func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.QueryNotificationsRequest, res *api.QueryNotificationsResponse) error {
-	if req.Limit == 0 || req.Limit > 1000 {
+	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 1000
 	}
 
@@ -868,8 +868,9 @@ func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.Query
 		notifs = []*api.Notification{}
 	}
 	res.Notifications = notifs
+	res.NextToken = ""
 	if lastID >= 0 {
-		res.NextToken = strconv.FormatInt(lastID+1, 10)
+		res.NextToken = strconv.FormatInt(lastID, 10)
 	}
 	return nil
 }

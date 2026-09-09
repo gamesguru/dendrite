@@ -598,7 +598,7 @@ type QueryNotificationsRequest struct {
 }
 
 type QueryNotificationsResponse struct {
-	NextToken     string          `json:"next_token"`
+	NextToken     string          `json:"next_token,omitempty"`
 	Notifications []*Notification `json:"notifications"` // Required.
 }
 

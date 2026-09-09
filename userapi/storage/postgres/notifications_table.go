@@ -62,7 +62,7 @@ const updateNotificationReadSQL = "" +
 const selectNotificationSQL = "" +
 	"SELECT id, room_id, ts_ms, read, notification_json FROM userapi_notifications WHERE localpart = $1 AND server_name = $2 AND id > $3 AND (" +
 	"(($4 & 1) <> 0 AND highlight) OR (($4 & 2) <> 0 AND NOT highlight)" +
-	") AND NOT read ORDER BY localpart, id LIMIT $5"
+	") ORDER BY localpart, id LIMIT $5"
 
 const selectNotificationCountSQL = "" +
 	"SELECT COUNT(*) FROM userapi_notifications WHERE localpart = $1 AND server_name = $2 AND (" +

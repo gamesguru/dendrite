@@ -17,7 +17,7 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// GetNotifications handles /_matrix/client/r0/notifications.
+// GetNotifications handles /_matrix/client/v3/notifications.
 func GetNotifications(
 	req *http.Request, device *userapi.Device,
 	userAPI userapi.ClientUserAPI,
@@ -25,12 +25,21 @@ func GetNotifications(
 	var limit int64
 	if limitStr := req.URL.Query().Get("limit"); limitStr != "" {
 		var err error
-		limit, err = strconv.ParseInt(limitStr, 10, 64)
-		if err != nil {
-			util.GetLogger(req.Context()).WithError(err).Error("ParseInt(limit) failed")
+		limit, err = strconv.ParseInt(limitStr, 10, strconv.IntSize)
+		if err != nil || limit < 0 {
 			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
+				Code: http.StatusBadRequest,
+				JSON: spec.InvalidParam("limit must be a non-negative integer"),
+			}
+		}
+	}
+
+	if from := req.URL.Query().Get("from"); from != "" {
+		fromID, err := strconv.ParseInt(from, 10, 64)
+		if err != nil || fromID < 0 {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.InvalidParam("Invalid notification pagination token"),
 			}
 		}
 	}
