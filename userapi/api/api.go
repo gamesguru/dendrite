@@ -728,7 +728,7 @@ const (
 	TypeCrossSigningUpdate
 )
 
-// DeviceMessage represents the message produced into Kafka by the key server.
+// DeviceMessage represents the message published to JetStream by the user API.
 type DeviceMessage struct {
 	Type                         DeviceMessageType `json:"Type,omitempty"`
 	*DeviceKeys                  `json:"DeviceKeys,omitempty"`
@@ -738,7 +738,7 @@ type DeviceMessage struct {
 	DeviceChangeID int64
 }
 
-// OutputCrossSigningKeyUpdate is an entry in the signing key update output kafka log.
+// OutputCrossSigningKeyUpdate is an entry in the signing key update output JetStream stream.
 type OutputCrossSigningKeyUpdate struct {
 	CrossSigningKeyUpdate `json:"signing_keys"`
 }

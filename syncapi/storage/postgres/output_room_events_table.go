@@ -28,7 +28,7 @@ import (
 )
 
 const outputRoomEventsSchema = `
--- This sequence is shared between all the tables generated from kafka logs.
+-- This sequence is shared between all the tables populated from JetStream streams.
 CREATE SEQUENCE IF NOT EXISTS syncapi_stream_id;
 
 -- Stores output room events received from the roomserver.

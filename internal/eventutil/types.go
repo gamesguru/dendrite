@@ -31,7 +31,7 @@ type ReadMarkerJSON struct {
 // the Push Server to the Sync API server.
 type NotificationData struct {
 	// RoomID identifies the scope of the statistics, together with
-	// MXID (which is encoded in the Kafka key).
+	// MXID (which is carried in the JetStream message header named by jetstream.UserID).
 	RoomID string `json:"room_id"`
 
 	// HighlightCount is the number of unread notifications with the

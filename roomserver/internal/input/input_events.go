@@ -62,7 +62,7 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 //
 // TODO(#375): This should be rewritten to allow concurrent calls. The
 // difficulty is in ensuring that we correctly annotate events with the correct
-// state deltas when sending to kafka streams
+// state deltas when sending to JetStream streams
 // TODO: Break up function - we should probably do transaction ID checks before calling this.
 //
 //nolint:gocyclo

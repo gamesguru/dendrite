@@ -52,16 +52,6 @@ global:
   trusted_third_party_id_servers:
   - matrix.org
   - vector.im
-  kafka:
-    addresses:
-    - localhost:2181
-    topic_prefix: Zendrite
-    use_naffka: true
-    naffka_database:
-      connection_string: file:naffka.db
-      max_open_conns: 100
-      max_idle_conns: 2
-      conn_max_lifetime: -1
   metrics:
     enabled: false
     basic_auth:

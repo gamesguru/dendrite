@@ -30,7 +30,7 @@ type InboundPeeker struct {
 // initiates a /peek over federation.
 //
 // It should atomically figure out the current state of the room (for the
-// response to /peek) while adding the new inbound peek to the kafka stream so the
+// response to /peek) while adding the new inbound peek to the JetStream stream so the
 // fed sender can start sending peeked events without a race between the state
 // snapshot and the stream of peeked events.
 func (r *InboundPeeker) PerformInboundPeek(

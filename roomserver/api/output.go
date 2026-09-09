@@ -44,11 +44,11 @@ const (
 	// - Replace the event in the database.
 	OutputTypeRedactedEvent OutputType = "redacted_event"
 
-	// OutputTypeNewPeek indicates that the kafka event is an OutputNewPeek.
+	// OutputTypeNewPeek indicates that the JetStream event is an OutputNewPeek.
 	OutputTypeNewPeek OutputType = "new_peek"
-	// OutputTypeNewInboundPeek indicates that the kafka event is an OutputNewInboundPeek.
+	// OutputTypeNewInboundPeek indicates that the JetStream event is an OutputNewInboundPeek.
 	OutputTypeNewInboundPeek OutputType = "new_inbound_peek"
-	// OutputTypeRetirePeek indicates that the kafka event is an OutputRetirePeek.
+	// OutputTypeRetirePeek indicates that the JetStream event is an OutputRetirePeek.
 	OutputTypeRetirePeek OutputType = "retire_peek"
 	// OutputTypePurgeRoom indicates the event is an OutputPurgeRoom.
 	OutputTypePurgeRoom OutputType = "purge_room"
@@ -56,7 +56,7 @@ const (
 	OutputTypeUnPartialStatedRoom OutputType = "un_partial_stated_room"
 )
 
-// An OutputEvent is an entry in the roomserver output kafka log.
+// An OutputEvent is an entry in the roomserver output JetStream stream.
 // Consumers should check the type field when consuming this event.
 type OutputEvent struct {
 	// What sort of event this is.

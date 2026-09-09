@@ -668,7 +668,7 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 	}
 	util.GetLogger(r.ctx).WithField("new_events", len(res.Events)).Info("Storing new events from backfill")
 
-	// TODO: we should only be inserting events into the database from the roomserver's kafka output stream.
+	// TODO: we should only be inserting events into the database from the roomserver's JetStream output stream.
 	// Currently, this can race with live events for the room and cause problems. It's also just a bit unclear
 	// when you have multiple entry points to write events.
 

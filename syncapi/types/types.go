@@ -619,7 +619,7 @@ type Peek struct {
 	Deleted bool
 }
 
-// OutputReceiptEvent is an entry in the receipt output kafka log.
+// OutputReceiptEvent is an entry in the receipt output JetStream stream.
 type OutputReceiptEvent struct {
 	ThreadID  string         `json:"thread_id,omitempty"`
 	UserID    string         `json:"user_id"`
@@ -629,7 +629,7 @@ type OutputReceiptEvent struct {
 	Timestamp spec.Timestamp `json:"timestamp"`
 }
 
-// OutputSendToDeviceEvent is an entry in the send-to-device output kafka log.
+// OutputSendToDeviceEvent is an entry in the send-to-device output JetStream stream.
 // This contains the full event content, along with the user ID and device ID
 // to which it is destined.
 type OutputSendToDeviceEvent struct {

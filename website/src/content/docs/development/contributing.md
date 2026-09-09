@@ -28,6 +28,10 @@ The following items are at risk of not being accepted:
 See the [Installation](/installation/planning) section for information on how to build an instance of Zendrite.
 You will likely need this in order to test your changes.
 
+Local development uses the built-in NATS server with JetStream, which Zendrite starts automatically when `global.jetstream.addresses` is empty.
+Set `global.jetstream.storage_path` to a persistent, writable directory as described in [JetStream configuration](/installation/manual/configuration/#jetstream-configuration).
+No separate messaging service needs to be installed for this setup.
+
 ## Pre-commit hooks
 
 This project uses [pre-commit](https://pre-commit.com/) to run checks before each commit.
