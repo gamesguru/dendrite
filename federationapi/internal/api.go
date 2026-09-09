@@ -35,6 +35,8 @@ type FederationInternalAPI struct {
 	queues             *queue.OutgoingQueues
 	joins              sync.Map            // joins currently in progress
 	partialStateWorker *PartialStateWorker // MSC3706: worker for background state resync
+	rateLimitMutex     sync.Mutex
+	rateLimits         map[spec.ServerName]time.Time
 }
 
 func NewFederationInternalAPI(
@@ -137,6 +139,10 @@ func (a *FederationInternalAPI) IsBlacklistedOrBackingOff(s spec.ServerName) (*s
 		}
 	}
 
+	if err := a.rateLimitError(s); err != nil {
+		return stats, err
+	}
+
 	now := time.Now()
 	until := stats.BackoffInfo()
 	if until != nil && now.Before(*until) {
@@ -185,6 +191,7 @@ func failBlacklistableError(err error, stats *statistics.ServerStatistics) (unti
 }
 
 // doFederationRequest makes a federation request, refusing if the server is blacklisted.
+// Remote rate limits are always respected, independently of transport backoff.
 // When checkBackoff is true, also refuses if the server is currently in a backoff period.
 // Set checkBackoff to false for read-only, user-triggered queries (like room hierarchy)
 // where blocking on backoff from unrelated failures is counterproductive.
@@ -199,6 +206,9 @@ func (a *FederationInternalAPI) doFederationRequest(
 			Blacklisted: true,
 		}
 	}
+	if err := a.rateLimitError(s); err != nil {
+		return nil, err
+	}
 	if checkBackoff {
 		now := time.Now()
 		until := stats.BackoffInfo()
@@ -212,6 +222,9 @@ func (a *FederationInternalAPI) doFederationRequest(
 
 	res, err := request()
 	if err != nil {
+		if limited := a.recordRateLimit(s, err); limited != nil {
+			return res, limited
+		}
 		failUntil, blacklisted := failBlacklistableError(err, stats)
 		now := time.Now()
 		var retryAfter time.Duration
@@ -231,7 +244,8 @@ func (a *FederationInternalAPI) doFederationRequest(
 }
 
 // doFederationRequestNoStats makes a federation request that neither checks nor
-// updates the destination's backoff statistics (it still honors the blacklist).
+// updates the destination's backoff statistics (it still honors the blacklist
+// and records and respects remote rate limits).
 //
 // It is for background bulk operations — notably the partial-state resync, which
 // fetches thousands of events one-by-one from the join server. Under that load
@@ -251,8 +265,15 @@ func (a *FederationInternalAPI) doFederationRequestNoStats(
 		}
 	}
 
+	if err := a.rateLimitError(s); err != nil {
+		return nil, err
+	}
+
 	res, err := request()
 	if err != nil {
+		if limited := a.recordRateLimit(s, err); limited != nil {
+			return res, limited
+		}
 		return res, &api.FederationClientError{
 			Err:  err.Error(),
 			Code: federationHTTPCode(err),
