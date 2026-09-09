@@ -92,7 +92,7 @@ jobs:
           fetch-tags: true
 
       - name: Download binaries
-        uses: forgejo/download-artifact@v4
+        uses: forgejo/download-artifact@v7
         with:
           name: binaries
           path: dist
