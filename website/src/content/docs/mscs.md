@@ -8,6 +8,7 @@ This page tracks the implementation status of notable MSCs in Zendrite.
 
 Many MSCs listed here have since been merged into the [Matrix specification](https://spec.matrix.org/) proper.
 They are listed by their original MSC number and the first spec version which includes them.
+Feature support does not imply support for an entire specification version; see the [client API conformance audit](/development/client-api-conformance/) for discovery policy and remaining blockers.
 
 ## Sync
 
@@ -20,9 +21,9 @@ They are listed by their original MSC number and the first spec version which in
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
-| [MSC2675](https://github.com/matrix-org/matrix-spec-proposals/pull/2675) | Serverside aggregations of message relationships | 1.3 | Implemented |
-| [MSC2676](https://github.com/matrix-org/matrix-spec-proposals/pull/2676) | Message editing | 1.4 | Implemented |
-| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | 1.7 | Implemented |
+| [MSC2675](https://github.com/matrix-org/matrix-spec-proposals/pull/2675) | Serverside aggregations of message relationships | 1.3 | Partial: relation retrieval exists; pagination and parent visibility gaps remain |
+| [MSC2676](https://github.com/matrix-org/matrix-spec-proposals/pull/2676) | Message editing | 1.4 | Partial: raw edits supported; server-side bundles missing |
+| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | 1.7 | Partial: relation storage and retrieval; aggregation not certified |
 | [MSC2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) | Threading | N/A | Opt-in (`msc2836`) |
 | [MSC2285](https://github.com/matrix-org/matrix-spec-proposals/pull/2285) | Private read receipts | 1.4 | Implemented |
 
@@ -45,7 +46,7 @@ They are listed by their original MSC number and the first spec version which in
 | [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented |
 | [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | 1.2 | Implemented |
 | [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | N/A | Opt-in (`msc3814`) |
-| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Opt-in (`msc4115`) |
+| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Implemented in sync; no opt-in required |
 
 ## Federation
 
@@ -59,7 +60,7 @@ They are listed by their original MSC number and the first spec version which in
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
-| [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Implemented |
+| [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Available through MSC3861 delegated authentication |
 | [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | 1.15 | Opt-in (`msc3861`) |
 
 ## VoIP
@@ -80,7 +81,6 @@ mscs:
     - msc2753
     - msc3814
     - msc3861
-    - msc4115
 ```
 
 ### MSC3814: Dehydrated Devices v2

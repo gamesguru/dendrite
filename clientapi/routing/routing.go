@@ -101,8 +101,13 @@ func Setup(
 		"org.matrix.simplified_msc3575": true, // MSC4186: Simplified Sliding Sync
 		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
 	}
-	for _, msc := range cfg.MSCs.MSCs {
-		unstableFeatures["org.matrix."+msc] = true
+	// Configuration entries alone do not establish implementation support.
+	// Keep this list aligned with setup/mscs.EnableMSC and the discovery audit.
+	for _, msc := range mscCfg.MSCs {
+		switch msc {
+		case "msc2444", "msc2753", "msc2836", "msc3814", "msc3861":
+			unstableFeatures["org.matrix."+msc] = true
+		}
 	}
 	if oidcEnabled {
 		// MSC3861 implies the MSC2965 auth_metadata / MSC2967 scopes family.
@@ -157,6 +162,9 @@ func Setup(
 		})).Methods(http.MethodGet, http.MethodHead, http.MethodOptions)
 	}
 
+	// Retain the existing ceiling: newer routes do not establish version
+	// conformance. See development/client-api-conformance in the documentation
+	// for the audit and remaining blockers.
 	publicAPIMux.Handle("/versions",
 		httputil.MakeExternalAPI("versions", func(req *http.Request) util.JSONResponse {
 			return util.JSONResponse{
