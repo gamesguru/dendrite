@@ -205,10 +205,33 @@ func (s *LocalFileStore) StoreThumbnail(_ context.Context, mediaHash types.Base6
 	}
 
 	src := filepath.Join(string(tmpPath), "content")
-	if err := os.Rename(src, path); err != nil {
+	input, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open thumbnail: %w", err)
+	}
+	defer input.Close()
+
+	// Thumbnail generators may use a different filesystem (e.g. /tmp). Stage
+	// beside the destination so publication is atomic even across mounts.
+	staged, err := os.CreateTemp(filepath.Dir(path), ".thumbnail-*")
+	if err != nil {
+		return fmt.Errorf("failed to stage thumbnail: %w", err)
+	}
+	defer os.Remove(staged.Name())
+	written, copyErr := io.Copy(staged, input)
+	closeErr := staged.Close()
+	if copyErr != nil {
+		return fmt.Errorf("failed to copy thumbnail: %w", copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to close thumbnail: %w", closeErr)
+	}
+	if written != int64(fileSize) {
+		return fmt.Errorf("thumbnail size mismatch: copied %d bytes, expected %d", written, fileSize)
+	}
+	if err := os.Rename(staged.Name(), path); err != nil {
 		return fmt.Errorf("failed to move thumbnail to final destination (%v): %w", path, err)
 	}
-	_ = fileSize
 	return nil
 }
 
