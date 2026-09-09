@@ -67,8 +67,6 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events (
   history_visibility SMALLINT NOT NULL DEFAULT 2
 );
 
-CREATE INDEX IF NOT EXISTS syncapi_output_room_events_timestamp_idx ON syncapi_output_room_events (room_id, (((headered_event_json::json ->> 'origin_server_ts')::BIGINT)), id);
-
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_type_idx ON syncapi_output_room_events (type);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_sender_idx ON syncapi_output_room_events (sender);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_room_id_idx ON syncapi_output_room_events (room_id);
@@ -82,8 +80,8 @@ CREATE INDEX IF NOT EXISTS syncapi_output_room_events_recent_events_idx ON synca
 
 const insertEventSQL = "" +
 	"INSERT INTO syncapi_output_room_events (" +
-	"room_id, event_id, headered_event_json, type, sender, contains_url, add_state_ids, remove_state_ids, session_id, transaction_id, exclude_from_sync, history_visibility" +
-	") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) " +
+	"room_id, event_id, headered_event_json, type, sender, contains_url, add_state_ids, remove_state_ids, session_id, transaction_id, exclude_from_sync, history_visibility, origin_server_ts" +
+	") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
 	"ON CONFLICT ON CONSTRAINT syncapi_output_room_event_id_idx DO UPDATE SET exclude_from_sync = (excluded.exclude_from_sync AND $11) " +
 	"RETURNING id"
 
@@ -136,7 +134,7 @@ const selectMaxEventIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_output_room_events"
 
 const updateEventJSONSQL = "" +
-	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2"
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
 
 // In order for us to apply the state updates correctly, rows need to be ordered in the order they were received (id).
 const selectStateInRangeFilteredSQL = "" +
@@ -202,15 +200,15 @@ const selectMaxStreamPositionsForRoomsSQL = "" +
 
 const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
 FROM syncapi_output_room_events
-WHERE room_id = $1 AND ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) >= $2
-AND ($3 = 0 OR ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) > $2 OR (((headered_event_json::json ->> 'origin_server_ts')::BIGINT) = $2 AND id > $3))
-ORDER BY ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) ASC, id ASC LIMIT $4`
+WHERE room_id = $1 AND origin_server_ts >= $2
+AND ($3 = 0 OR origin_server_ts > $2 OR (origin_server_ts = $2 AND id > $3))
+ORDER BY origin_server_ts ASC, id ASC LIMIT $4`
 
 const selectTimestampBackwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
 FROM syncapi_output_room_events
-WHERE room_id = $1 AND ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) <= $2
-AND ($3 = 0 OR ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) < $2 OR (((headered_event_json::json ->> 'origin_server_ts')::BIGINT) = $2 AND id < $3))
-ORDER BY ((headered_event_json::json ->> 'origin_server_ts')::BIGINT) DESC, id DESC LIMIT $4`
+WHERE room_id = $1 AND origin_server_ts <= $2
+AND ($3 = 0 OR origin_server_ts < $2 OR (origin_server_ts = $2 AND id < $3))
+ORDER BY origin_server_ts DESC, id DESC LIMIT $4`
 
 type outputRoomEventsStatements struct {
 	selectTimestampForwardStmt           *sql.Stmt
@@ -257,6 +255,10 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 	m := sqlutil.NewMigrator(db)
 	m.AddMigrations(
 		sqlutil.Migration{
+			Version: "syncapi: store output event timestamps separately",
+			Up:      deltas.UpAddOutputRoomEventTimestamp,
+		},
+		sqlutil.Migration{
 			Version: "syncapi: add history visibility column (output_room_events)",
 			Up:      deltas.UpAddHistoryVisibilityColumnOutputRoomEvents,
 		},
@@ -299,7 +301,7 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 		return err
 	}
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
-	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
+	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID(), event.OriginServerTS())
 	return err
 }
 
@@ -444,6 +446,7 @@ func (s *outputRoomEventsStatements) InsertEvent(
 		txnID,
 		excludeFromSync,
 		historyVisibility,
+		event.OriginServerTS(),
 	).Scan(&streamPos)
 	return
 }

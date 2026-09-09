@@ -99,9 +99,11 @@ Candidates include backfilled events and pass through the same room-history visi
 Invisible candidates are skipped, including across batches with equal timestamps.
 Unknown rooms, unavailable history, and searches with no visible match return `404 M_NOT_FOUND`.
 
-SQLite and PostgreSQL use an expression index on room ID, the event JSON's timestamp, and stream ID.
-The index is created for existing databases at startup as well as for new databases, so existing events become searchable without rewriting them.
-Creating it on a large existing database can increase the first startup time after upgrading.
+SQLite uses an expression index on room ID, the event JSON's timestamp, and stream ID.
+PostgreSQL indexes a separate numeric `origin_server_ts` column alongside room ID and stream ID.
+Its startup migration replaces the earlier JSON expression index and backfills timestamps in batches using Go's JSON parser, preserving the stored event JSON.
+This avoids PostgreSQL Unicode conversion errors on valid event content containing escapes such as `\u0000`, both during upgrades and when storing new events.
+The backfill and index replacement run in a transaction and can increase the first startup time on a large existing database.
 
 The [Matrix specification](https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv1roomsroomidtimestamp_to_event) permits federation lookup when local history is insufficient, but does not require it.
 This implementation searches local history only: Zendrite's federation client currently lacks the corresponding lookup method, and a remote event ID and timestamp alone do not establish whether the requesting user may see the event.
