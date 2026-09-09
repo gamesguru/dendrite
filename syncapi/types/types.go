@@ -621,6 +621,7 @@ type Peek struct {
 
 // OutputReceiptEvent is an entry in the receipt output kafka log.
 type OutputReceiptEvent struct {
+	ThreadID  string         `json:"thread_id,omitempty"`
 	UserID    string         `json:"user_id"`
 	RoomID    string         `json:"room_id"`
 	EventID   string         `json:"event_id"`

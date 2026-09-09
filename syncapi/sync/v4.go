@@ -1180,7 +1180,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						err := txn.UpsertConnectionReceipt( //nolint:contextcheck
 							ctx, connectionKey,
 							receipt.RoomID, receipt.Type, receipt.UserID,
-							receipt.EventID, receipt.Timestamp,
+							receipt.EventID, receipt.ThreadID, receipt.Timestamp,
 						)
 						if err != nil {
 							logrus.WithError(err).WithFields(logrus.Fields{

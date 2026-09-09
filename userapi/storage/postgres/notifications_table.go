@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS userapi_notifications (
 
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_room_id_event_id_idx ON userapi_notifications(localpart, server_name, room_id, event_id);
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_room_id_id_idx ON userapi_notifications(localpart, server_name, room_id, id);
+CREATE INDEX IF NOT EXISTS userapi_notification_room_id_idx ON userapi_notifications(room_id, id);
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_id_idx ON userapi_notifications(localpart, server_name, id);
 `
 
@@ -77,12 +78,18 @@ const cleanNotificationsSQL = "" +
 	"DELETE FROM userapi_notifications WHERE" +
 	" (highlight = FALSE AND ts_ms < $1) OR (highlight = TRUE AND ts_ms < $2)"
 
-func NewPostgresNotificationTable(db *sql.DB) (tables.NotificationTable, error) {
+func NewPostgresNotificationTable(ctx context.Context, db *sql.DB) (tables.NotificationTable, error) {
 	s := &notificationsStatements{}
 	_, err := db.Exec(notificationSchema)
 	if err != nil {
 		return nil, err
 	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification event threads", Up: tables.CreateNotificationEvents})
+	if err = m.Up(ctx); err != nil {
+		return nil, err
+	}
+
 	return s, sqlutil.StatementList{
 		{&s.insertStmt, insertNotificationSQL},
 		{&s.deleteUpToStmt, deleteNotificationsUpToSQL},

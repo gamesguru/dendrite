@@ -198,8 +198,8 @@ func (d *DatabaseTransaction) SelectLatestUserReceiptsForConnection(ctx context.
 	return d.Receipts.SelectLatestUserReceiptsForConnection(ctx, d.txn, connectionKey, roomIDs, userID)
 }
 
-func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error {
-	return d.Receipts.UpsertConnectionReceipt(ctx, d.txn, connectionKey, roomID, receiptType, userID, eventID, timestamp)
+func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error {
+	return d.Receipts.UpsertConnectionReceipt(ctx, d.txn, connectionKey, roomID, receiptType, userID, eventID, threadID, timestamp)
 }
 
 func (d *DatabaseTransaction) DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error {

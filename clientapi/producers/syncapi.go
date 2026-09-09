@@ -36,7 +36,7 @@ type SyncAPIProducer struct {
 
 func (p *SyncAPIProducer) SendReceipt(
 	ctx context.Context,
-	userID, roomID, eventID, receiptType string, timestamp spec.Timestamp,
+	userID, roomID, eventID, receiptType, threadID string, timestamp spec.Timestamp,
 ) error {
 	m := &nats.Msg{
 		Subject: p.TopicReceiptEvent,
@@ -46,6 +46,7 @@ func (p *SyncAPIProducer) SendReceipt(
 	m.Header.Set(jetstream.RoomID, roomID)
 	m.Header.Set(jetstream.EventID, eventID)
 	m.Header.Set("type", receiptType)
+	m.Header.Set("thread_id", threadID)
 	m.Header.Set("timestamp", fmt.Sprintf("%d", timestamp))
 
 	log.WithFields(log.Fields{}).Tracef("Producing to topic '%s'", p.TopicReceiptEvent)

@@ -69,10 +69,11 @@ func (t *OutputReceiptConsumer) Start() error {
 func (t *OutputReceiptConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	receipt := syncTypes.OutputReceiptEvent{
-		UserID:  msg.Header.Get(jetstream.UserID),
-		RoomID:  msg.Header.Get(jetstream.RoomID),
-		EventID: msg.Header.Get(jetstream.EventID),
-		Type:    msg.Header.Get("type"),
+		UserID:   msg.Header.Get(jetstream.UserID),
+		RoomID:   msg.Header.Get(jetstream.RoomID),
+		EventID:  msg.Header.Get(jetstream.EventID),
+		Type:     msg.Header.Get("type"),
+		ThreadID: msg.Header.Get("thread_id"),
 	}
 
 	switch receipt.Type {
@@ -119,7 +120,8 @@ func (t *OutputReceiptConsumer) onMessage(ctx context.Context, msgs []*nats.Msg)
 		User: map[string]fedTypes.FederationReceiptData{
 			receipt.UserID: {
 				Data: fedTypes.ReceiptTS{
-					TS: receipt.Timestamp,
+					TS:       receipt.Timestamp,
+					ThreadID: receipt.ThreadID,
 				},
 				EventIDs: []string{receipt.EventID},
 			},

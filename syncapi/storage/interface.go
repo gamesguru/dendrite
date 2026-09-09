@@ -64,7 +64,7 @@ type DatabaseTransaction interface {
 	RoomReceiptsAfter(ctx context.Context, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error)
 	// Per-connection receipt tracking for sliding sync (MSC4186)
 	SelectLatestUserReceiptsForConnection(ctx context.Context, connectionKey int64, roomIDs []string, userID string) ([]types.OutputReceiptEvent, error)
-	UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error
+	UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error
 	DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error
 	DeleteConnectionReceiptsForRoom(ctx context.Context, connectionKey int64, roomID string) error
 	// AllJoinedUsersInRooms returns a map of room ID to a list of all joined user IDs.
@@ -196,7 +196,7 @@ type Database interface {
 	// RedactEvent wipes an event in the database and sets the unsigned.redacted_because key to the redaction event
 	RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error
 	// StoreReceipt stores new receipt events
-	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
 	UpdateIgnoresForUser(ctx context.Context, userID string, ignores *types.IgnoredUsers) error
 	ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error)
 	UpdateRelations(ctx context.Context, event *rstypes.HeaderedEvent) error

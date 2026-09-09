@@ -54,7 +54,8 @@ type FederationReceiptData struct {
 }
 
 type ReceiptTS struct {
-	TS spec.Timestamp `json:"ts"`
+	ThreadID string         `json:"thread_id,omitempty"`
+	TS       spec.Timestamp `json:"ts"`
 }
 
 type Presence struct {

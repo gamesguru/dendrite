@@ -20,6 +20,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushgateway"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
+	"codefloe.com/pat-s/zendrite/internal/receipts"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -400,6 +401,26 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 		}
 	}
 
+	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
+	if err != nil {
+		return err
+	}
+	users, err := s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos)
+	if err != nil {
+		return err
+	}
+	for _, userID := range users {
+		if err = s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); err != nil {
+			return err
+		}
+		localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
+		if err != nil {
+			return err
+		}
+		if err = util.NotifyUserCountsAsync(ctx, s.pgClient, localpart, domain, s.db); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

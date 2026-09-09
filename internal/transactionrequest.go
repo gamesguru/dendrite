@@ -289,7 +289,7 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 					if api.IsServerBannedFromRoom(ctx, t.rsAPI, roomID, domain) {
 						continue
 					}
-					if err := t.processReceiptEvent(ctx, userID, roomID, "m.read", mread.Data.TS, mread.EventIDs); err != nil {
+					if err := t.processReceiptEvent(ctx, userID, roomID, "m.read", mread.Data.ThreadID, mread.Data.TS, mread.EventIDs); err != nil {
 						util.GetLogger(ctx).WithError(err).WithFields(logrus.Fields{
 							"sender":  t.Origin,
 							"user_id": userID,
@@ -344,7 +344,7 @@ func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) e
 
 // processReceiptEvent sends receipt events to JetStream.
 func (t *TxnReq) processReceiptEvent(ctx context.Context,
-	userID, roomID, receiptType string,
+	userID, roomID, receiptType, threadID string,
 	timestamp spec.Timestamp,
 	eventIDs []string,
 ) error {
@@ -357,7 +357,7 @@ func (t *TxnReq) processReceiptEvent(ctx context.Context,
 	}
 	// store every event
 	for _, eventID := range eventIDs {
-		if err := t.producer.SendReceipt(ctx, userID, roomID, eventID, receiptType, timestamp); err != nil {
+		if err := t.producer.SendReceipt(ctx, userID, roomID, eventID, receiptType, threadID, timestamp); err != nil {
 			return fmt.Errorf("unable to set receipt event: %w", err)
 		}
 	}

@@ -191,13 +191,13 @@ type Filter interface {
 }
 
 type Receipts interface {
-	UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
 	SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error)
 	SelectMaxReceiptID(ctx context.Context, txn *sql.Tx) (id int64, err error)
 	PurgeReceipts(ctx context.Context, txn *sql.Tx, roomID string) error
 	// Per-connection receipt tracking for sliding sync (MSC4186)
 	SelectLatestUserReceiptsForConnection(ctx context.Context, txn *sql.Tx, connectionKey int64, roomIDs []string, userID string) ([]types.OutputReceiptEvent, error)
-	UpsertConnectionReceipt(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error
+	UpsertConnectionReceipt(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error
 	DeleteConnectionReceipts(ctx context.Context, txn *sql.Tx, connectionKey int64) error
 	DeleteConnectionReceiptsForRoom(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID string) error
 }

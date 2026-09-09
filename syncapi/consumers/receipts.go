@@ -67,10 +67,11 @@ func (s *OutputReceiptEventConsumer) Start() error {
 func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	output := types.OutputReceiptEvent{
-		UserID:  msg.Header.Get(jetstream.UserID),
-		RoomID:  msg.Header.Get(jetstream.RoomID),
-		EventID: msg.Header.Get(jetstream.EventID),
-		Type:    msg.Header.Get("type"),
+		UserID:   msg.Header.Get(jetstream.UserID),
+		RoomID:   msg.Header.Get(jetstream.RoomID),
+		EventID:  msg.Header.Get(jetstream.EventID),
+		Type:     msg.Header.Get("type"),
+		ThreadID: msg.Header.Get("thread_id"),
 	}
 
 	log.WithFields(log.Fields{
@@ -96,6 +97,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		output.Type,
 		output.UserID,
 		output.EventID,
+		output.ThreadID,
 		output.Timestamp,
 	)
 	if err != nil {
@@ -115,47 +117,10 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		"stream_pos": streamPos,
 	}).Debug("SyncAPI receipt consumer: stored receipt successfully")
 
-	// When a user posts an m.read receipt, update their notification count to 0
-	// This ensures the unread badge clears immediately for v4 sync
-	// IMPORTANT: Do this BEFORE calling notifiers to avoid race conditions
-	var notifStreamPos types.StreamPosition
-	if output.Type == "m.read" {
-		log.WithFields(log.Fields{
-			"user_id": output.UserID,
-			"room_id": output.RoomID,
-		}).Debug("SyncAPI receipt consumer: clearing notification count for m.read receipt")
-
-		notifStreamPos, err = s.db.UpsertRoomUnreadNotificationCounts( //nolint:contextcheck
-			s.ctx,
-			output.UserID,
-			output.RoomID,
-			0, // Clear notification count
-			0, // Clear highlight count
-		)
-		if err != nil {
-			log.WithError(err).WithFields(log.Fields{
-				"user_id": output.UserID,
-				"room_id": output.RoomID,
-			}).Error("SyncAPI receipt consumer: failed to clear notification counts")
-			// Continue anyway - receipt was still stored successfully
-		} else {
-			log.WithFields(log.Fields{
-				"user_id":            output.UserID,
-				"room_id":            output.RoomID,
-				"notif_stream_pos":   notifStreamPos,
-				"receipt_stream_pos": streamPos,
-			}).Debug("SyncAPI receipt consumer: cleared notification counts successfully")
-		}
-	}
-
-	// Advance streams and notify AFTER all database commits are done
-	// This prevents long-polling connections from waking up between commits
+	// Notification counts are updated by the user API using the receipt
+	// boundary and thread. Clearing the room here would erase unrelated unread state.
 	s.stream.Advance(streamPos)
 	s.notifier.OnNewReceipt(output.RoomID, types.StreamingToken{ReceiptPosition: streamPos})
-
-	if output.Type == "m.read" && notifStreamPos > 0 {
-		s.notifier.OnNewNotificationData(output.UserID, types.StreamingToken{NotificationDataPosition: notifStreamPos})
-	}
 
 	return true
 }

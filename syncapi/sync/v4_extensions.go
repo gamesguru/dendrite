@@ -662,7 +662,14 @@ func (rp *RequestPool) processReceiptsExtension(
 				typeContent = make(map[string]ReceiptTS)
 				eventContent[receipt.Type] = typeContent
 			}
-			typeContent[receipt.UserID] = ReceiptTS{TS: receipt.Timestamp}
+
+			// Sliding sync has one receipt event per room. If two threads share
+			// a wire key, deliver the second on the next response rather than
+			// overwriting it and falsely recording it as delivered.
+			if _, exists := typeContent[receipt.UserID]; exists {
+				continue
+			}
+			typeContent[receipt.UserID] = ReceiptTS{TS: receipt.Timestamp, ThreadID: receipt.ThreadID}
 
 			// Collect this receipt for connection state update (will be done in write transaction later)
 			deliveredReceipts = append(deliveredReceipts, receipt)
@@ -696,7 +703,8 @@ type ReceiptMRead struct {
 
 // ReceiptTS represents a receipt timestamp.
 type ReceiptTS struct {
-	TS spec.Timestamp `json:"ts"`
+	ThreadID string         `json:"thread_id,omitempty"`
+	TS       spec.Timestamp `json:"ts"`
 }
 
 // processTypingExtension handles typing notifications extension

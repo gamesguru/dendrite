@@ -308,6 +308,7 @@ type ClientRoomserverAPI interface {
 }
 
 type UserRoomserverAPI interface {
+	QueryEventsByID(ctx context.Context, req *QueryEventsByIDRequest, res *QueryEventsByIDResponse) error
 	QuerySenderIDAPI
 	QueryLatestEventsAndStateAPI
 	KeyserverRoomserverAPI

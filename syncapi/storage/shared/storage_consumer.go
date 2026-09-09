@@ -563,9 +563,9 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 }
 
 // StoreReceipt stores user receipts.
-func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
+func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, timestamp)
+		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
 		return err
 	})
 	return

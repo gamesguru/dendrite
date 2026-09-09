@@ -949,7 +949,10 @@ func (d *Database) GetRoomNotificationCounts(ctx context.Context, localpart stri
 
 func (d *Database) DeleteOldNotifications(ctx context.Context) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.Notifications.Clean(ctx, txn)
+		if err := d.Notifications.Clean(ctx, txn); err != nil {
+			return err
+		}
+		return cleanNotificationReceipts(ctx, txn)
 	})
 }
 
