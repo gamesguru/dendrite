@@ -446,6 +446,15 @@ func Setup(
 			}),
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
+	mutualRooms := newMutualRoomsHandler(rsAPI)
+	v1mux.Handle("/mutual_rooms",
+		httputil.MakeAuthAPI("mutual_rooms", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, device); r != nil {
+				return *r
+			}
+			return mutualRooms.get(req, device)
+		}),
+	).Methods(http.MethodGet, http.MethodOptions)
 	v3mux.Handle("/joined_rooms",
 		httputil.MakeAuthAPI("joined_rooms", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return GetJoinedRooms(req, device, rsAPI)
