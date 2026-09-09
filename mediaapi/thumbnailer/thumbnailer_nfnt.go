@@ -7,7 +7,9 @@
 package thumbnailer
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/draw"
@@ -16,14 +18,15 @@ import (
 	"image/jpeg"
 	// Imported for png codec.
 	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
+	animatedwebp "github.com/gen2brain/webp"
 	log "github.com/sirupsen/logrus"
 	xdraw "golang.org/x/image/draw"
-	// Imported for webp codec.
-	_ "golang.org/x/image/webp"
+	"golang.org/x/image/webp"
 
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
@@ -122,7 +125,33 @@ func readFile(src string) (image.Image, error) {
 	}
 	defer file.Close()
 
-	img, _, err := image.Decode(file)
+	const (
+		riffHeaderSize  = 12
+		webpFlagsOffset = 20
+		webpProbeSize   = webpFlagsOffset + 1
+	)
+	reader := bufio.NewReader(file)
+	header, _ := reader.Peek(webpProbeSize)
+	if len(header) >= riffHeaderSize && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP" {
+		// VP8X must be the first chunk for extended WebP. The animation
+		// flag is bit 1 of its first payload byte. Decode one composited
+		// frame for animations, and retain x/image for still images.
+		const animationFlag = 1 << 1
+		if len(header) >= webpProbeSize && string(header[12:16]) == "VP8X" && header[webpFlagsOffset]&animationFlag != 0 {
+			// The animation decoder can return a blank canvas for truncated
+			// containers. Reject them before decoding the first frame.
+			info, statErr := file.Stat()
+			if statErr != nil {
+				return nil, statErr
+			}
+			if int64(binary.LittleEndian.Uint32(header[4:8]))+8 > info.Size() {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return animatedwebp.Decode(reader)
+		}
+		return webp.Decode(reader)
+	}
+	img, _, err := image.Decode(reader)
 	if err != nil {
 		return nil, err
 	}
