@@ -242,6 +242,9 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	res.SelfSigningKeys = make(map[string]fclient.CrossSigningKey)
 	res.UserSigningKeys = make(map[string]fclient.CrossSigningKey)
 	res.Failures = make(map[string]any)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// make a map from domain to device keys
 	domainToDeviceKeys := make(map[string]map[string][]string)
@@ -326,6 +329,9 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	// Now that we've done the potentially expensive work of asking the federation,
 	// try filling the cross-signing keys from the database that we know about.
 	a.crossSigningKeysFromDatabase(ctx, req, res)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Finally, append signatures that we know about
 	// TODO: This is horrible because we need to round-trip the signature from

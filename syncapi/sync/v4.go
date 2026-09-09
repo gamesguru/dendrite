@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -1526,11 +1527,23 @@ func (rp *RequestPool) buildInterruptResponse(
 		Extensions: &types.ExtensionResponse{},
 	}
 
+	// A disconnected client cannot receive this response. The timeout and
+	// disconnect cases can also become ready together, so check before any I/O.
+	if ctx.Err() != nil {
+		return resp
+	}
+
 	// Process requested lists to include their current state
 	roomsInLists := make(map[string]types.RoomSubscriptionConfig)
 	for listName, listConfig := range v4Req.Lists {
+		if ctx.Err() != nil {
+			return resp
+		}
 		list, listErr := rp.processRoomList(ctx, device.UserID, listName, listConfig, connState, false)
 		if listErr != nil {
+			if errors.Is(listErr, context.Canceled) || errors.Is(listErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(listErr).WithFields(logrus.Fields{
 				"list_name":     listName,
 				"response_type": responseType,
@@ -1557,9 +1570,15 @@ func (rp *RequestPool) buildInterruptResponse(
 	}
 
 	// Populate room data for rooms that appear in list operations
+	if ctx.Err() != nil {
+		return resp
+	}
 	if len(roomsInLists) > 0 {
 		snapshot, snapshotErr := rp.db.NewDatabaseSnapshot(ctx)
 		if snapshotErr != nil {
+			if errors.Is(snapshotErr, context.Canceled) || errors.Is(snapshotErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(snapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for room data")
 		} else {
 			var succeeded bool
@@ -1576,6 +1595,9 @@ func (rp *RequestPool) buildInterruptResponse(
 			}).Debug("[V4_SYNC] Populating room data for interrupt response")
 
 			for roomID, config := range roomsInLists {
+				if ctx.Err() != nil {
+					return resp
+				}
 				var requiredStateConfig *types.RequiredStateConfig
 				if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 {
 					requiredStateConfig = &config.RequiredState
@@ -1590,6 +1612,9 @@ func (rp *RequestPool) buildInterruptResponse(
 
 				roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false)
 				if buildErr != nil {
+					if errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded) {
+						return resp
+					}
 					logrus.WithError(buildErr).WithFields(logrus.Fields{
 						"room_id":       roomID,
 						"response_type": responseType,
@@ -1603,9 +1628,16 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 	}
 
+	if ctx.Err() != nil {
+		return resp
+	}
+
 	// Process extensions (provides e2ee data like OTK counts)
 	extSnapshot, extSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
 	if extSnapshotErr != nil {
+		if errors.Is(extSnapshotErr, context.Canceled) || errors.Is(extSnapshotErr, context.DeadlineExceeded) {
+			return resp
+		}
 		logrus.WithError(extSnapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for extensions")
 	} else {
 		var succeeded bool
@@ -1626,6 +1658,9 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions)
 		if extErr != nil {
+			if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(extErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to process extensions")
 		} else {
 			resp.Extensions = extensionResp
