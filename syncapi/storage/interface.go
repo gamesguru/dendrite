@@ -24,6 +24,8 @@ import (
 )
 
 type DatabaseTransaction interface {
+	// EventsByTimestamp returns candidates in timestamp order, including backfilled events.
+	EventsByTimestamp(ctx context.Context, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error)
 	sqlutil.Transaction
 	SharedUsers
 

@@ -854,3 +854,8 @@ func (d *DatabaseTransaction) UnPartialStatedRoomsInRange(
 	roomIDs, _, err := d.UnPartialStatedRooms.SelectUnPartialStatedRoomsInRange(ctx, d.txn, userID, r)
 	return roomIDs, err
 }
+
+// EventsByTimestamp returns candidates in timestamp order using an exclusive cursor after the first batch.
+func (d *DatabaseTransaction) EventsByTimestamp(ctx context.Context, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
+	return d.OutputEvents.SelectEventsByTimestamp(ctx, d.txn, roomID, timestamp, afterID, backwards, limit)
+}

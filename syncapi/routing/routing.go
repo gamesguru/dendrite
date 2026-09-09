@@ -39,6 +39,7 @@ func Setup(
 ) {
 	v1unstablemux := csMux.PathPrefix("/{apiversion:(?:v1|unstable)}/").Subrouter()
 	v3mux := csMux.PathPrefix("/{apiversion:(?:r0|v3)}/").Subrouter()
+	v1mux := csMux.PathPrefix("/v1/").Subrouter()
 	v4mux := csMux.PathPrefix("/v4/").Subrouter()
 
 	// MSC4186: Simplified Sliding Sync
@@ -70,6 +71,19 @@ func Setup(
 		}
 		return OnIncomingMessagesRequest(req, syncDB, vars["roomID"], device, rsAPI, cfg, srp, lazyLoadCache)
 	}, httputil.WithAllowGuests())).Methods(http.MethodGet, http.MethodOptions)
+
+	v1mux.Handle("/rooms/{roomID}/timestamp_to_event",
+		httputil.MakeAuthAPI("timestamp_to_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, device); r != nil {
+				return *r
+			}
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return TimestampToEvent(req, device, vars["roomID"], syncDB, rsAPI)
+		}, httputil.WithAllowGuests()),
+	).Methods(http.MethodGet, http.MethodOptions)
 
 	v3mux.Handle("/rooms/{roomID}/event/{eventID}",
 		httputil.MakeAuthAPI("rooms_get_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

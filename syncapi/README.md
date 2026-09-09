@@ -90,3 +90,20 @@ very large. This is mitigated slightly with indexes, but better data structures 
 - `invite_state` is not implemented (for similar reasons to the above point).
 - The current implementation scales badly when a very old `since` token is provided.
 - The entire current room state can be re-sent to the client if they send a duplicate "join" event which should be a no-op.
+
+## Timestamp-to-event lookup
+
+`GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event` is implemented in `syncapi/routing/`.
+It requires authentication, applies the configured rate limits, and returns `event_id` and `origin_server_ts` for the closest locally stored event at or beyond `ts` in direction `f`, or at or before `ts` in direction `b`.
+Candidates include backfilled events and pass through the same room-history visibility filter as other history endpoints.
+Invisible candidates are skipped, including across batches with equal timestamps.
+Unknown rooms, unavailable history, and searches with no visible match return `404 M_NOT_FOUND`.
+
+SQLite and PostgreSQL use an expression index on room ID, the event JSON's timestamp, and stream ID.
+The index is created for existing databases at startup as well as for new databases, so existing events become searchable without rewriting them.
+Creating it on a large existing database can increase the first startup time after upgrading.
+
+The [Matrix specification](https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv1roomsroomidtimestamp_to_event) permits federation lookup when local history is insufficient, but does not require it.
+This implementation searches local history only: Zendrite's federation client currently lacks the corresponding lookup method, and a remote event ID and timestamp alone do not establish whether the requesting user may see the event.
+A future fallback would need server selection, remote event and state retrieval with validation, and per-user history visibility checks before returning a remote candidate.
+Until then, a history gap can yield a more distant local event or `M_NOT_FOUND`.

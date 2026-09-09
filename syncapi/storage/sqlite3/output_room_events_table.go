@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events (
   history_visibility SMALLINT NOT NULL DEFAULT 2 -- The history visibility before this event (1 - world_readable; 2 - shared; 3 - invited; 4 - joined)
 );
 
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_timestamp_idx ON syncapi_output_room_events (room_id, (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT)), id);
+
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_type_idx ON syncapi_output_room_events (type);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_sender_idx ON syncapi_output_room_events (sender);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_room_id_idx ON syncapi_output_room_events (room_id);
@@ -110,7 +112,21 @@ const selectSearchSQL = "SELECT id, event_id, headered_event_json FROM syncapi_o
 const purgeEventsSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE room_id = $1"
 
+const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) >= $2
+AND ($3 = 0 OR CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) > $2 OR (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) = $2 AND id > $3))
+ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) ASC, id ASC LIMIT $4`
+
+const selectTimestampBackwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) <= $2
+AND ($3 = 0 OR CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) < $2 OR (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) = $2 AND id < $3))
+ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) DESC, id DESC LIMIT $4`
+
 type outputRoomEventsStatements struct {
+	selectTimestampForwardStmt   *sql.Stmt
+	selectTimestampBackwardStmt  *sql.Stmt
 	db                           *sql.DB
 	streamIDStatements           *StreamIDStatements
 	insertEventStmt              *sql.Stmt
@@ -147,6 +163,8 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 	}
 
 	return s, sqlutil.StatementList{
+		{&s.selectTimestampForwardStmt, selectTimestampForwardSQL},
+		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
 		{&s.updateEventJSONStmt, updateEventJSONSQL},
@@ -744,4 +762,20 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 		result[roomID] = maxPos
 	}
 	return result, rows.Err()
+}
+
+// SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
+// A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
+// Backfilled events are eligible even when excluded from incremental sync.
+func (s *outputRoomEventsStatements) SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
+	stmt := s.selectTimestampForwardStmt
+	if backwards {
+		stmt = s.selectTimestampBackwardStmt
+	}
+	rows, err := sqlutil.TxStmt(txn, stmt).QueryContext(ctx, roomID, timestamp, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectEventsByTimestamp: close rows")
+	return rowsToStreamEvents(rows)
 }
