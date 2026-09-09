@@ -645,3 +645,10 @@ type RelationEntry struct {
 	Position StreamPosition
 	EventID  string
 }
+
+// ThreadRelation identifies a thread reply and its position in room topology.
+type ThreadRelation struct {
+	RootEventID string
+	EventID     string
+	Position    TopologyToken
+}

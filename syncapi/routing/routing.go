@@ -135,6 +135,17 @@ func Setup(
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
+	v1unstablemux.Handle("/rooms/{roomId}/threads", httputil.MakeAuthAPI("room_threads", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		if r := rateLimits.Limit(req, device); r != nil {
+			return *r
+		}
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		return Threads(req, device, syncDB, rsAPI, vars["roomId"])
+	}, httputil.WithAllowGuests())).Methods(http.MethodGet, http.MethodOptions)
+
 	v1unstablemux.Handle("/rooms/{roomId}/relations/{eventId}",
 		httputil.MakeAuthAPI("relations", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))

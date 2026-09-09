@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
@@ -27,8 +29,14 @@ func newRelationsTable(t *testing.T, dbType test.DBType) (tables.Relations, *sql
 	var tab tables.Relations
 	switch dbType {
 	case test.DBTypePostgres:
+		if _, err = postgres.NewPostgresTopologyTable(db); err != nil {
+			t.Fatal(err)
+		}
 		tab, err = postgres.NewPostgresRelationsTable(db)
 	case test.DBTypeSQLite:
+		if _, err = sqlite3.NewSqliteTopologyTable(db); err != nil {
+			t.Fatal(err)
+		}
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {
 			t.Fatalf("failed to prepare stream stmts: %s", err)
@@ -184,5 +192,39 @@ func TestRelationsTable(t *testing.T) {
 		} {
 			compareRelationsToExpected(t, tab, r, expected) //nolint:contextcheck
 		}
+	})
+}
+
+func TestThreadRelationsTable(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		ctx := t.Context()
+		tab, db, closeDB := newRelationsTable(t, dbType)
+		defer closeDB()
+		insert := func(room, root, child string, depth, stream int64) {
+			require.NoError(t, tab.InsertRelation(ctx, nil, room, root, child, "m.room.message", "m.thread"))
+			_, err := db.ExecContext(ctx, `INSERT INTO syncapi_output_room_events_topology (event_id, topological_position, stream_position, room_id) VALUES ($1, $2, $3, $4)`, child, depth, stream, room)
+			require.NoError(t, err)
+		}
+		insert(roomID, "root-a", "a", 10, 1)
+		insert(roomID, "root-b", "b", 10, 2)
+		insert(roomID, "root-a", "c", 9, 3)
+		insert("!other:server", "root-d", "d", 11, 4)
+		watermark, err := tab.SelectMaxRelationID(ctx, nil)
+		require.NoError(t, err)
+		// A late-arriving reply at an old depth is excluded from the snapshot.
+		insert(roomID, "root-e", "e", 8, 5)
+		before := types.TopologyToken{Depth: 20, PDUPosition: 20}
+		var children []string
+		for {
+			entries, err := tab.SelectThreadRelations(ctx, nil, roomID, types.StreamPosition(watermark), before, 1)
+			require.NoError(t, err)
+			if len(entries) == 0 {
+				break
+			}
+			require.Len(t, entries, 1)
+			children = append(children, entries[0].EventID)
+			before = entries[0].Position
+		}
+		require.Equal(t, []string{"b", "a", "c"}, children)
 	})
 }

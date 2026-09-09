@@ -855,6 +855,11 @@ func (d *DatabaseTransaction) UnPartialStatedRoomsInRange(
 	return roomIDs, err
 }
 
+// ThreadRelations returns a bounded batch of thread replies in topology order.
+func (d *DatabaseTransaction) ThreadRelations(ctx context.Context, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error) {
+	return d.Relations.SelectThreadRelations(ctx, d.txn, roomID, watermark, before, limit)
+}
+
 // EventsByTimestamp returns candidates in timestamp order using an exclusive cursor after the first batch.
 func (d *DatabaseTransaction) EventsByTimestamp(ctx context.Context, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
 	return d.OutputEvents.SelectEventsByTimestamp(ctx, d.txn, roomID, timestamp, afterID, backwards, limit)

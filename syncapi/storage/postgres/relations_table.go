@@ -58,7 +58,19 @@ const selectRelationsInRangeDescSQL = "" +
 const selectMaxRelationIDSQL = "" +
 	"SELECT COALESCE(MAX(id), 0) FROM syncapi_relations"
 
+// Page through individual thread replies in topology order. The relation watermark
+// freezes the input across requests, including replies backfilled at older depths.
+const selectThreadRelationsSQL = `
+SELECT r.event_id, r.child_event_id, t.topological_position, t.stream_position
+FROM syncapi_relations r
+JOIN syncapi_output_room_events_topology t ON t.event_id = r.child_event_id AND t.room_id = r.room_id
+WHERE r.room_id = $1 AND r.rel_type = 'm.thread' AND r.id <= $2
+AND (t.topological_position < $3 OR (t.topological_position = $3 AND t.stream_position < $4))
+ORDER BY t.topological_position DESC, t.stream_position DESC LIMIT $5
+`
+
 type relationsStatements struct {
+	selectThreadRelationsStmt      *sql.Stmt
 	insertRelationStmt             *sql.Stmt
 	selectRelationsInRangeAscStmt  *sql.Stmt
 	selectRelationsInRangeDescStmt *sql.Stmt
@@ -74,6 +86,7 @@ func NewPostgresRelationsTable(db *sql.DB) (tables.Relations, error) {
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertRelationStmt, insertRelationSQL},
+		{&s.selectThreadRelationsStmt, selectThreadRelationsSQL},
 		{&s.selectRelationsInRangeAscStmt, selectRelationsInRangeAscSQL},
 		{&s.selectRelationsInRangeDescStmt, selectRelationsInRangeDescSQL},
 		{&s.deleteRelationStmt, deleteRelationSQL},
@@ -148,4 +161,22 @@ func (s *relationsStatements) SelectMaxRelationID(
 	stmt := sqlutil.TxStmt(txn, s.selectMaxRelationIDStmt)
 	err = stmt.QueryRowContext(ctx).Scan(&id)
 	return
+}
+
+// SelectThreadRelations returns replies in descending topology order, before an exclusive cursor.
+func (s *relationsStatements) SelectThreadRelations(ctx context.Context, txn *sql.Tx, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectThreadRelationsStmt).QueryContext(ctx, roomID, watermark, before.Depth, before.PDUPosition, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectThreadRelations: rows.close() failed")
+	var result []types.ThreadRelation
+	for rows.Next() {
+		var entry types.ThreadRelation
+		if err = rows.Scan(&entry.RootEventID, &entry.EventID, &entry.Position.Depth, &entry.Position.PDUPosition); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
+	}
+	return result, rows.Err()
 }
