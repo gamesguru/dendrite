@@ -93,8 +93,11 @@ Linting is configured in `.golangci.yaml` and runs via [golangci-lint](https://g
 It runs automatically as a pre-commit hook, but you can also run it manually:
 
 ```bash
-golangci-lint run
+prek run golangci-lint --all-files
 ```
+
+This command and `just lint`, which invokes the same hook, require `prek` on `PATH`.
+The hook uses the version pinned in `.pre-commit-config.yaml` and the `test` and `goolm` build tags configured in `.golangci.yaml`.
 
 If you are receiving linter warnings that you are certain are spurious and want to silence them, you can annotate the relevant lines or methods with a `// nolint:` comment.
 Please avoid doing this if you can.
@@ -104,7 +107,7 @@ Please avoid doing this if you can.
 We also have unit tests which we run via:
 
 ```bash
-go test -race ./...
+go test -tags goolm -race ./...
 ```
 
 This runs both SQLite and PostgreSQL tests.
