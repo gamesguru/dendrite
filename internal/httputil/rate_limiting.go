@@ -2,6 +2,7 @@ package httputil
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -117,10 +118,8 @@ func (l *RateLimits) Limit(req *http.Request, device *userapi.Device) *util.JSON
 	case rateLimit <- struct{}{}:
 	default:
 		// We hit the rate limit. Tell the client to back off.
-		return &util.JSONResponse{
-			Code: http.StatusTooManyRequests,
-			JSON: spec.LimitExceeded("You are sending too many requests too quickly!", l.cooloffDuration.Milliseconds()),
-		}
+		response := LimitExceededResponse("You are sending too many requests too quickly!", l.cooloffDuration)
+		return &response
 	}
 
 	// After the time interval, drain a resource from the rate limiting
@@ -130,4 +129,21 @@ func (l *RateLimits) Limit(req *http.Request, device *userapi.Device) *util.JSON
 		<-rateLimit
 	}()
 	return nil
+}
+
+// LimitExceededResponse includes retry guidance for both current and legacy clients.
+func LimitExceededResponse(message string, delay time.Duration) util.JSONResponse {
+	if delay < 0 {
+		delay = 0
+	}
+	// Round up so clients never retry before the configured delay has elapsed.
+	seconds := delay / time.Second
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	return util.JSONResponse{
+		Code:    http.StatusTooManyRequests,
+		Headers: map[string]string{"Retry-After": strconv.FormatInt(int64(seconds), 10)},
+		JSON:    spec.LimitExceeded(message, delay.Milliseconds()),
+	}
 }

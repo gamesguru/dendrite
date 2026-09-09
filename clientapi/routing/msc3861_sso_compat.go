@@ -447,10 +447,7 @@ func (h *ssoCompatHandler) serveRedirect(req *http.Request) util.JSONResponse {
 	state, session, err := h.registerRedirect(redirectURL)
 	if err != nil {
 		if errors.Is(err, errSSOStorageFull) {
-			return util.JSONResponse{
-				Code: http.StatusTooManyRequests,
-				JSON: spec.LimitExceeded("Too many in-flight SSO logins, please try again later.", ssoLimitRetryAfterMS),
-			}
+			return httputil.LimitExceededResponse("Too many in-flight SSO logins, please try again later.", ssoLimitRetryAfterMS*time.Millisecond)
 		}
 		logrus.WithError(err).Error("MSC3861 SSO compat: failed to create session")
 		return util.JSONResponse{
@@ -563,10 +560,7 @@ func (h *ssoCompatHandler) serveCallback(req *http.Request) util.JSONResponse {
 	// than a homeserver-local one, which would never introspect.
 	if err := h.stashOIDCTokens(tokenRes.Metadata.Token, tokens, device.ID, device.UserID); err != nil {
 		logrus.WithError(err).Error("MSC3861 SSO compat: failed to stash OIDC tokens")
-		return util.JSONResponse{
-			Code: http.StatusTooManyRequests,
-			JSON: spec.LimitExceeded("Too many in-flight SSO logins, please try again later.", ssoLimitRetryAfterMS),
-		}
+		return httputil.LimitExceededResponse("Too many in-flight SSO logins, please try again later.", ssoLimitRetryAfterMS*time.Millisecond)
 	}
 
 	clientURL, err := url.Parse(session.redirectURL)

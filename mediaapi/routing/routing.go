@@ -207,8 +207,11 @@ func makeDownloadAPI(
 		// NOTSPEC: The spec says everything at /media/ should be rate limited, but this causes issues with thumbnails (#2243)
 		if name != "thumbnail" {
 			if r := rateLimits.Limit(req, nil); r != nil {
-				w.WriteHeader(http.StatusTooManyRequests)
-				if err := json.NewEncoder(w).Encode(r); err != nil {
+				for header, value := range r.Headers {
+					w.Header().Set(header, value)
+				}
+				w.WriteHeader(r.Code)
+				if err := json.NewEncoder(w).Encode(r.JSON); err != nil {
 					return
 				}
 				return
