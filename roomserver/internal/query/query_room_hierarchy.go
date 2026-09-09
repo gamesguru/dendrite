@@ -561,7 +561,7 @@ func publicRoomsChunk(ctx context.Context, querier *Queryer, roomID spec.RoomID)
 	if len(pubRooms) == 0 {
 		return nil
 	}
-	return &pubRooms[0]
+	return &pubRooms[0].PublicRoom
 }
 
 func stripped(ev gomatrixserverlib.PDU) *fclient.RoomHierarchyStrippedEvent {

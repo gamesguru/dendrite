@@ -201,16 +201,24 @@ func IsServerBannedFromRoom(ctx context.Context, rsAPI FederationRoomserverAPI, 
 	return res.Banned
 }
 
+// PublicRoom preserves the distinction between an absent room type and a string,
+// including an explicitly empty string, in directory results.
+type PublicRoom struct {
+	fclient.PublicRoom
+	RoomType *string `json:"room_type,omitempty"`
+}
+
 // PopulatePublicRooms extracts PublicRoom information for all the provided room IDs. The IDs are not checked to see if they are visible in the
 // published room directory.
 // Due to lots of switches.
-func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]fclient.PublicRoom, error) {
+func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]PublicRoom, error) {
 	avatarTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.avatar", StateKey: ""}
 	nameTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.name", StateKey: ""}
 	canonicalTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCanonicalAlias, StateKey: ""}
 	topicTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.topic", StateKey: ""}
 	guestTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.guest_access", StateKey: ""}
 	visibilityTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomHistoryVisibility, StateKey: ""}
+	createTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCreate, StateKey: ""}
 	joinRuleTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomJoinRules, StateKey: ""}
 
 	var stateRes QueryBulkStateContentResponse
@@ -218,7 +226,7 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 		RoomIDs:        roomIDs,
 		AllowWildcards: true,
 		StateTuples: []gomatrixserverlib.StateKeyTuple{
-			nameTuple, canonicalTuple, topicTuple, guestTuple, visibilityTuple, joinRuleTuple, avatarTuple,
+			nameTuple, canonicalTuple, topicTuple, guestTuple, visibilityTuple, joinRuleTuple, avatarTuple, createTuple,
 			{EventType: spec.MRoomMember, StateKey: "*"},
 		},
 	}, &stateRes)
@@ -226,12 +234,10 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 		util.GetLogger(ctx).WithError(err).Error("QueryBulkStateContent failed")
 		return nil, err
 	}
-	chunk := make([]fclient.PublicRoom, len(roomIDs))
+	chunk := make([]PublicRoom, len(roomIDs))
 	i := 0
 	for roomID, data := range stateRes.Rooms {
-		pub := fclient.PublicRoom{
-			RoomID: roomID,
-		}
+		pub := PublicRoom{PublicRoom: fclient.PublicRoom{RoomID: roomID}}
 		joinCount := 0
 		var guestAccess string
 		for tuple, contentVal := range data {
@@ -240,6 +246,17 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 				continue
 			}
 			switch tuple {
+			case createTuple:
+				var content struct {
+					Type *string `json:"type"`
+				}
+				if err := json.Unmarshal([]byte(contentVal), &content); err != nil {
+					return nil, fmt.Errorf("parse create content for %s: %w", roomID, err)
+				}
+				pub.RoomType = content.Type
+				if content.Type != nil {
+					pub.PublicRoom.RoomType = *content.Type
+				}
 			case avatarTuple:
 				pub.AvatarURL = contentVal
 			case nameTuple:
