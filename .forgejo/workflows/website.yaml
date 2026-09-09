@@ -37,7 +37,7 @@ jobs:
         run: bun run build
 
       - name: Upload artifact
-        uses: forgejo/upload-artifact@v4
+        uses: forgejo/upload-artifact@v5
         with:
           name: website-dist
           path: website/dist

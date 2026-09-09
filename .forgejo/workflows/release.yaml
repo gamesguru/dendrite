@@ -71,7 +71,7 @@ jobs:
           ls -la
 
       - name: Upload artifacts
-        uses: forgejo/upload-artifact@v4
+        uses: forgejo/upload-artifact@v5
         with:
           name: binaries
           path: dist/*
