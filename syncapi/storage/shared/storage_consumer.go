@@ -380,7 +380,7 @@ func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, reda
 func (d *Database) fetchStateEvents(
 	ctx context.Context, txn *sql.Tx,
 	roomIDToEventIDSet map[string]map[string]bool,
-	eventIDToEvent map[string]types.StreamEvent,
+	eventIDToEvent map[string]types.StreamEvent, rsAPI stateEventQuerier,
 ) (map[string][]types.StreamEvent, error) {
 	stateBetween := make(map[string][]types.StreamEvent)
 	missingEvents := make(map[string][]string)
@@ -405,11 +405,11 @@ func (d *Database) fetchStateEvents(
 	if len(missingEvents) > 0 {
 		// This happens when add_state_ids has an event ID which is not in the provided range.
 		// We need to explicitly fetch them.
-		evs, err := d.fetchMissingStateEvents(ctx, txn, missingEvents)
+		evs, err := d.fetchMissingStateEvents(ctx, txn, missingEvents, rsAPI)
 		if err != nil {
 			return nil, err
 		}
-		// we know we got them all otherwise an error would've been returned, so just loop the events
+		// Append the resolved events; unavailable events are reported by the fetcher.
 		for _, ev := range evs {
 			roomID := ev.RoomID().String()
 			stateBetween[roomID] = append(stateBetween[roomID], ev)
@@ -419,10 +419,10 @@ func (d *Database) fetchStateEvents(
 }
 
 // fetchMissingStateEvents converts the given event IDs, keyed by the room they
-// belong to, into events. The room IDs are only used to give the caller some
-// context when the mapping turns out to be incomplete.
+// belong to, into events. Resolve older state from roomserver if it is no longer
+// present in either sync table, and report any remaining gaps by room.
 func (d *Database) fetchMissingStateEvents(
-	ctx context.Context, txn *sql.Tx, roomIDToEventIDs map[string][]string,
+	ctx context.Context, txn *sql.Tx, roomIDToEventIDs map[string][]string, rsAPI stateEventQuerier,
 ) ([]types.StreamEvent, error) {
 	total := 0
 	for _, roomEventIDs := range roomIDToEventIDs {
@@ -465,31 +465,39 @@ func (d *Database) fetchMissingStateEvents(
 	if err != nil {
 		return nil, err
 	}
-	if len(stateEvents) != len(missing) {
-		// Report which rooms are short of state events, so that a persistently
-		// incomplete room can be identified from the logs. Only room IDs and
-		// counts are logged, never event contents.
-		for _, event := range stateEvents {
-			have[event.EventID()] = true
+	for _, event := range stateEvents {
+		have[event.EventID()] = true
+	}
+	historicalIDs := make(map[string][]string)
+	for _, eventID := range missing {
+		if !have[eventID] {
+			roomID := eventIDToRoomID[eventID]
+			historicalIDs[roomID] = append(historicalIDs[roomID], eventID)
 		}
-		unresolvedPerRoom := map[string]int{}
-		for _, eventID := range missing {
-			if !have[eventID] {
-				unresolvedPerRoom[eventIDToRoomID[eventID]]++
-			}
+	}
+	historical, err := fetchHistoricalStateEvents(ctx, rsAPI, historicalIDs)
+	if err != nil {
+		return nil, err
+	}
+	stateEvents = append(stateEvents, historical...)
+	for _, event := range historical {
+		have[event.EventID()] = true
+	}
+	unresolvedPerRoom := map[string]int{}
+	for _, eventID := range missing {
+		if !have[eventID] {
+			unresolvedPerRoom[eventIDToRoomID[eventID]]++
 		}
+	}
+	if len(unresolvedPerRoom) > 0 {
+		// Preserve partial responses for events absent even from roomserver.
 		util.GetLogger(ctx).WithFields(logrus.Fields{
 			"got":                len(stateEvents),
 			"wanted":             len(missing),
 			"unresolved_by_room": unresolvedPerRoom,
 		}).Warn("Failed to map all event IDs to events")
-
-		// TODO: Why is this happening? It's probably the roomserver. Uncomment
-		// this error again when we work out what it is and fix it, otherwise we
-		// just end up returning lots of 500s to the client and that breaks
-		// pretty much everything, rather than just sending what we have.
-		// return nil, fmt.Errorf("failed to map all event IDs to events: (got %d, wanted %d)", len(stateEvents), len(missing))
 	}
+
 	events = append(events, stateEvents...)
 	return events, nil
 }

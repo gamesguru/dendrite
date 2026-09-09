@@ -401,7 +401,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 		}
 		return nil, nil, err
 	}
-	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
@@ -422,7 +422,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 			}
 			return nil, nil, err
 		}
-		stateFiltered, err = d.fetchStateEvents(ctx, d.txn, stateNeededFiltered, eventMapFiltered)
+		stateFiltered, err = d.fetchStateEvents(ctx, d.txn, stateNeededFiltered, eventMapFiltered, rsAPI)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil, nil
@@ -583,7 +583,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 		}
 		return nil, nil, err
 	}
-	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
