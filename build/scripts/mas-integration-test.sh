@@ -307,7 +307,8 @@ aarch64 | arm64) GOARCH=arm64 ;;
 x86_64 | amd64) GOARCH=amd64 ;;
 *) fail "unsupported container architecture ${GOARCH}" ;;
 esac
-CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build -tags goolm -o "${WORKDIR}/zendrite" ./cmd/zendrite
+# WebP's dynamic backend requires a libc loader even with CGO disabled.
+CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build -tags goolm,nodynamic -o "${WORKDIR}/zendrite" ./cmd/zendrite
 
 log "starting MAS"
 docker run -d --name mas-e2e-mas --network "${NETWORK}" \
