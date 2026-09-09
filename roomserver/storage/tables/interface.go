@@ -286,6 +286,8 @@ func ExtractContentValue(ev *types.HeaderedEvent) string {
 		key = "history_visibility"
 	case spec.MRoomJoinRules:
 		key = "join_rule"
+	case spec.MRoomEncryption:
+		key = "algorithm"
 	case spec.MRoomMember:
 		key = "membership"
 	case spec.MRoomName:

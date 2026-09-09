@@ -48,9 +48,9 @@ type RoomSummaryResponse struct {
 	WorldReadable    bool     `json:"world_readable"`
 	JoinRule         string   `json:"join_rule,omitempty"`
 	AllowedRoomIDs   []string `json:"allowed_room_ids,omitempty"`
-	Encryption       string   `json:"im.nheko.summary.encryption,omitempty"`
+	Encryption       string   `json:"encryption,omitempty"`
 	Membership       string   `json:"membership,omitempty"`
-	RoomVersion      string   `json:"im.nheko.summary.room_version,omitempty"`
+	RoomVersion      string   `json:"room_version,omitempty"`
 }
 
 // Cache is the interface that an implementation must satisfy.

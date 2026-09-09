@@ -358,45 +358,37 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
-	// MSC3266: Room Summary API
-	// Supports both authenticated and unauthenticated requests (Phase 4)
-	// Unauthenticated requests can only access public/world-readable rooms
-	// Correct path (aliases shouldn't be under /rooms)
-	unstableMux.Handle("/im.nheko.summary/summary/{roomIDOrAlias}",
-		httputil.MakeOptionalAuthAPI("room_summary", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+	// Room Summary API (Matrix v1.15, previously MSC3266).
+	// Supports both authenticated and unauthenticated requests.
+	// Unauthenticated requests can only access public, knockable or world-readable rooms.
+	// The federation sender may not implement the internal API (e.g. in tests), in which
+	// case remote rooms simply cannot be summarized.
+	roomSummaryFSAPI, _ := federationSender.(federationAPI.FederationInternalAPI)
+	// A nil *Caches must not be wrapped in the interface, or the handler would panic on use.
+	var roomSummaryCache caching.RoomSummaryCache
+	if caches != nil {
+		roomSummaryCache = caches
+	}
+	roomSummaryHandler := func(
+		handler func(*http.Request, *userapi.Device, string, roomserverAPI.ClientRoomserverAPI, federationAPI.FederationInternalAPI, spec.ServerName, caching.RoomSummaryCache) util.JSONResponse,
+	) http.Handler {
+		return httputil.MakeOptionalAuthAPI("room_summary", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
-			// Type assert to FederationInternalAPI (the actual implementation implements both)
-			fsAPI, ok := federationSender.(federationAPI.FederationInternalAPI)
-			if !ok {
-				return util.JSONResponse{
-					Code: http.StatusInternalServerError,
-					JSON: spec.InternalServerError{},
-				}
-			}
-			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, zendriteCfg.Global.ServerName, caches)
-		}, httputil.WithAllowGuests()),
-	).Methods(http.MethodGet, http.MethodOptions)
-	// Legacy path for compatibility with Element X and other existing implementations
-	unstableMux.Handle("/im.nheko.summary/rooms/{roomIDOrAlias}/summary",
-		httputil.MakeOptionalAuthAPI("room_summary", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-			if err != nil {
-				return util.ErrorResponse(err)
-			}
-			// Type assert to FederationInternalAPI (the actual implementation implements both)
-			fsAPI, ok := federationSender.(federationAPI.FederationInternalAPI)
-			if !ok {
-				return util.JSONResponse{
-					Code: http.StatusInternalServerError,
-					JSON: spec.InternalServerError{},
-				}
-			}
-			return GetRoomSummary(req, device, vars["roomIDOrAlias"], rsAPI, fsAPI, zendriteCfg.Global.ServerName, caches)
-		}, httputil.WithAllowGuests()),
-	).Methods(http.MethodGet, http.MethodOptions)
+			return handler(req, device, vars["roomIDOrAlias"], rsAPI, roomSummaryFSAPI, zendriteCfg.Global.ServerName, roomSummaryCache)
+		}, httputil.WithAllowGuests())
+	}
+	// Stable endpoint
+	v1mux.Handle("/room_summary/{roomIDOrAlias}", roomSummaryHandler(GetRoomSummary)).
+		Methods(http.MethodGet, http.MethodOptions)
+	// Experimental MSC3266 endpoint (aliases shouldn't be under /rooms)
+	unstableMux.Handle("/im.nheko.summary/summary/{roomIDOrAlias}", roomSummaryHandler(GetRoomSummaryUnstable)).
+		Methods(http.MethodGet, http.MethodOptions)
+	// Legacy MSC3266 path for compatibility with Element X and other existing implementations
+	unstableMux.Handle("/im.nheko.summary/rooms/{roomIDOrAlias}/summary", roomSummaryHandler(GetRoomSummaryUnstable)).
+		Methods(http.MethodGet, http.MethodOptions)
 
 	v3mux.Handle("/createRoom",
 		httputil.MakeAuthAPI("createRoom", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

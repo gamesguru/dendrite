@@ -167,12 +167,15 @@ func Test_Devices(t *testing.T) {
 	alice := test.NewUser(t)
 	localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
 	assert.NoError(t, err)
-	deviceID := util.RandomString(8)
-	accessToken := util.RandomString(16)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
+
+		// Declared per subtest: the database subtests run in parallel and
+		// must not share mutable variables.
+		deviceID := util.RandomString(8)
+		accessToken := util.RandomString(16)
 
 		deviceWithID, err := db.CreateDevice(ctx, localpart, domain, &deviceID, accessToken, nil, "", "")
 		assert.NoError(t, err, "unable to create deviceWithoutID")
@@ -385,7 +388,7 @@ func Test_Profile(t *testing.T) {
 		defer close()
 
 		// create account, which also creates a profile
-		_, err = db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
+		_, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
 		assert.NoError(t, err, "failed to create account")
 
 		gotProfile, err := db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
