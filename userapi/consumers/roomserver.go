@@ -775,12 +775,15 @@ func (rse *ruleSetEvalContext) HasPowerLevel(senderID spec.SenderID, levelKey st
 			plEvent = res.StateEvents[i]
 		}
 	}
+	if createEvent == nil {
+		return false, fmt.Errorf("missing room create event for notification permissions")
+	}
 	verImpl := gomatrixserverlib.MustGetRoomVersion(createEvent.Version())
 	if verImpl.PrivilegedCreators() && slices.Contains(gomatrixserverlib.CreatorsFromCreateEvent(createEvent), string(senderID)) {
 		return true, nil
 	}
 	if plEvent == nil {
-		return true, nil // unsure, but this is what we did before
+		return senderID == createEvent.SenderID(), nil
 	}
 	plc, err := gomatrixserverlib.NewPowerLevelContentFromEvent(plEvent.PDU)
 	if err != nil {

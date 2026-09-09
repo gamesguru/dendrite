@@ -277,6 +277,7 @@ func (d *Database) QueryPushRules(
 		return nil, err
 	}
 
+	pushrules.AddMentionRules(&pushRules.Global, localpart, serverName)
 	return &pushRules, nil
 }
 
@@ -302,7 +303,14 @@ func (d *Database) GetAccountData(ctx context.Context, localpart string, serverN
 	rooms map[string]map[string]json.RawMessage,
 	err error,
 ) {
-	return d.AccountDatas.SelectAccountData(ctx, localpart, serverName)
+	global, rooms, err = d.AccountDatas.SelectAccountData(ctx, localpart, serverName)
+	if err != nil {
+		return
+	}
+	if data, ok := global["m.push_rules"]; ok {
+		global["m.push_rules"], err = upgradeMentionAccountData(data, localpart, serverName)
+	}
+	return
 }
 
 // GetAccountDataByType returns account data matching a given
@@ -313,9 +321,42 @@ func (d *Database) GetAccountDataByType(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string,
 ) (data json.RawMessage, err error) {
-	return d.AccountDatas.SelectAccountDataByType(
-		ctx, localpart, serverName, roomID, dataType,
-	)
+	data, err = d.AccountDatas.SelectAccountDataByType(ctx, localpart, serverName, roomID, dataType)
+	if err != nil {
+		return nil, err
+	}
+	if roomID == "" && dataType == "m.push_rules" {
+		return upgradeMentionAccountData(data, localpart, serverName)
+	}
+	return data, nil
+}
+
+// upgradeMentionAccountData upgrades existing global rules without creating account
+// data on reads or changing empty payloads and unrelated top-level fields.
+func upgradeMentionAccountData(data json.RawMessage, localpart string, serverName spec.ServerName) (json.RawMessage, error) {
+	if len(data) == 0 {
+		return data, nil
+	}
+	var accountData map[string]json.RawMessage
+	if err := json.Unmarshal(data, &accountData); err != nil {
+		return nil, err
+	}
+	var global *pushrules.RuleSet
+	if raw, ok := accountData["global"]; ok {
+		if err := json.Unmarshal(raw, &global); err != nil {
+			return nil, err
+		}
+	}
+	if global == nil {
+		return data, nil
+	}
+	pushrules.AddMentionRules(global, localpart, serverName)
+	raw, err := json.Marshal(global)
+	if err != nil {
+		return nil, err
+	}
+	accountData["global"] = raw
+	return json.Marshal(accountData)
 }
 
 // GetNewNumericLocalpart generates and returns a new unused numeric localpart.

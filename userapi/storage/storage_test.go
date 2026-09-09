@@ -858,3 +858,68 @@ func TestFallbackKeys(t *testing.T) {
 		}
 	})
 }
+
+func TestPushRulesMentionUpgrade(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		rules := pushrules.DefaultAccountRuleSets("alice", "localhost")
+		var legacy []*pushrules.Rule
+		for _, rule := range rules.Global.Override {
+			if rule.RuleID != pushrules.MRuleIsUserMention && rule.RuleID != pushrules.MRuleIsRoomMention {
+				legacy = append(legacy, rule)
+			}
+		}
+		rules.Global.Override = legacy
+		data, err := json.Marshal(rules)
+		assert.NoError(t, err)
+		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", data))
+		upgraded, err := db.QueryPushRules(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.Len(t, upgraded.Global.Override, len(legacy)+2)
+		expected, err := json.Marshal(upgraded)
+		assert.NoError(t, err)
+		byType, err := db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+		assert.NoError(t, err)
+		assert.JSONEq(t, string(expected), string(byType))
+		global, _, err := db.GetAccountData(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.JSONEq(t, string(expected), string(global["m.push_rules"]))
+		// Persist a preference on the new default and ensure subsequent reads keep it.
+		for _, rule := range upgraded.Global.Override {
+			if rule.RuleID == pushrules.MRuleIsUserMention {
+				rule.Enabled = false
+			}
+		}
+		data, err = json.Marshal(upgraded)
+		assert.NoError(t, err)
+		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", data))
+		again, err := db.QueryPushRules(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.Equal(t, upgraded, again)
+	})
+}
+
+func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		data, err := db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+		assert.NoError(t, err)
+		assert.Empty(t, data)
+		global, _, err := db.GetAccountData(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		_, exists := global["m.push_rules"]
+		assert.False(t, exists, "reading absent push rules must not create account data")
+
+		for _, payload := range []string{`{}`, `null`, `{"global":null}`, `{"custom":true}`} {
+			assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(payload)))
+			data, err = db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+			assert.NoError(t, err)
+			assert.Equal(t, payload, string(data))
+			global, _, err = db.GetAccountData(ctx, "alice", "localhost")
+			assert.NoError(t, err)
+			assert.Equal(t, payload, string(global["m.push_rules"]))
+		}
+	})
+}

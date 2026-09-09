@@ -1,11 +1,15 @@
 package pushrules
 
+import "encoding/json"
+
 func defaultOverrideRules(userID string) []*Rule {
 	return []*Rule{
 		&mRuleMasterDefinition,
 		&mRuleSuppressNoticesDefinition,
 		mRuleInviteForMeDefinition(userID),
 		&mRuleMemberEventDefinition,
+		mRuleIsUserMentionDefinition(userID),
+		mRuleIsRoomMentionDefinition(),
 		&mRuleContainsDisplayNameDefinition,
 		&mRuleRoomNotifDefinition,
 		&mRuleTombstoneDefinition,
@@ -15,6 +19,8 @@ func defaultOverrideRules(userID string) []*Rule {
 }
 
 const (
+	MRuleIsUserMention       = ".m.rule.is_user_mention"
+	MRuleIsRoomMention       = ".m.rule.is_room_mention"
 	MRuleMaster              = ".m.rule.master"
 	MRuleSuppressNotices     = ".m.rule.suppress_notices"
 	MRuleInviteForMe         = ".m.rule.invite_for_me"
@@ -187,5 +193,25 @@ func mRuleInviteForMeDefinition(userID string) *Rule {
 				Value: "default",
 			},
 		},
+	}
+}
+
+func mRuleIsUserMentionDefinition(userID string) *Rule {
+	value, err := json.Marshal(userID)
+	if err != nil {
+		panic(err)
+	}
+	return &Rule{
+		RuleID: MRuleIsUserMention, Default: true, Enabled: true,
+		Conditions: []*Condition{{Kind: EventPropertyContainsCondition, Key: `content.m\.mentions.user_ids`, Value: value}},
+		Actions:    []*Action{{Kind: NotifyAction}, {Kind: SetTweakAction, Tweak: SoundTweak, Value: "default"}, {Kind: SetTweakAction, Tweak: HighlightTweak}},
+	}
+}
+
+func mRuleIsRoomMentionDefinition() *Rule {
+	return &Rule{
+		RuleID: MRuleIsRoomMention, Default: true, Enabled: true,
+		Conditions: []*Condition{{Kind: EventPropertyIsCondition, Key: `content.m\.mentions.room`, Value: json.RawMessage(`true`)}, {Kind: SenderNotificationPermissionCondition, Key: "room"}},
+		Actions:    []*Action{{Kind: NotifyAction}, {Kind: SetTweakAction, Tweak: HighlightTweak}},
 	}
 }
