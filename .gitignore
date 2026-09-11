@@ -80,3 +80,6 @@ zendrite
 !.forgejo/**/zendrite.yaml
 CLAUDE.md
 AGENTS.md
+
+# Local documentation
+/docs/
