@@ -435,7 +435,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 	// Update presence and last seen (reuse existing v3 logic)
 	rp.updateLastSeen(req, device)
-	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID) //nolint:contextcheck
+	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID)
 
 	// Main sync loop - similar to v3 sync
 	// Loop until we have updates to return or timeout expires

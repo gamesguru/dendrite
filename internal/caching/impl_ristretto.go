@@ -72,6 +72,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 		})
 	}
 	return &Caches{
+		close: cache.Close,
 		RoomVersions: &RistrettoCachePartition[string, gomatrixserverlib.RoomVersion]{ // room ID -> room version
 			cache:  cache,
 			Prefix: roomVersionsCache,

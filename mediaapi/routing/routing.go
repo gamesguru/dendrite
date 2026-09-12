@@ -7,6 +7,7 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -48,9 +49,9 @@ func Setup(
 	userAPI userapi.MediaUserAPI,
 	client *fclient.Client,
 	federationClient fclient.FederationClient,
-	keyRing gomatrixserverlib.JSONVerifier,
+	keyRing gomatrixserverlib.JSONVerifier, contexts ...context.Context,
 ) {
-	rateLimits := httputil.NewRateLimits(&cfg.ClientAPI.RateLimiting)
+	rateLimits := httputil.NewRateLimits(&cfg.ClientAPI.RateLimiting, contexts...)
 
 	v3mux := routers.Media.PathPrefix("/{apiversion:(?:r0|v1|v3)}/").Subrouter()
 	v1mux := routers.Client.PathPrefix("/v1/media/").Subrouter()

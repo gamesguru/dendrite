@@ -473,6 +473,7 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	unreachableServer := spec.ServerName("notlocalhost")
 
 	updater := DeviceListUpdater{
+		process:     process.NewProcessContextWithParent(t.Context()),
 		workerChans: make([]chan spec.ServerName, 1),
 		isBlacklistedOrBackingOffFn: func(s spec.ServerName) (*statistics.ServerStatistics, error) {
 			if s == unreachableServer {

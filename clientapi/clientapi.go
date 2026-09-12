@@ -58,6 +58,6 @@ func AddPublicRoutes(
 		cfg, rsAPI, asAPI,
 		userAPI, userDirectoryProvider, federation,
 		syncProducer, transactionsCache, fsAPI,
-		extRoomsProvider, caches, natsClient, enableMetrics,
+		extRoomsProvider, caches, natsClient, enableMetrics, processContext.Context(),
 	)
 }

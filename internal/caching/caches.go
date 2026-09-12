@@ -17,6 +17,7 @@ import (
 // different implementations as long as they satisfy the Cache
 // interface.
 type Caches struct {
+	close                   func()
 	RoomVersions            Cache[string, gomatrixserverlib.RoomVersion]           // room ID -> room version
 	ServerKeys              Cache[string, gomatrixserverlib.PublicKeyLookupResult] // server name -> server keys
 	RoomServerRoomNIDs      Cache[string, types.RoomNID]                           // room ID -> room NID
@@ -67,4 +68,11 @@ type keyable interface {
 
 type costable interface {
 	CacheCost() int
+}
+
+// Close releases the cache after all application users have stopped.
+func (c *Caches) Close() {
+	if c.close != nil {
+		c.close()
+	}
 }

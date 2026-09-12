@@ -84,14 +84,7 @@ func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, 
 		return nil, err
 	}
 	if processCtx != nil {
-		// Register the component before starting the goroutine to avoid
-		// a race between ComponentStarted() and WaitForComponentsToFinish().
-		processCtx.ComponentStarted()
-		go func() {
-			<-processCtx.WaitForShutdown()
-			_ = fts.Close()
-			processCtx.ComponentFinished()
-		}()
+		processCtx.Defer(func() { _ = fts.Close() })
 	}
 	return fts, nil
 }

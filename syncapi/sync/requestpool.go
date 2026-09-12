@@ -26,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -36,6 +37,7 @@ import (
 
 // RequestPool manages HTTP long-poll connections for /sync.
 type RequestPool struct {
+	ctx      context.Context
 	db       storage.Database
 	cfg      *config.SyncAPI
 	userAPI  userapi.SyncUserAPI
@@ -68,12 +70,25 @@ func NewRequestPool(
 	streams *streams.Streams, notifier *notifier.Notifier,
 	producer PresencePublisher, consumer PresenceConsumer, enableMetrics bool,
 ) *RequestPool {
+	return NewRequestPoolWithContext(context.Background(), db, cfg, userAPI, rsAPI, streams, notifier, producer, consumer, enableMetrics)
+}
+
+// NewRequestPoolWithContext binds sync maintenance to the application lifetime.
+func NewRequestPoolWithContext(
+	ctx context.Context,
+	db storage.Database, cfg *config.SyncAPI,
+	userAPI userapi.SyncUserAPI,
+	rsAPI roomserverAPI.SyncRoomserverAPI,
+	streams *streams.Streams, notifier *notifier.Notifier,
+	producer PresencePublisher, consumer PresenceConsumer, enableMetrics bool,
+) *RequestPool {
 	if enableMetrics {
 		prometheus.MustRegister(
 			activeSyncRequests, waitingSyncRequests,
 		)
 	}
 	rp := &RequestPool{
+		ctx:           ctx,
 		db:            db,
 		cfg:           cfg,
 		userAPI:       userAPI,
@@ -86,8 +101,8 @@ func NewRequestPool(
 		consumer:      consumer,
 		v4Connections: &sync.Map{},
 	}
-	go rp.cleanLastSeen()
-	go rp.cleanPresence(db, time.Minute*5) //nolint:mnd
+	process.Go(ctx, rp.cleanLastSeen)
+	process.Go(ctx, func() { rp.cleanPresence(db, time.Minute*5) }) //nolint:mnd // Existing presence cleanup interval.
 	return rp
 }
 
@@ -97,7 +112,9 @@ func (rp *RequestPool) cleanLastSeen() {
 			rp.lastseen.Delete(key)
 			return true
 		})
-		time.Sleep(time.Minute)
+		if !process.Sleep(rp.ctx, time.Minute) {
+			return
+		}
 	}
 }
 
@@ -117,7 +134,9 @@ func (rp *RequestPool) cleanPresence(db storage.Presence, cleanupTime time.Durat
 			}
 			return true
 		})
-		time.Sleep(cleanupTime)
+		if !process.Sleep(rp.ctx, cleanupTime) {
+			return
+		}
 	}
 }
 
@@ -193,14 +212,17 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 
 		if checkAgain {
 			// after a timeout, check presence again to make sure it gets set as offline sooner or later
-			time.AfterFunc(presenceTimeout, func() {
+			process.Go(rp.ctx, func() {
+				if !process.Sleep(rp.ctx, presenceTimeout) {
+					return
+				}
 				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false)
 			})
 		}
 	}
 
 	// ensure we also send the current status_msg to federated servers and not nil
-	dbPresence, err := db.GetPresences(context.Background(), []string{userID})
+	dbPresence, err := db.GetPresences(rp.ctx, []string{userID})
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return
 	}
@@ -227,7 +249,7 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// now synchronously update our view of the world. It's critical we do this before calculating
 	// the /sync response else we may not return presence: online immediately.
 	rp.consumer.EmitPresence(
-		context.Background(), userID, presenceToSet, newPresence.ClientFields.StatusMsg,
+		rp.ctx, userID, presenceToSet, newPresence.ClientFields.StatusMsg,
 		spec.AsTimestamp(time.Now()), true,
 	)
 }

@@ -127,7 +127,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	if s.cfg.Matrix.ReportStats.Enabled {
-		go s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String())
+		process.Go(ctx, func() { s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String()) })
 	}
 
 	metadata, err := msg.Metadata()
@@ -655,11 +655,11 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 	//
 	// TODO: think about bounding this to one per user, and what
 	// ordering guarantees we must provide.
-	go func() { //nolint:contextcheck
+	process.Go(process.Lifetime(ctx), func() {
 		// This background processing cannot be tied to a request.
 		// We're generous with the "global" timeout, each HTTP request gets its own context with
 		// at most 30 seconds below.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) //nolint:mnd
+		ctx, cancel := context.WithTimeout(process.Lifetime(ctx), 5*time.Minute) //nolint:mnd
 		defer cancel()
 
 		var rejected []*pushgateway.Device
@@ -695,7 +695,7 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		if len(rejected) > 0 {
 			s.deleteRejectedPushers(ctx, rejected, mem.Localpart, mem.Domain)
 		}
-	}()
+	})
 
 	return nil
 }

@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -308,7 +308,7 @@ func AdminPurgeRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) 
 		return util.ErrorResponse(err)
 	}
 
-	if err = rsAPI.PerformAdminPurgeRoom(context.Background(), vars["roomID"]); err != nil {
+	if err = rsAPI.PerformAdminPurgeRoom(req.Context(), vars["roomID"]); err != nil {
 		return util.ErrorResponse(err)
 	}
 
@@ -472,8 +472,8 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 	// so we deliberately do not impose a timeout: a genuinely stuck download is
 	// cleared by a server restart, whereas a premature cancellation would leave
 	// the room only partially repaired.
-	go func() {
-		ctx := context.Background()
+	ctx := process.Lifetime(req.Context())
+	process.Go(ctx, func() {
 		if err := rsAPI.PerformAdminDownloadState(ctx, roomID, device.UserID, spec.ServerName(serverName)); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"userID":     device.UserID,
@@ -486,7 +486,7 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 				"roomID":     roomID,
 			}).Info("successfully downloaded state")
 		}
-	}()
+	})
 	return util.JSONResponse{
 		Code: 200, //nolint:mnd
 		JSON: struct {

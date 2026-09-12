@@ -26,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type Admin struct {
@@ -241,29 +242,28 @@ func (r *Admin) PerformAdminPurgeRoom(
 // roomID. The flag check is the caller's responsibility — see
 // ScheduleAutoPurgeIfEmpty and the startup sweep.
 //
-// The ctx parameter exists for the api.RoomserverInternalAPI interface;
-// the spawned goroutine intentionally uses context.Background() so the
-// purge cannot be canceled by a short-lived caller (e.g. a NATS message
-// handler whose context is canceled when the handler returns).
+// Purging outlives the caller request but remains bound to the application lifetime.
 func (r *Admin) AutoPurgeRoom(ctx context.Context, roomID, reason string) {
 	_, owner := r.PurgeTracker.BeginPurge(roomID)
 	if !owner {
 		return
 	}
-	go func() { //nolint:contextcheck
+	if !process.Go(process.Lifetime(ctx), func() {
 		defer r.PurgeTracker.FinishPurge(roomID)
 		// Detach from the caller's context: the caller may be a short-lived
 		// handler (e.g. NATS message dispatch) whose ctx is canceled as soon
 		// as the handler returns. The purge itself is an autonomous, in-flight
-		// operation and must run to completion.
-		ctx := context.Background()
+		// operation that remains bound to the application lifetime.
+		ctx := process.Lifetime(ctx)
 		fields := logrus.Fields{"room_id": roomID, "reason": reason}
 		if err := r.PerformAdminPurgeRoom(ctx, roomID); err != nil {
 			logrus.WithError(err).WithFields(fields).Warn("Auto-purge of empty room failed")
 			return
 		}
 		logrus.WithFields(fields).Info("Auto-purged empty room")
-	}()
+	}) {
+		r.PurgeTracker.FinishPurge(roomID)
+	}
 }
 
 func (r *Admin) PerformAdminDownloadState(

@@ -6,12 +6,15 @@
 package transactions
 
 import (
+	"context"
 	"net/url"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/matrix-org/util"
+
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // DefaultCleanupPeriod represents the default time duration after which cacheCleanService runs.
@@ -37,19 +40,23 @@ type Cache struct {
 }
 
 // New is a wrapper which calls NewWithCleanupPeriod with DefaultCleanupPeriod as argument.
-func New() *Cache {
-	return NewWithCleanupPeriod(DefaultCleanupPeriod)
+func New(contexts ...context.Context) *Cache {
+	return NewWithCleanupPeriod(DefaultCleanupPeriod, contexts...)
 }
 
 // NewWithCleanupPeriod creates a new Cache object, starts cacheCleanService.
 // Takes cleanupPeriod as argument.
 // Returns a reference to newly created Cache.
-func NewWithCleanupPeriod(cleanupPeriod time.Duration) *Cache {
+func NewWithCleanupPeriod(cleanupPeriod time.Duration, contexts ...context.Context) *Cache {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	t := Cache{txnsMaps: [2]txnsMap{make(txnsMap), make(txnsMap)}}
 	t.cleanupPeriod = cleanupPeriod
 
 	// Start clean service as the Cache is created
-	go cacheCleanService(&t)
+	process.Go(ctx, func() { cacheCleanService(ctx, &t) })
 	return &t
 }
 
@@ -79,9 +86,8 @@ func (t *Cache) AddTransaction(accessToken, txnID string, u *url.URL, res *util.
 // cacheCleanService is responsible for cleaning up entries after cleanupPeriod.
 // It guarantees that an entry will be present in cache for at least cleanupPeriod & at most 2 * cleanupPeriod.
 // This cycles the txnMaps forward, i.e. back map is assigned the front and front is assigned an empty map.
-func cacheCleanService(t *Cache) {
-	ticker := time.NewTicker(t.cleanupPeriod).C
-	for range ticker {
+func cacheCleanService(ctx context.Context, t *Cache) {
+	for process.Sleep(ctx, t.cleanupPeriod) {
 		t.Lock()
 		t.txnsMaps[1] = t.txnsMaps[0]
 		t.txnsMaps[0] = make(txnsMap)

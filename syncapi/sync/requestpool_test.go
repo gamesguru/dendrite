@@ -113,6 +113,7 @@ func TestRequestPool_updatePresence(t *testing.T) {
 		*/
 	}
 	rp := &RequestPool{
+		ctx:      t.Context(),
 		presence: &syncMap,
 		producer: publisher,
 		consumer: consumer,

@@ -76,8 +76,12 @@ func Setup(
 	federationSender federationAPI.ClientFederationAPI,
 	extRoomsProvider api.ExtraPublicRoomsProvider,
 	caches *caching.Caches,
-	natsClient *nats.Conn, enableMetrics bool,
+	natsClient *nats.Conn, enableMetrics bool, contexts ...context.Context,
 ) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	cfg := &zendriteCfg.ClientAPI
 	mscCfg := &zendriteCfg.MSCs
 	publicAPIMux := routers.Client
@@ -91,7 +95,7 @@ func Setup(
 
 	oidcEnabled := mscCfg.Enabled("msc3861")
 
-	rateLimits := httputil.NewRateLimits(&cfg.RateLimiting)
+	rateLimits := httputil.NewRateLimits(&cfg.RateLimiting, ctx)
 	userInteractiveAuth := auth.NewUserInteractive(userAPI, cfg)
 
 	unstableFeatures := map[string]bool{
@@ -190,7 +194,7 @@ func Setup(
 
 	if cfg.RegistrationSharedSecret != "" {
 		logrus.Info("Enabling shared secret registration at /_synapse/admin/v1/register")
-		sr := NewSharedSecretRegistration(cfg.RegistrationSharedSecret)
+		sr := NewSharedSecretRegistration(cfg.RegistrationSharedSecret, ctx)
 		synapseAdminRouter.Handle("/admin/v1/register",
 			httputil.MakeExternalAPI("shared_secret_registration", func(req *http.Request) util.JSONResponse {
 				if req.Method == http.MethodGet {
@@ -301,7 +305,7 @@ func Setup(
 	// server notifications
 	if cfg.Matrix.ServerNotices.Enabled {
 		logrus.Info("Enabling server notices at /_synapse/admin/v1/send_server_notice")
-		serverNotificationSender, err := getSenderDevice(context.Background(), rsAPI, userAPI, cfg)
+		serverNotificationSender, err := getSenderDevice(ctx, rsAPI, userAPI, cfg)
 		if err != nil {
 			logrus.WithError(err).Fatal("unable to get account for sending server notices")
 		}
@@ -852,7 +856,7 @@ func Setup(
 	// Stub endpoints required by Element
 
 	if oidcEnabled {
-		ssoHandler := newSSOCompatHandler(&mscCfg.MSC3861, userAPI, http.DefaultClient, rateLimits)
+		ssoHandler := newSSOCompatHandler(&mscCfg.MSC3861, userAPI, http.DefaultClient, rateLimits, ctx)
 
 		v3mux.Handle("/login",
 			ssoHandler.serveLogin(),

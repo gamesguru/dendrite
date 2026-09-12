@@ -181,7 +181,7 @@ func (oq *destinationQueue) wakeQueueIfNeeded() {
 	// If we aren't running then wake up the queue.
 	if !oq.running.Load() {
 		// Start the queue.
-		go oq.backgroundSend()
+		oq.process.Go(oq.backgroundSend)
 	}
 }
 

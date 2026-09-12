@@ -27,6 +27,7 @@ import (
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -301,8 +302,8 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 	}
 
-	go func() { //nolint:contextcheck
-		localPath, cleanup, err := fileStore.LocalPath(context.Background(), r.MediaMetadata.Base64Hash)
+	process.Go(process.Lifetime(ctx), func() {
+		localPath, cleanup, err := fileStore.LocalPath(process.Lifetime(ctx), r.MediaMetadata.Base64Hash)
 		if err != nil {
 			r.Logger.WithError(err).Error("unable to get local path for thumbnail generation")
 			return
@@ -330,7 +331,7 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 
 		busy, err := thumbnailer.GenerateThumbnails(
-			context.Background(), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
+			process.Lifetime(ctx), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
 			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
 		)
 		if err != nil {
@@ -339,7 +340,6 @@ func (r *uploadRequest) storeFileAndMetadata(
 		if busy {
 			r.Logger.Warn("Maximum number of active thumbnail generators reached. Skipping pre-generation.")
 		}
-	}()
-
+	})
 	return nil
 }

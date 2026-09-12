@@ -49,7 +49,7 @@ func NewInternalAPI(
 	// events to be sent out.
 	for _, appservice := range cfg.Derived.ApplicationServices {
 		// Create bot account for this AS if it doesn't already exist
-		if err := generateAppServiceAccount(userAPI, appservice, cfg.Global.ServerName); err != nil {
+		if err := generateAppServiceAccount(processContext.Context(), userAPI, appservice, cfg.Global.ServerName); err != nil {
 			logrus.WithFields(logrus.Fields{
 				"appservice": appservice.ID,
 			}).WithError(err).Panicf("failed to generate bot account for appservice")
@@ -74,12 +74,13 @@ func NewInternalAPI(
 // `sender_localpart` field of each application service if it doesn't
 // exist already.
 func generateAppServiceAccount(
+	ctx context.Context,
 	userAPI userapi.AppserviceUserAPI,
 	as config.ApplicationService,
 	serverName spec.ServerName,
 ) error {
 	var accRes userapi.PerformAccountCreationResponse
-	err := userAPI.PerformAccountCreation(context.Background(), &userapi.PerformAccountCreationRequest{
+	err := userAPI.PerformAccountCreation(ctx, &userapi.PerformAccountCreationRequest{
 		AccountType:  userapi.AccountTypeAppService,
 		Localpart:    as.SenderLocalpart,
 		ServerName:   serverName,
@@ -90,7 +91,7 @@ func generateAppServiceAccount(
 		return err
 	}
 	var devRes userapi.PerformDeviceCreationResponse
-	err = userAPI.PerformDeviceCreation(context.Background(), &userapi.PerformDeviceCreationRequest{
+	err = userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
 		Localpart:          as.SenderLocalpart,
 		ServerName:         serverName,
 		AccessToken:        as.ASToken,

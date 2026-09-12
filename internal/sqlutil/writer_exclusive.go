@@ -3,75 +3,35 @@ package sqlutil
 import (
 	"database/sql"
 	"errors"
-	"sync/atomic"
+	"sync"
 )
 
-// ExclusiveWriter implements sqlutil.Writer.
-// ExclusiveWriter allows queuing database writes so that you don't
-// contend on database locks in, e.g. SQLite. Only one task will run
-// at a time on a given ExclusiveWriter.
+// ExclusiveWriter serializes database writes on the calling goroutines.
+// This keeps writes inside their caller's application lifetime instead of
+// leaving a permanently running queue goroutine behind after database closure.
 type ExclusiveWriter struct {
-	running atomic.Bool
-	todo    chan transactionWriterTask
+	mu          sync.Mutex
+	initialized bool
 }
 
 func NewExclusiveWriter() Writer {
-	return &ExclusiveWriter{
-		todo: make(chan transactionWriterTask),
-	}
+	return &ExclusiveWriter{initialized: true}
 }
 
-// transactionWriterTask represents a specific task.
-type transactionWriterTask struct {
-	db   *sql.DB
-	txn  *sql.Tx
-	f    func(txn *sql.Tx) error
-	wait chan error
-}
-
-// Do queues a task to be run by a TransactionWriter. The function
-// provided will be ran within a transaction as supplied by the
-// txn parameter if one is supplied, and if not, will take out a
-// new transaction from the database supplied in the database
-// parameter. Either way, this will block until the task is done.
+// Do runs one task at a time, optionally within the supplied or a new transaction.
+// Callers must not recursively invoke Do on the same writer.
 func (w *ExclusiveWriter) Do(db *sql.DB, txn *sql.Tx, f func(txn *sql.Tx) error) error {
-	if w.todo == nil {
+	if !w.initialized {
 		return errors.New("not initialized")
 	}
-	if !w.running.Load() {
-		go w.run()
-	}
-	task := transactionWriterTask{
-		db:   db,
-		txn:  txn,
-		f:    f,
-		wait: make(chan error, 1),
-	}
-	w.todo <- task
-	return <-task.wait
-}
-
-// run processes the tasks for a given transaction writer. Only one
-// of these goroutines will run at a time. A transaction will be
-// opened using the database object from the task and then this will
-// be passed as a parameter to the task function.
-func (w *ExclusiveWriter) run() {
-	if !w.running.CompareAndSwap(false, true) {
-		return
-	}
-
-	defer w.running.Store(false)
-	for task := range w.todo {
-		switch {
-		case task.db != nil && task.txn != nil:
-			task.wait <- task.f(task.txn)
-		case task.db != nil && task.txn == nil:
-			task.wait <- WithTransaction(task.db, func(txn *sql.Tx) error {
-				return task.f(txn)
-			})
-		default:
-			task.wait <- task.f(nil)
-		}
-		close(task.wait)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch {
+	case db != nil && txn != nil:
+		return f(txn)
+	case db != nil && txn == nil:
+		return WithTransaction(db, f)
+	default:
+		return f(nil)
 	}
 }

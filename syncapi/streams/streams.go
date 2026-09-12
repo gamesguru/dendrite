@@ -25,6 +25,7 @@ type Streams struct {
 }
 
 func NewSyncStreamProviders(
+	ctx context.Context,
 	d storage.Database, userAPI userapi.SyncUserAPI,
 	rsAPI rsapi.SyncRoomserverAPI,
 	eduCache *caching.EDUCache, lazyLoadCache caching.LazyLoadCache, notifier *notifier.Notifier,
@@ -68,7 +69,6 @@ func NewSyncStreamProviders(
 		},
 	}
 
-	ctx := context.TODO()
 	snapshot, err := d.NewDatabaseSnapshot(ctx)
 	if err != nil {
 		panic(err)

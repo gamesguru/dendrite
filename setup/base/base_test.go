@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,4 +129,105 @@ func TestLandingPage_UnixSocket(t *testing.T) {
 
 	// Using .String() for user friendly output
 	assert.Equal(t, expectedRes.String(), buf.String(), "response mismatch")
+}
+
+func TestStartHTTPBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	address, err := config.HTTPAddress("http://" + listener.Addr().String())
+	require.NoError(t, err)
+	p := process.NewProcessContextWithParent(t.Context())
+	cfg := config.Zendrite{}
+	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+	err = basepkg.StartHTTP(p, &cfg, httputil.NewRouters(), address, nil, nil)
+	require.Error(t, err, "bind failure must be visible to activation")
+	p.ShutdownZendrite()
+	p.WaitForComponentsToFinish()
+}
+
+func TestHTTPShutdownJoinsRequestsBeforeCleanup(t *testing.T) {
+	p := process.NewProcessContextWithParent(t.Context())
+	cfg := config.Zendrite{}
+	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+	routers := httputil.NewRouters()
+	entered, canceled, release, handlerFinished := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	routers.Client.HandleFunc("/lifecycle-test", func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+		close(canceled)
+		<-release
+		close(handlerFinished)
+	}).Methods(http.MethodGet)
+	p.Defer(func() {
+		select {
+		case <-handlerFinished:
+		default:
+			t.Error("dependencies closed before HTTP request finished")
+		}
+	})
+	probe := httptest.NewServer(nil)
+	probe.Close()
+	address, err := config.HTTPAddress(probe.URL)
+	require.NoError(t, err)
+	require.NoError(t, basepkg.StartHTTP(p, &cfg, routers, address, nil, nil))
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, err := http.Get(probe.URL + "/_matrix/client/lifecycle-test")
+		if err == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not enter")
+	}
+	p.ShutdownZendrite()
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request context not canceled")
+	}
+	close(release)
+	p.WaitForComponentsToFinish()
+	<-requestDone
+}
+
+func TestHTTPWaitsForRecoveryReadiness(t *testing.T) {
+	p := process.NewProcessContextWithParent(t.Context())
+	defer func() { p.ShutdownZendrite(); p.WaitForComponentsToFinish() }()
+	cfg := config.Zendrite{}
+	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
+	routers := httputil.NewRouters()
+	var ready atomic.Bool
+	var calls atomic.Int32
+	routers.Client.HandleFunc("/recovery-test", func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}).Methods(http.MethodGet)
+	probe := httptest.NewServer(nil)
+	probe.Close()
+	address, err := config.HTTPAddress(probe.URL)
+	require.NoError(t, err)
+	require.NoError(t, basepkg.StartHTTP(p, &cfg, routers, address, nil, nil, ready.Load))
+	for _, tc := range []struct {
+		name   string
+		ready  bool
+		status int
+		calls  int32
+	}{
+		{"recovering", false, http.StatusServiceUnavailable, 0},
+		{"active", true, http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ready.Store(tc.ready)
+			response, err := http.Get(probe.URL + "/_matrix/client/recovery-test")
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, tc.status, response.StatusCode)
+			require.Equal(t, tc.calls, calls.Load())
+		})
+	}
 }

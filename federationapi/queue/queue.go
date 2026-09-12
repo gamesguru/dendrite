@@ -74,7 +74,7 @@ var destinationQueueBackingOff = prometheus.NewGauge(
 // NewOutgoingQueues makes a new OutgoingQueues.
 func NewOutgoingQueues(
 	db storage.Database,
-	process *process.ProcessContext,
+	processContext *process.ProcessContext,
 	disabled bool,
 	origin spec.ServerName,
 	client fclient.FederationClient,
@@ -83,7 +83,7 @@ func NewOutgoingQueues(
 ) *OutgoingQueues {
 	queues := &OutgoingQueues{
 		disabled:   disabled,
-		process:    process,
+		process:    processContext,
 		db:         db,
 		origin:     origin,
 		client:     client,
@@ -97,14 +97,14 @@ func NewOutgoingQueues(
 	// Look up which servers we have pending items for and then rehydrate those queues.
 	if !disabled {
 		serverNames := map[spec.ServerName]struct{}{}
-		if names, err := db.GetPendingPDUServerNames(process.Context()); err == nil {
+		if names, err := db.GetPendingPDUServerNames(processContext.Context()); err == nil {
 			for _, serverName := range names {
 				serverNames[serverName] = struct{}{}
 			}
 		} else {
 			log.WithError(err).Error("Failed to get PDU server names for destination queue hydration")
 		}
-		if names, err := db.GetPendingEDUServerNames(process.Context()); err == nil {
+		if names, err := db.GetPendingEDUServerNames(processContext.Context()); err == nil {
 			for _, serverName := range names {
 				serverNames[serverName] = struct{}{}
 			}
@@ -115,12 +115,15 @@ func NewOutgoingQueues(
 		if max := len(serverNames); max > 120 {    //nolint:mnd
 			step = (time.Second * 120) / time.Duration(max) //nolint:mnd
 		}
+		pending := make([]*destinationQueue, 0, len(serverNames))
 		for serverName := range serverNames {
 			if queue := queues.getQueue(serverName); queue != nil {
-				time.AfterFunc(offset, queue.wakeQueueIfNeeded)
-				offset += step
+				pending = append(pending, queue)
 			}
 		}
+		process.Stagger(processContext.Context(), pending, offset, step, func(queue *destinationQueue) {
+			queue.wakeQueueIfNeeded()
+		})
 	}
 	return queues
 }

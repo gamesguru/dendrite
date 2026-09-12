@@ -136,9 +136,9 @@ func (w *worker) start() {
 		return
 	}
 
-	w.ctx, w.cancel = context.WithCancelCause(context.Background())
+	w.ctx, w.cancel = context.WithCancelCause(w.r.ProcessContext.Context())
 
-	go func() {
+	if !w.r.ProcessContext.Go(func() {
 		logrus.Debugf("worker for room %q started", w.roomID)
 		for {
 			select {
@@ -153,7 +153,11 @@ func (w *worker) start() {
 				w._next()
 			}
 		}
-	}()
+	}) {
+		w.cancel(context.Canceled)
+		w.ctx = nil
+		w.cancel = nil
+	}
 }
 
 func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
@@ -286,10 +290,12 @@ func (r *Inputer) Start() error {
 	_, err := r.JetStream.Subscribe(
 		"", // This is blank because we specified it in BindStream.
 		func(m *nats.Msg) {
-			roomID := m.Header.Get(jetstream.RoomID)
-			meta, _ := m.Metadata()
-			r.startWorkerForRoom(roomID, meta.Sequence.Stream)
-			_ = m.Ack()
+			r.ProcessContext.Do(func() {
+				roomID := m.Header.Get(jetstream.RoomID)
+				meta, _ := m.Metadata()
+				r.startWorkerForRoom(roomID, meta.Sequence.Stream)
+				_ = m.Ack()
+			})
 		},
 		nats.HeadersOnly(),
 		nats.DeliverAll(),

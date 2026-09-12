@@ -48,6 +48,9 @@ func NewInternalAPI(
 ) *internal.UserInternalAPI {
 	js, _ := natsInstance.Prepare(processContext, &zendriteCfg.Global.JetStream)
 	appServices := zendriteCfg.Derived.ApplicationServices
+	if zendriteCfg.MSCs.Enabled("msc3861") {
+		internal.StartIntrospectionCacheCleanup(processContext.Context())
+	}
 
 	pgClient := pushgateway.NewHTTPClient(zendriteCfg.UserAPI.PushGatewayDisableTLSValidation)
 
@@ -119,12 +122,9 @@ func NewInternalAPI(
 		logrus.WithError(err).Error("failed to cleanup stale device lists")
 	}
 
-	go func() {
-		if err := updater.Start(); err != nil {
-			logrus.WithError(err).Panicf("failed to start device list updater")
-		}
-	}()
-
+	if err := updater.Start(); err != nil {
+		logrus.WithError(err).Panicf("failed to start device list updater")
+	}
 	dlConsumer := consumers.NewDeviceListUpdateConsumer(
 		processContext, &zendriteCfg.UserAPI, js, updater,
 	)
@@ -153,18 +153,16 @@ func NewInternalAPI(
 		logrus.WithError(err).Panic("failed to start user API streamed event consumer")
 	}
 
-	var cleanOldNotifs func()
-	cleanOldNotifs = func() {
+	cleanOldNotifs := func() {
 		logrus.Infof("Cleaning old notifications")
 		if err := db.DeleteOldNotifications(processContext.Context()); err != nil {
 			logrus.WithError(err).Error("Failed to clean old notifications")
 		}
-		time.AfterFunc(time.Hour, cleanOldNotifs)
 	}
-	time.AfterFunc(time.Minute, cleanOldNotifs)
+	process.Repeat(processContext.Context(), time.Minute, time.Hour, cleanOldNotifs)
 
 	if zendriteCfg.Global.ReportStats.Enabled {
-		go util.StartPhoneHomeCollector(time.Now(), zendriteCfg, db)
+		util.StartPhoneHomeCollector(processContext.Context(), time.Now(), zendriteCfg, db)
 	}
 
 	return userAPI

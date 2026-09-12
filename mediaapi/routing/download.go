@@ -33,6 +33,7 @@ import (
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 const mediaIDCharacters = "A-Za-z0-9_=-"
@@ -790,9 +791,9 @@ func (r *downloadRequest) fetchRemoteFileAndStoreMetadata(
 		return errors.New("failed to store file metadata in DB")
 	}
 
-	go func() { //nolint:contextcheck
+	process.Go(process.Lifetime(ctx), func() {
 		busy, err := thumbnailer.GenerateThumbnails(
-			context.Background(), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
+			process.Lifetime(ctx), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
 			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
 		)
 		if err != nil {
@@ -801,8 +802,7 @@ func (r *downloadRequest) fetchRemoteFileAndStoreMetadata(
 		if busy {
 			r.Logger.Warn("Maximum number of active thumbnail generators reached. Skipping pre-generation.")
 		}
-	}()
-
+	})
 	r.Logger.WithFields(log.Fields{
 		"UploadName":    r.MediaMetadata.UploadName,
 		"Base64Hash":    r.MediaMetadata.Base64Hash,

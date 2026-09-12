@@ -28,6 +28,7 @@ import (
 
 	zinternal "codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -116,9 +117,13 @@ func getIntrospectionCache() *ttlcache.Cache[string, *cachedIntrospection] {
 			ttlcache.WithTTL[string, *cachedIntrospection](introspectionCacheTTL),
 			ttlcache.WithCapacity[string, *cachedIntrospection](introspectionCacheMaxSize),
 		)
-		go introspectionCache.Start()
 	})
 	return introspectionCache
+}
+
+// StartIntrospectionCacheCleanup expires cached tokens within the application lifetime.
+func StartIntrospectionCacheCleanup(ctx context.Context) {
+	process.Repeat(ctx, introspectionCacheTTL, introspectionCacheTTL, getIntrospectionCache().DeleteExpired)
 }
 
 // hashToken produces a SHA-256 hex hash of a token for use as a cache key.

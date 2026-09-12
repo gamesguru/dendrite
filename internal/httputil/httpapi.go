@@ -153,9 +153,9 @@ func MakeOptionalAuthAPI(
 		if err == nil && device != nil {
 			// add the user ID to the logger
 			logger = logger.WithField("user_id", device.UserID)
+			hub := sentry.GetHubFromContext(req.Context())
 			req = req.WithContext(util.ContextWithLogger(req.Context(), logger))
 			// add the user to Sentry, if enabled
-			hub := sentry.GetHubFromContext(req.Context())
 			if hub != nil {
 				hub = hub.Clone()
 				hub.Scope().SetUser(sentry.User{
@@ -264,7 +264,7 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 		}
 
 		if opts.WithAuth {
-			logger := util.GetLogger(req.Context())
+			logger := util.GetLogger(ctx)
 			_, jsonErr := auth.VerifyUserFromRequest(req, userAPI)
 			if jsonErr != nil {
 				w.WriteHeader(jsonErr.Code)

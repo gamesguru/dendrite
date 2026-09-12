@@ -75,64 +75,66 @@ func NewOutputClientDataConsumer(
 // Start consuming from room servers.
 func (s *OutputClientDataConsumer) Start() error {
 	_, err := s.nats.Subscribe(s.topicReIndex, func(msg *nats.Msg) {
-		if err := msg.Ack(); err != nil {
-			return
-		}
-		if !s.cfg.Fulltext.Enabled {
-			log.Warn("Fulltext indexing is disabled")
-			return
-		}
-		ctx := context.Background()
-		log.Infof("Starting to index events")
-		var offset int
-		start := time.Now()
-		count := 0
-		var id int64 = 0
-		for {
-			evs, err := s.db.ReIndex(ctx, 1000, id) //nolint:mnd
-			if err != nil {
-				log.WithError(err).Errorf("unable to get events to index")
+		process.Do(s.ctx, func() {
+			if err := msg.Ack(); err != nil {
 				return
 			}
-			if len(evs) == 0 {
-				break
+			if !s.cfg.Fulltext.Enabled {
+				log.Warn("Fulltext indexing is disabled")
+				return
 			}
-			log.Debugf("Indexing %d events", len(evs))
-			elements := make([]fulltext.IndexElement, 0, len(evs))
-
-			for streamPos, ev := range evs {
-				id = streamPos
-				e := fulltext.IndexElement{
-					EventID:        ev.EventID(),
-					RoomID:         ev.RoomID().String(),
-					StreamPosition: streamPos,
+			ctx := s.ctx
+			log.Infof("Starting to index events")
+			var offset int
+			start := time.Now()
+			count := 0
+			var id int64 = 0
+			for {
+				evs, err := s.db.ReIndex(ctx, 1000, id) //nolint:mnd
+				if err != nil {
+					log.WithError(err).Errorf("unable to get events to index")
+					return
 				}
-				e.SetContentType(ev.Type())
+				if len(evs) == 0 {
+					break
+				}
+				log.Debugf("Indexing %d events", len(evs))
+				elements := make([]fulltext.IndexElement, 0, len(evs))
 
-				switch ev.Type() {
-				case "m.room.message":
-					e.Content = gjson.GetBytes(ev.Content(), "body").String()
-				case spec.MRoomName:
-					e.Content = gjson.GetBytes(ev.Content(), "name").String()
-				case spec.MRoomTopic:
-					e.Content = gjson.GetBytes(ev.Content(), "topic").String()
-				default:
+				for streamPos, ev := range evs {
+					id = streamPos
+					e := fulltext.IndexElement{
+						EventID:        ev.EventID(),
+						RoomID:         ev.RoomID().String(),
+						StreamPosition: streamPos,
+					}
+					e.SetContentType(ev.Type())
+
+					switch ev.Type() {
+					case "m.room.message":
+						e.Content = gjson.GetBytes(ev.Content(), "body").String()
+					case spec.MRoomName:
+						e.Content = gjson.GetBytes(ev.Content(), "name").String()
+					case spec.MRoomTopic:
+						e.Content = gjson.GetBytes(ev.Content(), "topic").String()
+					default:
+						continue
+					}
+
+					if strings.TrimSpace(e.Content) == "" {
+						continue
+					}
+					elements = append(elements, e)
+				}
+				if err = s.fts.Index(elements...); err != nil {
+					log.WithError(err).Error("unable to index events")
 					continue
 				}
-
-				if strings.TrimSpace(e.Content) == "" {
-					continue
-				}
-				elements = append(elements, e)
+				offset += len(evs)
+				count += len(elements)
 			}
-			if err = s.fts.Index(elements...); err != nil {
-				log.WithError(err).Error("unable to index events")
-				continue
-			}
-			offset += len(evs)
-			count += len(elements)
-		}
-		log.Infof("Indexed %d events in %v", count, time.Since(start))
+			log.Infof("Indexed %d events in %v", count, time.Since(start))
+		})
 	})
 	if err != nil {
 		return err

@@ -105,6 +105,7 @@ func NewInternalAPI(
 
 	stats := statistics.NewStatistics(federationDB, cfg.FederationMaxRetries+1, cfg.P2PFederationRetriesUntilAssumedOffline+1, cfg.EnableRelays)
 
+	processContext.Defer(stats.Close)
 	js, nats := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 
 	signingInfo := zendriteCfg.Global.SigningIdentities()
@@ -155,15 +156,13 @@ func NewInternalAPI(
 		logrus.WithError(err).Panic("failed to start presence consumer")
 	}
 
-	var cleanExpiredEDUs func()
-	cleanExpiredEDUs = func() {
+	cleanExpiredEDUs := func() {
 		logrus.Infof("Cleaning expired EDUs")
 		if err := federationDB.DeleteExpiredEDUs(processContext.Context()); err != nil {
 			logrus.WithError(err).Error("Failed to clean expired EDUs")
 		}
-		time.AfterFunc(time.Hour, cleanExpiredEDUs)
 	}
-	time.AfterFunc(time.Minute, cleanExpiredEDUs)
+	process.Repeat(processContext.Context(), time.Minute, time.Hour, cleanExpiredEDUs)
 
 	fedAPI := internal.NewFederationInternalAPI(federationDB, cfg, rsAPI, federation, &stats, caches, queues, keyRing)
 

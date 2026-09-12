@@ -9,6 +9,7 @@ package base
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -20,13 +21,11 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	sentryhttp "github.com/getsentry/sentry-go/http"
-	"github.com/kardianos/minwinsvc"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
@@ -44,6 +43,8 @@ var loginFallback embed.FS
 var StaticContent = staticContent
 
 const HTTPServerTimeout = time.Minute * 5
+
+const httpShutdownTimeout = 5 * time.Second
 
 // CreateClient creates a new client (normally used for media fetch requests).
 // Should only be called once per component.
@@ -117,12 +118,36 @@ func SetupAndServeHTTP(
 	externalHTTPAddr config.ServerAddress,
 	certFile, keyFile *string,
 ) {
+	if err := StartHTTP(processContext, cfg, routers, externalHTTPAddr, certFile, keyFile); err != nil {
+		logrus.WithError(err).Error("Failed to start HTTP listener")
+		processContext.ShutdownZendrite()
+	}
+	<-processContext.WaitForShutdown()
+}
+
+// StartHTTP binds synchronously so activation can report listener failures.
+// All requests and listener shutdown are joined before dependency cleanup.
+func StartHTTP(
+	processContext *process.ProcessContext,
+	cfg *config.Zendrite,
+	routers httputil.Routers,
+	externalHTTPAddr config.ServerAddress,
+	certFile, keyFile *string, ready ...func() bool,
+) error {
 	externalRouter := httputil.NewRouter("")
 
 	externalServ := &http.Server{
 		Addr:         externalHTTPAddr.Address,
 		WriteTimeout: HTTPServerTimeout,
-		Handler:      externalRouter,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(ready) > 0 && !ready[0]() {
+				http.Error(w, "Homeserver is not ready", http.StatusServiceUnavailable)
+				return
+			}
+			if !processContext.Do(func() { externalRouter.ServeHTTP(w, r) }) {
+				http.Error(w, "Homeserver is stopping", http.StatusServiceUnavailable)
+			}
+		}),
 		BaseContext: func(_ net.Listener) context.Context {
 			return processContext.Context()
 		},
@@ -145,7 +170,7 @@ func SetupAndServeHTTP(
 	if err := tmpl.ExecuteTemplate(landingPage, "index.gotmpl", map[string]string{
 		"Version": internal.VersionString(),
 	}); err != nil {
-		logrus.WithError(err).Fatal("failed to execute landing page template")
+		return fmt.Errorf("execute landing page template: %w", err)
 	}
 
 	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -187,60 +212,67 @@ func SetupAndServeHTTP(
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
 	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
 
-	if externalHTTPAddr.Enabled() {
-		go func() {
-			var externalShutdown atomic.Bool // RegisterOnShutdown can be called more than once
-			logrus.Infof("Starting external listener on %s", externalServ.Addr)
-			processContext.ComponentStarted()
-			externalServ.RegisterOnShutdown(func() {
-				if externalShutdown.CompareAndSwap(false, true) {
-					processContext.ComponentFinished()
-					logrus.Infof("Stopped external HTTP listener")
-				}
-			})
-			if certFile != nil && keyFile != nil {
-				if err := externalServ.ListenAndServeTLS(*certFile, *keyFile); err != nil {
-					if err != http.ErrServerClosed {
-						logrus.WithError(err).Fatal("failed to serve HTTPS")
-					}
-				}
-			} else {
-				if externalHTTPAddr.IsUnixSocket() {
-					err := os.Remove(externalHTTPAddr.Address)
-					if err != nil && !errors.Is(err, fs.ErrNotExist) {
-						logrus.WithError(err).Fatal("failed to remove existing unix socket")
-					}
-					listener, err := net.Listen(externalHTTPAddr.Network(), externalHTTPAddr.Address)
-					if err != nil {
-						logrus.WithError(err).Fatal("failed to serve unix socket")
-					}
-					err = os.Chmod(externalHTTPAddr.Address, externalHTTPAddr.UnixSocketPermission)
-					if err != nil {
-						logrus.WithError(err).Fatal("failed to set unix socket permissions")
-					}
-					if err := externalServ.Serve(listener); err != nil {
-						if err != http.ErrServerClosed {
-							logrus.WithError(err).Fatal("failed to serve unix socket")
-						}
-					}
-				} else {
-					if err := externalServ.ListenAndServe(); err != nil {
-						if err != http.ErrServerClosed {
-							logrus.WithError(err).Fatal("failed to serve HTTP")
-						}
-					}
-				}
-			}
-			logrus.Infof("Stopped external listener on %s", externalServ.Addr)
-		}()
+	if !externalHTTPAddr.Enabled() {
+		return nil
 	}
-
-	minwinsvc.SetOnExit(processContext.ShutdownZendrite)
-	<-processContext.WaitForShutdown()
-
-	logrus.Infof("Stopping HTTP listeners")
-	_ = externalServ.Shutdown(context.Background())
-	logrus.Infof("Stopped HTTP listeners")
+	if err := processContext.Context().Err(); err != nil {
+		return err
+	}
+	var tlsConfig *tls.Config
+	if certFile != nil && keyFile != nil {
+		certificate, err := tls.LoadX509KeyPair(*certFile, *keyFile)
+		if err != nil {
+			return fmt.Errorf("load listener TLS certificate: %w", err)
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	}
+	if externalHTTPAddr.IsUnixSocket() {
+		if err := os.Remove(externalHTTPAddr.Address); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove unix socket: %w", err)
+		}
+	}
+	listener, err := net.Listen(externalHTTPAddr.Network(), externalHTTPAddr.Address)
+	if err != nil {
+		return fmt.Errorf("bind HTTP listener: %w", err)
+	}
+	if externalHTTPAddr.IsUnixSocket() {
+		if err = os.Chmod(externalHTTPAddr.Address, externalHTTPAddr.UnixSocketPermission); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("set unix socket permissions: %w", err)
+		}
+	}
+	if tlsConfig != nil {
+		externalServ.TLSConfig = tlsConfig
+	}
+	if !processContext.Go(func() {
+		logrus.Infof("Starting external listener on %s", listener.Addr())
+		var serveErr error
+		if tlsConfig != nil {
+			serveErr = externalServ.ServeTLS(listener, "", "")
+		} else {
+			serveErr = externalServ.Serve(listener)
+		}
+		if err := serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logrus.WithError(err).Error("HTTP listener failed")
+			processContext.ShutdownZendrite()
+		}
+	}) {
+		_ = listener.Close()
+		return processContext.Context().Err()
+	}
+	// Registration must also succeed if cancellation raced with Serve startup.
+	// Use ComponentStarted here because this runs inside tracked application startup.
+	processContext.ComponentStarted()
+	go func() {
+		defer processContext.ComponentFinished()
+		<-processContext.WaitForShutdown()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		defer cancel()
+		if err := externalServ.Shutdown(shutdownCtx); err != nil {
+			_ = externalServ.Close()
+		}
+	}()
+	return nil
 }
 
 func WaitForShutdown(processCtx *process.ProcessContext) {

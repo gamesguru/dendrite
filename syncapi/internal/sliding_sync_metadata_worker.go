@@ -80,15 +80,15 @@ func (w *SlidingSyncMetadataWorker) Start() error {
 
 	// Start worker goroutines
 	for i := 0; i < metadataWorkerCount; i++ {
-		go w.worker(i)
+		w.process.Go(func() { w.worker(i) })
 	}
 
 	// Start retry/ticker loop
-	go w.tickerLoop()
+	w.process.Go(w.tickerLoop)
 
 	if needsPopulation {
 		// Queue initial population in background
-		go w.queueInitialPopulation()
+		w.process.Go(w.queueInitialPopulation)
 	}
 
 	logrus.Info("[SLIDING_SYNC_METADATA] Worker started")
@@ -213,11 +213,19 @@ func (w *SlidingSyncMetadataWorker) QueueRoom(roomID string) {
 
 // worker processes rooms from the channel.
 func (w *SlidingSyncMetadataWorker) worker(workerID int) {
-	for roomID := range w.workerCh {
+	for {
+		var roomID string
 		select {
 		case <-w.process.Context().Done():
 			return
-		default:
+		case room, ok := <-w.workerCh:
+			if !ok {
+				return
+			}
+			roomID = room
+		}
+		if w.process.Context().Err() != nil {
+			return
 		}
 
 		if err := w.processRoom(roomID); err != nil {

@@ -227,11 +227,11 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 	// at startup (e.g. left over from a previous run, or from a crash
 	// mid-purge during the previous shutdown).
 	if r.Cfg.RoomServer.AutoPurgeEnabled() {
-		go func() {
+		r.ProcessContext.Go(func() {
 			if _, err := r.RunEmptyRoomsSweep(r.ProcessContext.Context()); err != nil {
 				logrus.WithError(err).Warn("startup empty-rooms sweep failed")
 			}
-		}()
+		})
 	}
 }
 
@@ -500,7 +500,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 	}
 
 	// Query local joined members to notify downstream components
-	ctx := context.Background()
+	ctx := r.ProcessContext.Context()
 	membershipsReq := &api.QueryMembershipsForRoomRequest{
 		RoomID:     roomID,
 		JoinedOnly: true,

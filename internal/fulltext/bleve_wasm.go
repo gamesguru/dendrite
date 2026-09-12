@@ -32,13 +32,13 @@ type Indexer interface {
 }
 
 type SearchResult struct {
-	Status   interface{}   `json:"status"`
-	Request  *interface{}  `json:"request"`
-	Hits     []interface{} `json:"hits"`
+	Status   any           `json:"status"`
+	Request  *any          `json:"request"`
+	Hits     []any         `json:"hits"`
 	Total    uint64        `json:"total_hits"`
 	MaxScore float64       `json:"max_score"`
 	Took     time.Duration `json:"took"`
-	Facets   interface{}   `json:"facets"`
+	Facets   any           `json:"facets"`
 }
 
 func (i *IndexElement) SetContentType(v string) {}

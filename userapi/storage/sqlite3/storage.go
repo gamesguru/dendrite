@@ -94,7 +94,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewSQLiteStatsTable(db, serverName) //nolint:contextcheck
+	statsTable, err := NewSQLiteStatsTable(db, serverName, ctx) //nolint:contextcheck // The optional context is propagated to the maintenance task.
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteStatsTable: %w", err)
 	}

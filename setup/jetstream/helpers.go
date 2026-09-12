@@ -8,6 +8,8 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // JetStreamConsumer starts a durable consumer on the given subject with the
@@ -42,7 +44,7 @@ func JetStreamConsumer(
 		logrus.WithContext(ctx).WithError(err).Warnf("Failed to configure durable %q", durable)
 		return err
 	}
-	go jetStreamConsumerWorker(ctx, sub, subj, batch, f)
+	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, batch, f) })
 	return nil
 }
 

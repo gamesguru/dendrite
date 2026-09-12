@@ -1,6 +1,7 @@
 package httputil
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"sync"
@@ -10,10 +11,12 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type RateLimits struct {
+	ctx              context.Context
 	limits           map[string]chan struct{}
 	limitsMutex      sync.RWMutex
 	cleanMutex       sync.RWMutex
@@ -23,8 +26,13 @@ type RateLimits struct {
 	exemptUserIDs    map[string]struct{}
 }
 
-func NewRateLimits(cfg *config.RateLimiting) *RateLimits {
+func NewRateLimits(cfg *config.RateLimiting, contexts ...context.Context) *RateLimits {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	l := &RateLimits{
+		ctx:              ctx,
 		limits:           make(map[string]chan struct{}),
 		enabled:          cfg.Enabled,
 		requestThreshold: cfg.Threshold,
@@ -35,7 +43,7 @@ func NewRateLimits(cfg *config.RateLimiting) *RateLimits {
 		l.exemptUserIDs[userID] = struct{}{}
 	}
 	if l.enabled {
-		go l.clean()
+		process.Go(ctx, l.clean)
 	}
 	return l
 }
@@ -46,7 +54,9 @@ func (l *RateLimits) clean() {
 		// lock of the entire map and see if any of the channels are
 		// empty. If they are then we will close and delete them,
 		// freeing up memory.
-		time.Sleep(time.Second * 30)
+		if !process.Sleep(l.ctx, time.Second*30) { //nolint:mnd // Preserve the existing cleanup interval.
+			return
+		}
 		l.cleanMutex.Lock()
 		l.limitsMutex.Lock()
 		for k, c := range l.limits {
@@ -124,10 +134,12 @@ func (l *RateLimits) Limit(req *http.Request, device *userapi.Device) *util.JSON
 
 	// After the time interval, drain a resource from the rate limiting
 	// channel. This will free up space in the channel for new requests.
-	go func() {
-		<-time.After(l.cooloffDuration)
+	process.Go(l.ctx, func() {
+		if !process.Sleep(l.ctx, l.cooloffDuration) {
+			return
+		}
 		<-rateLimit
-	}()
+	})
 	return nil
 }
 

@@ -30,6 +30,7 @@ import (
 	clienthttputil "codefloe.com/pat-s/zendrite/clientapi/httputil"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -132,8 +133,12 @@ func newSSOCompatHandler(
 	cfg *config.MSC3861Config,
 	userAPI userapi.ClientUserAPI,
 	httpClient *http.Client,
-	rateLimits *httputil.RateLimits,
+	rateLimits *httputil.RateLimits, contexts ...context.Context,
 ) *ssoCompatHandler {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -146,7 +151,7 @@ func newSSOCompatHandler(
 		sessions:     make(map[string]*ssoCompatSession),
 		oidcByLogTok: make(map[string]*ssoCompatOIDCTokens),
 	}
-	go h.cleanupLoop()
+	process.Go(ctx, func() { h.cleanupLoop(ctx) })
 	return h
 }
 
@@ -159,11 +164,13 @@ func (h *ssoCompatHandler) Close() {
 	})
 }
 
-func (h *ssoCompatHandler) cleanupLoop() {
+func (h *ssoCompatHandler) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(ssoCleanupInterval)
 	defer ticker.Stop()
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			h.cleanupExpiredSessions()
 		case <-h.stop:

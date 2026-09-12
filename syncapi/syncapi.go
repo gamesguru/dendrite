@@ -7,8 +7,6 @@
 package syncapi
 
 import (
-	"context"
-
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -57,11 +55,12 @@ func AddPublicRoutes(
 		// Non-fatal - we can continue without background population
 	}
 
-	eduCache := caching.NewTypingCache()
+	eduCache := caching.NewTypingCache(processContext.Context())
+	processContext.Defer(eduCache.Close)
 	notifier := notifier.NewNotifier(rsAPI)
-	streams := streams.NewSyncStreamProviders(syncDB, userAPI, rsAPI, eduCache, caches, notifier)
-	notifier.SetCurrentPosition(streams.Latest(context.Background()))
-	if err = notifier.Load(context.Background(), syncDB); err != nil {
+	streams := streams.NewSyncStreamProviders(processContext.Context(), syncDB, userAPI, rsAPI, eduCache, caches, notifier)
+	notifier.SetCurrentPosition(streams.Latest(processContext.Context()))
+	if err = notifier.Load(processContext.Context(), syncDB); err != nil {
 		logrus.WithError(err).Panicf("failed to load notifier ")
 	}
 
@@ -83,7 +82,7 @@ func AddPublicRoutes(
 		userAPI,
 	)
 
-	requestPool := sync.NewRequestPool(syncDB, &zendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
+	requestPool := sync.NewRequestPoolWithContext(processContext.Context(), syncDB, &zendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
 
 	if err = presenceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start presence consumer")
@@ -151,7 +150,7 @@ func AddPublicRoutes(
 		logrus.WithError(err).Panicf("failed to start receipts consumer")
 	}
 
-	rateLimits := httputil.NewRateLimits(&zendriteCfg.ClientAPI.RateLimiting)
+	rateLimits := httputil.NewRateLimits(&zendriteCfg.ClientAPI.RateLimiting, processContext.Context())
 
 	routing.Setup(
 		routers.Client, requestPool, syncDB, userAPI,
