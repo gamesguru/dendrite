@@ -20,6 +20,9 @@ import (
 )
 
 type Global struct {
+	// HA controls opt-in leader election.
+	HA HA `yaml:"ha"`
+
 	// Signing identity contains the server name, private key and key ID of
 	// the deployment.
 	fclient.SigningIdentity `yaml:",inline"`
@@ -114,6 +117,7 @@ func (c *Global) Defaults(opts DefaultOpts) {
 	if opts.SingleDatabase {
 		c.DatabaseOptions.Defaults(90) //nolint:mnd
 	}
+	c.HA.Defaults()
 	c.JetStream.Defaults(opts)
 	c.Metrics.Defaults(opts)
 	c.DNSCache.Defaults()
@@ -146,6 +150,7 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 		}
 	}
 
+	c.HA.Verify(configErrs)
 	c.JetStream.Verify(configErrs)
 	c.Metrics.Verify(configErrs)
 	c.Sentry.Verify(configErrs)

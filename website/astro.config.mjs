@@ -67,6 +67,7 @@ export default defineConfig({
             { label: 'Optimisation', slug: 'administration/optimisation' },
             { label: 'Migration from Dendrite', slug: 'administration/migration-from-dendrite' },
             { label: 'Backups', slug: 'administration/backups' },
+            { label: 'High availability', slug: 'administration/high-availability' },
             { label: 'Troubleshooting', slug: 'administration/troubleshooting' },
           ],
         },

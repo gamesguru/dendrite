@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/setup"
 	basepkg "codefloe.com/pat-s/zendrite/setup/base"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/ha"
 	"codefloe.com/pat-s/zendrite/setup/lifecycle"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/setup/profiling"
@@ -134,16 +135,15 @@ func main() {
 	upCounter.Add(1)
 	prometheus.MustRegister(upCounter)
 
-	// Standalone mode authorizes one activation immediately. Future election code
-	// must call Run only after fencing and cancel ownership on leadership loss.
+	// Standalone authorizes activation immediately; HA requires election and fencing.
 	var server *lifecycle.Homeserver
 	server = lifecycle.New(func(application *process.ProcessContext) error {
 		return startHomeserver(application, cfg, httpAddr, httpsAddr, server.Ready)
 	}, shutdownTimeout)
-	minwinsvc.SetOnExit(server.Stop)
 	ownership, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := server.Run(ownership); err != nil {
+	minwinsvc.SetOnExit(func() { stop(); server.Stop() })
+	if err := ha.Run(ownership, cfg.Global.HA, server, nil, shutdownTimeout); err != nil {
 		logrus.WithError(err).Error("Homeserver stopped")
 		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.
 	}

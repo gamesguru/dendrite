@@ -9,6 +9,18 @@ version: 2
 
 # Global Matrix configuration. This configuration applies to all components.
 global:
+  # Experimental election foundation. Keep disabled until the fencing provider
+  # in issue #349 is implemented; election alone never permits application startup.
+  ha:
+    enabled: false
+    backend: kubernetes
+    lease_name: matrix-example-org
+    lease_namespace: matrix
+    candidate_id: pod-uid
+    lease_duration: 30s
+    renew_deadline: 20s
+    retry_period: 5s
+
   # The domain name of this homeserver.
   server_name: localhost
 
