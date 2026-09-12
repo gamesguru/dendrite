@@ -9,8 +9,8 @@ version: 2
 
 # Global Matrix configuration. This configuration applies to all components.
 global:
-  # Experimental election foundation. Keep disabled until the fencing provider
-  # in issue #349 is implemented; election alone never permits application startup.
+  # Experimental election foundation. Keep disabled until resource-enforced
+  # ownership in issue #349 is implemented; election alone never permits startup.
   ha:
     enabled: false
     backend: kubernetes

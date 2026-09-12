@@ -5,7 +5,9 @@ description: Configure active-passive high availability on Kubernetes.
 
 High availability (HA) runs one active Zendrite instance while other instances wait as standbys.
 If the active instance fails, a standby takes over after confirming that it is safe to start.
-HA is supported only on Kubernetes and is disabled by default.
+The current implementation provides experimental Kubernetes Lease election and is disabled by default.
+Automatic failover is not yet supported: production promotion remains blocked until resource-enforced ownership is implemented and verified.
+The selected design protects shared resources from stale leaders without cloud-provider or hypervisor power-control integration.
 
 ## Configuration
 
@@ -24,7 +26,8 @@ global:
     retry_period: 5s
 ```
 
-Set `enabled` to `true` to enable HA.
+Keep `enabled` set to `false` until the resource-enforced ownership work in [#349](https://codefloe.com/pat-s/zendrite/issues/349) is complete.
+Setting it to `true` starts election but does not authorize application startup.
 All instances of the same homeserver must use the same Lease name and namespace.
 Use a separate Lease for each homeserver and set `candidate_id` to each pod's UID.
 
