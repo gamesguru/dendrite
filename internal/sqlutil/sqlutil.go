@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"regexp"
 
 	"github.com/sirupsen/logrus"
 
@@ -41,7 +40,6 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer) (*sql.DB, error) 
 			"max_open_conns":    dbProperties.MaxOpenConns(),
 			"max_idle_conns":    dbProperties.MaxIdleConns(),
 			"conn_max_lifetime": dbProperties.ConnMaxLifetime(),
-			"data_source_name":  regexp.MustCompile(`://[^@]*@`).ReplaceAllLiteralString(dsn, "://"),
 		})
 		logger.Debug("Setting DB connection limits")
 		db.SetMaxOpenConns(dbProperties.MaxOpenConns())

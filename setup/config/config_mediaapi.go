@@ -50,6 +50,8 @@ type MediaStorage struct {
 
 // LocalStorage contains configuration for the local filesystem backend.
 type LocalStorage struct {
+	// Shared asserts that every candidate mounts the same durable POSIX filesystem.
+	Shared bool `yaml:"shared"`
 	// BasePath is the path where media files are stored.
 	BasePath Path `yaml:"base_path"`
 }

@@ -126,6 +126,9 @@ global:
 
   # Configuration for NATS JetStream
   jetstream:
+    # Zero preserves existing replication and defaults new streams to one replica.
+    # HA requires an external cluster with 3 or 5 replicas.
+    replicas: 0
     # A list of NATS Server addresses to connect to. If none are specified, an
     # internal NATS server will be started automatically when running Zendrite in
     # monolith mode.
@@ -354,6 +357,8 @@ media_api:
   storage:
     type: local
     local:
+      # Set only for a synchronously persisted shared POSIX filesystem in HA mode.
+      shared: false
       # Storage path for uploaded media. May be relative or absolute.
       base_path: ./media_store
     # s3:
@@ -442,6 +447,8 @@ sync_api:
 
   # Configuration for the full-text search engine.
   search:
+    # Rebuild a disposable index before serving; required when HA search is enabled.
+    rebuild_on_startup: false
     # Whether or not search is enabled.
     enabled: false
 

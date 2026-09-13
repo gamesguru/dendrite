@@ -27,10 +27,12 @@ func (c *SyncAPI) Verify(configErrs *ConfigErrors) {
 }
 
 type Fulltext struct {
-	Enabled   bool   `yaml:"enabled"`
-	IndexPath Path   `yaml:"index_path"`
-	InMemory  bool   `yaml:"in_memory"` // only useful in tests
-	Language  string `yaml:"language"`  // the language to use when analyzing content
+	// RebuildOnStartup creates a fresh local index from PostgreSQL before serving.
+	RebuildOnStartup bool   `yaml:"rebuild_on_startup"`
+	Enabled          bool   `yaml:"enabled"`
+	IndexPath        Path   `yaml:"index_path"`
+	InMemory         bool   `yaml:"in_memory"` // only useful in tests
+	Language         string `yaml:"language"`  // the language to use when analyzing content
 }
 
 func (f *Fulltext) Defaults(opts DefaultOpts) {

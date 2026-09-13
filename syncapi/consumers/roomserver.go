@@ -326,6 +326,9 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		return nil
 	}
 	if err = s.writeFTS(ev, pduPos); err != nil {
+		if s.cfg.Matrix.HA.Enabled {
+			return err
+		}
 		log.WithFields(log.Fields{
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
@@ -389,6 +392,9 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	}
 
 	if err = s.writeFTS(ev, pduPos); err != nil {
+		if s.cfg.Matrix.HA.Enabled {
+			return err
+		}
 		log.WithFields(log.Fields{
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
@@ -792,6 +798,9 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 				// We remove the original event from the index
 				if srcEventID, ok := relatedData["event_id"]; ok {
 					if err := s.fts.Delete(srcEventID.Str); err != nil {
+						if s.cfg.Matrix.HA.Enabled {
+							return err
+						}
 						log.WithFields(log.Fields{
 							"event_id": ev.EventID(),
 							"src_id":   srcEventID.Str,

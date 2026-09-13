@@ -116,6 +116,9 @@ func NewInternalAPI(
 		cfg.Matrix.ServerName, federation, &stats,
 		signingInfo,
 	)
+	if zendriteCfg.Global.HA.Enabled && queues.RecoveryError() != nil {
+		logrus.WithError(queues.RecoveryError()).Panic("failed to recover federation destinations")
+	}
 
 	rsConsumer := consumers.NewOutputRoomEventConsumer(
 		processContext, cfg, js, nats, queues,

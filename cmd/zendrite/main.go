@@ -143,6 +143,9 @@ func main() {
 	ownership, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	minwinsvc.SetOnExit(func() { stop(); server.Stop() })
+	if err := ha.SetCompatibility(cfg); err != nil {
+		logrus.WithError(err).Fatal("HA compatibility validation failed")
+	}
 	if err := ha.Run(ownership, cfg.Global.HA, server, nil, shutdownTimeout); err != nil {
 		logrus.WithError(err).Error("Homeserver stopped")
 		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.

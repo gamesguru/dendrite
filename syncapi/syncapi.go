@@ -7,6 +7,9 @@
 package syncapi
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -66,9 +69,28 @@ func AddPublicRoutes(
 
 	var fts *fulltext.Search
 	if zendriteCfg.SyncAPI.Fulltext.Enabled {
-		fts, err = fulltext.New(processContext, zendriteCfg.SyncAPI.Fulltext)
+		searchConfig := zendriteCfg.SyncAPI.Fulltext
+		if searchConfig.RebuildOnStartup && !searchConfig.InMemory {
+			// A new directory avoids stale documents and never deletes an operator's index.
+			if err = os.MkdirAll(string(searchConfig.IndexPath), 0o700); err != nil {
+				logrus.WithError(err).Panic("failed to create search recovery directory")
+			}
+			var directory string
+			directory, err = os.MkdirTemp(string(searchConfig.IndexPath), "recovery-")
+			if err != nil {
+				logrus.WithError(err).Panic("failed to allocate search recovery index")
+			}
+			processContext.Defer(func() { _ = os.RemoveAll(directory) })
+			searchConfig.IndexPath = config.Path(filepath.Join(directory, "index"))
+		}
+		fts, err = fulltext.New(processContext, searchConfig)
 		if err != nil {
 			logrus.WithError(err).Panicf("failed to create full text")
+		}
+		if searchConfig.RebuildOnStartup {
+			if err = consumers.RecoverSearch(processContext.Context(), syncDB, fts); err != nil {
+				logrus.WithError(err).Panic("failed to recover search index")
+			}
 		}
 	}
 

@@ -20,6 +20,9 @@ type JetStream struct {
 	JetStreamDomain string `yaml:"js_domain"`
 	// Keep all storage in memory. This is mostly useful for unit tests.
 	InMemory bool `yaml:"in_memory"`
+	// Replicas is the requested stream replication factor.
+	// Zero preserves existing replication and defaults new streams to one replica.
+	Replicas int `yaml:"replicas"`
 	// Disable logging. This is mostly useful for unit tests.
 	NoLog bool `yaml:"-"`
 	// Disables TLS validation. This should NOT be used in production.
@@ -51,6 +54,9 @@ func (c *JetStream) Defaults(opts DefaultOpts) {
 }
 
 func (c *JetStream) Verify(configErrs *ConfigErrors) {
+	if c.Replicas < 0 || c.Replicas > 5 {
+		configErrs.Add("global.jetstream.replicas must be between 0 and 5")
+	}
 	// Without an explicit storage_path, NATS Server falls back to os.TempDir(),
 	// which on Windows + Go 1.26+ can latch JetStream into a permanent
 	// "Critical write error" state via ERROR_INVALID_PARAMETER in os.RemoveAll.

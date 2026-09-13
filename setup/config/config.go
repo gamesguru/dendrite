@@ -350,6 +350,7 @@ func (c *Zendrite) Defaults(opts DefaultOpts) {
 }
 
 func (c *Zendrite) Verify(configErrs *ConfigErrors) {
+	c.VerifyHAStorage(configErrs)
 	type verifiable interface {
 		Verify(configErrs *ConfigErrors)
 	}

@@ -13,6 +13,8 @@ import (
 // HA configures opt-in Kubernetes Lease election for one homeserver.
 // Election does not authorize application effects without an ownership gate.
 type HA struct {
+	// Compatibility is computed from the loaded configuration and executable.
+	Compatibility  string `yaml:"-"`
 	Enabled        bool   `yaml:"enabled"`
 	Backend        string `yaml:"backend"`
 	LeaseName      string `yaml:"lease_name"`

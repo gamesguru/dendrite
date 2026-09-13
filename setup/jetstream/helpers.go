@@ -25,6 +25,9 @@ func JetStreamConsumer(
 	opts ...nats.SubOpt,
 ) error {
 	defer func(durable string) {
+		if _, protected := js.(protectedJetStream); protected {
+			return
+		}
 		// If there are existing consumers from before they were pull
 		// consumers, we need to clean up the old push consumers. However,
 		// in order to not affect the interest-based policies, we need to

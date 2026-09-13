@@ -15,6 +15,7 @@ import (
 	"codefloe.com/pat-s/zendrite/setup"
 	basepkg "codefloe.com/pat-s/zendrite/setup/base"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/ha"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/mscs"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -23,6 +24,11 @@ import (
 
 // startHomeserver initializes all application dependencies only during activation.
 func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, httpAddr, httpsAddr config.ServerAddress, ready func() bool) error {
+	releaseStorage, err := ha.PrepareStorage(processCtx.Context(), cfg)
+	if err != nil {
+		return err
+	}
+	defer releaseStorage()
 	// create DNS cache
 	var dnsCache *fclient.DNSCache
 	if cfg.Global.DNSCache.Enabled {
@@ -111,6 +117,12 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 
 	if err := processCtx.Context().Err(); err != nil {
 		return err
+	}
+	if cfg.Global.HA.Enabled {
+		js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		if err := jetstream.RecoverSync(processCtx.Context(), js, &cfg.Global.JetStream); err != nil {
+			return err
+		}
 	}
 	if err := basepkg.StartHTTP(processCtx, cfg, routers, httpAddr, nil, nil, ready); err != nil {
 		return err

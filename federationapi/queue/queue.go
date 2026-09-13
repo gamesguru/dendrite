@@ -8,6 +8,7 @@ package queue
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -29,15 +30,16 @@ import (
 // OutgoingQueues is a collection of queues for sending transactions to other
 // matrix servers.
 type OutgoingQueues struct {
-	db          storage.Database
-	process     *process.ProcessContext
-	disabled    bool
-	origin      spec.ServerName
-	client      fclient.FederationClient
-	statistics  *statistics.Statistics
-	signing     map[spec.ServerName]*fclient.SigningIdentity
-	queuesMutex sync.Mutex // protects the below
-	queues      map[spec.ServerName]*destinationQueue
+	recoveryError error
+	db            storage.Database
+	process       *process.ProcessContext
+	disabled      bool
+	origin        spec.ServerName
+	client        fclient.FederationClient
+	statistics    *statistics.Statistics
+	signing       map[spec.ServerName]*fclient.SigningIdentity
+	queuesMutex   sync.Mutex // protects the below
+	queues        map[spec.ServerName]*destinationQueue
 }
 
 func init() { //nolint:gochecknoinits
@@ -102,6 +104,7 @@ func NewOutgoingQueues(
 				serverNames[serverName] = struct{}{}
 			}
 		} else {
+			queues.recoveryError = errors.Join(queues.recoveryError, err)
 			log.WithError(err).Error("Failed to get PDU server names for destination queue hydration")
 		}
 		if names, err := db.GetPendingEDUServerNames(processContext.Context()); err == nil {
@@ -109,6 +112,7 @@ func NewOutgoingQueues(
 				serverNames[serverName] = struct{}{}
 			}
 		} else {
+			queues.recoveryError = errors.Join(queues.recoveryError, err)
 			log.WithError(err).Error("Failed to get EDU server names for destination queue hydration")
 		}
 		offset, step := time.Second*5, time.Second //nolint:mnd
@@ -344,3 +348,6 @@ func (oqs *OutgoingQueues) RetryServer(srv spec.ServerName, wasBlacklisted bool)
 		queue.wakeQueueIfEventsPending(wasBlacklisted)
 	}
 }
+
+// RecoveryError reports a failure to enumerate durable destinations at startup.
+func (oqs *OutgoingQueues) RecoveryError() error { return oqs.recoveryError }
