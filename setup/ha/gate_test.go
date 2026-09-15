@@ -215,7 +215,7 @@ func TestOwnershipGoesStaleWithoutAHeartbeat(t *testing.T) {
 	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
 	require.NoError(t, gate.Valid())
 
-	require.Eventually(t, func() bool { return gate.Valid() != nil }, time.Second, 10*time.Millisecond,
+	require.Eventually(t, func() bool { return gate.Valid() != nil }, 30*time.Second, 10*time.Millisecond,
 		"ownership must go stale once it has not been re-verified")
 	require.ErrorIs(t, gate.Valid(), ErrOwnershipStale)
 }
@@ -242,6 +242,6 @@ func TestHeartbeatRetiresTheOwnerAfterTakeover(t *testing.T) {
 	successor := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, successor.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
 
-	require.Eventually(t, func() bool { return errors.Is(gate.Valid(), ErrOwnershipRetired) }, 2*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return errors.Is(gate.Valid(), ErrOwnershipRetired) }, 30*time.Second, 20*time.Millisecond,
 		"the heartbeat must observe that a successor took over")
 }

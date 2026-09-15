@@ -203,6 +203,14 @@ func guardConnection(activation Activation) func(context.Context, *pgx.Conn) err
 	}
 }
 
+// querier is the subset of *pgx.Conn that the fencing sweep uses. It exists so
+// a test can make termination a no-op and exercise the path where a pass
+// completes but backends remain, which is the uncertain-fencing case.
+type querier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 // fenceHorizon reports a database timestamp taken after the generation advance
 // committed. A backend that starts later necessarily reads the new generation
 // and is refused by guardConnection, so only older backends need fencing.
@@ -243,7 +251,7 @@ func generationPattern(activation Activation) string {
 // this homeserver and reports how many it stopped. It must run only after the
 // generation advance has committed: a backend that connected earlier is already
 // visible here, and one that connects later is refused by guardConnection.
-func fenceBackends(ctx context.Context, conn *pgx.Conn, activation Activation, horizon time.Time) (int, error) {
+func fenceBackends(ctx context.Context, conn querier, activation Activation, horizon time.Time) (int, error) {
 	rows, err := conn.Query(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"+retiredBackendPredicate,
 		generationPattern(activation), activation.Generation, horizon)
 	if err != nil {
@@ -262,7 +270,7 @@ func fenceBackends(ctx context.Context, conn *pgx.Conn, activation Activation, h
 
 // retiredBackends counts backends of earlier activations that are still
 // connected, so promotion can confirm a clean sweep before activating.
-func retiredBackends(ctx context.Context, conn *pgx.Conn, activation Activation, horizon time.Time) (int, error) {
+func retiredBackends(ctx context.Context, conn querier, activation Activation, horizon time.Time) (int, error) {
 	var remaining int
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity"+retiredBackendPredicate,
 		generationPattern(activation), activation.Generation, horizon).Scan(&remaining); err != nil {

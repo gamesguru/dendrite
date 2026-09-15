@@ -110,4 +110,10 @@ Shared media does not itself supply that barrier or solve local search-index per
 Deployments without those proofs remain blocked by the fencing release gate.
 
 Automated tests cover configuration rejection, credential-independent compatibility, Lease mismatches, PostgreSQL migration serialization, search recovery errors/cancellation/cursors, namespace-safe stream updates, replication upgrades, and preservation of acknowledged messages and pending consumer state across a three-node broker leader failure.
+They also cover the ownership failure envelope.
+A leader paused beyond expiry and resumed after takeover is refused at the database, broker, media, admission, and dispatch boundaries, including on a connection pool it had already opened and used.
+A leader partitioned from the Kubernetes API discovers that it was replaced through the database alone, while its Lease context is still live and it still holds data-plane access.
+A sweep that completes a pass without converging blocks promotion and reports how many backends still hold the retired generation.
+An application that will not stop within the shutdown budget forces process termination.
+A transaction already dispatched completes while newly admitted dispatch is refused.
 Infrastructure power-off, correlated storage failures, PostgreSQL failover, S3/shared-filesystem failover, and complete Matrix client/search recovery against the reference workload remain deployment qualification scenarios in issue #352.

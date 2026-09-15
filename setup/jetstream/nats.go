@@ -403,9 +403,8 @@ func AwaitOwnership(ctx context.Context, owner Ownership) error {
 // refuses publication from a retired activation.
 //
 // The broker has no generation check of its own, so this is the boundary every
-// publish must pass. A resumed owner reaches it before any message is queued,
-// and reconnect buffering is disabled so nothing queued earlier can be flushed
-// behind it.
+// publish must pass. A resumed owner reaches it before any new message is
+// queued, because the freshness window has lapsed by the time it resumes.
 type protectedJetStream struct {
 	natsclient.JetStreamContext
 	ownership Ownership
