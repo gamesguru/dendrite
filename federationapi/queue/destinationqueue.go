@@ -24,6 +24,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
 )
@@ -384,6 +385,16 @@ func (oq *destinationQueue) backgroundSend() {
 		// If we have pending PDUs or EDUs then construct a transaction.
 		// Try sending the next transaction and see what happens.
 		sendMethod, terr := oq.nextTransaction(toSendPDUs, toSendEDUs)
+		if errors.Is(terr, ownership.ErrDispatchRefused) {
+			// This homeserver refused to dispatch, so the destination told us
+			// nothing. Charging it would persist retry state, divert to relays
+			// and eventually blacklist a server that was never unreachable,
+			// in a database the successor inherits. Stop instead and let the
+			// promoted activation resume the queue.
+			logrus.WithError(terr).WithField("destination", oq.destination).
+				Warn("Stopping destination queue: ownership is no longer held")
+			return
+		}
 		if terr != nil {
 			// We failed to send the transaction. Mark it as a failure.
 			_, blacklisted := oq.statistics.Failure()

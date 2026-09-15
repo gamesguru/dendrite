@@ -675,6 +675,12 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 				// one Sytest that expects one HTTP request per
 				// device, rather than per URL. For now, we must
 				// notify each one separately.
+				// Delivery begins inside the consumer callback, which the
+				// fetch and acknowledgement barriers do not cover.
+				if err := jetstream.Owned(s.jetstream); err != nil {
+					log.WithError(err).Warn("Not notifying pushers: ownership is no longer held")
+					return
+				}
 				for _, dev := range devices {
 					// Give each HTTP request its own context.
 					httpCtx, httpCancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd

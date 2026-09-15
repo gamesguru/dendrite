@@ -21,6 +21,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -140,7 +141,7 @@ func StartHTTP(
 		Addr:         externalHTTPAddr.Address,
 		WriteTimeout: HTTPServerTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if len(ready) > 0 && !ready[0]() {
+			if len(ready) > 0 && !alwaysAdmitted(r.URL.Path) && !ready[0]() {
 				http.Error(w, "Homeserver is not ready", http.StatusServiceUnavailable)
 				return
 			}
@@ -290,4 +291,14 @@ func WaitForShutdown(processCtx *process.ProcessContext) {
 	processCtx.WaitForComponentsToFinish()
 
 	logrus.Warnf("Zendrite is exiting now")
+}
+
+// alwaysAdmitted reports whether a path must answer even while application
+// admission is closed.
+//
+// Probes and metrics describe the process rather than serve Matrix traffic.
+// Refusing them would blind monitoring and make a candidate look dead to every
+// probe at the moment an operator most needs to see why it stopped admitting.
+func alwaysAdmitted(path string) bool {
+	return path == "/metrics" || strings.HasPrefix(path, httputil.ZendriteAdminPathPrefix+"monitor/")
 }

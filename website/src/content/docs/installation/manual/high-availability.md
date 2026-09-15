@@ -3,11 +3,10 @@ title: HA storage and recovery
 description: Storage prerequisites, recovery readiness, and coordinated upgrades for active-passive candidates.
 ---
 
-HA remains opt-in and promotion remains blocked until resource-enforced ownership covers every protected boundary in issue #349.
+HA remains opt-in and experimental.
 Kubernetes Lease ownership and PostgreSQL advisory locks do not fence a suspended former owner.
-The database boundary is now enforced by an ownership generation and a backend sweep, described in [High availability](/administration/high-availability/).
-The broker boundary is enforced by an ownership freshness window, a publication check, and a consumer acknowledgement barrier, also described there.
-The media and outbound dispatch boundaries are not implemented yet, and a candidate refuses to activate while any of them is missing.
+Resource-enforced ownership now covers the database, broker, media, dispatch, and admission boundaries, described in [High availability](/administration/high-availability/).
+The failure envelope has not been qualified, so keep HA disabled in production until issue #352 is complete.
 These checks add storage and recovery prerequisites; they do not remove that release gate.
 
 ## Supported storage

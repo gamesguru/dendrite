@@ -138,10 +138,10 @@ func TestPromotionRequiresEveryProtectedBoundary(t *testing.T) {
 	require.NoError(t, verifyCoverage(boundedGate{boundaries: requiredBoundaries}))
 }
 
-func TestPostgresGateCoversOnlyTheDatabaseBoundary(t *testing.T) {
+func TestPostgresGateCoversEveryProtectedBoundary(t *testing.T) {
 	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1/zendrite", testHAConfig(time.Hour, time.Hour))
-	require.Equal(t, []Boundary{BoundaryPostgres, BoundaryJetStream}, gate.Boundaries())
-	require.ErrorIs(t, verifyCoverage(gate), ErrFencingIncomplete)
+	require.ElementsMatch(t, requiredBoundaries, gate.Boundaries())
+	require.NoError(t, verifyCoverage(gate), "promotion must no longer be blocked by missing coverage")
 }
 
 func TestPostgresGateReportsOwnershipToOtherBoundaries(t *testing.T) {

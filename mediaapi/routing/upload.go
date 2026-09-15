@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
@@ -147,6 +149,9 @@ func (r *uploadRequest) doUpload(
 
 	hash, bytesWritten, tmpDir, cleanup, err := fileStore.WriteTemp(ctx, reqReader)
 	if err != nil {
+		if response := unavailableIfUnowned(err); response != nil {
+			return response
+		}
 		r.Logger.WithError(err).WithFields(log.Fields{
 			"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
 		}).Warn("Error while transferring file")
@@ -276,6 +281,9 @@ func (r *uploadRequest) storeFileAndMetadata(
 ) *util.JSONResponse {
 	duplicate, err := fileStore.Store(ctx, tmpDir, r.MediaMetadata.Base64Hash, r.MediaMetadata.FileSizeBytes)
 	if err != nil {
+		if response := unavailableIfUnowned(err); response != nil {
+			return response
+		}
 		r.Logger.WithError(err).Error("Failed to store file.")
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -342,4 +350,16 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 	})
 	return nil
+}
+
+// unavailableIfUnowned turns a media refusal caused by lost ownership into a
+// retryable 503 rather than telling the client its upload was malformed.
+func unavailableIfUnowned(err error) *util.JSONResponse {
+	if !errors.Is(err, ownership.ErrDispatchRefused) {
+		return nil
+	}
+	return &util.JSONResponse{
+		Code: http.StatusServiceUnavailable,
+		JSON: spec.Unknown("Homeserver is not currently accepting media uploads"),
+	}
 }

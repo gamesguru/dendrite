@@ -286,7 +286,7 @@ func (g *PostgresGate) Retire() { g.retired.Store(true) }
 // Boundaries reports which protected boundaries this gate enforces.
 // Promotion stays blocked until the remaining boundaries are implemented.
 func (g *PostgresGate) Boundaries() []Boundary {
-	return []Boundary{BoundaryPostgres, BoundaryJetStream}
+	return []Boundary{BoundaryPostgres, BoundaryJetStream, BoundaryMedia, BoundaryDispatch}
 }
 
 // ApplicationName marks this activation's database connections so a successor

@@ -23,6 +23,7 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -206,6 +207,12 @@ func (s *OutputRoomEventConsumer) sendEvents(
 	address := fmt.Sprintf("%s/%s/%s", state.RequestUrl(), path, txnID)
 	if s.cfg.LegacyAuth {
 		address += "?access_token=" + url.QueryEscape(state.HSToken)
+	}
+	// The consumer barrier only runs before fetch and before acknowledgement,
+	// so a delivery started while ownership was still held would otherwise
+	// reach the appservice after a successor is active.
+	if err := jetstream.Owned(s.jetstream); err != nil {
+		return fmt.Errorf("%w: appservice delivery refused: %w", ownership.ErrDispatchRefused, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "PUT", address, bytes.NewBuffer(transaction))
 	if err != nil {

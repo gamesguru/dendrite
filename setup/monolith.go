@@ -17,6 +17,7 @@ import (
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/internal/transactions"
 	"codefloe.com/pat-s/zendrite/mediaapi"
@@ -43,6 +44,10 @@ type Monolith struct {
 	RoomserverAPI roomserverAPI.RoomserverInternalAPI
 	UserAPI       userapi.UserInternalAPI
 	RelayAPI      relayAPI.RelayInternalAPI
+
+	// Owner is set only in HA, where components that perform effects the
+	// database cannot reject consult it before acting. It is nil in standalone.
+	Owner ownership.Owner
 
 	// Optional
 	ExtPublicRoomsProvider   api.ExtraPublicRoomsProvider
@@ -71,7 +76,7 @@ func (m *Monolith) AddAllPublicRoutes(
 	federationapi.AddPublicRoutes(
 		processCtx, routers, cfg, natsInstance, m.UserAPI, m.FedClient, m.KeyRing, m.RoomserverAPI, m.FederationAPI, enableMetrics,
 	)
-	mediaapi.AddPublicRoutes(routers, cm, cfg, m.UserAPI, m.Client, m.FedClient, m.KeyRing, processCtx.Context())
+	mediaapi.AddPublicRoutes(routers, cm, cfg, m.UserAPI, m.Client, m.FedClient, m.KeyRing, m.Owner, processCtx.Context())
 	syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, m.UserAPI, m.RoomserverAPI, caches, enableMetrics)
 
 	if m.RelayAPI != nil {

@@ -356,6 +356,20 @@ type Ownership interface {
 // ownershipRetryInterval is how often a stale consumer rechecks ownership.
 const ownershipRetryInterval = 500 * time.Millisecond
 
+// Owned reports whether this activation may still perform an effect on a
+// JetStream context. It is nil-safe, so standalone callers get nil.
+//
+// Delivery that begins inside a consumer callback is not covered by the
+// fetch and acknowledgement barriers, so callers that dispatch to an external
+// system check here immediately before doing so.
+func Owned(js natsclient.JetStreamContext) error {
+	owner := OwnershipOf(js)
+	if owner == nil {
+		return nil
+	}
+	return owner.Valid()
+}
+
 // AwaitOwnership blocks until this activation may act again, ownership is
 // retired, or ctx is done.
 //

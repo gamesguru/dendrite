@@ -46,6 +46,11 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	}
 
 	federationClient := basepkg.CreateFederationClient(cfg, dnsCache)
+	// A remote server cannot reject a retired owner, so outbound dispatch is
+	// refused here instead, before a transaction starts its round-trip.
+	if gate != nil {
+		federationClient = basepkg.GuardFederationClient(federationClient, gate)
+	}
 	httpClient := basepkg.CreateClient(cfg, dnsCache)
 
 	// prepare required dependencies
@@ -112,6 +117,9 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		RoomserverAPI: rsAPI,
 		UserAPI:       userAPI,
 	}
+	if gate != nil {
+		monolith.Owner = gate
+	}
 	if err := processCtx.Context().Err(); err != nil {
 		return err
 	}
@@ -135,11 +143,18 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 			return err
 		}
 	}
-	if err := basepkg.StartHTTP(processCtx, cfg, routers, httpAddr, nil, nil, ready); err != nil {
+	// Admission is evaluated per request so a candidate that loses ownership
+	// rejects traffic immediately, including on established keep-alive
+	// connections, rather than waiting for Kubernetes to remove its endpoint.
+	admit := ready
+	if gate != nil {
+		admit = ha.Admit(ready, gate)
+	}
+	if err := basepkg.StartHTTP(processCtx, cfg, routers, httpAddr, nil, nil, admit); err != nil {
 		return err
 	}
 	if *unixSocket == "" && *certFile != "" && *keyFile != "" {
-		if err := basepkg.StartHTTP(processCtx, cfg, routers, httpsAddr, certFile, keyFile, ready); err != nil {
+		if err := basepkg.StartHTTP(processCtx, cfg, routers, httpsAddr, certFile, keyFile, admit); err != nil {
 			return err
 		}
 	}
