@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
@@ -54,6 +55,49 @@ func JetStreamConsumer(
 	}
 	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, batch, f, ownership) })
 	return nil
+}
+
+const (
+	// RedeliveryBaseDelay is how long a consumer waits before the first
+	// redelivery of a message it refused.
+	redeliveryBaseDelay = 250 * time.Millisecond
+	// RedeliveryMaxDelay caps the backoff. A consumer that has been failing
+	// for a while should keep checking, but not faster than this.
+	redeliveryMaxDelay = 30 * time.Second
+)
+
+// redeliveryDelay reports how long to wait before redelivering a message the
+// consumer refused, backing off exponentially with the number of attempts.
+//
+// Refusing without a delay spins. The failures that make a consumer refuse are
+// usually the persistent kind, a dependency that is down rather than a single
+// unlucky call, so an immediate redelivery hammers that dependency for as long
+// as the outage lasts, which is precisely when it can least afford it.
+//
+// Consumers deliberately set no MaxDeliver. For a homeserver, silently
+// discarding work is worse than retrying it forever: the backoff bounds the
+// cost of retrying, and consumerRedeliveries makes a message that will never
+// succeed visible to an operator.
+func redeliveryDelay(msg *nats.Msg) time.Duration {
+	// A message with no readable ack metadata is treated as a first attempt,
+	// so it still waits rather than coming straight back.
+	attempts := uint64(1)
+	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > attempts {
+		attempts = meta.NumDelivered
+	}
+	return redeliveryBackoff(attempts)
+}
+
+// redeliveryBackoff doubles the base delay once per attempt, up to the cap.
+func redeliveryBackoff(attempts uint64) time.Duration {
+	delay := redeliveryBaseDelay
+	for i := uint64(1); i < attempts; i++ {
+		if delay >= redeliveryMaxDelay {
+			break
+		}
+		delay *= 2
+	}
+	return min(delay, redeliveryMaxDelay)
 }
 
 func jetStreamConsumerWorker(
@@ -155,8 +199,10 @@ func jetStreamConsumerWorker(
 			}
 		} else {
 			for _, msg := range msgs {
-				if err = msg.Nak(nats.Context(ctx)); err != nil {
-					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.Nak: %w", err))
+				delay := redeliveryDelay(msg)
+				consumerRedeliveries.WithLabelValues(subj).Inc()
+				if err = msg.NakWithDelay(delay, nats.Context(ctx)); err != nil {
+					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.NakWithDelay: %w", err))
 					sentry.CaptureException(err)
 				}
 			}
