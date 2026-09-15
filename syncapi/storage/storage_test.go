@@ -260,61 +260,64 @@ func TestGetEventsInRangeWithTopologyTokenNoEventsForFilter(t *testing.T) {
 }
 
 func TestStreamToTopologicalPosition(t *testing.T) {
-	alice := test.NewUser(t)
-	r := test.NewRoom(t, alice)
-
-	testCases := []struct {
-		name             string
-		roomID           string
-		streamPos        types.StreamPosition
-		backwardOrdering bool
-		wantToken        types.TopologyToken
-	}{
-		{
-			name:             "forward ordering found streamPos returns found position",
-			roomID:           r.ID,
-			streamPos:        1,
-			backwardOrdering: false,
-			wantToken:        types.TopologyToken{Depth: 1, PDUPosition: 1},
-		},
-		{
-			name:             "forward ordering not found streamPos returns max position",
-			roomID:           r.ID,
-			streamPos:        100,
-			backwardOrdering: false,
-			wantToken:        types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64},
-		},
-		{
-			name:             "backward ordering found streamPos returns found position",
-			roomID:           r.ID,
-			streamPos:        1,
-			backwardOrdering: true,
-			wantToken:        types.TopologyToken{Depth: 1, PDUPosition: 1},
-		},
-		{
-			name:             "backward ordering not found streamPos returns maxDepth with param pduPosition",
-			roomID:           r.ID,
-			streamPos:        100,
-			backwardOrdering: true,
-			wantToken:        types.TopologyToken{Depth: 5, PDUPosition: 100},
-		},
-		{
-			name:             "backward non-existent room returns zero token",
-			roomID:           "!doesnotexist:localhost",
-			streamPos:        1,
-			backwardOrdering: true,
-			wantToken:        types.TopologyToken{Depth: 0, PDUPosition: 1},
-		},
-		{
-			name:             "forward non-existent room returns max token",
-			roomID:           "!doesnotexist:localhost",
-			streamPos:        1,
-			backwardOrdering: false,
-			wantToken:        types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64},
-		},
-	}
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// The database subtests below run in parallel and WriteEvent sets
+		// Visibility on the events it is given, so a room built out here would be
+		// mutated by both subtests at once. Each subtest gets its own.
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		testCases := []struct {
+			name             string
+			roomID           string
+			streamPos        types.StreamPosition
+			backwardOrdering bool
+			wantToken        types.TopologyToken
+		}{
+			{
+				name:             "forward ordering found streamPos returns found position",
+				roomID:           r.ID,
+				streamPos:        1,
+				backwardOrdering: false,
+				wantToken:        types.TopologyToken{Depth: 1, PDUPosition: 1},
+			},
+			{
+				name:             "forward ordering not found streamPos returns max position",
+				roomID:           r.ID,
+				streamPos:        100,
+				backwardOrdering: false,
+				wantToken:        types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64},
+			},
+			{
+				name:             "backward ordering found streamPos returns found position",
+				roomID:           r.ID,
+				streamPos:        1,
+				backwardOrdering: true,
+				wantToken:        types.TopologyToken{Depth: 1, PDUPosition: 1},
+			},
+			{
+				name:             "backward ordering not found streamPos returns maxDepth with param pduPosition",
+				roomID:           r.ID,
+				streamPos:        100,
+				backwardOrdering: true,
+				wantToken:        types.TopologyToken{Depth: 5, PDUPosition: 100},
+			},
+			{
+				name:             "backward non-existent room returns zero token",
+				roomID:           "!doesnotexist:localhost",
+				streamPos:        1,
+				backwardOrdering: true,
+				wantToken:        types.TopologyToken{Depth: 0, PDUPosition: 1},
+			},
+			{
+				name:             "forward non-existent room returns max token",
+				roomID:           "!doesnotexist:localhost",
+				streamPos:        1,
+				backwardOrdering: false,
+				wantToken:        types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64},
+			},
+		}
+
 		db, close := MustCreateDatabase(t, dbType)
 		defer close()
 
