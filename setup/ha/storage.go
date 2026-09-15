@@ -39,16 +39,26 @@ func SetCompatibility(cfg *config.Zendrite) error {
 // PrepareStorage runs only after fenced ownership. Its dedicated connection holds
 // a migration lock until startup completes. This lock is not an ownership fence.
 // The compatibility record is committed before any component migration can run.
-func PrepareStorage(ctx context.Context, cfg *config.Zendrite) (func(), error) {
+//
+// The connection carries the activation marker and ownership guard, because it
+// can commit schema changes: a successor's sweep must be able to terminate it
+// like any other application backend.
+func PrepareStorage(ctx context.Context, cfg *config.Zendrite, gate *PostgresGate) (func(), error) {
 	if !cfg.Global.HA.Enabled {
 		return func() {}, nil
 	}
 	if cfg.Global.HA.Compatibility == "" {
 		return nil, fmt.Errorf("missing HA compatibility identity")
 	}
-	conn, err := pgx.Connect(ctx, string(cfg.Global.DatabaseOptions.ConnectionString))
+	if gate == nil || gate.Activation() == nil {
+		return nil, fmt.Errorf("HA storage: ownership has not been established")
+	}
+	conn, err := connectAs(ctx, string(cfg.Global.DatabaseOptions.ConnectionString), gate)
 	if err != nil {
-		return nil, fmt.Errorf("HA PostgreSQL connection failed")
+		// A retired generation is the one cause an operator must see, and it
+		// used to be replaced by a generic connection failure. pgx redacts
+		// passwords in its own connection errors, so wrapping is safe.
+		return nil, fmt.Errorf("HA PostgreSQL connection failed: %w", err)
 	}
 	closeConn := func() {
 		const closeTimeout = 5 * time.Second
@@ -84,4 +94,24 @@ func PrepareStorage(ctx context.Context, cfg *config.Zendrite) (func(), error) {
 		return fail("configuration or executable differs; an offline coordinated upgrade is required")
 	}
 	return closeConn, nil
+}
+
+// connectAs opens a connection bound to the authorized activation, marked so a
+// successor can terminate it and guarded so it cannot be re-established once
+// the generation is retired.
+func connectAs(ctx context.Context, dataSource string, gate *PostgresGate) (*pgx.Conn, error) {
+	cfg, err := pgx.ParseConfig(dataSource)
+	if err != nil {
+		return nil, err
+	}
+	cfg.RuntimeParams["application_name"] = gate.ApplicationName()
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err = gate.VerifyConnection(ctx, conn); err != nil {
+		_ = conn.Close(ctx)
+		return nil, err
+	}
+	return conn, nil
 }

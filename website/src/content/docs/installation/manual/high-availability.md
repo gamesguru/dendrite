@@ -3,8 +3,10 @@ title: HA storage and recovery
 description: Storage prerequisites, recovery readiness, and coordinated upgrades for active-passive candidates.
 ---
 
-HA remains opt-in and promotion remains blocked until the infrastructure fencing provider in issue #349 is installed.
+HA remains opt-in and promotion remains blocked until resource-enforced ownership covers every protected boundary in issue #349.
 Kubernetes Lease ownership and PostgreSQL advisory locks do not fence a suspended former owner.
+The database boundary is now enforced by an ownership generation and a backend sweep, described in [High availability](/administration/high-availability/).
+The JetStream, media, and outbound dispatch boundaries are not implemented yet, and a candidate refuses to activate while any of them is missing.
 These checks add storage and recovery prerequisites; they do not remove that release gate.
 
 ## Supported storage
@@ -59,12 +61,14 @@ Password/token rotation within the same database user, NATS account, and S3 name
 NATS credentials on every candidate must resolve to the same account; changing an account is an offline namespace migration.
 Use the same executable artifact and homeserver configuration on every candidate; mixed binaries, including different local builds, are unsupported.
 
+Ownership authority itself lives in `zendrite_ha_ownership`, separately from the compatibility records described here.
 The Lease annotation `zendrite.codefloe.com/compatibility` pins the election scope before ownership is granted.
 An existing Lease with a missing or mismatched annotation fails closed, including a manually precreated Lease.
 The initial candidate creates the annotated Lease; do not replace an existing Lease to bypass a mismatch.
-The fencing provider must retain owner history independently of the Lease.
+Owner history is retained independently of the Lease in `zendrite_ha_ownership_history`.
 After fenced ownership, a dedicated PostgreSQL connection obtains an advisory migration lock and commits a second compatibility record in `zendrite_ha_compatibility` before component constructors run.
 That connection holds the lock through initialization, recovery, and listener binding.
+It carries the activation marker as well, so a successor's sweep terminates it like any other application backend.
 Application initialization failure leaves the compatibility record pinned, stops readiness, and requires a fresh process.
 Migration transactions retain their existing rollback behavior; a partially completed sequence is retried only by the same compatible binary under safe ownership.
 Incompatible schema errors during initialization prevent readiness.

@@ -135,10 +135,18 @@ func main() {
 	upCounter.Add(1)
 	prometheus.MustRegister(upCounter)
 
-	// Standalone authorizes activation immediately; HA requires election and fencing.
+	// Standalone authorizes activation immediately; HA requires election and
+	// resource-enforced ownership. The interface is left nil when HA is
+	// disabled so a typed nil pointer cannot pose as an installed gate.
+	var gate ha.OwnershipGate
+	var ownershipGate *ha.PostgresGate
+	if cfg.Global.HA.Enabled {
+		ownershipGate = ha.NewPostgresGate(string(cfg.Global.DatabaseOptions.ConnectionString), cfg.Global.HA.OwnershipTimeout)
+		gate = ownershipGate
+	}
 	var server *lifecycle.Homeserver
 	server = lifecycle.New(func(application *process.ProcessContext) error {
-		return startHomeserver(application, cfg, httpAddr, httpsAddr, server.Ready)
+		return startHomeserver(application, cfg, httpAddr, httpsAddr, server.Ready, ownershipGate)
 	}, shutdownTimeout)
 	ownership, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -146,7 +154,7 @@ func main() {
 	if err := ha.SetCompatibility(cfg); err != nil {
 		logrus.WithError(err).Fatal("HA compatibility validation failed")
 	}
-	if err := ha.Run(ownership, cfg.Global.HA, server, nil, shutdownTimeout); err != nil {
+	if err := ha.Run(ownership, cfg.Global.HA, server, gate, shutdownTimeout); err != nil {
 		logrus.WithError(err).Error("Homeserver stopped")
 		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.
 	}

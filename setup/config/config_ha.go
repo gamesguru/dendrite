@@ -24,6 +24,9 @@ type HA struct {
 	LeaseDuration time.Duration `yaml:"lease_duration"`
 	RenewDeadline time.Duration `yaml:"renew_deadline"`
 	RetryPeriod   time.Duration `yaml:"retry_period"`
+	// OwnershipTimeout bounds resource-enforced ownership establishment.
+	// Exceeding it leaves the candidate unready; it never activates anyway.
+	OwnershipTimeout time.Duration `yaml:"ownership_timeout"`
 }
 
 // Defaults keeps HA disabled and supplies the reference election timings.
@@ -33,10 +36,14 @@ func (c *HA) Defaults() {
 		referenceLeaseDuration = 30 * time.Second
 		referenceRenewDeadline = 20 * time.Second
 		referenceRetryPeriod   = 5 * time.Second
+		// ADR 0003 budgets 45 seconds for ownership establishment in the
+		// reference deployment, which must outlast one expiring Lease.
+		referenceOwnershipTimeout = 45 * time.Second
 	)
 	c.LeaseDuration = referenceLeaseDuration
 	c.RenewDeadline = referenceRenewDeadline
 	c.RetryPeriod = referenceRetryPeriod
+	c.OwnershipTimeout = referenceOwnershipTimeout
 }
 
 // Verify rejects ambiguous identities and unsafe election timings when enabled.
@@ -68,6 +75,11 @@ func (c *HA) Verify(errs *ConfigErrors) {
 	// The API stores LeaseDurationSeconds as int32; do not truncate or overflow it.
 	if c.LeaseDuration%time.Second != 0 || c.LeaseDuration/time.Second > math.MaxInt32 {
 		errs.Add("global.ha.lease_duration must be whole seconds and fit in a positive signed 32-bit LeaseDurationSeconds value")
+	}
+	// A successor must be able to outwait an expiring Lease while it proves
+	// that no backend of the retired activation remains connected.
+	if c.OwnershipTimeout < c.LeaseDuration {
+		errs.Add("global.ha.ownership_timeout must be at least global.ha.lease_duration")
 	}
 	// Match client-go's jitter constraint without importing its election runtime here.
 	const jitterFactor = 1.2

@@ -20,6 +20,7 @@ global:
     lease_duration: 30s
     renew_deadline: 20s
     retry_period: 5s
+    ownership_timeout: 45s
 
   # The domain name of this homeserver.
   server_name: localhost

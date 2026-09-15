@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/zendrite/setup/lifecycle"
@@ -13,8 +14,36 @@ import (
 // ErrLeadershipLost requires termination, even if application draining succeeds.
 var ErrLeadershipLost = errors.New("lease leadership lost; process must exit")
 
-// ErrFencingUnavailable prevents production activation until issue #349 supplies a fencer.
+// ErrFencingUnavailable prevents production activation when no gate is installed.
 var ErrFencingUnavailable = errors.New("HA promotion blocked: no enforceable ownership/fencing provider is installed (issue #349); keep HA disabled until fencing is available")
+
+// ErrFencingIncomplete prevents activation while any protected boundary is
+// still unenforced. ADR 0003 forbids activating once only some boundaries have
+// advanced to the new owner, so partial coverage fails closed.
+var ErrFencingIncomplete = errors.New("HA promotion blocked: ownership is not enforced at every protected boundary (issue #349)")
+
+// requiredBoundaries lists every boundary that must reject a retired owner
+// before a candidate may activate. See ADR 0003's resource coverage table.
+var requiredBoundaries = []Boundary{BoundaryPostgres, BoundaryJetStream, BoundaryMedia, BoundaryDispatch}
+
+// verifyCoverage reports which protected boundaries the installed gate leaves
+// unenforced, so an unready candidate can name the reason.
+func verifyCoverage(gate OwnershipGate) error {
+	covered := map[Boundary]bool{}
+	for _, boundary := range gate.Boundaries() {
+		covered[boundary] = true
+	}
+	var missing []string
+	for _, boundary := range requiredBoundaries {
+		if !covered[boundary] {
+			missing = append(missing, string(boundary))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: unenforced boundaries: %s", ErrFencingIncomplete, strings.Join(missing, ", "))
+}
 
 // Candidate binds a unique process to a stable homeserver election scope.
 type Candidate struct {
@@ -29,6 +58,9 @@ type Candidate struct {
 // Concrete infrastructure identity and evidence handling belong to the provider.
 type OwnershipGate interface {
 	Acquire(context.Context, Candidate) error
+	// Boundaries reports the protected boundaries this gate enforces.
+	// Promotion is refused until every required boundary is covered.
+	Boundaries() []Boundary
 }
 
 // Application is a single-use, bounded lifecycle; Stop closes admission immediately.
@@ -83,6 +115,10 @@ func control(ctx context.Context, elector election, acquired <-chan context.Cont
 		}
 		if gate == nil {
 			promoted <- ErrFencingUnavailable
+			return
+		}
+		if err := verifyCoverage(gate); err != nil {
+			promoted <- err
 			return
 		}
 		if err := gate.Acquire(ownership, candidate); err != nil {

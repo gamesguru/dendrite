@@ -18,6 +18,7 @@ import (
 type Connections struct {
 	globalConfig        config.DatabaseOptions
 	processContext      *process.ProcessContext
+	options             []ConnectionOption
 	existingConnections sync.Map
 }
 
@@ -26,10 +27,14 @@ type con struct {
 	writer Writer
 }
 
-func NewConnectionManager(processCtx *process.ProcessContext, globalConfig config.DatabaseOptions) *Connections {
+// NewConnectionManager returns a manager for the homeserver's database
+// handles. HA supplies ownership options so that every pooled connection is
+// bound to the authorized activation; standalone supplies none.
+func NewConnectionManager(processCtx *process.ProcessContext, globalConfig config.DatabaseOptions, options ...ConnectionOption) *Connections {
 	return &Connections{
 		globalConfig:   globalConfig,
 		processContext: processCtx,
+		options:        options,
 	}
 }
 
@@ -60,7 +65,7 @@ func (c *Connections) Connection(dbProperties *config.DatabaseOptions) (*sql.DB,
 	}
 
 	// Open a new database connection using the supplied config.
-	db, err := Open(dbProperties, writer)
+	db, err := Open(dbProperties, writer, c.options...)
 	if err != nil {
 		return nil, nil, err
 	}

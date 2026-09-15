@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,24 +22,26 @@ func TestStorageCompatibilityAndMigrationSerialization(t *testing.T) {
 	cfg := &config.Zendrite{}
 	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "same-binary-and-config"}
 	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
-	release, err := PrepareStorage(t.Context(), cfg)
+	gate := NewPostgresGate(dsn, 45*time.Second)
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	release, err := PrepareStorage(t.Context(), cfg, gate)
 	require.NoError(t, err)
 	defer release()
 	// Even another authorized startup cannot migrate concurrently.
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	_, err = PrepareStorage(ctx, cfg)
+	_, err = PrepareStorage(ctx, cfg, gate)
 	require.ErrorContains(t, err, "migration lock")
 	release()
-	again, err := PrepareStorage(t.Context(), cfg)
+	again, err := PrepareStorage(t.Context(), cfg, gate)
 	require.NoError(t, err)
 	again()
 	unsafe := *cfg
 	unsafe.Global.DatabaseOptions.ConnectionString += " synchronous_commit=off"
-	_, err = PrepareStorage(t.Context(), &unsafe)
+	_, err = PrepareStorage(t.Context(), &unsafe, gate)
 	require.ErrorContains(t, err, "synchronous_commit")
 	cfg.Global.HA.Compatibility = "different-binary"
-	_, err = PrepareStorage(t.Context(), cfg)
+	_, err = PrepareStorage(t.Context(), cfg, gate)
 	require.ErrorContains(t, err, "configuration or executable differs")
 }
 
@@ -84,4 +87,31 @@ func TestLeaseBootstrapRetainsCompatibility(t *testing.T) {
 	stored, err := client.CoordinationV1().Leases("test").Get(t.Context(), "matrix", metav1.GetOptions{})
 	require.NoError(t, err)
 	require.Equal(t, "expected", stored.Annotations[compatibilityAnnotation])
+}
+
+// TestPrepareStorageConnectionIsFenceable covers a connection that the sweep
+// would otherwise miss: the dedicated migration connection holds the advisory
+// lock through initialization and can commit schema changes, so it must carry
+// the activation marker like every other application backend.
+func TestPrepareStorageConnectionIsFenceable(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer cleanup()
+	cfg := &config.Zendrite{}
+	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "same-binary-and-config"}
+	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
+
+	gate := NewPostgresGate(dsn, 45*time.Second)
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	release, err := PrepareStorage(t.Context(), cfg, gate)
+	require.NoError(t, err)
+	defer release()
+
+	observer, err := pgx.Connect(t.Context(), dsn)
+	require.NoError(t, err)
+	defer func() { _ = observer.Close(context.WithoutCancel(t.Context())) }()
+	var marked int
+	require.NoError(t, observer.QueryRow(t.Context(),
+		"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1",
+		gate.ApplicationName()).Scan(&marked))
+	require.Positive(t, marked, "the migration connection must be visible to a successor's sweep")
 }

@@ -17,6 +17,10 @@ type gateFunc func(context.Context, Candidate) error
 
 func (f gateFunc) Acquire(ctx context.Context, c Candidate) error { return f(ctx, c) }
 
+// A test gate stands in for a complete implementation, so control's coverage
+// check does not mask the behavior each scenario exercises.
+func (f gateFunc) Boundaries() []Boundary { return requiredBoundaries }
+
 type electionFunc func(context.Context)
 
 func (f electionFunc) Run(ctx context.Context) { f(ctx) }
@@ -205,3 +209,35 @@ func TestStopBeforeActivation(t *testing.T) {
 		})
 	}
 }
+
+// TestControlRefusesIncompleteFencing keeps HA blocked while only some of the
+// protected boundaries enforce ownership. ADR 0003 forbids activating once
+// only part of the resource coverage has advanced to the new owner.
+func TestControlRefusesIncompleteFencing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		leader, lose := context.WithCancelCause(ctx)
+		defer lose(nil)
+		acquired := make(chan context.Context, 1)
+		elector := electionFunc(func(ctx context.Context) {
+			acquired <- leader
+			<-ctx.Done()
+		})
+		server := lifecycle.New(func(*process.ProcessContext) error {
+			t.Error("initialized without ownership at every protected boundary")
+			return nil
+		}, time.Second)
+		err := control(ctx, elector, acquired, nil, Candidate{}, partialGate{}, server, time.Second)
+		if !errors.Is(err, ErrFencingIncomplete) {
+			t.Fatalf("incomplete fencing did not block promotion: %v", err)
+		}
+	})
+}
+
+type partialGate struct{}
+
+func (partialGate) Acquire(context.Context, Candidate) error {
+	return errors.New("Acquire must not run while coverage is incomplete")
+}
+func (partialGate) Boundaries() []Boundary { return []Boundary{BoundaryPostgres} }

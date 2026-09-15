@@ -35,6 +35,8 @@ func TestHAConfig(t *testing.T) {
 			c.RenewDeadline = 1500 * time.Millisecond
 			c.RetryPeriod = time.Second
 		}, false},
+		{"ownership timeout", func(c *HA) { c.OwnershipTimeout = 0 }, true},
+		{"ownership timeout shorter than lease", func(c *HA) { c.OwnershipTimeout = c.LeaseDuration - time.Second }, true},
 		{"subsecond", func(c *HA) {
 			c.LeaseDuration = time.Second / 2
 			c.RenewDeadline = time.Millisecond * 100
@@ -64,7 +66,7 @@ func TestHAYAMLDefaults(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("ha:\n  enabled: true\n  candidate_id: pod-uid\n  lease_name: matrix\n  lease_namespace: matrix\n  retry_period: 4s\n"), &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.HA.Backend != "kubernetes" || c.HA.LeaseDuration != 30*time.Second || c.HA.RetryPeriod != 4*time.Second {
+	if c.HA.Backend != "kubernetes" || c.HA.LeaseDuration != 30*time.Second || c.HA.RetryPeriod != 4*time.Second || c.HA.OwnershipTimeout != 45*time.Second {
 		t.Fatalf("unexpected defaults: %+v", c.HA)
 	}
 }

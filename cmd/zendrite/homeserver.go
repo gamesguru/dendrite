@@ -23,8 +23,8 @@ import (
 )
 
 // startHomeserver initializes all application dependencies only during activation.
-func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, httpAddr, httpsAddr config.ServerAddress, ready func() bool) error {
-	releaseStorage, err := ha.PrepareStorage(processCtx.Context(), cfg)
+func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, httpAddr, httpsAddr config.ServerAddress, ready func() bool, gate *ha.PostgresGate) error {
+	releaseStorage, err := ha.PrepareStorage(processCtx.Context(), cfg, gate)
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,13 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	httpClient := basepkg.CreateClient(cfg, dnsCache)
 
 	// prepare required dependencies
-	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+	// In HA every pooled connection is bound to the authorized activation, so
+	// PostgreSQL refuses a retired owner even if it has not noticed the loss.
+	var dbOptions []sqlutil.ConnectionOption
+	if gate != nil {
+		dbOptions = append(dbOptions, sqlutil.WithConnectionGuard(gate.ApplicationName(), gate.GuardConnection))
+	}
+	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions, dbOptions...)
 	routers := httputil.NewRouters()
 
 	caches := caching.NewRistrettoCache(cfg.Global.Cache.EstimatedMaxSize, cfg.Global.Cache.MaxAge, caching.EnableMetrics)
