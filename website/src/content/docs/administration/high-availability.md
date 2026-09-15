@@ -7,7 +7,7 @@ High availability (HA) runs one active Zendrite instance while other instances w
 If the active instance fails, a standby takes over after confirming that it is safe to start.
 The current implementation provides experimental Kubernetes Lease election and is disabled by default.
 Automatic failover is not yet supported: production promotion remains blocked until resource-enforced ownership covers every protected boundary and is verified.
-Ownership is enforced at the PostgreSQL boundary today; the JetStream, media, and outbound dispatch boundaries are still unimplemented, and a candidate refuses to activate while any of them is missing.
+Ownership is enforced at the PostgreSQL and JetStream boundaries today; the media and outbound dispatch boundaries are still unimplemented, and a candidate refuses to activate while any of them is missing.
 The selected design protects shared resources from stale leaders without cloud-provider or hypervisor power-control integration.
 
 ## Configuration
@@ -64,6 +64,30 @@ A retired owner therefore cannot commit, whether or not it has noticed that it l
 This enforcement is PostgreSQL's rather than the application's, which is why it also covers a process that was suspended past its lease and resumed after takeover.
 It depends on every candidate using the same PostgreSQL role, which HA already requires by rejecting per-component database targets.
 A transaction that had already flushed its commit before termination is ordered before the promotion, and the successor has not activated at that point, so authoritative effects do not overlap.
+
+## Ownership freshness
+
+The database can reject a retired owner by itself, but the message broker cannot.
+A candidate therefore treats its ownership as valid only while the database has confirmed it recently.
+
+A background heartbeat re-reads the generation on its own guarded connection every `retry_period`, and ownership stays valid for `renew_deadline` after each confirmation.
+A process that was suspended past its lease resumes with a stale confirmation, so it refuses to publish or dispatch before it has checked again, and that check is refused outright once a successor has taken over.
+A candidate that can reach the broker but not the database also goes stale and stops acting, which is the intended fail-closed behavior.
+
+## Broker fencing
+
+Every JetStream publication passes an ownership check and is stamped with the publishing generation in the `Zendrite-HA-Generation` header.
+The connection name carries the activation, which makes an overlapping owner visible in broker monitoring.
+
+Publication is gated on the freshness window rather than on a broker-side check, so a retired owner can still publish for a short period after its successor activates.
+Consumers count such messages in `zendrite_ha_retired_generation_messages_total` and log them, rather than discarding them.
+They are not discarded because a suspended owner only publishes for writes it already committed, so dropping them would lose events that exist in the database.
+
+Consumers stop rather than acknowledge once ownership is lost, before fetching and again after the callback returns.
+Unconfirmed ownership is treated differently from retirement: a database blip makes a consumer wait and resume, because a worker that exits is never restarted and would leave a leader that serves traffic while consuming nothing.
+The roomserver's room workers manage their own subscriptions and apply the same barrier.
+Acknowledging work that a retired owner did not complete would discard it, so the message is left pending for the promoted activation to redeliver instead.
+Messages are never discarded on the basis of their generation: a suspended owner can publish an event that genuinely committed before it was fenced, and dropping that message would lose it.
 
 ## Kubernetes permissions
 

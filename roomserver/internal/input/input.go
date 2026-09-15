@@ -327,6 +327,23 @@ func (w *worker) _next() {
 	// Look up what the next event is that's waiting to be processed.
 	ctx, cancel := context.WithTimeout(w.r.ProcessContext.Context(), time.Minute)
 	defer cancel()
+	// This consumer manages its own subscription, so the barrier in
+	// jetstream.JetStreamConsumer does not cover it. Without this check a
+	// retired owner would keep fetching, fail because the database is fenced,
+	// and acknowledge the messages anyway, discarding room events before the
+	// promoted activation could redeliver them.
+	if err := jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
+		logrus.WithError(err).WithField("room_id", w.roomID).
+			Warn("Not processing room events: ownership is no longer held")
+		// Ownership that is merely unconfirmed for longer than this fetch
+		// deadline is transient, so queue another attempt. Returning without
+		// one would leave the worker waiting for new activity in this room,
+		// which may never come, with events already queued unprocessed.
+		if errors.Is(err, context.DeadlineExceeded) {
+			w.notify()
+		}
+		return
+	}
 	w.sentryHub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetTag("room_id", w.roomID)
 	})
@@ -456,11 +473,15 @@ func (w *worker) _next() {
 		// Even though we failed to process this message (e.g. due to Zendrite restarting and receiving a context canceled),
 		// the message may already have been queued for redelivery or will be, so this makes sure that we still reprocess the msg
 		// after restarting. We only Ack if the context was not yet canceled.
-		if w.r.ProcessContext.Context().Err() == nil {
+		//
+		// A retired owner must not acknowledge here either: its failure is the
+		// fence refusing the write, and acknowledging would discard an event
+		// the successor still has to process.
+		if w.r.ProcessContext.Context().Err() == nil && w.ownedForAck() {
 			_ = msg.AckSync()
 		}
 		errString = err.Error()
-	} else {
+	} else if w.ownedForAck() {
 		_ = msg.AckSync()
 	}
 
@@ -588,3 +609,19 @@ var roomserverInputBackpressure = prometheus.NewGaugeVec(
 	},
 	[]string{"room_id"},
 )
+
+// ownedForAck reports whether this activation may still acknowledge work on the
+// input stream. It never waits: acknowledgement happens after the work is done,
+// so a stale owner leaves the message pending for redelivery instead.
+func (w *worker) ownedForAck() bool {
+	owner := jetstream.OwnershipOf(w.r.JetStream)
+	if owner == nil {
+		return true
+	}
+	if err := owner.Valid(); err != nil {
+		logrus.WithError(err).WithField("room_id", w.roomID).
+			Warn("Not acknowledging room event: ownership is no longer held")
+		return false
+	}
+	return true
+}

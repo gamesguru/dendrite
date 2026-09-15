@@ -141,7 +141,7 @@ func main() {
 	var gate ha.OwnershipGate
 	var ownershipGate *ha.PostgresGate
 	if cfg.Global.HA.Enabled {
-		ownershipGate = ha.NewPostgresGate(string(cfg.Global.DatabaseOptions.ConnectionString), cfg.Global.HA.OwnershipTimeout)
+		ownershipGate = ha.NewPostgresGate(string(cfg.Global.DatabaseOptions.ConnectionString), cfg.Global.HA)
 		gate = ownershipGate
 	}
 	var server *lifecycle.Homeserver

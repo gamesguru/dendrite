@@ -22,7 +22,7 @@ func TestStorageCompatibilityAndMigrationSerialization(t *testing.T) {
 	cfg := &config.Zendrite{}
 	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "same-binary-and-config"}
 	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
-	gate := NewPostgresGate(dsn, 45*time.Second)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
 	release, err := PrepareStorage(t.Context(), cfg, gate)
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestPrepareStorageConnectionIsFenceable(t *testing.T) {
 	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "same-binary-and-config"}
 	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
 
-	gate := NewPostgresGate(dsn, 45*time.Second)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
 	release, err := PrepareStorage(t.Context(), cfg, gate)
 	require.NoError(t, err)

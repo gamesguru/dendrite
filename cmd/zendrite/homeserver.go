@@ -60,7 +60,12 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 
 	caches := caching.NewRistrettoCache(cfg.Global.Cache.EstimatedMaxSize, cfg.Global.Cache.MaxAge, caching.EnableMetrics)
 	processCtx.Defer(caches.Close)
+	// A typed nil must not pose as an installed ownership reporter, so the
+	// interface stays empty outside HA.
 	natsInstance := jetstream.NATSInstance{}
+	if gate != nil {
+		natsInstance.Ownership = gate
+	}
 	if err := processCtx.Context().Err(); err != nil {
 		return err
 	}

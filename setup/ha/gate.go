@@ -2,12 +2,15 @@ package ha
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/sirupsen/logrus"
+
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 // Boundary names a protected resource boundary. Promotion reports the boundary
@@ -44,14 +47,27 @@ func (e *BlockedError) Unwrap() error { return e.Err }
 // or not it has noticed that it lost the Lease.
 type PostgresGate struct {
 	dataSource string
-	timeout    time.Duration
+	cfg        config.HA
 	activation atomic.Pointer[Activation]
+	retired    atomic.Bool
+	// verified is the last time the database confirmed this generation.
+	// Ownership is only valid while that confirmation is recent, so a process
+	// that was suspended refuses to act until it has checked again.
+	verified atomic.Int64
 }
 
 // NewPostgresGate returns a gate bound to the homeserver's global database.
-func NewPostgresGate(dataSource string, timeout time.Duration) *PostgresGate {
-	return &PostgresGate{dataSource: dataSource, timeout: timeout}
+// Election timings double as the ownership freshness window and heartbeat
+// interval, so ownership cannot outlive a Lease that is no longer being
+// renewed.
+func NewPostgresGate(dataSource string, cfg config.HA) *PostgresGate {
+	return &PostgresGate{dataSource: dataSource, cfg: cfg}
 }
+
+// freshness is how long a confirmed generation may be trusted without another
+// check, and interval is how often the heartbeat confirms it.
+func (g *PostgresGate) freshness() time.Duration { return g.cfg.RenewDeadline }
+func (g *PostgresGate) interval() time.Duration  { return g.cfg.RetryPeriod }
 
 // Activation reports the authorized activation, or nil while promotion is
 // blocked. Callers must not open application connections without it.
@@ -61,7 +77,8 @@ func (g *PostgresGate) Activation() *Activation { return g.activation.Load() }
 // remains connected. It is bounded by the ownership-establishment budget and
 // leaves the candidate unready rather than activating on timeout.
 func (g *PostgresGate) Acquire(ctx context.Context, candidate Candidate) error {
-	ctx, cancel := context.WithTimeout(ctx, g.timeout)
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.OwnershipTimeout)
 	defer cancel()
 	scope := candidate.LeaseNamespace + "/" + candidate.LeaseName
 	conn, err := g.connect(ctx)
@@ -98,7 +115,11 @@ func (g *PostgresGate) Acquire(ctx context.Context, candidate Candidate) error {
 	if confirmed.Generation != activation.Generation {
 		return &BlockedError{Boundary: BoundaryPostgres, Err: fmt.Errorf("%w: held generation %d, current generation %d", ErrGenerationRetired, activation.Generation, confirmed.Generation)}
 	}
+	// Record the confirmation before publishing the activation, so Valid never
+	// observes a fresh activation with no confirmation behind it.
+	g.verified.Store(time.Now().UnixNano())
 	g.activation.Store(&activation)
+	go g.heartbeat(parent)
 	logrus.WithFields(logrus.Fields{
 		"generation": activation.Generation,
 		"scope":      activation.Scope,
@@ -115,12 +136,12 @@ const (
 // connect uses a dedicated connection that is deliberately not marked as an
 // application backend, so the sweep below never terminates the promoter.
 func (g *PostgresGate) connect(ctx context.Context) (*pgx.Conn, error) {
-	cfg, err := pgx.ParseConfig(g.dataSource)
+	connConfig, err := pgx.ParseConfig(g.dataSource)
 	if err != nil {
 		return nil, fmt.Errorf("parse HA database target: %w", err)
 	}
-	cfg.RuntimeParams["application_name"] = ownershipConnName
-	conn, err := pgx.ConnectConfig(ctx, cfg)
+	connConfig.RuntimeParams["application_name"] = ownershipConnName
+	conn, err := pgx.ConnectConfig(ctx, connConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect to the HA database: %w", err)
 	}
@@ -150,9 +171,123 @@ func (g *PostgresGate) sweep(ctx context.Context, conn *pgx.Conn, activation Act
 	}
 }
 
-// Boundaries reports that this gate enforces ownership at the database only.
+// ErrOwnershipStale reports that ownership has not been confirmed recently
+// enough to be trusted. It is the barrier for effects the database cannot
+// reject on its own, such as broker publication and outbound dispatch.
+var ErrOwnershipStale = errors.New("HA ownership has not been confirmed within the freshness window")
+
+// ErrOwnershipRetired reports that this activation may no longer act. Every
+// boundary must fail closed once it is observed.
+var ErrOwnershipRetired = errors.New("HA ownership is retired; this activation may no longer act")
+
+// Generation reports the authorized ownership generation, or zero before
+// promotion. It stamps effects at boundaries the database cannot reach.
+func (g *PostgresGate) Generation() int64 {
+	activation := g.activation.Load()
+	if activation == nil {
+		return 0
+	}
+	return activation.Generation
+}
+
+// Identity reports this activation's candidate identity.
+func (g *PostgresGate) Identity() string {
+	activation := g.activation.Load()
+	if activation == nil {
+		return ""
+	}
+	return activation.Identity
+}
+
+// Valid reports whether this activation may still act. It is deliberately
+// cheap so that every protected effect can consult it, and it fails closed
+// before promotion, after retirement, and whenever the last confirmation from
+// the database is older than the freshness window.
+//
+// The freshness window is what protects boundaries the database cannot reach.
+// A process suspended past its lease resumes with a stale confirmation, so it
+// refuses to publish or dispatch until it has checked again, by which time the
+// database refuses it outright.
+func (g *PostgresGate) Valid() error {
+	if g.activation.Load() == nil {
+		return fmt.Errorf("%w: ownership has not been established", ErrOwnershipRetired)
+	}
+	if g.retired.Load() {
+		return ErrOwnershipRetired
+	}
+	if age := time.Since(time.Unix(0, g.verified.Load())); age > g.freshness() {
+		return fmt.Errorf("%w: last confirmed %s ago, freshness window is %s", ErrOwnershipStale, age.Round(time.Millisecond), g.freshness())
+	}
+	return nil
+}
+
+// heartbeat re-confirms the generation on its own guarded connection until
+// ownership ends. A proven newer generation retires the activation; any other
+// failure simply stops refreshing, so ownership goes stale and fails closed.
+func (g *PostgresGate) heartbeat(ctx context.Context) {
+	ticker := time.NewTicker(g.interval())
+	defer ticker.Stop()
+	var conn *pgx.Conn
+	defer func() {
+		if conn != nil {
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ownershipCloseTimeout)
+			defer cancel()
+			_ = conn.Close(closeCtx)
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if g.retired.Load() {
+			return
+		}
+		if conn == nil || conn.IsClosed() {
+			checkCtx, cancel := context.WithTimeout(ctx, g.interval())
+			fresh, err := g.connect(checkCtx)
+			cancel()
+			if err != nil {
+				continue
+			}
+			conn = fresh
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, g.interval())
+		err := g.VerifyConnection(checkCtx, conn)
+		cancel()
+		switch {
+		case err == nil:
+			g.verified.Store(time.Now().UnixNano())
+		case errors.Is(err, ErrGenerationRetired):
+			logrus.WithField("generation", g.Generation()).Warn("HA ownership was taken over by another candidate")
+			return
+		default:
+			// Bound this close like the deferred one: a hung close would
+			// stall the heartbeat, and a stalled heartbeat stalls every
+			// consumer that waits on ownership.
+			closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), ownershipCloseTimeout)
+			_ = conn.Close(closeCtx)
+			closeCancel()
+			conn = nil
+		}
+	}
+}
+
+// Retired reports whether ownership is permanently gone, as opposed to merely
+// unconfirmed. Consumers must outlast staleness but stop on retirement.
+func (g *PostgresGate) Retired() bool { return g.retired.Load() }
+
+// Retire stops this activation acting at every boundary. The database observes
+// loss first, so a refused connection retires the process without waiting for
+// the election loop to notice.
+func (g *PostgresGate) Retire() { g.retired.Store(true) }
+
+// Boundaries reports which protected boundaries this gate enforces.
 // Promotion stays blocked until the remaining boundaries are implemented.
-func (g *PostgresGate) Boundaries() []Boundary { return []Boundary{BoundaryPostgres} }
+func (g *PostgresGate) Boundaries() []Boundary {
+	return []Boundary{BoundaryPostgres, BoundaryJetStream}
+}
 
 // ApplicationName marks this activation's database connections so a successor
 // can recognize and terminate them. It is empty until promotion succeeds.
@@ -188,5 +323,12 @@ func (g *PostgresGate) VerifyConnection(ctx context.Context, conn *pgx.Conn) err
 	if activation == nil {
 		return fmt.Errorf("HA ownership has not been established; refusing database access")
 	}
-	return guardConnection(*activation)(ctx, conn)
+	err := guardConnection(*activation)(ctx, conn)
+	// Only a newer recorded generation proves ownership is gone. A failed
+	// check is an unverified connection, not a demotion, and must not retire
+	// an activation that still holds authority.
+	if errors.Is(err, ErrGenerationRetired) {
+		g.Retire()
+	}
+	return err
 }

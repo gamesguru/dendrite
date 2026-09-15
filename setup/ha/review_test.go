@@ -84,7 +84,7 @@ func TestBackendsAfterTheHorizonAreNotFencingEvidence(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, remaining, "a backend started after the horizon cannot hold the retired generation")
 
-	require.NoError(t, NewPostgresGate(dsn, 45*time.Second).sweep(t.Context(), conn, promoted, horizon),
+	require.NoError(t, NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour)).sweep(t.Context(), conn, promoted, horizon),
 		"promotion must converge instead of waiting out the ownership budget")
 }
 
@@ -95,9 +95,9 @@ func TestBackendsAfterTheHorizonAreNotFencingEvidence(t *testing.T) {
 func TestRefusedConnectionsDoNotLeakBackends(t *testing.T) {
 	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	t.Cleanup(cleanup)
-	retired := NewPostgresGate(dsn, 45*time.Second)
+	retired := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, retired.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
-	promoted := NewPostgresGate(dsn, 45*time.Second)
+	promoted := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, promoted.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
 
 	connConfig, err := pgx.ParseConfig(dsn)
@@ -128,9 +128,9 @@ func TestPrepareStorageReportsWhyItWasRefused(t *testing.T) {
 	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "same-binary-and-config"}
 	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
 
-	retired := NewPostgresGate(dsn, 45*time.Second)
+	retired := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, retired.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
-	promoted := NewPostgresGate(dsn, 45*time.Second)
+	promoted := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, promoted.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
 
 	_, err := PrepareStorage(t.Context(), cfg, retired)

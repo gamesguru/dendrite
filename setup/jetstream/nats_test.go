@@ -21,7 +21,7 @@ func TestNATSConnectOptions(t *testing.T) {
 	t.Run("disables TLS validation when configured", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.JetStream{DisableTLSValidation: true}
-		opts, err := natsConnectOptions(nil, cfg, nil)
+		opts, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -47,7 +47,7 @@ func TestNATSConnectOptions(t *testing.T) {
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path("/does/not/exist.creds"),
 		}
-		_, err := natsConnectOptions(nil, cfg, nil)
+		_, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err == nil {
 			t.Fatal("expected an error for missing credentials file")
 		}
@@ -68,7 +68,7 @@ func TestNATSConnectOptions(t *testing.T) {
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path(path),
 		}
-		_, err := natsConnectOptions(nil, cfg, nil)
+		_, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err == nil {
 			t.Fatal("expected an error for invalid credentials file")
 		}
@@ -90,7 +90,7 @@ func TestNATSConnectOptions(t *testing.T) {
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path(path),
 		}
-		opts, err := natsConnectOptions(nil, cfg, nil)
+		opts, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

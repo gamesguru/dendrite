@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
+	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -17,13 +18,13 @@ func TestPostgresGateFencesThePreviousActivation(t *testing.T) {
 	t.Cleanup(cleanup)
 	candidate := Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}
 
-	first := NewPostgresGate(dsn, 45*time.Second)
+	first := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, first.Acquire(t.Context(), candidate))
 	require.Equal(t, int64(1), first.Activation().Generation)
 	retired := activationConn(t, dsn, *first.Activation())
 	require.NoError(t, retired.PingContext(t.Context()))
 
-	successor := NewPostgresGate(dsn, 45*time.Second)
+	successor := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, successor.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
 	require.Equal(t, int64(2), successor.Activation().Generation)
 
@@ -33,7 +34,7 @@ func TestPostgresGateFencesThePreviousActivation(t *testing.T) {
 }
 
 func TestPostgresGateReportsTheBlockingBoundary(t *testing.T) {
-	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1:1/nonexistent", time.Second)
+	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1:1/nonexistent", testHAConfig(time.Hour, time.Hour))
 	err := gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"})
 	require.Error(t, err)
 	var blocked *BlockedError
@@ -47,7 +48,7 @@ func TestPostgresGateDoesNotActivateOnCancellation(t *testing.T) {
 	t.Cleanup(cleanup)
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(errors.New("promotion canceled"))
-	gate := NewPostgresGate(dsn, 45*time.Second)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.Error(t, gate.Acquire(ctx, Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
 	require.Nil(t, gate.Activation())
 
@@ -67,7 +68,7 @@ func TestResumedOwnerCannotCommitAfterTakeover(t *testing.T) {
 	t.Cleanup(cleanup)
 	scoped := Candidate{LeaseName: "matrix", LeaseNamespace: "example"}
 
-	old := NewPostgresGate(dsn, 45*time.Second)
+	old := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	oldCandidate := scoped
 	oldCandidate.Identity = "candidate-a"
 	require.NoError(t, old.Acquire(t.Context(), oldCandidate))
@@ -84,7 +85,7 @@ func TestResumedOwnerCannotCommitAfterTakeover(t *testing.T) {
 
 	successor := scoped
 	successor.Identity = "candidate-b"
-	promoted := NewPostgresGate(dsn, 45*time.Second)
+	promoted := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, promoted.Acquire(t.Context(), successor))
 
 	// It resumes after takeover and tries to finish its work.
@@ -99,7 +100,7 @@ func TestResumedOwnerCannotCommitAfterTakeover(t *testing.T) {
 }
 
 func TestPostgresGateRefusesConnectionsBeforePromotion(t *testing.T) {
-	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1/zendrite", 45*time.Second)
+	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1/zendrite", testHAConfig(time.Hour, time.Hour))
 	require.Empty(t, gate.ApplicationName(), "an unpromoted candidate must not mark connections")
 	require.Error(t, gate.VerifyConnection(t.Context(), nil), "an unpromoted candidate must not open application connections")
 }
@@ -107,7 +108,7 @@ func TestPostgresGateRefusesConnectionsBeforePromotion(t *testing.T) {
 func TestPostgresGateGuardsConnectionsAfterPromotion(t *testing.T) {
 	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	t.Cleanup(cleanup)
-	gate := NewPostgresGate(dsn, 45*time.Second)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
 	require.Equal(t, applicationName(*gate.Activation()), gate.ApplicationName())
 
@@ -116,7 +117,7 @@ func TestPostgresGateGuardsConnectionsAfterPromotion(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) })
 	require.NoError(t, gate.VerifyConnection(t.Context(), conn))
 
-	successor := NewPostgresGate(dsn, 45*time.Second)
+	successor := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
 	require.NoError(t, successor.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
 	require.ErrorContains(t, gate.VerifyConnection(t.Context(), conn), "retired")
 }
@@ -138,7 +139,109 @@ func TestPromotionRequiresEveryProtectedBoundary(t *testing.T) {
 }
 
 func TestPostgresGateCoversOnlyTheDatabaseBoundary(t *testing.T) {
-	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1/zendrite", 45*time.Second)
-	require.Equal(t, []Boundary{BoundaryPostgres}, gate.Boundaries())
+	gate := NewPostgresGate("postgresql://zendrite@127.0.0.1/zendrite", testHAConfig(time.Hour, time.Hour))
+	require.Equal(t, []Boundary{BoundaryPostgres, BoundaryJetStream}, gate.Boundaries())
 	require.ErrorIs(t, verifyCoverage(gate), ErrFencingIncomplete)
+}
+
+func TestPostgresGateReportsOwnershipToOtherBoundaries(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
+	require.Error(t, gate.Valid(), "an unpromoted candidate must not act at any boundary")
+
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	require.NoError(t, gate.Valid())
+	require.Equal(t, int64(1), gate.Generation())
+	require.Equal(t, "candidate-a", gate.Identity())
+
+	gate.Retire()
+	require.Error(t, gate.Valid(), "a retired activation must stop acting at every boundary")
+}
+
+// TestPostgresGateRetiresOnRefusedConnection makes the database the trigger:
+// the first connection PostgreSQL refuses tells the rest of the process that
+// its ownership is gone, without waiting for the election loop to catch up.
+func TestPostgresGateRetiresOnRefusedConnection(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+
+	successor := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
+	require.NoError(t, successor.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
+	require.NoError(t, gate.Valid(), "ownership loss is only observable once the database refuses")
+
+	conn, err := pgx.Connect(t.Context(), dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) })
+	require.Error(t, gate.VerifyConnection(t.Context(), conn))
+	require.Error(t, gate.Valid())
+}
+
+// TestPostgresGateKeepsOwnershipThroughTransientErrors separates losing
+// ownership from failing to check it. A network error must not retire a leader
+// that still holds the current generation.
+func TestPostgresGateKeepsOwnershipThroughTransientErrors(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+
+	broken, err := pgx.Connect(t.Context(), dsn)
+	require.NoError(t, err)
+	require.NoError(t, broken.Close(t.Context()))
+
+	require.Error(t, gate.VerifyConnection(t.Context(), broken), "a closed connection cannot be verified")
+	require.NoError(t, gate.Valid(), "an unverifiable connection is not proof of lost ownership")
+}
+
+func testHAConfig(freshness, interval time.Duration) config.HA {
+	return config.HA{
+		LeaseName: "matrix", LeaseNamespace: "example",
+		OwnershipTimeout: 45 * time.Second,
+		RenewDeadline:    freshness,
+		RetryPeriod:      interval,
+	}
+}
+
+// TestOwnershipGoesStaleWithoutAHeartbeat is the suspended-owner case at
+// boundaries the database cannot reach. A process that was paused cannot know
+// it still owns the homeserver, so it must refuse to act until it re-verifies.
+func TestOwnershipGoesStaleWithoutAHeartbeat(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(150*time.Millisecond, time.Hour))
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	require.NoError(t, gate.Valid())
+
+	require.Eventually(t, func() bool { return gate.Valid() != nil }, time.Second, 10*time.Millisecond,
+		"ownership must go stale once it has not been re-verified")
+	require.ErrorIs(t, gate.Valid(), ErrOwnershipStale)
+}
+
+func TestHeartbeatKeepsOwnershipFresh(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(3*time.Second, 100*time.Millisecond))
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+
+	// The window is comfortably larger than a round trip so a slow database on
+	// a loaded runner cannot null the connection and fail the test.
+	require.Never(t, func() bool { return gate.Valid() != nil }, time.Second, 50*time.Millisecond,
+		"a heartbeating owner must stay valid")
+}
+
+func TestHeartbeatRetiresTheOwnerAfterTakeover(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	gate := NewPostgresGate(dsn, testHAConfig(time.Hour, 100*time.Millisecond))
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	require.NoError(t, gate.Valid())
+
+	successor := NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour))
+	require.NoError(t, successor.Acquire(t.Context(), Candidate{Identity: "candidate-b", LeaseName: "matrix", LeaseNamespace: "example"}))
+
+	require.Eventually(t, func() bool { return errors.Is(gate.Valid(), ErrOwnershipRetired) }, 2*time.Second, 20*time.Millisecond,
+		"the heartbeat must observe that a successor took over")
 }

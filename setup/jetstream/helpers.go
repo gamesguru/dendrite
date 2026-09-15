@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
@@ -24,6 +25,10 @@ func JetStreamConsumer(
 	f func(ctx context.Context, msgs []*nats.Msg) bool,
 	opts ...nats.SubOpt,
 ) error {
+	var ownership Ownership
+	if protected, isProtected := js.(protectedJetStream); isProtected {
+		ownership = protected.ownership
+	}
 	defer func(durable string) {
 		if _, protected := js.(protectedJetStream); protected {
 			return
@@ -47,14 +52,30 @@ func JetStreamConsumer(
 		logrus.WithContext(ctx).WithError(err).Warnf("Failed to configure durable %q", durable)
 		return err
 	}
-	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, batch, f) })
+	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, batch, f, ownership) })
 	return nil
 }
 
 func jetStreamConsumerWorker(
 	ctx context.Context, sub *nats.Subscription, subj string, batch int,
 	f func(ctx context.Context, msgs []*nats.Msg) bool,
+	ownership Ownership,
 ) {
+	// ownedOrStop reports whether this activation may still act on the stream.
+	// A retired owner must not fetch or acknowledge: acknowledging work it did
+	// not complete would discard it, so the consumer stops and leaves the
+	// message pending for the promoted activation to redeliver.
+	//
+	// Unconfirmed ownership is not retirement. AwaitOwnership waits it out
+	// rather than returning, because a worker that returns is never restarted.
+	ownedOrStop := func(stage string) bool {
+		if err := AwaitOwnership(ctx, ownership); err != nil {
+			logrus.WithContext(ctx).WithField("subject", subj).WithError(err).
+				Warnf("Stopping consumer before %s: ownership is no longer held", stage)
+			return false
+		}
+		return true
+	}
 	for {
 		// If the parent context has given up then there's no point in
 		// carrying on doing anything, so stop the listener.
@@ -62,6 +83,9 @@ func jetStreamConsumerWorker(
 		case <-ctx.Done():
 			return
 		default:
+		}
+		if !ownedOrStop("fetching") {
+			return
 		}
 		// The context behavior here is surprising — we supply a context
 		// so that we can interrupt the fetch if we want, but NATS will still
@@ -105,6 +129,10 @@ func jetStreamConsumerWorker(
 		if len(msgs) < 1 {
 			continue
 		}
+		msgs = ownedGeneration(ctx, ownership, subj, msgs)
+		if len(msgs) == 0 {
+			continue
+		}
 		for _, msg := range msgs {
 			if err = msg.InProgress(nats.Context(ctx)); err != nil {
 				logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.InProgress: %w", err))
@@ -112,7 +140,13 @@ func jetStreamConsumerWorker(
 				continue
 			}
 		}
-		if f(ctx, msgs) {
+		acknowledge := f(ctx, msgs)
+		// Ownership can be lost while the callback is running, so it is
+		// rechecked here rather than only before the fetch.
+		if !ownedOrStop("acknowledging") {
+			return
+		}
+		if acknowledge {
 			for _, msg := range msgs {
 				if err = msg.AckSync(nats.Context(ctx)); err != nil {
 					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.AckSync: %w", err))
@@ -128,4 +162,34 @@ func jetStreamConsumerWorker(
 			}
 		}
 	}
+}
+
+// ownedGeneration records messages published by a retired activation.
+//
+// Publication is gated on the ownership freshness window, so a retired owner
+// can still publish for a short period after its successor activates. The
+// messages are processed rather than discarded, because a suspended owner
+// publishes only for writes it already committed, and dropping them would lose
+// events that exist in the database. Counting them makes the overlap visible.
+func ownedGeneration(ctx context.Context, ownership Ownership, subj string, msgs []*nats.Msg) []*nats.Msg {
+	if ownership == nil {
+		return msgs
+	}
+	for _, msg := range msgs {
+		stamped := msg.Header.Get(GenerationHeader)
+		if stamped == "" {
+			continue
+		}
+		generation, err := strconv.ParseInt(stamped, 10, 64)
+		if err != nil || generation >= ownership.Generation() {
+			continue
+		}
+		retiredGenerationMessages.WithLabelValues(subj).Inc()
+		logrus.WithContext(ctx).WithFields(logrus.Fields{
+			"subject":    subj,
+			"published":  generation,
+			"generation": ownership.Generation(),
+		}).Warn("Processing a message published by a retired activation")
+	}
+	return msgs
 }

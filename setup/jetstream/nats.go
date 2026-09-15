@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +23,11 @@ import (
 
 type NATSInstance struct {
 	*natsserver.Server
-	nc *natsclient.Conn
-	js natsclient.JetStreamContext
+	// Ownership is set only in HA, where every publication must pass the
+	// activation's ownership check before it reaches the broker.
+	Ownership Ownership
+	nc        *natsclient.Conn
+	js        natsclient.JetStreamContext
 }
 
 var natsLock sync.Mutex
@@ -47,9 +51,16 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 
 	// For connecting to an external NATS server.
 	if len(cfg.Addresses) > 0 {
-		s.js, s.nc = setupNATS(process, cfg, nil)
+		s.js, s.nc = setupNATS(process, cfg, nil, s.Ownership)
 		process.Defer(s.nc.Close)
 		return s.js, s.nc
+	}
+
+	// Configuration already rejects embedded NATS in HA, but the embedded path
+	// below connects without any of the ownership options, so refuse it here
+	// too rather than silently running an HA candidate with no broker barrier.
+	if s.Ownership != nil {
+		logrus.Fatal("HA requires external JetStream addresses; refusing to start the embedded NATS server")
 	}
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
@@ -85,19 +96,19 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 	if s.nc, err = natsclient.Connect("", natsclient.InProcessServer(s.Server)); err != nil {
 		logrus.Fatalln("Failed to create NATS client")
 	}
-	s.js, s.nc = setupNATS(process, cfg, s.nc)
+	s.js, s.nc = setupNATS(process, cfg, s.nc, s.Ownership)
 	process.Defer(s.nc.Close)
 	return s.js, s.nc
 }
 
-func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsclient.Conn) (natsclient.JetStreamContext, *natsclient.Conn) {
+func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsclient.Conn, ownership Ownership) (natsclient.JetStreamContext, *natsclient.Conn) {
 	jsOpts := []natsclient.JSOpt{}
 	if cfg.JetStreamDomain != "" {
 		jsOpts = append(jsOpts, natsclient.Domain(cfg.JetStreamDomain))
 	}
 
 	if nc == nil {
-		opts, err := natsConnectOptions(process, cfg, jsOpts)
+		opts, err := natsConnectOptions(process, cfg, jsOpts, ownership)
 		if err != nil {
 			logrus.WithError(err).Fatal("Unable to configure NATS connection")
 		}
@@ -120,7 +131,7 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 	}
 	checkAndConfigureStreams(process, cfg, js, nc)
 	if cfg.Matrix != nil && cfg.Matrix.HA.Enabled {
-		js = protectedJetStream{js}
+		js = Protected(js, ownership)
 	}
 	return js, nc
 }
@@ -130,9 +141,13 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 // validated upfront so that missing or malformed credentials produce a clear
 // error at startup. The NATS client re-reads the credentials file on each
 // reconnect, so rotating the file contents does not require a process restart.
-func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, jsOpts []natsclient.JSOpt) ([]natsclient.Option, error) {
+func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, jsOpts []natsclient.JSOpt, ownership Ownership) ([]natsclient.Option, error) {
+	name := "Zendrite"
+	if ownership != nil {
+		name = fmt.Sprintf("Zendrite/%d/%s", ownership.Generation(), ownership.Identity())
+	}
 	opts := []natsclient.Option{
-		natsclient.Name("Zendrite"),
+		natsclient.Name(name),
 		natsclient.MaxReconnects(-1), // Try forever
 		natsclient.ReconnectJitter(time.Second, time.Second),
 		natsclient.ReconnectWait(time.Second * 10), //nolint:mnd
@@ -142,6 +157,12 @@ func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, 
 				if jerr != nil {
 					logrus.WithError(jerr).Panic("Unable to get JetStream context in reconnect handler")
 					return
+				}
+				// Reconnecting must not hand back an unprotected context:
+				// stream reconfiguration below would otherwise bypass the
+				// ownership and deletion guards for the rest of the process.
+				if ownership != nil {
+					js = Protected(js, ownership)
 				}
 				checkAndConfigureStreams(process, cfg, js, c)
 			})
@@ -314,8 +335,82 @@ func configureStreams(process *process.ProcessContext, cfg *config.JetStream, js
 	return nil
 }
 
-// protectedJetStream disallows destructive compatibility repairs in HA.
-type protectedJetStream struct{ natsclient.JetStreamContext }
+// GenerationHeader records the activation that published a message. A
+// successor uses it to observe that a retired owner reached the broker.
+const GenerationHeader = "Zendrite-HA-Generation"
+
+// Ownership reports the activation authorized to act at the broker boundary.
+// Valid must fail closed: it reports an error as soon as ownership is known to
+// be lost, which the database guard establishes on the first refused
+// connection.
+type Ownership interface {
+	Generation() int64
+	Identity() string
+	Valid() error
+	// Retired reports whether ownership is permanently gone, as opposed to
+	// temporarily unconfirmed. The two must not be treated alike: retirement
+	// is terminal, while staleness is a blip a consumer has to outlast.
+	Retired() bool
+}
+
+// ownershipRetryInterval is how often a stale consumer rechecks ownership.
+const ownershipRetryInterval = 500 * time.Millisecond
+
+// AwaitOwnership blocks until this activation may act again, ownership is
+// retired, or ctx is done.
+//
+// Staleness is transient. A database blip longer than the freshness window must
+// not permanently stop a consumer: its worker is never restarted, so the leader
+// would keep the Lease and serve HTTP while consuming nothing for the rest of
+// the process lifetime.
+func AwaitOwnership(ctx context.Context, owner Ownership) error {
+	if owner == nil {
+		return nil
+	}
+	ticker := time.NewTicker(ownershipRetryInterval)
+	defer ticker.Stop()
+	for {
+		err := owner.Valid()
+		if err == nil {
+			return nil
+		}
+		if owner.Retired() {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// protectedJetStream disallows destructive compatibility repairs in HA and
+// refuses publication from a retired activation.
+//
+// The broker has no generation check of its own, so this is the boundary every
+// publish must pass. A resumed owner reaches it before any message is queued,
+// and reconnect buffering is disabled so nothing queued earlier can be flushed
+// behind it.
+type protectedJetStream struct {
+	natsclient.JetStreamContext
+	ownership Ownership
+}
+
+// Protected binds a JetStream context to one authorized activation.
+func Protected(js natsclient.JetStreamContext, owner Ownership) natsclient.JetStreamContext {
+	return protectedJetStream{JetStreamContext: js, ownership: owner}
+}
+
+// OwnershipOf reports the activation a JetStream context is bound to, or nil
+// outside HA. Consumers that manage their own subscriptions use it to apply the
+// same ownership barrier as JetStreamConsumer.
+func OwnershipOf(js natsclient.JetStreamContext) Ownership {
+	if protected, ok := js.(protectedJetStream); ok {
+		return protected.ownership
+	}
+	return nil
+}
 
 func (protectedJetStream) DeleteStream(string, ...natsclient.JSOpt) error {
 	return fmt.Errorf("HA refuses stream deletion; migrate offline")
@@ -323,6 +418,43 @@ func (protectedJetStream) DeleteStream(string, ...natsclient.JSOpt) error {
 
 func (protectedJetStream) DeleteConsumer(string, string, ...natsclient.JSOpt) error {
 	return fmt.Errorf("HA refuses consumer deletion; migrate offline")
+}
+
+// stamp refuses a retired owner and records the publishing generation.
+func (p protectedJetStream) stamp(msg *natsclient.Msg) error {
+	if p.ownership == nil {
+		return fmt.Errorf("HA publication refused: ownership has not been established")
+	}
+	if err := p.ownership.Valid(); err != nil {
+		return fmt.Errorf("HA publication refused: %w", err)
+	}
+	if msg.Header == nil {
+		msg.Header = natsclient.Header{}
+	}
+	msg.Header.Set(GenerationHeader, strconv.FormatInt(p.ownership.Generation(), 10))
+	return nil
+}
+
+func (p protectedJetStream) PublishMsg(msg *natsclient.Msg, opts ...natsclient.PubOpt) (*natsclient.PubAck, error) {
+	if err := p.stamp(msg); err != nil {
+		return nil, err
+	}
+	return p.JetStreamContext.PublishMsg(msg, opts...)
+}
+
+func (p protectedJetStream) Publish(subject string, data []byte, opts ...natsclient.PubOpt) (*natsclient.PubAck, error) {
+	return p.PublishMsg(&natsclient.Msg{Subject: subject, Data: data}, opts...)
+}
+
+func (p protectedJetStream) PublishMsgAsync(msg *natsclient.Msg, opts ...natsclient.PubOpt) (natsclient.PubAckFuture, error) {
+	if err := p.stamp(msg); err != nil {
+		return nil, err
+	}
+	return p.JetStreamContext.PublishMsgAsync(msg, opts...)
+}
+
+func (p protectedJetStream) PublishAsync(subject string, data []byte, opts ...natsclient.PubOpt) (natsclient.PubAckFuture, error) {
+	return p.PublishMsgAsync(&natsclient.Msg{Subject: subject, Data: data}, opts...)
 }
 
 func waitForReplicas(ctx context.Context, js natsclient.JetStreamContext, name string, replicas int) error {
