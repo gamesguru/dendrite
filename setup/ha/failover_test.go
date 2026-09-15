@@ -293,7 +293,7 @@ func TestStuckApplicationForcesTermination(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			done <- control(ctx, elector, acquired, nil, Candidate{}, gateFunc(func(context.Context, Candidate) error { return nil }), app, time.Second)
+			done <- control(ctx, elector, acquired, nil, Candidate{}, gateFunc(func(context.Context, Candidate) error { return nil }), app, time.Second, NewStatus())
 		}()
 		synctest.Wait()
 		lose(ErrLeadershipLost)

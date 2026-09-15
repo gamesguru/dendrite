@@ -74,7 +74,9 @@ func TestControl(t *testing.T) {
 					gate = nil
 				}
 				done := make(chan error, 1)
-				go func() { done <- control(ctx, elector, acquired, nil, Candidate{}, gate, server, 2*time.Second) }()
+				go func() {
+					done <- control(ctx, elector, acquired, nil, Candidate{}, gate, server, 2*time.Second, NewStatus())
+				}()
 				synctest.Wait()
 				switch scenario {
 				case "standby cancellation":
@@ -136,7 +138,7 @@ func TestDisabledDoesNotUseKubernetesOrGate(t *testing.T) {
 	server := lifecycle.New(func(p *process.ProcessContext) error { cancel(nil); return nil }, time.Second)
 	gate := gateFunc(func(context.Context, Candidate) error { t.Error("standalone called fencing"); return nil })
 	// Invalid HA-only options are ignored, and no service account is required.
-	if err := Run(ctx, config.HA{Backend: "invalid"}, server, gate, time.Second); err != nil {
+	if err := Run(ctx, config.HA{Backend: "invalid"}, nil, server, gate, time.Second); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -177,7 +179,7 @@ func TestStopBeforeActivation(t *testing.T) {
 				}
 				done := make(chan error, 1)
 				go func() {
-					done <- control(ctx, elector, acquired, nil, Candidate{}, gateFunc(func(context.Context, Candidate) error { return nil }), app, time.Second)
+					done <- control(ctx, elector, acquired, nil, Candidate{}, gateFunc(func(context.Context, Candidate) error { return nil }), app, time.Second, NewStatus())
 				}()
 				<-app.entered
 				switch reason {
@@ -228,7 +230,7 @@ func TestControlRefusesIncompleteFencing(t *testing.T) {
 			t.Error("initialized without ownership at every protected boundary")
 			return nil
 		}, time.Second)
-		err := control(ctx, elector, acquired, nil, Candidate{}, partialGate{}, server, time.Second)
+		err := control(ctx, elector, acquired, nil, Candidate{}, partialGate{}, server, time.Second, NewStatus())
 		if !errors.Is(err, ErrFencingIncomplete) {
 			t.Fatalf("incomplete fencing did not block promotion: %v", err)
 		}

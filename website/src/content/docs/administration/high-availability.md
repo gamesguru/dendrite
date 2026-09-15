@@ -27,6 +27,7 @@ global:
     renew_deadline: 20s
     retry_period: 5s
     ownership_timeout: 45s
+    status_address: :8009
 ```
 
 Keep `enabled` set to `false` until the failure envelope is qualified in [#352](https://codefloe.com/pat-s/zendrite/issues/352).
@@ -40,6 +41,47 @@ Longer timings allow more time for Kubernetes API requests but can delay failove
 `ownership_timeout` bounds how long a candidate may spend proving that the previous owner can no longer act.
 It must be at least as long as `lease_duration`, so a successor can outwait an expiring Lease.
 A candidate that exhausts this budget stays unready and reports the boundary that blocked it; it never activates as a fallback.
+
+## Probes and status
+
+Every candidate serves liveness, readiness, status, and metrics on `status_address`, separately from the Matrix listeners.
+This listener exists because a standby never binds the Matrix listeners at all.
+Without it a standby would look dead to Kubernetes and be restarted, and its metrics would not be scrapable until it happened to be promoted.
+
+| Endpoint | Meaning |
+| --- | --- |
+| `/_zendrite/monitor/up` | Liveness. Succeeds for any running candidate, including a standby. |
+| `/_zendrite/monitor/health` | Readiness. Succeeds only for the active homeserver. |
+| `/_zendrite/monitor/status` | Phase, leadership, readiness, and the blocking reason as JSON. |
+| `/metrics` | Prometheus metrics, when `global.metrics.enabled` is set. |
+
+Point the liveness probe at `/_zendrite/monitor/up` and the readiness probe at `/_zendrite/monitor/health`, both on the `status_address` port rather than the Matrix port.
+The same paths also exist on the Matrix listener, which a standby never binds, so probing them there makes every standby fail its probes and restart.
+Using the readiness endpoint for liveness has the same effect, because a standby is intentionally unready.
+
+A candidate reports one of `starting`, `standby`, `fencing`, `recovering`, `active`, `draining`, or `stopped`.
+An elected candidate stays unready through `fencing` and `recovering`, so a Service only routes to it once ownership is established and recovery is complete.
+When promotion is blocked, `/_zendrite/monitor/status` names the boundary and the reason.
+
+## Metrics and alerts
+
+All HA metrics use fixed label sets.
+Candidate identity and ownership generation are deliberately never labels, because they grow without bound across failovers.
+
+| Metric | Meaning |
+| --- | --- |
+| `zendrite_ha_phase{phase}` | 1 for the current phase, 0 for the others. |
+| `zendrite_ha_leadership_transitions_total{transition}` | Leadership acquisitions and losses. |
+| `zendrite_ha_renewal_failures_total` | Lease renewal failures, which precede an election. |
+| `zendrite_ha_fencing_failures_total{boundary}` | Ownership establishment failures per boundary. |
+| `zendrite_ha_recovery_duration_seconds` | Acquisition to readiness for the current activation. |
+| `zendrite_ha_shutdown_duration_seconds` | Ownership loss to the end of draining. |
+
+Alert on no ready leader, repeated elections, stuck recovery, and repeated fencing failures.
+The chart ships these rules; see [Helm setup](/installation/helm/helm/).
+
+Note that `zendrite_ha_shutdown_duration_seconds` is set as the process drains, so a scrape may not catch it before the process exits.
+Treat it as a best-effort signal and read the logs for the authoritative shutdown record.
 
 ## Ownership generation
 
@@ -116,6 +158,88 @@ A media operation refused for lost ownership returns 503 rather than 400, so a c
 ## Kubernetes permissions
 
 The pods' service account needs `get`, `create`, and `update` permissions on `leases` in the `coordination.k8s.io` API group within the configured namespace.
+
+## Prerequisites
+
+- Kubernetes 1.26 or later, for a stable `coordination.k8s.io/v1` Lease API and `PodDisruptionBudget` in `policy/v1`.
+- An external HA PostgreSQL with synchronous commit, and an external replicated JetStream.
+  The bundled single-node PostgreSQL and the embedded NATS server are rejected in HA mode.
+- Shared media: S3, or an explicitly shared POSIX filesystem.
+- The same signing key, server name, and executable on every candidate.
+- Every candidate must connect as the same PostgreSQL role, which HA already enforces by rejecting per-component database targets.
+
+See [HA storage and recovery](/installation/manual/high-availability/) for the full storage contract.
+
+## Signing keys and bootstrap
+
+Every candidate must present the same signing identity, or remote servers will reject events depending on which candidate served them.
+Mount one signing key Secret into every pod; do not let each pod generate its own.
+Public signing identities are part of the compatibility fingerprint recorded on the Lease, so a candidate with a different key fails closed rather than serving traffic under the wrong identity.
+That is a hard stop, not a fallback: fix the Secret rather than working around the mismatch.
+
+To bootstrap, start with `replicaCount: 1` and HA enabled, and confirm the pod reaches `active`.
+The first candidate creates the annotated Lease and the ownership record.
+Only then scale up.
+Starting several candidates against an empty database at once is safe but harder to diagnose if a prerequisite is wrong.
+
+## Upgrades
+
+Rolling mixed-version upgrades are not supported: candidates pin themselves to one executable and configuration fingerprint.
+A new-version pod fails the Lease compatibility check, so replacing pods one at a time deadlocks. Once the last old pod is gone, nothing can acquire the Lease without operator intervention.
+
+Upgrade in a maintenance window instead, as described in [HA storage and recovery](/installation/manual/high-availability/): scale to zero, confirm no pod is running, deliberately reset both compatibility records, then scale back up on the new version.
+`maxSurge: 0` keeps a new candidate from being started alongside an old owner, but it does not make a rolling upgrade work.
+
+## Manual failover
+
+Delete the pod that reports `active`.
+The remaining candidates contend for the Lease, and one of them establishes ownership and recovers.
+Do not delete the Lease to force a failover.
+The Lease is coordination, not authority, and deleting it does not retire the ownership generation.
+
+Expect a visible interruption.
+Clients receive connection errors or `503` responses until the successor is ready, then reconnect and resume from their existing sync tokens.
+Long-lived `/sync` connections are dropped and must be re-established.
+Typing notifications, HTTP transaction caches, login and SSO intermediates, and sliding-sync sessions are process-local, so clients may need to retry a request or start a fresh session.
+
+## Rolling back to a single instance
+
+Scale to `replicaCount: 1` and wait until exactly one candidate reports `active`.
+To leave HA entirely, scale to zero first, confirm no pod is running, then set `ha.enabled: false` and start one instance with the same identity and storage.
+Do not set `ha.enabled: false` while several pods are running: without election nothing prevents two active homeservers.
+
+## Recovering from blocked fencing
+
+A candidate that cannot establish ownership refuses to activate and exits with a nonzero status, so Kubernetes restarts it and it contends again.
+This is intended: it fails closed rather than risking two active homeservers.
+
+Read the blocking reason from the candidate's logs.
+`/_zendrite/monitor/status` reports the boundary only during the brief window before the process exits, and `zendrite_ha_fencing_failures_total` is likely to be missed by a scrape for the same reason, so neither is a reliable record of a single failure.
+A candidate stuck in a restart loop is visible through `ZendriteHANoReadyLeader` and through the pod's restart count.
+
+Look at the named boundary first.
+A `postgresql` block usually means a backend of the previous activation is still connected, which the status reason reports as a count.
+Find it with `SELECT pid, application_name, state FROM pg_stat_activity WHERE application_name LIKE 'zendrite:%'`, and confirm the old pod is really gone.
+Do not delete the ownership tables to clear the block; that discards the evidence that makes takeover safe.
+
+## Guarantees and limitations
+
+Supported today:
+
+- One active homeserver at a time, enforced at the database, broker, media, dispatch, and admission boundaries.
+- Automatic takeover after a candidate loses its Lease, provided ownership can be established.
+- Committed PostgreSQL writes and acknowledged JetStream publications survive takeover under the documented storage settings.
+
+Not supported, and not planned for this iteration:
+
+- Active-active. Only one candidate serves traffic; the others are cold.
+- Zero-downtime failover. Takeover restarts the homeserver and rebuilds process-local state.
+- Rolling mixed-version upgrades and automatic schema downgrade.
+- Exactly-once external delivery. Federation, appservice, and push retries can duplicate remote deliveries.
+- Non-Kubernetes election backends.
+
+The failure envelope has not been qualified against a production workload; that work is [#352](https://codefloe.com/pat-s/zendrite/issues/352).
+Recovery time has not been measured for large deployments, and a full search index rebuild can exceed the proposed 120 second takeover target.
 
 ## Failover behavior
 

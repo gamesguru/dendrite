@@ -154,7 +154,7 @@ func main() {
 	if err := ha.SetCompatibility(cfg); err != nil {
 		logrus.WithError(err).Fatal("HA compatibility validation failed")
 	}
-	if err := ha.Run(ownership, cfg.Global.HA, server, gate, shutdownTimeout); err != nil {
+	if err := ha.Run(ownership, cfg.Global.HA, &cfg.Global.Metrics, server, gate, shutdownTimeout); err != nil {
 		logrus.WithError(err).Error("Homeserver stopped")
 		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.
 	}

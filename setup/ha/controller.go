@@ -77,13 +77,19 @@ type election interface{ Run(context.Context) }
 // even when cancellation races the asynchronous acquisition callback.
 //
 //nolint:contextcheck // Ownership must descend from client-go's context received over the acquisition channel.
-func control(ctx context.Context, elector election, acquired <-chan context.Context, failures <-chan error, candidate Candidate, gate OwnershipGate, app Application, timeout time.Duration) error {
+func control(ctx context.Context, elector election, acquired <-chan context.Context, failures <-chan error, candidate Candidate, gate OwnershipGate, app Application, timeout time.Duration, status *Status) error {
 	electionCtx, cancelElection := context.WithCancelCause(ctx)
 	defer cancelElection(nil)
 	electionDone := make(chan struct{})
 	go func() { elector.Run(electionCtx); close(electionDone) }()
 	defer func() { cancelElection(nil); <-electionDone }()
 
+	if status == nil {
+		status = NewStatus()
+	}
+	// A candidate contending for the Lease is live but must never be routed
+	// Matrix traffic, so standby is reported before waiting for acquisition.
+	status.Observe(PhaseStandby, "")
 	var leader context.Context
 	select {
 	case <-ctx.Done():
@@ -100,6 +106,8 @@ func control(ctx context.Context, elector election, acquired <-chan context.Cont
 		return ErrLeadershipLost
 	case leader = <-acquired:
 	}
+	// Acquisition authorizes fencing, never application startup.
+	status.Observe(PhaseFencing, "")
 	ownership, cancelOwnership := context.WithCancelCause(leader)
 	defer cancelOwnership(nil)
 	// Parent cancellation must also stop promotion for controllable election implementations.
@@ -118,10 +126,12 @@ func control(ctx context.Context, elector election, acquired <-chan context.Cont
 			return
 		}
 		if err := verifyCoverage(gate); err != nil {
+			status.Fail(err)
 			promoted <- err
 			return
 		}
 		if err := gate.Acquire(ownership, candidate); err != nil {
+			status.Fail(err)
 			promoted <- fmt.Errorf("establish fenced ownership: %w", err)
 			return
 		}
@@ -161,6 +171,7 @@ func control(ctx context.Context, elector election, acquired <-chan context.Cont
 		}
 	}
 	cancelOwnership(result)
+	status.Fail(result)
 	app.Stop()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

@@ -20,7 +20,7 @@ import (
 
 // Run preserves standalone behavior without constructing any Kubernetes client
 // when HA is disabled. A nil gate deliberately refuses HA application startup.
-func Run(ctx context.Context, cfg config.HA, app Application, gate OwnershipGate, shutdownTimeout time.Duration) error {
+func Run(ctx context.Context, cfg config.HA, metrics *config.Metrics, app Application, gate OwnershipGate, shutdownTimeout time.Duration) error {
 	if !cfg.Enabled {
 		return app.Run(ctx)
 	}
@@ -46,7 +46,22 @@ func Run(ctx context.Context, cfg config.HA, app Application, gate OwnershipGate
 	if err != nil {
 		return fmt.Errorf("create HA Kubernetes Lease client: %w", err)
 	}
-	return runKubernetes(ctx, cfg, client, app, gate, shutdownTimeout)
+	// Bind the status listener before electing. A standby never binds the
+	// Matrix listeners, so this is the only surface its probes and metrics
+	// have, and a candidate that cannot serve probes must fail to start
+	// rather than be restarted for looking dead.
+	status := NewStatus()
+	if reporter, ok := app.(StateReporter); ok {
+		status.Track(reporter)
+	}
+	listener, serve, err := listenStatus(cfg, status, metrics)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
+	go serve()
+	logrus.WithField("address", listener.Addr().String()).Info("HA status listener started")
+	return runKubernetes(ctx, cfg, client, app, gate, shutdownTimeout, status)
 }
 
 // newLeaseClient permits a slow request to use the renewal window. The retry
@@ -57,14 +72,14 @@ func newLeaseClient(clientConfig *rest.Config, renewDeadline time.Duration) (coo
 	return coordination.NewForConfig(clientConfig)
 }
 
-func runKubernetes(ctx context.Context, cfg config.HA, client coordination.CoordinationV1Interface, app Application, gate OwnershipGate, shutdownTimeout time.Duration) error {
+func runKubernetes(ctx context.Context, cfg config.HA, client coordination.CoordinationV1Interface, app Application, gate OwnershipGate, shutdownTimeout time.Duration, status *Status) error {
 	candidate := Candidate{Identity: cfg.CandidateID + "_" + uuid.NewString(), LeaseName: cfg.LeaseName, LeaseNamespace: cfg.LeaseNamespace}
 	failures := make(chan error, 1)
 	lock := &permissionLock{Interface: &annotatedLeaseLock{LeaseLock: &resourcelock.LeaseLock{
 		LeaseMeta:  metav1.ObjectMeta{Name: candidate.LeaseName, Namespace: candidate.LeaseNamespace, Annotations: map[string]string{compatibilityAnnotation: cfg.Compatibility}},
 		Client:     client,
 		LockConfig: resourcelock.ResourceLockConfig{Identity: candidate.Identity},
-	}}, failures: failures, leases: client.Leases(candidate.LeaseNamespace), compatibility: cfg.Compatibility, leaseName: candidate.LeaseName}
+	}}, failures: failures, leases: client.Leases(candidate.LeaseNamespace), compatibility: cfg.Compatibility, leaseName: candidate.LeaseName, identity: candidate.Identity}
 	acquired := make(chan context.Context, 1)
 	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:          lock,
@@ -80,7 +95,7 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 	if err != nil {
 		return fmt.Errorf("configure HA Lease election: %w", err)
 	}
-	return control(ctx, elector, acquired, failures, candidate, gate, app, shutdownTimeout)
+	return control(ctx, elector, acquired, failures, candidate, gate, app, shutdownTimeout, status)
 }
 
 // permissionLock turns permanent authorization failures into actionable terminal
@@ -91,6 +106,7 @@ type permissionLock struct {
 	leases        coordination.LeaseInterface
 	compatibility string
 	leaseName     string
+	identity      string
 }
 
 func (l *permissionLock) report(err error) {
@@ -128,6 +144,13 @@ func (l *permissionLock) Create(ctx context.Context, record resourcelock.LeaderE
 
 func (l *permissionLock) Update(ctx context.Context, record resourcelock.LeaderElectionRecord) error {
 	err := l.Interface.Update(ctx, record)
+	// client-go calls Update both to renew and to acquire, so counting every
+	// failure would inflate this on every healthy standby that loses a race.
+	// Only a holder failing to renew is control-plane trouble, and a single
+	// failure is not yet a lost lease: client-go retries until the deadline.
+	if err != nil && record.HolderIdentity == l.identity {
+		renewalFailures.Inc()
+	}
 	l.report(err)
 	return err
 }

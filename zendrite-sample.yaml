@@ -21,6 +21,7 @@ global:
     renew_deadline: 20s
     retry_period: 5s
     ownership_timeout: 45s
+    status_address: :8009
 
   # The domain name of this homeserver.
   server_name: localhost

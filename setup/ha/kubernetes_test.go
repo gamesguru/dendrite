@@ -90,7 +90,7 @@ func TestKubernetesContention(t *testing.T) {
 			server := lifecycle.New(func(*process.ProcessContext) error { starts.Add(1); return nil }, time.Second)
 			servers[i] = server
 			go func() {
-				done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, gate, time.Second)
+				done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, gate, time.Second, NewStatus())
 			}()
 		}
 		time.Sleep(time.Minute)
@@ -153,7 +153,7 @@ func TestKubernetesFailures(t *testing.T) {
 				server := lifecycle.New(func(*process.ProcessContext) error { starts.Add(1); return nil }, time.Second)
 				done := make(chan error, 1)
 				go func() {
-					done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, gateFunc(func(context.Context, Candidate) error { return nil }), time.Second)
+					done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, gateFunc(func(context.Context, Candidate) error { return nil }), time.Second, NewStatus())
 				}()
 				synctest.Wait()
 				if scenario == "renewal failure" {
@@ -239,7 +239,7 @@ func TestLeaseRequestRenewalWindow(t *testing.T) {
 
 func TestInvalidHAStopsApplication(t *testing.T) {
 	server := lifecycle.New(func(*process.ProcessContext) error { t.Error("invalid HA initialized application"); return nil }, time.Second)
-	if err := Run(t.Context(), config.HA{Enabled: true}, server, nil, time.Second); err == nil {
+	if err := Run(t.Context(), config.HA{Enabled: true}, nil, server, nil, time.Second); err == nil {
 		t.Fatal("invalid HA accepted")
 	}
 	if server.State() != lifecycle.Stopped {

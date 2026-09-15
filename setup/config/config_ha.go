@@ -27,6 +27,9 @@ type HA struct {
 	// OwnershipTimeout bounds resource-enforced ownership establishment.
 	// Exceeding it leaves the candidate unready; it never activates anyway.
 	OwnershipTimeout time.Duration `yaml:"ownership_timeout"`
+	// StatusAddress serves liveness, readiness, status, and metrics for every
+	// candidate, including standbys that never bind the Matrix listeners.
+	StatusAddress string `yaml:"status_address"`
 }
 
 // Defaults keeps HA disabled and supplies the reference election timings.
@@ -44,6 +47,7 @@ func (c *HA) Defaults() {
 	c.RenewDeadline = referenceRenewDeadline
 	c.RetryPeriod = referenceRetryPeriod
 	c.OwnershipTimeout = referenceOwnershipTimeout
+	c.StatusAddress = ":8009"
 }
 
 // Verify rejects ambiguous identities and unsafe election timings when enabled.
@@ -75,6 +79,10 @@ func (c *HA) Verify(errs *ConfigErrors) {
 	// The API stores LeaseDurationSeconds as int32; do not truncate or overflow it.
 	if c.LeaseDuration%time.Second != 0 || c.LeaseDuration/time.Second > math.MaxInt32 {
 		errs.Add("global.ha.lease_duration must be whole seconds and fit in a positive signed 32-bit LeaseDurationSeconds value")
+	}
+	// Probes must reach a standby, which never binds the Matrix listeners.
+	if c.StatusAddress == "" {
+		errs.Add("global.ha.status_address must be set so probes can reach a standby candidate")
 	}
 	// A successor must be able to outwait an expiring Lease while it proves
 	// that no backend of the retired activation remains connected.

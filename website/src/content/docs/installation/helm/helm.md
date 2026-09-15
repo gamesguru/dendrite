@@ -43,6 +43,42 @@ zendrite_config:
       conn_max_lifetime: -1
 ```
 
+## High availability
+
+The chart can run several candidates with one ready, safely active homeserver.
+HA is experimental; read [High availability](/administration/high-availability/) and [HA storage and recovery](/installation/manual/high-availability/) before enabling it.
+
+The values below require the chart release that adds HA support, tracked in [devxy/helm-zendrite#35](https://codefloe.com/devxy/helm-zendrite/pulls/35).
+Earlier releases have no `ha` or `replicaCount` values, no Lease RBAC and no status Service, and enabling HA against them leaves pods without permission to acquire their Lease.
+
+```yaml
+replicaCount: 3
+
+ha:
+  enabled: true
+
+# maxSurge must be 0: a surged candidate cannot become Ready while the old one
+# still owns the homeserver, so the rollout would wait for it forever.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+```
+
+This restarts candidates one at a time and lets a standby take over, which is what you want for a configuration change or a same-version restart.
+
+A **version change is different**.
+Candidates pin themselves to one executable fingerprint recorded on the Lease, so new-version pods cannot acquire it and the deployment ends with no owner at all.
+Use the maintenance window described in [High availability](/administration/high-availability/#upgrades) for any version change.
+
+`replicaCount` above 1 without `ha.enabled` is rejected, because running several active replicas without leader election corrupts shared state.
+A rolling update with a nonzero `maxSurge` is rejected as well: a surged candidate cannot be promoted while the old one still holds ownership, so the rollout would deadlock.
+
+The chart creates a service account with `get`, `update` and `create` on the homeserver's Lease, a headless status Service so standbys can be scraped, a disruption budget, and alert rules.
+It does not provision the HA prerequisites.
+Point the chart at an external HA PostgreSQL, an external replicated JetStream, and shared media, and disable the bundled PostgreSQL.
+
 ## Installing with PostgreSQL
 
 The chart comes with a dependency on Postgres, which can be installed alongside Zendrite. Enable it in your `values.yaml`:
