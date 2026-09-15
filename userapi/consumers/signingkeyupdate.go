@@ -95,8 +95,11 @@ func (t *SigningKeyUpdateConsumer) onMessage(ctx context.Context, msgs []*nats.M
 	t.userAPI.PerformUploadDeviceKeys(ctx, uploadReq, uploadRes)
 	if uploadRes.Error != nil {
 		logrus.WithError(uploadRes.Error).Error("failed to upload device keys")
-		return true
+		// Transient: the upload failed, so the cross-signing keys were never stored.
+		// Acknowledging here loses the update permanently.
+		return false
 	}
 
-	return true
+	// Transient, as above.
+	return false
 }

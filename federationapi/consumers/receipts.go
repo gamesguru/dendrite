@@ -142,5 +142,6 @@ func (t *OutputReceiptConsumer) onMessage(ctx context.Context, msgs []*nats.Msg)
 		return false
 	}
 
-	return true
+	// Transient: the receipt never reached the destination queue.
+	return false
 }

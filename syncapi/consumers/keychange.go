@@ -107,7 +107,10 @@ func (s *OutputKeyChangeEventConsumer) onDeviceKeyMessage(m api.DeviceMessage, d
 	if err != nil {
 		logrus.WithError(err).Error("syncapi: failed to QuerySharedUsers for key change event from key server")
 		sentry.CaptureException(err)
-		return true
+		// Transient: the key change is not delivered to anyone who shares a room
+		// with this user, leaving them with a stale device list. Retry rather than
+		// drop, or verification breaks silently and does not recover.
+		return false
 	}
 	// make sure we get our own key updates too!
 	queryRes.UserIDsToCount[output.UserID] = 1
@@ -132,7 +135,9 @@ func (s *OutputKeyChangeEventConsumer) onCrossSigningMessage(m api.DeviceMessage
 	if err != nil {
 		logrus.WithError(err).Error("syncapi: failed to QuerySharedUsers for key change event from key server")
 		sentry.CaptureException(err)
-		return true
+		// Transient, and the same reasoning as the device key path above: a dropped
+		// cross-signing update leaves other users unable to verify this one.
+		return false
 	}
 	// make sure we get our own key updates too!
 	queryRes.UserIDsToCount[output.UserID] = 1

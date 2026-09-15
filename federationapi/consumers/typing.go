@@ -110,5 +110,7 @@ func (t *OutputTypingConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) 
 		return false
 	}
 
+	// Dropped on purpose. Typing notifications expire on their own, so a
+	// redelivered one would be stale by the time it arrived.
 	return true
 }
