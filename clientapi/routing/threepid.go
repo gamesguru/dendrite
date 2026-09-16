@@ -46,6 +46,18 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		return *reqErr
 	}
+	if body.IDServer == "" {
+		body.IDServer = cfg.EmailValidationServer
+		if body.IDServer == "" {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.MatrixError{
+					ErrCode: "M_THREEPID_MEDIUM_NOT_SUPPORTED",
+					Err:     "Email verification is not configured on this homeserver",
+				},
+			}
+		}
+	}
 
 	var resp reqTokenResponse
 	var err error
@@ -75,17 +87,9 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	}
 
 	resp.SID, err = threepid.CreateSession(req.Context(), body, cfg, client)
-	{
-		var errCase0 threepid.ErrNotTrusted
-		switch {
-		case err == nil:
-		case errors.As(err, &errCase0):
-			util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
-			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.IDServer)}
-		default:
-			util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
-			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.Unknown("Internal server error")}
-		}
+	if err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
+		return threePIDError(err, body.IDServer)
 	}
 
 	return util.JSONResponse{

@@ -25,6 +25,10 @@ type ClientAPI struct {
 	// If set, allows registration by anyone who also has the shared
 	// secret, even if registration is otherwise disabled.
 	RegistrationSharedSecret string `yaml:"registration_shared_secret"`
+
+	// EmailValidationServer handles email verification when clients omit id_server.
+	// Use a hostname listed in global.trusted_third_party_id_servers, without a scheme.
+	EmailValidationServer string `yaml:"email_validation_server"`
 	// If set, prevents guest accounts from being created. Only takes
 	// effect if registration is enabled, otherwise guests registration
 	// is forbidden either way.
@@ -73,6 +77,7 @@ type ClientAPI struct {
 
 func (c *ClientAPI) Defaults(opts DefaultOpts) {
 	c.RegistrationSharedSecret = ""
+	c.EmailValidationServer = ""
 	c.RegistrationRequiresToken = false
 	c.RecaptchaPublicKey = ""
 	c.RecaptchaPrivateKey = ""
@@ -89,6 +94,20 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 }
 
 func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
+	if c.EmailValidationServer != "" {
+		trusted := false
+		if c.Matrix != nil {
+			for _, server := range c.Matrix.TrustedIDServers {
+				if server == c.EmailValidationServer {
+					trusted = true
+					break
+				}
+			}
+		}
+		if !trusted {
+			configErrs.Add("client_api.email_validation_server must be listed in global.trusted_third_party_id_servers")
+		}
+	}
 	c.TURN.Verify(configErrs)
 	c.RateLimiting.Verify(configErrs)
 	if c.RecaptchaEnabled {

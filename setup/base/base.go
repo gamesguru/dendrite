@@ -50,6 +50,15 @@ const httpShutdownTimeout = 5 * time.Second
 // CreateClient creates a new client (normally used for media fetch requests).
 // Should only be called once per component.
 func CreateClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) *fclient.Client {
+	return createClient(cfg, dnsCache, true)
+}
+
+// CreateIdentityClient connects directly to identity servers without federation discovery.
+func CreateIdentityClient(cfg *config.Zendrite) *fclient.Client {
+	return createClient(cfg, nil, false)
+}
+
+func createClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache, federationDiscovery bool) *fclient.Client {
 	if cfg.Global.DisableFederation {
 		return fclient.NewClient(
 			fclient.WithTransport(noOpHTTPTransport),
@@ -57,7 +66,7 @@ func CreateClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) *fclient.Cli
 	}
 	opts := []fclient.ClientOption{
 		fclient.WithSkipVerify(cfg.FederationAPI.DisableTLSValidation),
-		fclient.WithWellKnownSRVLookups(true),
+		fclient.WithWellKnownSRVLookups(federationDiscovery),
 	}
 	if cfg.Global.DNSCache.Enabled && dnsCache != nil {
 		opts = append(opts, fclient.WithDNSCache(dnsCache))

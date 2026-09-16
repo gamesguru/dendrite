@@ -359,3 +359,98 @@ func Test3PIDBindingMetadata(t *testing.T) {
 	res := SaveAccountData(threePIDRequest(`{}`), userAPI, &api.Device{UserID: userID}, userID, "", key, nil)
 	requireThreePIDResponse(t, res, 403, "M_FORBIDDEN")
 }
+
+func (a *threePIDUserAPI) QueryLocalpartForThreePID(_ context.Context, _ *api.QueryLocalpartForThreePIDRequest, _ *api.QueryLocalpartForThreePIDResponse) error {
+	return nil
+}
+
+func TestRequestEmailTokenWithoutIdentityServer(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, requested, expected, errcode string
+	}{
+		{name: "Element request", configured: "id.example", expected: "id.example"},
+		{name: "not configured", errcode: "M_THREEPID_MEDIUM_NOT_SUPPORTED"},
+		{name: "untrusted configured server", configured: "untrusted.example", errcode: "M_SERVER_NOT_TRUSTED"},
+		{name: "legacy explicit server", requested: "id.example", expected: "id.example"},
+		{name: "explicit server takes precedence", configured: "default.example", requested: "id.example", expected: "id.example"},
+		{name: "untrusted explicit server", configured: "id.example", requested: "untrusted.example", errcode: "M_SERVER_NOT_TRUSTED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := threePIDConfig()
+			cfg.EmailValidationServer = tc.configured
+			cfg.Matrix.TrustedIDServers = append(cfg.Matrix.TrustedIDServers, "default.example")
+			userAPI := &threePIDUserAPI{}
+			requests := 0
+			client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+				requests++
+				require.Equal(t, "https", req.URL.Scheme)
+				require.Equal(t, tc.expected, req.URL.Host)
+				switch req.URL.Path {
+				case "/_matrix/identity/api/v1/validate/email/requestToken":
+					require.NoError(t, req.ParseForm())
+					require.Equal(t, "alice@example.com", req.Form.Get("email"))
+					require.Equal(t, tc.name, req.Form.Get("client_secret"))
+					require.Equal(t, "1", req.Form.Get("send_attempt"))
+					return identityResponse(200, `{"sid":"email-session"}`), nil
+				case "/_matrix/identity/api/v1/3pid/getValidated3pid":
+					require.Equal(t, "email-session", req.URL.Query().Get("sid"))
+					require.Equal(t, tc.name, req.URL.Query().Get("client_secret"))
+					return identityResponse(200, `{"address":"alice@example.com","medium":"email","validated_at":1}`), nil
+				default:
+					t.Fatalf("unexpected request: %s", req.URL)
+					return nil, errors.New("unexpected request")
+				}
+			})))
+			body := map[string]any{"email": "alice@example.com", "client_secret": tc.name, "send_attempt": 1}
+			if tc.requested != "" {
+				body["id_server"] = tc.requested
+			}
+			encoded, err := json.Marshal(body)
+			require.NoError(t, err)
+			res := RequestEmailToken(threePIDRequest(string(encoded)), userAPI, cfg, client)
+			if tc.errcode != "" {
+				requireThreePIDResponse(t, res, 400, tc.errcode)
+				require.Zero(t, requests)
+				return
+			}
+			requireThreePIDResponse(t, res, 200, "")
+			require.Equal(t, reqTokenResponse{SID: "email-session"}, res.JSON)
+			require.Equal(t, tc.expected, threepid.SessionServer("email-session", tc.name))
+			// Element's final add request also omits id_server; use the remembered server.
+			add := fmt.Sprintf(`{"sid":"email-session","client_secret":%q,"auth":{"type":"m.login.password","user":"alice","password":"password"}}`, tc.name)
+			res = Add3PID(threePIDRequest(add), userAPI, &api.Device{UserID: "@alice:test"}, cfg, client, auth.NewUserInteractive(userAPI, cfg))
+			requireThreePIDResponse(t, res, 200, "")
+			require.Len(t, userAPI.saved, 1)
+			require.Equal(t, "alice@example.com", userAPI.saved[0].ThreePID)
+			require.Equal(t, 2, requests)
+		})
+	}
+}
+
+func TestRequestEmailTokenIdentityErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, errcode string
+		upstream, code      int
+	}{
+		{"invalid email", `{"errcode":"M_INVALID_EMAIL","error":"Invalid email address"}`, "M_INVALID_EMAIL", 400, 400},
+		{"forbidden", `{"errcode":"M_FORBIDDEN","error":"Email verification is disabled"}`, "M_FORBIDDEN", 403, 403},
+		{"rate limited", `{"errcode":"M_LIMIT_EXCEEDED","error":"Try later","retry_after_ms":60000}`, "M_LIMIT_EXCEEDED", 429, 429},
+		{"non JSON", `<html>Upstream unavailable</html>`, "M_UNKNOWN", 503, 502},
+		{"unstructured JSON", `{"message":"Upstream unavailable"}`, "M_UNKNOWN", 503, 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := threePIDConfig()
+			cfg.EmailValidationServer = "id.example"
+			client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(*http.Request) (*http.Response, error) {
+				return identityResponse(tc.upstream, tc.body), nil
+			})))
+			res := RequestEmailToken(threePIDRequest(`{"email":"alice@example.com","client_secret":"secret","send_attempt":1}`), &threePIDUserAPI{}, cfg, client)
+			requireThreePIDResponse(t, res, tc.code, tc.errcode)
+			if tc.code == tc.upstream {
+				encoded, err := json.Marshal(res.JSON)
+				require.NoError(t, err)
+				require.JSONEq(t, tc.body, string(encoded))
+			}
+		})
+	}
+}

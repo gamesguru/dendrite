@@ -65,3 +65,18 @@ func TestValidationSessions(t *testing.T) {
 	validationSessions.Unlock()
 	require.False(t, exists)
 }
+
+func TestCreateSessionErrorDetails(t *testing.T) {
+	cfg := &config.ClientAPI{Matrix: &config.Global{TrustedIDServers: []string{"id.example"}}}
+	client := fclient.NewClient(fclient.WithTransport(identityTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"errcode":"M_FORBIDDEN","error":"Verification disabled"}`))}, nil
+	})))
+	sid, err := CreateSession(t.Context(), EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, cfg, client)
+	require.Empty(t, sid)
+	require.ErrorContains(t, err, "id.example (HTTP 403)")
+	require.ErrorContains(t, err, "M_FORBIDDEN")
+	require.ErrorContains(t, err, "Verification disabled")
+	var remote *IdentityServerError
+	require.ErrorAs(t, err, &remote)
+	require.Equal(t, 403, remote.Code)
+}

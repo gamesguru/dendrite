@@ -217,6 +217,13 @@ client_api:
   # of whether registration is otherwise disabled.
   registration_shared_secret: ''
 
+  # Identity server used for email verification when clients such as Element omit id_server.
+  # Set a hostname (without https://) listed in global.trusted_third_party_id_servers.
+  # The server must support the legacy identity API v1 email validation endpoints.
+  # Email addresses and verification client secrets are sent to this server.
+  # Leave empty to require an explicit id_server in email verification requests.
+  email_validation_server: ''
+
   # Whether to require reCAPTCHA for registration. If you have enabled registration
   # then this is HIGHLY RECOMMENDED to reduce the risk of your homeserver being used
   # for coordinated spam attacks.

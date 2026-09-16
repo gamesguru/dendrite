@@ -80,7 +80,7 @@ func CreateSession(
 
 	// Error if the status isn't OK
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("could not create a session on the server %s", req.IDServer)
+		return "", fmt.Errorf("could not create a session on the server %s (HTTP %d): %w", req.IDServer, resp.StatusCode, identityError(resp))
 	}
 
 	// Extract the SID from the response and return it
