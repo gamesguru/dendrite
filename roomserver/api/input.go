@@ -9,6 +9,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -16,8 +17,37 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-// for detecting rejected events and returning 403 instead of 500ing.
+// InputWasRejected marks the error returned when the roomserver refused an
+// event because it failed the auth checks, so that callers can map it to 403
+// instead of 500ing. The auth reason, when known, follows as ": <reason>".
 const InputWasRejected = "InputWasRejected"
+
+// IsInputRejected reports whether err signals that the roomserver rejected an
+// event because it failed the auth checks, as opposed to a transient failure.
+func IsInputRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return msg == InputWasRejected || strings.HasPrefix(msg, InputWasRejected+": ")
+}
+
+// InputRejectionReason returns the auth reason behind a rejection with the
+// InputWasRejected marker stripped, so that it can be shown to the client.
+// For any other error it returns the error's own message.
+func InputRejectionReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if reason, ok := strings.CutPrefix(msg, InputWasRejected+": "); ok {
+		return reason
+	}
+	if msg == InputWasRejected {
+		return "the event was rejected"
+	}
+	return msg
+}
 
 type Kind int
 

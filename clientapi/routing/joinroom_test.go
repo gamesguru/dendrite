@@ -3,7 +3,9 @@ package routing
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,18 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			t.Fatalf("response is not a createRoomResponse: %+v", resp)
 		}
 
+		// create an invite-only room that nobody else is invited to
+		resp = createRoom(ctx, createRoomRequest{
+			Name:       "private",
+			Topic:      "private",
+			Visibility: "private",
+			Preset:     spec.PresetPrivateChat,
+		}, aliceDev, &cfg.ClientAPI, userAPI, rsAPI, asAPI, time.Now())
+		crRespPrivate, ok := resp.JSON.(createRoomResponse)
+		if !ok {
+			t.Fatalf("response is not a createRoomResponse: %+v", resp)
+		}
+
 		// Dummy request
 		body := &bytes.Buffer{}
 		req, err := http.NewRequest(http.MethodPost, "/?server_name=test", body)
@@ -103,6 +117,11 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			device      *uapi.Device
 			roomID      string
 			wantHTTP200 bool
+			// wantCode, when non-zero, asserts the exact status code returned.
+			wantCode int
+			// wantErrContains, when set, asserts the error shown to the client
+			// mentions why the join was refused.
+			wantErrContains string
 		}{
 			{
 				name:        "User can join successfully by alias",
@@ -151,6 +170,15 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 				device: charlieDev,
 				roomID: crRespWithGuestAccess.RoomID,
 			},
+			{
+				// A rejected join must tell the client why it was refused,
+				// not just that something was rejected.
+				name:            "join is forbidden if the room is invite only",
+				device:          bobDev,
+				roomID:          crRespPrivate.RoomID,
+				wantCode:        http.StatusForbidden,
+				wantErrContains: "join rule",
+			},
 		}
 
 		for _, tc := range testCases {
@@ -158,6 +186,18 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 				joinResp := JoinRoomByIDOrAlias(req, tc.device, rsAPI, userAPI, tc.roomID)
 				if tc.wantHTTP200 && !joinResp.Is2xx() {
 					t.Fatalf("expected join room to succeed, but didn't: %+v", joinResp)
+				}
+				if tc.wantCode != 0 && joinResp.Code != tc.wantCode {
+					t.Fatalf("expected status %d, got %d: %+v", tc.wantCode, joinResp.Code, joinResp)
+				}
+				if tc.wantErrContains != "" {
+					body, err := json.Marshal(joinResp.JSON)
+					if err != nil {
+						t.Fatalf("failed to marshal response: %s", err)
+					}
+					if !strings.Contains(string(body), tc.wantErrContains) {
+						t.Fatalf("expected error to contain %q, got %s", tc.wantErrContains, body)
+					}
 				}
 			})
 		}

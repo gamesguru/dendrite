@@ -120,10 +120,10 @@ func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, devic
 		false,
 	); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
-		if err.Error() == roomserverAPI.InputWasRejected {
+		if roomserverAPI.IsInputRejected(err) {
 			return util.JSONResponse{
 				Code: http.StatusForbidden,
-				JSON: spec.Forbidden("the event was rejected"),
+				JSON: spec.Forbidden(roomserverAPI.InputRejectionReason(err)),
 			}
 		}
 		return util.JSONResponse{

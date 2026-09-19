@@ -486,7 +486,10 @@ func (w *worker) _next() {
 	}
 
 	if wasRejected {
-		errString = api.InputWasRejected
+		// Keep the auth reason alongside the marker: without it the client is
+		// told only that something was rejected, and the "why" stays buried in
+		// the server logs.
+		errString = api.InputWasRejected + ": " + err.Error()
 	}
 
 	// If it was a synchronous input request then the "sync" field

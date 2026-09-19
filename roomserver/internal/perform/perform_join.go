@@ -426,7 +426,7 @@ func (r *Joiner) performJoinRoomByID(
 			inputRes := rsAPI.InputRoomEventsResponse{}
 			r.Inputer.InputRoomEvents(ctx, &inputReq, &inputRes)
 			if err = inputRes.Err(); err != nil {
-				return "", "", rsAPI.ErrNotAllowed{Err: err}
+				return "", "", rsAPI.ErrNotAllowed{Err: errors.New(rsAPI.InputRejectionReason(err))}
 			}
 		}
 	case errors.As(err, new(eventutil.ErrRoomNoExists)):
