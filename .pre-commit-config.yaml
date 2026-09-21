@@ -48,7 +48,7 @@ repos:
     hooks:
       - id: editorconfig-checker
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
-    rev: v9.26.0
+    rev: v9.27.0
     hooks:
       # Enforce Conventional Commits with a mandatory package scope; rules live
       # in .commitlintrc.json. Runs on the commit message, so it needs the
