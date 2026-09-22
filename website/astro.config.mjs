@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'Registration', slug: 'administration/registration' },
             { label: 'Delegated auth (OIDC)', slug: 'administration/oidc' },
             { label: 'Presence', slug: 'administration/presence' },
+            { label: 'MatrixRTC (calls)', slug: 'administration/matrixrtc' },
             { label: 'Admin API', slug: 'administration/adminapi' },
             { label: 'Auto-purging empty rooms', slug: 'administration/auto-purge-empty-rooms' },
             { label: 'Auto-forgetting rooms on leave', slug: 'administration/auto-forget-on-leave' },

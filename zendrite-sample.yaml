@@ -90,6 +90,14 @@ global:
   # Requires `well_known_client_name` to also be configured.
   well_known_sliding_sync_proxy: ''
 
+  # MatrixRTC focus servers used for voice and video calls (MSC4143). They are
+  # advertised to clients as "org.matrix.msc4143.rtc_foci" in
+  # /.well-known/matrix/client. The URL is the lk-jwt-service endpoint, not the
+  # LiveKit SFU itself.
+  rtc_foci:
+  #  - type: livekit
+  #    livekit_service_url: "https://matrix.example.com/livekit/jwt"
+
   # Lists of domains that the server will trust as identity servers to verify third
   # party identifiers such as phone numbers and email addresses.
   trusted_third_party_id_servers:

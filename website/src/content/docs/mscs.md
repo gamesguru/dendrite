@@ -67,7 +67,7 @@ Feature support does not imply support for an entire specification version; see 
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
-| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | N/A | Implemented |
+| [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | N/A | Implemented (configure via [`rtc_foci`](/administration/matrixrtc/)) |
 
 ## Opt-in MSCs
 
