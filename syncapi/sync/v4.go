@@ -229,6 +229,55 @@ func logV4Response(response any, userID, deviceID string, statusCode int) {
 	}
 }
 
+// copyForwardStreamStates persists the "events" stream state of every room the
+// client has been sent on this connection but which is absent from the response
+// being built, so that cascade-deleting old positions does not lose it and make
+// the room look like it was never sent.
+//
+// Each such room is recorded as PREVIOUSLY rather than keeping its stored
+// status, mirroring Synapse's record_unsent_rooms: the room was sent before but
+// is not part of this response. LastToken is carried over untouched, so it keeps
+// pointing at the position the room was last actually sent at, which is where a
+// future gap recovery has to resume from.
+//
+// Nothing distinguishes PREVIOUSLY from LIVE when reading the state back yet
+// (see determineRoomStreamState's callers), so this only aligns what is stored
+// with the state machine documented on types.HaveSentRoomFlag.
+//
+// It returns the number of rooms whose state was copied forward.
+func (rp *RequestPool) copyForwardStreamStates(
+	ctx context.Context,
+	connState *V4ConnectionState,
+	roomsToPopulate map[string]types.RoomSubscriptionConfig,
+) int {
+	copiedCount := 0
+	for roomID, streams := range connState.PreviousStreamStates {
+		// Skip rooms that were processed in this response (they already have updated state)
+		if _, processed := roomsToPopulate[roomID]; processed {
+			continue
+		}
+		eventsStream, ok := streams["events"]
+		if !ok {
+			continue
+		}
+		if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", types.HaveSentRoomPreviously.String(), eventsStream.LastToken); updateErr != nil {
+			logrus.WithError(updateErr).WithFields(logrus.Fields{
+				"room_id":             roomID,
+				"connection_position": connState.ConnectionPosition,
+			}).Error("[V4_STATE_DEBUG] Failed to copy forward stream state")
+			continue
+		}
+		copiedCount++
+	}
+	if copiedCount > 0 {
+		logrus.WithFields(logrus.Fields{
+			"copied_count":        copiedCount,
+			"connection_position": connState.ConnectionPosition,
+		}).Debug("[V4_STATE_DEBUG] Copied forward stream states for unchanged rooms")
+	}
+	return copiedCount
+}
+
 // OnIncomingSyncRequestV4 handles POST /v4/sync requests (MSC4186 Simplified Sliding Sync)
 //
 //nolint:gocyclo
@@ -1077,30 +1126,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// even though they were sent before.
 		// See: https://codefloe.com/pat-s/zendrite/issues/XXXX
 		if since != nil && connState.PreviousStreamStates != nil {
-			copiedCount := 0
-			for roomID, streams := range connState.PreviousStreamStates {
-				// Skip rooms that were processed in this response (they already have updated state)
-				if _, processed := roomsToPopulate[roomID]; processed {
-					continue
-				}
-				// Copy forward the "events" stream state to the new position
-				if eventsStream, ok := streams["events"]; ok {
-					if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", eventsStream.RoomStatus, eventsStream.LastToken); updateErr != nil { //nolint:contextcheck
-						logrus.WithError(updateErr).WithFields(logrus.Fields{
-							"room_id":             roomID,
-							"connection_position": connState.ConnectionPosition,
-						}).Error("[V4_STATE_DEBUG] Failed to copy forward stream state")
-					} else {
-						copiedCount++
-					}
-				}
-			}
-			if copiedCount > 0 {
-				logrus.WithFields(logrus.Fields{
-					"copied_count":        copiedCount,
-					"connection_position": connState.ConnectionPosition,
-				}).Debug("[V4_STATE_DEBUG] Copied forward stream states for unchanged rooms")
-			}
+			rp.copyForwardStreamStates(ctx, connState, roomsToPopulate) //nolint:contextcheck
 		}
 
 		// CRITICAL FIX: Copy forward room configs for rooms that were previously sent

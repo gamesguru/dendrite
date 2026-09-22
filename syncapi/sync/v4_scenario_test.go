@@ -564,64 +564,6 @@ func TestRequiredStateWildcardPatterns(t *testing.T) {
 // Connection State Tests (based on Synapse's test_connection_tracking.py)
 // =============================================================================.
 
-// TestConnectionStatePersistence tests connection state tracking
-// Based on Synapse's LIVE/PREVIOUSLY/NEVER state transitions.
-func TestConnectionStatePersistence(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name            string
-		initialState    string
-		afterSync       string
-		afterMissedSync string
-		description     string
-	}{
-		{
-			name:            "room transitions from NEVER to LIVE",
-			initialState:    "never",
-			afterSync:       "live",
-			afterMissedSync: "previously",
-			description:     "New room becomes LIVE after sync, PREVIOUSLY after missing sync",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt // capture range variable
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			// Test the state transition logic
-			roomID := "!testroom:localhost"
-
-			// Initial state: room not in connection state
-			connState := &V4ConnectionState{
-				ConnectionKey:        1,
-				PreviousStreamStates: make(map[string]map[string]*types.SlidingSyncStreamState),
-			}
-
-			// Room not present = NEVER
-			_, exists := connState.PreviousStreamStates[roomID]
-			assert.False(t, exists, "Room should not exist initially")
-
-			// After first sync, room is marked as LIVE
-			connState.PreviousStreamStates[roomID] = map[string]*types.SlidingSyncStreamState{
-				"events": {
-					RoomStatus: "live",
-					LastToken:  "s100_50_25_10_5_3_1_0_8",
-				},
-			}
-
-			state, exists := connState.PreviousStreamStates[roomID]
-			assert.True(t, exists, "Room should exist after sync")
-			assert.Equal(t, "live", state["events"].RoomStatus)
-
-			// After missing a sync (room drops out of window), status becomes PREVIOUSLY
-			connState.PreviousStreamStates[roomID]["events"].RoomStatus = "previously"
-
-			state = connState.PreviousStreamStates[roomID]
-			assert.Equal(t, "previously", state["events"].RoomStatus)
-		})
-	}
-}
-
 // TestConnectionStateRoomSubscriptions tests room subscription handling
 // Based on Synapse's test_room_subscriptions_* tests.
 func TestConnectionStateRoomSubscriptions(t *testing.T) {
