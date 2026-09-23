@@ -63,12 +63,14 @@ func NewOutputRoomEventConsumer(
 	syncProducer *producers.SyncAPI,
 ) *OutputRoomEventConsumer {
 	return &OutputRoomEventConsumer{
-		ctx:          process.Context(),
-		cfg:          cfg,
-		jetstream:    js,
-		db:           store,
-		durable:      cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
-		topic:        cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
+		ctx:       process.Context(),
+		cfg:       cfg,
+		jetstream: js,
+		db:        store,
+		durable:   cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
+		// Consume the syncapi-forwarded topic, not the raw roomserver output -
+		// see producers.PushEventProducer for why.
+		topic:        cfg.Matrix.JetStream.Prefixed(jetstream.OutputPushEvent),
 		pgClient:     pgClient,
 		rsAPI:        rsAPI,
 		syncProducer: syncProducer,
@@ -85,6 +87,15 @@ func (s *OutputRoomEventConsumer) Start() error {
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
 		s.onMessage, nats.DeliverAll(), nats.ManualAck(),
 	); err != nil {
+		return err
+	}
+	// This consumer used to read the raw roomserver output. Delete the durable
+	// left behind on that stream: OutputRoomEvent is interest-based with no
+	// MaxAge, so an abandoned consumer pins every message on it forever.
+	err := s.jetstream.DeleteConsumer(
+		s.cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent), s.durable+"Pull",
+	)
+	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 		return err
 	}
 	return nil

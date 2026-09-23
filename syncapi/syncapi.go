@@ -126,9 +126,13 @@ func AddPublicRoutes(
 		}
 	}
 
+	pushProducer := &producers.PushEventProducer{
+		JetStream: js, Topic: zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputPushEvent),
+	}
+
 	roomConsumer := consumers.NewOutputRoomEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
-		streams.InviteStreamProvider, rsAPI, fts, asProducer,
+		streams.InviteStreamProvider, rsAPI, fts, asProducer, pushProducer,
 	)
 	// Wire up the metadata worker for continuous updates (Phase 12 optimization)
 	roomConsumer.SetMetadataQueuer(metadataWorker)
