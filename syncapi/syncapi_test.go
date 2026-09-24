@@ -1188,7 +1188,7 @@ func testContext(t *testing.T, dbType test.DBType) {
 	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world 1!"})
 	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world 2!"})
 	thirdMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world3!"})
-	room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world4!"})
+	lastMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "hello world4!"})
 
 	if err := rsapi.SendEvents(context.Background(), rsAPI, rsapi.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
 		t.Fatalf("failed to send events: %v", err)
@@ -1198,8 +1198,11 @@ func testContext(t *testing.T, dbType test.DBType) {
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 
 	syncUntil(t, routers, alice.AccessToken, false, func(syncBody string) bool {
-		// wait for the last sent eventID to come down sync
-		path := fmt.Sprintf(`rooms.join.%s.timeline.events.#(event_id=="%s")`, room.ID, thirdMsg.EventID())
+		// Wait for the LAST sent eventID, not the one the context requests are
+		// centered on: "all events are limited" expects an event after thirdMsg,
+		// so gating on thirdMsg lets the request run while lastMsg is still in
+		// flight and /context legitimately returns no after-events.
+		path := fmt.Sprintf(`rooms.join.%s.timeline.events.#(event_id=="%s")`, room.ID, lastMsg.EventID())
 		return gjson.Get(syncBody, path).Exists()
 	})
 
