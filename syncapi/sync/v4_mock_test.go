@@ -316,10 +316,30 @@ func createMockStateEvent(eventType, stateKey, content string) *rstypes.Headered
 	return &rstypes.HeaderedEvent{PDU: event}
 }
 
+// createMockStateStreamEvent creates a mock state StreamEvent (includes
+// state_key, which is what makes an event a state event at all), for tests
+// exercising state-delta computation via RecentEvents (getRequiredStateDelta).
+func createMockStateStreamEvent(eventID, eventType, stateKey string, streamPos types.StreamPosition, content string) types.StreamEvent {
+	eventJSON := []byte(`{
+		"type":"` + eventType + `",
+		"state_key":"` + stateKey + `",
+		"room_id":"!test:localhost",
+		"sender":"@test:localhost",
+		"event_id":"` + eventID + `",
+		"origin_server_ts":1234567890,
+		"depth":1,
+		"prev_events":[],
+		"auth_events":[],
+		"content":` + content + `
+	}`)
+
+	return mockStreamEvent(eventJSON, streamPos, "createMockStateStreamEvent")
+}
+
 // createMockTimelineEvent creates a mock non-state (message) StreamEvent at the
 // given stream position, for tests exercising getTimelineEvents' range
-// computation. Unlike createMockStateEvent, it omits state_key entirely, since
-// a present state_key (even "") makes an event a state event.
+// computation. Unlike createMockStateStreamEvent, it omits state_key entirely,
+// since a present state_key (even "") makes an event a state event.
 func createMockTimelineEvent(eventID string, streamPos types.StreamPosition, content string) types.StreamEvent {
 	eventJSON := []byte(`{
 		"type":"m.room.message",
@@ -333,10 +353,16 @@ func createMockTimelineEvent(eventID string, streamPos types.StreamPosition, con
 		"content":` + content + `
 	}`)
 
+	return mockStreamEvent(eventJSON, streamPos, "createMockTimelineEvent")
+}
+
+// mockStreamEvent builds the StreamEvent both fixture helpers return; caller
+// only names the panic so a malformed fixture points at the right helper.
+func mockStreamEvent(eventJSON []byte, streamPos types.StreamPosition, caller string) types.StreamEvent {
 	verImpl, _ := gomatrixserverlib.GetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	event, err := verImpl.NewEventFromTrustedJSON(eventJSON, false)
 	if err != nil {
-		panic("createMockTimelineEvent: failed to build mock event: " + err.Error())
+		panic(caller + ": failed to build mock event: " + err.Error())
 	}
 
 	return types.StreamEvent{
