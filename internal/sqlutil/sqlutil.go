@@ -116,5 +116,10 @@ func openDriver(driverName, dsn string, opts connectionOptions) (*sql.DB, error)
 	if afterConnect == nil {
 		afterConnect = func(context.Context, *pgx.Conn) error { return nil }
 	}
-	return stdlib.OpenDB(*connConfig, stdlib.OptionAfterConnect(afterConnect)), nil
+	// Probe every HA checkout before application SQL runs. The driver's default
+	// skips probes for recently used connections, allowing a former primary's
+	// termination error to escape to a client during rapid reuse. Ping failures
+	// become ErrBadConn and database/sql can safely reconnect before the query.
+	return stdlib.OpenDB(*connConfig, stdlib.OptionAfterConnect(afterConnect),
+		stdlib.OptionShouldPing(func(context.Context, stdlib.ShouldPingParams) bool { return true })), nil
 }

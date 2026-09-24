@@ -93,3 +93,29 @@ func TestConnectionManagerAppliesTheGuard(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT application_name FROM pg_stat_activity WHERE pid = pg_backend_pid()").Scan(&stored))
 	require.Equal(t, "zendrite:abcd1234:7:ef567890", stored)
 }
+
+func TestGuardedPoolDiscardsRecentlyTerminatedBackend(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	props := &config.DatabaseOptions{ConnectionString: config.DataSource(dsn)}
+	db, err := Open(props, NewDummyWriter(), WithConnectionGuard("zendrite:failover", nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	admin, err := pgx.Connect(t.Context(), dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	for range 5 {
+		var pid int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT pg_backend_pid()").Scan(&pid))
+		var terminated bool
+		require.NoError(t, admin.QueryRow(t.Context(), "SELECT pg_terminate_backend($1, 1000)", pid).Scan(&terminated))
+		require.True(t, terminated)
+		// Reuse within pgx's default one-second ping interval, as rapid requests do
+		// when the former primary resumes and Patroni terminates its sessions.
+		var answer int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT 42").Scan(&answer))
+		require.Equal(t, 42, answer)
+	}
+}
