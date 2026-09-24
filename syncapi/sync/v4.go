@@ -85,6 +85,32 @@ type V4ConnectionState struct {
 	PreviousRoomConfigs map[string]*types.SlidingSyncRoomConfig
 }
 
+// laggingRoomSet lists the rooms whose own last-sent token sits behind the
+// connection's since token, along with the oldest of those tokens.
+type laggingRoomSet struct {
+	roomIDs     []string
+	oldestToken types.StreamPosition
+}
+
+// laggingRooms finds rooms that were excluded from earlier responses while the
+// connection advanced elsewhere. Events sent into such a room during the gap
+// predate since, so the since-keyed change filter cannot see them; they are
+// recovered by the widened lower bound in getTimelineEvents, but only if the
+// room survives filtering in the first place.
+func laggingRooms(roomStates map[string]types.RoomStreamState, since types.StreamPosition) laggingRoomSet {
+	var lagging laggingRoomSet
+	for roomID, roomState := range roomStates {
+		if roomState.LastToken == nil || roomState.LastToken.PDUPosition >= since {
+			continue
+		}
+		if len(lagging.roomIDs) == 0 || roomState.LastToken.PDUPosition < lagging.oldestToken {
+			lagging.oldestToken = roomState.LastToken.PDUPosition
+		}
+		lagging.roomIDs = append(lagging.roomIDs, roomID)
+	}
+	return lagging
+}
+
 // determineRoomStreamState determines the RoomStreamState for a room based on connection state
 // This is used to drive incremental sync behavior (initial vs live vs previously).
 // CRITICAL: Detects membership transitions (like v3 sync's NewlyJoined) to properly handle
@@ -833,15 +859,47 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 
 				// Also include rooms that have never been sent on this connection
-				// These should always be included as they're "new" to the client
+				// These should always be included as they're "new" to the client,
+				// and rooms whose own last-sent token lags behind the connection's
+				// since token: their missed events can all predate since, in which
+				// case RoomsWithEventsSince above does not see them at all and the
+				// widened lower bound in getTimelineEvents never gets to run.
+				//
+				// determineRoomStreamState issues membership queries, so each
+				// candidate's state is resolved once and reused for both checks.
+				roomStates := make(map[string]types.RoomStreamState, len(roomsToPopulate))
 				for roomID := range roomsToPopulate {
-					roomState := determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID) //nolint:contextcheck
+					roomStates[roomID] = determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID) //nolint:contextcheck
+				}
+
+				for roomID, roomState := range roomStates {
 					if roomState.Status == types.HaveSentRoomNever {
 						roomsToKeep[roomID] = true
 						if roomKeepReasons[roomID] != "" {
 							roomKeepReasons[roomID] += ",status_never"
 						} else {
 							roomKeepReasons[roomID] = "status_never"
+						}
+					}
+				}
+
+				lagging := laggingRooms(roomStates, since.StreamToken.PDUPosition)
+				if len(lagging.roomIDs) > 0 {
+					// One batched query from the oldest lagging token. This can
+					// over-report a room whose events all fall between that
+					// oldest token and its own, which costs an extra room with
+					// an empty timeline rather than a wrong response.
+					laggingWithEvents, laggingErr := filterSnapshot.RoomsWithEventsSince(ctx, lagging.roomIDs, lagging.oldestToken) //nolint:contextcheck
+					if laggingErr != nil {
+						logrus.WithError(laggingErr).Error("[V4_SYNC] Failed to filter lagging rooms; including all of them")
+						laggingWithEvents = lagging.roomIDs
+					}
+					for _, roomID := range laggingWithEvents {
+						roomsToKeep[roomID] = true
+						if roomKeepReasons[roomID] != "" {
+							roomKeepReasons[roomID] += ",lagging_room_token"
+						} else {
+							roomKeepReasons[roomID] = "lagging_room_token"
 						}
 					}
 				}
@@ -1630,6 +1688,17 @@ func (rp *RequestPool) buildInterruptResponse(
 				}
 
 				roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID)
+
+				// An interrupt response persists no stream state and returns
+				// pos unchanged, so anything it emits is emitted again on the
+				// next timeout and in the following real response. Pin
+				// LastToken to since so getTimelineEvents does not widen the
+				// range down to a lagging room token here: the gap is caught
+				// up by the next real response, which does persist state.
+				if roomState.LastToken != nil && since != nil {
+					pinned := since.StreamToken
+					roomState.LastToken = &pinned
+				}
 
 				var fromPosPtr *types.StreamingToken
 				if since != nil {

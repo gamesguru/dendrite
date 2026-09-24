@@ -1,3 +1,4 @@
+// Copyright 2026 The Zendrite Authors
 // Copyright 2025 Jackmaninov
 // Copyright 2025 Patrick Schratz
 //
@@ -8,6 +9,7 @@ package sync
 
 import (
 	"context"
+	"sort"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -132,12 +134,40 @@ func (m *mockSnapshot) GetStateEventsForRoom(ctx context.Context, roomID string,
 	return events, nil
 }
 
+// RecentEvents filters the events set via SetRecentEvents down to the requested
+// range, mirroring the real DB's (r.To, r.From] semantics (exclusive lower bound,
+// inclusive upper bound), so range-computation bugs in callers are actually
+// exercised instead of being masked by returning everything unconditionally.
 func (m *mockSnapshot) RecentEvents(ctx context.Context, roomIDs []string, r types.Range, eventFilter *synctypes.RoomEventFilter, chronologicalOrder bool, onlySyncEvents bool) (map[string]types.RecentEvents, error) {
+	// Low()/High() key off r.Backwards, so an inverted From/To is reported as
+	// the empty range the real DB would produce rather than being silently
+	// normalised away by magnitude.
+	lo, hi := r.Low(), r.High()
+
 	result := make(map[string]types.RecentEvents)
 	for _, roomID := range roomIDs {
-		if events, ok := m.recentEvents[roomID]; ok {
-			result[roomID] = events
+		all, ok := m.recentEvents[roomID]
+		if !ok {
+			continue
 		}
+
+		filtered := make([]types.StreamEvent, 0, len(all.Events))
+		for _, ev := range all.Events {
+			if ev.StreamPosition > lo && ev.StreamPosition <= hi {
+				filtered = append(filtered, ev)
+			}
+		}
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].StreamPosition < filtered[j].StreamPosition
+		})
+
+		limited := false
+		if eventFilter != nil && eventFilter.Limit > 0 && len(filtered) > eventFilter.Limit {
+			filtered = filtered[len(filtered)-eventFilter.Limit:]
+			limited = true
+		}
+
+		result[roomID] = types.RecentEvents{Events: filtered, Limited: limited}
 	}
 	return result, nil
 }
@@ -222,4 +252,33 @@ func createMockStateEvent(eventType, stateKey, content string) *rstypes.Headered
 	}
 
 	return &rstypes.HeaderedEvent{PDU: event}
+}
+
+// createMockTimelineEvent creates a mock non-state (message) StreamEvent at the
+// given stream position, for tests exercising getTimelineEvents' range
+// computation. Unlike createMockStateEvent, it omits state_key entirely, since
+// a present state_key (even "") makes an event a state event.
+func createMockTimelineEvent(eventID string, streamPos types.StreamPosition, content string) types.StreamEvent {
+	eventJSON := []byte(`{
+		"type":"m.room.message",
+		"room_id":"!test:localhost",
+		"sender":"@test:localhost",
+		"event_id":"` + eventID + `",
+		"origin_server_ts":1234567890,
+		"depth":1,
+		"prev_events":[],
+		"auth_events":[],
+		"content":` + content + `
+	}`)
+
+	verImpl, _ := gomatrixserverlib.GetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	event, err := verImpl.NewEventFromTrustedJSON(eventJSON, false)
+	if err != nil {
+		panic("createMockTimelineEvent: failed to build mock event: " + err.Error())
+	}
+
+	return types.StreamEvent{
+		HeaderedEvent:  &rstypes.HeaderedEvent{PDU: event},
+		StreamPosition: streamPos,
+	}
 }

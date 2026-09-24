@@ -1,3 +1,4 @@
+// Copyright 2026 The Zendrite Authors
 // Copyright 2025 Jackmaninov
 // Copyright 2025 Patrick Schratz
 //
@@ -271,7 +272,7 @@ func (rp *RequestPool) getTimelineEvents(
 	roomID string,
 	_ string, // userID unused - timeline retrieval is room-scoped
 	limit int,
-	_ types.RoomStreamState, // roomState unused - using sync-level token for incremental logic
+	roomState types.RoomStreamState,
 	currentPos types.StreamingToken,
 	fromToken *types.StreamingToken,
 ) (timeline []synctypes.ClientEvent, limited bool, numLive int, err error) {
@@ -293,9 +294,10 @@ func (rp *RequestPool) getTimelineEvents(
 		Limit: limit,
 	}
 
-	// CRITICAL: Determine range based on SYNC-LEVEL token, not per-room state
-	// Match the logic used for Initial flag - if sync has since token, it's incremental for ALL rooms
-	// This fixes Element X badge issues where room_subscriptions got full history on incremental syncs
+	// CRITICAL: the lower bound is the OLDER of since and roomState.LastToken -
+	// using since alone drops events from a room that was excluded from prior
+	// responses while the connection advanced elsewhere. Brand-new rooms
+	// (Status == HaveSentRoomNever) take the fromToken == nil branch instead.
 	var fromPos, toPos types.StreamPosition
 	fromPos = currentPos.PDUPosition // Always go backwards from current
 
@@ -309,14 +311,21 @@ func (rp *RequestPool) getTimelineEvents(
 			"mode":    "historical (no since token)",
 		}).Debug("[TIMELINE] Fetching historical events for initial sync")
 	} else {
-		// Incremental sync (has since token) - only get NEW events since the sync's since token
-		// Use sync-level token, NOT per-room state (fixes room_subscriptions returning full history)
+		// Incremental sync (has since token) - get events since whichever is
+		// older: the sync-level since token, or this room's own last-sent
+		// token (if it lagged behind because the room wasn't included in
+		// every response).
 		toPos = fromToken.PDUPosition
+		mode := "incremental (since token)"
+		if roomState.LastToken != nil && roomState.LastToken.PDUPosition < toPos {
+			toPos = roomState.LastToken.PDUPosition
+			mode = "incremental (room last-sent token, lagged behind since token)"
+		}
 		logrus.WithFields(logrus.Fields{
 			"room_id": roomID,
 			"from":    fromPos,
 			"to":      toPos,
-			"mode":    "incremental (since token)",
+			"mode":    mode,
 		}).Debug("[TIMELINE] Fetching incremental events since sync token")
 	}
 
