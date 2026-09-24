@@ -357,6 +357,13 @@ func (w *worker) _next() {
 		// Make sure that once we're done here, we queue up another call
 		// to _next in the worker goroutine.
 		defer w.notify()
+	case jetstream.IsTransientFetchError(err):
+		// Keep the durable subscription and retry even if no new room
+		// activity arrives. Broker failover must not strand queued events.
+		if process.Sleep(w.r.ProcessContext.Context(), jetstream.FetchRetryDelay) {
+			w.notify()
+		}
+		return
 	case errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {

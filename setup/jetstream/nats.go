@@ -153,6 +153,18 @@ func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, 
 		natsclient.ReconnectWait(time.Second * 10), //nolint:mnd
 		natsclient.ReconnectHandler(func(c *natsclient.Conn) {
 			process.Do(func() {
+				if cfg.Matrix != nil && cfg.Matrix.HA.Enabled {
+					// HA storage was validated before activation. A reconnect
+					// resumes the same durable subscriptions and protected JS
+					// context; it must not repeat bootstrap, mutate storage, or
+					// require every replica while the cluster has lost a peer.
+					// Stream/consumer leaders may still be electing, so even a
+					// read here can time out and turn broker failover into a
+					// homeserver panic. Publishers and consumers already retry
+					// through their existing ownership barriers.
+					logrus.Info("Reconnected to replicated JetStream")
+					return
+				}
 				js, jerr := c.JetStream(jsOpts...)
 				if jerr != nil {
 					logrus.WithError(jerr).Panic("Unable to get JetStream context in reconnect handler")

@@ -272,7 +272,7 @@ func TestHAAllowsRoomWakeupConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, info.Config.Durable)
 	require.NoError(t, validateConsumers(t.Context(), consumerJS, stream, cfg))
-	// This is the full stream/consumer check invoked by the reconnect handler.
+	// This is the full stream/consumer check performed before activation.
 	require.NotPanics(t, func() { checkAndConfigureStreams(p, cfg, js, nc) })
 	for _, tc := range []struct {
 		name   string

@@ -58,6 +58,8 @@ func JetStreamConsumer(
 }
 
 const (
+	// FetchRetryDelay bounds retries while brokers reconnect or elect a leader.
+	FetchRetryDelay = 250 * time.Millisecond
 	// RedeliveryBaseDelay is how long a consumer waits before the first
 	// redelivery of a message it refused.
 	redeliveryBaseDelay = 250 * time.Millisecond
@@ -65,6 +67,18 @@ const (
 	// for a while should keep checking, but not faster than this.
 	redeliveryMaxDelay = 30 * time.Second
 )
+
+// IsTransientFetchError reports transport and leader changes that invalidate a
+// pull request without invalidating its durable consumer. Retrying preserves
+// queued work; deleting the subscription or stopping the worker strands it.
+func IsTransientFetchError(err error) bool {
+	return errors.Is(err, nats.ErrFetchDisconnected) ||
+		errors.Is(err, nats.ErrDisconnected) ||
+		errors.Is(err, nats.ErrConnectionReconnecting) ||
+		errors.Is(err, nats.ErrNoResponders) ||
+		errors.Is(err, nats.ErrConsumerLeadershipChanged) ||
+		(err != nil && err.Error() == "nats: Server Shutdown")
+}
 
 // redeliveryDelay reports how long to wait before redelivering a message the
 // consumer refused, backing off exponentially with the number of attempts.
@@ -155,14 +169,10 @@ func jetStreamConsumerWorker(
 			case errors.Is(err, nats.ErrTimeout):
 				// Pull request was invalidated, try again.
 				continue
-			case errors.Is(err, nats.ErrConsumerLeadershipChanged):
-				// Leadership changed so pending pull requests became invalidated,
-				// just try again.
-				continue
-			case err.Error() == "nats: Server Shutdown":
-				// The server is shutting down, but we'll rely on reconnect
-				// behavior to try and either connect us to another node (if
-				// clustered) or to reconnect when the server comes back up.
+			case IsTransientFetchError(err):
+				if !process.Sleep(ctx, FetchRetryDelay) {
+					return
+				}
 				continue
 			default:
 				// Something else went wrong.
