@@ -587,7 +587,7 @@ func (r *Inputer) queueInputRoomEvents(
 		if err != nil {
 			return nil, fmt.Errorf("json.Marshal: %w", err)
 		}
-		if _, err = r.JetStream.PublishMsg(msg, nats.Context(ctx)); err != nil {
+		if _, err = jetstream.Publish(ctx, r.JetStream, msg); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  roomID,
 				"event_id": e.Event.EventID(),
