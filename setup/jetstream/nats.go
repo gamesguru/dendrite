@@ -305,6 +305,7 @@ func configureStreams(process *process.ProcessContext, cfg *config.JetStream, js
 		if err != nil && !errors.Is(err, natsclient.ErrStreamNotFound) {
 			return fmt.Errorf("inspect stream %s: %w", desired.Name, err)
 		}
+		establishReplication := info == nil || info.Config.Replicas != desired.Replicas
 		if info == nil {
 			info, err = js.AddStream(&desired, natsclient.Context(process.Context()))
 			if err != nil && !ha && desired.Storage == natsclient.FileStorage {
@@ -339,7 +340,7 @@ func configureStreams(process *process.ProcessContext, cfg *config.JetStream, js
 			return fmt.Errorf("stream %s did not establish requested storage and replication", desired.Name)
 		}
 		if ha {
-			if err = waitForReplicas(process.Context(), js, desired.Name, desired.Replicas); err != nil {
+			if err = waitForReplicas(process.Context(), js, desired.Name, desired.Replicas, establishReplication); err != nil {
 				return err
 			}
 		}
@@ -482,7 +483,13 @@ func (p protectedJetStream) PublishAsync(subject string, data []byte, opts ...na
 	return p.PublishMsgAsync(&natsclient.Msg{Subject: subject, Data: data}, opts...)
 }
 
-func waitForReplicas(ctx context.Context, js natsclient.JetStreamContext, name string, replicas int) error {
+func waitForReplicas(ctx context.Context, js natsclient.JetStreamContext, name string, replicas int, establishReplication bool) error {
+	// New or resized streams must finish replication. Existing streams may
+	// activate with a quorum so one unavailable broker does not block failover.
+	required := replicas/2 + 1 //nolint:mnd // A Raft quorum is strictly more than half the configured members.
+	if establishReplication {
+		required = replicas
+	}
 	const replicationTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, replicationTimeout)
 	defer cancel()
@@ -495,9 +502,13 @@ func waitForReplicas(ctx context.Context, js natsclient.JetStreamContext, name s
 		}
 		healthy := info.Config.Replicas == replicas && info.Cluster != nil && info.Cluster.Leader != "" && len(info.Cluster.Replicas) == replicas-1
 		if healthy {
+			current := 1 // The elected leader is one voting member.
 			for _, replica := range info.Cluster.Replicas {
-				healthy = healthy && replica.Current && !replica.Offline
+				if replica.Current && !replica.Offline {
+					current++
+				}
 			}
+			healthy = current >= required
 		}
 		if healthy {
 			return nil

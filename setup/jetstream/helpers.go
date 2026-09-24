@@ -47,6 +47,12 @@ func JetStreamConsumer(
 	}(durable)
 
 	durable += "Pull"
+	if ownership != nil {
+		if err := ConfigureHADelivery(ctx, js, subj, durable); err != nil {
+			return err
+		}
+		opts = append(opts, nats.AckWait(HAConsumerAckWait))
+	}
 	sub, err := js.PullSubscribe(subj, durable, opts...)
 	if err != nil {
 		sentry.CaptureException(err)
@@ -150,7 +156,7 @@ func jetStreamConsumerWorker(
 		// enforce its own deadline (roughly 5 seconds by default). Therefore
 		// it is our responsibility to check whether our context expired or
 		// not when a context error is returned. Footguns. Footguns everywhere.
-		msgs, err := sub.Fetch(batch, nats.Context(ctx))
+		msgs, err := FetchOwned(ctx, sub, batch, ownership)
 		if err != nil {
 			switch {
 			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
@@ -183,6 +189,9 @@ func jetStreamConsumerWorker(
 		if len(msgs) < 1 {
 			continue
 		}
+		if !ownedOrStop("processing") {
+			return
+		}
 		msgs = ownedGeneration(ctx, ownership, subj, msgs)
 		if len(msgs) == 0 {
 			continue
@@ -194,7 +203,9 @@ func jetStreamConsumerWorker(
 				continue
 			}
 		}
+		stopProgress := KeepAliveDelivery(ctx, ownership, msgs)
 		acknowledge := f(ctx, msgs)
+		stopProgress()
 		// Ownership can be lost while the callback is running, so it is
 		// rechecked here rather than only before the fetch.
 		if !ownedOrStop("acknowledging") {

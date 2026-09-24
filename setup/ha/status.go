@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/setup/lifecycle"
 )
 
@@ -39,6 +40,7 @@ type Status struct {
 	since      time.Time
 	reason     string
 	boundary   Boundary
+	owner      ownership.Owner
 	server     StateReporter
 	acquiredAt time.Time
 	lostAt     time.Time
@@ -61,6 +63,14 @@ func (s *Status) Track(server StateReporter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.server = server
+}
+
+// TrackOwnership makes traffic and active-candidate probes use the same fencing
+// validity as application admission, including after a frozen process resumes.
+func (s *Status) TrackOwnership(owner ownership.Owner) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.owner = owner
 }
 
 // Observe records a phase transition and clears any previous blocking reason.
@@ -169,7 +179,18 @@ func (p Phase) merge(server StateReporter) Phase {
 func (s *Status) Refresh() { s.Phase() }
 
 // Ready reports whether this candidate should receive Matrix traffic.
-func (s *Status) Ready() bool { return s.Phase() == PhaseActive }
+func (s *Status) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enter(s.phase.merge(s.server))
+	return s.ready()
+}
+
+// ready is called with mu held. Phase alone can remain active until the
+// election loop notices a loss that the fencing gate has already observed.
+func (s *Status) ready() bool {
+	return s.phase == PhaseActive && s.reason == "" && (s.owner == nil || s.owner.Valid() == nil)
+}
 
 // Healthy reports candidate availability, independently of Matrix eligibility.
 // Standbys are healthy; incomplete promotion, failures and shutdown are not.
@@ -178,7 +199,7 @@ func (s *Status) Healthy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enter(s.phase.merge(s.server))
-	return (s.phase == PhaseStandby || s.phase == PhaseActive) && s.reason == ""
+	return (s.phase == PhaseStandby && s.reason == "") || s.ready()
 }
 
 // Handler serves the probe and status endpoints.
@@ -235,9 +256,9 @@ func (s *Status) write(w http.ResponseWriter) {
 		Since:    s.since.UTC().Format(time.RFC3339),
 		Reason:   s.reason,
 		Boundary: s.boundary,
+		Ready:    s.ready(),
 	}
 	s.mu.Unlock()
-	body.Ready = body.Phase == PhaseActive
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		logrus.WithError(err).Debug("Failed to write HA status response")
 	}

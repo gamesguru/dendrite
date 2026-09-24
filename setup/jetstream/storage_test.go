@@ -130,6 +130,9 @@ func TestHAReplicationUpgradeAndBrokerFailover(t *testing.T) {
 		msg, getErr := js.GetMsg(name, ack.Sequence)
 		return getErr == nil && string(msg.Data) == "acknowledged"
 	}, 15*time.Second, 100*time.Millisecond)
+	// A successor must configure the existing streams with one broker still
+	// absent, while preserving every stream's configured replica count.
+	require.NoError(t, configureStreams(p, cfg, js))
 	// Consumer and stream Raft groups can elect their new leaders at different times.
 	require.Eventually(t, func() bool {
 		consumer, readErr := js.ConsumerInfo(name, "pending")
@@ -235,7 +238,7 @@ func TestReplicaReadinessUnderLoad(t *testing.T) {
 			}}}}
 			ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 			defer cancel()
-			err := waitForReplicas(ctx, js, "stream", 3)
+			err := waitForReplicas(ctx, js, "stream", 3, true)
 			if tc.wantError {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
@@ -453,5 +456,33 @@ func TestConsumerValidationDrainsRealLister(t *testing.T) {
 		require.False(t, open, "lister still has an undrained send")
 	default:
 		t.Fatal("real lister has not closed its channel")
+	}
+}
+
+func TestExistingStreamsRequireQuorum(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		current   int
+		replicas  int
+		leader    string
+		wantError bool
+	}{
+		{name: "one failed broker", current: 1, replicas: 3, leader: "leader"},
+		{name: "lost quorum", current: 0, replicas: 3, leader: "leader", wantError: true},
+		{name: "no elected leader", current: 2, replicas: 3, wantError: true},
+		{name: "wrong replica configuration", current: 2, replicas: 1, leader: "leader", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peers := []*nats.PeerInfo{{Name: "peer-1", Current: tc.current > 0}, {Name: "peer-2", Current: tc.current > 1}}
+			js := replicaSnapshot{info: &nats.StreamInfo{Config: nats.StreamConfig{Replicas: tc.replicas}, Cluster: &nats.ClusterInfo{Leader: tc.leader, Replicas: peers}}}
+			ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+			defer cancel()
+			err := waitForReplicas(ctx, js, "stream", 3, false)
+			if tc.wantError {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }

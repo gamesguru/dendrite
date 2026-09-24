@@ -119,6 +119,13 @@ func SendEvent(
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	// Concurrent retries may have all missed the cache before waiting for the
+	// room lock. Recheck after acquiring it, before creating another event.
+	if txnID != nil {
+		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+			return *res
+		}
+	}
 
 	var r map[string]any // must be a JSON object
 	resErr := httputil.UnmarshalJSONRequest(req, &r)

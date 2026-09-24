@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
@@ -51,6 +52,9 @@ func Run(ctx context.Context, cfg config.HA, metrics *config.Metrics, app Applic
 	// have, and a candidate that cannot serve probes must fail to start
 	// rather than be restarted for looking dead.
 	status := NewStatus()
+	if owner, ok := gate.(ownership.Owner); ok {
+		status.TrackOwnership(owner)
+	}
 	if reporter, ok := app.(StateReporter); ok {
 		status.Track(reporter)
 	}

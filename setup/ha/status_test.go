@@ -261,3 +261,30 @@ func TestAcquisitionConflictsAreNotRenewalFailures(t *testing.T) {
 	require.Error(t, holder.Update(t.Context(), resourcelock.LeaderElectionRecord{HolderIdentity: "candidate-a"}))
 	require.Equal(t, before+1, counterValue2(t, renewalFailures))
 }
+
+func TestStatusRejectsStaleAndRetiredOwnersBeforeLifecycleStops(t *testing.T) {
+	for _, reason := range []string{"ownership is stale", "ownership is retired"} {
+		t.Run(reason, func(t *testing.T) {
+			owner := &stubOwner{}
+			status := NewStatus()
+			status.TrackOwnership(owner)
+			status.Observe(PhaseActive, "")
+			require.True(t, status.Ready())
+			owner.err = errors.New(reason)
+			require.Equal(t, PhaseActive, status.Phase(), "election has not yet observed the loss")
+			require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/health"))
+			require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/candidate"))
+			require.Equal(t, http.StatusOK, probe(t, status, "/_zendrite/monitor/up"))
+			recorder := httptest.NewRecorder()
+			status.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/_zendrite/monitor/status", nil))
+			var body statusBody
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+			require.False(t, body.Ready)
+			status.Observe(PhaseStandby, "")
+			require.True(t, status.Healthy(), "standbys need no active ownership")
+			owner.err = nil
+			status.Observe(PhaseActive, "")
+			require.True(t, status.Ready(), "temporary staleness may recover without lifecycle restart")
+		})
+	}
+}

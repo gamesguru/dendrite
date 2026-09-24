@@ -106,6 +106,8 @@ const missingStateCooldownDuration = 5 * time.Minute
 // active again then we'll recreate the consumer anyway.
 const inactiveThreshold = time.Hour * 24
 
+const roomAckSlack = 10 * time.Second
+
 type worker struct {
 	sync.Mutex
 	r            *Inputer
@@ -117,7 +119,8 @@ type worker struct {
 	cancel       context.CancelCauseFunc
 	ephemeralSeq uint64
 	// last seq we fully processed
-	durableSeq uint64
+	durableSeq   uint64
+	lastActivity time.Time
 }
 
 // notify queues a call to _next in the worker's goroutine.
@@ -136,6 +139,7 @@ func (w *worker) start() {
 		return
 	}
 
+	w.lastActivity = time.Now()
 	w.ctx, w.cancel = context.WithCancelCause(w.r.ProcessContext.Context())
 
 	if !w.r.ProcessContext.Go(func() {
@@ -206,12 +210,16 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 			return
 		}
 
+		ackWait := MaximumMissingProcessingTime + roomAckSlack
+		if jetstream.OwnershipOf(r.JetStream) != nil {
+			ackWait = jetstream.HAConsumerAckWait
+		}
 		consumerConfig := &nats.ConsumerConfig{
 			Durable:           consumer,
 			AckPolicy:         nats.AckExplicitPolicy,
 			DeliverPolicy:     nats.DeliverAllPolicy,
 			FilterSubject:     subject,
-			AckWait:           MaximumMissingProcessingTime + (time.Second * 10), //nolint:mnd
+			AckWait:           ackWait,
 			InactiveThreshold: inactiveThreshold,
 		}
 
@@ -261,7 +269,7 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 			subject, consumer,
 			nats.ManualAck(),
 			nats.DeliverAll(),
-			nats.AckWait(MaximumMissingProcessingTime+(time.Second*10)), //nolint:mnd
+			nats.AckWait(ackWait),
 			nats.Bind(r.InputRoomEventTopic, consumer),
 			nats.InactiveThreshold(inactiveThreshold),
 		)
@@ -347,7 +355,7 @@ func (w *worker) _next() {
 	w.sentryHub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetTag("room_id", w.roomID)
 	})
-	msgs, err := w.subscription.Fetch(1, nats.Context(ctx))
+	msgs, err := jetstream.FetchOwned(ctx, w.subscription, 1, jetstream.OwnershipOf(w.r.JetStream))
 	switch {
 	case err == nil:
 		// Is the server shutting down? If so, stop processing.
@@ -365,6 +373,10 @@ func (w *worker) _next() {
 		}
 		return
 	case errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		if jetstream.OwnershipOf(w.r.JetStream) != nil && ctx.Err() == nil && time.Since(w.lastActivity) < time.Minute {
+			w.notify()
+			return
+		}
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {
 			return
@@ -429,6 +441,15 @@ func (w *worker) _next() {
 		return
 	}
 
+	// A fetch issued before suspension may finish after this owner retires.
+	if err = jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
+		return
+	}
+	stopProgress := jetstream.KeepAliveDelivery(w.r.ProcessContext.Context(), jetstream.OwnershipOf(w.r.JetStream), msgs)
+	defer stopProgress()
+
+	w.lastActivity = time.Now()
+
 	// Try to unmarshal the input room event. If the JSON unmarshalling
 	// fails then we'll terminate the message — this notifies NATS that
 	// we are done with the message and never want to see it again.
@@ -453,11 +474,13 @@ func (w *worker) _next() {
 	// it was a synchronous request.
 	var errString string
 	wasRejected := false
-	if err = w.r.processRoomEvent(
+	err = w.r.processRoomEvent(
 		w.r.ProcessContext.Context(),
 		spec.ServerName(msg.Header.Get("virtual_host")),
 		&inputRoomEvent,
-	); err != nil {
+	)
+	stopProgress()
+	if err != nil {
 		var rejErr types.RejectedError
 		if errors.As(err, &rejErr) {
 			// Don't send events that were rejected to Sentry
@@ -497,6 +520,11 @@ func (w *worker) _next() {
 		// told only that something was rejected, and the "why" stays buried in
 		// the server logs.
 		errString = api.InputWasRejected + ": " + err.Error()
+	}
+
+	// A retired worker must not answer a successor's pending synchronous input.
+	if !w.ownedForAck() {
+		return
 	}
 
 	// If it was a synchronous input request then the "sync" field
