@@ -247,3 +247,17 @@ Standbys do not serve traffic until takeover and startup are complete.
 An instance that loses leadership stops accepting requests, shuts down, and exits.
 If safe takeover cannot be confirmed, the standby does not start serving traffic.
 Check the application logs for election and startup failures.
+
+### Candidate health and active-only routing
+
+`/_zendrite/monitor/candidate` returns HTTP 200 for a healthy standby or active candidate.
+Starting, fencing, recovering, draining, stopped, and failed candidates return HTTP 503.
+`/_zendrite/monitor/health` remains the active-only traffic check.
+Use the candidate endpoint for Kubernetes readiness only with a separate routing layer that checks the active-only endpoint before forwarding Matrix traffic.
+The Helm chart supports this with `ha.routing.enabled`, using replicated HAProxy routers and DNS discovery of all candidate status endpoints.
+This makes healthy standbys Ready without adding them directly to Matrix traffic or granting applications permission to modify routing resources.
+
+Failover includes Lease expiry, election retry jitter, fencing, recovery, and routing convergence.
+Shorter Lease and retry periods can reduce detection time but make leadership more sensitive to control-plane stalls and increase renewal traffic.
+Keep `lease_duration > renew_deadline > 1.2 * retry_period`, and validate actual service recovery with the intended timings.
+Reducing election timings never skips resource fencing or backlog recovery.

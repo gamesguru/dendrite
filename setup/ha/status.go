@@ -171,11 +171,21 @@ func (s *Status) Refresh() { s.Phase() }
 // Ready reports whether this candidate should receive Matrix traffic.
 func (s *Status) Ready() bool { return s.Phase() == PhaseActive }
 
+// Healthy reports candidate availability, independently of Matrix eligibility.
+// Standbys are healthy; incomplete promotion, failures and shutdown are not.
+// Only use this for pod readiness when a separate router checks Ready.
+func (s *Status) Healthy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enter(s.phase.merge(s.server))
+	return (s.phase == PhaseStandby || s.phase == PhaseActive) && s.reason == ""
+}
+
 // Handler serves the probe and status endpoints.
 //
-// Liveness and readiness are deliberately different: a standby is live, so a
-// liveness probe must not restart it, and unready, so a Service must not route
-// to it. An elected candidate stays unready until fencing and recovery finish.
+// Liveness, candidate health and traffic readiness are separate. A standby
+// passes candidate health but cannot receive Matrix traffic. A routing layer
+// must still check /health, which fails until fencing and recovery finish.
 func (s *Status) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_zendrite/monitor/up", func(w http.ResponseWriter, _ *http.Request) {
@@ -183,6 +193,15 @@ func (s *Status) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /_zendrite/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if !s.Ready() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			s.write(w)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /_zendrite/monitor/candidate", func(w http.ResponseWriter, _ *http.Request) {
+		if !s.Healthy() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			s.write(w)

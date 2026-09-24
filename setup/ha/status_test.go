@@ -28,6 +28,23 @@ func TestStatusReportsStandbyAsLiveButNotReady(t *testing.T) {
 		"a standby must not be routed Matrix traffic")
 }
 
+func TestCandidateHealthIsSeparateFromTrafficEligibility(t *testing.T) {
+	for _, phase := range []Phase{PhaseStarting, PhaseStandby, PhaseFencing, PhaseRecovering, PhaseActive, PhaseDraining, PhaseStopped} {
+		t.Run(string(phase), func(t *testing.T) {
+			status := NewStatus()
+			status.Observe(phase, "")
+			want := http.StatusServiceUnavailable
+			if phase == PhaseStandby || phase == PhaseActive {
+				want = http.StatusOK
+			}
+			require.Equal(t, want, probe(t, status, "/_zendrite/monitor/candidate"))
+			require.Equal(t, phase == PhaseActive, status.Ready())
+			status.Fail(errors.New("candidate cannot proceed"))
+			require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/candidate"))
+		})
+	}
+}
+
 func TestStatusReportsReadyOnlyWhenActive(t *testing.T) {
 	status := NewStatus()
 	for _, phase := range []Phase{PhaseFencing, PhaseRecovering, PhaseDraining, PhaseStopped} {
@@ -70,6 +87,7 @@ func TestStatusFollowsTheActivationLifecycle(t *testing.T) {
 
 	server.Stop()
 	require.Equal(t, PhaseStopped, status.Phase(), "the status must follow the activation rather than report a stale phase")
+	require.False(t, status.Healthy(), "a stopped activation must not remain a healthy candidate")
 }
 
 func probe(t *testing.T, status *Status, path string) int {
@@ -94,6 +112,7 @@ func TestStatusListenerServesStandbyCandidates(t *testing.T) {
 
 	base := "http://" + listener.Addr().String()
 	require.Equal(t, http.StatusOK, get(t, base+"/_zendrite/monitor/up"))
+	require.Equal(t, http.StatusOK, get(t, base+"/_zendrite/monitor/candidate"))
 	require.Equal(t, http.StatusServiceUnavailable, get(t, base+"/_zendrite/monitor/health"))
 	require.Equal(t, http.StatusOK, get(t, base+"/metrics"),
 		"standby metrics must be scrapable, or a candidate is invisible until it is promoted")
