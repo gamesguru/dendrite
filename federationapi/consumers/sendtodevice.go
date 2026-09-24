@@ -125,8 +125,8 @@ func (t *OutputSendToDeviceConsumer) onMessage(ctx context.Context, msgs []*nats
 		return false
 	}
 
-	// Transient. Send-to-device is an EDU but it is not ephemeral: it carries
-	// the megolm sessions other devices need, so dropping one can leave
-	// messages permanently undecryptable.
-	return false
+	// The message is queued; the destination queue owns delivery from here.
+	// Refusing it would queue it again under a new message ID on every
+	// redelivery, which the remote server cannot deduplicate.
+	return true
 }

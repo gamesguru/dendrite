@@ -100,6 +100,5 @@ func (t *SigningKeyUpdateConsumer) onMessage(ctx context.Context, msgs []*nats.M
 		return false
 	}
 
-	// Transient, as above.
-	return false
+	return true
 }

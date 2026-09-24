@@ -142,6 +142,6 @@ func (t *OutputReceiptConsumer) onMessage(ctx context.Context, msgs []*nats.Msg)
 		return false
 	}
 
-	// Transient: the receipt never reached the destination queue.
-	return false
+	// The receipt is queued; the destination queue owns delivery from here.
+	return true
 }
