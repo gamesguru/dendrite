@@ -103,6 +103,17 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
 		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
+			// The process context is canceled at shutdown while this consumer
+			// can still be part way through a message. Nothing was written, so
+			// there is no inconsistent database for the panic below to guard
+			// against: NAK instead and let redelivery pick the event up.
+			if interrupted(err) {
+				log.WithFields(log.Fields{
+					"event_id": ev.EventID(),
+					"room_id":  ev.RoomID().String(),
+				}).Warn("Interrupted before the room event was written; leaving it for redelivery")
+				return false
+			}
 			// A room purge evacuates the room (producing leave events) and then
 			// deletes the room's state, all before the OutputTypePurgeRoom message
 			// reaches us. Those leave events can therefore arrive here after the
@@ -128,11 +139,14 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 
 	case api.OutputTypeNewInboundPeek:
 		if err := s.processInboundPeek(*output.NewInboundPeek); err != nil {
+			if interrupted(err) {
+				log.WithField("peek", output.NewInboundPeek).Warn("Interrupted before the inbound peek was tracked; leaving it for redelivery")
+				return false
+			}
 			log.WithFields(log.Fields{
 				"event":      output.NewInboundPeek,
 				log.ErrorKey: err,
 			}).Panicf("roomserver output log: remote peek event failure")
-			return false
 		}
 
 	case api.OutputTypePurgeRoom:
@@ -150,6 +164,13 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// interrupted reports whether err is this process being torn down rather than
+// a genuine failure. Consumers keep running until their worker is stopped, so
+// an in-flight message can fail this way with nothing having been written.
+func interrupted(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // processInboundPeek starts tracking a new federated inbound peek (replacing the existing one if any)
