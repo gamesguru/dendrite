@@ -150,8 +150,14 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	case api.OutputTypeOldRoomEvent:
 		err = s.onOldRoomEvent(s.ctx, *output.OldRoomEvent) //nolint:contextcheck
 	case api.OutputTypeNewInviteEvent:
-		s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
-		err = s.producePushEvent(msg)
+		// Publish only once the invite is persisted, so the device is never
+		// woken for an invite that /sync cannot yet return. A failed publish is
+		// not NAKed here: AddInviteEvent has no ON CONFLICT, so the redelivery
+		// would insert a duplicate row and re-advance the invite stream,
+		// re-delivering the invite to the client on every /sync.
+		if s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) == nil { //nolint:contextcheck
+			_ = s.producePushEvent(msg)
+		}
 	case api.OutputTypeRetireInviteEvent:
 		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
@@ -492,19 +498,25 @@ func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rst
 	return sp, nil
 }
 
+// onNewInviteEvent returns nil once the invite is durably stored, or when there
+// is nothing to store because the invite is not for a local user. The error is
+// used to gate the push publication, not to NAK the message.
 func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	ctx context.Context, msg api.OutputNewInviteEvent,
-) {
+) error {
 	if msg.Event.StateKey() == nil {
-		return
+		return nil
 	}
 
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, msg.Event.RoomID(), spec.SenderID(*msg.Event.StateKey()))
-	if err != nil || userID == nil {
-		return
+	if err != nil {
+		return err
+	}
+	if userID == nil {
+		return nil
 	}
 	if !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
-		return
+		return nil
 	}
 
 	msg.Event.UserID = *userID
@@ -518,11 +530,12 @@ func (s *OutputRoomEventConsumer) onNewInviteEvent(
 			"pdupos":     pduPos,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: write invite failure")
-		return
+		return err
 	}
 
 	s.inviteStream.Advance(pduPos)
 	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *msg.Event.StateKey())
+	return nil
 }
 
 func (s *OutputRoomEventConsumer) onRetireInviteEvent(

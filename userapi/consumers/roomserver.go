@@ -89,14 +89,22 @@ func (s *OutputRoomEventConsumer) Start() error {
 	); err != nil {
 		return err
 	}
-	// This consumer used to read the raw roomserver output. Delete the durable
+	// This consumer used to read the raw roomserver output. Delete the durables
 	// left behind on that stream: OutputRoomEvent is interest-based with no
-	// MaxAge, so an abandoned consumer pins every message on it forever.
-	err := s.jetstream.DeleteConsumer(
-		s.cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent), s.durable+"Pull",
-	)
-	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-		return err
+	// MaxAge, so an abandoned consumer pins every message on it forever. Both
+	// names are tried because pre-Pull-era deployments have the unsuffixed one.
+	//
+	// HA refuses consumer deletion outright, so there the cleanup is an offline
+	// migration step. Failing to clean up never aborts startup: the caller
+	// panics on a Start error, and an orphaned consumer is not worth that.
+	if jetstream.OwnershipOf(s.jetstream) == nil {
+		stream := s.cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent)
+		for _, durable := range []string{s.durable + "Pull", s.durable} {
+			err := s.jetstream.DeleteConsumer(stream, durable)
+			if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+				log.WithError(err).Warnf("Failed to clean up old consumer %q on stream %q", durable, stream)
+			}
+		}
 	}
 	return nil
 }
