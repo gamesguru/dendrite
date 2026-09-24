@@ -9,6 +9,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -19,6 +20,7 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // mockSnapshot implements storage.DatabaseTransaction for testing
@@ -36,6 +38,16 @@ type mockSnapshot struct {
 	retiredInvites     map[string]*rstypes.HeaderedEvent // roomID -> retired invite
 	maxInvitePos       types.StreamPosition
 	membershipCounts   map[string]map[string]int // roomID -> membership -> count
+
+	// accountDataChanges backs GetAccountDataInRange.
+	accountDataChanges []mockAccountDataChange
+}
+
+// mockAccountDataChange is one fixture entry for GetAccountDataInRange.
+type mockAccountDataChange struct {
+	roomID   string
+	dataType string
+	pos      types.StreamPosition
 }
 
 type mockMembership struct {
@@ -80,6 +92,37 @@ func (m *mockSnapshot) SetStateEvent(roomID, eventType, stateKey string, event *
 // SetRecentEvents sets recent events for a room.
 func (m *mockSnapshot) SetRecentEvents(roomID string, events types.RecentEvents) {
 	m.recentEvents[roomID] = events
+}
+
+// SetAccountDataChange adds one fixture entry: roomID (empty = global) had
+// dataType change at pos.
+func (m *mockSnapshot) SetAccountDataChange(roomID, dataType string, pos types.StreamPosition) {
+	m.accountDataChanges = append(m.accountDataChanges, mockAccountDataChange{roomID: roomID, dataType: dataType, pos: pos})
+}
+
+// GetAccountDataInRange filters the fixtures set via SetAccountDataChange down
+// to the requested range, mirroring the real DB's (Low(), High()] semantics:
+// exclusive lower bound, inclusive upper bound. An empty result reports
+// lastPos as High(), as both real backends do, so callers that advance a token
+// on "nothing changed" behave the same here as in production.
+func (m *mockSnapshot) GetAccountDataInRange(ctx context.Context, userID string, r types.Range, accountDataFilterPart *synctypes.EventFilter) (map[string][]string, types.StreamPosition, error) {
+	lo, hi := r.Low(), r.High()
+
+	result := make(map[string][]string)
+	lastPos := lo
+	for _, c := range m.accountDataChanges {
+		if c.pos <= lo || c.pos > hi {
+			continue
+		}
+		result[c.roomID] = append(result[c.roomID], c.dataType)
+		if c.pos > lastPos {
+			lastPos = c.pos
+		}
+	}
+	if len(result) == 0 {
+		lastPos = hi
+	}
+	return result, lastPos, nil
 }
 
 // SetRoomSummary sets the room summary for a room.
@@ -223,6 +266,25 @@ type mockRoomserverAPI struct {
 
 func (m *mockRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 	return spec.NewUserID(string(senderID), true)
+}
+
+// mockUserAPI implements userapi.SyncUserAPI for testing.
+// Uses interface embedding to satisfy the interface without implementing all methods.
+type mockUserAPI struct {
+	userapi.SyncUserAPI
+
+	globalAccountData map[string]json.RawMessage            // dataType -> content
+	roomAccountData   map[string]map[string]json.RawMessage // roomID -> dataType -> content
+}
+
+// QueryAccountData returns the fixtures configured on mockUserAPI regardless
+// of which room/type was requested - callers (e.g. processAccountDataExtension)
+// are responsible for looking up the specific room/type they need, exactly as
+// the real userapi implementation's caller does.
+func (m *mockUserAPI) QueryAccountData(ctx context.Context, req *userapi.QueryAccountDataRequest, res *userapi.QueryAccountDataResponse) error {
+	res.GlobalAccountData = m.globalAccountData
+	res.RoomAccountData = m.roomAccountData
+	return nil
 }
 
 // createMockStateEvent creates a mock HeaderedEvent for testing

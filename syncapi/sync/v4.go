@@ -83,6 +83,9 @@ type V4ConnectionState struct {
 	// Room configs from previous syncs (for timeline expansion tracking)
 	// map[roomID]*RoomConfig
 	PreviousRoomConfigs map[string]*types.SlidingSyncRoomConfig
+	// Rooms whose account_data position this response has already written, so
+	// copyForwardAccountDataState knows which ones still need carrying over.
+	AccountDataWritten map[string]bool
 }
 
 // laggingRoomSet lists the rooms whose own last-sent token sits behind the
@@ -1228,7 +1231,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions) //nolint:contextcheck
+		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, connState, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions) //nolint:contextcheck
+		// Runs whether or not the account_data extension was processed: rooms it
+		// did not write still need their stored position carried onto this
+		// connection position before the old one is cascade-deleted.
+		rp.copyForwardAccountDataState(ctx, connState) //nolint:contextcheck
 		if err != nil {
 			logrus.WithError(err).Error("Failed to process extensions")
 			// Continue anyway - extensions are optional, return empty extension response
@@ -1751,7 +1758,7 @@ func (rp *RequestPool) buildInterruptResponse(
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions)
+		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions)
 		if extErr != nil {
 			if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
 				return resp

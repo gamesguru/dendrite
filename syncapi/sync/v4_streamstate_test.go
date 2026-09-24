@@ -32,8 +32,16 @@ type streamStateWrite struct {
 type mockStreamStateDB struct {
 	storage.Database
 
+	// Keyed by streamKey: one room has a row per stream, so keying by room
+	// alone would let an account_data write mask an events write.
 	writes  map[string]streamStateWrite
 	failFor map[string]bool
+}
+
+// streamKey identifies one (room, stream) row, matching the connection stream
+// table's primary key.
+func streamKey(roomID, stream string) string {
+	return roomID + "|" + stream
 }
 
 func newMockStreamStateDB() *mockStreamStateDB {
@@ -47,7 +55,7 @@ func (m *mockStreamStateDB) UpdateConnectionStream(_ context.Context, connection
 	if m.failFor[roomID] {
 		return errors.New("write failed")
 	}
-	m.writes[roomID] = streamStateWrite{
+	m.writes[streamKey(roomID, stream)] = streamStateWrite{
 		position:  connectionPosition,
 		stream:    stream,
 		status:    roomStatus,
@@ -92,13 +100,13 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		})
 
 		assert.Equal(t, 1, copied)
-		require.Contains(t, db.writes, droppedRoom)
+		require.Contains(t, db.writes, streamKey(droppedRoom, "events"))
 		assert.Equal(t, streamStateWrite{
 			position:  newPosition,
 			stream:    "events",
 			status:    types.HaveSentRoomPreviously.String(),
 			lastToken: lastToken,
-		}, db.writes[droppedRoom])
+		}, db.writes[streamKey(droppedRoom, "events")])
 	})
 
 	t.Run("room sent in the response is left alone", func(t *testing.T) {
@@ -112,7 +120,7 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		})
 
 		// The room is written by the main response loop instead, which marks it live.
-		assert.NotContains(t, db.writes, sentRoom)
+		assert.NotContains(t, db.writes, streamKey(sentRoom, "events"))
 	})
 
 	t.Run("a room already previously keeps its original token", func(t *testing.T) {
@@ -126,7 +134,7 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		copied := rp.copyForwardStreamStates(context.Background(), state, nil)
 
 		assert.Equal(t, 2, copied)
-		assert.Equal(t, lastToken, db.writes[droppedRoom].lastToken,
+		assert.Equal(t, lastToken, db.writes[streamKey(droppedRoom, "events")].lastToken,
 			"the gap start must not move forward while a room stays unsent")
 	})
 
@@ -156,7 +164,7 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		copied := rp.copyForwardStreamStates(context.Background(), connState(), nil)
 
 		assert.Equal(t, 1, copied)
-		assert.NotContains(t, db.writes, droppedRoom)
-		assert.Contains(t, db.writes, sentRoom)
+		assert.NotContains(t, db.writes, streamKey(droppedRoom, "events"))
+		assert.Contains(t, db.writes, streamKey(sentRoom, "events"))
 	})
 }
