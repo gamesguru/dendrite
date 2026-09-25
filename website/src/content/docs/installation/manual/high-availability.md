@@ -87,7 +87,8 @@ Durable consumers resume their persisted acknowledgement positions.
 Before opening public listeners, startup waits for the sync consumers to apply their captured stream backlog, including already delivered but unacknowledged messages.
 The presence consumer participates only when inbound or outbound presence is enabled.
 Cancellation, broker errors, or a 120-second sync recovery timeout prevent readiness.
-Typing state, HTTP transaction caches, login/SSO intermediates, and sliding-sync sessions remain transient process state; clients may need to retry or establish a fresh session after promotion.
+Typing state, login/SSO intermediates, and sliding-sync sessions remain transient process state; clients may need to retry or establish a fresh session after promotion.
+Client transaction IDs are recorded in the database, so retrying a message after promotion does not store it twice.
 
 When search is enabled, set `sync_api.search.rebuild_on_startup: true`.
 Every activation builds a fresh Bleve index from PostgreSQL before starting sync consumers, then catches up the durable sync backlog before readiness.

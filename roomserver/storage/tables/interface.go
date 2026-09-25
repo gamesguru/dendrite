@@ -193,6 +193,15 @@ type Membership interface {
 	SelectJoinedUsers(ctx context.Context, txn *sql.Tx, targetUserNIDs []types.EventStateKeyNID) ([]types.EventStateKeyNID, error)
 }
 
+// ClientTransactions records which event a client's transaction ID produced,
+// so that a retry of the same transaction does not store a second event even
+// when it reaches another process after an HA takeover.
+type ClientTransactions interface {
+	InsertClientTransaction(ctx context.Context, txn *sql.Tx, roomID, senderID string, sessionID int64, transactionID, eventID string, insertedTS int64) error
+	SelectClientTransactionEventID(ctx context.Context, txn *sql.Tx, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	DeleteClientTransactionsBefore(ctx context.Context, txn *sql.Tx, insertedTS int64) (int64, error)
+}
+
 type Published interface {
 	UpsertRoomPublished(ctx context.Context, txn *sql.Tx, roomID, appserviceID, networkID string, published bool) (err error)
 	SelectPublishedFromRoomID(ctx context.Context, txn *sql.Tx, roomID string) (published bool, err error)

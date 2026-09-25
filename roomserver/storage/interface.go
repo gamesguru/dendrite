@@ -9,6 +9,7 @@ package storage
 import (
 	"context"
 	"crypto/ed25519"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -204,6 +205,9 @@ type Database interface {
 	QueryAdminEventReports(ctx context.Context, from uint64, limit uint64, backwards bool, userID string, roomID string) ([]api.QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (api.QueryAdminEventReportResponse, error)
 	AdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
 
 	// Partial state methods for MSC3706 faster joins
 	// IsRoomPartialState returns true if the room has partial state from a faster join
@@ -271,6 +275,13 @@ type RoomDatabase interface {
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// ClientTransactionEventID returns the event a client transaction produced,
+	// or "" if the transaction is unknown.
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	// StoreClientTransaction records the event a client transaction produced.
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	// ExpireClientTransactions forgets transactions recorded before the given time.
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
 }
 
 type EventDatabase interface {

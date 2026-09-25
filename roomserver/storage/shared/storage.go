@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -50,7 +51,9 @@ type Database struct {
 	Purge              tables.Purge
 	UserRoomKeyTable   tables.UserRoomKeys
 	PartialStateTable  tables.PartialState
-	GetRoomUpdaterFn   func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
+	// ClientTransactionsTable maps client transaction IDs to their events.
+	ClientTransactionsTable tables.ClientTransactions
+	GetRoomUpdaterFn        func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
 }
 
 // EventDatabase contains all tables needed to work with events.
@@ -2433,3 +2436,35 @@ func (s stateEntryByStateKeySorter) Less(i, j int) bool {
 	return s[i].StateKeyTuple.LessThan(s[j].StateKeyTuple)
 }
 func (s stateEntryByStateKeySorter) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+// ClientTransactionEventID implements storage.RoomDatabase.
+func (d *Database) ClientTransactionEventID(
+	ctx context.Context, roomID, senderID string, sessionID int64, transactionID string,
+) (string, error) {
+	eventID, err := d.ClientTransactionsTable.SelectClientTransactionEventID(ctx, nil, roomID, senderID, sessionID, transactionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return eventID, err
+}
+
+// StoreClientTransaction implements storage.RoomDatabase. Recording the same
+// transaction again keeps the event first recorded for it.
+func (d *Database) StoreClientTransaction(
+	ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.ClientTransactionsTable.InsertClientTransaction(
+			ctx, txn, roomID, senderID, sessionID, transactionID, eventID, time.Now().UnixMilli(),
+		)
+	})
+}
+
+// ExpireClientTransactions implements storage.RoomDatabase.
+func (d *Database) ExpireClientTransactions(ctx context.Context, before time.Time) (removed int64, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		removed, err = d.ClientTransactionsTable.DeleteClientTransactionsBefore(ctx, txn, before.UnixMilli())
+		return err
+	})
+	return removed, err
+}

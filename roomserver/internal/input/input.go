@@ -312,6 +312,8 @@ func (r *Inputer) Start() error {
 		nats.BindStream(r.InputRoomEventTopic),
 	)
 
+	r.ProcessContext.Go(r.expireClientTransactions)
+
 	// Make sure that the room consumers have the right config.
 	stream := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
 	for consumer := range r.JetStream.Consumers(stream) {
@@ -327,6 +329,30 @@ func (r *Inputer) Start() error {
 	}
 
 	return err
+}
+
+// clientTransactionRetention is how long a client transaction ID keeps
+// deduplicating retries, as in Synapse. Clients retry within minutes.
+const clientTransactionRetention = 24 * time.Hour
+
+// expireClientTransactions periodically forgets client transactions older
+// than clientTransactionRetention.
+func (r *Inputer) expireClientTransactions() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		removed, err := r.DB.ExpireClientTransactions(r.ProcessContext.Context(), time.Now().Add(-clientTransactionRetention))
+		if err != nil && r.ProcessContext.Context().Err() == nil {
+			logrus.WithError(err).Warn("Failed to expire client transactions")
+		} else if removed > 0 {
+			logrus.WithField("removed", removed).Debug("Expired client transactions")
+		}
+		select {
+		case <-r.ProcessContext.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // _next is called by the worker for the room. It must only be called
@@ -480,6 +506,13 @@ func (w *worker) _next() {
 		&inputRoomEvent,
 	)
 	stopProgress()
+	// A retried client transaction is done: the caller is told which event
+	// the transaction produced instead.
+	var duplicateOf string
+	if dupErr := (types.DuplicateTransactionError{}); errors.As(err, &dupErr) {
+		duplicateOf = dupErr.EventID
+		err = nil
+	}
 	if err != nil {
 		var rejErr types.RejectedError
 		if errors.As(err, &rejErr) {
@@ -534,7 +567,12 @@ func (w *worker) _next() {
 	// was no error then we'll return a blank message, which means
 	// that everything was OK.
 	if replyTo := msg.Header.Get("sync"); replyTo != "" {
-		if err = w.r.NATSClient.Publish(replyTo, []byte(errString)); err != nil {
+		reply := &nats.Msg{Subject: replyTo, Data: []byte(errString), Header: nats.Header{}}
+		if duplicateOf != "" {
+			reply.Header.Set("event_id", inputRoomEvent.Event.EventID())
+			reply.Header.Set("duplicate_of", duplicateOf)
+		}
+		if err = w.r.NATSClient.PublishMsg(reply); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  w.roomID,
 				"event_id": inputRoomEvent.Event.EventID(),
@@ -634,6 +672,12 @@ func (r *Inputer) InputRoomEvents(
 		}
 		if len(msg.Data) > 0 {
 			response.ErrMsg = string(msg.Data)
+		}
+		if original := msg.Header.Get("duplicate_of"); original != "" {
+			if response.DuplicateOf == nil {
+				response.DuplicateOf = map[string]string{}
+			}
+			response.DuplicateOf[msg.Header.Get("event_id")] = original
 		}
 	}
 }

@@ -137,6 +137,9 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateReportedEventsTable(db); err != nil {
 		return err
 	}
+	if err := CreateClientTransactionsTable(db); err != nil {
+		return err
+	}
 	if err := CreatePartialStateTable(db); err != nil {
 		return err
 	}
@@ -212,6 +215,10 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 	if err != nil {
 		return err
 	}
+	clientTransactions, err := PrepareClientTransactionsTable(db)
+	if err != nil {
+		return err
+	}
 
 	d.Database = shared.Database{
 		DB: db,
@@ -227,19 +234,20 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 			RedactionsTable:     redactions,
 			ReportedEventsTable: reportedEvents,
 		},
-		Cache:              cache,
-		Writer:             writer,
-		RoomsTable:         rooms,
-		StateBlockTable:    stateBlock,
-		StateSnapshotTable: stateSnapshot,
-		RoomAliasesTable:   roomAliases,
-		InvitesTable:       invites,
-		MembershipTable:    membership,
-		PublishedTable:     published,
-		GetRoomUpdaterFn:   d.GetRoomUpdater,
-		Purge:              purge,
-		UserRoomKeyTable:   userRoomKeys,
-		PartialStateTable:  partialState,
+		Cache:                   cache,
+		Writer:                  writer,
+		RoomsTable:              rooms,
+		StateBlockTable:         stateBlock,
+		StateSnapshotTable:      stateSnapshot,
+		RoomAliasesTable:        roomAliases,
+		InvitesTable:            invites,
+		MembershipTable:         membership,
+		PublishedTable:          published,
+		GetRoomUpdaterFn:        d.GetRoomUpdater,
+		Purge:                   purge,
+		UserRoomKeyTable:        userRoomKeys,
+		PartialStateTable:       partialState,
+		ClientTransactionsTable: clientTransactions,
 	}
 	return nil
 }

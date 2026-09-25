@@ -44,6 +44,38 @@ func SendEvents(
 	return SendInputRoomEvents(ctx, rsAPI, virtualHost, ires, async)
 }
 
+// SendEventForTransaction synchronously sends a local client's new event
+// together with the client's transaction ID. It returns the ID of the event
+// the transaction produced: the event's own ID, or that of the event stored
+// for an earlier attempt of the same transaction, in which case this event
+// was discarded.
+func SendEventForTransaction(
+	ctx context.Context, rsAPI InputRoomEventsAPI,
+	event *types.HeaderedEvent,
+	virtualHost, origin spec.ServerName,
+	sendAsServer spec.ServerName, txnID *TransactionID,
+) (string, error) {
+	request := InputRoomEventsRequest{
+		InputRoomEvents: []InputRoomEvent{{
+			Kind:          KindNew,
+			Event:         event,
+			Origin:        origin,
+			SendAsServer:  string(sendAsServer),
+			TransactionID: txnID,
+		}},
+		VirtualHost: virtualHost,
+	}
+	var response InputRoomEventsResponse
+	rsAPI.InputRoomEvents(ctx, &request, &response)
+	if err := response.Err(); err != nil {
+		return "", err
+	}
+	if original, ok := response.DuplicateOf[event.EventID()]; ok {
+		return original, nil
+	}
+	return event.EventID(), nil
+}
+
 // SendStateAsOutliers writes state events to the roomserver as outliers.
 // This is used during MSC3706 partial state resync to add full room state
 // without having a new event to add.

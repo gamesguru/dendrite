@@ -221,21 +221,19 @@ func SendEvent(
 		}
 	}
 
-	// pass the new event to the roomserver and receive the correct event ID
-	// event ID in case of duplicate transaction is discarded
+	// Pass the new event to the roomserver. If this retries a transaction
+	// that already produced an event, possibly on another process before an
+	// HA takeover, the roomserver discards this event and names that one.
 	startedSubmittingEvent := time.Now()
-	if err := api.SendEvents(
+	eventID, err := api.SendEventForTransaction(
 		req.Context(), rsAPI,
-		api.KindNew,
-		[]*types.HeaderedEvent{
-			{PDU: e},
-		},
+		&types.HeaderedEvent{PDU: e},
 		device.UserDomain(),
 		domain,
 		domain,
 		txnAndSessionID,
-		false,
-	); err != nil {
+	)
+	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("SendEvents failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -244,14 +242,14 @@ func SendEvent(
 	}
 	timeToSubmitEvent := time.Since(startedSubmittingEvent)
 	util.GetLogger(req.Context()).WithFields(logrus.Fields{
-		"event_id":     e.EventID(),
+		"event_id":     eventID,
 		"room_id":      roomID,
 		"room_version": roomVersion,
 	}).Info("Sent event to roomserver")
 
 	res := util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: sendEventResponse{e.EventID()},
+		JSON: sendEventResponse{eventID},
 	}
 	// Add response to transactionsCache
 	if txnID != nil {

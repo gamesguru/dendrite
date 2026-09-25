@@ -236,21 +236,18 @@ func SendServerNotice(
 		}
 	}
 
-	// pass the new event to the roomserver and receive the correct event ID
-	// event ID in case of duplicate transaction is discarded
+	// Pass the new event to the roomserver, which names the event an earlier
+	// attempt of the same transaction produced, if any.
 	startedSubmittingEvent := time.Now()
-	if err := api.SendEvents(
+	eventID, err := api.SendEventForTransaction(
 		ctx, rsAPI,
-		api.KindNew,
-		[]*types.HeaderedEvent{
-			{PDU: e},
-		},
+		&types.HeaderedEvent{PDU: e},
 		device.UserDomain(),
 		cfgClient.Matrix.ServerName,
 		cfgClient.Matrix.ServerName,
 		txnAndSessionID,
-		false,
-	); err != nil {
+	)
+	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -258,7 +255,7 @@ func SendServerNotice(
 		}
 	}
 	util.GetLogger(ctx).WithFields(logrus.Fields{
-		"event_id":     e.EventID(),
+		"event_id":     eventID,
 		"room_id":      roomID,
 		"room_version": roomVersion,
 	}).Info("Sent event to roomserver")
@@ -266,7 +263,7 @@ func SendServerNotice(
 
 	res := util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: sendEventResponse{e.EventID()},
+		JSON: sendEventResponse{eventID},
 	}
 	// Add response to transactionsCache
 	if txnID != nil {

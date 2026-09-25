@@ -42,7 +42,7 @@ Every scenario meets the safety contract and the recovery objective:
 - The router never saw two active candidates, and no status sample showed two candidates ready.
 - With the reference workload, a crashed leader is replaced and serving client and federation requests in 65.1 s.
 
-One limitation remains open: a client retry that spans a takeover can create a duplicate event, as described under [findings](#findings).
+The one duplicate event measured below came from a client retry that spanned a takeover; it is fixed by [#398](https://codefloe.com/pat-s/zendrite/issues/398), as described under [findings](#findings).
 
 ## Recovery at the reference timings
 
@@ -117,7 +117,7 @@ Retired-generation publications arrived after the successor acquired ownership b
 
 Scenario notes:
 
-- `leader-graceful-shutdown`: one logical transaction produced two events, because its first attempt reached the retired owner and its retry the successor, beyond the process-local transaction cache.
+- `leader-graceful-shutdown`: one logical transaction produced two events, because its first attempt reached the retired owner and its retry the successor, beyond the then process-local transaction cache.
 - `leader-paused-beyond-lease`: the resumed former leader refused all 25 direct writes sent to it.
 - `leader-partitioned-from-kubernetes`: the former leader refused all 15 direct writes sent to it after its successor was promoted.
 - `leader-partitioned-from-everything`: the former leader refused all 15 direct writes sent to it after the partition healed.
@@ -159,12 +159,10 @@ The qualification found these defects; each is fixed in its own pull request, an
 | Backward pagination stepped over events that share a depth | `/messages` and `prev_batch` skipped acknowledged messages whenever a late remote event forked the room at the same depth | [#395](https://codefloe.com/pat-s/zendrite/pulls/395) |
 | A Lease holder partitioned from PostgreSQL kept renewing the Lease | No standby could take over while the partition lasted; after the first fix, renewing through the drain still pushed takeover to 141.6 s with the reference workload | [#399](https://codefloe.com/pat-s/zendrite/pulls/399) |
 | The sync and federation consumers panicked when a database write failed transiently | With the reference workload, a 3 s PostgreSQL failover crashed the leader and became a 64 s leadership change | [#397](https://codefloe.com/pat-s/zendrite/pulls/397) |
+| Transaction IDs were deduplicated only in a process-local cache | If the old owner accepted a message into the room input stream but stopped before answering, the successor applied it and the client's retry created a second event, once in `leader-graceful-shutdown` | [#398](https://codefloe.com/pat-s/zendrite/issues/398) |
 
-One limitation is documented rather than fixed:
-
-- Transaction IDs are deduplicated in a process-local cache.
-  If the old owner accepts a message into the room input stream but stops before answering, the successor applies it, and the client's retry with the same transaction ID creates a second event.
-  This happened once in `leader-graceful-shutdown` and is counted as *duplicated across takeover* above; a durable fix is tracked in [#398](https://codefloe.com/pat-s/zendrite/issues/398).
+The results above predate the #398 fix, which the roomserver now makes durable by recording each client transaction's event for 24 hours.
+A full-tier rerun with it found no duplicate across takeover in any of the 16 scenarios, 14 of which retried a write across the fault.
 
 Two observations need no code change but affect operation:
 
@@ -191,7 +189,7 @@ The harness trades fidelity for reproducibility in a few places, so these still 
 | --- | --- |
 | A resumed or partitioned old leader cannot perform stale authoritative work after successor promotion | Database audit, broker, media and federation attribution, and refused direct writes in the pause and partition scenarios |
 | All documented failover scenarios meet the safety contract and measured recovery targets | 16 scenarios at the reference timings and 3 with the reference workload, all within 120 s or suspended by design |
-| Acknowledged data and logical client transaction behavior meet the documented durability and idempotency guarantees | No lost acknowledged writes; the only duplicate is the documented process-local transaction cache limit, tracked in #398 |
+| Acknowledged data and logical client transaction behavior meet the documented durability and idempotency guarantees | No lost acknowledged writes; the only duplicate came from the process-local transaction cache, fixed by #398 and absent from the rerun |
 | Recovery maintains sync, media, search and federation correctness | `/sync` with existing tokens, `/messages`, to-device, receipts, media, search and federation in both directions are verified after every scenario |
 | Relevant Go race tests and standalone regressions pass | Every fix above adds regression tests and passes under `-race` against PostgreSQL and SQLite; full CI passes on each pull request |
 | A release evidence report records configuration, observed recovery times, failures, and remaining limitations | This page |

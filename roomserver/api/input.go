@@ -139,6 +139,10 @@ type InputRoomEventsRequest struct {
 type InputRoomEventsResponse struct {
 	ErrMsg     string // set if there was any error
 	NotAllowed bool   // true if an event in the input was not allowed.
+	// DuplicateOf maps the ID of an input event that retried a client
+	// transaction to the event the transaction already produced. The input
+	// event was not stored.
+	DuplicateOf map[string]string
 }
 
 func (r *InputRoomEventsResponse) Err() error {

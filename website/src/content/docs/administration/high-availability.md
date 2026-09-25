@@ -203,8 +203,8 @@ The Lease is coordination, not authority, and deleting it does not retire the ow
 Expect a visible interruption.
 Clients receive connection errors or `503` responses until the successor is ready, then reconnect and resume from their existing sync tokens.
 Long-lived `/sync` connections are dropped and must be re-established.
-Typing notifications, HTTP transaction caches, login and SSO intermediates, and sliding-sync sessions are process-local, so clients may need to retry a request or start a fresh session.
-Because the transaction cache is process-local, a message whose first attempt reached the old owner just before it stopped can be stored twice when the client retries it against the successor; see [#398](https://codefloe.com/pat-s/zendrite/issues/398).
+Typing notifications, login and SSO intermediates, and sliding-sync sessions are process-local, so clients may need to retry a request or start a fresh session.
+Retrying a message with the same transaction ID is safe across a takeover: the roomserver remembers which event each transaction produced for 24 hours, so a retry is answered with the event the first attempt stored, even if the old owner stored it.
 
 ## Rolling back to a single instance
 

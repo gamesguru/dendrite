@@ -137,6 +137,24 @@ func (r *Inputer) processRoomEvent(
 		senderDomain = sender.Domain()
 	}
 
+	// A retried client transaction must not store a second event. The first
+	// attempt may have been stored by a previous owner after an HA takeover,
+	// or after its request failed. It is always ahead of the retry on this
+	// room's input subject, so its mapping is known by now.
+	if input.Kind == api.KindNew && input.TransactionID != nil && roomInfo != nil {
+		originalID, terr := r.DB.ClientTransactionEventID(
+			ctx, event.RoomID().String(), string(event.SenderID()),
+			input.TransactionID.SessionID, input.TransactionID.TransactionID,
+		)
+		if terr != nil {
+			return fmt.Errorf("r.DB.ClientTransactionEventID: %w", terr)
+		}
+		if originalID != "" && originalID != event.EventID() {
+			logger.WithField("original_event_id", originalID).Info("Skipping a retried client transaction")
+			return types.DuplicateTransactionError{EventID: originalID}
+		}
+	}
+
 	// Check if the room has partial state (MSC3706 faster joins)
 	// This affects how we handle missing auth events and authorization failures
 	var hasPartialState bool
@@ -484,6 +502,17 @@ func (r *Inputer) processRoomEvent(
 	eventNID, stateAtEvent, err := r.DB.StoreEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 	if err != nil {
 		return fmt.Errorf("updater.StoreEvent: %w", err)
+	}
+
+	// Remember which event this client transaction produced, so that a retry
+	// is answered with it rather than storing another event.
+	if input.Kind == api.KindNew && input.TransactionID != nil && !isRejected {
+		if err = r.DB.StoreClientTransaction(
+			ctx, event.RoomID().String(), string(event.SenderID()),
+			input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
+		); err != nil {
+			return fmt.Errorf("r.DB.StoreClientTransaction: %w", err)
+		}
 	}
 
 	// If we performed expensive state resolution for this event, update the
