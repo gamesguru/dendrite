@@ -152,6 +152,12 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		HistoryVisibility: historyVisibilityShared,
 	}
 
+	// As in Synapse, only private chats let every member invite; public
+	// rooms leave it to moderators. power_level_content_override still wins.
+	if createRequest.StatePreset == spec.PresetPublicChat {
+		powerLevelContent.Invite = 50
+	}
+
 	if createRequest.PowerLevelContentOverride != nil {
 		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults
 		err = json.Unmarshal(createRequest.PowerLevelContentOverride, &powerLevelContent)

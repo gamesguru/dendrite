@@ -203,10 +203,15 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 			"result":          "error",
 			"reachable":       joinErr.Reachable,
 		}).Debug("Federation PerformJoin failed")
-		if !joinErr.Reachable {
-			r.statistics.ForServer(joinErr.ServerName).Failure() //nolint:contextcheck
+		// A well-formed refusal, such as a 403 from make_join because the
+		// server cannot authorize a restricted join, means the server is
+		// reachable. Only transport failures and 5xx answers count towards
+		// backoff, which would otherwise hold back everything else we send it.
+		stats := r.statistics.ForServer(joinErr.ServerName) //nolint:contextcheck
+		if joinErr.Reachable {
+			stats.Success(statistics.SendDirect) //nolint:contextcheck
 		} else {
-			r.statistics.ForServer(joinErr.ServerName).Success(statistics.SendDirect) //nolint:contextcheck
+			failBlacklistableError(joinErr.Err, stats) //nolint:contextcheck
 		}
 		return joinErr.Err
 	}

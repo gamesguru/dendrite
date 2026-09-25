@@ -259,10 +259,12 @@ func (r *Joiner) performJoinRoomByID(
 	userDomain := userID.Domain()
 
 	// Force a federated join if we're dealing with a pending invite
-	// and we aren't in the room.
+	// and we aren't in the room, or our copy of the room has not seen the
+	// invite yet: /invite can arrive before the inviting server's /send
+	// carrying the same event, and a local join would then be refused.
 	if checkInvitePending {
 		isInvitePending, inviteSender, _, inviteEvent, inviteErr := helpers.IsInvitePending(ctx, r.DB, req.RoomIDOrAlias, senderID)
-		if inviteErr == nil && !serverInRoom && isInvitePending {
+		if inviteErr == nil && isInvitePending && (!serverInRoom || !r.stateHasInvite(ctx, req.RoomIDOrAlias, *userID)) {
 			inviter, queryErr := r.RSAPI.QueryUserIDForSender(ctx, *roomID, inviteSender)
 			if queryErr != nil {
 				return "", "", fmt.Errorf("r.RSAPI.QueryUserIDForSender: %w", queryErr)
@@ -403,6 +405,16 @@ func (r *Joiner) performJoinRoomByID(
 		if errors.As(aerr, &matrixErr) && matrixErr.ErrCode == spec.ErrorForbidden {
 			return "", "", rsAPI.ErrNotAllowed{Err: aerr}
 		}
+		// No local user can authorize the restricted join, but another server
+		// in the room may have one: join through it instead.
+		if errors.As(aerr, &matrixErr) && matrixErr.ErrCode == spec.ErrorUnableToAuthoriseJoin {
+			if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
+				delete(req.Content, "join_authorised_via_users_server") //nolint:misspell // Matrix spec uses British spelling
+				req.ServerNames = append(req.ServerNames, servers...)
+				joinedVia, err = r.performFederatedJoinRoomByID(ctx, req)
+				return req.RoomIDOrAlias, joinedVia, err
+			}
+		}
 		// All other errors (database errors, InternalServerError, M_UNABLE_TO_AUTHORIZE_JOIN, etc.)
 		// are returned as-is and will become HTTP 500
 		return "", "", aerr
@@ -502,4 +514,28 @@ func (r *Joiner) populateAuthorisedViaUserForRestrictedJoin(
 	}
 
 	return r.Queryer.QueryRestrictedJoinAllowed(ctx, *roomID, senderID)
+}
+
+// stateHasInvite reports whether the room's current state already holds an
+// invite for the user.
+func (r *Joiner) stateHasInvite(ctx context.Context, roomID string, userID spec.UserID) bool {
+	res := rsAPI.QueryMembershipForUserResponse{}
+	if err := r.Queryer.QueryMembershipForUser(ctx, &rsAPI.QueryMembershipForUserRequest{RoomID: roomID, UserID: userID}, &res); err != nil {
+		return false
+	}
+	return res.Membership == spec.Invite
+}
+
+// otherServersInRoom lists the other servers joined to a room.
+func (r *Joiner) otherServersInRoom(ctx context.Context, roomID string) []spec.ServerName {
+	res := fsAPI.QueryJoinedHostServerNamesInRoomResponse{}
+	if err := r.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fsAPI.QueryJoinedHostServerNamesInRoomRequest{
+		RoomID:             roomID,
+		ExcludeSelf:        true,
+		ExcludeBlacklisted: true,
+	}, &res); err != nil {
+		logrus.WithError(err).WithField("room_id", roomID).Warn("Failed to list the servers in the room")
+		return nil
+	}
+	return res.ServerNames
 }

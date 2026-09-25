@@ -265,19 +265,26 @@ func (r *Inputer) processRoomEvent(
 	// to multi-minute stalls between batch processing.
 	authEvents, _ := gomatrixserverlib.NewAuthEvents(nil)
 	knownEvents := map[string]*types.Event{}
+	isRejected := false
+	var rejectionErr error
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
 	} else if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
-		return fmt.Errorf("r.fetchAuthEvents: %w", err)
+		if input.Kind != api.KindOutlier {
+			return fmt.Errorf("r.fetchAuthEvents: %w", err)
+		}
+		// An outlier whose auth events cannot be obtained, e.g. because they
+		// are badly signed, is rejected rather than failing the whole batch
+		// it came with, such as the room state of a join.
+		isRejected = true
+		rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
+		logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
 	}
-
-	isRejected := false
-	var rejectionErr error
 
 	// Check if the event is allowed by its auth events. If it isn't then
 	// we consider the event to be "rejected" — it will still be persisted.
 	// Skip this check for admin operations that set SkipEventAuth.
-	if !input.SkipEventAuth {
+	if !input.SkipEventAuth && !isRejected {
 		if err = gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		}); err != nil {
@@ -413,8 +420,9 @@ func (r *Inputer) processRoomEvent(
 			// Unknown auth events only really matter if the event actually failed
 			// auth. If it passed auth then we can assume that everything that was
 			// known was sufficient, even if extraneous auth events were specified
-			// but weren't found.
-			if isRejected {
+			// but weren't found. A rejected outlier is stored as rejected all the
+			// same, so that it does not fail the batch it arrived with.
+			if isRejected && input.Kind != api.KindOutlier {
 				if event.StateKey() != nil {
 					return fmt.Errorf(
 						"missing auth event %s for state event %s (type %q, state key %q)",
