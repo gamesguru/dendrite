@@ -34,7 +34,7 @@ Feature support does not imply support for an entire specification version; see 
 | [MSC1772](https://github.com/matrix-org/matrix-spec-proposals/pull/1772) | Spaces | 1.2 | Implemented |
 | [MSC2946](https://github.com/matrix-org/matrix-spec-proposals/pull/2946) | Spaces summary / room hierarchy | 1.2 | Implemented |
 | [MSC3083](https://github.com/matrix-org/matrix-spec-proposals/pull/3083) | Restricted rooms (space-based membership) | 1.2 | Implemented |
-| [MSC2403](https://github.com/matrix-org/matrix-spec-proposals/pull/2403) | Knocking | 1.1 | Implemented |
+| [MSC2403](https://github.com/matrix-org/matrix-spec-proposals/pull/2403) | Knocking | 1.1 | Implemented: `/knock`, `make_knock` and `send_knock`, `rooms.knock` in `/sync` and knocked rooms in sliding sync. A knock is rescinded with `/leave`. Kicks and bans that end an invite or knock are also sent to the target's server when it is not in the room |
 | [MSC3266](https://github.com/matrix-org/matrix-spec-proposals/pull/3266) | Room summary API | 1.15 | Implemented |
 | [MSC3765](https://github.com/matrix-org/matrix-spec-proposals/pull/3765) | Rich text in room topics | 1.15 | Not implemented |
 | [MSC4267](https://github.com/matrix-org/matrix-spec-proposals/pull/4267) | Forget room on leave ([`m.forget_forced_upon_leave` capability](https://spec.matrix.org/v1.18/client-server-api/#mforget_forced_upon_leave-capability)) | 1.18 | Implemented (opt-in via [`auto_forget_on_leave`](/administration/auto-forget-on-leave/)) |
@@ -55,6 +55,7 @@ Feature support does not imply support for an entire specification version; see 
 | [MSC3706](https://github.com/matrix-org/matrix-spec-proposals/pull/3706) | Partial state in `/send_join` (faster joins) | 1.6 | Implemented |
 | [MSC2444](https://github.com/matrix-org/matrix-spec-proposals/pull/2444) | Peeking over federation | N/A | Opt-in (`msc2444`) |
 | [MSC2753](https://github.com/matrix-org/matrix-spec-proposals/pull/2753) | Peeking via `/sync` | N/A | Opt-in (`msc2753`) |
+| [MSC4311](https://github.com/matrix-org/matrix-spec-proposals/pull/4311) | Create event in invite and knock stripped state | 1.16 | Implemented: `invite_room_state` and `knock_room_state` are sent as full PDUs including `m.room.create`. From room version 12, invites whose state holds PDUs that fail validation are rejected with `M_MISSING_PARAM`. Missing or stripped-only state is accepted with a warning, per the MSC's migration section, as are all failures in earlier room versions. Knock state entries that fail validation are dropped |
 
 ## Authentication
 

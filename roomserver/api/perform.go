@@ -41,6 +41,17 @@ type PerformJoinRequest struct {
 	Unsigned      map[string]any    `json:"unsigned"`
 }
 
+// PerformKnockRequest asks to knock on a room, i.e. to request an invite.
+type PerformKnockRequest struct {
+	RoomIDOrAlias string
+	UserID        spec.UserID
+	// Content of the knock event besides the membership, e.g. the reason
+	// and the user's profile.
+	Content map[string]any
+	// Servers to knock through when this server is not in the room.
+	ServerNames []spec.ServerName
+}
+
 type PerformLeaveRequest struct {
 	RoomID string
 	Leaver spec.UserID

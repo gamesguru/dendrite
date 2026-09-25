@@ -30,7 +30,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-GO_IMAGE="golang:1.26-trixie"
+GO_IMAGE="golang:1.27-trixie"
 ENVTEST_VERSION="1.37.0"
 declare -A ENVTEST_SHA512=(
   [amd64]="1d1c453633b72c161a5d5a886cde7ac850be1a2ac796a9e1d4ffacacc64868295bdd2d57aa66cd0c158f5ce510f5dfe3fbc61ac21bd3dcfb875bd70658aa663a"

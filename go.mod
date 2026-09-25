@@ -1,7 +1,7 @@
 module codefloe.com/pat-s/zendrite
 
 require (
-	codefloe.com/pat-s/gomatrixserverlib v1.0.9
+	codefloe.com/pat-s/gomatrixserverlib v1.1.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.4.7
 	github.com/altcha-org/altcha-lib-go v1.0.0
@@ -30,6 +30,7 @@ require (
 	github.com/nats-io/nats.go v1.53.1
 	github.com/nats-io/nkeys v0.4.16
 	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.3
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.12.1
@@ -39,10 +40,10 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	golang.org/x/crypto v0.56.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.45.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/term v0.45.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/term v0.46.0
 	google.golang.org/grpc v1.83.2
 	gotest.tools/v3 v3.5.2
 	k8s.io/api v0.37.0
@@ -137,7 +138,6 @@ require (
 	github.com/oleiade/lane/v2 v2.0.0 // indirect
 	github.com/petermattis/goid v0.0.0-20260816044145-ed329add6b1b // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.71.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -158,8 +158,8 @@ require (
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260904194346-d0f1323225a4 // indirect
@@ -179,4 +179,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-go 1.26.0
+go 1.27.0

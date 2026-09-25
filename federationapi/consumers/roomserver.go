@@ -305,6 +305,15 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	// partial join. SendEvent deduplicates and drops our own server name.
 	joinedHostsAtEvent = append(joinedHostsAtEvent, partialStateServers...)
 
+	// A kick or ban ending a remote user's invite or knock must also reach
+	// their server, which is not in the room and would otherwise never learn
+	// that the invite was rescinded or the knock rejected.
+	if isLocalEvent {
+		if target, ok := s.pendingMembershipTarget(ore); ok {
+			joinedHostsAtEvent = append(joinedHostsAtEvent, target)
+		}
+	}
+
 	// TODO: do housekeeping to evict unrenewed peeking hosts
 
 	// TODO: implement query to let the fedapi check whether a given peek is live or not
@@ -313,6 +322,52 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	return s.queues.SendEvent(
 		ore.Event, spec.ServerName(ore.SendAsServer), joinedHostsAtEvent,
 	)
+}
+
+// pendingMembershipTarget returns the server of the user a membership event
+// kicks or bans out of a knock, or whose invite the inviter rescinds, if that
+// server is remote.
+func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomEvent) (spec.ServerName, bool) {
+	ev := ore.Event
+	if ev.Type() != spec.MRoomMember || ev.StateKey() == nil || *ev.StateKey() == string(ev.SenderID()) {
+		return "", false
+	}
+	if membership, err := ev.Membership(); err != nil || (membership != spec.Leave && membership != spec.Ban) {
+		return "", false
+	}
+	target, err := s.rsAPI.QueryUserIDForSender(s.ctx, ev.RoomID(), spec.SenderID(*ev.StateKey()))
+	if err != nil || target == nil || s.cfg.Matrix.IsLocalServerName(target.Domain()) {
+		return "", false
+	}
+
+	// Only invites and knocks: a user who joined has a server in the room.
+	if len(ore.RemovesStateEventIDs) == 0 {
+		return "", false
+	}
+	eventsRes := &api.QueryEventsByIDResponse{}
+	if err = s.rsAPI.QueryEventsByID(s.ctx, &api.QueryEventsByIDRequest{
+		RoomID:   ev.RoomID().String(),
+		EventIDs: ore.RemovesStateEventIDs,
+	}, eventsRes); err != nil {
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to load the membership replaced by a kick or ban")
+		return "", false
+	}
+	for _, removed := range eventsRes.Events {
+		if removed.Type() != spec.MRoomMember || !removed.StateKeyEquals(*ev.StateKey()) {
+			continue
+		}
+		membership, mErr := removed.Membership()
+		switch {
+		case mErr != nil:
+		case membership == spec.Knock:
+			return target.Domain(), true
+		case membership == spec.Invite && removed.SenderID() == ev.SenderID():
+			// As in Synapse, only the inviter rescinds an invite over
+			// federation; other kicks stay within the room.
+			return target.Domain(), true
+		}
+	}
+	return "", false
 }
 
 func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []types.JoinedHost) {

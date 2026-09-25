@@ -115,20 +115,10 @@ func (r *FederationInternalAPI) PerformJoin(
 	}
 
 	// If we reach here then we didn't complete a join for some reason.
-	var httpErr gomatrix.HTTPError
-	if ok := errors.As(lastErr, &httpErr); ok {
-		httpErr.Message = string(httpErr.Contents)
-		response.LastError = &httpErr
-	} else {
-		response.LastError = &gomatrix.HTTPError{
-			Code:         0,
-			WrappedError: nil,
-			Message:      "Unknown HTTP error",
-		}
-		if lastErr != nil {
-			response.LastError.Message = lastErr.Error()
-		}
+	if lastErr == nil {
+		lastErr = errors.New("unknown HTTP error")
 	}
+	response.LastError = federationHTTPError(lastErr)
 
 	logrus.Errorf(
 		"failed to join user %q to room %q through %d server(s): last error %s",

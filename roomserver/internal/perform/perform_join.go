@@ -103,53 +103,70 @@ func (r *Joiner) performJoinRoomByAlias(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
 ) (string, spec.ServerName, error) {
-	// Get the domain part of the room alias.
-	_, domain, err := gomatrixserverlib.SplitID('#', req.RoomIDOrAlias)
+	roomID, servers, err := resolveRoomAlias(ctx, r.Cfg, r.FSAPI, r.RSAPI, req.RoomIDOrAlias)
 	if err != nil {
-		return "", "", rsAPI.ErrInvalidID{Err: fmt.Errorf("alias %q is not in the correct format", req.RoomIDOrAlias)}
+		return "", "", err
 	}
-	req.ServerNames = append(req.ServerNames, domain)
+	req.ServerNames = append(req.ServerNames, servers...)
+
+	// If we do, then pluck out the room ID and continue the join.
+	req.RoomIDOrAlias = roomID
+	return r.performJoinRoomByID(ctx, req)
+}
+
+// resolveRoomAlias looks up the room ID for an alias, locally or over
+// federation, and returns servers which are likely to be in the room.
+func resolveRoomAlias(
+	ctx context.Context,
+	cfg *config.RoomServer,
+	fedAPI fsAPI.RoomserverFederationAPI,
+	rsapi rsAPI.RoomserverInternalAPI,
+	alias string,
+) (string, []spec.ServerName, error) {
+	// Get the domain part of the room alias.
+	_, domain, err := gomatrixserverlib.SplitID('#', alias)
+	if err != nil {
+		return "", nil, rsAPI.ErrInvalidID{Err: fmt.Errorf("alias %q is not in the correct format", alias)}
+	}
+	servers := []spec.ServerName{domain}
 
 	// Check if this alias matches our own server configuration. If it
-	// doesn't then we'll need to try a federated join.
+	// doesn't then we'll need to ask a remote server.
 	var roomID string
-	if !r.Cfg.Matrix.IsLocalServerName(domain) {
-		// The alias isn't owned by us, so we will need to try joining using
-		// a remote server.
+	if !cfg.Matrix.IsLocalServerName(domain) {
+		// The alias isn't owned by us, so we will need to look it up
+		// using a remote server.
 		dirReq := fsAPI.PerformDirectoryLookupRequest{
-			RoomAlias:  req.RoomIDOrAlias, // the room alias to lookup
-			ServerName: domain,            // the server to ask
+			RoomAlias:  alias,  // the room alias to lookup
+			ServerName: domain, // the server to ask
 		}
 		dirRes := fsAPI.PerformDirectoryLookupResponse{}
-		err = r.FSAPI.PerformDirectoryLookup(ctx, &dirReq, &dirRes)
+		err = fedAPI.PerformDirectoryLookup(ctx, &dirReq, &dirRes)
 		if err != nil {
-			logrus.WithError(err).Errorf("error looking up alias %q", req.RoomIDOrAlias)
-			return "", "", fmt.Errorf("looking up alias %q over federation failed: %w", req.RoomIDOrAlias, err)
+			logrus.WithError(err).Errorf("error looking up alias %q", alias)
+			return "", nil, fmt.Errorf("looking up alias %q over federation failed: %w", alias, err)
 		}
 		roomID = dirRes.RoomID
-		req.ServerNames = append(req.ServerNames, dirRes.ServerNames...)
+		servers = append(servers, dirRes.ServerNames...)
 	} else {
 		getRoomReq := rsAPI.GetRoomIDForAliasRequest{
-			Alias:              req.RoomIDOrAlias,
+			Alias:              alias,
 			IncludeAppservices: true,
 		}
 		getRoomRes := rsAPI.GetRoomIDForAliasResponse{}
 		// Otherwise, look up if we know this room alias locally.
-		err = r.RSAPI.GetRoomIDForAlias(ctx, &getRoomReq, &getRoomRes)
+		err = rsapi.GetRoomIDForAlias(ctx, &getRoomReq, &getRoomRes)
 		if err != nil {
-			return "", "", fmt.Errorf("lookup room alias %q failed: %w", req.RoomIDOrAlias, err)
+			return "", nil, fmt.Errorf("lookup room alias %q failed: %w", alias, err)
 		}
 		roomID = getRoomRes.RoomID
 	}
 
 	// If the room ID is empty then we failed to look up the alias.
 	if roomID == "" {
-		return "", "", spec.NotFound(fmt.Sprintf("alias %q not found", req.RoomIDOrAlias))
+		return "", nil, spec.NotFound(fmt.Sprintf("alias %q not found", alias))
 	}
-
-	// If we do, then pluck out the room ID and continue the join.
-	req.RoomIDOrAlias = roomID
-	return r.performJoinRoomByID(ctx, req)
+	return roomID, servers, nil
 }
 
 // TODO: Break this function up a bit & move to GMSL

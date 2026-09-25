@@ -53,7 +53,7 @@ labels:
 
 steps:
   qualification:
-    image: docker.io/library/golang:1.26-trixie
+    image: docker.io/library/golang:1.27-trixie
     environment:
       HACHAOS_TIER: ${HACHAOS_TIER:-ci}
       HACHAOS_GROUP: ${GROUP}

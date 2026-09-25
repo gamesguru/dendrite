@@ -24,7 +24,10 @@ const (
 	// OutputTypeNewInviteEvent indicates that the event is an OutputNewInviteEvent.
 	OutputTypeNewInviteEvent OutputType = "new_invite_event"
 	// OutputTypeRetireInviteEvent indicates that the event is an OutputRetireInviteEvent.
+	// It also retires knocks, which share the invite lifecycle.
 	OutputTypeRetireInviteEvent OutputType = "retire_invite_event"
+	// OutputTypeNewKnockEvent indicates that the event is an OutputNewKnockEvent.
+	OutputTypeNewKnockEvent OutputType = "new_knock_event"
 	// OutputTypeRedactedEvent indicates that the event is an OutputRedactedEvent
 	//
 	// This event is emitted when a redaction has been 'validated' (meaning both the redaction and the event to redact are known).
@@ -69,6 +72,8 @@ type OutputEvent struct {
 	NewInviteEvent *OutputNewInviteEvent `json:"new_invite_event,omitempty"`
 	// The content of event with type OutputTypeRetireInviteEvent
 	RetireInviteEvent *OutputRetireInviteEvent `json:"retire_invite_event,omitempty"`
+	// The content of event with type OutputTypeNewKnockEvent
+	NewKnockEvent *OutputNewKnockEvent `json:"new_knock_event,omitempty"`
 	// The content of event with type OutputTypeRedactedEvent
 	RedactedEvent *OutputRedactedEvent `json:"redacted_event,omitempty"`
 	// The content of event with type OutputTypeNewPeek
@@ -203,6 +208,18 @@ type OutputNewInviteEvent struct {
 	// The room version of the invited room.
 	RoomVersion gomatrixserverlib.RoomVersion `json:"room_version"`
 	// The "m.room.member" invite event.
+	Event *types.HeaderedEvent `json:"event"`
+}
+
+// An OutputNewKnockEvent is written whenever a local user's knock becomes
+// active. Like invites, knocks can be for rooms this server is not in, so
+// they are tracked separately from the room events. The event carries the
+// stripped room state for clients in unsigned.knock_room_state. Knocks are
+// retired with OutputRetireInviteEvent.
+type OutputNewKnockEvent struct {
+	// The room version of the room knocked on.
+	RoomVersion gomatrixserverlib.RoomVersion `json:"room_version"`
+	// The "m.room.member" knock event.
 	Event *types.HeaderedEvent `json:"event"`
 }
 

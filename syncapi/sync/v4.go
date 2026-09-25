@@ -1418,7 +1418,7 @@ func (rp *RequestPool) getRoomsForList(
 }
 
 // getAllActiveMembershipRooms fetches all rooms where user has active membership
-// Per MSC4186 and Synapse behavior: joined, invited, banned, kicked rooms are included
+// Per MSC4186 and Synapse behavior: joined, invited, knocked, banned, kicked rooms are included
 // Self-left rooms are excluded from default lists.
 func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID string) ([]RoomWithBumpStamp, error) {
 	joinedRooms, err := rp.GetRoomsForUser(ctx, userID, "join")
@@ -1426,6 +1426,10 @@ func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID s
 		return nil, err
 	}
 	invitedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Invite)
+	if err != nil {
+		return nil, err
+	}
+	knockedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Knock)
 	if err != nil {
 		return nil, err
 	}
@@ -1439,13 +1443,14 @@ func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID s
 	}
 
 	// Combine all membership types
-	rooms := make([]RoomWithBumpStamp, 0, len(joinedRooms)+len(invitedRooms)+len(bannedRooms)+len(kickedRooms))
+	rooms := make([]RoomWithBumpStamp, 0, len(joinedRooms)+len(invitedRooms)+len(knockedRooms)+len(bannedRooms)+len(kickedRooms))
 	rooms = append(rooms, joinedRooms...)
 	rooms = append(rooms, invitedRooms...)
+	rooms = append(rooms, knockedRooms...)
 	rooms = append(rooms, bannedRooms...)
 	rooms = append(rooms, kickedRooms...)
 
-	// Deduplicate rooms - keep first occurrence (highest priority: join > invite > ban > kicked)
+	// Deduplicate rooms - keep first occurrence (highest priority: join > invite > knock > ban > kicked)
 	return deduplicateRooms(rooms), nil
 }
 

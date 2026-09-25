@@ -10,6 +10,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/auth"
@@ -35,6 +36,21 @@ func UpdateToInviteMembership(
 	if err != nil {
 		return nil, err
 	}
+	// Retire a knock this invite answers before announcing the invite: the
+	// sync API shows the most recent entry for a room, which must be the
+	// invite.
+	for _, eventID := range retired {
+		updates = append(updates, api.OutputEvent{
+			Type: api.OutputTypeRetireInviteEvent,
+			RetireInviteEvent: &api.OutputRetireInviteEvent{
+				EventID:          eventID,
+				RoomID:           add.RoomID().String(),
+				Membership:       spec.Join,
+				RetiredByEventID: add.EventID(),
+				TargetSenderID:   spec.SenderID(*add.StateKey()),
+			},
+		})
+	}
 	if needsSending {
 		// We notify the consumers using a special event even though we will
 		// notify them about the change in current state as part of the normal
@@ -46,18 +62,6 @@ func UpdateToInviteMembership(
 			NewInviteEvent: &api.OutputNewInviteEvent{
 				Event:       &types.HeaderedEvent{PDU: add.PDU},
 				RoomVersion: roomVersion,
-			},
-		})
-	}
-	for _, eventID := range retired {
-		updates = append(updates, api.OutputEvent{
-			Type: api.OutputTypeRetireInviteEvent,
-			RetireInviteEvent: &api.OutputRetireInviteEvent{
-				EventID:          eventID,
-				RoomID:           add.RoomID().String(),
-				Membership:       spec.Join,
-				RetiredByEventID: add.EventID(),
-				TargetSenderID:   spec.SenderID(*add.StateKey()),
 			},
 		})
 	}
@@ -97,9 +101,31 @@ func IsServerCurrentlyInRoom(ctx context.Context, db storage.Database, querier a
 	return auth.IsAnyUserOnServerWithMembership(ctx, querier, serverName, gmslEvents, spec.Join), nil
 }
 
+// IsInvitePending reports whether the user has an outstanding invite to the
+// room, returning the inviter, the invite event ID and the invite event.
 func IsInvitePending(
 	ctx context.Context, db storage.Database,
 	roomID string, senderID spec.SenderID,
+) (bool, spec.SenderID, string, gomatrixserverlib.PDU, error) {
+	return isMembershipPending(ctx, db, roomID, senderID, spec.Invite)
+}
+
+// IsKnockPending reports whether the user has an outstanding knock on the
+// room, returning the knock event ID and the knock event.
+func IsKnockPending(
+	ctx context.Context, db storage.Database,
+	roomID string, senderID spec.SenderID,
+) (bool, string, gomatrixserverlib.PDU, error) {
+	pending, _, eventID, event, err := isMembershipPending(ctx, db, roomID, senderID, spec.Knock)
+	return pending, eventID, event, err
+}
+
+// isMembershipPending looks up the active entry in the invites table, which
+// records both invites and knocks, and reports it if it has the wanted
+// membership.
+func isMembershipPending(
+	ctx context.Context, db storage.Database,
+	roomID string, senderID spec.SenderID, membership string,
 ) (bool, spec.SenderID, string, gomatrixserverlib.PDU, error) {
 	// Look up the room NID for the supplied room ID.
 	info, err := db.RoomInfo(ctx, roomID)
@@ -127,7 +153,7 @@ func IsInvitePending(
 	if err != nil {
 		return false, "", "", nil, fmt.Errorf("r.DB.GetInvitesForUser: %w", err)
 	}
-	if len(senderUserNIDs) == 0 {
+	if len(senderUserNIDs) == 0 || gjson.GetBytes(eventJSON, "content.membership").Str != membership {
 		return false, "", "", nil, nil
 	}
 	userNIDToEventID := make(map[types.EventStateKeyNID]string)

@@ -289,8 +289,23 @@ func updateToLeaveMembership(
 func updateToKnockMembership(
 	mu *shared.MembershipUpdater, add *types.Event, updates []api.OutputEvent,
 ) ([]api.OutputEvent, error) {
-	if _, _, err := mu.Update(tables.MembershipStateKnock, add, false); err != nil {
+	// Knocking again retires the previous knock. The new knock is announced
+	// by the roomserver's PerformKnock, which has the room state for it.
+	_, retired, err := mu.Update(tables.MembershipStateKnock, add, false)
+	if err != nil {
 		return nil, err
+	}
+	for _, eventID := range retired {
+		updates = append(updates, api.OutputEvent{
+			Type: api.OutputTypeRetireInviteEvent,
+			RetireInviteEvent: &api.OutputRetireInviteEvent{
+				EventID:          eventID,
+				RoomID:           add.RoomID().String(),
+				Membership:       spec.Knock,
+				RetiredByEventID: add.EventID(),
+				TargetSenderID:   spec.SenderID(*add.StateKey()),
+			},
+		})
 	}
 	return updates, nil
 }

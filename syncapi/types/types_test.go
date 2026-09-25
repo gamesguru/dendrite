@@ -133,6 +133,24 @@ func TestNewInviteResponse(t *testing.T) {
 	}
 }
 
+// Invites stored before invite_room_state was always a list carry an empty
+// object there. They must still reach the client.
+func TestNewInviteResponseWithEmptyObjectState(t *testing.T) {
+	t.Parallel()
+	event := `{"auth_events":[],"content":{"membership":"invite","is_direct":true},"depth":9,"hashes":{"sha256":"8p+Ur4f8vLFX6mkIXhxI0kegPG7X3tWy56QmvBkExAg"},"origin":"matrix.org","origin_server_ts":1602087113066,"prev_events":[],"room_id":"!XbeXirGWSPXbEaGokF:matrix.org","sender":"@neilalexander:matrix.org","signatures":{},"state_key":"@alice:zendrite.test","type":"m.room.member","unsigned":{"invite_room_state":{}}}`
+	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV5).NewEventFromTrustedJSON([]byte(event), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewInviteResponse(context.Background(), &FakeRoomserverAPI{}, &types.HeaderedEvent{PDU: ev}, synctypes.FormatSync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.InviteState.Events) != 1 {
+		t.Fatalf("expected only the invite event, got %d events", len(res.InviteState.Events))
+	}
+}
+
 func TestJoinResponse_MarshalJSON(t *testing.T) {
 	t.Parallel()
 	type fields struct {

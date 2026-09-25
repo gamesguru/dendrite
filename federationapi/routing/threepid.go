@@ -190,9 +190,20 @@ func ExchangeThirdPartyInvite(
 		}
 	}
 
+	// MSC4311: the invited server expects the room state, including the
+	// create event, alongside the invite.
+	inviteState, err := gomatrixserverlib.GenerateStrippedState(httpReq.Context(), *validRoomID, rsAPI.StateQuerier())
+	if err != nil {
+		util.GetLogger(httpReq.Context()).WithError(err).Error("failed to generate invite room state")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
 	// Ask the requesting server to sign the newly created event so we know it
 	// acknowledged it
-	inviteReq, err := fclient.NewInviteV2Request(event, nil)
+	inviteReq, err := fclient.NewInviteV2Request(event, inviteState)
 	if err != nil {
 		util.GetLogger(httpReq.Context()).WithError(err).Error("failed to make invite v2 request")
 		return util.JSONResponse{

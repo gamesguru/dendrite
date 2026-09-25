@@ -160,6 +160,9 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 	case api.OutputTypeRetireInviteEvent:
 		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
+	case api.OutputTypeNewKnockEvent:
+		// Knocks are stored like invites but never pushed: the user sent it.
+		_ = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
 		s.onNewPeek(s.ctx, *output.NewPeek) //nolint:contextcheck
 	case api.OutputTypeRetirePeek:
@@ -526,11 +529,19 @@ func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rst
 func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	ctx context.Context, msg api.OutputNewInviteEvent,
 ) error {
-	if msg.Event.StateKey() == nil {
+	return s.addPendingMembershipEvent(ctx, msg.Event)
+}
+
+// addPendingMembershipEvent stores an invite or knock for a local user in the
+// invites table, which backs both rooms.invite and rooms.knock in /sync.
+func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
+	ctx context.Context, event *rstypes.HeaderedEvent,
+) error {
+	if event.StateKey() == nil {
 		return nil
 	}
 
-	userID, err := s.rsAPI.QueryUserIDForSender(ctx, msg.Event.RoomID(), spec.SenderID(*msg.Event.StateKey()))
+	userID, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(*event.StateKey()))
 	if err != nil {
 		return err
 	}
@@ -541,14 +552,14 @@ func (s *OutputRoomEventConsumer) onNewInviteEvent(
 		return nil
 	}
 
-	msg.Event.UserID = *userID
+	event.UserID = *userID
 
-	pduPos, err := s.db.AddInviteEvent(ctx, msg.Event)
+	pduPos, err := s.db.AddInviteEvent(ctx, event)
 	if err != nil {
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
-			"event_id":   msg.Event.EventID(),
-			"event":      string(msg.Event.JSON()),
+			"event_id":   event.EventID(),
+			"event":      string(event.JSON()),
 			"pdupos":     pduPos,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: write invite failure")
@@ -556,7 +567,7 @@ func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	}
 
 	s.inviteStream.Advance(pduPos)
-	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *msg.Event.StateKey())
+	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *event.StateKey())
 	return nil
 }
 

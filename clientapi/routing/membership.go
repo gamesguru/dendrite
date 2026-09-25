@@ -210,8 +210,9 @@ func SendKick(
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	// kick is only valid if the user is not currently banned or left (that is, they are joined or invited)
-	if queryRes.Membership != spec.Join && queryRes.Membership != spec.Invite {
+	// kick is only valid if the user is not currently banned or left (that is,
+	// they are joined, invited or knocking; kicking a knock rejects it)
+	if queryRes.Membership != spec.Join && queryRes.Membership != spec.Invite && queryRes.Membership != spec.Knock {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden("cannot /kick banned or left users"),

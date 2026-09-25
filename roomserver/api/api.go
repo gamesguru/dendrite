@@ -279,6 +279,7 @@ type ClientRoomserverAPI interface {
 	PerformInvite(ctx context.Context, req *PerformInviteRequest) error
 	PerformJoin(ctx context.Context, req *PerformJoinRequest) (roomID string, joinedVia spec.ServerName, err error)
 	PerformLeave(ctx context.Context, req *PerformLeaveRequest, res *PerformLeaveResponse) error
+	PerformKnock(ctx context.Context, req *PerformKnockRequest) (roomID string, err error)
 	PerformPublish(ctx context.Context, req *PerformPublishRequest) error
 	// PerformForget forgets a rooms history for a specific user
 	PerformForget(ctx context.Context, req *PerformForgetRequest, resp *PerformForgetResponse) error
@@ -349,6 +350,12 @@ type FederationRoomserverAPI interface {
 	QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (string, error)
 	PerformInboundPeek(ctx context.Context, req *PerformInboundPeekRequest, res *PerformInboundPeekResponse) error
 	HandleInvite(ctx context.Context, event *types.HeaderedEvent) error
+	// RetractPendingMembership applies a kick or ban received over federation
+	// to a local user's invite or knock for a room this server is not in,
+	// reporting whether it did. Such events cannot be authorized against the
+	// room state, so only the inviter can rescind an invite, and only servers
+	// named by the knock's room state can reject a knock.
+	RetractPendingMembership(ctx context.Context, event *types.HeaderedEvent) (bool, error)
 
 	PerformInvite(ctx context.Context, req *PerformInviteRequest) error
 	// Query a given amount (or less) of events prior to a given set of events.

@@ -55,7 +55,11 @@ func (rp *RequestPool) detectRoomMembership(
 			logrus.WithError(inviteErr).WithField("room_id", roomID).Warn("Failed to check for invites")
 		} else if invite, hasInvite := invites[roomID]; hasInvite {
 			if _, isRetired := retired[roomID]; !isRetired {
-				result.membership = "invite"
+				// The invites table also holds knocks.
+				result.membership = spec.Invite
+				if eventMembership, _ := invite.Membership(); eventMembership == spec.Knock {
+					result.membership = spec.Knock
+				}
 				result.inviteEvent = invite
 			}
 		}
@@ -166,9 +170,13 @@ func (rp *RequestPool) BuildRoomData(
 	membershipResult := rp.detectRoomMembership(ctx, snapshot, roomID, userID, currentPos)
 
 	// If user is invited, return stripped state instead of timeline/required_state
-	if membershipResult.membership == "invite" {
+	if membershipResult.membership == spec.Invite {
 		logrus.WithField("room_id", roomID).Info("[V4_SYNC] Building invite room data (stripped state)")
 		return rp.buildInviteRoomData(ctx, snapshot, roomID, userID, isInitialForRoom, membershipResult.inviteEvent)
+	}
+	// Knocked rooms likewise only get stripped state.
+	if membershipResult.membership == spec.Knock {
+		return rp.buildKnockRoomData(ctx, snapshot, roomID, userID, isInitialForRoom, membershipResult.inviteEvent)
 	}
 
 	// Get timeline events
@@ -987,6 +995,41 @@ func (rp *RequestPool) buildInviteRoomData(
 	isInitial bool,
 	inviteEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
+	roomData, err := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, inviteEvent, "invite_room_state")
+	if err != nil {
+		return nil, err
+	}
+	// MSC4186 spec uses "stripped_state", Synapse/Element X use "invite_state"
+	roomData.InviteState = roomData.StrippedState
+	return roomData, nil
+}
+
+// buildKnockRoomData constructs room data for a room the user knocked on,
+// from the knock_room_state recorded with the knock. Only stripped_state is
+// set, since invite_state would make clients treat the room as an invite.
+func (rp *RequestPool) buildKnockRoomData(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	roomID string,
+	userID string,
+	isInitial bool,
+	knockEvent *rstypes.HeaderedEvent,
+) (*types.SlidingRoomData, error) {
+	return rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
+}
+
+// buildStrippedRoomData builds the stripped state of an invited or knocked
+// room from the stripped state stored under unsignedKey on the membership
+// event, falling back to local state for rooms this server is in.
+func (rp *RequestPool) buildStrippedRoomData(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	roomID string,
+	userID string,
+	isInitial bool,
+	inviteEvent *rstypes.HeaderedEvent,
+	unsignedKey string,
+) (*types.SlidingRoomData, error) {
 	roomData := &types.SlidingRoomData{
 		Initial: isInitial,
 	}
@@ -996,7 +1039,7 @@ func (rp *RequestPool) buildInviteRoomData(
 	// For federated invites, the room state is embedded in the invite event's unsigned field
 	// as "invite_room_state". This is the same approach V3 sync uses (see NewInviteResponse).
 	if inviteEvent != nil {
-		if inviteRoomState := gjson.GetBytes(inviteEvent.Unsigned(), "invite_room_state"); inviteRoomState.Exists() {
+		if inviteRoomState := gjson.GetBytes(inviteEvent.Unsigned(), unsignedKey); inviteRoomState.IsArray() {
 			// Parse the invite_room_state array
 			for _, stateEvent := range inviteRoomState.Array() {
 				// Convert raw JSON to ClientEvent
@@ -1074,9 +1117,6 @@ func (rp *RequestPool) buildInviteRoomData(
 		}
 	}
 
-	// Populate both fields for forward/backward compatibility
-	// MSC4186 spec uses "stripped_state", Synapse/Element X use "invite_state"
-	roomData.InviteState = strippedEvents
 	roomData.StrippedState = strippedEvents
 
 	logrus.WithFields(logrus.Fields{
@@ -1084,7 +1124,8 @@ func (rp *RequestPool) buildInviteRoomData(
 		"stripped_count":   len(strippedEvents),
 		"name":             roomData.Name,
 		"has_invite_event": inviteEvent != nil,
-	}).Debug("[V4_SYNC] Built invite room data")
+		"unsigned_key":     unsignedKey,
+	}).Debug("[V4_SYNC] Built stripped room data")
 
 	return roomData, nil
 }

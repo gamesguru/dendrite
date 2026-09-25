@@ -172,6 +172,20 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 			continue
 		}
 
+		// A kick or ban ending a local user's invite or knock can reach us
+		// for a room we are not in, where it cannot be authorized as usual.
+		if event.Type() == spec.MRoomMember {
+			retracted, retractErr := t.rsAPI.RetractPendingMembership(ctx, &rstypes.HeaderedEvent{PDU: event})
+			if retractErr != nil {
+				util.GetLogger(ctx).WithError(retractErr).Warnf("Transaction: Couldn't retract pending membership for event %q", event.EventID())
+			}
+			if retracted {
+				results[event.EventID()] = fclient.PDUResult{}
+				PDUCountTotal.WithLabelValues("success").Inc()
+				continue
+			}
+		}
+
 		// pass the event to the roomserver which will do auth checks
 		// If the event fail auth checks, gmsl.NotAllowed error will be returned which we be silently
 		// discarded by the caller of this function

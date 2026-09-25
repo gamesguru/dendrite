@@ -434,6 +434,19 @@ func Setup(
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 
+	v3mux.Handle("/knock/{roomIDOrAlias}",
+		httputil.MakeAuthAPI("knock", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, device); r != nil {
+				return *r
+			}
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return KnockRoomByIDOrAlias(req, device, rsAPI, userAPI, vars["roomIDOrAlias"])
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	if mscCfg.Enabled("msc2753") {
 		v3mux.Handle("/peek/{roomIDOrAlias}",
 			httputil.MakeAuthAPI(spec.Peek, userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

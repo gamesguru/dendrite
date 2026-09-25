@@ -335,6 +335,7 @@ type RoomsResponse struct {
 	Join   map[string]*JoinResponse   `json:"join,omitempty"`
 	Peek   map[string]*JoinResponse   `json:"peek,omitempty"`
 	Invite map[string]*InviteResponse `json:"invite,omitempty"`
+	Knock  map[string]*KnockResponse  `json:"knock,omitempty"`
 	Leave  map[string]*LeaveResponse  `json:"leave,omitempty"`
 }
 
@@ -370,7 +371,7 @@ func (r Response) MarshalJSON() ([]byte, error) {
 	}
 	if r.Rooms != nil {
 		if len(r.Rooms.Join) == 0 && len(r.Rooms.Peek) == 0 &&
-			len(r.Rooms.Invite) == 0 && len(r.Rooms.Leave) == 0 {
+			len(r.Rooms.Invite) == 0 && len(r.Rooms.Knock) == 0 && len(r.Rooms.Leave) == 0 {
 			a.Rooms = nil
 		}
 	}
@@ -385,6 +386,7 @@ func (r *Response) HasUpdates() bool {
 	return (len(r.AccountData.Events) > 0 ||
 		len(r.Presence.Events) > 0 ||
 		len(r.Rooms.Invite) > 0 ||
+		len(r.Rooms.Knock) > 0 ||
 		len(r.Rooms.Join) > 0 ||
 		len(r.Rooms.Leave) > 0 ||
 		len(r.Rooms.Peek) > 0 ||
@@ -402,6 +404,7 @@ func NewResponse() *Response {
 		Join:   map[string]*JoinResponse{},
 		Peek:   map[string]*JoinResponse{},
 		Invite: map[string]*InviteResponse{},
+		Knock:  map[string]*KnockResponse{},
 		Leave:  map[string]*LeaveResponse{},
 	}
 
@@ -424,6 +427,7 @@ func NewResponse() *Response {
 func (r *Response) IsEmpty() bool {
 	return len(r.Rooms.Join) == 0 &&
 		len(r.Rooms.Invite) == 0 &&
+		len(r.Rooms.Knock) == 0 &&
 		len(r.Rooms.Leave) == 0 &&
 		len(r.AccountData.Events) == 0 &&
 		len(r.Presence.Events) == 0 &&
@@ -522,25 +526,60 @@ type InviteResponse struct {
 // NewInviteResponse creates an empty response with initialized arrays.
 func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent, eventFormat synctypes.ClientEventFormat) (*InviteResponse, error) {
 	res := InviteResponse{}
-	res.InviteState.Events = []json.RawMessage{}
+	events, err := strippedStateWithEvent(ctx, rsAPI, event, "invite_room_state", eventFormat)
+	if err != nil {
+		return nil, err
+	}
+	res.InviteState.Events = events
+	return &res, nil
+}
 
-	// First see if there's invite_room_state in the unsigned key of the invite.
+// KnockResponse represents a /sync response for a room which is under the 'knock' key.
+type KnockResponse struct {
+	KnockState struct {
+		Events []json.RawMessage `json:"events"`
+	} `json:"knock_state"`
+}
+
+// NewKnockResponse builds the knock_state for a room the user knocked on
+// from the room state recorded with the knock and the knock event itself.
+func NewKnockResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent, eventFormat synctypes.ClientEventFormat) (*KnockResponse, error) {
+	res := KnockResponse{}
+	events, err := strippedStateWithEvent(ctx, rsAPI, event, "knock_room_state", eventFormat)
+	if err != nil {
+		return nil, err
+	}
+	res.KnockState.Events = events
+	return &res, nil
+}
+
+// strippedStateWithEvent returns the stripped state stored under the given
+// unsigned key of an invite or knock event, followed by the event itself so
+// clients can tell who sent it.
+func strippedStateWithEvent(
+	ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent,
+	unsignedKey string, eventFormat synctypes.ClientEventFormat,
+) ([]json.RawMessage, error) {
+	events := []json.RawMessage{}
+
+	// First see if there's stripped state in the unsigned key of the event.
 	// If there is then unmarshal it into the response. This will contain the
 	// partial room state such as join rules, room name etc.
-	if inviteRoomState := gjson.GetBytes(event.Unsigned(), "invite_room_state"); inviteRoomState.Exists() {
+	// Older invites may store an empty object here rather than a list.
+	if roomState := gjson.GetBytes(event.Unsigned(), unsignedKey); roomState.IsArray() {
 		if event.Version() == gomatrixserverlib.RoomVersionPseudoIDs && eventFormat != synctypes.FormatSyncFederation {
-			updatedInvite, err := synctypes.GetUpdatedInviteRoomState(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			updated, err := synctypes.GetUpdatedInviteRoomState(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
-			}, inviteRoomState, event.PDU, event.RoomID(), eventFormat)
+			}, roomState, event.PDU, event.RoomID(), eventFormat)
 			if err != nil {
 				return nil, err
 			}
-			if err := json.Unmarshal(updatedInvite, &res.InviteState.Events); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal updated invite state: %w", err)
+			if err := json.Unmarshal(updated, &events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal updated %s: %w", unsignedKey, err)
 			}
 		} else {
-			if err := json.Unmarshal([]byte(inviteRoomState.Raw), &res.InviteState.Events); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal invite room state: %w", err)
+			if err := json.Unmarshal([]byte(roomState.Raw), &events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal %s: %w", unsignedKey, err)
 			}
 		}
 	}
@@ -551,9 +590,8 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 		return nil, err
 	}
 
-	// Then we'll see if we can create a partial of the invite event itself.
-	// This is needed for clients to work out *who* sent the invite.
-	inviteEvent, err := synctypes.ToClientEvent(eventNoUnsigned, eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	// Then we'll see if we can create a partial of the event itself.
+	clientEvent, err := synctypes.ToClientEvent(eventNoUnsigned, eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 	if err != nil {
@@ -561,13 +599,12 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 	}
 
 	// Ensure unsigned field is empty so it isn't marshaled into the final JSON
-	inviteEvent.Unsigned = nil
+	clientEvent.Unsigned = nil
 
-	if ev, err := json.Marshal(*inviteEvent); err == nil {
-		res.InviteState.Events = append(res.InviteState.Events, ev)
+	if ev, err := json.Marshal(*clientEvent); err == nil {
+		events = append(events, ev)
 	}
-
-	return &res, nil
+	return events, nil
 }
 
 // LeaveResponse represents a /sync response for a room which is under the 'leave' key.
