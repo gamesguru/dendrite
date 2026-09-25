@@ -237,23 +237,13 @@ func (r *Inputer) processRoomEvent(
 				}
 			}
 		}
-		// Filter out servers that are currently backing off or blacklisted.
-		// This avoids iterating hundreds of dead servers in missing-state resolution.
-		// The join server (first in list for partial state rooms) is exempt from
-		// this filter since it recently processed our join.
-		filtered := serverRes.ServerNames[:0]
 		var joinServerName spec.ServerName
 		if hasPartialState && roomInfo != nil {
 			if joinServer, jsErr := r.DB.GetPartialStateJoinServer(ctx, roomInfo.RoomNID); jsErr == nil && joinServer != "" {
 				joinServerName = spec.ServerName(joinServer)
 			}
 		}
-		for _, server := range serverRes.ServerNames {
-			if server == joinServerName || !r.FSAPI.IsServerBackingOff(server) {
-				filtered = append(filtered, server)
-			}
-		}
-		serverRes.ServerNames = filtered
+		serverRes.ServerNames = withoutBackingOffServers(serverRes.ServerNames, input.Origin, joinServerName, r.FSAPI.IsServerBackingOff)
 	}
 
 	// Check that the auth events of the event are known.
@@ -1271,4 +1261,24 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 		ids = append(ids, e.EventID())
 	}
 	return ids
+}
+
+// withoutBackingOffServers drops the servers we are backing off from, so that
+// missing-state resolution does not iterate hundreds of dead servers. Two
+// servers are known to be alive and are kept regardless: the origin, which just
+// sent us the event, and the partial state join server, which recently
+// processed our join. Our backoff towards the origin only reflects our own
+// failed sends, for example while it was restarting, and dropping it would
+// reject every event that arrives ahead of its prev events.
+func withoutBackingOffServers(
+	servers []spec.ServerName, origin, joinServer spec.ServerName,
+	isBackingOff func(spec.ServerName) bool,
+) []spec.ServerName {
+	filtered := servers[:0]
+	for _, server := range servers {
+		if server == origin || server == joinServer || !isBackingOff(server) {
+			filtered = append(filtered, server)
+		}
+	}
+	return filtered
 }

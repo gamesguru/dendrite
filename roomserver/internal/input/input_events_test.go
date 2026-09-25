@@ -259,3 +259,16 @@ func Test_ResolvePartialStateAuth_NewStateFromAuth(t *testing.T) {
 	_, hasBob := stateMap[bobKey]
 	assert.True(t, hasBob, "State map should include Bob's membership from auth events")
 }
+
+func TestWithoutBackingOffServersKeepsLiveServers(t *testing.T) {
+	backingOff := map[spec.ServerName]bool{"origin": true, "join": true, "dead": true}
+	isBackingOff := func(server spec.ServerName) bool { return backingOff[server] }
+
+	got := withoutBackingOffServers(
+		[]spec.ServerName{"origin", "dead", "join", "alive"}, "origin", "join", isBackingOff,
+	)
+	assert.Equal(t, []spec.ServerName{"origin", "join", "alive"}, got)
+
+	got = withoutBackingOffServers([]spec.ServerName{"origin", "dead"}, "", "", isBackingOff)
+	assert.Empty(t, got, "backing off servers are dropped when neither is the origin or join server")
+}
