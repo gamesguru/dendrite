@@ -78,7 +78,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	if err := processCtx.Context().Err(); err != nil {
 		return err
 	}
-	fsAPI := federationapi.NewInternalAPI(
+	fsAPI, startFederationAPI := federationapi.NewUnstartedInternalAPI(
 		processCtx, cfg, cm, &natsInstance, federationClient, rsAPI, caches, nil, false,
 	)
 
@@ -91,6 +91,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		return err
 	}
 	rsAPI.SetFederationAPI(fsAPI, keyRing)
+	startFederationAPI()
 
 	if err := processCtx.Context().Err(); err != nil {
 		return err
