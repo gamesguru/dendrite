@@ -11,7 +11,7 @@ Every number comes from the [HA qualification](/development/ha-qualification/) h
 
 | Setting | Value |
 | --- | --- |
-| Code | `main` at `29bd237c` with [#394](https://codefloe.com/pat-s/zendrite/pulls/394), [#395](https://codefloe.com/pat-s/zendrite/pulls/395), [#396](https://codefloe.com/pat-s/zendrite/pulls/396) and [#397](https://codefloe.com/pat-s/zendrite/pulls/397) |
+| Code | `main` at `29bd237c` with [#394](https://codefloe.com/pat-s/zendrite/pulls/394), [#395](https://codefloe.com/pat-s/zendrite/pulls/395), [#397](https://codefloe.com/pat-s/zendrite/pulls/397) and the Lease stepdown fix merged with [#399](https://codefloe.com/pat-s/zendrite/pulls/399) |
 | Election timings | the documented defaults: `lease_duration` 30s, `renew_deadline` 20s, `retry_period` 5s, `ownership_timeout` 45s |
 | Recovery objective | 120 s from fault to successful client and federation requests (ADR 0001) |
 | Candidates | 3, behind a router that checks the active-only endpoint every 500 ms, as the chart's HAProxy does |
@@ -157,7 +157,7 @@ The qualification found these defects; each is fixed in its own pull request, an
 | A JetStream publication whose broker died before acknowledging it waited on the caller's context | Client writes stalled for 30 s after losing the stream leader; an inbound federation transaction hung indefinitely and blocked the remote server's queue | [#393](https://codefloe.com/pat-s/zendrite/pulls/393) |
 | A destination queue loaded its backlog unordered, after events queued since the restart | After a takeover, the remote server rejected all 53 queued events for missing `prev_events` | [#394](https://codefloe.com/pat-s/zendrite/pulls/394) |
 | Backward pagination stepped over events that share a depth | `/messages` and `prev_batch` skipped acknowledged messages whenever a late remote event forked the room at the same depth | [#395](https://codefloe.com/pat-s/zendrite/pulls/395) |
-| A Lease holder partitioned from PostgreSQL kept renewing the Lease | No standby could take over while the partition lasted; after the first fix, renewing through the drain still pushed takeover to 141.6 s with the reference workload | [#396](https://codefloe.com/pat-s/zendrite/pulls/396) |
+| A Lease holder partitioned from PostgreSQL kept renewing the Lease | No standby could take over while the partition lasted; after the first fix, renewing through the drain still pushed takeover to 141.6 s with the reference workload | [#399](https://codefloe.com/pat-s/zendrite/pulls/399) |
 | The sync and federation consumers panicked when a database write failed transiently | With the reference workload, a 3 s PostgreSQL failover crashed the leader and became a 64 s leadership change | [#397](https://codefloe.com/pat-s/zendrite/pulls/397) |
 
 One limitation is documented rather than fixed:
