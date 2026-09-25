@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +60,10 @@ type PostgresGate struct {
 	// failing, so without this the only symptom of a broken heartbeat is a
 	// candidate that goes stale much later for no stated reason.
 	lastCheck atomic.Pointer[string]
+	// abandoned is closed once ownership has gone unconfirmed for so long
+	// that holding on to the Lease only keeps a healthier candidate out.
+	abandoned   chan struct{}
+	abandonOnce sync.Once
 }
 
 // NewPostgresGate returns a gate bound to the homeserver's global database.
@@ -66,7 +71,35 @@ type PostgresGate struct {
 // interval, so ownership cannot outlive a Lease that is no longer being
 // renewed.
 func NewPostgresGate(dataSource string, cfg config.HA) *PostgresGate {
-	return &PostgresGate{dataSource: dataSource, cfg: cfg}
+	return &PostgresGate{dataSource: dataSource, cfg: cfg, abandoned: make(chan struct{})}
+}
+
+// ErrOwnershipUnconfirmed reports that ownership could not be confirmed for
+// longer than the Lease duration after it went stale. The candidate gives up
+// leadership so that one which can reach the database can take over.
+var ErrOwnershipUnconfirmed = errors.New("HA ownership could not be confirmed for longer than the Lease duration; giving up leadership")
+
+// Abandoned is closed when ownership has been unconfirmed for longer than the
+// freshness window plus the Lease duration.
+//
+// A stale owner refuses every effect, so it is safe, but it still renews the
+// Lease if it can reach the Kubernetes API. Without giving up, a candidate
+// partitioned from the database would keep every standby out for as long as
+// the partition lasts. The Lease duration is the grace period because it is
+// the time the design already allows a successor to wait.
+func (g *PostgresGate) Abandoned() <-chan struct{} { return g.abandoned }
+
+// abandonIfUnconfirmed gives up ownership once it has been unconfirmed for
+// too long, and reports whether it did.
+func (g *PostgresGate) abandonIfUnconfirmed() bool {
+	if time.Since(time.Unix(0, g.verified.Load())) <= g.freshness()+g.cfg.LeaseDuration {
+		return false
+	}
+	g.abandonOnce.Do(func() {
+		logrus.WithField("generation", g.Generation()).Error("HA ownership has not been confirmed for longer than the Lease duration; giving up leadership")
+		close(g.abandoned)
+	})
+	return true
 }
 
 // freshness is how long a confirmed generation may be trusted without another
@@ -288,6 +321,9 @@ func (g *PostgresGate) heartbeat(ctx context.Context) {
 			cancel()
 			if err != nil {
 				g.noteCheck(err)
+				if g.abandonIfUnconfirmed() {
+					return
+				}
 				continue
 			}
 			conn = fresh
@@ -310,6 +346,9 @@ func (g *PostgresGate) heartbeat(ctx context.Context) {
 			_ = conn.Close(closeCtx)
 			closeCancel()
 			conn = nil
+			if g.abandonIfUnconfirmed() {
+				return
+			}
 		}
 	}
 }

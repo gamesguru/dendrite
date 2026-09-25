@@ -79,6 +79,8 @@ export default defineConfig({
             { label: 'Contributing', slug: 'development/contributing' },
             { label: 'Profiling', slug: 'development/profiling' },
             { label: 'Coverage', slug: 'development/coverage' },
+            { label: 'HA qualification', slug: 'development/ha-qualification' },
+            { label: 'HA qualification report', slug: 'development/ha-qualification-report' },
           ],
         },
       ],

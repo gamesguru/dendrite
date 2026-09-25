@@ -148,8 +148,23 @@ func control(ctx context.Context, elector election, acquired <-chan context.Cont
 		promoted <- err
 	}()
 
+	// A gate that cannot confirm ownership for long enough gives it up, so a
+	// candidate that can reach the database can take over. Gates without that
+	// signal leave the channel nil, which never fires.
+	var abandoned <-chan struct{}
+	if a, ok := gate.(interface{ Abandoned() <-chan struct{} }); ok {
+		abandoned = a.Abandoned()
+	}
+
 	var result error
 	select {
+	case <-abandoned:
+		result = ErrOwnershipUnconfirmed
+		// Stop renewing now rather than after draining, which can take the
+		// whole shutdown budget while the database is unreachable. The Lease
+		// is not released, only left to expire, and a successor still has to
+		// fence before it acts.
+		cancelElection(result)
 	case result = <-promoted:
 		app.Stop()
 		if ctx.Err() != nil && errors.Is(result, context.Canceled) {

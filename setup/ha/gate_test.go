@@ -245,3 +245,40 @@ func TestHeartbeatRetiresTheOwnerAfterTakeover(t *testing.T) {
 	require.Eventually(t, func() bool { return errors.Is(gate.Valid(), ErrOwnershipRetired) }, 30*time.Second, 20*time.Millisecond,
 		"the heartbeat must observe that a successor took over")
 }
+
+// TestUnconfirmedOwnershipIsAbandoned is a Lease holder that loses the
+// database. Its ownership goes stale and it refuses to act, but it can still
+// renew the Lease, so it must eventually give ownership up rather than keep
+// every standby out for as long as the partition lasts.
+func TestUnconfirmedOwnershipIsAbandoned(t *testing.T) {
+	cfg := testHAConfig(100*time.Millisecond, 20*time.Millisecond)
+	cfg.LeaseDuration = 200 * time.Millisecond
+	// Nothing listens on port 1, so every confirmation fails.
+	gate := NewPostgresGate("postgres://zendrite@127.0.0.1:1/zendrite?sslmode=disable&connect_timeout=1", cfg)
+	gate.activation.Store(&Activation{Generation: 1, Identity: "candidate-a", Scope: "example/matrix"})
+	confirmed := time.Now()
+	gate.verified.Store(confirmed.UnixNano())
+	go gate.heartbeat(t.Context())
+
+	select {
+	case <-gate.Abandoned():
+	case <-time.After(10 * time.Second):
+		t.Fatal("ownership that cannot be confirmed must be abandoned")
+	}
+	require.GreaterOrEqual(t, time.Since(confirmed), cfg.RenewDeadline+cfg.LeaseDuration,
+		"ownership must not be abandoned before the freshness window and the Lease duration have passed")
+}
+
+func TestConfirmedOwnershipIsNotAbandoned(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(cleanup)
+	cfg := testHAConfig(time.Second, 50*time.Millisecond)
+	cfg.LeaseDuration = 100 * time.Millisecond
+	gate := NewPostgresGate(dsn, cfg)
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "candidate-a", LeaseName: "matrix", LeaseNamespace: "example"}))
+	select {
+	case <-gate.Abandoned():
+		t.Fatal("a heartbeating owner must not abandon ownership")
+	case <-time.After(time.Second):
+	}
+}

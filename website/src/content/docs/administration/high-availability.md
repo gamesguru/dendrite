@@ -6,9 +6,9 @@ description: Configure active-passive high availability on Kubernetes.
 High availability (HA) runs one active Zendrite instance while other instances wait as standbys.
 If the active instance fails, a standby takes over after confirming that it is safe to start.
 The current implementation is experimental and disabled by default.
-Ownership is now enforced at every protected boundary: the database, the message broker, media, outbound dispatch, and HTTP admission.
-Do not enable it in production yet.
-The failure envelope has not been qualified, which is tracked in [#352](https://codefloe.com/pat-s/zendrite/issues/352), and the deployment integration in [#351](https://codefloe.com/pat-s/zendrite/issues/351) is still outstanding.
+Ownership is enforced at every protected boundary: the database, the message broker, media, outbound dispatch, and HTTP admission.
+The failure envelope is qualified by the fault harness described in [HA qualification](/development/ha-qualification/), and the [qualification report](/development/ha-qualification-report/) records measured recovery times and the remaining limitations.
+Qualify HA on your own infrastructure before relying on it in production.
 The selected design protects shared resources from stale leaders without cloud-provider or hypervisor power-control integration.
 
 ## Configuration
@@ -30,7 +30,7 @@ global:
     status_address: :8009
 ```
 
-Keep `enabled` set to `false` until the failure envelope is qualified in [#352](https://codefloe.com/pat-s/zendrite/issues/352).
+Enable HA only once the [prerequisites](#prerequisites) are in place.
 All instances of the same homeserver must use the same Lease name and namespace.
 Use a separate Lease for each homeserver and set `candidate_id` to each pod's UID.
 
@@ -115,6 +115,9 @@ A candidate therefore treats its ownership as valid only while the database has 
 A background heartbeat re-reads the generation on its own guarded connection every `retry_period`, and ownership stays valid for `renew_deadline` after each confirmation.
 A process that was suspended past its lease resumes with a stale confirmation, so it refuses to publish or dispatch before it has checked again, and that check is refused outright once a successor has taken over.
 A candidate that can reach the broker but not the database also goes stale and stops acting, which is the intended fail-closed behavior.
+If ownership stays unconfirmed for longer than `lease_duration` after it went stale, the candidate also gives up leadership and exits.
+Otherwise a Lease holder partitioned from the database, but not from the Kubernetes API, would keep renewing the Lease and keep every standby out for as long as the partition lasted.
+The Lease then expires and a candidate that can reach the database takes over, roughly `renew_deadline` plus twice `lease_duration` after the partition began.
 
 ## Broker fencing
 
@@ -201,6 +204,7 @@ Expect a visible interruption.
 Clients receive connection errors or `503` responses until the successor is ready, then reconnect and resume from their existing sync tokens.
 Long-lived `/sync` connections are dropped and must be re-established.
 Typing notifications, HTTP transaction caches, login and SSO intermediates, and sliding-sync sessions are process-local, so clients may need to retry a request or start a fresh session.
+Because the transaction cache is process-local, a message whose first attempt reached the old owner just before it stopped can be stored twice when the client retries it against the successor; see [#398](https://codefloe.com/pat-s/zendrite/issues/398).
 
 ## Rolling back to a single instance
 
@@ -238,8 +242,8 @@ Not supported, and not planned for this iteration:
 - Exactly-once external delivery. Federation, appservice, and push retries can duplicate remote deliveries.
 - Non-Kubernetes election backends.
 
-The failure envelope has not been qualified against a production workload; that work is [#352](https://codefloe.com/pat-s/zendrite/issues/352).
-Recovery time has not been measured for large deployments, and a full search index rebuild can exceed the proposed 120 second takeover target.
+The [qualification report](/development/ha-qualification-report/) measures recovery against the ADR reference workload.
+Larger deployments should measure their own, because a full search index rebuild can exceed the 120 second takeover target.
 
 ## Failover behavior
 

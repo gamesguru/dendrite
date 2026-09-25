@@ -1,0 +1,78 @@
+# HA qualification (issue #352): fault scenarios against a real PostgreSQL
+# primary and synchronous standby, a three-node JetStream cluster, an S3
+# server, a kube-apiserver and a federating peer. See
+# build/scripts/ha-qualification.sh.
+#
+# Pull requests and pushes that touch HA code run the bounded ci tier. Manual
+# runs and the ha-qualification cron run the heavier tiers: set HACHAOS_TIER to
+# full or reference. Those runs also publish their evidence to the generic
+# package registry, which needs the ha_evidence_token secret.
+when:
+  - event: pull_request
+    path:
+      - 'setup/ha/**'
+      - 'setup/jetstream/**'
+      - 'setup/lifecycle/**'
+      - 'setup/base/**'
+      - 'internal/ownership/**'
+      - 'internal/sqlutil/**'
+      - 'test/hachaos/**'
+      - 'build/scripts/ha-qualification.sh'
+      - '.crow/ha-qualification.yaml'
+      - 'go.mod'
+      - 'go.sum'
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+    path:
+      - 'setup/ha/**'
+      - 'setup/jetstream/**'
+      - 'setup/lifecycle/**'
+      - 'setup/base/**'
+      - 'internal/ownership/**'
+      - 'internal/sqlutil/**'
+      - 'test/hachaos/**'
+      - 'build/scripts/ha-qualification.sh'
+      - '.crow/ha-qualification.yaml'
+      - 'go.mod'
+      - 'go.sum'
+  - event: manual
+  - event: cron
+    cron: ha-qualification
+
+# Each group runs in its own workflow and container, in parallel, so every
+# group stays within the repository's pipeline timeout at the full tier.
+matrix:
+  GROUP:
+    - crash
+    - partition
+    - dependency
+    - lifecycle
+
+labels:
+  platform: linux/amd64
+
+steps:
+  qualification:
+    image: docker.io/library/golang:1.26-trixie
+    environment:
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: ${GROUP}
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/${GROUP}
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  publish-evidence:
+    image: docker.io/library/alpine:3.22
+    depends_on: [qualification]
+    when:
+      - event: [manual, cron]
+        status: [success, failure]
+    environment:
+      TOKEN:
+        from_secret: ha_evidence_token
+    commands:
+      - apk add --no-cache curl >/dev/null
+      - tar -czf evidence.tar.gz -C .hachaos/artifacts ${GROUP}
+      - >-
+        curl --fail -sS -H "Authorization: token $TOKEN" --upload-file evidence.tar.gz
+        "https://codefloe.com/api/packages/pat-s/generic/zendrite-ha-evidence/${CI_PIPELINE_NUMBER}/${GROUP}.tar.gz"

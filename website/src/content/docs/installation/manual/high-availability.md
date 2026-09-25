@@ -6,8 +6,8 @@ description: Storage prerequisites, recovery readiness, and coordinated upgrades
 HA remains opt-in and experimental.
 Kubernetes Lease ownership and PostgreSQL advisory locks do not fence a suspended former owner.
 Resource-enforced ownership now covers the database, broker, media, dispatch, and admission boundaries, described in [High availability](/administration/high-availability/).
-The failure envelope has not been qualified, so keep HA disabled in production until issue #352 is complete.
-These checks add storage and recovery prerequisites; they do not remove that release gate.
+The failure envelope is qualified by the [HA qualification](/development/ha-qualification/) harness, and the [qualification report](/development/ha-qualification-report/) records measured recovery times and the remaining limitations.
+These checks add storage and recovery prerequisites to that qualification.
 
 ## Supported storage
 
@@ -99,7 +99,7 @@ It starts from an empty index so deleted or redacted documents cannot survive fr
 It does not require a shared index or persistent volume and must not point to a concurrently opened Bleve index.
 Normal shutdown removes the activation's temporary index after closing it; a killed process can leave unused `recovery-*` directories for offline cleanup.
 Provision space for a complete rebuilt index and possible crash leftovers.
-Large indexes can exceed the proposed 120-second overall takeover target; measure recovery for the deployment workload before release qualification.
+Large indexes can exceed the 120-second overall takeover target; measure recovery for the deployment workload.
 
 ## Media fencing boundary and qualification
 
@@ -116,4 +116,5 @@ A leader partitioned from the Kubernetes API discovers that it was replaced thro
 A sweep that completes a pass without converging blocks promotion and reports how many backends still hold the retired generation.
 An application that will not stop within the shutdown budget forces process termination.
 A transaction already dispatched completes while newly admitted dispatch is refused.
-Infrastructure power-off, correlated storage failures, PostgreSQL failover, S3/shared-filesystem failover, and complete Matrix client/search recovery against the reference workload remain deployment qualification scenarios in issue #352.
+PostgreSQL failover and complete Matrix client, sync, media, search and federation recovery, including against the ADR reference workload, are covered by the [HA qualification](/development/ha-qualification/) harness.
+Infrastructure power-off, correlated storage failures, and S3 or shared-filesystem failover remain outside it and should be exercised on the target infrastructure.

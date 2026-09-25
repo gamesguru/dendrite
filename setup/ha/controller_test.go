@@ -243,3 +243,53 @@ func (partialGate) Acquire(context.Context, Candidate) error {
 	return errors.New("Acquire must not run while coverage is incomplete")
 }
 func (partialGate) Boundaries() []Boundary { return []Boundary{BoundaryPostgres} }
+
+// abandoningGate grants ownership, then gives it up when abandon is closed.
+type abandoningGate struct {
+	gateFunc
+	abandon chan struct{}
+}
+
+func (g abandoningGate) Abandoned() <-chan struct{} { return g.abandon }
+
+// TestControlGivesUpAbandonedOwnership checks that an active candidate whose
+// ownership cannot be confirmed stops serving and gives up leadership, even
+// though its Lease is still held.
+func TestControlGivesUpAbandonedOwnership(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		leader, lose := context.WithCancelCause(ctx)
+		defer lose(nil)
+		acquired := make(chan context.Context, 1)
+		var stoppedBy error
+		elector := electionFunc(func(ctx context.Context) {
+			acquired <- leader
+			<-ctx.Done()
+			stoppedBy = context.Cause(ctx)
+		})
+		server := lifecycle.New(func(*process.ProcessContext) error { return nil }, time.Second)
+		gate := abandoningGate{gateFunc: func(context.Context, Candidate) error { return nil }, abandon: make(chan struct{})}
+		done := make(chan error, 1)
+		go func() {
+			done <- control(ctx, elector, acquired, nil, Candidate{}, gate, server, 2*time.Second, NewStatus())
+		}()
+		synctest.Wait()
+		if !server.Ready() {
+			t.Fatal("fenced leader not ready")
+		}
+		close(gate.abandon)
+		if err := <-done; !errors.Is(err, ErrOwnershipUnconfirmed) {
+			t.Fatalf("expected ErrOwnershipUnconfirmed, got %v", err)
+		}
+		if leader.Err() != nil {
+			t.Fatal("the Lease was lost; the test must show that abandonment alone stops the candidate")
+		}
+		if server.Ready() {
+			t.Fatal("a candidate that gave up ownership still published readiness")
+		}
+		if !errors.Is(stoppedBy, ErrOwnershipUnconfirmed) {
+			t.Fatalf("Lease renewal must stop as soon as ownership is abandoned, not after draining; election stopped by %v", stoppedBy)
+		}
+	})
+}
