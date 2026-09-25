@@ -132,6 +132,79 @@ func TestKubernetesContention(t *testing.T) {
 	})
 }
 
+// reachableGate is a gate whose database reachability the test controls.
+type reachableGate struct {
+	gateFunc
+	unreachable *atomic.Bool
+}
+
+func (g reachableGate) Reachable(context.Context) error {
+	if g.unreachable.Load() {
+		return errors.New("database unreachable")
+	}
+	return nil
+}
+
+// A candidate cut off from the database must leave the Lease to one that can
+// fence, but a holder that loses the database keeps renewing: giving it up is
+// the gate's decision, made only after the freshness window.
+func TestKubernetesAcquiresOnlyWhenDatabaseReachable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := leaseClient()
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		fenced := make(chan string, 4)
+		fence := gateFunc(func(_ context.Context, c Candidate) error {
+			fenced <- c.Identity
+			return nil
+		})
+		var firstUnreachable, secondUnreachable atomic.Bool
+		firstUnreachable.Store(true)
+		run := func(unreachable *atomic.Bool, done chan<- error) *lifecycle.Homeserver {
+			server := lifecycle.New(func(*process.ProcessContext) error { return nil }, time.Second)
+			go func() {
+				done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, reachableGate{fence, unreachable}, time.Second, NewStatus())
+			}()
+			return server
+		}
+		done := make(chan error, 2)
+		// The cut-off candidate starts first, so without the check it would
+		// take the free Lease.
+		first := run(&firstUnreachable, done)
+		time.Sleep(time.Second)
+		second := run(&secondUnreachable, done)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if first.Ready() || !second.Ready() {
+			t.Fatalf("cut-off candidate ready=%v, healthy candidate ready=%v", first.Ready(), second.Ready())
+		}
+		holder := <-fenced
+		if len(fenced) != 0 {
+			t.Fatalf("%d further candidates fenced", len(fenced))
+		}
+
+		// The holder now loses the database while the other candidate
+		// regains it: the Lease must stay with the holder.
+		secondUnreachable.Store(true)
+		firstUnreachable.Store(false)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		lease, err := client.CoordinationV1().Leases("matrix").Get(ctx, "homeserver", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *lease.Spec.HolderIdentity != holder || len(fenced) != 0 || !second.Ready() {
+			t.Fatalf("holder=%q, want %q; further fences=%d", *lease.Spec.HolderIdentity, holder, len(fenced))
+		}
+		cancel(nil)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestKubernetesFailures(t *testing.T) {
 	for _, scenario := range []string{"get denied", "create denied", "update denied", "API outage", "renewal failure"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -166,6 +166,28 @@ func (g *PostgresGate) Acquire(ctx context.Context, candidate Candidate) error {
 	return nil
 }
 
+// Reachable reports whether this candidate can reach the HA database, within
+// one retry period. The Lease lock checks it before every acquisition attempt,
+// so a candidate cut off from the database leaves the Lease to one that can
+// fence.
+func (g *PostgresGate) Reachable(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, g.interval())
+	defer cancel()
+	conn, err := g.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), ownershipCloseTimeout)
+		defer closeCancel()
+		_ = conn.Close(closeCtx)
+	}()
+	if err = conn.Ping(ctx); err != nil {
+		return fmt.Errorf("ping the HA database: %w", err)
+	}
+	return nil
+}
+
 const (
 	ownershipCloseTimeout = 5 * time.Second
 	sweepInterval         = 100 * time.Millisecond

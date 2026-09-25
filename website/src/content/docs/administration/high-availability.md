@@ -118,6 +118,8 @@ A candidate that can reach the broker but not the database also goes stale and s
 If ownership stays unconfirmed for longer than `lease_duration` after it went stale, the candidate also gives up leadership and exits.
 Otherwise a Lease holder partitioned from the database, but not from the Kubernetes API, would keep renewing the Lease and keep every standby out for as long as the partition lasted.
 The Lease then expires and a candidate that can reach the database takes over, roughly `renew_deadline` plus twice `lease_duration` after the partition began.
+A candidate only tries to take the Lease after connecting to the database within one `retry_period`, so the restarted former holder, still partitioned, cannot win it back and spend `ownership_timeout` failing to fence.
+Renewals are not checked this way; a holder that loses the database gives the Lease up as described above.
 
 ## Broker fencing
 

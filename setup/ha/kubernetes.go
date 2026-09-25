@@ -3,6 +3,7 @@ package ha
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,6 +85,9 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 		Client:     client,
 		LockConfig: resourcelock.ResourceLockConfig{Identity: candidate.Identity},
 	}}, failures: failures, leases: client.Leases(candidate.LeaseNamespace), compatibility: cfg.Compatibility, leaseName: candidate.LeaseName, identity: candidate.Identity}
+	if r, ok := gate.(interface{ Reachable(context.Context) error }); ok {
+		lock.acquirable = r.Reachable
+	}
 	acquired := make(chan context.Context, 1)
 	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:          lock,
@@ -104,6 +108,12 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 
 // permissionLock turns permanent authorization failures into actionable terminal
 // errors. Transient API failures retain client-go's acquisition/renewal retries.
+//
+// It also refuses to take the Lease while acquirable fails. A candidate that
+// cannot reach the database would hold the Lease through the whole ownership
+// timeout without fencing, and then leave it to expire, keeping a healthy
+// standby out for both. Renewals are never refused: a holder that loses the
+// database gives the Lease up through its gate instead.
 type permissionLock struct {
 	resourcelock.Interface
 	failures      chan<- error
@@ -111,6 +121,37 @@ type permissionLock struct {
 	compatibility string
 	leaseName     string
 	identity      string
+	acquirable    func(context.Context) error
+	// holder is the holder identity last read from or written to the Lease,
+	// which tells an acquiring Update from a renewing one: client-go sends
+	// the same record for both.
+	holder  atomic.Pointer[string]
+	blocked atomic.Bool
+}
+
+// checkAcquirable reports why this candidate must not take the Lease now.
+func (l *permissionLock) checkAcquirable(ctx context.Context) error {
+	if l.acquirable == nil {
+		return nil
+	}
+	err := l.acquirable(ctx)
+	if err != nil {
+		if !l.blocked.Swap(true) {
+			logrus.WithError(err).Warn("Not acquiring the HA Lease while this candidate cannot reach the database")
+		}
+		return fmt.Errorf("not acquiring the HA Lease: %w", err)
+	}
+	if l.blocked.Swap(false) {
+		logrus.Info("The database is reachable again; contending for the HA Lease")
+	}
+	return nil
+}
+
+func (l *permissionLock) observe(holder string) { l.holder.Store(&holder) }
+
+func (l *permissionLock) holds() bool {
+	holder := l.holder.Load()
+	return holder != nil && *holder == l.identity
 }
 
 func (l *permissionLock) report(err error) {
@@ -124,6 +165,9 @@ func (l *permissionLock) report(err error) {
 
 func (l *permissionLock) Get(ctx context.Context) (*resourcelock.LeaderElectionRecord, []byte, error) {
 	record, raw, err := l.Interface.Get(ctx)
+	if err == nil && record != nil {
+		l.observe(record.HolderIdentity)
+	}
 	if err == nil && l.compatibility != "" {
 		lease, readErr := l.leases.Get(ctx, l.leaseName, metav1.GetOptions{})
 		if readErr != nil {
@@ -141,13 +185,27 @@ func (l *permissionLock) Get(ctx context.Context) (*resourcelock.LeaderElectionR
 }
 
 func (l *permissionLock) Create(ctx context.Context, record resourcelock.LeaderElectionRecord) error {
+	if err := l.checkAcquirable(ctx); err != nil {
+		return err
+	}
 	err := l.Interface.Create(ctx, record)
+	if err == nil {
+		l.observe(record.HolderIdentity)
+	}
 	l.report(err)
 	return err
 }
 
 func (l *permissionLock) Update(ctx context.Context, record resourcelock.LeaderElectionRecord) error {
+	if !l.holds() {
+		if err := l.checkAcquirable(ctx); err != nil {
+			return err
+		}
+	}
 	err := l.Interface.Update(ctx, record)
+	if err == nil {
+		l.observe(record.HolderIdentity)
+	}
 	// client-go calls Update both to renew and to acquire, so counting every
 	// failure would inflate this on every healthy standby that loses a race.
 	// Only a holder failing to renew is control-plane trouble, and a single
