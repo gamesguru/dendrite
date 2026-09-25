@@ -239,26 +239,22 @@ func (t TopologyToken) String() string {
 	return fmt.Sprintf("t%d_%d", t.Depth, t.PDUPosition)
 }
 
-// Decrement the topology token to one event earlier.
+// Decrement moves the token to just before the event it identifies.
+//
+// Events are ordered by depth, then by stream position, and a backward range
+// includes events at the token's depth whose stream position is at most the
+// token's. Keeping the depth and stepping the stream position back therefore
+// excludes exactly this event. Stepping the depth back instead would skip
+// every other event at this depth that arrived earlier, which happens
+// whenever the room DAG forks, such as when a remote server sends an event
+// concurrently with a local one.
 func (t *TopologyToken) Decrement() {
-	depth := t.Depth
-	pduPos := t.PDUPosition
-	if depth-1 <= 0 {
-		// nothing can be lower than this
-		depth = 1
-	} else {
-		// this assumes that we will never have 1000 events all with the same
-		// depth. TODO: work out what the right PDU position is to use, probably needs a db hit.
-		depth--
-		pduPos += 1000
+	if t.Depth < 1 {
+		t.Depth = 1
 	}
-	// The lowest token value is 1, therefore we need to manually set it to that
-	// value if we're below it.
-	if depth < 1 {
-		depth = 1
+	if t.PDUPosition > 0 {
+		t.PDUPosition--
 	}
-	t.Depth = depth
-	t.PDUPosition = pduPos
 }
 
 func NewTopologyTokenFromString(tok string) (token TopologyToken, err error) {
