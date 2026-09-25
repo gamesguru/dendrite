@@ -7,10 +7,12 @@
 package queue
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -251,6 +253,19 @@ func (oq *destinationQueue) getPendingFromDatabase() {
 		} else {
 			logrus.WithError(err).Errorf("Failed to get pending EDUs for %q", oq.destination)
 		}
+	}
+
+	// Send in the order the events were queued. The database hands them back
+	// unordered, and events queued since a restart are already in memory ahead
+	// of the older backlog. A receiver that gets an event before its prev_events
+	// may reject it permanently.
+	if retrieved {
+		slices.SortStableFunc(oq.pendingPDUs, func(a, b *queuedPDU) int {
+			return cmp.Compare(a.dbReceipt.GetNID(), b.dbReceipt.GetNID())
+		})
+		slices.SortStableFunc(oq.pendingEDUs, func(a, b *queuedEDU) int {
+			return cmp.Compare(a.dbReceipt.GetNID(), b.dbReceipt.GetNID())
+		})
 	}
 
 	// If we've retrieved all of the events from the database with room to spare

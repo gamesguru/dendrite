@@ -54,6 +54,7 @@ const selectQueueNextTransactionIDSQL = "" +
 const selectQueuePDUsSQL = "" +
 	"SELECT json_nid FROM federationsender_queue_pdus" +
 	" WHERE server_name = $1" +
+	" ORDER BY json_nid" +
 	" LIMIT $2"
 
 const selectQueuePDUsReferenceJSONCountSQL = "" +
