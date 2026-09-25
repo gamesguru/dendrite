@@ -804,19 +804,42 @@ func MakeFedHTTPAPI(
 	return http.HandlerFunc(h)
 }
 
+// FederationWakeups retries delivery to servers that have just made an
+// authenticated request to us, since that shows they are reachable again.
 type FederationWakeups struct {
-	FsAPI   *fedInternal.FederationInternalAPI
+	FsAPI   wakeupAPI
 	origins sync.Map
 }
 
+type wakeupAPI interface {
+	IsServerBackingOff(spec.ServerName) bool
+	MarkServersAlive([]spec.ServerName)
+}
+
+const (
+	// WakeupInterval limits how often a server we are not backing off from is
+	// marked alive, which then has little to do.
+	wakeupInterval = time.Minute
+	// BackingOffWakeupInterval limits the retries a server we are backing off
+	// from can trigger. The first wakeup can come too early to succeed, for
+	// example from a restarting or promoted HA homeserver that sends before
+	// it is routable, and waiting the full wakeupInterval for the next one
+	// would leave our backlog for it undelivered while it keeps contacting us.
+	backingOffWakeupInterval = 5 * time.Second
+)
+
 func (f *FederationWakeups) Wakeup(ctx context.Context, origin spec.ServerName) {
+	interval := wakeupInterval
+	if f.FsAPI.IsServerBackingOff(origin) {
+		interval = backingOffWakeupInterval
+	}
 	key, keyok := f.origins.Load(origin)
 	if keyok {
 		lastTime, ok := key.(time.Time)
-		if ok && time.Since(lastTime) < time.Minute {
+		if ok && time.Since(lastTime) < interval {
 			return
 		}
 	}
-	f.FsAPI.MarkServersAlive([]spec.ServerName{origin}) //nolint:contextcheck
+	f.FsAPI.MarkServersAlive([]spec.ServerName{origin})
 	f.origins.Store(origin, time.Now())
 }
