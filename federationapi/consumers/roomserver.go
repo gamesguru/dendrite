@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
 	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
@@ -102,12 +103,17 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	switch output.Type {
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
-		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
+		// A database that is only unreachable, as during a PostgreSQL
+		// failover, is waited out rather than reaching the panic below.
+		err := sqlutil.RetryTransient(s.ctx, "federation API update for "+ev.EventID(), func() error { //nolint:contextcheck
+			return s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState)
+		})
+		if err != nil {
 			// The process context is canceled at shutdown while this consumer
 			// can still be part way through a message. Nothing was written, so
 			// there is no inconsistent database for the panic below to guard
 			// against: NAK instead and let redelivery pick the event up.
-			if interrupted(err) {
+			if interrupted(err) || s.ctx.Err() != nil {
 				log.WithFields(log.Fields{
 					"event_id": ev.EventID(),
 					"room_id":  ev.RoomID().String(),
@@ -138,8 +144,11 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 
 	case api.OutputTypeNewInboundPeek:
-		if err := s.processInboundPeek(*output.NewInboundPeek); err != nil {
-			if interrupted(err) {
+		err := sqlutil.RetryTransient(s.ctx, "federation API inbound peek", func() error { //nolint:contextcheck
+			return s.processInboundPeek(*output.NewInboundPeek)
+		})
+		if err != nil {
+			if interrupted(err) || s.ctx.Err() != nil {
 				log.WithField("peek", output.NewInboundPeek).Warn("Interrupted before the inbound peek was tracked; leaving it for redelivery")
 				return false
 			}

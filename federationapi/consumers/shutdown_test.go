@@ -7,6 +7,7 @@ package consumers
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,4 +86,45 @@ func TestInterrupted(t *testing.T) {
 		"processMessage wraps with %w, so the check has to see through it")
 	assert.False(t, interrupted(errors.New("write failed")))
 	assert.False(t, interrupted(nil))
+}
+
+// flakyRoomserverAPI fails lookups with a transient database error a few
+// times, then with cancellation, as a PostgreSQL failover followed by
+// shutdown looks to this consumer.
+type flakyRoomserverAPI struct {
+	api.FederationRoomserverAPI
+	transient int
+	calls     int
+}
+
+func (f *flakyRoomserverAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	f.calls++
+	if f.calls <= f.transient {
+		return fmt.Errorf("query events: %w", driver.ErrBadConn)
+	}
+	return context.Canceled
+}
+
+// TestOnMessageRetriesTransientFailures checks that a database that is only
+// unreachable is waited out instead of reaching the panic that guards against
+// an inconsistent database.
+func TestOnMessageRetriesTransientFailures(t *testing.T) {
+	user := test.NewUser(t)
+	room := test.NewRoom(t, user)
+	ev := room.Events()[len(room.Events())-1]
+	rsAPI := &flakyRoomserverAPI{transient: 2}
+	s := &OutputRoomEventConsumer{ctx: context.Background(), rsAPI: rsAPI}
+
+	data, err := json.Marshal(api.OutputEvent{
+		Type:         api.OutputTypeNewRoomEvent,
+		NewRoomEvent: &api.OutputNewRoomEvent{Event: ev, AddsStateEventIDs: []string{"$absent:test"}},
+	})
+	require.NoError(t, err)
+	msg := &nats.Msg{Data: data, Header: nats.Header{}}
+	msg.Header.Set(jetstream.RoomEventType, string(api.OutputTypeNewRoomEvent))
+
+	var acked bool
+	require.NotPanics(t, func() { acked = s.onMessage(context.Background(), []*nats.Msg{msg}) })
+	assert.Equal(t, 3, rsAPI.calls, "transient failures must be retried in place")
+	assert.False(t, acked, "an event that was never written must be left for redelivery")
 }

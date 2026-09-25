@@ -352,8 +352,22 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	ev.UserID = *userID
 
-	pduPos, err := s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+	// Retry a write that failed only because the database was unreachable,
+	// such as during a PostgreSQL failover. Refusing the message would let
+	// later room events overtake it, and crashing to retry it costs an HA
+	// leadership change. WriteEvent is one transaction with idempotent
+	// inserts, so repeating it is safe.
+	var pduPos types.StreamPosition
+	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+		return err
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// Shutting down: the transaction was rolled back, so leave the
+			// message for redelivery.
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -419,8 +433,16 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	}
 	ev.UserID = *userID
 
-	pduPos, err := s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+	// Retried in place, as for new events.
+	var pduPos types.StreamPosition
+	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+		return err
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
