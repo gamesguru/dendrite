@@ -13,6 +13,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/federationapi"
@@ -2065,5 +2066,43 @@ func TestAutoForgetOnLeaveEnabled_ReflectsConfig(t *testing.T) {
 
 		cfg.RoomServer.AutoForgetOnLeave = false
 		assert.False(t, rsAPI.AutoForgetOnLeaveEnabled())
+	})
+}
+
+// A client transaction whose event was stored but whose output events could
+// not be published, for example because the broker was failing over, must
+// not be recorded: the client's retry would otherwise be answered with an
+// event that never reaches any client or server.
+func TestTransactionNotRecordedWhenOutputFails(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		natsInstance := jetstream.NATSInstance{}
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false))
+
+		txn := &api.TransactionID{SessionID: 1, TransactionID: "txn-1"}
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+		producer := internalAPI.OutputProducer
+		topic := producer.Topic
+		// No stream binds this subject, so publishing the output fails.
+		producer.Topic = "nowhere"
+		first := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		_, err := api.SendEventForTransaction(ctx, rsAPI, first, "test", "test", "test", txn)
+		producer.Topic = topic
+		require.Error(t, err, "the output events could not be published")
+
+		retry := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		eventID, err := api.SendEventForTransaction(ctx, rsAPI, retry, "test", "test", "test", txn)
+		require.NoError(t, err)
+		require.Equal(t, retry.EventID(), eventID, "the retry was answered with the unpublished event")
 	})
 }

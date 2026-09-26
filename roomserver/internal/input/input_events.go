@@ -504,17 +504,6 @@ func (r *Inputer) processRoomEvent(
 		return fmt.Errorf("updater.StoreEvent: %w", err)
 	}
 
-	// Remember which event this client transaction produced, so that a retry
-	// is answered with it rather than storing another event.
-	if input.Kind == api.KindNew && input.TransactionID != nil && !isRejected {
-		if err = r.DB.StoreClientTransaction(
-			ctx, event.RoomID().String(), string(event.SenderID()),
-			input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
-		); err != nil {
-			return fmt.Errorf("r.DB.StoreClientTransaction: %w", err)
-		}
-	}
-
 	// If we performed expensive state resolution for this event, update the
 	// cooldown based on whether the event was ultimately accepted or rejected.
 	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
@@ -624,6 +613,22 @@ func (r *Inputer) processRoomEvent(
 		)
 		if err != nil {
 			return fmt.Errorf("r.updateLatestEvents: %w", err)
+		}
+		// Remember which event this client transaction produced, so that a
+		// retry is answered with it rather than storing another event. Only
+		// now is the event in the room and its output events published: a
+		// retry after a failure before this point must store a new event,
+		// because answering it with this one would acknowledge a message no
+		// client or server ever receives.
+		if input.TransactionID != nil {
+			if err = r.DB.StoreClientTransaction(
+				ctx, event.RoomID().String(), string(event.SenderID()),
+				input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
+			); err != nil {
+				// The event is delivered; failing the request now would only
+				// make the client retry it into a duplicate.
+				logger.WithError(err).Warn("Failed to record the client transaction of a delivered event")
+			}
 		}
 		if localLeftJoin {
 			r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)
