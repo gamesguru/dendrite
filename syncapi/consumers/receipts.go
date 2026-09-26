@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -91,15 +92,23 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 
 	output.Timestamp = spec.Timestamp(timestamp)
 
-	streamPos, err := s.db.StoreReceipt( //nolint:contextcheck
-		s.ctx,
-		output.RoomID,
-		output.Type,
-		output.UserID,
-		output.EventID,
-		output.ThreadID,
-		output.Timestamp,
-	)
+	// A receipt the database could not take, for example during a PostgreSQL
+	// failover or while a successor fences this candidate, must be redelivered
+	// rather than acknowledged: nothing else carries it. Storing is an upsert,
+	// so a retry is safe.
+	var streamPos types.StreamPosition
+	err = sqlutil.RetryTransient(ctx, "sync API write of a receipt", func() (err error) {
+		streamPos, err = s.db.StoreReceipt(
+			ctx,
+			output.RoomID,
+			output.Type,
+			output.UserID,
+			output.EventID,
+			output.ThreadID,
+			output.Timestamp,
+		)
+		return err
+	})
 	if err != nil {
 		log.WithError(err).WithFields(log.Fields{
 			"user_id":  output.UserID,
@@ -107,7 +116,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 			"event_id": output.EventID,
 		}).Error("SyncAPI receipt consumer: failed to store receipt")
 		sentry.CaptureException(err)
-		return true
+		return ctx.Err() == nil && !sqlutil.IsTransient(err)
 	}
 
 	log.WithFields(log.Fields{

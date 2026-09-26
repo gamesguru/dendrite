@@ -20,6 +20,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -179,11 +180,19 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 	}
 
 	if output.IgnoredUsers != nil {
-		if err := s.db.UpdateIgnoresForUser(ctx, userID, output.IgnoredUsers); err != nil {
+		// Redeliver an update the database could not take, rather than lose
+		// it; replacing the ignore list is idempotent.
+		err := sqlutil.RetryTransient(ctx, "sync API write of ignored users", func() error {
+			return s.db.UpdateIgnoresForUser(ctx, userID, output.IgnoredUsers)
+		})
+		if err != nil {
 			log.WithError(err).WithFields(log.Fields{
 				"user_id": userID,
 			}).Errorf("Failed to update ignored users")
 			sentry.CaptureException(err)
+			if ctx.Err() != nil || sqlutil.IsTransient(err) {
+				return false
+			}
 		}
 	}
 

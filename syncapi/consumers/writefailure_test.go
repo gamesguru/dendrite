@@ -9,10 +9,12 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -28,6 +30,10 @@ type unavailableDatabase struct {
 var errDatabaseUnavailable = fmt.Errorf("failed to connect to the database: %w", driver.ErrBadConn)
 
 func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility) (types.StreamPosition, error) {
+	return 0, errDatabaseUnavailable
+}
+
+func (unavailableDatabase) StoreReceipt(context.Context, string, string, string, string, string, spec.Timestamp) (types.StreamPosition, error) {
 	return 0, errDatabaseUnavailable
 }
 
@@ -55,4 +61,21 @@ func TestWriteFailureStopsOnShutdown(t *testing.T) {
 	require.NotPanics(t, func() {
 		require.ErrorIs(t, s.onNewRoomEvent(ctx, api.OutputNewRoomEvent{Event: ev}), errDatabaseUnavailable)
 	})
+}
+
+// TestReceiptWriteFailureIsRedelivered checks that a receipt the database
+// could not store is left for redelivery rather than acknowledged and lost,
+// as happened to a receipt sent while a successor fenced the old owner.
+func TestReceiptWriteFailureIsRedelivered(t *testing.T) {
+	s := &OutputReceiptEventConsumer{ctx: t.Context(), db: unavailableDatabase{}}
+	msg := nats.NewMsg("receipt")
+	msg.Header.Set(jetstream.UserID, "@alice:test")
+	msg.Header.Set(jetstream.RoomID, "!room:test")
+	msg.Header.Set(jetstream.EventID, "$event")
+	msg.Header.Set("type", "m.read")
+	msg.Header.Set("timestamp", "1")
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	require.False(t, s.onMessage(ctx, []*nats.Msg{msg}), "an unstored receipt must not be acknowledged")
 }
