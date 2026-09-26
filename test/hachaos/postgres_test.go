@@ -553,6 +553,53 @@ func (c *pgCluster) diagnoseEvent(ctx context.Context, eventID string) string {
 	return b.String()
 }
 
+// receiptState lists a user's stored receipts in a room, with the stream
+// position of each receipt's event, so a receipt that moved backwards shows.
+func (c *pgCluster) receiptState(ctx context.Context, room, user string, events ...string) string {
+	var b strings.Builder
+	err := c.query(ctx, func(conn *pgx.Conn) error {
+		b.WriteString("syncapi_receipts (id, type, thread, event_id, event stream position, receipt_ts):\n")
+		rows, err := conn.Query(ctx, `SELECT r.id, r.receipt_type, r.thread_id, r.event_id, e.id, r.receipt_ts
+			FROM syncapi_receipts r LEFT JOIN syncapi_output_room_events e ON e.event_id = r.event_id
+			WHERE r.room_id = $1 AND r.user_id = $2 ORDER BY r.id`, room, user)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id, ts int64
+			var kind, thread, event string
+			var pos *int64
+			if err = rows.Scan(&id, &kind, &thread, &event, &pos, &ts); err != nil {
+				rows.Close()
+				return err
+			}
+			fmt.Fprintf(&b, "  %d %s %q %s %v %d\n", id, kind, thread, event, deref(pos), ts)
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return err
+		}
+		var maxID *int64
+		if err = conn.QueryRow(ctx, "SELECT max(id) FROM syncapi_receipts").Scan(&maxID); err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "max receipt id %v\n\nstream positions of the receipts' events:\n", deref(maxID))
+		for _, event := range events {
+			var pos *int64
+			err = conn.QueryRow(ctx, "SELECT id FROM syncapi_output_room_events WHERE event_id = $1", event).Scan(&pos)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			fmt.Fprintf(&b, "  %s %v\n", event, deref(pos))
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(&b, "diagnosis failed: %v\n", err)
+	}
+	return b.String()
+}
+
 func deref[T any](v *T) any {
 	if v == nil {
 		return nil

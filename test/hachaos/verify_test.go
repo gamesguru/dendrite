@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -332,40 +333,87 @@ func awaitAll(ctx context.Context, r *result, timeout time.Duration, what string
 	}
 }
 
-// verifyReceipt checks that the newest acknowledged read receipt is visible
-// to another member after takeover.
+// verifyReceipt checks that the newest acknowledged read receipt, or one sent
+// after it, is visible to another member after takeover.
 func verifyReceipt(ctx context.Context, r *result, w *workload, e *environment, receipts []sendRecord, settle time.Duration) {
-	var last string
-	for _, rec := range receipts {
-		if rec.Acked {
-			last = rec.Nonce
-		}
-	}
-	if last == "" {
+	accepted := newestReceipts(receipts)
+	if len(accepted) == 0 {
 		r.notef("no read receipt was acknowledged during the scenario")
 		return
 	}
+	last := accepted[0]
 	alice := newClient(e.router.url()).withToken(w.alice)
+	var shown string
 	err := waitFor(ctx, settle, func() error {
 		resp, err := alice.sync(ctx, "", 0)
 		if err != nil {
 			return err
 		}
+		shown = ""
 		for _, ev := range resp.Rooms.Join[w.room].Ephemeral.Events {
 			if ev.Type != "m.receipt" {
 				continue
 			}
 			for eventID, byType := range ev.Content {
-				if _, ok := byType["m.read"][w.bob.user]; ok && eventID == last {
-					return nil
+				if _, ok := byType["m.read"][w.bob.user]; ok {
+					shown = eventID
 				}
 			}
 		}
-		return fmt.Errorf("receipt for %s not visible", last)
+		if slices.Contains(accepted, shown) {
+			return nil
+		}
+		return fmt.Errorf("receipt for %s not visible; the server shows %q", last, shown)
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		r.failf("acknowledged read receipt: %v", err)
+		_ = os.WriteFile(filepath.Join(e.logs, "missing-receipt.txt"), []byte(diagnoseReceipt(ctx, w, e, receipts)), 0o644)
+	case shown != last:
+		r.notef("the visible read receipt, for %s, was sent after the newest acknowledged one and never acknowledged: the workload halted with it in flight after the server had stored it", shown)
 	}
+}
+
+// newestReceipts lists the receipts a server may show once the workload stops:
+// the newest acknowledged one first, then every receipt sent after it. A
+// receipt in flight when the workload halts is canceled on the client, but
+// the server may already have published it, so, like an unacknowledged
+// message that was committed anyway, it can replace the acknowledged one.
+func newestReceipts(receipts []sendRecord) []string {
+	for i := len(receipts) - 1; i >= 0; i-- {
+		if !receipts[i].Acked {
+			continue
+		}
+		var out []string
+		for _, rec := range receipts[i:] {
+			out = append(out, rec.Nonce)
+		}
+		return out
+	}
+	return nil
+}
+
+// diagnoseReceipt separates a receipt that never reached the broker, one the
+// sync API never consumed, and one a later write replaced.
+func diagnoseReceipt(ctx context.Context, w *workload, e *environment, receipts []sendRecord) string {
+	var b strings.Builder
+	const recent = 12
+	b.WriteString("receipts sent, oldest first (event, first attempt, acked at, attempts, last error):\n")
+	var events []string
+	for _, rec := range receipts[max(0, len(receipts)-recent):] {
+		fmt.Fprintf(&b, "  %s %s %s %d %s\n", rec.Nonce, rec.First.Format(time.RFC3339Nano), rec.AckedAt.Format(time.RFC3339Nano), rec.Attempts, rec.LastErr)
+		if !slices.Contains(events, rec.Nonce) {
+			events = append(events, rec.Nonce)
+		}
+	}
+	b.WriteString("\nreceipt publications, oldest first (at, user, event, generation):\n")
+	pubs := e.nats.receiptPublications()
+	for _, p := range pubs[max(0, len(pubs)-recent):] {
+		fmt.Fprintf(&b, "  %s %s %s %s\n", p.At.Format(time.RFC3339Nano), p.User, p.EventID, p.Generation)
+	}
+	b.WriteString("\n" + e.nats.consumerState("OutputReceiptEvent", "SyncAPIReceiptConsumerPull") + "\n\n")
+	b.WriteString(e.pg.receiptState(ctx, w.room, w.bob.user, events...))
+	return b.String()
 }
 
 // verifyMedia proves that media uploaded before the fault survives and that
@@ -568,5 +616,26 @@ func ownerGenerations(history []ownershipRecord) func(owner string, at time.Time
 			}
 		}
 		return g
+	}
+}
+
+func TestNewestReceipts(t *testing.T) {
+	acked := func(event string) sendRecord { return sendRecord{Nonce: event, Acked: true} }
+	unacked := func(event string) sendRecord { return sendRecord{Nonce: event} }
+	for _, tc := range []struct {
+		name     string
+		receipts []sendRecord
+		want     []string
+	}{
+		{"none", nil, nil},
+		{"none acknowledged", []sendRecord{unacked("$a")}, nil},
+		{"newest acknowledged", []sendRecord{acked("$a"), acked("$b")}, []string{"$b"}},
+		{"in flight at halt", []sendRecord{unacked("$a"), acked("$b"), unacked("$c")}, []string{"$b", "$c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := newestReceipts(tc.receipts); !slices.Equal(got, tc.want) {
+				t.Fatalf("newestReceipts() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

@@ -25,9 +25,10 @@ type natsCluster struct {
 	timeline *timeline
 	nodes    []*natsNode
 
-	mu      sync.Mutex
-	effects []brokerEffect
-	watcher *nats.Conn
+	mu       sync.Mutex
+	effects  []brokerEffect
+	receipts []receiptPublication
+	watcher  *nats.Conn
 }
 
 type natsNode struct {
@@ -46,10 +47,20 @@ type brokerEffect struct {
 	Generation int64
 }
 
+// receiptPublication is one read receipt published to the receipt stream,
+// whichever server it came from.
+type receiptPublication struct {
+	At         time.Time
+	User       string
+	EventID    string
+	Generation string
+}
+
 const (
-	natsNodes   = 3
-	topicPrefix = "HAChaos"
-	generationH = "Zendrite-HA-Generation"
+	natsNodes    = 3
+	topicPrefix  = "HAChaos"
+	generationH  = "Zendrite-HA-Generation"
+	receiptTopic = topicPrefix + "OutputReceiptEvent"
 )
 
 const natsConfig = `
@@ -186,6 +197,13 @@ func (c *natsCluster) watch() error {
 		if strings.HasPrefix(msg.Reply, "$JS.ACK.") {
 			return
 		}
+		if msg.Subject == receiptTopic {
+			c.mu.Lock()
+			c.receipts = append(c.receipts, receiptPublication{
+				At: time.Now(), User: msg.Header.Get("user_id"), EventID: msg.Header.Get("event_id"), Generation: msg.Header.Get(generationH),
+			})
+			c.mu.Unlock()
+		}
 		value := msg.Header.Get(generationH)
 		if value == "" {
 			return
@@ -210,6 +228,39 @@ func (c *natsCluster) publications() []brokerEffect {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]brokerEffect(nil), c.effects...)
+}
+
+func (c *natsCluster) receiptPublications() []receiptPublication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]receiptPublication(nil), c.receipts...)
+}
+
+// consumerState describes a durable consumer's progress through its stream,
+// which separates a message that was never delivered from one delivered and
+// not acknowledged.
+func (c *natsCluster) consumerState(stream, durable string) string {
+	nc, err := nats.Connect(c.directURLs(), nats.Timeout(2*time.Second), nats.Name(harnessApp))
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	defer nc.Close()
+	js, err := nc.JetStream(nats.MaxWait(5 * time.Second))
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	s, err := js.StreamInfo(topicPrefix + stream)
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	info, err := js.ConsumerInfo(topicPrefix+stream, topicPrefix+durable)
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	return fmt.Sprintf("stream %s: messages=%d first_seq=%d last_seq=%d\n"+
+		"consumer %s: delivered_stream_seq=%d ack_floor_stream_seq=%d num_pending=%d num_ack_pending=%d num_redelivered=%d num_waiting=%d",
+		s.Config.Name, s.State.Msgs, s.State.FirstSeq, s.State.LastSeq,
+		info.Name, info.Delivered.Stream, info.AckFloor.Stream, info.NumPending, info.NumAckPending, info.NumRedelivered, info.NumWaiting)
 }
 
 // streamLeader reports the node that leads a stream's replica group.

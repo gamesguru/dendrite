@@ -38,7 +38,7 @@ After the fault heals, the harness compares what clients were told with what the
 - Every acknowledged write is in the room exactly once.
   A request that failed without an answer may have committed, which is allowed, but it must not produce two events.
 - Every acknowledged write reaches the syncing client with the token it held before the fault, and reaches the remote server.
-- Every acknowledged to-device message is delivered, the newest acknowledged receipt is visible, media uploaded before the fault is intact, and search finds messages from before and after it.
+- Every acknowledged to-device message is delivered, the newest acknowledged receipt (or one still in flight when the workload stopped) is visible, media uploaded before the fault is intact, and search finds messages from before and after it.
 
 It also checks ownership at every protected boundary:
 
