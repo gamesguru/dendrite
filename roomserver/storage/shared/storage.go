@@ -1792,6 +1792,18 @@ func (d *Database) PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode
 
 	purgeable := make([]types.RoomNID, 0, len(roomNIDs))
 	for i := range roomNIDs {
+		// A room is only empty once a local membership has been applied
+		// and later left or forgotten. Without any local membership row it
+		// is still being created or joined: its membership events are
+		// stored before the membership table is updated, and purging it in
+		// that window would delete a room its creator is about to enter.
+		applied, err := d.MembershipTable.SelectAnyLocalMembership(ctx, nil, roomNIDs[i])
+		if err != nil {
+			return nil, err
+		}
+		if !applied {
+			continue
+		}
 		var keep bool
 		switch mode {
 		case config.AutoPurgeOnEmpty:

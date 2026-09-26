@@ -189,6 +189,9 @@ type Membership interface {
 	// membership state (join, invite, knock, leave, ban) counts as long as
 	// the user has not forgotten it.
 	SelectAnyLocalMemberNotForgotten(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
+	// SelectAnyLocalMembership reports whether the given room has any local
+	// membership row, in any state and whether forgotten or not.
+	SelectAnyLocalMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	DeleteMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID) error
 	SelectJoinedUsers(ctx context.Context, txn *sql.Tx, targetUserNIDs []types.EventStateKeyNID) ([]types.EventStateKeyNID, error)
 }

@@ -2106,3 +2106,42 @@ func TestTransactionNotRecordedWhenOutputFails(t *testing.T) {
 		require.Equal(t, retry.EventID(), eventID, "the retry was answered with the unpublished event")
 	})
 }
+
+// The startup sweep must not purge a room whose membership events are stored
+// but not yet applied, as happens between a room's create event and its
+// creator's join being processed: the sweep would delete a room its creator
+// is about to enter. An outlier is stored without applying its membership,
+// which holds a room in exactly that state.
+func TestAutoPurgeSweepSkipsRoomsInCreation(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		// The create event is applied; the creator's join is stored but its
+		// membership not applied, as between the two being processed.
+		events := room.Events()
+		require.Equal(t, spec.MRoomCreate, events[0].Type())
+		require.Equal(t, spec.MRoomMember, events[1].Type())
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, events[:1], "test", "test", "test", nil, false))
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindOutlier, events[1:2], "test", "test", "test", nil, false))
+
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+		for _, mode := range []config.AutoPurgeMode{config.AutoPurgeOnEmpty, config.AutoPurgeOnAllForgotten} {
+			cfg.RoomServer.AutoPurgeMode = mode
+			scheduled, err := internalAPI.RunEmptyRoomsSweep(ctx)
+			require.NoError(t, err)
+			assert.Zero(t, scheduled, "mode %s scheduled a purge of a room still being created", mode)
+		}
+	})
+}
