@@ -62,7 +62,7 @@ steps:
       - bash build/scripts/ha-qualification.sh TestQualification
 
   publish-evidence:
-    image: docker.io/library/alpine:3.22
+    image: docker.io/library/alpine:3.24
     depends_on: [qualification]
     when:
       - event: [manual, cron]
