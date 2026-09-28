@@ -92,8 +92,9 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:          lock,
 		LeaseDuration: cfg.LeaseDuration, RenewDeadline: cfg.RenewDeadline, RetryPeriod: cfg.RetryPeriod,
-		// Never release on cancellation: startup or protected work may still be running.
-		// Expiry also does not prove fencing; every successor must pass OwnershipGate.
+		// Never release on cancellation: startup or protected work may still be
+		// running. runKubernetes releases after a completed drain instead.
+		// Neither release nor expiry proves fencing; every successor must pass OwnershipGate.
 		ReleaseOnCancel: false,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(leader context.Context) { acquired <- leader },
@@ -103,7 +104,39 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 	if err != nil {
 		return fmt.Errorf("configure HA Lease election: %w", err)
 	}
-	return control(ctx, elector, acquired, failures, candidate, gate, app, shutdownTimeout, status)
+	err = control(ctx, elector, acquired, failures, candidate, gate, app, shutdownTimeout, status)
+	if err == nil && ctx.Err() != nil {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.RenewDeadline)
+		defer cancel()
+		releaseLease(releaseCtx, lock, candidate.Identity)
+	}
+	return err
+}
+
+// releaseLease hands the Lease back after a requested shutdown drained the
+// application completely, so a standby takes over at its next retry instead
+// of waiting for the Lease to expire. Control only reports such a shutdown
+// without an error once the application has stopped, so no protected work of
+// this process remains; a drain that overran the shutdown budget returns an
+// error and keeps the Lease. The update is conditional on the Lease version
+// read here, so it cannot clear a Lease another candidate has taken since.
+func releaseLease(ctx context.Context, lock resourcelock.Interface, identity string) {
+	record, _, err := lock.Get(ctx)
+	if err != nil || record == nil || record.HolderIdentity != identity {
+		return
+	}
+	now := metav1.NewTime(time.Now())
+	err = lock.Update(ctx, resourcelock.LeaderElectionRecord{
+		LeaseDurationSeconds: 1,
+		RenewTime:            now,
+		AcquireTime:          now,
+		LeaderTransitions:    record.LeaderTransitions,
+	})
+	if err != nil {
+		logrus.WithError(err).Warn("Could not release the HA Lease after shutdown; a successor waits for it to expire")
+		return
+	}
+	logrus.Info("Released the HA Lease after a clean shutdown")
 }
 
 // permissionLock turns permanent authorization failures into actionable terminal

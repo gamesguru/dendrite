@@ -199,6 +199,8 @@ Upgrade in a maintenance window instead, as described in [HA storage and recover
 
 Delete the pod that reports `active`.
 The remaining candidates contend for the Lease, and one of them establishes ownership and recovers.
+Once its application has drained, the stopping leader releases the Lease, so a standby takes over at its next `retry_period` rather than after `lease_duration`.
+A leader that does not drain within the shutdown budget, or that crashes, leaves the Lease to expire instead.
 Do not delete the Lease to force a failover.
 The Lease is coordination, not authority, and deleting it does not retire the ownership generation.
 

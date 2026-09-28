@@ -74,6 +74,8 @@ func leaseClient() *fake.Clientset {
 func TestKubernetesContention(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client := leaseClient()
+		cfg := electionConfig()
+		cfg.Compatibility = "fingerprint"
 		ctx, cancel := context.WithCancelCause(t.Context())
 		defer cancel(nil)
 		var starts atomic.Int32
@@ -90,7 +92,7 @@ func TestKubernetesContention(t *testing.T) {
 			server := lifecycle.New(func(*process.ProcessContext) error { starts.Add(1); return nil }, time.Second)
 			servers[i] = server
 			go func() {
-				done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), server, gate, time.Second, NewStatus())
+				done <- runKubernetes(ctx, cfg, client.CoordinationV1(), server, gate, time.Second, NewStatus())
 			}()
 		}
 		time.Sleep(time.Minute)
@@ -121,13 +123,46 @@ func TestKubernetesContention(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		// Cancellation must not clear the Lease while protected work might be draining.
+		// A leader whose application drained completely hands the Lease back,
+		// so a standby need not wait for it to expire.
 		lease, err = client.CoordinationV1().Leases("matrix").Get(t.Context(), "homeserver", metav1.GetOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if *lease.Spec.HolderIdentity != identity {
-			t.Fatal("leadership released on cancellation")
+		if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != "" {
+			t.Fatalf("Lease still held by %q after a clean shutdown", *lease.Spec.HolderIdentity)
+		}
+		if lease.Annotations[compatibilityAnnotation] != cfg.Compatibility {
+			t.Fatal("releasing the Lease dropped its compatibility annotation")
+		}
+	})
+}
+
+// A leader whose application did not stop in time may still be doing
+// protected work, so it must leave the Lease to expire.
+func TestKubernetesKeepsLeaseWhenDrainTimesOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := leaseClient()
+		ctx, cancel := context.WithCancelCause(t.Context())
+		app := &stuckApplication{stopped: make(chan struct{})}
+		defer close(app.stopped)
+		done := make(chan error, 1)
+		gate := gateFunc(func(context.Context, Candidate) error { return nil })
+		go func() {
+			done <- runKubernetes(ctx, electionConfig(), client.CoordinationV1(), app, gate, time.Second, NewStatus())
+		}()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		cancel(nil)
+		if err := <-done; !errors.Is(err, lifecycle.ErrShutdownTimeout) {
+			t.Fatalf("expected a shutdown timeout, got %v", err)
+		}
+		lease, err := client.CoordinationV1().Leases("matrix").Get(t.Context(), "homeserver", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity == "" {
+			t.Fatal("Lease released although the application was still running")
 		}
 	})
 }
