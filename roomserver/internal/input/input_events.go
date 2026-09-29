@@ -59,6 +59,59 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 	[]string{"room_id"},
 )
 
+// retryClientTransaction answers a retried client transaction whose first
+// attempt produced the event originalID. It reports whether it handled the
+// retry; if not, the retry is processed as a new event.
+//
+// The transaction is recorded just before the first attempt publishes its
+// output events, and the event is marked as sent in the same database
+// transaction that updates the room, which commits after publishing. An event
+// that is not marked as sent therefore failed on one side of publishing or the
+// other: its output was never published (the broker failed), or it was
+// published and the room update then failed to commit (the database failed).
+// The two cannot be told apart, and answering the retry with the event would
+// lose it in the first case, while storing a new event would duplicate it in
+// the second. So the event is processed again instead: its output events are
+// published, possibly a second time, and the room is updated with it. The
+// consumers of the output stream store events by event ID, so clients and
+// servers see the event once either way, and the retry is answered with it.
+func (r *Inputer) retryClientTransaction(
+	ctx context.Context,
+	virtualHost spec.ServerName,
+	input *api.InputRoomEvent,
+	roomInfo *types.RoomInfo,
+	originalID string,
+	logger *logrus.Entry,
+) (bool, error) {
+	logger = logger.WithField("original_event_id", originalID)
+	events, err := r.DB.EventsFromIDs(ctx, roomInfo, []string{originalID})
+	if err != nil {
+		return true, fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+	}
+	if len(events) == 0 || events[0].PDU == nil {
+		// The transaction is recorded only after its event is stored, and
+		// both are purged with the room, so this is not expected.
+		logger.Warn("The event of a retried client transaction is not stored, storing the retry instead")
+		return false, nil
+	}
+	original := events[0]
+	sent, err := r.DB.EventSentToOutput(ctx, original.EventNID)
+	if err != nil {
+		return true, fmt.Errorf("r.DB.EventSentToOutput: %w", err)
+	}
+	if sent {
+		logger.Info("Skipping a retried client transaction")
+		return true, types.DuplicateTransactionError{EventID: originalID}
+	}
+	logger.Info("Processing the unsent event of a retried client transaction again")
+	again := *input
+	again.Event = &types.HeaderedEvent{PDU: original.PDU}
+	if err = r.processRoomEvent(ctx, virtualHost, &again); err != nil {
+		return true, fmt.Errorf("processing event %s of a retried client transaction: %w", originalID, err)
+	}
+	return true, types.DuplicateTransactionError{EventID: originalID}
+}
+
 // processRoomEvent can only be called once at a time
 //
 // TODO(#375): This should be rewritten to allow concurrent calls. The
@@ -151,8 +204,9 @@ func (r *Inputer) processRoomEvent(
 			return fmt.Errorf("r.DB.ClientTransactionEventID: %w", terr)
 		}
 		if originalID != "" && originalID != event.EventID() {
-			logger.WithField("original_event_id", originalID).Info("Skipping a retried client transaction")
-			return types.DuplicateTransactionError{EventID: originalID}
+			if handled, rerr := r.retryClientTransaction(ctx, virtualHost, input, roomInfo, originalID, logger); handled {
+				return rerr
+			}
 		}
 	}
 
@@ -611,6 +665,23 @@ func (r *Inputer) processRoomEvent(
 
 	switch input.Kind {
 	case api.KindNew:
+		// Remember which event this client transaction produced before its
+		// output events are published, so that a retry is answered with it
+		// rather than storing another event. Once published, clients and
+		// servers may have received the event even if the request then
+		// fails, for example because the database connection is lost before
+		// the room update commits. A retry finds the event not marked as
+		// sent and processes it again (see retryClientTransaction), so it
+		// is delivered whichever side of publishing the request failed on.
+		if input.TransactionID != nil {
+			if err = r.DB.StoreClientTransaction(
+				ctx, event.RoomID().String(), string(event.SenderID()),
+				input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
+			); err != nil {
+				// Nothing is published yet: the retry stores a new event.
+				return fmt.Errorf("r.DB.StoreClientTransaction: %w", err)
+			}
+		}
 		localLeftJoin, err := r.updateLatestEvents(
 			ctx,                 // context
 			roomInfo,            // room info for the room being updated
@@ -623,22 +694,6 @@ func (r *Inputer) processRoomEvent(
 		)
 		if err != nil {
 			return fmt.Errorf("r.updateLatestEvents: %w", err)
-		}
-		// Remember which event this client transaction produced, so that a
-		// retry is answered with it rather than storing another event. Only
-		// now is the event in the room and its output events published: a
-		// retry after a failure before this point must store a new event,
-		// because answering it with this one would acknowledge a message no
-		// client or server ever receives.
-		if input.TransactionID != nil {
-			if err = r.DB.StoreClientTransaction(
-				ctx, event.RoomID().String(), string(event.SenderID()),
-				input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
-			); err != nil {
-				// The event is delivered; failing the request now would only
-				// make the client retry it into a duplicate.
-				logger.WithError(err).Warn("Failed to record the client transaction of a delivered event")
-			}
 		}
 		if localLeftJoin {
 			r.ScheduleAutoPurgeIfEmpty(ctx, roomInfo)

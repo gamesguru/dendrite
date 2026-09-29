@@ -2472,6 +2472,11 @@ func (d *Database) StoreClientTransaction(
 	})
 }
 
+// EventSentToOutput implements storage.RoomDatabase.
+func (d *Database) EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error) {
+	return d.EventsTable.SelectEventSentToOutput(ctx, nil, eventNID)
+}
+
 // ExpireClientTransactions implements storage.RoomDatabase.
 func (d *Database) ExpireClientTransactions(ctx context.Context, before time.Time) (removed int64, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {

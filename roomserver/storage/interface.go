@@ -207,6 +207,7 @@ type Database interface {
 	AdminDeleteEventReport(ctx context.Context, reportID uint64) error
 	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
 	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
 	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
 
 	// Partial state methods for MSC3706 faster joins
@@ -280,6 +281,9 @@ type RoomDatabase interface {
 	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
 	// StoreClientTransaction records the event a client transaction produced.
 	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	// EventSentToOutput reports whether the event's output events were
+	// published and the room updated with it.
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
 	// ExpireClientTransactions forgets transactions recorded before the given time.
 	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
 }
