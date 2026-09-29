@@ -1170,7 +1170,7 @@ nextAuthEvent:
 			return fmt.Errorf("r.DB.GetOrCreateEventTypeNID: %w", err)
 		}
 
-		eventStateKeyNID, err := r.DB.GetOrCreateEventStateKeyNID(ctx, event.StateKey())
+		eventStateKeyNID, err := r.DB.GetOrCreateEventStateKeyNID(ctx, authEvent.StateKey())
 		if err != nil {
 			return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 		}
