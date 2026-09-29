@@ -241,10 +241,10 @@ func (e *environment) dumpGoroutines(ctx context.Context, label string) {
 }
 
 // watchSetup dumps the candidates' goroutines if a setup step is still
-// waiting after half the client's request timeout, while the request hangs.
+// waiting after slowSetupStep, while the request hangs.
 // The returned function stops the watch.
 func (e *environment) watchSetup(ctx context.Context, label string) func() {
-	timer := time.AfterFunc(30*time.Second, func() { e.dumpGoroutines(ctx, label) })
+	timer := time.AfterFunc(slowSetupStep, func() { e.dumpGoroutines(ctx, label) })
 	return func() { timer.Stop() }
 }
 

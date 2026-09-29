@@ -153,13 +153,15 @@ func startMSCProbe(ctx context.Context, w *workload) (*mscProbe, error) {
 	}
 	for _, version := range []string{"11", "12"} {
 		var room string
-		if err = retrying(ctx, func() error {
+		started := time.Now()
+		if err = retryingSetup(ctx, func() error {
 			defer e.watchSetup(ctx, "create-room-v"+version)()
-			room, err = w.alice.createPeekableRoom(ctx, "msc-v"+version, version)
+			room, err = w.alice.patient().createPeekableRoom(ctx, "msc-v"+version, version)
 			return err
 		}); err != nil {
 			return nil, fmt.Errorf("create a version %s room: %w", version, err)
 		}
+		w.noteSlowSetup("creating the version "+version+" MSC room", started)
 		txn := "msc-root-" + nonce()
 		var parent string
 		if err = retrying(ctx, func() error {

@@ -158,5 +158,13 @@ for result in "$HACHAOS_ARTIFACTS"/*/result.json; do
     echo "==== $(basename "$dir"): $(basename "$log") warnings and errors"
     grep -E 'level=(warning|error|fatal|panic)|^====' "$log" | tail -n 40 || true
   done
+  # Goroutine dumps taken while a setup request hung (#438), cut down to the
+  # client request and room input paths. Consumer workers idling in a fetch
+  # are their normal state and would crowd out the rest.
+  for dump in "$dir"/goroutines-*.txt; do
+    [[ -f "$dump" ]] || continue
+    echo "==== $(basename "$dir"): $(basename "$dump"), request and room input goroutines"
+    awk 'BEGIN { RS = ""; ORS = "\n\n" } /zendrite\/(clientapi\/routing|roomserver\/internal|roomserver\/producers)\// && !/jetstream\.FetchOwned/' "$dump" | head -n 300 || true
+  done
 done
 exit "$status"

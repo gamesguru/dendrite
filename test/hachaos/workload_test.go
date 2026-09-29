@@ -49,6 +49,16 @@ type workload struct {
 	gapFills int
 	// msc is the MSC probe, when MSCs are enabled.
 	msc *mscProbe
+	// setupNotes record setup steps slow enough to report.
+	setupNotes []string
+}
+
+// noteSlowSetup records a setup step that took longer than slowSetupStep, so
+// a scenario that passes only thanks to setupRequestTimeout still shows it.
+func (w *workload) noteSlowSetup(step string, started time.Time) {
+	if took := time.Since(started); took > slowSetupStep {
+		w.setupNotes = append(w.setupNotes, fmt.Sprintf("setup: %s took %s", step, took.Round(time.Second)))
+	}
 }
 
 // gap is a limited sync timeline, which a client fills by paging back from
@@ -107,14 +117,16 @@ func startWorkload(ctx context.Context, e *environment) (*workload, error) {
 	}
 	// A retried createRoom may create a second room; the workload simply
 	// uses whichever attempt succeeded.
-	if err = retrying(ctx, func() error {
+	started := time.Now()
+	if err = retryingSetup(ctx, func() error {
 		defer e.watchSetup(ctx, "create-room")()
 		var err error
-		w.room, err = w.alice.createRoom(ctx, "hachaos")
+		w.room, err = w.alice.patient().createRoom(ctx, "hachaos")
 		return err
 	}); err != nil {
 		return nil, err
 	}
+	w.noteSlowSetup("creating the workload room", started)
 	if err = retrying(ctx, func() error { return w.bob.join(ctx, w.room, "") }); err != nil {
 		return nil, err
 	}
@@ -150,7 +162,17 @@ func startWorkload(ctx context.Context, e *environment) (*workload, error) {
 // retrying repeats a setup request through transient failures, as a client
 // would, so a routing hiccup during setup does not end the scenario.
 func retrying(ctx context.Context, op func() error) error {
-	return waitFor(ctx, time.Minute, func() error {
+	return retryingWithin(ctx, time.Minute, op)
+}
+
+// retryingSetup is retrying for a setup request made with a patient client,
+// leaving room for one attempt to use all of setupRequestTimeout.
+func retryingSetup(ctx context.Context, op func() error) error {
+	return retryingWithin(ctx, setupRequestTimeout+time.Minute, op)
+}
+
+func retryingWithin(ctx context.Context, budget time.Duration, op func() error) error {
+	return waitFor(ctx, budget, func() error {
 		err := op()
 		if err != nil && !retryable(err) {
 			return errPermanent(err)

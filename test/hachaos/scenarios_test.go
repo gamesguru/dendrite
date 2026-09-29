@@ -590,6 +590,9 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 		return r
 	}
 	defer w.halt()
+	for _, n := range w.setupNotes {
+		r.notef("%s", n)
+	}
 	// Steady state before the fault, so sync tokens, queues and caches are
 	// in the state a real deployment would be in.
 	time.Sleep(10 * time.Second)

@@ -45,6 +45,24 @@ func retryable(err error) bool {
 	return err != nil
 }
 
+// setupRequestTimeout bounds one setup request, such as creating the
+// workload's rooms. Setup is not what a scenario qualifies, and on a loaded
+// host a new room's replicated JetStream consumers can take longer to come up
+// than a steady-state request is allowed (#438). A setup step that is merely
+// slow is noted in the report rather than failing the scenario.
+const setupRequestTimeout = 3 * time.Minute
+
+// slowSetupStep is how long a setup step may take before the report notes it.
+const slowSetupStep = 30 * time.Second
+
+// patient returns a copy of the client whose requests may take up to
+// setupRequestTimeout.
+func (c *mxClient) patient() *mxClient {
+	cp := *c
+	cp.http = &http.Client{Timeout: setupRequestTimeout, Transport: c.http.Transport}
+	return &cp
+}
+
 func newClient(base string) *mxClient {
 	return &mxClient{base: base, http: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 16, IdleConnTimeout: 30 * time.Second}}}
 }
