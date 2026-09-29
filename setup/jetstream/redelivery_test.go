@@ -99,3 +99,64 @@ func TestRefusedMessageIsRedeliveredAfterADelay(t *testing.T) {
 	require.GreaterOrEqual(t, seen[1].Sub(seen[0]), redeliveryBaseDelay,
 		"a refused message came back immediately, so it was negatively acknowledged without a delay")
 }
+
+// An acknowledgement whose reply is lost, as can happen while a stream elects a
+// new leader, must not stop the consumer. The reply waited on the worker's
+// lifetime context, so the worker blocked for good and every later message on
+// the subject stayed unprocessed.
+func TestLostAcknowledgementReplyDoesNotStopTheConsumer(t *testing.T) {
+	s := storageTestServer(t, "standalone", nil)
+	js := storageTestClient(t, s)
+	previous := ackTimeout
+	ackTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { ackTimeout = previous })
+
+	// A subscriber that takes acknowledgement requests and never answers.
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	const blackHole = "lost_ack_replies"
+	_, err = nc.Subscribe(blackHole, func(*nats.Msg) {})
+	require.NoError(t, err)
+
+	const subject = "lost_ack_test_subject"
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name: subject, Subjects: []string{subject}, Storage: nats.MemoryStorage,
+		Retention: nats.InterestPolicy,
+	})
+	require.NoError(t, err)
+
+	second := make(chan struct{})
+	var mu sync.Mutex
+	var bodies []string
+	p := process.NewProcessContextWithParent(t.Context())
+	defer p.ShutdownZendrite()
+	require.NoError(t, JetStreamConsumer(p.Context(), js, subject, "lostAckTest", 1,
+		func(_ context.Context, msgs []*nats.Msg) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			body := string(msgs[0].Data)
+			bodies = append(bodies, body)
+			switch body {
+			case "first":
+				// The acknowledgement goes out, but its reply never comes back.
+				msgs[0].Reply = blackHole
+			case "second":
+				close(second)
+			}
+			return true
+		}, nats.DeliverAll(), nats.ManualAck()))
+
+	_, err = js.Publish(subject, []byte("first"))
+	require.NoError(t, err)
+	_, err = js.Publish(subject, []byte("second"))
+	require.NoError(t, err)
+
+	select {
+	case <-second:
+	case <-time.After(10 * time.Second):
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("the consumer stopped after an acknowledgement lost its reply; processed %v", bodies)
+	}
+}

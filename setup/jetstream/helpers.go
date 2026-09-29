@@ -74,6 +74,21 @@ const (
 	redeliveryMaxDelay = 30 * time.Second
 )
 
+// ackTimeout bounds each acknowledgement request a consumer makes. With a
+// context, nats.go sends an acknowledgement as a request and waits for the
+// server's reply. A reply lost while the stream elects a new leader would
+// otherwise block the consumer for good, and every message queued behind it.
+// An acknowledgement that times out costs at most a redelivery after the
+// consumer's ack wait, which consumers already handle.
+var ackTimeout = 10 * time.Second
+
+// ackWithin sends one acknowledgement request, giving up after ackTimeout.
+func ackWithin(ctx context.Context, ack func(opts ...nats.AckOpt) error) error {
+	ctx, cancel := context.WithTimeout(ctx, ackTimeout)
+	defer cancel()
+	return ack(nats.Context(ctx))
+}
+
 // IsTransientFetchError reports transport and leader changes that invalidate a
 // pull request without invalidating its durable consumer. Retrying preserves
 // queued work; deleting the subscription or stopping the worker strands it.
@@ -197,7 +212,7 @@ func jetStreamConsumerWorker(
 			continue
 		}
 		for _, msg := range msgs {
-			if err = msg.InProgress(nats.Context(ctx)); err != nil {
+			if err = ackWithin(ctx, msg.InProgress); err != nil {
 				logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.InProgress: %w", err))
 				sentry.CaptureException(err)
 				continue
@@ -213,7 +228,7 @@ func jetStreamConsumerWorker(
 		}
 		if acknowledge {
 			for _, msg := range msgs {
-				if err = msg.AckSync(nats.Context(ctx)); err != nil {
+				if err = ackWithin(ctx, msg.AckSync); err != nil {
 					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.AckSync: %w", err))
 					sentry.CaptureException(err)
 				}
@@ -222,7 +237,7 @@ func jetStreamConsumerWorker(
 			for _, msg := range msgs {
 				delay := redeliveryDelay(msg)
 				consumerRedeliveries.WithLabelValues(subj).Inc()
-				if err = msg.NakWithDelay(delay, nats.Context(ctx)); err != nil {
+				if err = ackWithin(ctx, func(opts ...nats.AckOpt) error { return msg.NakWithDelay(delay, opts...) }); err != nil {
 					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.NakWithDelay: %w", err))
 					sentry.CaptureException(err)
 				}
