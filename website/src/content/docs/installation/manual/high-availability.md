@@ -24,6 +24,9 @@ These checks add storage and recovery prerequisites to that qualification.
   The application cannot verify filesystem mount or storage-controller durability settings.
 
 PostgreSQL must use synchronous commit and synchronously replicated storage with a failover policy that promotes only a replica containing acknowledged transactions.
+Set `connect_timeout` in the connection string, for example `postgres://zendrite@db-primary/zendrite?connect_timeout=5`.
+When the primary pod is deleted, connections to its address get no reply until the operator repoints the service, so without a timeout each new connection attempt blocks the request that needed it for as long as the failover takes.
+The timeout does not shorten the failover itself; it makes those requests fail and be retried instead of hanging.
 JetStream nodes must use independent persistent volumes in separate failure domains and `sync_interval: always` for the documented acknowledged-write guarantee across operating-system failures.
 Replication alone does not imply immediate fsync; see the [NATS durability documentation](https://github.com/nats-io/nats.docs/blob/master/nats-concepts/jetstream/README.md).
 S3-compatible services must preserve acknowledged writes across their supported failover and provide read-after-write consistency.
