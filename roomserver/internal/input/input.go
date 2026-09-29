@@ -471,9 +471,6 @@ func (w *worker) _next() {
 	if err = jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
 		return
 	}
-	stopProgress := jetstream.KeepAliveDelivery(w.r.ProcessContext.Context(), jetstream.OwnershipOf(w.r.JetStream), msgs)
-	defer stopProgress()
-
 	w.lastActivity = time.Now()
 
 	// Try to unmarshal the input room event. If the JSON unmarshalling
@@ -494,18 +491,14 @@ func (w *worker) _next() {
 		scope.SetTag("event_id", inputRoomEvent.Event.EventID())
 	})
 
-	// Process the room event. If something goes wrong then we'll tell
-	// NATS to terminate the message. We'll store the error result as
-	// a string, because we might want to return that to the caller if
-	// it was a synchronous request.
+	// Process the room event. An asynchronous input that fails on this
+	// server's own dependencies is retried first; if it still fails, the
+	// message is acknowledged below all the same. We'll store the error
+	// result as a string, because we might want to return that to the
+	// caller if it was a synchronous request.
 	var errString string
 	wasRejected := false
-	err = w.r.processRoomEvent(
-		w.r.ProcessContext.Context(),
-		spec.ServerName(msg.Header.Get("virtual_host")),
-		&inputRoomEvent,
-	)
-	stopProgress()
+	err = w.processInput(msg, &inputRoomEvent)
 	// A retried client transaction is done: the caller is told which event
 	// the transaction produced instead.
 	var duplicateOf string
