@@ -77,7 +77,8 @@ func (r *InboundPeeker) PerformInboundPeek(
 		sortedLatestEvents,
 		gomatrixserverlib.TopologicalOrderByPrevEvents,
 	)
-	response.LatestEvent = &types.HeaderedEvent{PDU: sortedLatestEvents[0]}
+	// Events read through the cache are HeaderedEvents already; do not nest them.
+	response.LatestEvent = &types.HeaderedEvent{PDU: (&types.HeaderedEvent{PDU: sortedLatestEvents[0]}).Unwrap()}
 
 	// XXX: do we actually need to do a state resolution here?
 	roomState := state.NewStateResolution(r.DB, info, r.Inputer.Queryer)

@@ -45,6 +45,22 @@ func (j *HeaderedEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Unwrap returns the event h wraps, however many HeaderedEvents deep. An
+// event read through the roomserver cache is already a *HeaderedEvent, so
+// wrapping it again nests them, and marshaling the inner one writes the
+// internal _room_version and _event_id keys. Anything that serializes a PDU
+// for federation must unwrap it first.
+func (h *HeaderedEvent) Unwrap() gomatrixserverlib.PDU {
+	var pdu gomatrixserverlib.PDU = h
+	for {
+		headered, ok := pdu.(*HeaderedEvent)
+		if !ok || headered == nil {
+			return pdu
+		}
+		pdu = headered.PDU
+	}
+}
+
 func NewEventJSONsFromHeaderedEvents(hes []*HeaderedEvent) gomatrixserverlib.EventJSONs {
 	result := make(gomatrixserverlib.EventJSONs, len(hes))
 	for i := range hes {

@@ -96,10 +96,12 @@ func Peek(
 	}
 
 	respPeek := fclient.RespPeek{
-		StateEvents:     types.NewEventJSONsFromHeaderedEvents(response.StateEvents),
-		AuthEvents:      types.NewEventJSONsFromHeaderedEvents(response.AuthChainEvents),
-		RoomVersion:     response.RoomVersion,
-		LatestEvent:     response.LatestEvent.PDU,
+		StateEvents: types.NewEventJSONsFromHeaderedEvents(response.StateEvents),
+		AuthEvents:  types.NewEventJSONsFromHeaderedEvents(response.AuthChainEvents),
+		RoomVersion: response.RoomVersion,
+		// The roomserver may answer with a cached, nested HeaderedEvent,
+		// whose JSON carries internal keys the peeking server rejects.
+		LatestEvent:     response.LatestEvent.Unwrap(),
 		RenewalInterval: renewalInterval,
 	}
 

@@ -76,16 +76,21 @@ func TestPeek(t *testing.T) {
 	// room ID form of the room version.
 	for _, room := range []*test.Room{peekableV11, peekableV12} {
 		t.Run("peek into room version "+string(room.Version), func(t *testing.T) {
-			code, body := peek(room.ID, all...)
-			require.Equal(t, http.StatusOK, code, string(body))
-			var res fclient.RespPeek
-			require.NoError(t, json.Unmarshal(body, &res))
-			assert.Equal(t, room.Version, res.RoomVersion)
-			assert.Equal(t, time.Hour.Milliseconds(), res.RenewalInterval)
-			require.NotNil(t, res.LatestEvent)
-			assert.Equal(t, room.Events()[len(room.Events())-1].EventID(), res.LatestEvent.EventID())
-			assert.NotEmpty(t, res.StateEvents)
-			assert.NotEmpty(t, res.AuthEvents)
+			// The second peek reads the latest event through the roomserver
+			// cache, which holds it as a HeaderedEvent.
+			for attempt := range 2 {
+				code, body := peek(room.ID, all...)
+				require.Equal(t, http.StatusOK, code, string(body))
+				assert.False(t, gjson.GetBytes(body, "latest_event._room_version").Exists(), "peek %d leaked the internal event header: %s", attempt, body)
+				var res fclient.RespPeek
+				require.NoError(t, json.Unmarshal(body, &res), "peek %d", attempt)
+				assert.Equal(t, room.Version, res.RoomVersion)
+				assert.Equal(t, time.Hour.Milliseconds(), res.RenewalInterval)
+				require.NotNil(t, res.LatestEvent)
+				assert.Equal(t, room.Events()[len(room.Events())-1].EventID(), res.LatestEvent.EventID())
+				assert.NotEmpty(t, res.StateEvents)
+				assert.NotEmpty(t, res.AuthEvents)
+			}
 		})
 	}
 
