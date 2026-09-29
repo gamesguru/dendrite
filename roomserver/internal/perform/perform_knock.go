@@ -59,7 +59,7 @@ func (r *Knocker) PerformKnock(
 		return "", nil, rsAPI.ErrInvalidID{Err: fmt.Errorf("room ID %q is invalid: %w", roomIDStr, err)}
 	}
 	// Room versions before 12 name a server which was in the room.
-	if domain := roomIDDomain(*roomID); domain != "" {
+	if domain := eventutil.RoomIDDomain(*roomID); domain != "" {
 		servers = append(servers, domain)
 	}
 
@@ -212,13 +212,4 @@ func newKnockOutput(event gomatrixserverlib.PDU, state []gomatrixserverlib.Invit
 			RoomVersion: event.Version(),
 		},
 	}}, nil
-}
-
-// roomIDDomain returns the server named in a room ID, or "" for the
-// domainless room IDs of room version 12 and later.
-func roomIDDomain(roomID spec.RoomID) spec.ServerName {
-	if !strings.Contains(roomID.String(), ":") {
-		return ""
-	}
-	return roomID.Domain()
 }

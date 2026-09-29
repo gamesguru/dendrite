@@ -85,24 +85,26 @@ func (r *Leaver) performLeaveRoomByID(
 
 	// If there's an invite outstanding for the room then respond to
 	// that.
-	isInvitePending, senderUser, eventID, _, err := helpers.IsInvitePending(ctx, r.DB, req.RoomID, *leaver)
+	isInvitePending, senderUser, eventID, inviteEvent, err := helpers.IsInvitePending(ctx, r.DB, req.RoomID, *leaver)
 	if err == nil && isInvitePending {
 		sender, serr := r.RSAPI.QueryUserIDForSender(ctx, *roomID, senderUser)
 		if serr != nil {
 			return nil, fmt.Errorf("failed looking up userID for sender %q: %w", senderUser, serr)
 		}
 
-		var domain spec.ServerName
+		if sender != nil && !r.Cfg.Matrix.IsLocalServerName(sender.Domain()) {
+			return r.performFederatedLeaveFromPending(ctx, req, res, []spec.ServerName{sender.Domain()}, eventID, *leaver)
+		}
 		if sender == nil {
 			// TODO: Currently a federated invite has no way of knowing the mxid_mapping of the inviter.
 			// Should we add the inviter's m.room.member event (with mxid_mapping) to invite_room_state to allow
 			// the invited user to leave via the inviter's server?
-			domain = roomID.Domain()
-		} else {
-			domain = sender.Domain()
-		}
-		if !r.Cfg.Matrix.IsLocalServerName(domain) {
-			return r.performFederatedLeaveFromPending(ctx, req, res, []spec.ServerName{domain}, eventID, *leaver)
+			// Until then, reject through the room ID's server, which room version 12 IDs do not name, and the
+			// servers of the invite's stripped state. With none of them, the invite is still retired locally.
+			if domain := eventutil.RoomIDDomain(*roomID); domain == "" || !r.Cfg.Matrix.IsLocalServerName(domain) {
+				servers := r.pendingStateServers(*roomID, inviteEvent, "invite_room_state")
+				return r.performFederatedLeaveFromPending(ctx, req, res, servers, eventID, *leaver)
+			}
 		}
 		// check that this is not a "server notice room"
 		accData := &userapi.QueryAccountDataResponse{}
@@ -332,7 +334,7 @@ func (r *Leaver) pendingStateServers(roomID spec.RoomID, event gomatrixserverlib
 		seen[server] = true
 		servers = append(servers, server)
 	}
-	add(roomIDDomain(roomID))
+	add(eventutil.RoomIDDomain(roomID))
 	state := gjson.GetBytes(event.Unsigned(), unsignedKey).Array()
 	sort.SliceStable(state, func(i, j int) bool {
 		return state[i].Get("type").Str == spec.MRoomCreate && state[j].Get("type").Str != spec.MRoomCreate

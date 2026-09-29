@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
@@ -202,7 +203,7 @@ func (r *Peeker) needsFederatedPeek(ctx context.Context, req *api.PerformPeekReq
 	}
 	req.ServerNames = servers
 
-	if domain := roomIDDomain(roomID); domain != "" {
+	if domain := eventutil.RoomIDDomain(roomID); domain != "" {
 		if r.Cfg.Matrix.IsLocalServerName(domain) {
 			return false, nil
 		}
