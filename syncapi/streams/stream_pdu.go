@@ -417,6 +417,13 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		return r.To, nil
 	}
 
+	// A room's state can hold tens of thousands of events, so building its
+	// delta takes a while. Stop between the expensive steps once the client
+	// has gone away rather than finishing a response nobody will read.
+	if err = ctx.Err(); err != nil {
+		return r.From, err
+	}
+
 	// Work out what the highest stream position is for all of the events in this
 	// room that were returned.
 	latestPosition := r.To
@@ -480,6 +487,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		}
 	}
 
+	if err = ctx.Err(); err != nil {
+		return r.From, err
+	}
+
 	// Applies the history visibility rules
 	events, err := applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents)
 	if err != nil {
@@ -498,6 +509,9 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	prevBatch, err := snapshot.GetBackwardTopologyPos(ctx, events)
 	if err != nil {
 		return r.From, fmt.Errorf("p.DB.GetBackwardTopologyPos: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		return r.From, err
 	}
 
 	eventFormat := synctypes.FormatSync
@@ -717,6 +731,11 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if err != nil {
 		return jr, err
 	}
+	// As for incremental syncs, stop between the expensive steps of a large
+	// room once the client has gone away.
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	jr.Summary, err = snapshot.GetRoomSummary(ctx, roomID, device.UserID)
 	if err != nil {
@@ -757,6 +776,10 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+	}
+
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Retrieve the backward topology position, i.e. the position of the
