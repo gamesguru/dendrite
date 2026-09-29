@@ -140,7 +140,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, false,
-			events.Events, events.Limited, eventFormat,
+			events.Events, events.Limited, eventFormat, to,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -178,7 +178,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, true,
-				events.Events, events.Limited, eventFormat,
+				events.Events, events.Limited, eventFormat, to,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -439,6 +439,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		delta.StateEvents, err = p.lazyLoadMembers(
 			ctx, snapshot, delta.RoomID, true, limited, stateFilter,
 			device, recentEvents, delta.StateEvents,
+			req.Since.PDUPosition, latestPosition,
 		)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return r.From, fmt.Errorf("p.lazyLoadMembers: %w", err)
@@ -692,6 +693,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	recentStreamEvents []types.StreamEvent,
 	limited bool,
 	eventFormat synctypes.ClientEventFormat,
+	sentAt types.StreamPosition,
 ) (jr *types.JoinResponse, err error) {
 	jr = types.NewJoinResponse()
 	// TODO: When filters are added, we may need to call this multiple times to get enough events.
@@ -750,6 +752,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID,
 			false, limited, stateFilter,
 			device, recentEvents, stateEvents,
+			0, sentAt,
 		)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -804,11 +807,18 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	return jr, nil
 }
 
+// lazyLoadMembers keeps only the memberships the client needs for the given
+// timeline. The since argument is the PDU position the client synced from,
+// and sentAt the position this response covers. A membership counts as
+// already sent only once the client has synced from the response that
+// carried it, because a client that never received a response retries from
+// its previous token.
 func (p *PDUStreamProvider) lazyLoadMembers(
 	ctx context.Context, snapshot storage.DatabaseTransaction, roomID string,
 	incremental, limited bool, stateFilter *synctypes.StateFilter,
 	device *userapi.Device,
 	timelineEvents, stateEvents []*rstypes.HeaderedEvent,
+	since, sentAt types.StreamPosition,
 ) ([]*rstypes.HeaderedEvent, error) {
 	if len(timelineEvents) == 0 {
 		return stateEvents, nil
@@ -824,8 +834,8 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	}
 	// Add all users the client doesn't know about yet to a list
 	for _, event := range timelineEvents {
-		// Membership is not yet cached, add it to the list
-		if _, ok := p.lazyLoadCache.IsLazyLoadedUserCached(device, roomID, string(event.SenderID())); !ok {
+		// Membership was not sent yet, or not in a response the client received
+		if member, ok := p.lazyLoadCache.IsLazyLoadedUserCached(device, roomID, string(event.SenderID())); !ok || types.StreamPosition(member.SentAt) > since {
 			timelineUsers[string(event.SenderID())] = struct{}{}
 		}
 	}
@@ -845,7 +855,7 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 			if _, ok := timelineUsers[userID]; ok || isGappedIncremental || userID == device.UserID {
 				newStateEvents = append(newStateEvents, event)
 				if !stateFilter.IncludeRedundantMembers {
-					p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, userID, event.EventID())
+					p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, userID, caching.LazyLoadedMember{EventID: event.EventID(), SentAt: int64(sentAt)})
 				}
 				delete(timelineUsers, userID)
 			}
@@ -867,7 +877,7 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	}
 	// cache the membership events
 	for _, membership := range memberships {
-		p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), membership.EventID())
+		p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), caching.LazyLoadedMember{EventID: membership.EventID(), SentAt: int64(sentAt)})
 	}
 	stateEvents = make([]*rstypes.HeaderedEvent, 0, len(newStateEvents)+len(memberships))
 	stateEvents = append(stateEvents, newStateEvents...)

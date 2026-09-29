@@ -31,7 +31,7 @@ type Caches struct {
 	FederationEDUs          Cache[int64, *gomatrixserverlib.EDU]                   // queue NID -> EDU
 	RoomHierarchies         Cache[string, fclient.RoomHierarchyResponse]           // room ID -> space response
 	RoomHierarchyFailures   Cache[string, struct{}]                                // room ID -> failed federation marker
-	LazyLoading             Cache[lazyLoadingCacheKey, string]                     // composite key -> event ID
+	LazyLoading             Cache[lazyLoadingCacheKey, LazyLoadedMember]           // composite key -> membership sent
 	RoomSummaries           Cache[string, RoomSummaryResponse]                     // "roomID:auth" -> summary response
 }
 

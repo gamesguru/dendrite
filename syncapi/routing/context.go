@@ -342,7 +342,7 @@ func applyLazyLoadMembers(
 
 	// cache the membership events
 	for _, membership := range memberships {
-		lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), membership.EventID())
+		lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), caching.LazyLoadedMember{EventID: membership.EventID()})
 	}
 
 	return memberships, nil

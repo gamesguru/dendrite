@@ -151,7 +151,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 			Mutable: true,
 			MaxAge:  lesserOf(5*time.Minute, maxAge), //nolint:mnd // 5 minute TTL for negative cache
 		},
-		LazyLoading: &RistrettoCachePartition[lazyLoadingCacheKey, string]{ // composite key -> event ID
+		LazyLoading: &RistrettoCachePartition[lazyLoadingCacheKey, LazyLoadedMember]{ // composite key -> membership sent
 			cache:   cache,
 			Prefix:  lazyLoadingCache,
 			Mutable: true,
