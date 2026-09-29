@@ -7,6 +7,10 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"syscall"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +41,35 @@ func TestIsTransient(t *testing.T) {
 			require.Equal(t, tc.want, IsTransient(tc.err))
 		})
 	}
+}
+
+func TestIsDatabaseUnavailable(t *testing.T) {
+	_, connectErr := pgx.Connect(t.Context(), "postgres://zendrite@127.0.0.1:1/zendrite?sslmode=disable&connect_timeout=1")
+	require.Error(t, connectErr)
+	// A remote server that is down fails an HTTP request with the same
+	// network errors a database connection would.
+	httpErr := &url.Error{Op: "Get", URL: "https://remote.test/_matrix/federation/v1/get_missing_events", Err: &net.OpError{
+		Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED,
+	}}
+
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"connection refused":     {fmt.Errorf("r.DB.RoomInfo: %w", connectErr), true},
+		"bad connection":         {driver.ErrBadConn, true},
+		"administrator shutdown": {fmt.Errorf("fast forward: %w", &pgconn.PgError{Code: "57P01"}), true},
+		"unique violation":       {&pgconn.PgError{Code: "23505"}, false},
+		"remote server down":     {fmt.Errorf("LookupMissingEvents: %w", httpErr), false},
+		"remote response cut":    {fmt.Errorf("LookupMissingEvents: %w", io.ErrUnexpectedEOF), false},
+		"cancellation":           {context.Canceled, false},
+		"no error":               {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, IsDatabaseUnavailable(tc.err))
+		})
+	}
+	require.True(t, IsTransient(httpErr), "IsTransient does not tell a remote server from the database")
 }
 
 func TestRetryTransient(t *testing.T) {

@@ -446,13 +446,18 @@ func (protectedJetStream) DeleteConsumer(string, string, ...natsclient.JSOpt) er
 	return fmt.Errorf("HA refuses consumer deletion; migrate offline")
 }
 
+// ErrPublicationRefused reports that this activation may not publish right
+// now: its ownership is unconfirmed, stale or retired. It says nothing about
+// the message, so work that fails with it must be retried, not discarded.
+var ErrPublicationRefused = errors.New("HA publication refused")
+
 // stamp refuses a retired owner and records the publishing generation.
 func (p protectedJetStream) stamp(msg *natsclient.Msg) error {
 	if p.ownership == nil {
-		return fmt.Errorf("HA publication refused: ownership has not been established")
+		return fmt.Errorf("%w: ownership has not been established", ErrPublicationRefused)
 	}
 	if err := p.ownership.Valid(); err != nil {
-		return fmt.Errorf("HA publication refused: %w", err)
+		return fmt.Errorf("%w: %w", ErrPublicationRefused, err)
 	}
 	if msg.Header == nil {
 		msg.Header = natsclient.Header{}

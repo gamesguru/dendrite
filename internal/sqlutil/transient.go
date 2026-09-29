@@ -34,12 +34,36 @@ func IsTransient(err error) bool {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		// Class 08 is a connection exception; 57P01 to 57P03 are the server
-		// shutting down, crashing, or not yet accepting connections.
-		return strings.HasPrefix(pgErr.Code, "08") || pgErr.Code == "57P01" || pgErr.Code == "57P02" || pgErr.Code == "57P03"
+		return isConnectionCode(pgErr.Code)
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr)
+}
+
+// IsDatabaseUnavailable is IsTransient restricted to errors the PostgreSQL
+// driver reports itself. Code that also talks to other servers needs it: a
+// plain network error or EOF there may come from a remote server's HTTP
+// response as easily as from the database.
+func IsDatabaseUnavailable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) || pgconn.SafeToRetry(err) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && isConnectionCode(pgErr.Code)
+}
+
+// isConnectionCode reports SQLSTATE codes that describe the connection rather
+// than the statement: class 08 is a connection exception, and 57P01 to 57P03
+// are the server shutting down, crashing, or not yet accepting connections.
+func isConnectionCode(code string) bool {
+	return strings.HasPrefix(code, "08") || code == "57P01" || code == "57P02" || code == "57P03"
 }
 
 const (

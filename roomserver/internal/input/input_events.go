@@ -20,6 +20,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -34,6 +35,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -380,6 +382,16 @@ func (r *Inputer) processRoomEvent(
 			}
 			var stateSnapshot *parsedRespState
 			if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
+				// A failure of this server's own database, broker or HA
+				// ownership, as during a PostgreSQL failover, says nothing
+				// about the event. Rejecting it would be permanent, since the
+				// sender does not resend it, and would start the cooldown that
+				// rejects the room's following events too. Fail the input
+				// instead: nothing is stored, and the next event in the room
+				// fetches this one again as a missing prev event.
+				if unavailableHere(ctx, err) {
+					return fmt.Errorf("missingState.processEventWithMissingState: %w", err)
+				}
 				// Something went wrong with retrieving the missing state, so we can't
 				// really do anything with the event other than reject it at this point.
 				isRejected = true
@@ -1301,6 +1313,19 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 // processed our join. Our backoff towards the origin only reflects our own
 // failed sends, for example while it was restarting, and dropping it would
 // reject every event that arrives ahead of its prev events.
+// UnavailableHere reports whether processing failed on this server's own
+// dependencies rather than on the event or the servers asked about it.
+// Generic network errors are not counted: while filling a gap they may as
+// well come from a remote server, whose failures the cooldown is for.
+func unavailableHere(ctx context.Context, err error) bool {
+	return ctx.Err() != nil ||
+		sqlutil.IsDatabaseUnavailable(err) ||
+		errors.Is(err, jetstream.ErrPublicationRefused) ||
+		errors.Is(err, nats.ErrTimeout) ||
+		errors.Is(err, nats.ErrNoStreamResponse) ||
+		jetstream.IsTransientFetchError(err)
+}
+
 func withoutBackingOffServers(
 	servers []spec.ServerName, origin, joinServer spec.ServerName,
 	isBackingOff func(spec.ServerName) bool,

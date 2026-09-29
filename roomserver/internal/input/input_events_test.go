@@ -1,12 +1,20 @@
 package input
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"syscall"
 	"testing"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -271,4 +279,30 @@ func TestWithoutBackingOffServersKeepsLiveServers(t *testing.T) {
 
 	got = withoutBackingOffServers([]spec.ServerName{"origin", "dead"}, "", "", isBackingOff)
 	assert.Empty(t, got, "backing off servers are dropped when neither is the origin or join server")
+}
+
+func TestUnavailableHere(t *testing.T) {
+	// The refusal seen during a PostgreSQL failover, as the publication gate
+	// wraps it.
+	stale := fmt.Errorf("%w: %w", jetstream.ErrPublicationRefused,
+		errors.New("HA ownership has not been confirmed within the freshness window: last confirmed 6.006s ago, freshness window is 6s"))
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"publication refused": {fmt.Errorf("t.inputer.processRoomEvent (fast forward): r.WriteOutputEvents (old): %w", stale), true},
+		"broker timeout":      {fmt.Errorf("r.WriteOutputEvents (old): %w", nats.ErrTimeout), true},
+		"no stream response":  {fmt.Errorf("r.WriteOutputEvents (old): %w", nats.ErrNoStreamResponse), true},
+		"database shutdown":   {fmt.Errorf("r.DB.RoomInfo: %w", &pgconn.PgError{Code: "57P01"}), true},
+		"remote unreachable":  {fmt.Errorf("t.getMissingEvents: %w", &url.Error{Op: "Get", URL: "https://remote", Err: syscall.ECONNREFUSED}), false},
+		"remote missing prev": {errors.New("called /get_missing_events but server remote didn't return any prev_events"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, unavailableHere(context.Background(), tc.err))
+		})
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.New("shutting down"))
+	assert.True(t, unavailableHere(ctx, errors.New("anything")), "a stopping server gives up; that is not the event's fault")
 }
