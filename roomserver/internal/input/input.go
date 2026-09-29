@@ -99,6 +99,11 @@ type Inputer struct {
 // resolution.
 const missingStateCooldownDuration = 5 * time.Minute
 
+// errMissingStateCooldown fails an input deferred by the missing-state
+// cooldown. It is expected for as long as a room is broken, so it is logged
+// where the input is deferred rather than reported as a processing failure.
+var errMissingStateCooldown = errors.New("state resolution cooldown active")
+
 // If a room consumer is inactive for a while then we will allow NATS
 // to clean it up. This stops us from holding onto durable consumers
 // indefinitely for rooms that might no longer be active, since they do
@@ -516,7 +521,7 @@ func (w *worker) _next() {
 				"type":     inputRoomEvent.Event.Type(),
 			}).Warn("Roomserver rejected event")
 			wasRejected = true
-		} else {
+		} else if !errors.Is(err, errMissingStateCooldown) {
 			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 				w.sentryHub.CaptureException(err)
 			}

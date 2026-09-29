@@ -401,20 +401,26 @@ func (r *Inputer) processRoomEvent(
 		}
 
 		// Check if state resolution recently failed for this room. If so, skip
-		// the expensive federation lookup and reject immediately. This prevents
-		// rooms stuck in a failure loop from consuming unbounded CPU and memory
-		// by loading thousands of state events on every incoming transaction.
+		// the expensive federation lookup. This prevents rooms stuck in a
+		// failure loop from consuming unbounded CPU and memory by loading
+		// thousands of state events on every incoming transaction.
+		//
+		// The event is deferred, not rejected: nothing about it has been
+		// looked at. The sender does not resend it, and a rejected event is
+		// left out of the auth events of every later event that cites it, so
+		// a rejected membership, for example, gets its sender's following
+		// events rejected too. Nothing is stored instead, so the event stays
+		// missing, and the first event in the room after the cooldown fetches
+		// it with its other missing prev events.
 		if !isRejected {
 			if lastFail, ok := r.missingStateCooldown.Load(stateResolutionRoomID); ok {
 				lastFailTime, _ := lastFail.(time.Time)
-				if time.Since(lastFailTime) < missingStateCooldownDuration {
-					logger.Warnf("Skipping state resolution for room %s (cooldown active after recent failure)", stateResolutionRoomID)
-					isRejected = true
-					rejectionErr = fmt.Errorf("state resolution cooldown active for room %s", stateResolutionRoomID)
-				} else {
-					// Cooldown expired, clear it and retry.
-					r.missingStateCooldown.Delete(stateResolutionRoomID)
+				if remaining := missingStateCooldownDuration - time.Since(lastFailTime); remaining > 0 {
+					logger.Warnf("Deferring event with missing prev events in room %s (state resolution cooldown active after recent failure)", stateResolutionRoomID)
+					return fmt.Errorf("%w for room %s, ending in %s", errMissingStateCooldown, stateResolutionRoomID, remaining.Round(time.Second))
 				}
+				// Cooldown expired, clear it and retry.
+				r.missingStateCooldown.Delete(stateResolutionRoomID)
 			}
 		}
 
