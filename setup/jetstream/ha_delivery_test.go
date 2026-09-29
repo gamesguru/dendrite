@@ -56,3 +56,40 @@ func TestHADeliveryKeepsLongHandlerAlive(t *testing.T) {
 	stop()
 	require.NoError(t, msgs[0].AckSync())
 }
+
+// A progress update whose reply is lost, as during a stream leader election,
+// must not stop the keepalive: the handler would otherwise lose its message to
+// redelivery while it is still processing it.
+func TestHADeliveryKeepAliveOutlastsALostReply(t *testing.T) {
+	s := storageTestServer(t, "standalone", nil)
+	js := storageTestClient(t, s)
+	_, err := js.AddStream(&nats.StreamConfig{Name: "lostprogress", Subjects: []string{"lostprogress"}, Storage: nats.MemoryStorage})
+	require.NoError(t, err)
+	sub, err := js.PullSubscribe("lostprogress", "worker", nats.AckWait(HAConsumerAckWait))
+	require.NoError(t, err)
+	_, err = js.Publish("lostprogress", []byte("work"))
+	require.NoError(t, err)
+	msgs, err := sub.Fetch(1, nats.MaxWait(time.Second))
+	require.NoError(t, err)
+
+	// A subscriber that takes the progress updates and never answers.
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	updates := make(chan struct{}, 16)
+	const blackHole = "lost_progress_replies"
+	_, err = nc.Subscribe(blackHole, func(*nats.Msg) { updates <- struct{}{} })
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	msgs[0].Reply = blackHole
+
+	stop := KeepAliveDelivery(t.Context(), &testOwnership{generation: 2}, msgs)
+	defer stop()
+	for i := range 2 {
+		select {
+		case <-updates:
+		case <-time.After(HAConsumerAckWait):
+			t.Fatalf("the keepalive stopped after %d progress update(s) got no reply", i)
+		}
+	}
+}

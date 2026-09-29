@@ -64,7 +64,12 @@ func KeepAliveDelivery(ctx context.Context, owner Ownership, msgs []*nats.Msg) f
 					return
 				}
 				for _, msg := range msgs {
-					if err := msg.InProgress(nats.Context(ctx)); err != nil {
+					// Sent without waiting for a reply. The broker can leave a
+					// progress update unanswered, as while the stream elects a
+					// new leader, and waiting for it would stop the keepalive
+					// until the handler returns, so the message would be
+					// redelivered while it is still being processed.
+					if err := msg.InProgress(); err != nil {
 						return
 					}
 				}
