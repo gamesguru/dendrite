@@ -126,6 +126,13 @@ type worker struct {
 	// last seq we fully processed
 	durableSeq   uint64
 	lastActivity time.Time
+	// announcements are headers-only deliveries for this room that wait for
+	// its durable consumer. The input stream keeps a message only while some
+	// consumer still needs it, so acknowledging an announcement before the
+	// room's consumer exists would let the stream discard the event. They
+	// are keyed by stream sequence, as an announcement left unacknowledged
+	// is delivered again.
+	announcements map[uint64]*nats.Msg
 }
 
 // notify queues a call to _next in the worker's goroutine.
@@ -139,38 +146,58 @@ func (w *worker) notify() {
 // start launches the worker goroutine that processes events serially.
 // The caller should take a lock before calling start.
 func (w *worker) start() {
-	// Worker is already running
-	if w.ctx != nil {
+	// Worker is already running. A worker whose context is canceled is on its
+	// way out: it will not process anything else, so it is replaced rather
+	// than left to exit and strand the work it was just asked to do.
+	if w.ctx != nil && w.ctx.Err() == nil {
 		return
 	}
 
 	w.lastActivity = time.Now()
-	w.ctx, w.cancel = context.WithCancelCause(w.r.ProcessContext.Context())
+	ctx, cancel := context.WithCancelCause(w.r.ProcessContext.Context())
+	w.ctx, w.cancel = ctx, cancel
 
 	if !w.r.ProcessContext.Go(func() {
 		logrus.Debugf("worker for room %q started", w.roomID)
 		for {
 			select {
-			case <-w.ctx.Done():
-				// Cleanup after the context is canceled, so we still can log the reason for cancellation.
-				logrus.WithError(w.ctx.Err()).Debugf("worker for room %q stopped", w.roomID)
-				w.Lock()
-				w.ctx = nil
-				w.Unlock()
-				return
+			case <-ctx.Done():
 			case <-w.ch:
-				w._next()
+				if ctx.Err() == nil {
+					w._next() //nolint:contextcheck // ctx only bounds this worker's lifetime; _next works on the process context.
+					continue
+				}
+				// Hand the wake-up to the worker that replaces this one.
+				w.notify()
 			}
+			// Cleanup after the context is canceled, so we still can log the reason for cancellation.
+			logrus.WithError(context.Cause(ctx)).Debugf("worker for room %q stopped", w.roomID)
+			w.Lock()
+			if w.ctx == ctx {
+				w.ctx = nil
+			}
+			w.Unlock()
+			return
 		}
 	}) {
-		w.cancel(context.Canceled)
+		cancel(context.Canceled)
 		w.ctx = nil
 		w.cancel = nil
 	}
 }
 
-func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
-	v, loaded := r.workers.LoadOrStore(roomID, &worker{
+// startWorkerForRoom records that the input stream holds an event for the
+// room up to seq and wakes the room's worker, starting it if needed. The
+// announcement is acknowledged once the room's durable consumer exists.
+//
+// It runs on the stream-wide headers-only subscription, so it must not wait
+// on the broker: a slow call here would hold up the input of every room. The
+// worker sets up the room's durable consumer itself, retrying until it
+// succeeds, because no further notification may ever come for a room whose
+// queued events are all announced already, as when createRoom queues every
+// initial event at once and waits for them.
+func (r *Inputer) startWorkerForRoom(roomID string, seq uint64, announcement *nats.Msg) {
+	v, _ := r.workers.LoadOrStore(roomID, &worker{
 		r:         r,
 		roomID:    roomID,
 		sentryHub: sentry.CurrentHub().Clone(),
@@ -181,113 +208,142 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 		return
 	}
 	w.Lock()
-	defer w.Unlock()
-
-	w.ephemeralSeq = seq
-	logrus.Debugf("loaded worker for room %q at seq %d (loaded=%t, subscription=%v)", roomID, seq, loaded, w.subscription)
-	if !loaded || w.subscription == nil {
-		streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
-		consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
-		subject := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEventSubj(w.roomID))
-
-		logger := logrus.WithFields(logrus.Fields{
-			"stream_name": streamName,
-			"consumer":    consumer,
-		})
-		// Create the consumer. We do this as a specific step rather than
-		// letting PullSubscribe create it for us because we need the consumer
-		// to outlive the subscription. If we do it this way, we can Bind in the
-		// next step, and when we Unsubscribe, the consumer continues to live. If
-		// we leave PullSubscribe to create the durable consumer, Unsubscribe will
-		// delete it because it thinks it "owns" it, which in turn breaks the
-		// interest-based retention storage policy.
-		// If the durable consumer already exists, this is effectively a no-op.
-		// Another interesting tid-bit here: the ACK policy is set to "all" so that
-		// if we acknowledge a message, we also acknowledge everything that comes
-		// before it. This is necessary because otherwise our consumer will never
-		// acknowledge things we filtered out for other subjects and therefore they
-		// will linger around forever.
-
-		info, err := w.r.JetStream.ConsumerInfo(streamName, consumer)
-		if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-			// log and return, we will retry anyway
-			logger.WithError(err).Errorf("failed to get consumer info")
-			return
+	// An announcement left unacknowledged is delivered again, possibly after
+	// newer ones.
+	w.ephemeralSeq = max(w.ephemeralSeq, seq)
+	logrus.Debugf("loaded worker for room %q at seq %d (subscription=%v)", roomID, seq, w.subscription)
+	subscribed := w.subscription != nil
+	if !subscribed && announcement != nil {
+		if w.announcements == nil {
+			w.announcements = map[uint64]*nats.Msg{}
 		}
-
-		ackWait := MaximumMissingProcessingTime + roomAckSlack
-		if jetstream.OwnershipOf(r.JetStream) != nil {
-			ackWait = jetstream.HAConsumerAckWait
-		}
-		consumerConfig := &nats.ConsumerConfig{
-			Durable:           consumer,
-			AckPolicy:         nats.AckExplicitPolicy,
-			DeliverPolicy:     nats.DeliverAllPolicy,
-			FilterSubject:     subject,
-			AckWait:           ackWait,
-			InactiveThreshold: inactiveThreshold,
-		}
-
-		// The consumer already exists, try to update if necessary.
-		if info != nil {
-			// Not using reflect.DeepEqual here, since consumerConfig does not explicitly set
-			// e.g. the consumerName, which is added by NATS later. So this would result
-			// in constantly updating/recreating the consumer.
-			switch {
-			case info.Config.AckWait.Nanoseconds() != consumerConfig.AckWait.Nanoseconds():
-				// Initially we had a AckWait of 2m 10s, now we have 5m 10s, so we need to update
-				// existing consumers.
-				fallthrough
-			case info.Config.AckPolicy != consumerConfig.AckPolicy:
-				// We've changed the AckPolicy from AckAll to AckExplicit, this needs a
-				// recreation of the consumer. (Note: Only a few changes actually need a recreat)
-				logger.Warn("Consumer already exists, trying to update it.")
-				// Try updating the consumer first
-				if _, err = w.r.JetStream.UpdateConsumer(streamName, consumerConfig); err != nil {
-					// We failed to update the consumer, recreate it
-					logger.WithError(err).Warn("Unable to update consumer, recreating...")
-					if err = w.r.JetStream.DeleteConsumer(streamName, consumer); err != nil {
-						logger.WithError(err).Fatal("Unable to delete consumer")
-						return
-					}
-					// Set info to nil, so it can be recreated with the correct config.
-					info = nil
-				}
-			}
-		}
-
-		if info == nil {
-			// Create the consumer with the correct config
-			if _, err = w.r.JetStream.AddConsumer(
-				r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent),
-				consumerConfig,
-			); err != nil {
-				logger.WithError(err).Errorf("Failed to create consumer for room %q", w.roomID)
-				return
-			}
-		}
-
-		// Bind to our durable consumer. We want to receive all messages waiting
-		// for this subject and we want to manually acknowledge them, so that we
-		// can ensure they are only cleaned up when we are done processing them.
-		sub, err := w.r.JetStream.PullSubscribe(
-			subject, consumer,
-			nats.ManualAck(),
-			nats.DeliverAll(),
-			nats.AckWait(ackWait),
-			nats.Bind(r.InputRoomEventTopic, consumer),
-			nats.InactiveThreshold(inactiveThreshold),
-		)
-		if err != nil {
-			logger.WithError(err).Errorf("Failed to subscribe to stream for room %q", w.roomID)
-			return
-		}
-
-		// Go and start pulling messages off the queue.
-		w.subscription = sub
-		w.start()
-		w.notify()
+		w.announcements[seq] = announcement
 	}
+	w.start()
+	w.Unlock()
+	w.notify()
+	if subscribed && announcement != nil {
+		_ = announcement.Ack()
+	}
+}
+
+// consumerSetupTimeout bounds each JetStream request that sets up a room's
+// durable consumer. A replicated consumer is not answered for until its own
+// Raft group has a leader, which on a loaded cluster can take longer than the
+// client's five-second default. Abandoning the request then only means
+// asking again for a consumer that has no leader yet.
+const consumerSetupTimeout = 30 * time.Second
+
+// consumerSetupRetryDelay spaces attempts to set up a room's durable consumer.
+var consumerSetupRetryDelay = time.Second
+
+// subscribe creates or updates the room's durable consumer and binds a pull
+// subscription to it. It must only be called by the worker's goroutine.
+func (w *worker) subscribe(ctx context.Context) error {
+	r := w.r
+	ctx, cancel := context.WithTimeout(ctx, consumerSetupTimeout)
+	defer cancel()
+	streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
+	consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
+	subject := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEventSubj(w.roomID))
+
+	logger := logrus.WithFields(logrus.Fields{
+		"stream_name": streamName,
+		"consumer":    consumer,
+	})
+	// Create the consumer. We do this as a specific step rather than
+	// letting PullSubscribe create it for us because we need the consumer
+	// to outlive the subscription. If we do it this way, we can Bind in the
+	// next step, and when we Unsubscribe, the consumer continues to live. If
+	// we leave PullSubscribe to create the durable consumer, Unsubscribe will
+	// delete it because it thinks it "owns" it, which in turn breaks the
+	// interest-based retention storage policy.
+	// If the durable consumer already exists, this is effectively a no-op.
+	// Another interesting tid-bit here: the ACK policy is set to "all" so that
+	// if we acknowledge a message, we also acknowledge everything that comes
+	// before it. This is necessary because otherwise our consumer will never
+	// acknowledge things we filtered out for other subjects and therefore they
+	// will linger around forever.
+
+	info, err := r.JetStream.ConsumerInfo(streamName, consumer, nats.Context(ctx))
+	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("get consumer info: %w", err)
+	}
+
+	ackWait := MaximumMissingProcessingTime + roomAckSlack
+	if jetstream.OwnershipOf(r.JetStream) != nil {
+		ackWait = jetstream.HAConsumerAckWait
+	}
+	consumerConfig := &nats.ConsumerConfig{
+		Durable:           consumer,
+		AckPolicy:         nats.AckExplicitPolicy,
+		DeliverPolicy:     nats.DeliverAllPolicy,
+		FilterSubject:     subject,
+		AckWait:           ackWait,
+		InactiveThreshold: inactiveThreshold,
+	}
+
+	// The consumer already exists, try to update if necessary.
+	if info != nil {
+		// Not using reflect.DeepEqual here, since consumerConfig does not explicitly set
+		// e.g. the consumerName, which is added by NATS later. So this would result
+		// in constantly updating/recreating the consumer.
+		switch {
+		case info.Config.AckWait.Nanoseconds() != consumerConfig.AckWait.Nanoseconds():
+			// Initially we had a AckWait of 2m 10s, now we have 5m 10s, so we need to update
+			// existing consumers.
+			fallthrough
+		case info.Config.AckPolicy != consumerConfig.AckPolicy:
+			// We've changed the AckPolicy from AckAll to AckExplicit, this needs a
+			// recreation of the consumer. (Note: Only a few changes actually need a recreat)
+			logger.Warn("Consumer already exists, trying to update it.")
+			// Try updating the consumer first
+			if _, err = r.JetStream.UpdateConsumer(streamName, consumerConfig, nats.Context(ctx)); err != nil {
+				// We failed to update the consumer, recreate it
+				logger.WithError(err).Warn("Unable to update consumer, recreating...")
+				if err = r.JetStream.DeleteConsumer(streamName, consumer, nats.Context(ctx)); err != nil {
+					logger.WithError(err).Fatal("Unable to delete consumer")
+					return err
+				}
+				// Set info to nil, so it can be recreated with the correct config.
+				info = nil
+			}
+		}
+	}
+
+	if info == nil {
+		// Create the consumer with the correct config
+		if _, err = r.JetStream.AddConsumer(streamName, consumerConfig, nats.Context(ctx)); err != nil {
+			return fmt.Errorf("create consumer: %w", err)
+		}
+	}
+
+	// Bind to our durable consumer. We want to receive all messages waiting
+	// for this subject and we want to manually acknowledge them, so that we
+	// can ensure they are only cleaned up when we are done processing them.
+	sub, err := r.JetStream.PullSubscribe(
+		subject, consumer,
+		nats.ManualAck(),
+		nats.DeliverAll(),
+		nats.AckWait(ackWait),
+		nats.Bind(r.InputRoomEventTopic, consumer),
+		nats.InactiveThreshold(inactiveThreshold),
+		// No nats.Context here: the subscription would end with it.
+	)
+	if err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	w.Lock()
+	w.subscription = sub
+	announcements := w.announcements
+	w.announcements = nil
+	w.Unlock()
+	// The room's consumer now holds its events, so the stream-wide
+	// announcements are no longer needed to keep them.
+	for _, announcement := range announcements {
+		_ = announcement.Ack()
+	}
+	return nil
 }
 
 // Start creates an ephemeral non-durable consumer on the roomserver
@@ -306,13 +362,16 @@ func (r *Inputer) Start() error {
 			r.ProcessContext.Do(func() {
 				roomID := m.Header.Get(jetstream.RoomID)
 				meta, _ := m.Metadata()
-				r.startWorkerForRoom(roomID, meta.Sequence.Stream)
-				_ = m.Ack()
+				r.startWorkerForRoom(roomID, meta.Sequence.Stream, m)
 			})
 		},
 		nats.HeadersOnly(),
 		nats.DeliverAll(),
 		nats.AckExplicit(),
+		// The room's worker acknowledges each announcement once the room's
+		// durable consumer exists, rather than as soon as this callback
+		// returns, so the input stream keeps the event until then.
+		nats.ManualAck(),
 		nats.ReplayInstant(),
 		nats.BindStream(r.InputRoomEventTopic),
 	)
@@ -386,6 +445,20 @@ func (w *worker) _next() {
 	w.sentryHub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetTag("room_id", w.roomID)
 	})
+	if w.subscription == nil {
+		if err := w.subscribe(w.r.ProcessContext.Context()); err != nil {
+			if w.r.ProcessContext.Context().Err() != nil {
+				return
+			}
+			logrus.WithError(err).WithField("room_id", w.roomID).Error("Failed to subscribe to the room's input consumer, retrying")
+			// The room has queued events, so try again now rather than when
+			// the room next sees activity, which may never happen.
+			if process.Sleep(w.r.ProcessContext.Context(), consumerSetupRetryDelay) {
+				w.notify()
+			}
+			return
+		}
+	}
 	msgs, err := jetstream.FetchOwned(ctx, w.subscription, 1, jetstream.OwnershipOf(w.r.JetStream))
 	switch {
 	case err == nil:
@@ -447,18 +520,27 @@ func (w *worker) _next() {
 		return
 	default:
 		// Something went wrong while trying to fetch the next event
-		// from the queue. In which case, we'll shut down the subscriber
-		// and wait to be notified about new room activity again. Maybe
-		// the problem will be corrected by then.
+		// from the queue. In which case, we'll shut down the subscriber.
 		// atomically clear the subscription and unsubscribe
 		w.Lock()
 
 		logrus.WithError(err).Errorf("Failed to get next stream message for room %q", w.roomID)
-		if err = w.subscription.Unsubscribe(); err != nil {
-			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
+		if uerr := w.subscription.Unsubscribe(); uerr != nil {
+			logrus.WithError(uerr).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
-		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.subscription = nil
+		// Events announced for this room are still queued: subscribe again
+		// shortly rather than wait for room activity that may never come.
+		if w.ephemeralSeq > w.durableSeq {
+			w.Unlock()
+			if process.Sleep(w.r.ProcessContext.Context(), consumerSetupRetryDelay) {
+				w.notify()
+			}
+			return
+		}
+		// Otherwise wait to be notified about new room activity again.
+		// Maybe the problem will be corrected by then.
+		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.Unlock()
 		return
 	}

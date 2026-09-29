@@ -22,6 +22,7 @@
 #   HACHAOS_PHASE      all (default), build, or run using already-built tools
 #   HACHAOS_ARTIFACTS  output directory (default .hachaos/artifacts/<timestamp>)
 #   HACHAOS_CONTAINER  1 to run inside a golang container via Docker
+#   HACHAOS_DOCKER_ARGS extra docker run arguments, e.g. --cpus=2 to reproduce a loaded CI host
 #   HACHAOS_TIMEOUT    go test timeout (default 60m)
 #   HACHAOS_KEEP       1 to keep the scenarios' data directories
 #   HACHAOS_TOOLS      downloaded tools and built binaries (default .hachaos/tools);
@@ -49,7 +50,9 @@ if [[ "${HACHAOS_CONTAINER:-}" == 1 ]]; then
   mkdir -p "$HACHAOS_ARTIFACTS"
   # Map the artifact directory to the same path inside the container so the
   # report's paths make sense on the host.
-  exec docker run --rm \
+  # Word splitting is intended: the value is a list of docker run options.
+  # shellcheck disable=SC2086
+  exec docker run --rm ${HACHAOS_DOCKER_ARGS:-} \
     -e HACHAOS_PHASE -e HACHAOS_TIER -e HACHAOS_SCENARIOS -e HACHAOS_GROUP -e HACHAOS_TIMEOUT -e HACHAOS_KEEP -e HACHAOS_TOOLS \
     -e HACHAOS_ARTIFACTS="$HACHAOS_ARTIFACTS" \
     -v "$ROOT:$ROOT" -w "$ROOT" \

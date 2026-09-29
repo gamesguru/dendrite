@@ -585,6 +585,8 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	w, err := startWorkload(ctx, e)
 	if err != nil {
 		r.failf("start workload: %v", err)
+		e.dumpGoroutines(ctx, "setup-failed")
+		saveScenario(e, &r, nil, started)
 		return r
 	}
 	defer w.halt()
@@ -639,11 +641,13 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 func saveScenario(e *environment, r *result, w *workload, started time.Time) {
 	r.Duration = time.Since(started)
 	r.Passed = len(r.Failures) == 0
-	sends, remoteSends, toDevice, receipts := w.snapshot()
-	body, err := json.MarshalIndent(map[string]any{
-		"result": r, "sends": sends, "remote_sends": remoteSends, "to_device": toDevice, "receipts": receipts, "syncs": w.syncTraces(),
-		"federation": e.fed.requests(), "media": e.s3.mutations(),
-	}, "", "  ")
+	saved := map[string]any{"result": r, "federation": e.fed.requests(), "media": e.s3.mutations()}
+	// A scenario that failed during setup has no workload yet.
+	if w != nil {
+		sends, remoteSends, toDevice, receipts := w.snapshot()
+		saved["sends"], saved["remote_sends"], saved["to_device"], saved["receipts"], saved["syncs"] = sends, remoteSends, toDevice, receipts, w.syncTraces()
+	}
+	body, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
 		return
 	}

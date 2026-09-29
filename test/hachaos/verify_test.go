@@ -4,7 +4,9 @@ package hachaos
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -715,6 +717,48 @@ func TestPDUPosition(t *testing.T) {
 	} {
 		if got := pduPosition(token); got != want {
 			t.Errorf("pduPosition(%q) = %d, want %d", token, got, want)
+		}
+	}
+}
+
+// TestRetryIgnoresHaltedAttempt covers a write in flight when the workload
+// stops: it is not a server failure, so it must not read as a disruption that
+// never recovered.
+func TestRetryIgnoresHaltedAttempt(t *testing.T) {
+	w := &workload{}
+	ctx, stop := context.WithCancelCause(t.Context())
+	rec := &sendRecord{}
+	w.retry(ctx, kindWrite, rec, func(attempt context.Context) error {
+		stop(errors.New("workload stopped"))
+		<-attempt.Done()
+		return attempt.Err()
+	})
+	if rec.Acked || rec.Attempts != 1 || rec.LastErr == "" {
+		t.Fatalf("halted write recorded as %+v", *rec)
+	}
+	if last, failed := w.lastFailureAfter(kindWrite, time.Time{}); failed {
+		t.Fatalf("a write aborted by the workload stopping counts as a failed attempt, ending %s", last)
+	}
+}
+
+// TestRecoveryIgnoresHaltedRequests covers the requests in flight when the
+// workload stops after a fault that failed nothing: they must not read as the
+// fault's first failure, which nothing after the halt could recover from.
+func TestRecoveryIgnoresHaltedRequests(t *testing.T) {
+	fault := time.Now()
+	w := &workload{}
+	w.record(kindWrite, fault, true)
+	w.record(kindSync, fault, true)
+	ctx, stop := context.WithCancelCause(t.Context())
+	stop(errors.New("workload stopped"))
+	w.retry(ctx, kindWrite, &sendRecord{}, func(context.Context) error { return context.Cause(ctx) })
+	c := &mxClient{base: "http://127.0.0.1:1", http: &http.Client{}, user: "@bob:test"}
+	if _, err := w.syncOnce(ctx, c, "s1", map[string]time.Time{}, true, time.Second); err == nil {
+		t.Fatal("a sync after the halt succeeded")
+	}
+	for _, kind := range []string{kindWrite, kindSync} {
+		if _, ok := recoveredAt(w.outcomes(kind), fault); !ok {
+			t.Errorf("%s: a request cut off by the halt hides the recovery", kind)
 		}
 	}
 }

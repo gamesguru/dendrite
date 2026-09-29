@@ -174,11 +174,13 @@ func newEnvironment(t *testing.T, ctx context.Context, s settings, name string) 
 		must(err, "allocate port")
 		sl.statusPort, err = freePort()
 		must(err, "allocate port")
+		sl.pprofPort, err = freePort()
+		must(err, "allocate port")
 		sl.config = filepath.Join(sl.dir, "zendrite.yaml")
 		body, err := haConfig(e, sl)
 		must(err, "render candidate configuration")
 		must(writeConfig(sl.config, body), "write candidate configuration")
-		sl.env = append(e.kube.candidateEnv(), "HTTPS_PROXY="+e.fed.proxyURL(), "GOTRACEBACK=all")
+		sl.env = append(e.kube.candidateEnv(), "HTTPS_PROXY="+e.fed.proxyURL(), "GOTRACEBACK=all", fmt.Sprintf("PPROFLISTEN=127.0.0.1:%d", sl.pprofPort))
 		e.slots = append(e.slots, sl)
 	}
 	e.router, err = startRouter(ctx, e.slots, tl)
@@ -213,6 +215,37 @@ func newEnvironment(t *testing.T, ctx context.Context, s settings, name string) 
 	must(waitFor(ctx, 2*time.Minute, func() error { return newClient(remote.httpURL()).versions(ctx) }), "remote homeserver did not start")
 	must(e.waitStandbys(ctx, 2*time.Minute), "standbys did not become healthy")
 	return e
+}
+
+// dumpGoroutines saves every running candidate's goroutines next to its log,
+// so a request that never answered can be traced to where the server waits.
+func (e *environment) dumpGoroutines(ctx context.Context, label string) {
+	for _, sl := range e.slots {
+		if sl.current() == nil {
+			continue
+		}
+		dumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		dump, err := sl.goroutines(dumpCtx)
+		cancel()
+		if err != nil {
+			e.timeline.add(eventNote, sl.name, "goroutine dump %s failed: %v", label, err)
+			continue
+		}
+		name := fmt.Sprintf("goroutines-%s-%s.txt", label, sl.name)
+		if err = os.WriteFile(filepath.Join(e.logs, name), dump, 0o644); err != nil {
+			e.timeline.add(eventNote, sl.name, "goroutine dump %s failed: %v", label, err)
+			continue
+		}
+		e.timeline.add(eventNote, sl.name, "goroutines saved to %s", name)
+	}
+}
+
+// watchSetup dumps the candidates' goroutines if a setup step is still
+// waiting after half the client's request timeout, while the request hangs.
+// The returned function stops the watch.
+func (e *environment) watchSetup(ctx context.Context, label string) func() {
+	timer := time.AfterFunc(30*time.Second, func() { e.dumpGoroutines(ctx, label) })
+	return func() { timer.Stop() }
 }
 
 // waitActive waits until the router has an active backend that answers a

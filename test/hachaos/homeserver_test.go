@@ -5,7 +5,9 @@ package hachaos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,10 +48,13 @@ type slot struct {
 	config     string
 	httpPort   int
 	statusPort int
-	env        []string
-	logs       string
-	owners     *owners
-	timeline   *timeline
+	// pprofPort serves the candidate's goroutine dumps, so a request that
+	// hangs can be traced to where the server waits.
+	pprofPort int
+	env       []string
+	logs      string
+	owners    *owners
+	timeline  *timeline
 
 	mu        sync.Mutex
 	bin       string
@@ -63,6 +68,26 @@ type slot struct {
 
 func (s *slot) httpURL() string   { return fmt.Sprintf("http://127.0.0.1:%d", s.httpPort) }
 func (s *slot) statusURL() string { return fmt.Sprintf("http://127.0.0.1:%d", s.statusPort) }
+
+// goroutines returns the running candidate's goroutine dump.
+func (s *slot) goroutines(ctx context.Context) ([]byte, error) {
+	if s.pprofPort == 0 {
+		return nil, errors.New("no pprof listener")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/debug/pprof/goroutine?debug=2", s.pprofPort), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
 
 func (s *slot) current() *process {
 	s.mu.Lock()
