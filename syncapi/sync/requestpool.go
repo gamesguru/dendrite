@@ -590,9 +590,21 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			// - Some sytests which test 'waking up' sync rely on some sync requests to block, which
 			//   they weren't always doing, resulting in flakey tests.
 			if !syncReq.Response.HasUpdates() && syncReq.Context.Err() == nil {
-				syncReq.Since = currentPos
+				// Carry on from what this pass covered, not from currentPos. A
+				// stream that could not be read, e.g. because the database was
+				// unavailable during a failover, reports the position it
+				// started from; moving its token on to currentPos would tell
+				// the client it has seen events it was never sent.
+				covered := syncReq.Response.NextBatch
+				stalled := covered == syncReq.Since
+				syncReq.Since = covered
 				// do not loop again if the ?timeout= is 0 as that means "return immediately"
 				if syncReq.Timeout > 0 {
+					// A pass that read nothing although there is something to
+					// read failed; wait before asking the database again.
+					if stalled && !waitBeforeRetry(syncReq.Context, min(failedPassRetryDelay, syncReq.Timeout-time.Since(startTime))) {
+						return giveupAfterFailure(syncReq)
+					}
 					syncReq.Timeout -= time.Since(startTime)
 					if syncReq.Timeout < 0 {
 						syncReq.Timeout = 0
@@ -678,6 +690,34 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 // shouldReturnImmediately returns whether the /sync request is an initial sync,
 // or timeout=0, or full_state=true, in any of the cases the request should
 // return immediately.
+// FailedPassRetryDelay is how long a long-polling sync waits before trying a
+// pass again that could not read anything, such as while the database fails
+// over, instead of spinning on it for the rest of its timeout.
+const failedPassRetryDelay = 250 * time.Millisecond
+
+// waitBeforeRetry waits for d, or less if the client goes away first, in
+// which case it reports false.
+func waitBeforeRetry(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// giveupAfterFailure answers a sync whose client went away while it waited
+// to retry a failed pass. The since token is unchanged, so nothing is skipped.
+func giveupAfterFailure(syncReq *types.SyncRequest) util.JSONResponse {
+	syncReq.Response.NextBatch = syncReq.Since
+	return util.JSONResponse{Code: http.StatusOK, JSON: syncReq.Response}
+}
+
 func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, currentPos types.StreamingToken) bool {
 	if currentPos.IsAfter(syncReq.Since) || syncReq.Timeout == 0 || syncReq.WantFullState {
 		return true

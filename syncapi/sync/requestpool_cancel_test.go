@@ -178,3 +178,50 @@ func TestSyncRequestReportsRealSnapshotFailures(t *testing.T) {
 		t.Errorf("expected %d error entries, got %d", db.snapshotCount(), got)
 	}
 }
+
+// otkUserAPI answers the one-time key count query a finished long poll makes.
+type otkUserAPI struct {
+	userapi.SyncUserAPI
+}
+
+func (otkUserAPI) QueryOneTimeKeys(context.Context, *userapi.QueryOneTimeKeysRequest, *userapi.QueryOneTimeKeysResponse) error {
+	return nil
+}
+
+// A long-polling sync whose pass cannot read the database, as during a
+// PostgreSQL failover, must not hand the client a token past what it read.
+// Treating the empty, failed pass like a quiet one moved the client's since
+// token to the notifier's current position, and the events at the positions
+// in between were never sent (issue #416).
+func TestSyncRequestDoesNotSkipPositionsItCouldNotRead(t *testing.T) {
+	device := &userapi.Device{UserID: "@alice:localhost", ID: "05LqQkIj"}
+	logrustest.NewGlobal()
+
+	db := &snapshotCountingDB{err: errBrokenDatabase}
+	rp := newCancellationTestPool(db, device)
+	rp.userAPI = otkUserAPI{}
+	since, err := types.NewStreamTokenFromString(nonEmptySinceToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An event was written at a position after the client's token.
+	current := since
+	current.PDUPosition = since.PDUPosition + 1
+	rp.Notifier.SetCurrentPosition(current)
+
+	req := httptest.NewRequest("GET", "/_matrix/client/v3/sync?timeout=1000&since="+since.String(), nil)
+	res := rp.OnIncomingSyncRequest(req, device)
+	if res.Code != 200 {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+	resp, ok := res.JSON.(*types.Response)
+	if !ok {
+		t.Fatalf("unexpected response body %T", res.JSON)
+	}
+	if resp.NextBatch.PDUPosition != since.PDUPosition {
+		t.Errorf("next_batch moved the PDU position from %d to %d without reading it", since.PDUPosition, resp.NextBatch.PDUPosition)
+	}
+	if got := db.snapshotCount(); got < 2 {
+		t.Errorf("expected the sync to retry the failed read, got %d snapshot attempts", got)
+	}
+}
