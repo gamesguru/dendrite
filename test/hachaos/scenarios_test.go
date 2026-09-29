@@ -641,7 +641,7 @@ func saveScenario(e *environment, r *result, w *workload, started time.Time) {
 	r.Passed = len(r.Failures) == 0
 	sends, remoteSends, toDevice, receipts := w.snapshot()
 	body, err := json.MarshalIndent(map[string]any{
-		"result": r, "sends": sends, "remote_sends": remoteSends, "to_device": toDevice, "receipts": receipts,
+		"result": r, "sends": sends, "remote_sends": remoteSends, "to_device": toDevice, "receipts": receipts, "syncs": w.syncTraces(),
 		"federation": e.fed.requests(), "media": e.s3.mutations(),
 	}, "", "  ")
 	if err != nil {

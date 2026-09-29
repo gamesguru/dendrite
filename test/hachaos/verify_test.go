@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -242,7 +243,7 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 
 	// Every acknowledged local write reaches a syncing client that kept its
 	// token across takeover, and the remote server's syncing client.
-	awaitAll(ctx, r, settle, "acknowledged write delivered to /sync with an existing token", func() []string {
+	missingSync := awaitAll(ctx, r, settle, "acknowledged write delivered to /sync with an existing token", func() []string {
 		w.catchUp(ctx)
 		w.mu.Lock()
 		defer w.mu.Unlock()
@@ -256,6 +257,13 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 		}
 		return missing
 	})
+	for _, txn := range missingSync[:min(len(missingSync), 3)] {
+		for _, s := range sends {
+			if s.Txn == txn {
+				_ = os.WriteFile(filepath.Join(e.logs, "missing-sync-"+txn+".txt"), []byte(diagnoseSync(ctx, w, e, s)), 0o644)
+			}
+		}
+	}
 	awaitAll(ctx, r, settle, "acknowledged write delivered over federation to the remote server", func() []string {
 		w.catchUp(ctx)
 		w.mu.Lock()
@@ -315,7 +323,7 @@ func spansTakeover(s sendRecord, acquisitions []time.Time) bool {
 
 // awaitAll waits until check reports nothing missing, and fails with a
 // sample of what is still missing otherwise.
-func awaitAll(ctx context.Context, r *result, timeout time.Duration, what string, check func() []string) {
+func awaitAll(ctx context.Context, r *result, timeout time.Duration, what string, check func() []string) []string {
 	var missing []string
 	_ = waitFor(ctx, timeout, func() error {
 		missing = check()
@@ -331,6 +339,64 @@ func awaitAll(ctx context.Context, r *result, timeout time.Duration, what string
 		}
 		r.failf("%d not %s within %s, e.g. %s", len(missing), what, timeout, strings.Join(sample, ", "))
 	}
+	return missing
+}
+
+// diagnoseSync shows where the sync API stored a write that a syncing client
+// never received, and the client's /sync requests around it. The request
+// whose token range spans the event's position, without returning it, is the
+// one that skipped it.
+func diagnoseSync(ctx context.Context, w *workload, e *environment, s sendRecord) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "write %s, event %s, first attempt %s, acknowledged %s\n", s.Txn, s.EventID,
+		s.First.Format(time.RFC3339Nano), s.AckedAt.Format(time.RFC3339Nano))
+	pos, committed, err := e.pg.syncPosition(ctx, s.EventID)
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "sync API position: unknown: %v\n", err)
+	case pos < 0:
+		fmt.Fprintf(&b, "sync API position: not stored; database: %s\n", e.pg.whereIs(ctx, s.EventID))
+	default:
+		fmt.Fprintf(&b, "sync API position %d, committed %v\n", pos, fmtTime(committed))
+	}
+	b.WriteString("\n/sync requests by " + w.bob.user + " (start, end, since PDU, next_batch PDU, limited, events; > spans the position, * returned the event):\n")
+	for _, t := range w.syncTraces() {
+		if t.User != w.bob.user {
+			continue
+		}
+		from, to := pduPosition(t.Since), pduPosition(t.NextBatch)
+		spans := pos >= 0 && from < pos && pos <= to
+		near := t.End.After(s.First.Add(-30*time.Second)) && t.Start.Before(s.AckedAt.Add(30*time.Second))
+		if !spans && !near {
+			continue
+		}
+		marker := " "
+		if spans {
+			marker = ">"
+		}
+		if slices.Contains(t.Events, s.EventID) {
+			marker += "*"
+		}
+		fmt.Fprintf(&b, "%-2s %s %s %d %d %t %d\n", marker, t.Start.Format("15:04:05.000"), t.End.Format("15:04:05.000"), from, to, t.Limited, len(t.Events))
+	}
+	return b.String()
+}
+
+// pduPosition reads the PDU stream position from a sync token, "s<pdu>_...".
+func pduPosition(token string) int64 {
+	first, _, _ := strings.Cut(strings.TrimPrefix(token, "s"), "_")
+	pos, err := strconv.ParseInt(first, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return pos
+}
+
+func fmtTime(t *time.Time) string {
+	if t == nil {
+		return "unknown"
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 // verifyReceipt checks that the newest acknowledged read receipt, or one sent
@@ -637,5 +703,18 @@ func TestNewestReceipts(t *testing.T) {
 				t.Fatalf("newestReceipts() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPDUPosition(t *testing.T) {
+	for token, want := range map[string]int64{
+		"s37_0_5_4_0_2_0_74_0":     37,
+		"s125_0_45_42_0_2_0_173_0": 125,
+		"":                         0,
+		"t12-34":                   0,
+	} {
+		if got := pduPosition(token); got != want {
+			t.Errorf("pduPosition(%q) = %d, want %d", token, got, want)
+		}
 	}
 }

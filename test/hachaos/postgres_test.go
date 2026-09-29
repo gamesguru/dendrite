@@ -600,6 +600,22 @@ func (c *pgCluster) receiptState(ctx context.Context, room, user string, events 
 	return b.String()
 }
 
+// syncPosition reports the sync API stream position an event was stored at
+// and when that write committed, or -1 when the sync API has not stored it.
+func (c *pgCluster) syncPosition(ctx context.Context, eventID string) (int64, *time.Time, error) {
+	pos := int64(-1)
+	var committed *time.Time
+	err := c.query(ctx, func(conn *pgx.Conn) error {
+		err := conn.QueryRow(ctx, "SELECT id, pg_xact_commit_timestamp(xmin) FROM syncapi_output_room_events WHERE event_id = $1", eventID).
+			Scan(&pos, &committed)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	return pos, committed, err
+}
+
 func deref[T any](v *T) any {
 	if v == nil {
 		return nil

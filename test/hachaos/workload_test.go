@@ -39,6 +39,7 @@ type workload struct {
 	remoteSeen   map[string]time.Time
 	toDeviceSeen map[string]time.Time
 	syncFailures []string
+	syncs        []syncTrace
 	lastBobEvent string
 	serial       int
 	// since is each syncing client's last token once its syncer stops.
@@ -321,8 +322,41 @@ func (w *workload) syncOnce(ctx context.Context, c *mxClient, since string, seen
 		return since, err
 	}
 	w.observe(resp, since, c, seen, local)
+	w.trace(c, since, resp, start)
 	w.fillGaps(ctx)
 	return resp.NextBatch, nil
+}
+
+// syncTrace is one /sync response a workload client received. A write that
+// never reaches a syncing client is matched against these to find the
+// request whose token moved past it.
+type syncTrace struct {
+	User      string    `json:"user"`
+	Since     string    `json:"since"`
+	NextBatch string    `json:"next_batch"`
+	Start     time.Time `json:"start"`
+	End       time.Time `json:"end"`
+	Limited   bool      `json:"limited,omitempty"`
+	Events    []string  `json:"events,omitempty"`
+}
+
+func (w *workload) trace(c *mxClient, since string, resp *syncResponse, start time.Time) {
+	t := syncTrace{User: c.user, Since: since, NextBatch: resp.NextBatch, Start: start, End: time.Now()}
+	if joined, ok := resp.Rooms.Join[w.room]; ok {
+		t.Limited = joined.Timeline.Limited
+		for _, ev := range joined.Timeline.Events {
+			t.Events = append(t.Events, ev.EventID)
+		}
+	}
+	w.mu.Lock()
+	w.syncs = append(w.syncs, t)
+	w.mu.Unlock()
+}
+
+func (w *workload) syncTraces() []syncTrace {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]syncTrace(nil), w.syncs...)
 }
 
 // fillGaps pages back from each limited timeline's prev_batch until it
