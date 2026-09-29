@@ -18,13 +18,14 @@
 #                      full: every scenario with the reference timings
 #                      reference: full, seeded with the ADR reference workload
 #   HACHAOS_SCENARIOS  comma-separated scenario names to run (default: the tier's set)
-#   HACHAOS_GROUP      crash, partition, dependency or lifecycle: one CI matrix group
+#   HACHAOS_GROUP      crash, partition, dependency or lifecycle: one CI group
+#   HACHAOS_PHASE      all (default), build, or run using already-built tools
 #   HACHAOS_ARTIFACTS  output directory (default .hachaos/artifacts/<timestamp>)
 #   HACHAOS_CONTAINER  1 to run inside a golang container via Docker
 #   HACHAOS_TIMEOUT    go test timeout (default 60m)
 #   HACHAOS_KEEP       1 to keep the scenarios' data directories
 #   HACHAOS_TOOLS      downloaded tools and built binaries (default .hachaos/tools);
-#                      give concurrent runs separate directories inside the repository
+#                      use separate directories for concurrent builds, or share read-only in run phase
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,7 +40,7 @@ declare -A ENVTEST_SHA512=(
 
 export HACHAOS_TIER="${HACHAOS_TIER:-ci}"
 HACHAOS_ARTIFACTS="${HACHAOS_ARTIFACTS:-$ROOT/.hachaos/artifacts/$(date -u +%Y%m%dT%H%M%SZ)-$HACHAOS_TIER}"
-# go test runs in the package directory, so a relative path would land there.
+# Child processes need absolute paths independent of their working directory.
 mkdir -p "$HACHAOS_ARTIFACTS"
 HACHAOS_ARTIFACTS="$(cd "$HACHAOS_ARTIFACTS" && pwd)"
 export HACHAOS_ARTIFACTS
@@ -49,7 +50,7 @@ if [[ "${HACHAOS_CONTAINER:-}" == 1 ]]; then
   # Map the artifact directory to the same path inside the container so the
   # report's paths make sense on the host.
   exec docker run --rm \
-    -e HACHAOS_TIER -e HACHAOS_SCENARIOS -e HACHAOS_GROUP -e HACHAOS_TIMEOUT -e HACHAOS_KEEP -e HACHAOS_TOOLS \
+    -e HACHAOS_PHASE -e HACHAOS_TIER -e HACHAOS_SCENARIOS -e HACHAOS_GROUP -e HACHAOS_TIMEOUT -e HACHAOS_KEEP -e HACHAOS_TOOLS \
     -e HACHAOS_ARTIFACTS="$HACHAOS_ARTIFACTS" \
     -v "$ROOT:$ROOT" -w "$ROOT" \
     -v "$HACHAOS_ARTIFACTS:$HACHAOS_ARTIFACTS" \
@@ -60,7 +61,59 @@ fi
 mkdir -p "$HACHAOS_ARTIFACTS"
 TOOLS="${HACHAOS_TOOLS:-$ROOT/.hachaos/tools}"
 mkdir -p "$TOOLS"
+TOOLS="$(cd "$TOOLS" && pwd)"
 
+phase="${HACHAOS_PHASE:-all}"
+case "$phase" in
+  all|build|run) ;;
+  *) echo "Unknown HACHAOS_PHASE: $phase (expected all, build or run)" >&2; exit 1 ;;
+esac
+
+# Runtime steps need no Go toolchain or module cache.
+case "$(uname -m)" in
+  x86_64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+assets="$TOOLS/envtest-$ENVTEST_VERSION-$arch"
+bin="$TOOLS/bin"
+if [[ "$phase" != run ]]; then
+  started=$SECONDS
+  # etcd and kube-apiserver from the pinned envtest release.
+  if [[ ! -x "$assets/kube-apiserver" ]]; then
+    archive="$TOOLS/envtest-$ENVTEST_VERSION-$arch.tar.gz"
+    curl -fsSL -o "$archive" "https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v$ENVTEST_VERSION/envtest-v$ENVTEST_VERSION-linux-$arch.tar.gz"
+    echo "${ENVTEST_SHA512[$arch]}  $archive" | sha512sum -c - >/dev/null
+    mkdir -p "$assets"
+    tar -xzf "$archive" -C "$assets" --strip-components=2
+    rm -f "$archive"
+  fi
+  echo "HA qualification: control-plane tools ready in $((SECONDS - started))s"
+
+  # Build once for all groups, including the harness's NATS and S3 roles.
+  # The upgrade binary differs only in its version string; candidates pin
+  # the exact executable for the compatibility check.
+  started=$SECONDS
+  mkdir -p "$bin"
+  go build -tags goolm -trimpath -buildvcs=false -o "$bin/zendrite" ./cmd/zendrite
+  go build -tags goolm -trimpath -buildvcs=false -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=hachaos-next" -o "$bin/zendrite-next" ./cmd/zendrite
+  go test -c -tags goolm -trimpath -buildvcs=false -o "$bin/hachaos.test" ./test/hachaos/
+  echo "HA qualification: binaries built in $((SECONDS - started))s"
+fi
+[[ "$phase" != build ]] || exit 0
+
+# Fail explicitly if the build step did not supply a complete tool set.
+for executable in "$assets/kube-apiserver" "$assets/etcd" "$bin/zendrite" "$bin/zendrite-next" "$bin/hachaos.test"; do
+  if [[ ! -x "$executable" ]]; then
+    echo "Missing $executable; run HACHAOS_PHASE=build first" >&2
+    exit 1
+  fi
+done
+export HACHAOS_KUBE_ASSETS="$assets"
+export HACHAOS_ZENDRITE="$bin/zendrite"
+export HACHAOS_ZENDRITE_NEXT="$bin/zendrite-next"
+
+started=$SECONDS
 # PostgreSQL server binaries. Package scripts must not start a cluster of
 # their own: the harness runs its own primary and standby.
 if [[ -z "${HACHAOS_PG_BIN:-}" ]] && ! compgen -G "/usr/lib/postgresql/*/bin/pg_ctl" >/dev/null; then
@@ -76,39 +129,20 @@ if [[ -z "${HACHAOS_PG_BIN:-}" ]] && ! compgen -G "/usr/lib/postgresql/*/bin/pg_
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends postgresql >/dev/null
 fi
 
-# etcd and kube-apiserver from the pinned envtest release.
-arch="$(go env GOARCH)"
-assets="$TOOLS/envtest-$ENVTEST_VERSION-$arch"
-if [[ ! -x "$assets/kube-apiserver" ]]; then
-  archive="$TOOLS/envtest-$ENVTEST_VERSION-$arch.tar.gz"
-  curl -fsSL -o "$archive" "https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v$ENVTEST_VERSION/envtest-v$ENVTEST_VERSION-linux-$arch.tar.gz"
-  echo "${ENVTEST_SHA512[$arch]}  $archive" | sha512sum -c - >/dev/null
-  mkdir -p "$assets"
-  tar -xzf "$archive" -C "$assets" --strip-components=2
-  rm -f "$archive"
-fi
-export HACHAOS_KUBE_ASSETS="$assets"
-
-# The binary under test, and a second build that differs only in its version
-# string. Candidates pin the exact executable, so the second build is what an
-# upgraded deployment looks like to the compatibility check.
-bin="$TOOLS/bin"
-mkdir -p "$bin"
-go build -tags goolm -trimpath -buildvcs=false -o "$bin/zendrite" ./cmd/zendrite
-go build -tags goolm -trimpath -buildvcs=false -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=hachaos-next" -o "$bin/zendrite-next" ./cmd/zendrite
-export HACHAOS_ZENDRITE="$bin/zendrite"
-export HACHAOS_ZENDRITE_NEXT="$bin/zendrite-next"
+echo "HA qualification: PostgreSQL tools ready in $((SECONDS - started))s"
 
 echo "HA qualification: tier $HACHAOS_TIER, artifacts in $HACHAOS_ARTIFACTS"
 status=0
-go test -tags goolm -count=1 -timeout "${HACHAOS_TIMEOUT:-60m}" -v -run "${1:-.}" ./test/hachaos/ 2>&1 | tee "$HACHAOS_ARTIFACTS/go-test.log" || status=$?
+"$bin/hachaos.test" -test.count=1 -test.timeout "${HACHAOS_TIMEOUT:-60m}" -test.v -test.run "${1:-.}" 2>&1 | tee "$HACHAOS_ARTIFACTS/go-test.log" || status=$?
 if [[ -f "$HACHAOS_ARTIFACTS/report.md" ]]; then
   cat "$HACHAOS_ARTIFACTS/report.md"
 fi
 # Pull request runs keep only the step log, so show enough of every failed
 # scenario to start investigating without its artifacts.
 for result in "$HACHAOS_ARTIFACTS"/*/result.json; do
-  [[ -f "$result" ]] && grep -q '"passed": false' "$result" || continue
+  if [[ ! -f "$result" ]] || ! grep -q '"passed": false' "$result"; then
+    continue
+  fi
   dir="$(dirname "$result")"
   echo "==== $(basename "$dir"): timeline"
   grep -E '"kind":"(fault|process|router)"' "$dir/timeline.jsonl" | tail -n 60 || true

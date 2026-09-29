@@ -96,6 +96,10 @@ HACHAOS_CONTAINER=1 HACHAOS_SCENARIOS=leader-sigkill build/scripts/ha-qualificat
 Each run writes `report.md`, `results.json` and, per scenario, every process log, a timeline of faults and phase changes, and the client ledger to `.hachaos/artifacts`.
 
 CI runs the `ci` tier on changes to HA code, split into four parallel groups, in `.crow/ha-qualification.yaml`.
+A shared build step downloads the control-plane tools and compiles Zendrite, the upgrade binary and the test harness once; the groups then run in separate containers against those binaries.
+`HACHAOS_PHASE=build` prepares the shared tools, and `HACHAOS_PHASE=run` runs them without compiling or downloading Go modules.
+The default `all` phase performs both steps for local runs.
+The script logs tool preparation and build durations, and the test harness reports each scenario duration.
 Manual runs and the `ha-qualification` cron can select the `full` or `reference` tier with `HACHAOS_TIER` and publish their artifacts to the package registry.
 
 ## Limitations

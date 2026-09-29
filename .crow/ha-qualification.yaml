@@ -39,31 +39,66 @@ when:
   - event: cron
     cron: ha-qualification
 
-# Each group runs in its own workflow and container, in parallel, so every
-# group stays within the repository's pipeline timeout at the full tier.
-matrix:
-  GROUP:
-    - crash
-    - partition
-    - dependency
-    - lifecycle
-
+# Build once in the shared workspace, then run each group in its own
+# container. Parallel groups only read the tools and write separate artifacts.
 labels:
   platform: linux/amd64
 
 steps:
-  qualification:
+  build:
     image: docker.io/library/golang:1.27-trixie
     environment:
+      HACHAOS_PHASE: build
+    commands:
+      - bash build/scripts/ha-qualification.sh
+
+  crash:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
       HACHAOS_TIER: ${HACHAOS_TIER:-ci}
-      HACHAOS_GROUP: ${GROUP}
-      HACHAOS_ARTIFACTS: .hachaos/artifacts/${GROUP}
+      HACHAOS_GROUP: crash
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/crash
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  partition:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: partition
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/partition
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  dependency:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: dependency
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/dependency
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  lifecycle:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: lifecycle
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/lifecycle
     commands:
       - bash build/scripts/ha-qualification.sh TestQualification
 
   publish-evidence:
     image: docker.io/library/alpine:3.24
-    depends_on: [qualification]
+    depends_on: [crash, partition, dependency, lifecycle]
     when:
       - event: [manual, cron]
         status: [success, failure]
@@ -72,7 +107,11 @@ steps:
         from_secret: ha_evidence_token
     commands:
       - apk add --no-cache curl >/dev/null
-      - tar -czf evidence.tar.gz -C .hachaos/artifacts ${GROUP}
-      - >-
-        curl --fail -sS -H "Authorization: token $TOKEN" --upload-file evidence.tar.gz
-        "https://codefloe.com/api/packages/pat-s/generic/zendrite-ha-evidence/${CI_PIPELINE_NUMBER}/${GROUP}.tar.gz"
+      - |
+        status=0
+        for group in crash partition dependency lifecycle; do
+          tar -czf "evidence-$$group.tar.gz" -C .hachaos/artifacts "$$group" || { status=1; continue; }
+          curl --fail -sS -H "Authorization: token $TOKEN" --upload-file "evidence-$$group.tar.gz" \
+            "https://codefloe.com/api/packages/pat-s/generic/zendrite-ha-evidence/${CI_PIPELINE_NUMBER}/$$group.tar.gz" || status=1
+        done
+        exit "$$status"
