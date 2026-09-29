@@ -2,6 +2,9 @@
 # Wire the commit-msg stage so `pre-commit install` also installs the
 # commitlint hook (which validates the commit title, not the staged files).
 default_install_hook_types: [pre-commit, commit-msg]
+# Hooks without their own stages run on staged files only; otherwise the
+# commit-msg stage hands them the commit message file, which prettier rejects.
+default_stages: [pre-commit]
 repos:
   - repo: meta
     hooks:
