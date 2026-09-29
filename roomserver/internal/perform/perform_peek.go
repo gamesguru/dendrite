@@ -114,20 +114,17 @@ func (r *Peeker) performPeekRoomByID(
 ) (roomID string, err error) {
 	roomID = req.RoomIDOrAlias
 
-	// Get the domain part of the room ID.
 	specRoomID, err := spec.NewRoomID(roomID)
 	if err != nil {
 		return "", api.ErrInvalidID{Err: fmt.Errorf("room ID %q is invalid: %w", roomID, err)}
 	}
-	domain := specRoomID.Domain()
+	federate, err := r.needsFederatedPeek(ctx, req, *specRoomID)
+	if err != nil {
+		return "", err
+	}
 	// handle federated peeks
 	// FIXME: don't create an outbound peek if we already have one going.
-	if !r.Cfg.Matrix.IsLocalServerName(domain) {
-		// If the server name in the room ID isn't ours then it's a
-		// possible candidate for finding the room via federation. Add
-		// it to the list of servers to try.
-		req.ServerNames = append(req.ServerNames, domain)
-
+	if federate {
 		// Try peeking by all of the supplied server names.
 		fedReq := fsAPI.PerformOutboundPeekRequest{
 			RoomID:      req.RoomIDOrAlias, // the room ID to try and peek
@@ -185,4 +182,51 @@ func (r *Peeker) performPeekRoomByID(
 	// We should now include this in the response so that the CS API can
 	// return the right room ID.
 	return roomID, nil
+}
+
+// needsFederatedPeek works out whether the room must be peeked over federation,
+// adding the servers to peek via to req.ServerNames.
+//
+// Before room version 12 a room ID names a server that knows the room, and a
+// room named by another server is always peeked over federation. From room
+// version 12 the room ID names no server: a room this server is joined to is
+// peeked locally, and any other room needs server names from the request. A
+// room that is neither known locally nor given server names cannot be peeked.
+func (r *Peeker) needsFederatedPeek(ctx context.Context, req *api.PerformPeekRequest, roomID spec.RoomID) (bool, error) {
+	// Never ask this server to peek into a room over federation.
+	servers := req.ServerNames[:0]
+	for _, serverName := range req.ServerNames {
+		if !r.Cfg.Matrix.IsLocalServerName(serverName) {
+			servers = append(servers, serverName)
+		}
+	}
+	req.ServerNames = servers
+
+	if domain := roomIDDomain(roomID); domain != "" {
+		if r.Cfg.Matrix.IsLocalServerName(domain) {
+			return false, nil
+		}
+		req.ServerNames = append(req.ServerNames, domain)
+		return true, nil
+	}
+
+	info, err := r.DB.RoomInfo(ctx, roomID.String())
+	if err != nil {
+		return false, fmt.Errorf("r.DB.RoomInfo: %w", err)
+	}
+	known := info != nil && !info.IsStub()
+	joined := false
+	if known {
+		if joined, err = r.DB.GetLocalServerInRoom(ctx, info.RoomNID); err != nil {
+			return false, fmt.Errorf("r.DB.GetLocalServerInRoom: %w", err)
+		}
+	}
+	switch {
+	case !joined && len(req.ServerNames) > 0:
+		return true, nil
+	case !known:
+		return false, api.ErrInvalidID{Err: fmt.Errorf("room %q is unknown to this server; give a server_name to peek via", roomID.String())}
+	default:
+		return false, nil
+	}
 }

@@ -46,6 +46,8 @@ type workload struct {
 	// gaps are limited timelines still to be filled from prev_batch.
 	gaps     []gap
 	gapFills int
+	// msc is the MSC probe, when MSCs are enabled.
+	msc *mscProbe
 }
 
 // gap is a limited sync timeline, which a client fills by paging back from
@@ -134,6 +136,12 @@ func startWorkload(ctx context.Context, e *environment) (*workload, error) {
 	w.run(func() { w.syncer(running, w.remote, remoteSince, w.remoteSeen, false) })
 	w.run(func() { w.toDeviceSender(running) })
 	w.run(func() { w.receiptSender(running) })
+	if len(e.settings.mscs) > 0 {
+		if w.msc, err = startMSCProbe(ctx, w); err != nil {
+			w.halt()
+			return nil, fmt.Errorf("start the MSC probe: %w", err)
+		}
+	}
 	return w, nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/consumers"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/roomserver/version"
@@ -337,11 +338,12 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	}
 	request.ServerNames = uniqueList
 
-	// See if there's an existing outbound peek for this room ID with
-	// one of the specified servers.
+	// See if there's a live outbound peek for this room ID with one of the
+	// specified servers. An expired one is renewed through its server below.
 	if peeks, err := r.db.GetOutboundPeeks(ctx, request.RoomID); err == nil {
+		now := spec.AsTimestamp(time.Now())
 		for _, peek := range peeks {
-			if _, ok := seenSet[peek.ServerName]; ok {
+			if _, ok := seenSet[peek.ServerName]; ok && !outboundPeekExpired(peek, now) {
 				return nil
 			}
 		}
@@ -370,17 +372,10 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	}
 
 	// If we reach here then we didn't complete a peek for some reason.
-	var httpErr gomatrix.HTTPError
-	if ok := errors.As(lastErr, &httpErr); ok {
-		httpErr.Message = string(httpErr.Contents)
-		response.LastError = &httpErr
-	} else {
-		response.LastError = &gomatrix.HTTPError{
-			Code:         0,
-			WrappedError: nil,
-			Message:      lastErr.Error(),
-		}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no servers to peek into room %q via", request.RoomID)
 	}
+	response.LastError = federationHTTPError(lastErr)
 
 	logrus.Errorf(
 		"failed to peek room %q through %d server(s): last error %s",
@@ -388,6 +383,11 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	)
 
 	return lastErr
+}
+
+// outboundPeekExpired reports whether the peek must be renewed at now.
+func outboundPeekExpired(peek federationTypes.OutboundPeek, now spec.Timestamp) bool {
+	return int64(now) > peek.RenewedTimestamp+peek.RenewalInterval
 }
 
 func (r *FederationInternalAPI) performOutboundPeekUsingServer(
@@ -415,8 +415,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	}
 	renewing := false
 	if outboundPeek != nil {
-		nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
-		if nowMilli > outboundPeek.RenewedTimestamp+outboundPeek.RenewalInterval {
+		if outboundPeekExpired(*outboundPeek, spec.AsTimestamp(time.Now())) {
 			logrus.Infof("stale outbound peek to %s for %s already exists; renewing", serverName, roomID)
 			renewing = true
 		} else {

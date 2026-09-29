@@ -129,10 +129,9 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	if err := processCtx.Context().Err(); err != nil {
 		return err
 	}
-	if len(cfg.MSCs.MSCs) > 0 {
-		if err := mscs.Enable(cfg, cm, routers, &monolith, caches); err != nil {
-			return fmt.Errorf("enable MSCs: %w", err)
-		}
+	// Enable runs even without MSCs, to clean up after disabled ones.
+	if err := mscs.Enable(processCtx, cfg, cm, &natsInstance, routers, &monolith, caches); err != nil {
+		return fmt.Errorf("enable MSCs: %w", err)
 	}
 
 	if err := processCtx.Context().Err(); err != nil {

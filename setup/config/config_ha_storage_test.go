@@ -39,6 +39,26 @@ func TestHAStorageValidation(t *testing.T) {
 		{"local search", func(c *Zendrite) { c.SyncAPI.Fulltext.Enabled = true }, true},
 		{"rebuild search", func(c *Zendrite) { c.SyncAPI.Fulltext.Enabled = true; c.SyncAPI.Fulltext.RebuildOnStartup = true }, false},
 		{"experimental", func(c *Zendrite) { c.MSCs.MSCs = []string{"msc-test"} }, true},
+		{"qualified MSCs", func(c *Zendrite) { c.MSCs.MSCs = []string{"msc2836", "msc2444", "msc2753"} }, false},
+		{"unqualified MSC", func(c *Zendrite) { c.MSCs.MSCs = []string{"msc2836", "msc3861"} }, true},
+		{"dehydrated devices", func(c *Zendrite) { c.MSCs.MSCs = []string{"msc3814"} }, true},
+		{"MSC name that enables nothing", func(c *Zendrite) { c.MSCs.MSCs = []string{"MSC2836"} }, true},
+		{"MSC database is global", func(c *Zendrite) {
+			c.MSCs.MSCs = []string{"msc2836"}
+			c.MSCs.Database.ConnectionString = c.Global.DatabaseOptions.ConnectionString
+		}, false},
+		{"MSC database sqlite", func(c *Zendrite) {
+			c.MSCs.MSCs = []string{"msc2836"}
+			c.MSCs.Database.ConnectionString = "file:mscs.db"
+		}, true},
+		{"MSC database override", func(c *Zendrite) {
+			c.MSCs.MSCs = []string{"msc2836"}
+			c.MSCs.Database.ConnectionString = "postgres://other/matrix"
+		}, true},
+		{"unused MSC database", func(c *Zendrite) {
+			c.MSCs.MSCs = []string{"msc2444", "msc2753"}
+			c.MSCs.Database.ConnectionString = "file:mscs.db"
+		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := haStorageConfig()
@@ -99,5 +119,30 @@ func TestHACompatibility(t *testing.T) {
 	other, err := c.HACompatibility("binary-two")
 	if err != nil || other == original {
 		t.Fatal("mixed binaries accepted")
+	}
+}
+
+// Candidates with different MSCs serve different routes and consumers, so
+// they must not share a deployment; the order MSCs are listed in is irrelevant.
+func TestHACompatibilityMSCs(t *testing.T) {
+	compatibility := func(mscs ...string) string {
+		t.Helper()
+		c := haStorageConfig()
+		c.Global.PrivateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+		c.MSCs.MSCs = mscs
+		got, err := c.HACompatibility("binary-one")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	original := compatibility("msc2836", "msc2753")
+	if compatibility("msc2753", "msc2836", "msc2753") != original {
+		t.Fatal("reordered or repeated MSCs changed the compatibility")
+	}
+	for _, mscs := range [][]string{nil, {"msc2836"}, {"msc2836", "msc2753", "msc2444"}} {
+		if compatibility(mscs...) == original {
+			t.Fatalf("MSCs %v accepted alongside %v", mscs, []string{"msc2836", "msc2753"})
+		}
 	}
 }

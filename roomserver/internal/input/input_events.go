@@ -27,7 +27,6 @@ import (
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
-	"codefloe.com/pat-s/zendrite/internal/hooks"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/acls"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -522,7 +521,6 @@ func (r *Inputer) processRoomEvent(
 	// notify anyone about it.
 	if input.Kind == api.KindOutlier {
 		logger.WithField("rejected", isRejected).Debug("Stored outlier")
-		hooks.Run(hooks.KindNewEventPersisted, headered)
 		return nil
 	}
 
@@ -709,8 +707,7 @@ func (r *Inputer) processRoomEvent(
 	}
 
 	// Everything was OK — the latest events updater didn't error and
-	// we've sent output events. Finally, generate a hook call.
-	hooks.Run(hooks.KindNewEventPersisted, headered)
+	// we've sent output events.
 	return nil
 }
 

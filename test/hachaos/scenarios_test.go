@@ -490,6 +490,7 @@ func scenarios() []scenario {
 				return s.e.waitStandbys(ctx, 2*time.Minute)
 			},
 		},
+		mscIndexFailureScenario(),
 	}
 }
 
@@ -511,6 +512,7 @@ var scenarioGroups = map[string]string{
 	"leadership-lost-during-startup":     "lifecycle",
 	"queued-federation-delivery":         "lifecycle",
 	"coordinated-upgrade":                "lifecycle",
+	"msc-relationship-index-failure":     "dependency",
 }
 
 func selectScenarios(t *testing.T, s settings) []scenario {
@@ -624,6 +626,7 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	measureRecovery(&r, w, e)
 	settle := 2 * time.Minute
 	verifyClientState(ctx, &r, w, e, settle)
+	verifyMSCs(ctx, &r, w.msc, settle)
 	verifyMedia(ctx, &r, w, before)
 	verifySearch(ctx, &r, w, settle)
 	verifyOwnership(ctx, &r, e, sr.pauses)

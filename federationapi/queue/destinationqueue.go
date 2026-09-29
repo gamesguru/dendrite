@@ -410,6 +410,16 @@ func (oq *destinationQueue) backgroundSend() {
 				Warn("Stopping destination queue: ownership is no longer held")
 			return
 		}
+		if terr != nil && oq.process.Context().Err() != nil {
+			// The transaction was cut short because this process is shutting
+			// down, for example an HA owner that lost its lease. Charging
+			// the destination would persist a backoff of minutes, which the
+			// successor inherits, for a server that was never unreachable.
+			logrus.WithError(terr).WithField("destination", oq.destination).
+				Info("Stopping destination queue: the process is shutting down")
+			oq.statistics.ClearBackoff()
+			return
+		}
 		if terr != nil {
 			// We failed to send the transaction. Mark it as a failure.
 			_, blacklisted := oq.statistics.Failure()

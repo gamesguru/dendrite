@@ -84,6 +84,20 @@ mscs:
     - msc3861
 ```
 
+### MSC2836: Threading
+
+The relationship index behind `POST /_matrix/client/unstable/event_relationships` is built from the roomserver output stream by the durable JetStream consumer `MSC2836RoomServerConsumer`.
+A relationship is therefore queryable shortly after its event is sent, not necessarily by the time the send request returns.
+A failed index write is retried until it succeeds, including by an HA successor, so a stored event never permanently loses its relationship.
+Disabling the MSC removes the consumer at the next start, except in HA mode, where it must be removed during the offline upgrade.
+
+### MSC2444 and MSC2753: Peeking
+
+Peeking into a room whose ID names no server, as in room version 12, works locally when this server is in the room.
+Any other such room needs `?server_name=` on `POST /_matrix/client/v3/peek/{roomIdOrAlias}` to peek over federation.
+Only world-readable, unencrypted rooms can be peeked, locally or by a remote server.
+Remote peeks ask to be renewed hourly; peeking again after the interval renews an expired outbound peek.
+
 ### MSC3814: Dehydrated Devices v2
 
 MSC3814 allows clients to store a "dehydrated" device on the server so that encrypted to-device messages (e.g. key shares) can be delivered while the user is offline.

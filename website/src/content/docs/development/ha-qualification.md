@@ -30,6 +30,9 @@ While a fault is injected, clients keep working the way a careful client does:
 - A syncing client long-polls with its existing token across takeover.
 - To-device messages, read receipts, media uploads and downloads, and search run alongside.
 - A user on the remote server writes to the same room, and syncs to receive local messages over federation.
+- Every server runs with the HA-qualified MSCs `msc2444`, `msc2753` and `msc2836` enabled; `HACHAOS_MSCS=none` turns them off.
+  An MSC probe sends thread replies into world-readable room version 11 and 12 rooms, which a local user peeks into via `/sync` and a remote user peeks into over federation.
+  The local user also peeks into a room on the remote server, in which the remote user writes.
 
 ## What is checked
 
@@ -38,6 +41,8 @@ After the fault heals, the harness compares what clients were told with what the
 - Every acknowledged write is in the room exactly once.
   A request that failed without an answer may have committed, which is allowed, but it must not produce two events.
 - Every acknowledged write reaches the syncing client with the token it held before the fault, and reaches the remote server.
+- Every acknowledged thread reply is returned by `/event_relationships`, and reaches the local and remote peekers with the tokens they held before the fault.
+  Every acknowledged write in the remote room reaches the local peeker.
 - Every acknowledged to-device message is delivered, the newest acknowledged receipt (or one still in flight when the workload stopped) is visible, media uploaded before the fault is intact, and search finds messages from before and after it.
 
 It also checks ownership at every protected boundary:
@@ -71,6 +76,7 @@ Recovery time is measured from fault injection to the first successful client wr
 | `leadership-lost-during-startup` | The successor loses the Kubernetes API while fencing or recovering. |
 | `queued-federation-delivery` | Federation is cut, events queue, and the active candidate is killed. |
 | `coordinated-upgrade` | A different build must not join; the maintenance-window upgrade must keep every write. |
+| `msc-relationship-index-failure` | PostgreSQL rejects MSC2836 relationship index writes, and the active candidate is replaced before they are allowed again. |
 
 ## Running it
 

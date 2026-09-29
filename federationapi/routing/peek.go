@@ -6,7 +6,9 @@
 package routing
 
 import (
+	"errors"
 	"net/http"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -27,12 +29,14 @@ func Peek(
 	roomID, peekID string,
 	remoteVersions []gomatrixserverlib.RoomVersion,
 ) util.JSONResponse {
-	// TODO: check if we're just refreshing an existing peek by querying the federationapi
+	// A repeated peek renews the existing one: the inbound peek is replaced.
 	roomVersion, err := rsAPI.QueryRoomVersionForRoom(httpReq.Context(), roomID)
 	if err != nil {
+		// The room version is only missing for a room this server does not know.
+		util.GetLogger(httpReq.Context()).WithError(err).WithField("room_id", roomID).Debug("Refusing a peek into an unknown room")
 		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("Room not found"),
 		}
 	}
 
@@ -54,10 +58,8 @@ func Peek(
 		}
 	}
 
-	// TODO: Check history visibility
-
-	// tell the peeking server to renew every hour
-	renewalInterval := int64(60 * 60 * 1000 * 1000) //nolint:mnd
+	// tell the peeking server to renew every hour; the interval is in milliseconds
+	renewalInterval := time.Hour.Milliseconds()
 
 	var response api.PerformInboundPeekResponse
 	err = rsAPI.PerformInboundPeek(
@@ -70,13 +72,27 @@ func Peek(
 		},
 		&response,
 	)
-	if err != nil {
-		resErr := util.ErrorResponse(err)
-		return resErr
+	var notAllowed api.ErrNotAllowed
+	switch {
+	case errors.As(err, &notAllowed):
+		// PerformInboundPeek checks history visibility and encryption.
+		return util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden(notAllowed.Error()),
+		}
+	case err != nil:
+		util.GetLogger(httpReq.Context()).WithError(err).WithField("room_id", roomID).Error("PerformInboundPeek failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
 	}
 
 	if !response.RoomExists {
-		return util.JSONResponse{Code: http.StatusNotFound, JSON: nil}
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("Room not found"),
+		}
 	}
 
 	respPeek := fclient.RespPeek{

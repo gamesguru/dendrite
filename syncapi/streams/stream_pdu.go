@@ -143,8 +143,8 @@ func (p *PDUStreamProvider) CompleteSync(
 			events.Events, events.Limited, eventFormat,
 		)
 		if jerr != nil {
-			if req.Context.Err() != nil || sqlutil.ErrIsCanceled(jerr) {
-				req.Log.WithError(jerr).WithField("room_id", roomID).Debugln("Abandoning complete sync, the client went away")
+			if req.Context.Err() != nil || abandonsSync(jerr) {
+				logAbandoned(req, jerr, roomID, "complete")
 				return from
 			}
 			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
@@ -181,8 +181,8 @@ func (p *PDUStreamProvider) CompleteSync(
 				events.Events, events.Limited, eventFormat,
 			)
 			if err != nil {
-				if req.Context.Err() != nil || sqlutil.ErrIsCanceled(err) {
-					req.Log.WithError(err).WithField("room_id", roomID).Debugln("Abandoning complete sync, the client went away")
+				if req.Context.Err() != nil || abandonsSync(err) {
+					logAbandoned(req, err, roomID, "complete")
 					return from
 				}
 				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
@@ -296,9 +296,11 @@ func (p *PDUStreamProvider) IncrementalSync(
 		}
 		var pos types.StreamPosition
 		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents); err != nil {
-			if req.Context.Err() != nil || sqlutil.ErrIsCanceled(err) {
-				req.Log.WithError(err).WithField("room_id", delta.RoomID).Debugln("Abandoning incremental sync, the client went away")
-				return newPos
+			if req.Context.Err() != nil || abandonsSync(err) {
+				// Stay at from: a position past this room's events would
+				// tell the client it has seen events it was never sent.
+				logAbandoned(req, err, delta.RoomID, "incremental")
+				return from
 			}
 			req.Log.WithError(err).WithField("room_id", delta.RoomID).Error("d.addRoomDeltaToResponse failed")
 			continue
@@ -458,7 +460,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// This is similar to Synapse's forced_newly_joined_room_ids mechanism.
 	if !hasMembershipChange {
 		unPartialStatedRooms, unPartialErr := snapshot.UnPartialStatedRoomsInRange(ctx, device.UserID, r)
-		if unPartialErr != nil && sqlutil.ErrIsCanceled(unPartialErr) {
+		if unPartialErr != nil && abandonsSync(unPartialErr) {
 			return r.From, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", unPartialErr)
 		}
 		if unPartialErr != nil {
@@ -480,7 +482,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// Applies the history visibility rules
 	events, err := applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents)
 	if err != nil {
-		if sqlutil.ErrIsCanceled(err) {
+		if abandonsSync(err) {
 			return r.From, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
 		}
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
@@ -541,7 +543,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		if hasMembershipChange {
 			jr.Summary, err = snapshot.GetRoomSummary(ctx, delta.RoomID, device.UserID)
 			if err != nil {
-				if sqlutil.ErrIsCanceled(err) {
+				if abandonsSync(err) {
 					return r.From, fmt.Errorf("snapshot.GetRoomSummary: %w", err)
 				}
 				logrus.WithError(err).WithField("room_id", delta.RoomID).Warn("failed to get room summary")
@@ -729,7 +731,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if !isPeek {
 		events, err = applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents)
 		if err != nil {
-			if sqlutil.ErrIsCanceled(err) {
+			if abandonsSync(err) {
 				return nil, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
 			}
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
@@ -914,4 +916,24 @@ func removeDuplicates[T gomatrixserverlib.PDU](stateEvents, recentEvents []T) []
 		}
 	}
 	return stateEvents
+}
+
+// abandonsSync reports whether err must abandon the sync without advancing
+// the client's position: the client went away, or the database dropped its
+// connection, as it does during a PostgreSQL failover. Carrying on would
+// leave the room's events out of a response whose position covers them, and
+// the client would never receive them.
+func abandonsSync(err error) bool {
+	return sqlutil.ErrIsCanceled(err) || sqlutil.IsTransient(err)
+}
+
+// logAbandoned records why a sync was abandoned: routinely because the client
+// went away, or, worth a warning, because the database was unavailable.
+func logAbandoned(req *types.SyncRequest, err error, roomID, kind string) {
+	logger := req.Log.WithError(err).WithField("room_id", roomID)
+	if req.Context.Err() != nil || sqlutil.ErrIsCanceled(err) {
+		logger.Debugf("Abandoning %s sync, the client went away", kind)
+		return
+	}
+	logger.Warnf("Abandoning %s sync, the database is unavailable", kind)
 }

@@ -12,7 +12,10 @@ These checks add storage and recovery prerequisites to that qualification.
 ## Supported storage
 
 - Configure one global PostgreSQL database and leave component connection strings empty or identical to the global connection string.
-  Separate component databases, SQLite, and experimental MSCs are not supported in HA mode.
+  Separate component databases and SQLite are not supported in HA mode.
+- Enable only the experimental MSCs qualified for HA: `msc2444`, `msc2753`, and `msc2836`.
+  Startup refuses any other MSC, including `msc3814` and `msc3861`.
+  With `msc2836`, leave `mscs.database.connection_string` empty or identical to the global connection string, so the relationship index is fenced like every other table.
 - Configure external JetStream addresses, a nonempty homeserver-specific topic prefix, and `global.jetstream.replicas: 3` or `5`.
   HA uses file storage for every stream, including typing and presence streams.
   Startup waits up to 30 seconds per stream for every configured replica to become current and online.
@@ -57,7 +60,9 @@ Do not delete occupied streams or consumers to make validation pass.
 
 ## Candidate compatibility and upgrades
 
-Candidates compute a fingerprint from the exact executable, public signing identities, effective PostgreSQL target and session parameters, broker endpoints/domain/prefix/replication, media namespace, and search settings.
+Candidates compute a fingerprint from the exact executable, public signing identities, effective PostgreSQL target and session parameters, broker endpoints/domain/prefix/replication, media namespace, search settings, and the set of enabled MSCs.
+Enabling or disabling an MSC is therefore an offline upgrade.
+Disabling `msc2836` leaves its `MSC2836RoomServerConsumerPull` durable, named with the topic prefix, on the roomserver output stream, which HA will not delete; remove it during the same maintenance window, or it retains every roomserver output message.
 Signing private keys and database passwords, NATS credentials, and S3 credentials are excluded from the stored record.
 Error messages never print the fingerprint inputs.
 Password/token rotation within the same database user, NATS account, and S3 namespace does not require resetting compatibility.

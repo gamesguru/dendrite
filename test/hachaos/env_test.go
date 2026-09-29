@@ -32,6 +32,9 @@ type settings struct {
 	// seedRooms and seedUsers size the reference workload.
 	seedRooms int
 	seedUsers int
+	// mscs are the experimental MSCs enabled on every server, and exercised
+	// by the MSC probe. HACHAOS_MSCS=none runs without them.
+	mscs []string
 }
 
 const (
@@ -53,6 +56,10 @@ func loadSettings(t *testing.T) settings {
 		next:       os.Getenv("HACHAOS_ZENDRITE_NEXT"),
 		candidates: 3,
 		target:     120 * time.Second,
+		mscs:       haMSCs,
+	}
+	if os.Getenv("HACHAOS_MSCS") == "none" {
+		s.mscs = nil
 	}
 	self, err := os.Executable()
 	if err != nil {

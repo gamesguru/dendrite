@@ -23,14 +23,15 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
 
 	fs "codefloe.com/pat-s/zendrite/federationapi/api"
-	"codefloe.com/pat-s/zendrite/internal/hooks"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -98,34 +99,16 @@ func toClientResponse(ctx context.Context, res *MSC2836EventRelationshipsRespons
 
 // Enable this MSC.
 func Enable(
-	cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.Routers, rsAPI roomserver.RoomserverInternalAPI, fsAPI fs.FederationInternalAPI,
-	userAPI userapi.UserInternalAPI, keyRing gomatrixserverlib.JSONVerifier,
+	processCtx *process.ProcessContext, cfg *config.Zendrite, cm *sqlutil.Connections, js nats.JetStreamContext, routers httputil.Routers,
+	rsAPI roomserver.RoomserverInternalAPI, fsAPI fs.FederationInternalAPI, userAPI userapi.UserInternalAPI, keyRing gomatrixserverlib.JSONVerifier,
 ) error {
 	db, err := NewDatabase(cm, &cfg.MSCs.Database)
 	if err != nil {
 		return fmt.Errorf("cannot enable MSC2836: %w", err)
 	}
-	hooks.Enable()
-	hooks.Attach(hooks.KindNewEventPersisted, func(headeredEvent any) {
-		he, ok := headeredEvent.(*types.HeaderedEvent)
-		if !ok {
-			return
-		}
-		hookErr := db.StoreRelation(context.Background(), he)
-		if hookErr != nil {
-			util.GetLogger(context.Background()).WithError(hookErr).WithField("event_id", he.EventID()).Error(
-				"failed to StoreRelation",
-			)
-		}
-		// we need to update child metadata here as well as after doing remote /event_relationships requests
-		// so we catch child metadata originating from /send transactions
-		hookErr = db.UpdateChildMetadata(context.Background(), he)
-		if hookErr != nil {
-			util.GetLogger(context.Background()).WithError(err).WithField("event_id", he.EventID()).Warn(
-				"failed to update child metadata for event",
-			)
-		}
-	})
+	if err = newRelationshipConsumer(cfg, js, db).Start(processCtx.Context()); err != nil {
+		return fmt.Errorf("cannot enable MSC2836: start relationship consumer: %w", err)
+	}
 
 	routers.Client.Handle("/unstable/event_relationships",
 		httputil.MakeAuthAPI("eventRelationships", userAPI, eventRelationshipHandler(db, rsAPI, fsAPI)),
@@ -374,7 +357,10 @@ func (rc *reqCtx) fetchUnknownEvent(eventID, roomID string) *types.HeaderedEvent
 		if err != nil {
 			continue
 		}
-		rc.injectResponseToRoomserver(res)
+		if err = rc.injectResponseToRoomserver(res); err != nil {
+			logger.WithError(err).WithField("server", srv).Warn("failed to store remote relationships")
+			continue
+		}
 		for _, ev := range res.ParsedEvents {
 			if ev.EventID() == eventID {
 				return &types.HeaderedEvent{PDU: ev}
@@ -425,7 +411,9 @@ func (rc *reqCtx) includeChildren(db Database, parentID string, limit int, recen
 			}
 		}
 		if result != nil {
-			rc.injectResponseToRoomserver(result)
+			if err := rc.injectResponseToRoomserver(result); err != nil {
+				util.GetLogger(rc.ctx).WithError(err).WithField("event_id", parentID).Warn("includeChildren: failed to store remote relationships")
+			}
 		}
 		// fallthrough to pull these new events from the DB
 	}
@@ -605,7 +593,10 @@ func (rc *reqCtx) lookForEvent(eventID string) *types.HeaderedEvent {
 		queryRes := rc.remoteEventRelationships(eventID)
 		if queryRes != nil {
 			// inject all the events into the roomserver then return the event in question
-			rc.injectResponseToRoomserver(queryRes)
+			if err := rc.injectResponseToRoomserver(queryRes); err != nil {
+				util.GetLogger(rc.ctx).WithError(err).WithField("event_id", eventID).Error("failed to store remote relationships")
+				return nil
+			}
 			for _, ev := range queryRes.ParsedEvents {
 				if ev.EventID() == eventID && rc.req.RoomID == ev.RoomID().String() {
 					return &types.HeaderedEvent{PDU: ev}
@@ -617,9 +608,11 @@ func (rc *reqCtx) lookForEvent(eventID string) *types.HeaderedEvent {
 		// If we don't do this then we risk never fetching the children.
 		queryRes := rc.remoteEventRelationships(eventID)
 		if queryRes != nil {
-			rc.injectResponseToRoomserver(queryRes)
-			err := rc.db.MarkChildrenExplored(context.Background(), eventID)
-			if err != nil {
+			// Only an event whose children were all stored is explored: a
+			// later request must otherwise fetch them again.
+			if err := rc.injectResponseToRoomserver(queryRes); err != nil {
+				util.GetLogger(rc.ctx).WithError(err).WithField("event_id", eventID).Warn("failed to store remote relationships; children stay unexplored")
+			} else if err = rc.db.MarkChildrenExplored(context.Background(), eventID); err != nil {
 				util.GetLogger(rc.ctx).WithError(err).Warnf("failed to mark children of %s as explored", eventID)
 			}
 		}
@@ -648,8 +641,10 @@ func (rc *reqCtx) getLocalEvent(roomID, eventID string) *types.HeaderedEvent {
 }
 
 // injectResponseToRoomserver injects the events
-// into the roomserver as KindOutlier, with auth chains.
-func (rc *reqCtx) injectResponseToRoomserver(res *MSC2836EventRelationshipsResponse) {
+// into the roomserver as KindOutlier, with auth chains, and indexes them.
+// Outliers never reach the roomserver output stream, so their relationships
+// are stored here rather than by the relationship consumer.
+func (rc *reqCtx) injectResponseToRoomserver(res *MSC2836EventRelationshipsResponse) error {
 	var stateEvents gomatrixserverlib.EventJSONs
 	var messageEvents []gomatrixserverlib.PDU
 	for _, ev := range res.ParsedEvents {
@@ -674,19 +669,18 @@ func (rc *reqCtx) injectResponseToRoomserver(res *MSC2836EventRelationshipsRespo
 		})
 	}
 	// we've got the data by this point so use a background context
-	err := roomserver.SendInputRoomEvents(context.Background(), rc.rsAPI, rc.serverName, ires, false)
-	if err != nil {
-		util.GetLogger(rc.ctx).WithError(err).Error("failed to inject MSC2836EventRelationshipsResponse into the roomserver")
+	ctx := context.Background()
+	if err := roomserver.SendInputRoomEvents(ctx, rc.rsAPI, rc.serverName, ires, false); err != nil {
+		return fmt.Errorf("inject MSC2836EventRelationshipsResponse into the roomserver: %w", err)
 	}
-	// update the child count / hash columns for these nodes. We need to do this here because not all events will make it
-	// through to the KindNewEventPersisted hook because the roomserver will ignore duplicates. Duplicates have meaning though
-	// as the `unsigned` field may differ (if the number of children changes).
+	// Index every event, including duplicates the roomserver already knew:
+	// their `unsigned` children count and hash may have changed since.
 	for _, ev := range ires {
-		err = rc.db.UpdateChildMetadata(context.Background(), ev.Event)
-		if err != nil {
-			util.GetLogger(rc.ctx).WithError(err).WithField("event_id", ev.Event.EventID()).Warn("failed to update child metadata for event")
+		if err := indexEvent(ctx, rc.db, ev.Event); err != nil {
+			return fmt.Errorf("index %s: %w", ev.Event.EventID(), err)
 		}
 	}
+	return nil
 }
 
 func (rc *reqCtx) addChildMetadata(ev *types.HeaderedEvent) {
