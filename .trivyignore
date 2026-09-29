@@ -1,0 +1,3 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp is unmaintained and has no fixed version.
+# Zendrite only imports golang.org/x/crypto/bcrypt, and govulncheck reports that no code reaches the openpgp package.
+GO-2026-5932
