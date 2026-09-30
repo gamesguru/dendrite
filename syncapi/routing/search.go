@@ -8,6 +8,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -115,6 +116,14 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 		nextBatch,
 		orderByTime,
 	)
+	if errors.Is(err, fulltext.ErrRecovering) {
+		// Partial results would look complete to the client; ask it to retry instead.
+		return util.JSONResponse{
+			Code:    http.StatusServiceUnavailable,
+			Headers: map[string]string{"Retry-After": "5"},
+			JSON:    spec.Unknown("Search is unavailable while the search index is rebuilt"),
+		}
+	}
 	if err != nil {
 		logrus.WithError(err).Error("failed to search fulltext")
 		return util.JSONResponse{

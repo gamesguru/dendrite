@@ -4,15 +4,50 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/fulltext"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 )
 
-// RecoverSearch rebuilds a fresh index before sync consumers or routes start.
+// searchRebuildRetry spaces out rebuild attempts after a failure.
+var searchRebuildRetry = 5 * time.Second
+
+// RebuildSearch rebuilds the index behind recovering while the homeserver
+// already serves, then admits searches. The rebuild takes time in proportion
+// to the searchable history, so serving must not wait for it: on a takeover
+// that wait held every client request back, not just search (#451).
+//
+// A failed attempt is retried from the start, which rewrites the same
+// documents, until it succeeds or ctx ends. Searches stay refused meanwhile,
+// so a failure is visible and never serves partial results.
+func RebuildSearch(ctx context.Context, db storage.Database, recovering *fulltext.Recovering) {
+	start := time.Now()
+	for attempt := 1; ; attempt++ {
+		err := RecoverSearch(ctx, db, recovering.Indexer)
+		if err == nil {
+			err = recovering.Finish()
+		}
+		if err == nil {
+			logrus.WithField("duration", time.Since(start).Round(time.Millisecond)).Info("Search index rebuilt; search is available")
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		logrus.WithError(err).WithField("attempt", attempt).Error("Failed to rebuild the search index; retrying")
+		if !process.Sleep(ctx, searchRebuildRetry) {
+			return
+		}
+	}
+}
+
+// RecoverSearch writes every searchable event in PostgreSQL to a fresh index.
 // PostgreSQL is authoritative; local index files are disposable derived state.
 func RecoverSearch(ctx context.Context, db storage.Database, index fulltext.Indexer) error {
 	var after int64

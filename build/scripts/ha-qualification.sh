@@ -27,6 +27,8 @@
 #   HACHAOS_KEEP       1 to keep the scenarios' data directories
 #   HACHAOS_TOOLS      downloaded tools and built binaries (default .hachaos/tools);
 #                      use separate directories for concurrent builds, or share read-only in run phase
+#   HACHAOS_SEARCH_HISTORY  searchable messages to send before the fault, so the
+#                      successor rebuilds a large search index (default 0)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -53,7 +55,7 @@ if [[ "${HACHAOS_CONTAINER:-}" == 1 ]]; then
   # Word splitting is intended: the value is a list of docker run options.
   # shellcheck disable=SC2086
   exec docker run --rm ${HACHAOS_DOCKER_ARGS:-} \
-    -e HACHAOS_PHASE -e HACHAOS_TIER -e HACHAOS_SCENARIOS -e HACHAOS_GROUP -e HACHAOS_TIMEOUT -e HACHAOS_KEEP -e HACHAOS_TOOLS \
+    -e HACHAOS_PHASE -e HACHAOS_TIER -e HACHAOS_SCENARIOS -e HACHAOS_GROUP -e HACHAOS_TIMEOUT -e HACHAOS_KEEP -e HACHAOS_TOOLS -e HACHAOS_SEARCH_HISTORY \
     -e HACHAOS_ARTIFACTS="$HACHAOS_ARTIFACTS" \
     -v "$ROOT:$ROOT" -w "$ROOT" \
     -v "$HACHAOS_ARTIFACTS:$HACHAOS_ARTIFACTS" \

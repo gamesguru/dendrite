@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,9 @@ type settings struct {
 	// seedRooms and seedUsers size the reference workload.
 	seedRooms int
 	seedUsers int
+	// searchHistory is the number of searchable messages sent before the
+	// fault, so a successor rebuilds a search index of production size.
+	searchHistory int
 	// mscs are the experimental MSCs enabled on every server, and exercised
 	// by the MSC probe. HACHAOS_MSCS=none runs without them.
 	mscs []string
@@ -60,6 +64,13 @@ func loadSettings(t *testing.T) settings {
 	}
 	if os.Getenv("HACHAOS_MSCS") == "none" {
 		s.mscs = nil
+	}
+	if v := os.Getenv("HACHAOS_SEARCH_HISTORY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			t.Fatalf("HACHAOS_SEARCH_HISTORY must be a message count, not %q", v)
+		}
+		s.searchHistory = n
 	}
 	self, err := os.Executable()
 	if err != nil {

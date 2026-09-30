@@ -65,7 +65,7 @@ func NewOutputRoomEventConsumer(
 	pduStream streams.StreamProvider,
 	inviteStream streams.StreamProvider,
 	rsAPI api.SyncRoomserverAPI,
-	fts *fulltext.Search,
+	fts fulltext.Indexer,
 	asProducer *producers.AppserviceEventProducer,
 	pushProducer *producers.PushEventProducer,
 ) *OutputRoomEventConsumer {

@@ -59,6 +59,9 @@ func renderReport(s settings, results []result) string {
 	if s.seedRooms > 0 {
 		fmt.Fprintf(&b, "| Seeded state | %d users, %d rooms |\n", s.seedUsers, s.seedRooms)
 	}
+	if s.searchHistory > 0 {
+		fmt.Fprintf(&b, "| Search history | %d messages |\n", s.searchHistory)
+	}
 	fmt.Fprintf(&b, "| Host | %s/%s, %d CPUs |\n\n", runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
 
 	fmt.Fprintf(&b, "## Recovery\n\n")
@@ -80,10 +83,10 @@ func renderReport(s settings, results []result) string {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d |\n", r.Name, status, seconds(r.Recovery.ClientWrite), seconds(r.Recovery.Sync), seconds(r.Recovery.FederationInbound), seconds(r.Recovery.FederationOutbound), len(r.Generations))
 	}
 	fmt.Fprintf(&b, "\n## Durability and idempotency\n\n")
-	fmt.Fprintf(&b, "| Scenario | Acked writes | Lost | Stored, not in /messages | Duplicated | Duplicated across takeover | Retried | Unacked | Unacked but committed | Remote writes | To-device |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	fmt.Fprintf(&b, "| Scenario | Acked writes | Lost | Stored, not in /messages | Duplicated | Duplicated across takeover | Retried | Unacked | Unacked but committed | Remote writes | To-device | HTTP 503 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, r := range results {
 		c := r.Counts
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", r.Name, c.Acked, c.Lost, c.Unserved, c.Duplicated, c.DuplicatedAcrossTakeover, c.Retried, c.Unacked, c.UnackedCommitted, c.RemoteAcked, c.ToDeviceAcked)
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", r.Name, c.Acked, c.Lost, c.Unserved, c.Duplicated, c.DuplicatedAcrossTakeover, c.Retried, c.Unacked, c.UnackedCommitted, c.RemoteAcked, c.ToDeviceAcked, c.Unavailable)
 	}
 	fmt.Fprintf(&b, "\n## Ownership boundaries\n\n")
 	fmt.Fprintf(&b, "| Scenario | Audited commits | Broker publications | Retired-generation publications | Media writes | Federation requests |\n| --- | --- | --- | --- | --- | --- |\n")
@@ -177,5 +180,87 @@ func seedReference(ctx context.Context, e *environment, users, rooms int) error 
 		}
 	}
 	e.timeline.add(eventNote, "seed", "done: %v", err)
+	return err
+}
+
+// seedSearchHistory sends n searchable messages before the fault. A
+// successor rebuilds its search index from all of them, which took about 32
+// seconds for 84,000 messages in production and once held every client
+// request back until it finished (#451).
+func seedSearchHistory(ctx context.Context, e *environment, n int) error {
+	e.timeline.add(eventNote, "seed", "sending %d searchable messages", n)
+	started := time.Now()
+	c, err := registerRetrying(ctx, e.router.url(), "historian")
+	if err != nil {
+		return err
+	}
+	const rooms, workers = 16, 16
+	roomIDs := make([]string, rooms)
+	for i := range roomIDs {
+		if err = retryingSetup(ctx, func() error {
+			var createErr error
+			roomIDs[i], createErr = c.patient().createRoom(ctx, fmt.Sprintf("history-%d", i))
+			return createErr
+		}); err != nil {
+			return err
+		}
+	}
+	words := strings.Fields("zendrite search history rebuild takeover successor index bleve analyzer token stream position redaction edit federation room member topic name message body activation standby lease renewal owner generation fencing")
+	jobs := make(chan int)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				// Production messages average about 1 KB of event JSON.
+				var body strings.Builder
+				fmt.Fprintf(&body, "history %d", i)
+				for j := range 60 {
+					fmt.Fprintf(&body, " %s%d", words[(i+j*7)%len(words)], (i*31+j)%1009)
+				}
+				if _, sendErr := c.send(ctx, roomIDs[i%rooms], fmt.Sprintf("history-%d", i), body.String()); sendErr != nil {
+					errs <- sendErr
+					return
+				}
+			}
+		}()
+	}
+	for i := range n {
+		select {
+		case jobs <- i:
+			continue
+		case err = <-errs:
+		}
+		break
+	}
+	close(jobs)
+	wg.Wait()
+	if err == nil {
+		select {
+		case err = <-errs:
+		default:
+		}
+	}
+	if err == nil {
+		// The sync API indexes the room output stream in order, so once a
+		// marker sent after every other message is searchable, all of them
+		// are. A fault before then would add the sync backlog to takeover.
+		marker := "historymarker" + nonce()
+		if _, err = c.send(ctx, roomIDs[0], "history-marker", marker); err == nil {
+			err = waitFor(ctx, 30*time.Minute, func() error {
+				ids, searchErr := c.search(ctx, marker)
+				if searchErr != nil {
+					return searchErr
+				}
+				if len(ids) == 0 {
+					return fmt.Errorf("the sync API has not indexed the search history yet")
+				}
+				return nil
+			})
+		}
+	}
+	e.timeline.add(eventNote, "seed", "search history done in %s: %v", time.Since(started).Round(time.Second), err)
 	return err
 }

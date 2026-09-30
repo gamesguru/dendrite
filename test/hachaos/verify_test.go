@@ -51,12 +51,14 @@ type recovery struct {
 }
 
 type counts struct {
-	Acked      int `json:"acked_writes"`
-	Unacked    int `json:"unacknowledged_writes"`
-	Retried    int `json:"writes_retried"`
-	Lost       int `json:"lost_writes"`
-	Unserved   int `json:"stored_but_missing_from_messages"`
-	Duplicated int `json:"duplicated_writes"`
+	Acked   int `json:"acked_writes"`
+	Unacked int `json:"unacknowledged_writes"`
+	Retried int `json:"writes_retried"`
+	// Unavailable counts HTTP 503 responses to the client workload.
+	Unavailable int `json:"unavailable_responses"`
+	Lost        int `json:"lost_writes"`
+	Unserved    int `json:"stored_but_missing_from_messages"`
+	Duplicated  int `json:"duplicated_writes"`
 	// DuplicatedAcrossTakeover counts retries whose first attempt reached the
 	// retired owner, which the process-local transaction cache cannot catch.
 	DuplicatedAcrossTakeover int `json:"duplicated_across_takeover"`

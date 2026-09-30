@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,6 +52,8 @@ type workload struct {
 	msc *mscProbe
 	// setupNotes record setup steps slow enough to report.
 	setupNotes []string
+	// unavailable counts HTTP 503 responses to the local clients.
+	unavailable atomic.Int64
 }
 
 // noteSlowSetup records a setup step that took longer than slowSetupStep, so
@@ -112,6 +115,7 @@ func startWorkload(ctx context.Context, e *environment) (*workload, error) {
 	if w.bob, err = registerRetrying(ctx, e.router.url(), "bob"); err != nil {
 		return nil, err
 	}
+	w.alice.unavailable, w.bob.unavailable = &w.unavailable, &w.unavailable
 	if w.remote, err = registerRetrying(ctx, e.remote.httpURL(), "rita"); err != nil {
 		return nil, err
 	}

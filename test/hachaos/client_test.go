@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type mxClient struct {
 	user   string
 	token  string
 	device string
+	// unavailable, when set, counts HTTP 503 responses.
+	unavailable *atomic.Int64
 }
 
 // mxError is a Matrix error response.
@@ -100,6 +103,9 @@ func (c *mxClient) do(ctx context.Context, method, path string, body, out any) e
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode == http.StatusServiceUnavailable && c.unavailable != nil {
+		c.unavailable.Add(1)
 	}
 	if resp.StatusCode != http.StatusOK {
 		mx := &mxError{Status: resp.StatusCode}

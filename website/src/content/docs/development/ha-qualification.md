@@ -91,9 +91,12 @@ HACHAOS_CONTAINER=1 HACHAOS_TIER=full build/scripts/ha-qualification.sh
 HACHAOS_CONTAINER=1 HACHAOS_TIER=reference build/scripts/ha-qualification.sh
 # one scenario
 HACHAOS_CONTAINER=1 HACHAOS_SCENARIOS=leader-sigkill build/scripts/ha-qualification.sh
+# one scenario after seeding 40,000 searchable messages, so the successor rebuilds a large search index
+HACHAOS_CONTAINER=1 HACHAOS_SCENARIOS=leader-sigkill HACHAOS_SEARCH_HISTORY=40000 build/scripts/ha-qualification.sh
 ```
 
 Each run writes `report.md`, `results.json` and, per scenario, every process log, a timeline of faults and phase changes, and the client ledger to `.hachaos/artifacts`.
+The report counts the HTTP 503 responses the client workload received between the fault and the end of recovery.
 
 CI runs the `ci` tier on changes to HA code, split into four parallel groups, in `.crow/ha-qualification.yaml`.
 A shared build step downloads the control-plane tools and compiles Zendrite, the upgrade binary and the test harness once; the groups then run in separate containers against those binaries.

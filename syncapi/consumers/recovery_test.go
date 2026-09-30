@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -19,12 +20,18 @@ type recoveryDatabase struct {
 	pages   []map[int64]rstypes.HeaderedEvent
 	cursors []int64
 	err     error
+	// failures fails this many reads before serving pages.
+	failures int
 }
 
 func (d *recoveryDatabase) ReIndex(_ context.Context, _, after int64) (map[int64]rstypes.HeaderedEvent, error) {
 	d.cursors = append(d.cursors, after)
 	if d.err != nil {
 		return nil, d.err
+	}
+	if d.failures > 0 {
+		d.failures--
+		return nil, errors.New("database unavailable")
 	}
 	if len(d.pages) == 0 {
 		return nil, nil
@@ -111,4 +118,34 @@ func TestRecoveryRemovesEditedOriginalsAcrossBatches(t *testing.T) {
 		require.NoError(t, searchErr)
 		require.Equal(t, tc.count, result.Total)
 	}
+}
+
+func TestRebuildSearchRetriesThenAdmitsSearches(t *testing.T) {
+	retry := searchRebuildRetry
+	searchRebuildRetry = time.Millisecond
+	t.Cleanup(func() { searchRebuildRetry = retry })
+
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	event := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "rebuilt after a failure", "msgtype": "m.text"})
+	db := &recoveryDatabase{pages: []map[int64]rstypes.HeaderedEvent{{5: *event}}, failures: 2}
+	fts, err := fulltext.New(nil, config.Fulltext{InMemory: true, Language: "en"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fts.Close()) })
+	recovering := fulltext.NewRecovering(fts)
+
+	RebuildSearch(t.Context(), db, recovering)
+	require.True(t, recovering.Recovered())
+	require.Equal(t, []int64{0, 0, 0, 5}, db.cursors)
+	result, err := recovering.Search("failure", []string{room.ID}, nil, 10, 0, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.Total)
+}
+
+func TestRebuildSearchStopsWhenOwnershipIsLost(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errors.New("ownership lost"))
+	recovering := fulltext.NewRecovering(&recoveryIndex{})
+	RebuildSearch(ctx, &recoveryDatabase{err: errors.New("refused")}, recovering)
+	require.False(t, recovering.Recovered())
 }

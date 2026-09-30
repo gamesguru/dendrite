@@ -55,7 +55,7 @@ func NewOutputClientDataConsumer(
 	store storage.Database,
 	notifier *notifier.Notifier,
 	stream streams.StreamProvider,
-	fts *fulltext.Search,
+	fts fulltext.Indexer,
 ) *OutputClientDataConsumer {
 	return &OutputClientDataConsumer{
 		ctx:          process.Context(),

@@ -102,8 +102,11 @@ Typing state, login/SSO intermediates, and sliding-sync sessions remain transien
 Client transaction IDs are recorded in the database, so retrying a message after promotion does not store it twice.
 
 When search is enabled, set `sync_api.search.rebuild_on_startup: true`.
-Every activation builds a fresh Bleve index from PostgreSQL before starting sync consumers, then catches up the durable sync backlog before readiness.
-Database reads, index writes, and ownership cancellation abort recovery on error.
+Every activation builds a fresh Bleve index from PostgreSQL in the background, so readiness and the public listeners do not wait for it.
+Until the rebuild finishes, `/search` answers HTTP 503 with `Retry-After` instead of results that would silently miss history.
+Sync consumers index new events during the rebuild.
+Deletions they make for redactions and edits are replayed once the rebuild has written its last document, so a rebuilt batch read before a redaction cannot restore the redacted text.
+A database read or index write error is logged and the rebuild restarts from the beginning; ownership cancellation stops it.
 The rebuild advances by the maximum stream position in each batch, independent of map iteration order.
 It starts from an empty index so deleted or redacted documents cannot survive from a candidate's older local index.
 
@@ -111,7 +114,7 @@ It starts from an empty index so deleted or redacted documents cannot survive fr
 It does not require a shared index or persistent volume and must not point to a concurrently opened Bleve index.
 Normal shutdown removes the activation's temporary index after closing it; a killed process can leave unused `recovery-*` directories for offline cleanup.
 Provision space for a complete rebuilt index and possible crash leftovers.
-Large indexes can exceed the 120-second overall takeover target; measure recovery for the deployment workload.
+Rebuild time grows with the searchable history and delays only search; `HACHAOS_SEARCH_HISTORY` makes the [HA qualification](/development/ha-qualification/) harness seed a history of a chosen size to measure it.
 
 ## Media fencing boundary and qualification
 

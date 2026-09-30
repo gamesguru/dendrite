@@ -67,7 +67,8 @@ func AddPublicRoutes(
 		logrus.WithError(err).Panicf("failed to load notifier ")
 	}
 
-	var fts *fulltext.Search
+	// index stays a nil interface when search is disabled.
+	var index fulltext.Indexer
 	if zendriteCfg.SyncAPI.Fulltext.Enabled {
 		searchConfig := zendriteCfg.SyncAPI.Fulltext
 		if searchConfig.RebuildOnStartup && !searchConfig.InMemory {
@@ -83,14 +84,16 @@ func AddPublicRoutes(
 			processContext.Defer(func() { _ = os.RemoveAll(directory) })
 			searchConfig.IndexPath = config.Path(filepath.Join(directory, "index"))
 		}
-		fts, err = fulltext.New(processContext, searchConfig)
-		if err != nil {
-			logrus.WithError(err).Panicf("failed to create full text")
+		fts, ftsErr := fulltext.New(processContext, searchConfig)
+		if ftsErr != nil {
+			logrus.WithError(ftsErr).Panicf("failed to create full text")
 		}
+		index = fts
 		if searchConfig.RebuildOnStartup {
-			if err = consumers.RecoverSearch(processContext.Context(), syncDB, fts); err != nil {
-				logrus.WithError(err).Panic("failed to recover search index")
-			}
+			// Consumers write to the index during the rebuild; searches wait for it.
+			recovering := fulltext.NewRecovering(fts)
+			index = recovering
+			processContext.Go(func() { consumers.RebuildSearch(processContext.Context(), syncDB, recovering) })
 		}
 	}
 
@@ -132,7 +135,7 @@ func AddPublicRoutes(
 
 	roomConsumer := consumers.NewOutputRoomEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
-		streams.InviteStreamProvider, rsAPI, fts, asProducer, pushProducer,
+		streams.InviteStreamProvider, rsAPI, index, asProducer, pushProducer,
 	)
 	// Wire up the metadata worker for continuous updates (Phase 12 optimization)
 	roomConsumer.SetMetadataQueuer(metadataWorker)
@@ -142,7 +145,7 @@ func AddPublicRoutes(
 
 	clientConsumer := consumers.NewOutputClientDataConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, natsClient, syncDB, notifier,
-		streams.AccountDataStreamProvider, fts,
+		streams.AccountDataStreamProvider, index,
 	)
 	if err = clientConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start client data consumer")
@@ -180,7 +183,7 @@ func AddPublicRoutes(
 
 	routing.Setup(
 		routers.Client, requestPool, syncDB, userAPI,
-		rsAPI, &zendriteCfg.SyncAPI, caches, fts,
+		rsAPI, &zendriteCfg.SyncAPI, caches, index,
 		rateLimits,
 	)
 }

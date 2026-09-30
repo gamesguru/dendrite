@@ -582,6 +582,12 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 			return r
 		}
 	}
+	if s.searchHistory > 0 {
+		if err := seedSearchHistory(ctx, e, s.searchHistory); err != nil {
+			r.failf("seed search history: %v", err)
+			return r
+		}
+	}
 	w, err := startWorkload(ctx, e)
 	if err != nil {
 		r.failf("start workload: %v", err)
@@ -629,6 +635,7 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	time.Sleep(15 * time.Second)
 	w.halt()
 	measureRecovery(&r, w, e)
+	r.Counts.Unavailable = int(w.unavailable.Load())
 	settle := 2 * time.Minute
 	verifyClientState(ctx, &r, w, e, settle)
 	verifyMSCs(ctx, &r, w.msc, settle)

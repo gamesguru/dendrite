@@ -42,6 +42,39 @@ Longer timings allow more time for Kubernetes API requests but can delay failove
 It must be at least as long as `lease_duration`, so a successor can outwait an expiring Lease.
 A candidate that exhausts this budget stays unready and reports the boundary that blocked it; it never activates as a fallback.
 
+### Choosing election timings
+
+Election timings trade how quickly a crashed owner is replaced against how long a healthy owner survives a stalled Kubernetes control plane.
+Start from one of these profiles:
+
+| Profile | `lease_duration` | `renew_deadline` | `retry_period` | `ownership_timeout` | Crash detected within | Use when |
+| --- | --- | --- | --- | --- | --- | --- |
+| Default | 30s | 20s | 5s | 45s | 35 seconds | Any control plane, including etcd members spread across data centers and managed control planes whose stall behavior is unknown. |
+| Faster failover | 20s | 15s | 2s | 30s | 22 seconds | A control plane whose Lease write latency you monitor and have seen stay well under 15 seconds, including during etcd leader elections. |
+
+The Helm chart's `ha.leaseDuration`, `ha.renewDeadline`, `ha.retryPeriod` and `ha.ownershipTimeout` values set these fields, and its defaults are the default profile.
+Timings are not part of the candidate compatibility fingerprint, so a normal rolling update can change them.
+
+Follow these rules when you deviate from a profile:
+
+- `renew_deadline` is how long an owner tolerates a control plane that does not answer.
+  An owner whose renewal does not complete within it gives up leadership and exits, even if the control plane recovers a moment later.
+  An etcd leader election stalls every Lease write while it lasts, often for several seconds and longer when etcd members span data centers.
+  Set `renew_deadline` at least 5 seconds above the longest Lease write latency you have observed, and never below 10 seconds.
+  With `renew_deadline: 6s`, one production deployment lost its owner to a Lease write that took about 8 seconds during an etcd leader election; 15 seconds would have kept it.
+- `lease_duration` is how long a crashed owner goes unnoticed.
+  A standby takes over at most `lease_duration` plus `retry_period` after the owner's last renewal.
+  Keep it at least 5 seconds above `renew_deadline`, so an owner that gives up has begun stepping down before a successor can acquire the Lease; fencing still refuses anything it has not stopped.
+- `retry_period` spaces out renewals and acquisition attempts.
+  Keep it at most a quarter of `renew_deadline`, so a renewal that fails fast, for example on a refused connection, is retried several times before the deadline.
+  Shorter periods detect a released Lease sooner but add Lease writes on every candidate.
+- `ownership_timeout` must be at least `lease_duration`; leave about 10 seconds more, so fencing a retired owner that is slow to disconnect does not exhaust it.
+
+A graceful shutdown releases the Lease, so a standby takes over at its next `retry_period` whatever the Lease duration.
+After takeover, the successor opens its listeners a few seconds after establishing ownership, and the chart's router adds up to its 500 ms health check interval.
+Watch `zendrite_ha_renewal_failures_total`: renewal failures without a leadership loss mean the control plane is approaching `renew_deadline`.
+Validate actual service recovery with the chosen timings, for example with the [HA qualification](/development/ha-qualification/) harness.
+
 ## Probes and status
 
 Every candidate serves liveness, readiness, status, and metrics on `status_address`, separately from the Matrix listeners.
@@ -247,7 +280,9 @@ Not supported, and not planned for this iteration:
 - Non-Kubernetes election backends.
 
 The [qualification report](/development/ha-qualification-report/) measures recovery against the ADR reference workload.
-Larger deployments should measure their own, because a full search index rebuild can exceed the 120 second takeover target.
+A successor opens its listeners without waiting for its search index, so the size of the search history does not delay takeover.
+Search itself answers HTTP 503 until the rebuild finishes, which takes time in proportion to the searchable history: about 32 seconds for 84,000 messages on one production candidate.
+Each activation logs `Activation phase finished` with the duration of every startup phase, and `Search index rebuilt` with the rebuild's duration.
 
 ## Failover behavior
 
@@ -266,8 +301,7 @@ The Helm chart supports this with `ha.routing.enabled`, using replicated HAProxy
 This makes healthy standbys Ready without adding them directly to Matrix traffic or granting applications permission to modify routing resources.
 
 Failover includes Lease expiry, election retry jitter, fencing, recovery, and routing convergence.
-Shorter Lease and retry periods can reduce detection time but make leadership more sensitive to control-plane stalls and increase renewal traffic.
-Keep `lease_duration > renew_deadline > 1.2 * retry_period`, and validate actual service recovery with the intended timings.
+Shorter Lease and retry periods can reduce detection time but make leadership more sensitive to control-plane stalls and increase renewal traffic; see [Choosing election timings](#choosing-election-timings).
 Reducing election timings never skips resource fencing or backlog recovery.
 
 ## Suspended owners and broker delivery

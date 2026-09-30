@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
@@ -22,13 +23,34 @@ import (
 	"codefloe.com/pat-s/zendrite/userapi"
 )
 
+// activationPhases logs how long each startup phase takes, so a slow
+// takeover shows which phase held the listeners back (#451).
+type activationPhases struct{ start, last time.Time }
+
+func newActivationPhases() *activationPhases {
+	now := time.Now()
+	return &activationPhases{start: now, last: now}
+}
+
+func (p *activationPhases) done(phase string) {
+	now := time.Now()
+	logrus.WithFields(logrus.Fields{
+		"phase":    phase,
+		"duration": now.Sub(p.last).Round(time.Millisecond),
+		"elapsed":  now.Sub(p.start).Round(time.Millisecond),
+	}).Info("Activation phase finished")
+	p.last = now
+}
+
 // startHomeserver initializes all application dependencies only during activation.
 func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, httpAddr, httpsAddr config.ServerAddress, ready func() bool, gate *ha.PostgresGate) error {
+	phases := newActivationPhases()
 	releaseStorage, err := ha.PrepareStorage(processCtx.Context(), cfg, gate)
 	if err != nil {
 		return err
 	}
 	defer releaseStorage()
+	phases.done("storage")
 	// create DNS cache
 	var dnsCache *fclient.DNSCache
 	if cfg.Global.DNSCache.Enabled {
@@ -75,6 +97,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		return err
 	}
 	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.EnableMetrics)
+	phases.done("roomserver")
 	if err := processCtx.Context().Err(); err != nil {
 		return err
 	}
@@ -92,6 +115,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	}
 	rsAPI.SetFederationAPI(fsAPI, keyRing)
 	startFederationAPI()
+	phases.done("federationapi")
 
 	if err := processCtx.Context().Err(); err != nil {
 		return err
@@ -101,6 +125,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		return err
 	}
 	asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI)
+	phases.done("userapi and appservice")
 
 	rsAPI.SetAppserviceAPI(asAPI)
 	rsAPI.SetUserAPI(userAPI)
@@ -125,6 +150,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		return err
 	}
 	monolith.AddAllPublicRoutes(processCtx, cfg, routers, cm, &natsInstance, caches, caching.EnableMetrics)
+	phases.done("public routes")
 
 	if err := processCtx.Context().Err(); err != nil {
 		return err
@@ -133,6 +159,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 	if err := mscs.Enable(processCtx, cfg, cm, &natsInstance, routers, &monolith, caches); err != nil {
 		return fmt.Errorf("enable MSCs: %w", err)
 	}
+	phases.done("MSCs")
 
 	if err := processCtx.Context().Err(); err != nil {
 		return err
@@ -142,6 +169,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 		if err := jetstream.RecoverSync(processCtx.Context(), js, &cfg.Global.JetStream); err != nil {
 			return err
 		}
+		phases.done("sync backlog")
 	}
 	// Admission is evaluated per request so a candidate that loses ownership
 	// rejects traffic immediately, including on established keep-alive
