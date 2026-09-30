@@ -70,7 +70,7 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 			JetStream:       true,
 			StoreDir:        string(cfg.StoragePath),
 			NoSystemAccount: true,
-			MaxPayload:      8 * 1024 * 1024, //nolint:mnd
+			MaxPayload:      embeddedMaxPayload,
 			NoSigs:          true,
 			NoLog:           cfg.NoLog,
 			SyncAlways:      true,
@@ -125,6 +125,13 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 		}
 	}
 
+	if limit := nc.MaxPayload(); maxPayloadBelowEmbedded(limit) {
+		logrus.WithFields(logrus.Fields{
+			"max_payload": limit,
+			"recommended": embeddedMaxPayload,
+		}).Warn("NATS max_payload is below the embedded server's limit; room events with large state deltas, such as joins to big rooms, will fail to publish")
+	}
+
 	js, err := nc.JetStream(jsOpts...)
 	if err != nil {
 		logrus.WithError(err).Panic("Unable to get JetStream context")
@@ -134,6 +141,17 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 		js = Protected(js, ownership)
 	}
 	return js, nc
+}
+
+// embeddedMaxPayload is the message size limit of the embedded server.
+// Room events carry their state delta, so a join to a large room can exceed
+// the 1 MiB NATS default by several megabytes.
+const embeddedMaxPayload = 8 * 1024 * 1024
+
+// maxPayloadBelowEmbedded reports whether a server's advertised limit rejects
+// messages that the embedded server would accept.
+func maxPayloadBelowEmbedded(limit int64) bool {
+	return limit < embeddedMaxPayload
 }
 
 // natsConnectOptions builds the NATS client options used for external

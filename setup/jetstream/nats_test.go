@@ -264,3 +264,26 @@ NKEYs are sensitive and should be treated as secrets.
 		t.Fatalf("writing creds file: %v", err)
 	}
 }
+
+func TestMaxPayloadBelowEmbedded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		limit int64
+		want  bool
+	}{
+		{"nats default", 1024 * 1024, true},
+		{"just below embedded", embeddedMaxPayload - 1, true},
+		{"embedded", embeddedMaxPayload, false},
+		{"larger", 16 * 1024 * 1024, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := maxPayloadBelowEmbedded(tc.limit); got != tc.want {
+				t.Fatalf("maxPayloadBelowEmbedded(%d) = %v, want %v", tc.limit, got, tc.want)
+			}
+		})
+	}
+}

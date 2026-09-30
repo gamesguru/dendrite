@@ -32,6 +32,9 @@ When the primary pod is deleted, connections to its address get no reply until t
 The timeout does not shorten the failover itself; it makes those requests fail and be retried instead of hanging.
 JetStream nodes must use independent persistent volumes in separate failure domains and `sync_interval: always` for the documented acknowledged-write guarantee across operating-system failures.
 Replication alone does not imply immediate fsync; see the [NATS durability documentation](https://github.com/nats-io/nats.docs/blob/master/nats-concepts/jetstream/README.md).
+Set `max_payload: 8MB` on every JetStream node to match the embedded server.
+With the 1 MiB NATS default, a room event whose state delta exceeds the limit, such as a join to a room with tens of thousands of members, fails to publish.
+The roomserver stores that event but does not apply it to the room's current state and does not retry the publication.
 S3-compatible services must preserve acknowledged writes across their supported failover and provide read-after-write consistency.
 These are deployment guarantees, not settings that Zendrite can establish through a stream API.
 
