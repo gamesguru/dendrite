@@ -25,8 +25,11 @@ const (
 	PhaseFencing    Phase = "fencing"
 	PhaseRecovering Phase = "recovering"
 	PhaseActive     Phase = "active"
-	PhaseDraining   Phase = "draining"
-	PhaseStopped    Phase = "stopped"
+	// PhaseHandingOver still serves requests in flight during a planned
+	// handover, but routers must not send it new ones.
+	PhaseHandingOver Phase = "handing-over"
+	PhaseDraining    Phase = "draining"
+	PhaseStopped     Phase = "stopped"
 )
 
 // Status is the candidate's probe and observability surface.
@@ -43,8 +46,20 @@ type Status struct {
 	owner      ownership.Owner
 	server     StateReporter
 	acquiredAt time.Time
+	handoverAt time.Time
 	lostAt     time.Time
 	leader     bool
+	// preparation is set once a standby checks whether it may take over.
+	// Until then, and without HA preparation at all, a standby is healthy.
+	preparation *preparation
+}
+
+// preparation is a standby's latest check of whether it may take over.
+type preparation struct {
+	version  string
+	contract Contract
+	recorded Recorded
+	err      error
 }
 
 // StateReporter is the activation's own view of itself, which is more
@@ -104,10 +119,15 @@ func (s *Status) enter(phase Phase) {
 		if !s.acquiredAt.IsZero() {
 			recoveryDuration.Set(s.since.Sub(s.acquiredAt).Seconds())
 		}
+	case PhaseHandingOver:
+		s.handoverAt = s.since
 	case PhaseDraining:
 		s.lostAt = s.since
-		if previous == PhaseActive || previous == PhaseRecovering || previous == PhaseFencing {
+		if previous == PhaseActive || previous == PhaseRecovering || previous == PhaseFencing || previous == PhaseHandingOver {
 			leadershipTransitions.WithLabelValues("lost").Inc()
+		}
+		if previous == PhaseHandingOver {
+			handoverDuration.Set(s.since.Sub(s.handoverAt).Seconds())
 		}
 		s.leader = false
 	case PhaseStopped:
@@ -160,6 +180,8 @@ func (p Phase) merge(server StateReporter) Phase {
 		return PhaseRecovering
 	case lifecycle.Active:
 		return PhaseActive
+	case lifecycle.HandingOver:
+		return PhaseHandingOver
 	case lifecycle.Draining:
 		return PhaseDraining
 	case lifecycle.Stopped:
@@ -193,13 +215,70 @@ func (s *Status) ready() bool {
 }
 
 // Healthy reports candidate availability, independently of Matrix eligibility.
-// Standbys are healthy; incomplete promotion, failures and shutdown are not.
+// A prepared standby is healthy; one that may not take over, incomplete
+// promotion, failures and shutdown are not.
 // Only use this for pod readiness when a separate router checks Ready.
 func (s *Status) Healthy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enter(s.phase.merge(s.server))
-	return (s.phase == PhaseStandby && s.reason == "") || s.ready()
+	return (s.phase == PhaseStandby && s.reason == "" && s.prepared()) || s.ready()
+}
+
+// prepared is called with mu held.
+func (s *Status) prepared() bool { return s.preparation == nil || s.preparation.err == nil }
+
+// errPreparationPending reports that a standby has not yet checked whether it
+// may take over. Until it has, it must not look prepared: a rollout would
+// otherwise replace the next candidate before this one was checked at all.
+var errPreparationPending = errors.New("this standby has not yet checked whether it may take over")
+
+// ExpectPreparation makes a standby unhealthy until its first preparation
+// check completes.
+func (s *Status) ExpectPreparation(version string, contract Contract) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.preparation = &preparation{version: version, contract: contract, err: errPreparationPending}
+	standbyPrepared.Set(0)
+}
+
+// Prepared records a standby's check of whether it may take over: whether it
+// reaches the database, and whether the deployment's upgrade contract admits
+// its build. A standby that may not take over is not healthy, so a rollout
+// that replaces the running build with an incompatible one stalls with the
+// old candidates still serving, instead of discovering the problem at
+// takeover.
+func (s *Status) Prepared(version string, contract Contract, recorded Recorded, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.preparation
+	s.preparation = &preparation{version: version, contract: contract, recorded: recorded, err: err}
+	compatible := 1.0
+	if errors.Is(err, ErrIncompatibleBuild) {
+		compatible = 0
+	}
+	buildCompatible.Set(compatible)
+	if err == nil {
+		standbyPrepared.Set(1)
+	} else {
+		standbyPrepared.Set(0)
+	}
+	switch {
+	case errors.Is(err, errPreparationPending):
+	case err != nil && (previous == nil || previous.err == nil || previous.err.Error() != err.Error()):
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"build_level":      contract.Level,
+			"deployment_level": recorded.Level,
+			"deployment_floor": recorded.Floor,
+		}).Warn("HA standby is not prepared to take over")
+	case err == nil && (previous == nil || previous.err != nil):
+		logrus.WithFields(logrus.Fields{
+			"version":            version,
+			"build_level":        contract.Level,
+			"deployment_level":   recorded.Level,
+			"deployment_version": recorded.Version,
+		}).Info("HA standby is prepared to take over")
+	}
 }
 
 // Handler serves the probe and status endpoints.
@@ -213,6 +292,15 @@ func (s *Status) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /_zendrite/monitor/health", func(w http.ResponseWriter, r *http.Request) {
+		// A router that treats 404 as "stop sending new requests" keeps the
+		// requests already in flight, which a planned handover is waiting
+		// for. Any other failure cuts them.
+		if s.Phase() == PhaseHandingOver {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			s.write(w)
+			return
+		}
 		if !s.Ready() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -239,12 +327,50 @@ func (s *Status) Handler() http.Handler {
 }
 
 type statusBody struct {
-	Phase    Phase    `json:"phase"`
-	Leader   bool     `json:"leader"`
-	Ready    bool     `json:"ready"`
-	Since    string   `json:"since"`
-	Reason   string   `json:"reason,omitempty"`
-	Boundary Boundary `json:"blocked_boundary,omitempty"`
+	Phase    Phase        `json:"phase"`
+	Leader   bool         `json:"leader"`
+	Ready    bool         `json:"ready"`
+	Since    string       `json:"since"`
+	Reason   string       `json:"reason,omitempty"`
+	Boundary Boundary     `json:"blocked_boundary,omitempty"`
+	Upgrade  *upgradeBody `json:"upgrade,omitempty"`
+}
+
+// upgradeBody reports this build's upgrade contract against the deployment's
+// record. The reason is a fixed summary, like the blocking reason, because
+// the endpoint is unauthenticated; the log carries the full cause.
+type upgradeBody struct {
+	Version           string `json:"version"`
+	Protocol          int    `json:"protocol"`
+	Level             int    `json:"level"`
+	UpgradeFrom       int    `json:"upgrade_from"`
+	RollbackTo        int    `json:"rollback_to"`
+	DeploymentLevel   int    `json:"deployment_level,omitempty"`
+	DeploymentFloor   int    `json:"deployment_floor,omitempty"`
+	DeploymentVersion string `json:"deployment_version,omitempty"`
+	Prepared          bool   `json:"prepared"`
+	Compatible        bool   `json:"compatible"`
+	Reason            string `json:"reason,omitempty"`
+}
+
+func (p *preparation) body() *upgradeBody {
+	if p == nil {
+		return nil
+	}
+	body := &upgradeBody{
+		Version: p.version, Protocol: p.contract.Protocol, Level: p.contract.Level, UpgradeFrom: p.contract.UpgradeFrom, RollbackTo: p.contract.RollbackTo,
+		DeploymentLevel: p.recorded.Level, DeploymentFloor: p.recorded.Floor, DeploymentVersion: p.recorded.Version,
+		Prepared: p.err == nil, Compatible: !errors.Is(p.err, ErrIncompatibleBuild),
+	}
+	switch {
+	case !body.Compatible:
+		body.Reason = "the deployment's upgrade contract does not admit this build; an offline upgrade is required, see the candidate logs"
+	case errors.Is(p.err, errPreparationPending):
+		body.Reason = "checking whether this build may take over"
+	case p.err != nil:
+		body.Reason = "cannot read the deployment's compatibility record; see the candidate logs"
+	}
+	return body
 }
 
 func (s *Status) write(w http.ResponseWriter) {
@@ -257,6 +383,7 @@ func (s *Status) write(w http.ResponseWriter) {
 		Reason:   s.reason,
 		Boundary: s.boundary,
 		Ready:    s.ready(),
+		Upgrade:  s.preparation.body(),
 	}
 	s.mu.Unlock()
 	if err := json.NewEncoder(w).Encode(body); err != nil {

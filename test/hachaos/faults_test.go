@@ -21,6 +21,9 @@ type run struct {
 
 	leaderSlot *slot
 	leaderProc *process
+	// plannedUntil is when a planned upgrade or restart finished.
+	plannedUntil time.Time
+	search       *searchProbe
 }
 
 // faultf records the moment of injection, which every recovery time is

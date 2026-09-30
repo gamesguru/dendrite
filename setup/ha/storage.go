@@ -2,37 +2,31 @@ package ha
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// SetCompatibility pins candidates to the exact executable, including local builds.
-func SetCompatibility(cfg *config.Zendrite) error {
+// SetCompatibility records the deployment identity and this build's version.
+// The executable itself is no longer pinned: the build's upgrade contract
+// decides which other builds may take over from it.
+func SetCompatibility(cfg *config.Zendrite, version string) error {
 	if !cfg.Global.HA.Enabled {
 		return nil
 	}
-	path, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("identify HA executable: %w", err)
+	if err := Release().Validate(); err != nil {
+		return fmt.Errorf("invalid HA upgrade contract: %w", err)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open HA executable: %w", err)
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err = io.Copy(h, f); err != nil {
-		return fmt.Errorf("hash HA executable: %w", err)
-	}
-	cfg.Global.HA.Compatibility, err = cfg.HACompatibility(hex.EncodeToString(h.Sum(nil)))
+	var err error
+	cfg.Global.HA.Compatibility, err = cfg.HACompatibility()
+	cfg.Global.HA.Version = version
 	return err
 }
 
@@ -80,21 +74,96 @@ func PrepareStorage(ctx context.Context, cfg *config.Zendrite, gate *PostgresGat
 	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(350, 1)"); err != nil {
 		return fail("cannot acquire migration lock")
 	}
-	if _, err = conn.Exec(ctx, "CREATE TABLE IF NOT EXISTS zendrite_ha_compatibility (id INTEGER PRIMARY KEY CHECK (id = 1), fingerprint TEXT NOT NULL)"); err != nil {
+	if _, err = conn.Exec(ctx, compatibilitySchema); err != nil {
 		return fail("cannot initialize compatibility record")
 	}
-	if _, err = conn.Exec(ctx, "INSERT INTO zendrite_ha_compatibility (id, fingerprint) VALUES (1, $1) ON CONFLICT (id) DO NOTHING", cfg.Global.HA.Compatibility); err != nil {
-		return fail("cannot persist compatibility record")
-	}
-	var fingerprint string
-	if err = conn.QueryRow(ctx, "SELECT fingerprint FROM zendrite_ha_compatibility WHERE id = 1").Scan(&fingerprint); err != nil {
+	recorded, err := readCompatibility(ctx, conn)
+	if err != nil {
 		return fail("cannot read compatibility record")
 	}
-	if fingerprint != cfg.Global.HA.Compatibility {
-		return fail("configuration or executable differs; an offline coordinated upgrade is required")
+	// The candidate checked this before taking the Lease, so a refusal here
+	// means another build activated in between. Refusing still happens before
+	// any migration, which is the boundary that matters for rollback.
+	contract := Release()
+	if err = contract.Admit(cfg.Global.HA.Compatibility, recorded); err != nil {
+		closeConn()
+		return nil, fmt.Errorf("HA storage: %w", err)
+	}
+	next := contract.Next(cfg.Global.HA.Compatibility, cfg.Global.HA.Version, recorded)
+	if _, err = conn.Exec(ctx, `INSERT INTO zendrite_ha_compatibility (id, fingerprint, protocol, level, floor, version, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, now())
+		ON CONFLICT (id) DO UPDATE SET fingerprint = $1, protocol = $2, level = $3, floor = $4, version = $5, updated_at = now()`,
+		next.Fingerprint, next.Protocol, next.Level, next.Floor, next.Version); err != nil {
+		return fail("cannot persist compatibility record")
+	}
+	fields := logrus.Fields{"deployment_level": next.Level, "deployment_floor": next.Floor, "version": next.Version}
+	switch {
+	case recorded.Empty():
+		logrus.WithFields(fields).Info("HA deployment compatibility recorded")
+	case recorded.Level != next.Level:
+		fields["previous_level"], fields["previous_version"] = recorded.Level, recorded.Version
+		logrus.WithFields(fields).Info("HA deployment level changed")
+	}
+	if !recorded.Empty() && next.Floor > recorded.Floor {
+		logrus.WithFields(fields).Warn("HA deployment floor raised; builds below it can no longer take over, and rolling back to one needs the offline procedure")
 	}
 	return closeConn, nil
 }
+
+// compatibilitySchema creates the compatibility record, and upgrades one
+// written by a build without an upgrade contract. The added columns are
+// nullable, so such a record reads as having no level and is refused until
+// the offline upgrade procedure resets it.
+const compatibilitySchema = `
+CREATE TABLE IF NOT EXISTS zendrite_ha_compatibility (id INTEGER PRIMARY KEY CHECK (id = 1), fingerprint TEXT NOT NULL);
+ALTER TABLE zendrite_ha_compatibility
+	ADD COLUMN IF NOT EXISTS protocol INTEGER,
+	ADD COLUMN IF NOT EXISTS level INTEGER,
+	ADD COLUMN IF NOT EXISTS floor INTEGER,
+	ADD COLUMN IF NOT EXISTS version TEXT,
+	ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;`
+
+// readCompatibility reads the deployment's compatibility record without
+// assuming its columns, so that a standby can read it before any activation
+// of its own build has created or upgraded the table.
+func readCompatibility(ctx context.Context, conn querier) (Recorded, error) {
+	var raw []byte
+	err := conn.QueryRow(ctx, "SELECT to_jsonb(c) FROM zendrite_ha_compatibility c WHERE id = 1").Scan(&raw)
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.Is(err, pgx.ErrNoRows), errors.As(err, &pgErr) && pgErr.Code == undefinedTable:
+		return Recorded{}, nil
+	case err != nil:
+		return Recorded{}, fmt.Errorf("read HA compatibility record: %w", err)
+	}
+	var row struct {
+		Fingerprint string  `json:"fingerprint"`
+		Protocol    *int    `json:"protocol"`
+		Level       *int    `json:"level"`
+		Floor       *int    `json:"floor"`
+		Version     *string `json:"version"`
+	}
+	if err = json.Unmarshal(raw, &row); err != nil {
+		return Recorded{}, fmt.Errorf("decode HA compatibility record: %w", err)
+	}
+	recorded := Recorded{Fingerprint: row.Fingerprint}
+	if row.Protocol != nil {
+		recorded.Protocol = *row.Protocol
+	}
+	if row.Level != nil {
+		recorded.Level = *row.Level
+	}
+	if row.Floor != nil {
+		recorded.Floor = *row.Floor
+	}
+	if row.Version != nil {
+		recorded.Version = *row.Version
+	}
+	return recorded, nil
+}
+
+// undefinedTable is PostgreSQL's SQLSTATE for a missing relation.
+const undefinedTable = "42P01"
 
 // connectAs opens a connection bound to the authorized activation, marked so a
 // successor can terminate it and guarded so it cannot be re-established once

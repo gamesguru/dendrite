@@ -16,6 +16,7 @@ Every scenario gets a fresh deployment on one host, built from real processes:
 - etcd and a kube-apiserver with RBAC that grants candidates only `get`, `create` and `update` on Leases.
 - Three zendrite candidates with HA enabled, supervised so that a process that exits is restarted, as the kubelet restarts a container.
 - A router that checks the active-only endpoint every 500 ms and cuts in-flight requests when a backend fails, like the chart's HAProxy routing layer.
+  A backend that answers 404 gets no new requests but keeps the ones in flight, and a request that arrives while no backend is up is held for up to 30 seconds, as the chart's router does.
 - A standalone homeserver joined to the test room, so federation runs in both directions.
 
 Candidates reach every dependency through fault proxies.
@@ -56,6 +57,9 @@ It also checks ownership at every protected boundary:
 
 Recovery time is measured from fault injection to the first successful client write, sync, inbound federation request and outbound federation request, and compared with the 120 second objective.
 
+Planned operations, `rolling-restart` and `rolling-upgrade`, are held to a stricter claim than recovery: every client request and every inbound federation request that overlapped the operation must succeed, and a request that only succeeded when retried counts as a failure.
+The report lists them separately, with the maximum and 99th percentile write latency, the outbound federation requests the successor had to retry, and how long search answered 503 while the successor rebuilt its index, which is the documented exception.
+
 ## Scenarios
 
 | Scenario | Fault |
@@ -63,7 +67,7 @@ Recovery time is measured from fault injection to the first successful client wr
 | `leader-sigkill` | The active candidate is killed. |
 | `leader-graceful-shutdown` | The active candidate receives SIGTERM. |
 | `leader-paused-beyond-lease` | The active candidate is frozen until a successor serves, then resumed. |
-| `rolling-restart` | Every candidate restarts in turn, the active one last. |
+| `rolling-restart` | Every candidate restarts in turn, the active one last, and no request may fail. |
 | `leader-partitioned-from-kubernetes` | The active candidate loses only the Kubernetes API. |
 | `leader-kubernetes-responses-lost` | Lease renewals arrive but their responses are lost. |
 | `leader-partitioned-from-database` | The active candidate loses only PostgreSQL. |
@@ -75,7 +79,10 @@ Recovery time is measured from fault injection to the first successful client wr
 | `fencing-cannot-be-proven` | A backend of the old owner cannot be terminated, so promotion must stay blocked. |
 | `leadership-lost-during-startup` | The successor loses the Kubernetes API while fencing or recovering. |
 | `queued-federation-delivery` | Federation is cut, events queue, and the active candidate is killed. |
-| `coordinated-upgrade` | A different build must not join; the maintenance-window upgrade must keep every write. |
+| `coordinated-upgrade` | A build the upgrade contract does not admit must not become prepared or take the released Lease; the maintenance-window upgrade must keep every write. |
+| `rolling-upgrade` | Every candidate is replaced by the next level, the active one last, and no request may fail. |
+| `rolling-upgrade-successor-fails` | The candidate taking over during a rolling upgrade is killed while it activates. |
+| `rolling-upgrade-broker-leader-lost` | The broker leading the room input stream is killed while the owner hands over during a rolling upgrade. |
 | `msc-relationship-index-failure` | PostgreSQL rejects MSC2836 relationship index writes, and the active candidate is replaced before they are allowed again. |
 
 ## Running it
@@ -99,7 +106,9 @@ Each run writes `report.md`, `results.json` and, per scenario, every process log
 The report counts the HTTP 503 responses the client workload received between the fault and the end of recovery.
 
 CI runs the `ci` tier on changes to HA code, split into four parallel groups, in `.crow/ha-qualification.yaml`.
-A shared build step downloads the control-plane tools and compiles Zendrite, the upgrade binary and the test harness once; the groups then run in separate containers against those binaries.
+A shared build step downloads the control-plane tools and compiles Zendrite, the upgrade binaries and the test harness once; the groups then run in separate containers against those binaries.
+The upgrade binaries are the same source with another version string and HA upgrade contract: `zendrite-next` is the adjacent level, which a rolling upgrade admits, and `zendrite-unadmitted` is a level that needs the offline upgrade.
+Their contracts are set at link time through `setup/ha.contractOverride`, which configuration cannot change.
 `HACHAOS_PHASE=build` prepares the shared tools, and `HACHAOS_PHASE=run` runs them without compiling or downloading Go modules.
 The default `all` phase performs both steps for local runs.
 The script logs tool preparation and build durations, and the test harness reports each scenario duration.
@@ -110,7 +119,8 @@ Manual runs and the `ha-qualification` cron can select the `full` or `reference`
 The harness trades fidelity for reproducibility in a few places:
 
 - Every process shares one host and one clock, and partitions are emulated by proxies.
-- The routing layer reimplements the chart's HAProxy check rather than running HAProxy.
+- The routing layer reimplements the chart's HAProxy check and hold rather than running HAProxy.
+- Both upgrade builds share the release's schema, so a rolling upgrade exercises the handover, the upgrade contract and the successor's recovery, but no migration; an upgrade between real releases should also be tried on a staging deployment.
 - The S3 server is gofakes3, so S3 failover itself is not exercised.
 - The PostgreSQL operator is emulated: the harness promotes the standby and relaxes synchronous commit while no standby exists.
 - Power loss and correlated storage failure are out of scope for a process-level harness.

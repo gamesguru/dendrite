@@ -40,9 +40,100 @@ func TestStorageCompatibilityAndMigrationSerialization(t *testing.T) {
 	unsafe.Global.DatabaseOptions.ConnectionString += " synchronous_commit=off"
 	_, err = PrepareStorage(t.Context(), &unsafe, gate)
 	require.ErrorContains(t, err, "synchronous_commit")
-	cfg.Global.HA.Compatibility = "different-binary"
+	cfg.Global.HA.Compatibility = "different-deployment"
 	_, err = PrepareStorage(t.Context(), cfg, gate)
-	require.ErrorContains(t, err, "configuration or executable differs")
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
+}
+
+// withRelease runs a test as a build with another upgrade contract.
+func withRelease(t *testing.T, c Contract) {
+	t.Helper()
+	previous := release
+	release = c
+	t.Cleanup(func() { release = previous })
+}
+
+// TestUpgradeContractRecord follows one deployment through an upgrade and a
+// rollback, as standbys of each build see it before they take the Lease and
+// as each activation records it.
+func TestUpgradeContractRecord(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer cleanup()
+	cfg := &config.Zendrite{}
+	cfg.Global.HA = config.HA{Enabled: true, Compatibility: "deployment", Version: "v1"}
+	cfg.Global.DatabaseOptions.ConnectionString = config.DataSource(dsn)
+	haCfg := testHAConfig(time.Hour, time.Hour)
+	haCfg.Compatibility = "deployment"
+	activate := func(identity string) {
+		t.Helper()
+		gate := NewPostgresGate(dsn, haCfg)
+		require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: identity, LeaseName: "matrix", LeaseNamespace: "example"}))
+		release, err := PrepareStorage(t.Context(), cfg, gate)
+		require.NoError(t, err)
+		release()
+	}
+	standby := func() (Recorded, error) {
+		t.Helper()
+		return NewPostgresGate(dsn, haCfg).Prepare(t.Context())
+	}
+
+	// A fresh database admits any build, and a standby never creates the record.
+	withRelease(t, Contract{Protocol: 1, Level: 1, UpgradeFrom: 1, RollbackTo: 1})
+	recorded, err := standby()
+	require.NoError(t, err)
+	require.True(t, recorded.Empty())
+	activate("v1-a")
+	recorded, err = standby()
+	require.NoError(t, err)
+	require.Equal(t, Recorded{Fingerprint: "deployment", Protocol: 1, Level: 1, Floor: 1, Version: "v1"}, recorded)
+
+	// A build that skips a level is refused before it would take the Lease,
+	// and the record is untouched.
+	withRelease(t, Contract{Protocol: 1, Level: 3, UpgradeFrom: 2, RollbackTo: 2})
+	_, err = standby()
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
+
+	// A compatible upgrade whose storage no longer supports level 1.
+	withRelease(t, Contract{Protocol: 1, Level: 2, UpgradeFrom: 1, RollbackTo: 2})
+	cfg.Global.HA.Version = "v2"
+	_, err = standby()
+	require.NoError(t, err)
+	activate("v2-a")
+	recorded, err = standby()
+	require.NoError(t, err)
+	require.Equal(t, 2, recorded.Level)
+	require.Equal(t, 2, recorded.Floor)
+
+	// The old build can no longer take over, as a standby or at activation.
+	withRelease(t, Contract{Protocol: 1, Level: 1, UpgradeFrom: 1, RollbackTo: 1})
+	_, err = standby()
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
+	gate := NewPostgresGate(dsn, haCfg)
+	require.NoError(t, gate.Acquire(t.Context(), Candidate{Identity: "v1-b", LeaseName: "matrix", LeaseNamespace: "example"}))
+	_, err = PrepareStorage(t.Context(), cfg, gate)
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
+	recorded, err = NewPostgresGate(dsn, haCfg).Prepare(t.Context())
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
+	require.Equal(t, 2, recorded.Level, "a refused activation must not rewrite the record")
+}
+
+// A deployment last activated by a build without an upgrade contract has a
+// record without a level. It must be refused, so that the first upgrade to a
+// build with a contract takes the offline path.
+func TestRecordWithoutContractIsRefused(t *testing.T) {
+	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer cleanup()
+	conn, err := pgx.Connect(t.Context(), dsn)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(context.WithoutCancel(t.Context())) }()
+	_, err = conn.Exec(t.Context(), "CREATE TABLE zendrite_ha_compatibility (id INTEGER PRIMARY KEY CHECK (id = 1), fingerprint TEXT NOT NULL)")
+	require.NoError(t, err)
+	_, err = conn.Exec(t.Context(), "INSERT INTO zendrite_ha_compatibility (id, fingerprint) VALUES (1, 'digest-of-binary-and-config')")
+	require.NoError(t, err)
+	haCfg := testHAConfig(time.Hour, time.Hour)
+	haCfg.Compatibility = "deployment"
+	_, err = NewPostgresGate(dsn, haCfg).Prepare(t.Context())
+	require.ErrorIs(t, err, ErrIncompatibleBuild)
 }
 
 func TestLeaseCompatibility(t *testing.T) {

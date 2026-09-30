@@ -88,6 +88,7 @@ func renderReport(s settings, results []result) string {
 		c := r.Counts
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", r.Name, c.Acked, c.Lost, c.Unserved, c.Duplicated, c.DuplicatedAcrossTakeover, c.Retried, c.Unacked, c.UnackedCommitted, c.RemoteAcked, c.ToDeviceAcked, c.Unavailable)
 	}
+	renderUpgrades(&b, results)
 	fmt.Fprintf(&b, "\n## Ownership boundaries\n\n")
 	fmt.Fprintf(&b, "| Scenario | Audited commits | Broker publications | Retired-generation publications | Media writes | Federation requests |\n| --- | --- | --- | --- | --- | --- |\n")
 	for _, r := range results {
@@ -263,4 +264,28 @@ func seedSearchHistory(ctx context.Context, e *environment, n int) error {
 	}
 	e.timeline.add(eventNote, "seed", "search history done in %s: %v", time.Since(started).Round(time.Second), err)
 	return err
+}
+
+// renderUpgrades reports the planned operations, whose claim is that no
+// request failed rather than that service recovered.
+func renderUpgrades(b *strings.Builder, results []result) {
+	var planned []result
+	for _, r := range results {
+		if r.Upgrade != nil {
+			planned = append(planned, r)
+		}
+	}
+	if len(planned) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## Planned upgrades and restarts\n\n")
+	fmt.Fprintf(b, "Requests that overlapped the operation, from the first SIGTERM until every candidate was replaced and prepared.\n")
+	fmt.Fprintf(b, "Failed requests fail the scenario; retries do not count as uninterrupted service.\n")
+	fmt.Fprintf(b, "Search answering 503 while the successor rebuilds its index is the documented exception.\n\n")
+	fmt.Fprintf(b, "| Scenario | Window | Requests | Failed | Write latency max | Write latency p99 | Outbound federation retried | Search 503 | Longest search outage |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	for _, r := range planned {
+		u := r.Upgrade
+		fmt.Fprintf(b, "| %s | %.1f s | %d | %d | %.2f s | %.2f s | %d | %d of %d | %.1f s |\n", r.Name, u.Window.Seconds(), sum(u.Requests), sum(u.Failed),
+			u.MaxLatency[kindWrite].Seconds(), u.P99Latency[kindWrite].Seconds(), u.OutboundFailed, u.Search.Unavailable, u.Search.Requests, u.Search.Longest.Seconds())
+	}
 }

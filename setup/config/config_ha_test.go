@@ -37,6 +37,9 @@ func TestHAConfig(t *testing.T) {
 		}, false},
 		{"ownership timeout", func(c *HA) { c.OwnershipTimeout = 0 }, true},
 		{"status address", func(c *HA) { c.StatusAddress = "" }, true},
+		{"handover disabled", func(c *HA) { c.HandoverTimeout = 0 }, false},
+		{"handover grace outlasts timeout", func(c *HA) { c.HandoverGrace = c.HandoverTimeout }, true},
+		{"negative handover grace", func(c *HA) { c.HandoverGrace = -time.Second }, true},
 		{"ownership timeout shorter than lease", func(c *HA) { c.OwnershipTimeout = c.LeaseDuration - time.Second }, true},
 		{"subsecond", func(c *HA) {
 			c.LeaseDuration = time.Second / 2

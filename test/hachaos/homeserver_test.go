@@ -194,11 +194,28 @@ func (s *slot) halt(graceful bool) {
 
 // candidateStatus is the body of /_zendrite/monitor/status.
 type candidateStatus struct {
-	Phase    string `json:"phase"`
-	Leader   bool   `json:"leader"`
-	Ready    bool   `json:"ready"`
-	Reason   string `json:"reason"`
-	Boundary string `json:"blocked_boundary"`
+	Phase    string         `json:"phase"`
+	Leader   bool           `json:"leader"`
+	Ready    bool           `json:"ready"`
+	Reason   string         `json:"reason"`
+	Boundary string         `json:"blocked_boundary"`
+	Upgrade  *upgradeStatus `json:"upgrade"`
+}
+
+// upgradeStatus is a candidate's upgrade contract against the deployment.
+type upgradeStatus struct {
+	Version         string `json:"version"`
+	Level           int    `json:"level"`
+	DeploymentLevel int    `json:"deployment_level"`
+	DeploymentFloor int    `json:"deployment_floor"`
+	Prepared        bool   `json:"prepared"`
+	Compatible      bool   `json:"compatible"`
+	Reason          string `json:"reason"`
+}
+
+// prepared reports whether a standby may take over, as its readiness does.
+func (st candidateStatus) prepared() bool {
+	return st.Phase == "standby" && st.Reason == "" && st.Upgrade != nil && st.Upgrade.Prepared
 }
 
 var probeClient = &http.Client{Timeout: 500 * time.Millisecond}
@@ -218,19 +235,19 @@ func (s *slot) status(ctx context.Context) (candidateStatus, error) {
 	return st, err
 }
 
-// healthy reports whether the active-only readiness probe passes, which is
-// what the router uses to select the backend.
-func (s *slot) healthy(ctx context.Context) bool {
+// health reports the active-only readiness probe's status code, which is
+// what the router uses to select the backend, or zero if it failed.
+func (s *slot) health(ctx context.Context) int {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.statusURL()+"/_zendrite/monitor/health", nil)
 	if err != nil {
-		return false
+		return 0
 	}
 	resp, err := probeClient.Do(req)
 	if err != nil {
-		return false
+		return 0
 	}
 	_ = resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode
 }
 
 // haConfig renders a candidate configuration. Everything that enters the HA
@@ -253,6 +270,8 @@ func haConfig(e *environment, s *slot) ([]byte, error) {
 		Enabled: true, Backend: "kubernetes", LeaseName: leaseName, LeaseNamespace: leaseNamespace, CandidateID: s.name,
 		LeaseDuration: e.timings.Lease, RenewDeadline: e.timings.Renew, RetryPeriod: e.timings.Retry, OwnershipTimeout: e.timings.Ownership,
 		StatusAddress: fmt.Sprintf("127.0.0.1:%d", s.statusPort),
+		// The defaults, which a literal would otherwise leave disabled.
+		HandoverGrace: 2 * time.Second, HandoverTimeout: 15 * time.Second,
 	}
 	commonConfig(cfg)
 	cfg.MSCs.MSCs = e.settings.mscs

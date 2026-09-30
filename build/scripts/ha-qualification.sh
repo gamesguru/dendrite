@@ -96,19 +96,24 @@ if [[ "$phase" != run ]]; then
   echo "HA qualification: control-plane tools ready in $((SECONDS - started))s"
 
   # Build once for all groups, including the harness's NATS and S3 roles.
-  # The upgrade binary differs only in its version string; candidates pin
-  # the exact executable for the compatibility check.
+  # The upgrade builds differ from the release build only in their version
+  # string and HA upgrade contract: zendrite-next is the adjacent level, which
+  # a rolling upgrade admits, and zendrite-unadmitted is a level that needs
+  # the offline upgrade.
   started=$SECONDS
   mkdir -p "$bin"
+  contract="codefloe.com/pat-s/zendrite/setup/ha.contractOverride"
+  version="codefloe.com/pat-s/zendrite/internal.version"
   go build -tags goolm -trimpath -buildvcs=false -o "$bin/zendrite" ./cmd/zendrite
-  go build -tags goolm -trimpath -buildvcs=false -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=hachaos-next" -o "$bin/zendrite-next" ./cmd/zendrite
+  go build -tags goolm -trimpath -buildvcs=false -ldflags "-X $version=hachaos-next -X $contract=adjacent" -o "$bin/zendrite-next" ./cmd/zendrite
+  go build -tags goolm -trimpath -buildvcs=false -ldflags "-X $version=hachaos-unadmitted -X $contract=unadmitted" -o "$bin/zendrite-unadmitted" ./cmd/zendrite
   go test -c -tags goolm -trimpath -buildvcs=false -o "$bin/hachaos.test" ./test/hachaos/
   echo "HA qualification: binaries built in $((SECONDS - started))s"
 fi
 [[ "$phase" != build ]] || exit 0
 
 # Fail explicitly if the build step did not supply a complete tool set.
-for executable in "$assets/kube-apiserver" "$assets/etcd" "$bin/zendrite" "$bin/zendrite-next" "$bin/hachaos.test"; do
+for executable in "$assets/kube-apiserver" "$assets/etcd" "$bin/zendrite" "$bin/zendrite-next" "$bin/zendrite-unadmitted" "$bin/hachaos.test"; do
   if [[ ! -x "$executable" ]]; then
     echo "Missing $executable; run HACHAOS_PHASE=build first" >&2
     exit 1
@@ -117,6 +122,7 @@ done
 export HACHAOS_KUBE_ASSETS="$assets"
 export HACHAOS_ZENDRITE="$bin/zendrite"
 export HACHAOS_ZENDRITE_NEXT="$bin/zendrite-next"
+export HACHAOS_ZENDRITE_UNADMITTED="$bin/zendrite-unadmitted"
 
 started=$SECONDS
 # PostgreSQL server binaries. Package scripts must not start a cluster of

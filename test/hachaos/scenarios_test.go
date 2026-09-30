@@ -27,7 +27,10 @@ type scenario struct {
 	// serving rather than risk an unsafe takeover, so the recovery objective
 	// does not apply while the fault lasts.
 	suspends bool
-	run      func(ctx context.Context, s *run) error
+	// uninterrupted marks planned operations, during which no client or
+	// inbound federation request may fail at all.
+	uninterrupted bool
+	run           func(ctx context.Context, s *run) error
 }
 
 var allTiers = []string{tierCI, tierFull, tierReference}
@@ -391,75 +394,72 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name:        "rolling-restart",
-			description: "Every candidate is restarted one at a time with SIGTERM, standbys first, as a rollout with maxSurge 0 and maxUnavailable 1 does.",
-			tiers:       allTiers,
+			name:          "rolling-restart",
+			description:   "Every candidate is restarted one at a time with SIGTERM, standbys first, as a rollout with maxSurge 0 and maxUnavailable 1 does. The owner hands over; no client or inbound federation request may fail.",
+			tiers:         allTiers,
+			uninterrupted: true,
 			run: func(ctx context.Context, s *run) error {
-				leader, err := s.active()
-				if err != nil {
-					return err
-				}
-				order := make([]*slot, 0, len(s.e.slots))
-				for _, sl := range s.e.slots {
-					if sl != leader {
-						order = append(order, sl)
-					}
-				}
-				order = append(order, leader)
-				for _, sl := range order {
-					if sl == leader {
-						s.faultf(sl.name, "SIGTERM active candidate during rollout")
-					} else {
-						s.e.timeline.add(eventFault, sl.name, "SIGTERM standby during rollout")
-					}
-					old := sl.current()
-					sl.halt(true)
-					if err = sl.start(); err != nil {
-						return err
-					}
-					if sl == leader {
-						if err = s.successor(leader, 3*s.e.timings.Lease+time.Minute); err != nil {
-							return err
-						}
-					}
-					if err = s.e.waitStandbys(ctx, 2*time.Minute); err != nil {
-						return fmt.Errorf("after restarting %s (pid %d): %w", sl.name, old.pid(), err)
-					}
-				}
-				return nil
+				s.faultf("deployment", "rolling restart")
+				return s.roll(ctx, s.e.settings.zendrite, nil)
 			},
 		},
 		{
 			name:        "coordinated-upgrade",
-			description: "A candidate running a different build must not join the running deployment; the documented maintenance-window upgrade must then preserve every acknowledged write.",
+			description: "A build that the upgrade contract does not admit must not join the running deployment or take the Lease when the owner hands over; the documented maintenance-window upgrade must then preserve every acknowledged write.",
 			tiers:       allTiers,
 			run: func(ctx context.Context, s *run) error {
-				if s.e.settings.next == "" {
-					return errors.New("HACHAOS_ZENDRITE_NEXT is not set")
+				if s.e.settings.unadmitted == "" {
+					return errors.New("HACHAOS_ZENDRITE_UNADMITTED is not set")
 				}
 				leader, err := s.active()
 				if err != nil {
 					return err
 				}
-				var standby *slot
+				var standbys []*slot
 				for _, sl := range s.e.slots {
 					if sl != leader {
-						standby = sl
-						break
+						standbys = append(standbys, sl)
 					}
 				}
-				// Mixed versions: the new build must fail closed.
-				standby.halt(true)
-				standby.setBinary(s.e.settings.next)
-				if err = standby.start(); err != nil {
+				// An unadmitted build starts as a standby but must never be
+				// prepared to take over, so a rollout stalls on it.
+				refused := standbys[0]
+				s.e.timeline.add(eventFault, refused.name, "replace a standby with a build the contract does not admit")
+				refused.halt(true)
+				refused.setBinary(s.e.settings.unadmitted)
+				if err = refused.start(); err != nil {
 					return err
 				}
-				time.Sleep(s.e.timings.Lease)
-				if active := s.e.router.activeSlot(); active != leader {
-					s.r.failf("starting a different build moved traffic from %s", leader.name)
+				err = waitFor(ctx, 2*time.Minute, func() error {
+					st, err := refused.status(ctx)
+					switch {
+					case err != nil:
+						return err
+					case st.Upgrade == nil:
+						return errors.New("no upgrade status yet")
+					case st.Upgrade.Compatible || st.prepared():
+						return fmt.Errorf("%s reports itself compatible and prepared", refused.name)
+					}
+					return nil
+				})
+				if err != nil {
+					s.r.failf("the unadmitted build was not refused: %v", err)
 				}
-				if st, err := standby.status(ctx); err == nil && st.Ready {
-					s.r.failf("%s reported ready while running a different build", standby.name)
+				if active := s.e.router.activeSlot(); active != leader {
+					s.r.failf("starting an unadmitted build moved traffic from %s", leader.name)
+				}
+				// The owner hands over; only the admitted standby may take the
+				// released Lease.
+				s.e.timeline.add(eventFault, leader.name, "SIGTERM the owner while an unadmitted build waits")
+				leader.halt(true)
+				if err = s.successor(leader, 3*s.e.timings.Lease+time.Minute); err != nil {
+					return err
+				}
+				if active := s.e.router.activeSlot(); active == refused {
+					s.r.failf("the unadmitted build %s took over", refused.name)
+				}
+				if err = leader.start(); err != nil {
+					return err
 				}
 				// Maintenance window: stop everything, reset compatibility,
 				// start one new candidate, then scale up.
@@ -471,7 +471,7 @@ func scenarios() []scenario {
 					return err
 				}
 				for _, sl := range s.e.slots {
-					sl.setBinary(s.e.settings.next)
+					sl.setBinary(s.e.settings.unadmitted)
 				}
 				if err = s.e.slots[0].start(); err != nil {
 					return err
@@ -490,6 +490,9 @@ func scenarios() []scenario {
 				return s.e.waitStandbys(ctx, 2*time.Minute)
 			},
 		},
+		rollingUpgradeScenario(),
+		successorFailsScenario(),
+		brokerLossScenario(),
 		mscIndexFailureScenario(),
 	}
 }
@@ -512,6 +515,9 @@ var scenarioGroups = map[string]string{
 	"leadership-lost-during-startup":     "lifecycle",
 	"queued-federation-delivery":         "lifecycle",
 	"coordinated-upgrade":                "lifecycle",
+	"rolling-upgrade":                    "lifecycle",
+	"rolling-upgrade-successor-fails":    "lifecycle",
+	"rolling-upgrade-broker-leader-lost": "dependency",
 	"msc-relationship-index-failure":     "dependency",
 }
 
@@ -635,6 +641,9 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	time.Sleep(15 * time.Second)
 	w.halt()
 	measureRecovery(&r, w, e)
+	if sc.uninterrupted {
+		verifyUninterrupted(&r, w, e, sr)
+	}
 	r.Counts.Unavailable = int(w.unavailable.Load())
 	settle := 2 * time.Minute
 	verifyClientState(ctx, &r, w, e, settle)

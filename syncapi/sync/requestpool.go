@@ -375,6 +375,12 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			case <-timer.C: // Timeout reached
 				return giveup()
 
+			// A planned handover answers now, as if the timeout had been
+			// reached, so the client's next sync reaches the successor
+			// instead of being cut when this owner stops.
+			case <-process.Quiescing(syncReq.Context):
+				return giveup()
+
 			case <-userStreamListener.GetNotifyChannel(syncReq.Since):
 				currentPos.ApplyUpdates(userStreamListener.GetSyncPosition())
 				syncReq.Log.WithField("currentPos", currentPos).Debugln("Responding to sync after wake-up")

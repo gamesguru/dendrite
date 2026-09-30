@@ -1,6 +1,6 @@
 ---
 title: HA storage and recovery
-description: Storage prerequisites, recovery readiness, and coordinated upgrades for active-passive candidates.
+description: Storage prerequisites, recovery readiness, and upgrades for active-passive candidates.
 ---
 
 HA remains opt-in and experimental.
@@ -63,32 +63,45 @@ Do not delete occupied streams or consumers to make validation pass.
 
 ## Candidate compatibility and upgrades
 
-Candidates compute a fingerprint from the exact executable, public signing identities, effective PostgreSQL target and session parameters, broker endpoints/domain/prefix/replication, media namespace, search settings, and the set of enabled MSCs.
-Enabling or disabling an MSC is therefore an offline upgrade.
+Candidates compute a deployment identity from the public signing identities, effective PostgreSQL target and session parameters, broker endpoints/domain/prefix/replication, media namespace, search settings, and the set of enabled MSCs.
+Every candidate must present the same identity; enabling or disabling an MSC is therefore an offline upgrade.
+The executable is not part of it: which builds may take over from each other is declared by their [upgrade contract](/administration/high-availability/#upgrade-contract).
 Disabling `msc2836` leaves its `MSC2836RoomServerConsumerPull` durable, named with the topic prefix, on the roomserver output stream, which HA will not delete; remove it during the same maintenance window, or it retains every roomserver output message.
 Signing private keys and database passwords, NATS credentials, and S3 credentials are excluded from the stored record.
 Error messages never print the fingerprint inputs.
 Password/token rotation within the same database user, NATS account, and S3 namespace does not require resetting compatibility.
 NATS credentials on every candidate must resolve to the same account; changing an account is an offline namespace migration.
-Use the same executable artifact and homeserver configuration on every candidate; mixed binaries, including different local builds, are unsupported.
+Use the same homeserver configuration on every candidate.
+Different builds, including local builds, may share a deployment only where their upgrade contracts admit each other.
 
 Ownership authority itself lives in `zendrite_ha_ownership`, separately from the compatibility records described here.
 The Lease annotation `zendrite.codefloe.com/compatibility` pins the election scope before ownership is granted.
 An existing Lease with a missing or mismatched annotation fails closed, including a manually precreated Lease.
 The initial candidate creates the annotated Lease; do not replace an existing Lease to bypass a mismatch.
 Owner history is retained independently of the Lease in `zendrite_ha_ownership_history`.
-After fenced ownership, a dedicated PostgreSQL connection obtains an advisory migration lock and commits a second compatibility record in `zendrite_ha_compatibility` before component constructors run.
+After fenced ownership, a dedicated PostgreSQL connection obtains an advisory migration lock, checks the deployment identity and upgrade contract against `zendrite_ha_compatibility`, and records its own level and the raised floor there before component constructors run.
+Standbys read this record, but never write it.
 That connection holds the lock through initialization, recovery, and listener binding.
 It carries the activation marker as well, so a successor's sweep terminates it like any other application backend.
 Application initialization failure leaves the compatibility record pinned, stops readiness, and requires a fresh process.
-Migration transactions retain their existing rollback behavior; a partially completed sequence is retried only by the same compatible binary under safe ownership.
+Migration transactions retain their existing rollback behavior; a partially completed sequence is retried only by a build the record admits, under safe ownership.
 Incompatible schema errors during initialization prevent readiness.
 
-Upgrades require an offline maintenance window: stop and fence every candidate, back up the database/broker/media, verify the intended schema migration with the new binary, and deploy the same artifact everywhere.
-Only after verifying that no former activation can return may an operator deliberately reset both compatibility records and bootstrap the new configuration.
+### Migrations during a rolling upgrade
+
+Migrations run only in an activation, after the previous owner has been fenced and under the migration lock, so the old and new builds never write the schema at the same time and a standby never changes storage the running owner uses.
+A migration therefore delays the successor's readiness, and a planned handover holds requests for that long: keep migrations that run during a rolling upgrade short, and move long data backfills to background work that tolerates restarts.
+A migration that an older level cannot run against, such as dropping or renaming a column it reads, must raise `rollback_to`; one that the new level needs before it can read older data must raise `upgrade_from`, which makes the upgrade offline.
+Split such changes over several levels where possible: first add the new structure and write both, then stop using the old one, and drop it only in a later level whose `rollback_to` excludes builds that still read it.
+Every level's schema, migrations and streams are recorded in `setup/ha/testdata/surface.txt`, and CI refuses a change to them that does not declare a new level.
+
+### Offline upgrades
+
+Offline upgrades are needed when the upgrade contract does not admit the new build, or the deployment identity changes: stop and fence every candidate, back up the database/broker/media, verify the intended schema migration with the new binary, and deploy the same artifact everywhere.
+Only after verifying that no former activation can return may an operator deliberately reset both compatibility records, by deleting the Lease and the `zendrite_ha_compatibility` row, and bootstrap the new configuration.
 A failed or ambiguous migration must leave candidates stopped until the schema is repaired or the coordinated backup is restored.
-Changing the fingerprint is not a schema migration and does not make an old binary safe to run against a newer schema.
-Rolling mixed-version upgrades and automatic schema downgrade are unsupported.
+Resetting the records is not a schema migration and does not make an old binary safe to run against a newer schema.
+Automatic schema downgrade is unsupported.
 
 ## Promotion recovery and search
 

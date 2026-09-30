@@ -131,6 +131,19 @@ Anything that proves that the code is functioning as intended is great, and to e
 
 We use the standard [Go testing package](https://gobyexample.com/testing) for this, alongside some helper functions in our own `test` package.
 
+## Changing shared state
+
+HA deployments run an old and a new build against the same database and streams during a [rolling upgrade](/administration/high-availability/#rolling-upgrades), so a change to that shared state needs a new HA upgrade level.
+`TestContractSurface` in `setup/ha` creates every table in a fresh PostgreSQL database and compares the schema, the recorded migrations and the JetStream stream definitions with `setup/ha/testdata/surface.txt`.
+When it fails, raise `Level` in `setup/ha/contract.go` and decide the other two fields:
+
+- Keep `UpgradeFrom` and `RollbackTo` at the previous level when the change is backward compatible, such as a new table, a nullable column, or a new optional message field.
+- Raise `RollbackTo` when an older build cannot work with what this one writes, such as a dropped column it reads or a message it cannot decode.
+- Raise `UpgradeFrom` when this build cannot take over from an older one, such as a changed stream or a migration that needs the old build stopped first; that makes the upgrade offline.
+
+Then record the level with `go test ./setup/ha -run TestContractSurface -update`, which adds it to `setup/ha/testdata/levels.json`, the published upgrade matrix.
+The test cannot see message formats, so a change to a JetStream message that an older build cannot decode needs the same treatment without a failing test.
+
 ## Continuous integration
 
 When a Pull Request is submitted, continuous integration jobs are run automatically by Forgejo Actions to ensure that the code builds and works.

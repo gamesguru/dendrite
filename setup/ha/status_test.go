@@ -29,7 +29,7 @@ func TestStatusReportsStandbyAsLiveButNotReady(t *testing.T) {
 }
 
 func TestCandidateHealthIsSeparateFromTrafficEligibility(t *testing.T) {
-	for _, phase := range []Phase{PhaseStarting, PhaseStandby, PhaseFencing, PhaseRecovering, PhaseActive, PhaseDraining, PhaseStopped} {
+	for _, phase := range allPhases {
 		t.Run(string(phase), func(t *testing.T) {
 			status := NewStatus()
 			status.Observe(phase, "")
@@ -287,4 +287,72 @@ func TestStatusRejectsStaleAndRetiredOwnersBeforeLifecycleStops(t *testing.T) {
 			require.True(t, status.Ready(), "temporary staleness may recover without lifecycle restart")
 		})
 	}
+}
+
+// A handing-over owner answers the active-only check with 404, which the
+// chart's router reads as "send no new requests, keep the ones in flight".
+// It is neither routable nor a healthy candidate.
+func TestHandingOverAsksRoutersToDrain(t *testing.T) {
+	status := NewStatus()
+	status.Observe(PhaseActive, "")
+	require.Equal(t, http.StatusOK, probe(t, status, "/_zendrite/monitor/health"))
+	status.Observe(PhaseHandingOver, "")
+	require.Equal(t, http.StatusNotFound, probe(t, status, "/_zendrite/monitor/health"))
+	require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/candidate"))
+	require.False(t, status.Ready())
+	status.Observe(PhaseDraining, "")
+	require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/health"),
+		"once draining, remaining requests are cut and the router must mark it down")
+}
+
+func TestHandingOverFollowsTheActivation(t *testing.T) {
+	processes := make(chan *process.ProcessContext, 1)
+	server := lifecycle.New(func(p *process.ProcessContext) error { processes <- p; return nil }, time.Second)
+	status := NewStatus()
+	status.Track(server)
+	ownership, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	go func() { _ = server.Run(ownership) }()
+	p := <-processes
+	require.Eventually(t, func() bool { return status.Phase() == PhaseActive }, 5*time.Second, time.Millisecond)
+	go p.Serve(func() { <-p.WaitForShutdown() })
+	go server.HandOver(time.Hour, time.Hour)
+	require.Eventually(t, func() bool { return status.Phase() == PhaseHandingOver }, 5*time.Second, time.Millisecond)
+	require.Equal(t, http.StatusNotFound, probe(t, status, "/_zendrite/monitor/health"))
+}
+
+// A standby that may not take over is live but not a healthy candidate, so
+// a rollout that introduces an incompatible build stalls before it replaces
+// any running candidate, and the status says why.
+func TestStandbyPreparation(t *testing.T) {
+	contract := Contract{Protocol: 1, Level: 3, UpgradeFrom: 3, RollbackTo: 3}
+	recorded := Recorded{Fingerprint: "deployment", Protocol: 1, Level: 1, Floor: 1, Version: "v1"}
+	status := NewStatus()
+	status.Observe(PhaseStandby, "")
+	require.True(t, status.Healthy(), "without HA preparation, a standby is healthy")
+	status.ExpectPreparation("v3", contract)
+	require.False(t, status.Healthy(), "a standby that has not checked yet is not prepared")
+
+	status.Prepared("v3", contract, recorded, contract.Admit("deployment", recorded))
+	require.Equal(t, http.StatusServiceUnavailable, probe(t, status, "/_zendrite/monitor/candidate"))
+	require.Equal(t, http.StatusOK, probe(t, status, "/_zendrite/monitor/up"))
+	recorder := httptest.NewRecorder()
+	status.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/_zendrite/monitor/status", nil))
+	var body statusBody
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.NotNil(t, body.Upgrade)
+	require.False(t, body.Upgrade.Compatible)
+	require.False(t, body.Upgrade.Prepared)
+	require.Equal(t, 3, body.Upgrade.Level)
+	require.Equal(t, 1, body.Upgrade.DeploymentLevel)
+	require.Equal(t, "v1", body.Upgrade.DeploymentVersion)
+	require.Contains(t, body.Upgrade.Reason, "offline upgrade")
+	require.NotContains(t, recorder.Body.String(), "deployment\"", "the fingerprint is not reported")
+
+	status.Prepared("v3", contract, recorded, errors.New("connect to the HA database: refused"))
+	require.False(t, status.Healthy(), "a standby that cannot reach the database cannot take over")
+
+	recorded.Level, recorded.Floor = 3, 3
+	status.Prepared("v3", contract, recorded, nil)
+	require.True(t, status.Healthy())
 }

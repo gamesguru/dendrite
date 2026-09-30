@@ -21,8 +21,11 @@ const (
 	Standby    State = "standby"
 	Recovering State = "recovering"
 	Active     State = "active"
-	Draining   State = "draining"
-	Stopped    State = "stopped"
+	// HandingOver still serves, but has asked routers to send new requests
+	// elsewhere and is waiting for the ones in flight.
+	HandingOver State = "handing-over"
+	Draining    State = "draining"
+	Stopped     State = "stopped"
 )
 
 // ErrAlreadyStarted prevents reuse of stopped application singletons.
@@ -58,8 +61,59 @@ func (h *Homeserver) State() State {
 	return h.state
 }
 
-// Ready reports whether initialization completed and ownership has not been canceled.
-func (h *Homeserver) Ready() bool { return h.State() == Active }
+// Ready reports whether initialization completed and ownership has not been
+// canceled. A homeserver that is handing over is still ready: it admits the
+// requests a router sent before it noticed the handover.
+func (h *Homeserver) Ready() bool {
+	state := h.State()
+	return state == Active || state == HandingOver
+}
+
+// handoverPoll is how often a handover checks for requests still in flight.
+const handoverPoll = 50 * time.Millisecond
+
+// HandOver lets an active homeserver stop without failing requests.
+//
+// It announces the handover, which routers see as a failed active-only check
+// that must not cut established requests, and wakes long-polling requests so
+// that they answer now. It keeps admitting requests for grace, so a request a
+// router sent before its next health check still succeeds, and then waits for
+// every request in flight to finish, for at most timeout in total.
+//
+// It does not stop the homeserver or release ownership: the caller stops it
+// afterwards, as for any shutdown. A homeserver that is not active, or that
+// loses ownership meanwhile, returns at once.
+func (h *Homeserver) HandOver(grace, timeout time.Duration) {
+	h.mu.Lock()
+	p := h.process
+	if h.state != Active || p == nil || p.Context().Err() != nil {
+		h.mu.Unlock()
+		return
+	}
+	h.state = HandingOver
+	h.mu.Unlock()
+	started := time.Now()
+	logrus.WithFields(logrus.Fields{"grace": grace, "timeout": timeout}).Info("Handing over: routers are told to send new requests elsewhere")
+	p.Quiesce()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	if !process.Sleep(p.Context(), grace) {
+		return
+	}
+	ticker := time.NewTicker(handoverPoll)
+	defer ticker.Stop()
+	for p.InFlight() > 0 {
+		select {
+		case <-p.Context().Done():
+			return
+		case <-deadline.C:
+			logrus.WithFields(logrus.Fields{"duration": time.Since(started).Round(time.Millisecond), "in_flight": p.InFlight()}).Warn("Handover timed out; requests still in flight will be cut")
+			return
+		case <-ticker.C:
+		}
+	}
+	logrus.WithField("duration", time.Since(started).Round(time.Millisecond)).Info("Handover drained every request in flight")
+}
 
 // Stop revokes local admission and cancels application work. Run joins the workers.
 // Stop is terminal, including before Run; it is not a fencing mechanism.

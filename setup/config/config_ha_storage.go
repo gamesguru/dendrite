@@ -98,9 +98,18 @@ func (c *Zendrite) haDatabases() []DataSource {
 	return databases
 }
 
-// HACompatibility fingerprints shared identities, namespaces and the exact binary.
+// haIdentityFormat distinguishes this fingerprint from the one recorded by
+// builds that also hashed their executable, so the two can never compare
+// equal and such a deployment is refused rather than joined.
+const haIdentityFormat = "deployment-identity/v1"
+
+// HACompatibility fingerprints the deployment's identity: shared signing
+// identities, storage targets, namespaces and the features that change what
+// candidates store. It deliberately excludes the executable, whose
+// compatibility the build's HA upgrade contract declares instead, so that a
+// rolling upgrade can change the build but never the deployment.
 // Credentials and private signing material are never included in the record.
-func (c *Zendrite) HACompatibility(binaryDigest string) (string, error) {
+func (c *Zendrite) HACompatibility() (string, error) {
 	db, err := pgx.ParseConfig(string(c.Global.DatabaseOptions.ConnectionString))
 	if err != nil {
 		return "", fmt.Errorf("invalid HA PostgreSQL target")
@@ -132,7 +141,7 @@ func (c *Zendrite) HACompatibility(binaryDigest string) (string, error) {
 	// Candidates must agree on the enabled MSCs: they change the routes served,
 	// the JetStream consumers and the tables written. Their storage is the
 	// global database, which VerifyHAStorage enforces and targets covers.
-	data, err := json.Marshal([]any{binaryDigest, identities, targets, db.User, db.Database, db.RuntimeParams, addresses, c.Global.JetStream.TopicPrefix, c.Global.JetStream.JetStreamDomain, c.Global.JetStream.Replicas, c.MediaAPI.StorageType(), c.MediaAPI.Storage.Local, c.MediaAPI.BasePath, s3.Endpoint, s3.Region, s3.Bucket, s3.Prefix, c.SyncAPI.Fulltext.Enabled, c.SyncAPI.Fulltext.Language, c.MSCs.normalized()})
+	data, err := json.Marshal([]any{haIdentityFormat, identities, targets, db.User, db.Database, db.RuntimeParams, addresses, c.Global.JetStream.TopicPrefix, c.Global.JetStream.JetStreamDomain, c.Global.JetStream.Replicas, c.MediaAPI.StorageType(), c.MediaAPI.Storage.Local, c.MediaAPI.BasePath, s3.Endpoint, s3.Region, s3.Bucket, s3.Prefix, c.SyncAPI.Fulltext.Enabled, c.SyncAPI.Fulltext.Language, c.MSCs.normalized()})
 	if err != nil {
 		return "", fmt.Errorf("encode HA compatibility: %w", err)
 	}

@@ -13,8 +13,11 @@ import (
 // HA configures opt-in Kubernetes Lease election for one homeserver.
 // Election does not authorize application effects without an ownership gate.
 type HA struct {
-	// Compatibility is computed from the loaded configuration and executable.
-	Compatibility  string `yaml:"-"`
+	// Compatibility is the deployment identity, computed from the loaded
+	// configuration. Candidates must agree on it exactly.
+	Compatibility string `yaml:"-"`
+	// Version is this build's version string, recorded for operators.
+	Version        string `yaml:"-"`
 	Enabled        bool   `yaml:"enabled"`
 	Backend        string `yaml:"backend"`
 	LeaseName      string `yaml:"lease_name"`
@@ -30,6 +33,13 @@ type HA struct {
 	// StatusAddress serves liveness, readiness, status, and metrics for every
 	// candidate, including standbys that never bind the Matrix listeners.
 	StatusAddress string `yaml:"status_address"`
+	// HandoverGrace is how long an owner asked to stop keeps admitting new
+	// requests after it has told routers to stop sending them, so requests
+	// dispatched before a router's next health check still succeed.
+	HandoverGrace time.Duration `yaml:"handover_grace"`
+	// HandoverTimeout bounds a planned handover: the grace period plus the
+	// wait for in-flight requests. Zero stops the owner immediately instead.
+	HandoverTimeout time.Duration `yaml:"handover_timeout"`
 }
 
 // Defaults keeps HA disabled and supplies the reference election timings.
@@ -48,6 +58,16 @@ func (c *HA) Defaults() {
 	c.RetryPeriod = referenceRetryPeriod
 	c.OwnershipTimeout = referenceOwnershipTimeout
 	c.StatusAddress = ":8009"
+	const (
+		// Two of the reference router's 500 ms health checks, each with its
+		// 500 ms timeout.
+		referenceHandoverGrace = 2 * time.Second
+		// Leaves the 30 second application shutdown budget and the Lease
+		// release inside a 60 second termination grace period.
+		referenceHandoverTimeout = 15 * time.Second
+	)
+	c.HandoverGrace = referenceHandoverGrace
+	c.HandoverTimeout = referenceHandoverTimeout
 }
 
 // Verify rejects ambiguous identities and unsafe election timings when enabled.
@@ -88,6 +108,9 @@ func (c *HA) Verify(errs *ConfigErrors) {
 	// that no backend of the retired activation remains connected.
 	if c.OwnershipTimeout < c.LeaseDuration {
 		errs.Add("global.ha.ownership_timeout must be at least global.ha.lease_duration")
+	}
+	if c.HandoverGrace < 0 || c.HandoverTimeout < 0 || (c.HandoverTimeout > 0 && c.HandoverGrace >= c.HandoverTimeout) {
+		errs.Add("global.ha.handover_grace must be shorter than global.ha.handover_timeout, and neither may be negative")
 	}
 	// Match client-go's jitter constraint without importing its election runtime here.
 	const jitterFactor = 1.2

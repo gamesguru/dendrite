@@ -32,7 +32,9 @@ type result struct {
 
 	Generations []ownershipRecord `json:"generations,omitempty"`
 	Counts      counts            `json:"counts"`
-	Duration    time.Duration     `json:"duration"`
+	// Upgrade reports a planned upgrade's uninterrupted-service measurements.
+	Upgrade  *upgradeReport `json:"upgrade,omitempty"`
+	Duration time.Duration  `json:"duration"`
 }
 
 // recovery is measured from fault injection to the first success. A nil

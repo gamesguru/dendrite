@@ -28,6 +28,8 @@ global:
     retry_period: 5s
     ownership_timeout: 45s
     status_address: :8009
+    handover_grace: 2s
+    handover_timeout: 15s
 ```
 
 Enable HA only once the [prerequisites](#prerequisites) are in place.
@@ -53,7 +55,7 @@ Start from one of these profiles:
 | Faster failover | 20s | 15s | 2s | 30s | 22 seconds | A control plane whose Lease write latency you monitor and have seen stay well under 15 seconds, including during etcd leader elections. |
 
 The Helm chart's `ha.leaseDuration`, `ha.renewDeadline`, `ha.retryPeriod` and `ha.ownershipTimeout` values set these fields, and its defaults are the default profile.
-Timings are not part of the candidate compatibility fingerprint, so a normal rolling update can change them.
+Timings are not part of the deployment identity, so a normal rolling update can change them.
 
 Follow these rules when you deviate from a profile:
 
@@ -84,7 +86,7 @@ Without it a standby would look dead to Kubernetes and be restarted, and its met
 | Endpoint | Meaning |
 | --- | --- |
 | `/_zendrite/monitor/up` | Liveness. Succeeds for any running candidate, including a standby. |
-| `/_zendrite/monitor/health` | Readiness. Succeeds only for the active homeserver. |
+| `/_zendrite/monitor/health` | Readiness. Succeeds only for the active homeserver, and answers 404 while it hands over. |
 | `/_zendrite/monitor/status` | Phase, leadership, readiness, and the blocking reason as JSON. |
 | `/metrics` | Prometheus metrics, when `global.metrics.enabled` is set. |
 
@@ -92,7 +94,7 @@ Point the liveness probe at `/_zendrite/monitor/up` and the readiness probe at `
 The same paths also exist on the Matrix listener, which a standby never binds, so probing them there makes every standby fail its probes and restart.
 Using the readiness endpoint for liveness has the same effect, because a standby is intentionally unready.
 
-A candidate reports one of `starting`, `standby`, `fencing`, `recovering`, `active`, `draining`, or `stopped`.
+A candidate reports one of `starting`, `standby`, `fencing`, `recovering`, `active`, `handing-over`, `draining`, or `stopped`.
 An elected candidate stays unready through `fencing` and `recovering`, so a Service only routes to it once ownership is established and recovery is complete.
 When promotion is blocked, `/_zendrite/monitor/status` names the boundary and the reason.
 
@@ -109,8 +111,12 @@ Candidate identity and ownership generation are deliberately never labels, becau
 | `zendrite_ha_fencing_failures_total{boundary}` | Ownership establishment failures per boundary. |
 | `zendrite_ha_recovery_duration_seconds` | Acquisition to readiness for the current activation. |
 | `zendrite_ha_shutdown_duration_seconds` | Ownership loss to the end of draining. |
+| `zendrite_ha_handover_duration_seconds` | Start of a planned handover to the end of its wait for requests in flight. |
+| `zendrite_ha_standby_prepared` | 1 while this standby reaches the database and may take over, 0 otherwise. |
+| `zendrite_ha_build_compatible` | 0 when the deployment's upgrade contract does not admit this build. |
+| `zendrite_ha_build_info{protocol,level,upgrade_from,rollback_to}` | This build's upgrade contract; always 1. |
 
-Alert on no ready leader, repeated elections, stuck recovery, and repeated fencing failures.
+Alert on no ready leader, repeated elections, stuck recovery, repeated fencing failures, and a candidate whose build the upgrade contract refuses.
 The chart ships these rules; see [Helm setup](/installation/helm/helm/).
 
 Note that `zendrite_ha_shutdown_duration_seconds` is set as the process drains, so a scrape may not catch it before the process exits.
@@ -203,7 +209,7 @@ The pods' service account needs `get`, `create`, and `update` permissions on `le
 - An external HA PostgreSQL with synchronous commit, and an external replicated JetStream.
   The bundled single-node PostgreSQL and the embedded NATS server are rejected in HA mode.
 - Shared media: S3, or an explicitly shared POSIX filesystem.
-- The same signing key, server name, and executable on every candidate.
+- The same signing key, server name, and configuration on every candidate, running builds that the deployment's [upgrade contract](#upgrade-contract) admits.
 - Every candidate must connect as the same PostgreSQL role, which HA already enforces by rejecting per-component database targets.
 
 See [HA storage and recovery](/installation/manual/high-availability/) for the full storage contract.
@@ -220,26 +226,123 @@ The first candidate creates the annotated Lease and the ownership record.
 Only then scale up.
 Starting several candidates against an empty database at once is safe but harder to diagnose if a prerequisite is wrong.
 
-## Upgrades
+## Rolling upgrades
 
-Rolling mixed-version upgrades are not supported: candidates pin themselves to one executable and configuration fingerprint.
-A new-version pod fails the Lease compatibility check, so replacing pods one at a time deadlocks. Once the last old pod is gone, nothing can acquire the Lease without operator intervention.
+A build that the deployment's upgrade contract admits can replace the running one while clients keep working.
+This needs active-only routing that holds requests while no candidate is active and drains a candidate that answers 404, as the Helm chart's `ha.routing.enabled` does; see [Helm setup](/installation/helm/helm/).
+Without such routing, every handover is a short outage like a [manual failover](#manual-failover).
 
-Upgrade in a maintenance window instead, as described in [HA storage and recovery](/installation/manual/high-availability/): scale to zero, confirm no pod is running, deliberately reset both compatibility records, then scale back up on the new version.
-`maxSurge: 0` keeps a new candidate from being started alongside an old owner, but it does not make a rolling upgrade work.
+### Upgrade contract
+
+Every build declares an upgrade contract instead of pinning its exact executable:
+
+| Field | Meaning |
+| --- | --- |
+| `protocol` | The ownership, fencing and compatibility record protocol. Builds of different protocols never share a deployment. |
+| `level` | The build's shared-state surface: the PostgreSQL schema and migrations, and the JetStream streams and message formats. It rises with every change to that surface. |
+| `upgrade_from` | The oldest level this build can take over from, including the messages such a build left queued. |
+| `rollback_to` | The oldest level that may take over from state this build has written. |
+
+Each candidate logs its contract at startup as `HA upgrade contract`, and exports it as `zendrite_ha_build_info`.
+Candidates must still agree on the deployment's identity: signing keys, server name, database, broker and media targets and namespaces, search settings, and enabled MSCs.
+Changing any of those remains an [offline upgrade](#offline-upgrades).
+
+The deployment records, in `zendrite_ha_compatibility`, the level of the build that activated last and a floor.
+The floor is the highest `rollback_to` of every build that has activated, because storage keeps every migration a build ran, so it only rises.
+A candidate may take over when its protocol matches, its level is at or above the floor, and, if its level is above the recorded one, its `upgrade_from` is at or below the recorded level.
+
+The contract is checked three times, and never by writing storage the running owner uses:
+
+- A standby checks the record every `retry_period`.
+  It is a healthy candidate on `/_zendrite/monitor/candidate` only while the record admits it and it reaches the database, so an incompatible image never becomes Ready and a rollout stalls on it while the old candidates keep serving.
+- Before every attempt to take the Lease, the candidate checks again, so an incompatible build never retires the running owner, even when the owner has released the Lease.
+- After fencing, activation checks once more under the migration lock and records its own level before any migration runs.
+
+`/_zendrite/monitor/status` reports the contract, the deployment's level, floor and last activated version, and whether the standby is prepared:
+
+```json
+{"phase": "standby", "upgrade": {"version": "3.5.0", "protocol": 1, "level": 2, "upgrade_from": 1, "rollback_to": 1, "deployment_level": 1, "deployment_floor": 1, "deployment_version": "3.4.0", "prepared": true, "compatible": true}}
+```
+
+A refused standby logs `HA standby is not prepared to take over` with the reason, reports `compatible: false`, and sets `zendrite_ha_build_compatible` to 0.
+
+### Supported upgrades
+
+The upgrade matrix is recorded in `setup/ha/testdata/levels.json` in the source repository, one entry per level, and CI refuses a change to the shared-state surface that does not declare a new level.
+
+| Level | Introduced | Upgrades from | Rolls back to |
+| --- | --- | --- | --- |
+| 1 | first release after 3.3.0 | 1 | 1 |
+
+Builds of the same level are always interchangeable, so patch releases and rebuilds roll without restrictions.
+A new level lists how far back it can upgrade from; unless its `upgrade_from` says so, only adjacent levels are supported, and skipping a level needs an intermediate rollout or an offline upgrade.
+Earlier releases pinned their exact executable and have no contract, so reaching level 1 is one last offline upgrade.
+
+These changes still need an offline upgrade:
+
+- Anything in the deployment identity, including enabling or disabling an MSC, changing the topic prefix, or moving media.
+- A level whose `upgrade_from` excludes the running level, for example a stream storage, retention or subject change, which HA refuses to apply to an existing stream.
+- A rollback below the floor.
+
+### Runbook
+
+1. Read the new release's level, `upgrade_from` and `rollback_to` in its release notes or `levels.json`, and compare them with `deployment_level` and `deployment_floor` in the status of a running candidate.
+2. Back up the database, as for any upgrade that may run migrations.
+3. Roll out the new image with `strategy.type: RollingUpdate`, `maxSurge: 0` and `maxUnavailable: 1`.
+   Each replacement pod must become Ready, which for a standby means prepared, before the next old pod is stopped.
+4. Watch `kubectl rollout status`.
+   A rollout that stalls on an unready new pod whose status reports `compatible: false` needs the offline procedure; undo the rollout with `kubectl rollout undo`, and the running candidates are untouched.
+5. When the rollout stops the active candidate, it hands over and a prepared candidate takes over.
+   The successor logs `HA deployment level changed` when it activates a new level.
+
+### Planned handover
+
+When a rollout or a pod deletion stops the active candidate, the candidate hands over instead of stopping at once:
+
+1. `/_zendrite/monitor/health` answers 404, so routers send it no new requests but keep the ones in flight, and hold new requests until a candidate is active.
+2. Long-polling `/sync` and sliding sync requests answer at once with the client's own position, and the client's next request is held for the successor.
+3. It keeps admitting requests for `handover_grace`, which must cover the routers' health check interval, then waits for every request in flight, for at most `handover_timeout` in total.
+4. It stops its consumers and background work, releases the Lease, and exits.
+   A prepared standby takes the Lease at its next `retry_period`, fences, runs any migrations, and becomes active; the routers then release the held requests to it.
+
+Clients see a pause of a few seconds, which is the grace period, the retry period and the successor's activation, rather than errors.
+`ha.terminationGracePeriodSeconds` must cover `handover_timeout` plus the 30 second shutdown budget.
+Set `handover_timeout: 0s` to stop at once instead.
+
+Some state is process-local and does not survive a handover, as after any takeover:
+
+- Search answers HTTP 503 with `Retry-After` until the successor has rebuilt its index, which takes time in proportion to the searchable history.
+- Sliding-sync connections start over, typing notifications are dropped, and a login, SSO or user-interactive authentication flow in progress must be restarted.
+- Outbound federation, appservice and push deliveries in flight when the owner stops are retried by the successor with their original transaction IDs.
+
+A rollout under `maxSurge: 0` may stop the active candidate before the standbys, so it can hand over twice: once to an old standby and once to a new one.
+Each handover is uninterrupted.
+
+### Aborting and rolling back
+
+Before the active candidate is replaced, undoing the rollout is always safe: no new build has written anything.
+If the successor fails while it activates, its Lease expires and another prepared candidate takes over, as in an ordinary takeover; clients may see errors once the routers' hold runs out.
+
+Once a new level has activated, its migrations have run.
+Rolling back to the old image is a rolling upgrade in reverse and is supported only while the old level is at or above the deployment's floor, which is the new build's `rollback_to`.
+Below the floor, old candidates are refused before they take the Lease, so a rollback leaves the new build serving; restoring the old version then needs the offline procedure and the database backup.
+
+### Offline upgrades
+
+When the contract does not admit the new build, upgrade in a maintenance window, as described in [HA storage and recovery](/installation/manual/high-availability/): scale to zero, confirm no pod is running, deliberately reset both compatibility records, then scale back up on the new version.
 
 ## Manual failover
 
 Delete the pod that reports `active`.
-The remaining candidates contend for the Lease, and one of them establishes ownership and recovers.
-Once its application has drained, the stopping leader releases the Lease, so a standby takes over at its next `retry_period` rather than after `lease_duration`.
+It [hands over](#planned-handover) like the active candidate in a rolling upgrade: it drains its requests in flight, then releases the Lease, so a standby takes over at its next `retry_period` rather than after `lease_duration`.
 A leader that does not drain within the shutdown budget, or that crashes, leaves the Lease to expire instead.
 Do not delete the Lease to force a failover.
 The Lease is coordination, not authority, and deleting it does not retire the ownership generation.
 
-Expect a visible interruption.
+With routing that holds requests, as the chart's does, clients see a pause rather than errors, apart from the process-local exceptions listed under [Planned handover](#planned-handover).
+Without it, expect a visible interruption.
 Clients receive connection errors or `503` responses until the successor is ready, then reconnect and resume from their existing sync tokens.
-Long-lived `/sync` connections are dropped and must be re-established.
+After an unplanned takeover, long-lived `/sync` connections are dropped and must be re-established.
 Typing notifications, login and SSO intermediates, and sliding-sync sessions are process-local, so clients may need to retry a request or start a fresh session.
 Retrying a message with the same transaction ID is safe across a takeover: the roomserver remembers which event each transaction produced for 24 hours, so a retry is answered with the event the first attempt stored, even if the old owner stored it.
 
@@ -270,12 +373,13 @@ Supported today:
 - One active homeserver at a time, enforced at the database, broker, media, dispatch, and admission boundaries.
 - Automatic takeover after a candidate loses its Lease, provided ownership can be established.
 - Committed PostgreSQL writes and acknowledged JetStream publications survive takeover under the documented storage settings.
+- [Rolling upgrades](#rolling-upgrades) between builds that the upgrade contract admits, and planned handovers, without failed client requests, apart from the documented process-local exceptions.
 
 Not supported, and not planned for this iteration:
 
 - Active-active. Only one candidate serves traffic; the others are cold.
-- Zero-downtime failover. Takeover restarts the homeserver and rebuilds process-local state.
-- Rolling mixed-version upgrades and automatic schema downgrade.
+- Zero-downtime failover after an unplanned failure. Takeover restarts the homeserver and rebuilds process-local state; routing that holds requests only hides it while the takeover is shorter than the hold.
+- Rolling upgrades that the contract does not admit, and automatic schema downgrade.
 - Exactly-once external delivery. Federation, appservice, and push retries can duplicate remote deliveries.
 - Non-Kubernetes election backends.
 
@@ -293,7 +397,8 @@ Check the application logs for election and startup failures.
 
 ### Candidate health and active-only routing
 
-`/_zendrite/monitor/candidate` returns HTTP 200 for a healthy standby or active candidate.
+`/_zendrite/monitor/candidate` returns HTTP 200 for a prepared standby or an active candidate.
+A standby is prepared once it has checked that it reaches the database and that the deployment's upgrade contract admits its build.
 Starting, fencing, recovering, draining, stopped, and failed candidates return HTTP 503.
 `/_zendrite/monitor/health` remains the active-only traffic check.
 Use the candidate endpoint for Kubernetes readiness only with a separate routing layer that checks the active-only endpoint before forwarding Matrix traffic.

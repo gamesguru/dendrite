@@ -18,10 +18,13 @@ import (
 
 // settings select what a run covers.
 type settings struct {
-	tier       string
-	artifacts  string
-	zendrite   string
-	next       string
+	tier      string
+	artifacts string
+	zendrite  string
+	next      string
+	// unadmitted is a build whose upgrade contract the running deployment
+	// does not admit, so it needs the offline upgrade.
+	unadmitted string
 	self       string
 	timings    timings
 	candidates int
@@ -58,6 +61,7 @@ func loadSettings(t *testing.T) settings {
 		artifacts:  os.Getenv("HACHAOS_ARTIFACTS"),
 		zendrite:   os.Getenv("HACHAOS_ZENDRITE"),
 		next:       os.Getenv("HACHAOS_ZENDRITE_NEXT"),
+		unadmitted: os.Getenv("HACHAOS_ZENDRITE_UNADMITTED"),
 		candidates: 3,
 		target:     120 * time.Second,
 		mscs:       haMSCs,
@@ -282,7 +286,7 @@ func (e *environment) waitActive(ctx context.Context, timeout time.Duration) (*s
 }
 
 // waitStandbys waits until every candidate other than the active one reports
-// a healthy standby phase.
+// a standby that is prepared to take over.
 func (e *environment) waitStandbys(ctx context.Context, timeout time.Duration) error {
 	return waitFor(ctx, timeout, func() error {
 		standbys := 0
@@ -291,7 +295,7 @@ func (e *environment) waitStandbys(ctx context.Context, timeout time.Duration) e
 			if err != nil {
 				return fmt.Errorf("%s: %w", sl.name, err)
 			}
-			if st.Phase == "standby" {
+			if st.prepared() {
 				standbys++
 			}
 		}

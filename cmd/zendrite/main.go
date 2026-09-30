@@ -135,6 +135,10 @@ func main() {
 	upCounter.Add(1)
 	prometheus.MustRegister(upCounter)
 
+	// The gate reads the deployment identity, so it is computed first.
+	if err := ha.SetCompatibility(cfg, internal.VersionString()); err != nil {
+		logrus.WithError(err).Fatal("HA compatibility validation failed")
+	}
 	// Standalone authorizes activation immediately; HA requires election and
 	// resource-enforced ownership. The interface is left nil when HA is
 	// disabled so a typed nil pointer cannot pose as an installed gate.
@@ -148,12 +152,12 @@ func main() {
 	server = lifecycle.New(func(application *process.ProcessContext) error {
 		return startHomeserver(application, cfg, httpAddr, httpsAddr, server.Ready, ownershipGate)
 	}, shutdownTimeout)
-	ownership, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	stopping, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	minwinsvc.SetOnExit(func() { stop(); server.Stop() })
-	if err := ha.SetCompatibility(cfg); err != nil {
-		logrus.WithError(err).Fatal("HA compatibility validation failed")
-	}
+	// An owner asked to stop hands over first, so a router can hold new
+	// requests for the successor while the ones in flight finish here.
+	ownership := ha.PlannedHandover(stopping, cfg.Global.HA, server)
 	if err := ha.Run(ownership, cfg.Global.HA, &cfg.Global.Metrics, server, gate, shutdownTimeout); err != nil {
 		logrus.WithError(err).Error("Homeserver stopped")
 		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.

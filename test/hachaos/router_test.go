@@ -17,6 +17,11 @@ import (
 // health endpoint of every candidate every 500ms, starts every backend down,
 // marks a backend down after one failed check and up after one success, and
 // cuts in-flight requests to a backend as soon as it is marked down.
+//
+// A 404 from the check stops a backend instead (HAProxy's disable-on-404):
+// it receives no new requests but keeps the ones in flight, which is how a
+// planned handover drains. While no backend is up, a request is held for up
+// to routerHold before it is refused, as the chart's Lua action does.
 type router struct {
 	listener net.Listener
 	server   *http.Server
@@ -33,12 +38,28 @@ type backend struct {
 	slot    *slot
 	proxy   *httputil.ReverseProxy
 	mu      sync.Mutex
-	up      bool
+	state   backendState
 	session context.Context
 	cut     context.CancelCauseFunc
 }
 
-const routerCheckInterval = 500 * time.Millisecond
+// backendState is a backend's routing state.
+type backendState int
+
+const (
+	backendDown backendState = iota
+	backendUp
+	// A stopping backend receives no new requests but keeps established ones.
+	backendStopping
+)
+
+const (
+	routerCheckInterval = 500 * time.Millisecond
+	// The hold matches the chart's default ha.routing.holdTimeout.
+	routerHold = 30 * time.Second
+	// The chart's Lua action checks for a backend this often.
+	routerHoldPoll = 100 * time.Millisecond
+)
 
 var errBackendDown = errors.New("backend marked down")
 
@@ -78,7 +99,7 @@ func (r *router) check(ctx context.Context) {
 				defer wg.Done()
 				probe, cancel := context.WithTimeout(ctx, routerCheckInterval)
 				defer cancel()
-				r.mark(b, b.slot.healthy(probe))
+				r.mark(b, b.slot.health(probe))
 			}()
 		}
 		wg.Wait()
@@ -97,27 +118,41 @@ func (r *router) check(ctx context.Context) {
 	}
 }
 
-func (r *router) mark(b *backend, healthy bool) {
+// mark applies one health check's status code, zero when it failed.
+func (r *router) mark(b *backend, code int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if healthy == b.up {
+	next := backendDown
+	switch code {
+	case http.StatusOK:
+		next = backendUp
+	case http.StatusNotFound:
+		// disable-on-404 only stops a server that is up; a down one stays down.
+		if b.state != backendDown {
+			next = backendStopping
+		}
+	}
+	if next == b.state {
 		return
 	}
-	b.up = healthy
-	if healthy {
+	b.state = next
+	switch next {
+	case backendUp:
 		r.timeline.add(eventRouter, b.slot.name, "up")
-		return
+	case backendStopping:
+		r.timeline.add(eventRouter, b.slot.name, "stopping: no new requests, keeping those in flight")
+	case backendDown:
+		// on-marked-down shutdown-sessions: close streams so clients retry.
+		b.cut(errBackendDown)
+		b.session, b.cut = context.WithCancelCause(r.base)
+		r.timeline.add(eventRouter, b.slot.name, "down")
 	}
-	// on-marked-down shutdown-sessions: close streams so clients retry.
-	b.cut(errBackendDown)
-	b.session, b.cut = context.WithCancelCause(r.base)
-	r.timeline.add(eventRouter, b.slot.name, "down")
 }
 
 func (b *backend) isUp() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.up
+	return b.state == backendUp
 }
 
 func (r *router) active() *backend {
@@ -137,8 +172,27 @@ func (r *router) activeSlot() *slot {
 	return nil
 }
 
+// hold waits for a backend to come up, as the chart's router does while none
+// is, so a handover or takeover delays requests rather than refusing them.
+func (r *router) hold(ctx context.Context) *backend {
+	deadline := time.Now().Add(routerHold)
+	for {
+		if b := r.active(); b != nil {
+			return b
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(routerHoldPoll):
+		}
+	}
+}
+
 func (r *router) serve(w http.ResponseWriter, req *http.Request) {
-	b := r.active()
+	b := r.hold(req.Context())
 	if b == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)

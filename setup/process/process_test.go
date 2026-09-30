@@ -113,3 +113,44 @@ func TestAdmittedCallbackIsJoined(t *testing.T) {
 	p.WaitForComponentsToFinish()
 	<-done
 }
+
+func TestServeCountsRequestsInFlight(t *testing.T) {
+	p := NewProcessContext()
+	defer p.ShutdownZendrite()
+	release := make(chan struct{})
+	serving := make(chan struct{})
+	go p.Serve(func() { close(serving); <-release })
+	<-serving
+	if got := p.InFlight(); got != 1 {
+		t.Fatalf("in flight: %d, want 1", got)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for p.InFlight() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a finished request is still counted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	p.ShutdownZendrite()
+	if p.Serve(func() { t.Error("served after shutdown") }) || p.InFlight() != 0 {
+		t.Fatal("a refused request must not stay counted")
+	}
+}
+
+func TestQuiescing(t *testing.T) {
+	if Quiescing(context.Background()) != nil {
+		t.Fatal("work without an application owner is never quiesced")
+	}
+	p := NewProcessContext()
+	defer p.ShutdownZendrite()
+	quiescing := Quiescing(p.Context())
+	select {
+	case <-quiescing:
+		t.Fatal("quiesced before a handover")
+	default:
+	}
+	p.Quiesce()
+	p.Quiesce()
+	<-quiescing
+}

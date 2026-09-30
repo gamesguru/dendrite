@@ -173,7 +173,7 @@ type reachableGate struct {
 	unreachable *atomic.Bool
 }
 
-func (g reachableGate) Reachable(context.Context) error {
+func (g reachableGate) Acquirable(context.Context) error {
 	if g.unreachable.Load() {
 		return errors.New("database unreachable")
 	}
@@ -352,5 +352,38 @@ func TestInvalidHAStopsApplication(t *testing.T) {
 	}
 	if server.State() != lifecycle.Stopped {
 		t.Fatal("early configuration failure did not stop application")
+	}
+}
+
+type stubPreparer struct {
+	recorded Recorded
+	err      error
+}
+
+func (p stubPreparer) Prepare(context.Context) (Recorded, error) { return p.recorded, p.err }
+
+// A standby keeps checking whether it may take over and stops once it leads.
+func TestPrepareReportsWhileStandby(t *testing.T) {
+	status := NewStatus()
+	status.Observe(PhaseStandby, "")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	done := make(chan struct{})
+	go func() {
+		prepare(ctx, stubPreparer{err: ErrIncompatibleBuild}, config.HA{RetryPeriod: 10 * time.Millisecond, Version: "v2"}, status)
+		close(done)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for status.Healthy() {
+		if time.Now().After(deadline) {
+			t.Fatal("an incompatible standby stayed healthy")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	status.Observe(PhaseFencing, "")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preparation continued after the candidate began to lead")
 	}
 }

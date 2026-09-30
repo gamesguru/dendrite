@@ -1,6 +1,10 @@
 package ha
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"strconv"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // HA metrics use fixed label sets only. Candidate identities and generations
 // are deliberately excluded: they grow without bound across failovers.
@@ -34,10 +38,33 @@ var (
 		Namespace: "zendrite", Subsystem: "ha", Name: "shutdown_duration_seconds",
 		Help: "Seconds from ownership loss to the end of draining for the current activation.",
 	})
+
+	handoverDuration = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "zendrite", Subsystem: "ha", Name: "handover_duration_seconds",
+		Help: "Seconds a planned handover spent announcing itself and waiting for requests in flight.",
+	})
+
+	standbyPrepared = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "zendrite", Subsystem: "ha", Name: "standby_prepared",
+		Help: "1 while this standby reaches the database and may take over the deployment, 0 otherwise.",
+	})
+
+	buildCompatible = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "zendrite", Subsystem: "ha", Name: "build_compatible",
+		Help: "0 when the deployment's upgrade contract does not admit this build, 1 otherwise.",
+	})
+
+	buildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "zendrite", Subsystem: "ha", Name: "build_info",
+		Help: "This build's HA upgrade contract; always 1.",
+	}, []string{"protocol", "level", "upgrade_from", "rollback_to"})
 )
 
 func init() { //nolint:gochecknoinits // Matches the existing component metric registration.
-	prometheus.MustRegister(currentPhase, leadershipTransitions, renewalFailures, fencingFailures, recoveryDuration, shutdownDuration)
+	prometheus.MustRegister(currentPhase, leadershipTransitions, renewalFailures, fencingFailures, recoveryDuration, shutdownDuration, handoverDuration, standbyPrepared, buildCompatible, buildInfo)
+	buildCompatible.Set(1)
+	c := Release()
+	buildInfo.WithLabelValues(strconv.Itoa(c.Protocol), strconv.Itoa(c.Level), strconv.Itoa(c.UpgradeFrom), strconv.Itoa(c.RollbackTo)).Set(1)
 	for _, phase := range allPhases {
 		currentPhase.WithLabelValues(string(phase)).Set(0)
 	}
@@ -49,7 +76,7 @@ func init() { //nolint:gochecknoinits // Matches the existing component metric r
 	}
 }
 
-var allPhases = []Phase{PhaseStarting, PhaseStandby, PhaseFencing, PhaseRecovering, PhaseActive, PhaseDraining, PhaseStopped}
+var allPhases = []Phase{PhaseStarting, PhaseStandby, PhaseFencing, PhaseRecovering, PhaseActive, PhaseHandingOver, PhaseDraining, PhaseStopped}
 
 // observePhase keeps exactly one phase series set, so alerts can select on a
 // phase without needing to know which candidate reported it.

@@ -93,3 +93,19 @@ func TestHADeliveryKeepAliveOutlastsALostReply(t *testing.T) {
 		}
 	}
 }
+
+// An owner that hands over must not release the Lease while a pull request it
+// sent can still take a successor's message.
+func TestWaitForOwnedPulls(t *testing.T) {
+	ownedPullsExpire.Store(time.Now().Add(200 * time.Millisecond).UnixNano())
+	started := time.Now()
+	WaitForOwnedPulls(t.Context())
+	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
+		t.Fatalf("returned after %s, before the pull request expired", elapsed)
+	}
+	started = time.Now()
+	WaitForOwnedPulls(t.Context())
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("waited %s with no pull request outstanding", elapsed)
+	}
+}

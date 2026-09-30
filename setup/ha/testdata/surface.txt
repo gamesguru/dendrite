@@ -1,0 +1,1231 @@
+column db_migrations | time | text | NO |
+column db_migrations | version | text | NO |
+column db_migrations | zendrite_version | text | NO |
+column federationsender_assumed_offline | server_name | text | NO |
+column federationsender_blacklist | server_name | text | NO |
+column federationsender_inbound_peeks | creation_ts | bigint | NO |
+column federationsender_inbound_peeks | peek_id | text | NO |
+column federationsender_inbound_peeks | renewal_interval | bigint | NO |
+column federationsender_inbound_peeks | renewed_ts | bigint | NO |
+column federationsender_inbound_peeks | room_id | text | NO |
+column federationsender_inbound_peeks | server_name | text | NO |
+column federationsender_joined_hosts | event_id | text | NO |
+column federationsender_joined_hosts | room_id | text | NO |
+column federationsender_joined_hosts | server_name | text | NO |
+column federationsender_notary_server_keys_json | notary_id | bigint | NO | nextval('federationsender_notary_server_keys_json_pkey'::regclass)
+column federationsender_notary_server_keys_json | response_json | text | NO |
+column federationsender_notary_server_keys_json | server_name | text | NO |
+column federationsender_notary_server_keys_json | valid_until | bigint | NO |
+column federationsender_notary_server_keys_metadata | key_id | text | NO |
+column federationsender_notary_server_keys_metadata | notary_id | bigint | NO |
+column federationsender_notary_server_keys_metadata | server_name | text | NO |
+column federationsender_outbound_peeks | creation_ts | bigint | NO |
+column federationsender_outbound_peeks | peek_id | text | NO |
+column federationsender_outbound_peeks | renewal_interval | bigint | NO |
+column federationsender_outbound_peeks | renewed_ts | bigint | NO |
+column federationsender_outbound_peeks | room_id | text | NO |
+column federationsender_outbound_peeks | server_name | text | NO |
+column federationsender_queue_edus | edu_type | text | NO |
+column federationsender_queue_edus | expires_at | bigint | NO | 0
+column federationsender_queue_edus | json_nid | bigint | NO |
+column federationsender_queue_edus | server_name | text | NO |
+column federationsender_queue_json | json_body | text | NO |
+column federationsender_queue_json | json_nid | bigint | NO | nextval('federationsender_queue_json_json_nid_seq'::regclass)
+column federationsender_queue_pdus | json_nid | bigint | NO |
+column federationsender_queue_pdus | server_name | text | NO |
+column federationsender_queue_pdus | transaction_id | text | NO |
+column federationsender_relay_servers | relay_server_name | text | NO |
+column federationsender_relay_servers | server_name | text | NO |
+column federationsender_retry_state | failure_count | integer | NO | 0
+column federationsender_retry_state | retry_until | bigint | NO | 0
+column federationsender_retry_state | server_name | text | NO |
+column keydb_server_keys | expired_ts | bigint | NO |
+column keydb_server_keys | server_key | text | NO |
+column keydb_server_keys | server_key_id | text | NO |
+column keydb_server_keys | server_name | text | NO |
+column keydb_server_keys | server_name_and_key_id | text | NO |
+column keydb_server_keys | valid_until_ts | bigint | NO |
+column keyserver_cross_signing_keys | key_data | text | NO |
+column keyserver_cross_signing_keys | key_type | smallint | NO |
+column keyserver_cross_signing_keys | user_id | text | NO |
+column keyserver_cross_signing_sigs | origin_key_id | text | NO |
+column keyserver_cross_signing_sigs | origin_user_id | text | NO |
+column keyserver_cross_signing_sigs | signature | text | NO |
+column keyserver_cross_signing_sigs | target_key_id | text | NO |
+column keyserver_cross_signing_sigs | target_user_id | text | NO |
+column keyserver_device_keys | device_id | text | NO |
+column keyserver_device_keys | display_name | text | YES |
+column keyserver_device_keys | key_json | text | NO |
+column keyserver_device_keys | stream_id | bigint | NO |
+column keyserver_device_keys | ts_added_secs | bigint | NO |
+column keyserver_device_keys | user_id | text | NO |
+column keyserver_fallback_keys | algorithm | text | NO |
+column keyserver_fallback_keys | device_id | text | NO |
+column keyserver_fallback_keys | key_id | text | NO |
+column keyserver_fallback_keys | key_json | text | NO |
+column keyserver_fallback_keys | ts_added_secs | bigint | NO |
+column keyserver_fallback_keys | used | boolean | NO |
+column keyserver_fallback_keys | user_id | text | NO |
+column keyserver_key_changes | change_id | bigint | NO | nextval('keyserver_key_changes_seq'::regclass)
+column keyserver_key_changes | user_id | text | NO |
+column keyserver_one_time_keys | algorithm | text | NO |
+column keyserver_one_time_keys | device_id | text | NO |
+column keyserver_one_time_keys | key_id | text | NO |
+column keyserver_one_time_keys | key_json | text | NO |
+column keyserver_one_time_keys | ts_added_secs | bigint | NO |
+column keyserver_one_time_keys | user_id | text | NO |
+column keyserver_stale_device_lists | domain | text | NO |
+column keyserver_stale_device_lists | is_stale | boolean | NO |
+column keyserver_stale_device_lists | ts_added_secs | bigint | NO |
+column keyserver_stale_device_lists | user_id | text | NO |
+column mediaapi_media_repository | base64hash | text | NO |
+column mediaapi_media_repository | content_type | text | NO |
+column mediaapi_media_repository | creation_ts | bigint | NO |
+column mediaapi_media_repository | file_size_bytes | bigint | NO |
+column mediaapi_media_repository | media_id | text | NO |
+column mediaapi_media_repository | media_origin | text | NO |
+column mediaapi_media_repository | upload_name | text | NO |
+column mediaapi_media_repository | user_id | text | NO |
+column mediaapi_thumbnail | content_type | text | NO |
+column mediaapi_thumbnail | creation_ts | bigint | NO |
+column mediaapi_thumbnail | file_size_bytes | bigint | NO |
+column mediaapi_thumbnail | height | integer | NO |
+column mediaapi_thumbnail | media_id | text | NO |
+column mediaapi_thumbnail | media_origin | text | NO |
+column mediaapi_thumbnail | resize_method | text | NO |
+column mediaapi_thumbnail | width | integer | NO |
+column msc2836_edges | child_event_id | text | NO |
+column msc2836_edges | parent_event_id | text | NO |
+column msc2836_edges | parent_room_id | text | NO |
+column msc2836_edges | parent_servers | text | NO |
+column msc2836_edges | rel_type | text | NO |
+column msc2836_nodes | event_id | text | NO |
+column msc2836_nodes | explored | smallint | NO |
+column msc2836_nodes | origin_server_ts | bigint | NO |
+column msc2836_nodes | room_id | text | NO |
+column msc2836_nodes | unsigned_children_count | bigint | NO |
+column msc2836_nodes | unsigned_children_hash | text | NO |
+column relayapi_queue | json_nid | bigint | NO |
+column relayapi_queue | server_name | text | NO |
+column relayapi_queue | transaction_id | text | NO |
+column relayapi_queue_json | json_body | text | NO |
+column relayapi_queue_json | json_nid | bigint | NO | nextval('relayapi_queue_json_json_nid_seq'::regclass)
+column roomserver_client_transactions | event_id | text | NO |
+column roomserver_client_transactions | inserted_ts | bigint | NO |
+column roomserver_client_transactions | room_id | text | NO |
+column roomserver_client_transactions | sender_id | text | NO |
+column roomserver_client_transactions | session_id | bigint | NO |
+column roomserver_client_transactions | transaction_id | text | NO |
+column roomserver_event_json | event_json | text | NO |
+column roomserver_event_json | event_nid | bigint | NO |
+column roomserver_event_state_keys | event_state_key | text | NO |
+column roomserver_event_state_keys | event_state_key_nid | bigint | NO | nextval('roomserver_event_state_key_nid_seq'::regclass)
+column roomserver_event_types | event_type | text | NO |
+column roomserver_event_types | event_type_nid | bigint | NO | nextval('roomserver_event_type_nid_seq'::regclass)
+column roomserver_events | auth_event_nids | ARRAY | NO |
+column roomserver_events | depth | bigint | NO |
+column roomserver_events | event_id | text | NO |
+column roomserver_events | event_nid | bigint | NO | nextval('roomserver_event_nid_seq'::regclass)
+column roomserver_events | event_state_key_nid | bigint | NO |
+column roomserver_events | event_type_nid | bigint | NO |
+column roomserver_events | is_rejected | boolean | NO | false
+column roomserver_events | room_nid | bigint | NO |
+column roomserver_events | sent_to_output | boolean | NO | false
+column roomserver_events | state_snapshot_nid | bigint | NO | 0
+column roomserver_invites | invite_event_id | text | NO |
+column roomserver_invites | invite_event_json | text | NO |
+column roomserver_invites | retired | boolean | NO | false
+column roomserver_invites | room_nid | bigint | NO |
+column roomserver_invites | sender_nid | bigint | NO | 0
+column roomserver_invites | target_nid | bigint | NO |
+column roomserver_membership | event_nid | bigint | NO | 0
+column roomserver_membership | forgotten | boolean | NO | false
+column roomserver_membership | membership_nid | bigint | NO | 1
+column roomserver_membership | room_nid | bigint | NO |
+column roomserver_membership | sender_nid | bigint | NO | 0
+column roomserver_membership | target_local | boolean | NO | false
+column roomserver_membership | target_nid | bigint | NO |
+column roomserver_partial_state_rooms | created_at | timestamp without time zone | NO | now()
+column roomserver_partial_state_rooms | device_lists_stream_id | bigint | NO | 0
+column roomserver_partial_state_rooms | join_event_nid | bigint | NO |
+column roomserver_partial_state_rooms | joined_via | text | NO |
+column roomserver_partial_state_rooms | room_nid | bigint | NO |
+column roomserver_partial_state_rooms_servers | room_nid | bigint | NO |
+column roomserver_partial_state_rooms_servers | server_name | text | NO |
+column roomserver_previous_events | event_nids | ARRAY | NO |
+column roomserver_previous_events | previous_event_id | text | NO |
+column roomserver_published | appservice_id | text | NO |
+column roomserver_published | network_id | text | NO |
+column roomserver_published | published | boolean | NO | false
+column roomserver_published | room_id | text | NO |
+column roomserver_redactions | redaction_event_id | text | NO |
+column roomserver_redactions | redacts_event_id | text | NO |
+column roomserver_redactions | validated | boolean | NO |
+column roomserver_reported_events | event_nid | bigint | NO |
+column roomserver_reported_events | event_sender_nid | bigint | NO |
+column roomserver_reported_events | id | bigint | NO | nextval('roomserver_reported_events_id_seq'::regclass)
+column roomserver_reported_events | reason | text | YES |
+column roomserver_reported_events | received_ts | bigint | NO |
+column roomserver_reported_events | reporting_user_nid | bigint | NO |
+column roomserver_reported_events | room_nid | bigint | NO |
+column roomserver_reported_events | score | integer | YES |
+column roomserver_room_aliases | alias | text | NO |
+column roomserver_room_aliases | creator_id | text | NO |
+column roomserver_room_aliases | room_id | text | NO |
+column roomserver_rooms | last_event_sent_nid | bigint | NO | 0
+column roomserver_rooms | latest_event_nids | ARRAY | NO | '{}'::bigint[]
+column roomserver_rooms | resync_state_nid | bigint | NO | 0
+column roomserver_rooms | room_id | text | NO |
+column roomserver_rooms | room_nid | bigint | NO | nextval('roomserver_room_nid_seq'::regclass)
+column roomserver_rooms | room_version | text | NO |
+column roomserver_rooms | state_snapshot_nid | bigint | NO | 0
+column roomserver_state_block | event_nids | ARRAY | NO |
+column roomserver_state_block | state_block_hash | bytea | YES |
+column roomserver_state_block | state_block_nid | bigint | NO | nextval('roomserver_state_block_nid_seq'::regclass)
+column roomserver_state_snapshots | room_nid | bigint | NO |
+column roomserver_state_snapshots | state_block_nids | ARRAY | NO |
+column roomserver_state_snapshots | state_snapshot_hash | bytea | YES |
+column roomserver_state_snapshots | state_snapshot_nid | bigint | NO | nextval('roomserver_state_snapshot_nid_seq'::regclass)
+column roomserver_user_room_keys | pseudo_id_key | bytea | YES |
+column roomserver_user_room_keys | pseudo_id_pub_key | bytea | NO |
+column roomserver_user_room_keys | room_nid | integer | NO |
+column roomserver_user_room_keys | user_nid | integer | NO |
+column syncapi_account_data_type | id | bigint | NO | nextval('syncapi_stream_id'::regclass)
+column syncapi_account_data_type | room_id | text | NO |
+column syncapi_account_data_type | type | text | NO |
+column syncapi_account_data_type | user_id | text | NO |
+column syncapi_backward_extremities | event_id | text | NO |
+column syncapi_backward_extremities | prev_event_id | text | NO |
+column syncapi_backward_extremities | room_id | text | NO |
+column syncapi_current_room_state | added_at | bigint | YES |
+column syncapi_current_room_state | contains_url | boolean | NO |
+column syncapi_current_room_state | event_id | text | NO |
+column syncapi_current_room_state | headered_event_json | text | NO |
+column syncapi_current_room_state | history_visibility | smallint | NO | 2
+column syncapi_current_room_state | membership | text | YES |
+column syncapi_current_room_state | room_id | text | NO |
+column syncapi_current_room_state | sender | text | NO |
+column syncapi_current_room_state | state_key | text | NO |
+column syncapi_current_room_state | type | text | NO |
+column syncapi_filter | filter | text | NO |
+column syncapi_filter | id | integer | NO | nextval('syncapi_filter_id_seq'::regclass)
+column syncapi_filter | localpart | text | NO |
+column syncapi_ignores | ignores_json | text | NO |
+column syncapi_ignores | user_id | text | NO |
+column syncapi_invite_events | deleted | boolean | NO |
+column syncapi_invite_events | event_id | text | NO |
+column syncapi_invite_events | headered_event_json | text | NO |
+column syncapi_invite_events | id | bigint | NO | nextval('syncapi_stream_id'::regclass)
+column syncapi_invite_events | room_id | text | NO |
+column syncapi_invite_events | target_user_id | text | NO |
+column syncapi_memberships | event_id | text | NO |
+column syncapi_memberships | membership | text | NO |
+column syncapi_memberships | room_id | text | NO |
+column syncapi_memberships | stream_pos | bigint | NO |
+column syncapi_memberships | topological_pos | bigint | NO |
+column syncapi_memberships | user_id | text | NO |
+column syncapi_notification_data | highlight_count | bigint | NO | 0
+column syncapi_notification_data | id | bigint | NO | nextval('syncapi_notification_data_id_seq'::regclass)
+column syncapi_notification_data | notification_count | bigint | NO | 0
+column syncapi_notification_data | room_id | text | NO |
+column syncapi_notification_data | user_id | text | NO |
+column syncapi_output_room_events | add_state_ids | ARRAY | YES |
+column syncapi_output_room_events | contains_url | boolean | NO |
+column syncapi_output_room_events | event_id | text | NO |
+column syncapi_output_room_events | exclude_from_sync | boolean | YES | false
+column syncapi_output_room_events | headered_event_json | text | NO |
+column syncapi_output_room_events | history_visibility | smallint | NO | 2
+column syncapi_output_room_events | id | bigint | NO | nextval('syncapi_stream_id'::regclass)
+column syncapi_output_room_events | origin_server_ts | bigint | NO |
+column syncapi_output_room_events | remove_state_ids | ARRAY | YES |
+column syncapi_output_room_events | room_id | text | NO |
+column syncapi_output_room_events | sender | text | NO |
+column syncapi_output_room_events | session_id | bigint | YES |
+column syncapi_output_room_events | transaction_id | text | YES |
+column syncapi_output_room_events | type | text | NO |
+column syncapi_output_room_events_topology | event_id | text | NO |
+column syncapi_output_room_events_topology | room_id | text | NO |
+column syncapi_output_room_events_topology | stream_position | bigint | NO |
+column syncapi_output_room_events_topology | topological_position | bigint | NO |
+column syncapi_peeks | creation_ts | bigint | NO |
+column syncapi_peeks | deleted | boolean | NO | false
+column syncapi_peeks | device_id | text | NO |
+column syncapi_peeks | id | bigint | YES | nextval('syncapi_stream_id'::regclass)
+column syncapi_peeks | room_id | text | NO |
+column syncapi_peeks | user_id | text | NO |
+column syncapi_presence | id | bigint | NO | nextval('syncapi_presence_id'::regclass)
+column syncapi_presence | last_active_ts | bigint | NO |
+column syncapi_presence | presence | integer | NO |
+column syncapi_presence | status_msg | text | YES |
+column syncapi_presence | user_id | text | NO |
+column syncapi_receipts | event_id | text | NO |
+column syncapi_receipts | id | bigint | NO | nextval('syncapi_receipt_id'::regclass)
+column syncapi_receipts | receipt_ts | bigint | NO |
+column syncapi_receipts | receipt_type | text | NO |
+column syncapi_receipts | room_id | text | NO |
+column syncapi_receipts | thread_id | text | NO | ''::text
+column syncapi_receipts | user_id | text | NO |
+column syncapi_relations | child_event_id | text | NO |
+column syncapi_relations | child_event_type | text | NO |
+column syncapi_relations | event_id | text | NO |
+column syncapi_relations | id | bigint | NO | nextval('syncapi_relation_id'::regclass)
+column syncapi_relations | rel_type | text | NO |
+column syncapi_relations | room_id | text | NO |
+column syncapi_send_to_device | content | text | NO |
+column syncapi_send_to_device | device_id | text | NO |
+column syncapi_send_to_device | id | bigint | NO | nextval('syncapi_send_to_device_id'::regclass)
+column syncapi_send_to_device | user_id | text | NO |
+column syncapi_sliding_sync_connection_lists | connection_key | bigint | NO |
+column syncapi_sliding_sync_connection_lists | list_name | text | NO |
+column syncapi_sliding_sync_connection_lists | room_ids | text | NO |
+column syncapi_sliding_sync_connection_positions | connection_key | bigint | NO |
+column syncapi_sliding_sync_connection_positions | connection_position | bigint | NO | nextval('syncapi_sliding_sync_connection_positio_connection_position_seq'::regclass)
+column syncapi_sliding_sync_connection_positions | created_ts | bigint | NO |
+column syncapi_sliding_sync_connection_receipts | connection_key | bigint | NO |
+column syncapi_sliding_sync_connection_receipts | last_delivered_event_id | text | NO |
+column syncapi_sliding_sync_connection_receipts | last_delivered_ts | bigint | NO |
+column syncapi_sliding_sync_connection_receipts | receipt_type | text | NO |
+column syncapi_sliding_sync_connection_receipts | room_id | text | NO |
+column syncapi_sliding_sync_connection_receipts | thread_id | text | NO | ''::text
+column syncapi_sliding_sync_connection_receipts | user_id | text | NO |
+column syncapi_sliding_sync_connection_required_state | connection_key | bigint | NO |
+column syncapi_sliding_sync_connection_required_state | required_state | text | NO |
+column syncapi_sliding_sync_connection_required_state | required_state_id | bigint | NO | nextval('syncapi_sliding_sync_connection_required__required_state_id_seq'::regclass)
+column syncapi_sliding_sync_connection_room_configs | connection_position | bigint | NO |
+column syncapi_sliding_sync_connection_room_configs | required_state_id | bigint | NO |
+column syncapi_sliding_sync_connection_room_configs | room_id | text | NO |
+column syncapi_sliding_sync_connection_room_configs | timeline_limit | integer | NO |
+column syncapi_sliding_sync_connection_streams | connection_position | bigint | NO |
+column syncapi_sliding_sync_connection_streams | last_token | text | NO |
+column syncapi_sliding_sync_connection_streams | room_id | text | NO |
+column syncapi_sliding_sync_connection_streams | room_status | text | NO |
+column syncapi_sliding_sync_connection_streams | stream | text | NO |
+column syncapi_sliding_sync_connections | conn_id | text | NO |
+column syncapi_sliding_sync_connections | connection_key | bigint | NO | nextval('syncapi_sliding_sync_connections_connection_key_seq'::regclass)
+column syncapi_sliding_sync_connections | created_ts | bigint | NO |
+column syncapi_sliding_sync_connections | device_id | text | NO |
+column syncapi_sliding_sync_connections | user_id | text | NO |
+column syncapi_sliding_sync_joined_rooms | bump_stamp | bigint | YES |
+column syncapi_sliding_sync_joined_rooms | event_stream_ordering | bigint | NO |
+column syncapi_sliding_sync_joined_rooms | is_encrypted | boolean | NO | false
+column syncapi_sliding_sync_joined_rooms | room_id | text | NO |
+column syncapi_sliding_sync_joined_rooms | room_name | text | YES |
+column syncapi_sliding_sync_joined_rooms | room_type | text | YES |
+column syncapi_sliding_sync_joined_rooms | tombstone_successor_room_id | text | YES |
+column syncapi_sliding_sync_latest_room_state | connection_key | bigint | YES |
+column syncapi_sliding_sync_latest_room_state | connection_position | bigint | YES |
+column syncapi_sliding_sync_latest_room_state | last_token | text | YES |
+column syncapi_sliding_sync_latest_room_state | room_id | text | YES |
+column syncapi_sliding_sync_latest_room_state | room_status | text | YES |
+column syncapi_sliding_sync_latest_room_state | stream | text | YES |
+column syncapi_sliding_sync_membership_snapshots | event_stream_ordering | bigint | NO |
+column syncapi_sliding_sync_membership_snapshots | forgotten | integer | NO | 0
+column syncapi_sliding_sync_membership_snapshots | has_known_state | boolean | NO | false
+column syncapi_sliding_sync_membership_snapshots | is_encrypted | boolean | NO | false
+column syncapi_sliding_sync_membership_snapshots | membership | text | NO |
+column syncapi_sliding_sync_membership_snapshots | membership_event_id | text | NO |
+column syncapi_sliding_sync_membership_snapshots | room_id | text | NO |
+column syncapi_sliding_sync_membership_snapshots | room_name | text | YES |
+column syncapi_sliding_sync_membership_snapshots | room_type | text | YES |
+column syncapi_sliding_sync_membership_snapshots | sender | text | NO |
+column syncapi_sliding_sync_membership_snapshots | tombstone_successor_room_id | text | YES |
+column syncapi_sliding_sync_membership_snapshots | user_id | text | NO |
+column syncapi_sliding_sync_rooms_to_recalculate | room_id | text | NO |
+column syncapi_unpartialstated_rooms | created_at | bigint | NO | (EXTRACT(epoch FROM now()) * (1000)::numeric)
+column syncapi_unpartialstated_rooms | id | bigint | NO | nextval('syncapi_unpartialstated_rooms_id'::regclass)
+column syncapi_unpartialstated_rooms | room_id | text | NO |
+column syncapi_unpartialstated_rooms | user_id | text | NO |
+column userapi_account_datas | content | text | NO |
+column userapi_account_datas | localpart | text | NO |
+column userapi_account_datas | room_id | text | YES |
+column userapi_account_datas | server_name | text | NO |
+column userapi_account_datas | type | text | NO |
+column userapi_accounts | account_type | smallint | NO |
+column userapi_accounts | appservice_id | text | YES |
+column userapi_accounts | created_ts | bigint | NO |
+column userapi_accounts | is_deactivated | boolean | YES | false
+column userapi_accounts | localpart | text | NO |
+column userapi_accounts | password_hash | text | YES |
+column userapi_accounts | server_name | text | NO |
+column userapi_daily_stats | active_e2ee_rooms | bigint | NO |
+column userapi_daily_stats | active_rooms | bigint | NO |
+column userapi_daily_stats | e2ee_messages | bigint | NO |
+column userapi_daily_stats | messages | bigint | NO |
+column userapi_daily_stats | sent_e2ee_messages | bigint | NO |
+column userapi_daily_stats | sent_messages | bigint | NO |
+column userapi_daily_stats | server_name | text | NO |
+column userapi_daily_stats | timestamp | bigint | NO |
+column userapi_daily_visits | device_id | text | NO |
+column userapi_daily_visits | localpart | text | NO |
+column userapi_daily_visits | timestamp | bigint | NO |
+column userapi_daily_visits | user_agent | text | YES |
+column userapi_dehydrated_devices | created_ts | bigint | NO |
+column userapi_dehydrated_devices | device_data | text | NO |
+column userapi_dehydrated_devices | device_id | text | NO |
+column userapi_dehydrated_devices | user_id | text | NO |
+column userapi_devices | access_token | text | NO |
+column userapi_devices | created_ts | bigint | NO |
+column userapi_devices | device_id | text | NO |
+column userapi_devices | display_name | text | YES |
+column userapi_devices | ip | text | YES |
+column userapi_devices | last_seen_ts | bigint | NO |
+column userapi_devices | localpart | text | NO |
+column userapi_devices | server_name | text | NO |
+column userapi_devices | session_id | bigint | NO | nextval('userapi_device_session_id_seq'::regclass)
+column userapi_devices | user_agent | text | YES |
+column userapi_external_ids | external_id | text | NO |
+column userapi_external_ids | localpart | text | NO |
+column userapi_external_ids | provider_id | text | NO |
+column userapi_external_ids | server_name | text | NO |
+column userapi_key_backup_versions | algorithm | text | NO |
+column userapi_key_backup_versions | auth_data | text | NO |
+column userapi_key_backup_versions | deleted | smallint | NO | 0
+column userapi_key_backup_versions | etag | text | NO |
+column userapi_key_backup_versions | user_id | text | NO |
+column userapi_key_backup_versions | version | bigint | YES | nextval('userapi_key_backup_versions_seq'::regclass)
+column userapi_key_backups | first_message_index | integer | NO |
+column userapi_key_backups | forwarded_count | integer | NO |
+column userapi_key_backups | is_verified | boolean | NO |
+column userapi_key_backups | room_id | text | NO |
+column userapi_key_backups | session_data | text | NO |
+column userapi_key_backups | session_id | text | NO |
+column userapi_key_backups | user_id | text | NO |
+column userapi_key_backups | version | text | NO |
+column userapi_login_tokens | token | text | NO |
+column userapi_login_tokens | token_expires_at | timestamp without time zone | NO |
+column userapi_login_tokens | user_id | text | NO |
+column userapi_notification_events | event_id | text | NO |
+column userapi_notification_events | notification_id | bigint | NO |
+column userapi_notification_events | room_id | text | NO |
+column userapi_notification_events | stream_pos | bigint | NO |
+column userapi_notification_events | thread_id | text | NO |
+column userapi_notification_receipt_locks | room_id | text | NO |
+column userapi_notifications | event_id | text | NO |
+column userapi_notifications | highlight | boolean | NO |
+column userapi_notifications | id | bigint | NO | nextval('userapi_notifications_id_seq'::regclass)
+column userapi_notifications | localpart | text | NO |
+column userapi_notifications | notification_json | text | NO |
+column userapi_notifications | read | boolean | NO | false
+column userapi_notifications | room_id | text | NO |
+column userapi_notifications | server_name | text | NO |
+column userapi_notifications | stream_pos | bigint | NO |
+column userapi_notifications | ts_ms | bigint | NO |
+column userapi_openid_tokens | localpart | text | NO |
+column userapi_openid_tokens | server_name | text | NO |
+column userapi_openid_tokens | token | text | NO |
+column userapi_openid_tokens | token_expires_at_ms | bigint | NO |
+column userapi_pending_notification_receipts | created_ts | bigint | NO |
+column userapi_pending_notification_receipts | event_id | text | NO |
+column userapi_pending_notification_receipts | localpart | text | NO |
+column userapi_pending_notification_receipts | room_id | text | NO |
+column userapi_pending_notification_receipts | server_name | text | NO |
+column userapi_pending_notification_receipts | thread_id | text | NO |
+column userapi_profiles | avatar_url | text | YES |
+column userapi_profiles | display_name | text | YES |
+column userapi_profiles | localpart | text | NO |
+column userapi_profiles | server_name | text | NO |
+column userapi_pushers | app_display_name | text | NO |
+column userapi_pushers | app_id | text | NO |
+column userapi_pushers | data | text | NO |
+column userapi_pushers | device_display_name | text | NO |
+column userapi_pushers | id | bigint | NO | nextval('userapi_pushers_id_seq'::regclass)
+column userapi_pushers | kind | text | NO |
+column userapi_pushers | lang | text | NO |
+column userapi_pushers | localpart | text | NO |
+column userapi_pushers | profile_tag | text | YES |
+column userapi_pushers | pushkey | text | NO |
+column userapi_pushers | pushkey_ts_ms | bigint | NO | 0
+column userapi_pushers | server_name | text | NO |
+column userapi_pushers | session_id | bigint | YES |
+column userapi_registration_tokens | completed | bigint | YES |
+column userapi_registration_tokens | expiry_time | bigint | YES |
+column userapi_registration_tokens | pending | bigint | YES |
+column userapi_registration_tokens | token | text | NO |
+column userapi_registration_tokens | uses_allowed | bigint | YES |
+column userapi_threepids | localpart | text | NO |
+column userapi_threepids | medium | text | NO | 'email'::text
+column userapi_threepids | server_name | text | NO |
+column userapi_threepids | threepid | text | NO |
+column zendrite_ha_compatibility | fingerprint | text | NO |
+column zendrite_ha_compatibility | floor | integer | YES |
+column zendrite_ha_compatibility | id | integer | NO |
+column zendrite_ha_compatibility | level | integer | YES |
+column zendrite_ha_compatibility | protocol | integer | YES |
+column zendrite_ha_compatibility | updated_at | timestamp with time zone | YES |
+column zendrite_ha_compatibility | version | text | YES |
+column zendrite_ha_ownership | acquired_at | timestamp with time zone | NO |
+column zendrite_ha_ownership | generation | bigint | NO |
+column zendrite_ha_ownership | id | integer | NO |
+column zendrite_ha_ownership | owner | text | NO |
+column zendrite_ha_ownership | scope | text | NO |
+column zendrite_ha_ownership_history | acquired_at | timestamp with time zone | NO |
+column zendrite_ha_ownership_history | generation | bigint | NO |
+column zendrite_ha_ownership_history | owner | text | NO |
+column zendrite_ha_ownership_history | scope | text | NO |
+index db_migrations | db_migrations_pkey | CREATE UNIQUE INDEX db_migrations_pkey ON public.db_migrations USING btree (version)
+index federationsender_assumed_offline | federationsender_assumed_offline_pkey | CREATE UNIQUE INDEX federationsender_assumed_offline_pkey ON public.federationsender_assumed_offline USING btree (server_name)
+index federationsender_blacklist | federationsender_blacklist_server_name_key | CREATE UNIQUE INDEX federationsender_blacklist_server_name_key ON public.federationsender_blacklist USING btree (server_name)
+index federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_server_name_peek_id_key | CREATE UNIQUE INDEX federationsender_inbound_peeks_room_id_server_name_peek_id_key ON public.federationsender_inbound_peeks USING btree (room_id, server_name, peek_id)
+index federationsender_joined_hosts | federatonsender_joined_hosts_event_id_idx | CREATE UNIQUE INDEX federatonsender_joined_hosts_event_id_idx ON public.federationsender_joined_hosts USING btree (event_id)
+index federationsender_joined_hosts | federatonsender_joined_hosts_room_id_idx | CREATE INDEX federatonsender_joined_hosts_room_id_idx ON public.federationsender_joined_hosts USING btree (room_id)
+index federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_pkey1 | CREATE UNIQUE INDEX federationsender_notary_server_keys_json_pkey1 ON public.federationsender_notary_server_keys_json USING btree (notary_id)
+index federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_meta_server_name_key_id_key | CREATE UNIQUE INDEX federationsender_notary_server_keys_meta_server_name_key_id_key ON public.federationsender_notary_server_keys_metadata USING btree (server_name, key_id)
+index federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_server_name_peek_id_key | CREATE UNIQUE INDEX federationsender_outbound_peeks_room_id_server_name_peek_id_key ON public.federationsender_outbound_peeks USING btree (room_id, server_name, peek_id)
+index federationsender_queue_edus | federationsender_queue_edus_json_nid_idx | CREATE UNIQUE INDEX federationsender_queue_edus_json_nid_idx ON public.federationsender_queue_edus USING btree (json_nid, server_name)
+index federationsender_queue_edus | federationsender_queue_edus_nid_idx | CREATE INDEX federationsender_queue_edus_nid_idx ON public.federationsender_queue_edus USING btree (json_nid)
+index federationsender_queue_edus | federationsender_queue_edus_server_name_idx | CREATE INDEX federationsender_queue_edus_server_name_idx ON public.federationsender_queue_edus USING btree (server_name)
+index federationsender_queue_json | federationsender_queue_json_json_nid_idx | CREATE UNIQUE INDEX federationsender_queue_json_json_nid_idx ON public.federationsender_queue_json USING btree (json_nid)
+index federationsender_queue_pdus | federationsender_queue_pdus_json_nid_idx | CREATE INDEX federationsender_queue_pdus_json_nid_idx ON public.federationsender_queue_pdus USING btree (json_nid)
+index federationsender_queue_pdus | federationsender_queue_pdus_pdus_json_nid_idx | CREATE UNIQUE INDEX federationsender_queue_pdus_pdus_json_nid_idx ON public.federationsender_queue_pdus USING btree (json_nid, server_name)
+index federationsender_queue_pdus | federationsender_queue_pdus_server_name_idx | CREATE INDEX federationsender_queue_pdus_server_name_idx ON public.federationsender_queue_pdus USING btree (server_name)
+index federationsender_relay_servers | federationsender_relay_server_server_name_relay_server_name_key | CREATE UNIQUE INDEX federationsender_relay_server_server_name_relay_server_name_key ON public.federationsender_relay_servers USING btree (server_name, relay_server_name)
+index federationsender_relay_servers | federationsender_relay_servers_server_name_idx | CREATE INDEX federationsender_relay_servers_server_name_idx ON public.federationsender_relay_servers USING btree (server_name)
+index federationsender_retry_state | federationsender_retry_state_pkey | CREATE UNIQUE INDEX federationsender_retry_state_pkey ON public.federationsender_retry_state USING btree (server_name)
+index keydb_server_keys | keydb_server_keys_unique | CREATE UNIQUE INDEX keydb_server_keys_unique ON public.keydb_server_keys USING btree (server_name, server_key_id)
+index keydb_server_keys | keydb_server_name_and_key_id | CREATE INDEX keydb_server_name_and_key_id ON public.keydb_server_keys USING btree (server_name_and_key_id)
+index keyserver_cross_signing_keys | keyserver_cross_signing_keys_pkey | CREATE UNIQUE INDEX keyserver_cross_signing_keys_pkey ON public.keyserver_cross_signing_keys USING btree (user_id, key_type)
+index keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_idx | CREATE INDEX keyserver_cross_signing_sigs_idx ON public.keyserver_cross_signing_sigs USING btree (origin_user_id, target_user_id, target_key_id)
+index keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_pkey | CREATE UNIQUE INDEX keyserver_cross_signing_sigs_pkey ON public.keyserver_cross_signing_sigs USING btree (origin_user_id, origin_key_id, target_user_id, target_key_id)
+index keyserver_device_keys | keyserver_device_keys_unique | CREATE UNIQUE INDEX keyserver_device_keys_unique ON public.keyserver_device_keys USING btree (user_id, device_id)
+index keyserver_fallback_keys | keyserver_fallback_keys_idx | CREATE INDEX keyserver_fallback_keys_idx ON public.keyserver_fallback_keys USING btree (user_id, device_id)
+index keyserver_fallback_keys | keyserver_fallback_keys_unique | CREATE UNIQUE INDEX keyserver_fallback_keys_unique ON public.keyserver_fallback_keys USING btree (user_id, device_id, algorithm)
+index keyserver_key_changes | keyserver_key_changes_pkey | CREATE UNIQUE INDEX keyserver_key_changes_pkey ON public.keyserver_key_changes USING btree (change_id)
+index keyserver_key_changes | keyserver_key_changes_unique_per_user | CREATE UNIQUE INDEX keyserver_key_changes_unique_per_user ON public.keyserver_key_changes USING btree (user_id)
+index keyserver_one_time_keys | keyserver_one_time_keys_idx | CREATE INDEX keyserver_one_time_keys_idx ON public.keyserver_one_time_keys USING btree (user_id, device_id)
+index keyserver_one_time_keys | keyserver_one_time_keys_unique | CREATE UNIQUE INDEX keyserver_one_time_keys_unique ON public.keyserver_one_time_keys USING btree (user_id, device_id, key_id, algorithm)
+index keyserver_stale_device_lists | keyserver_stale_device_lists_idx | CREATE INDEX keyserver_stale_device_lists_idx ON public.keyserver_stale_device_lists USING btree (domain, is_stale)
+index keyserver_stale_device_lists | keyserver_stale_device_lists_pkey | CREATE UNIQUE INDEX keyserver_stale_device_lists_pkey ON public.keyserver_stale_device_lists USING btree (user_id)
+index mediaapi_media_repository | mediaapi_media_repository_index | CREATE UNIQUE INDEX mediaapi_media_repository_index ON public.mediaapi_media_repository USING btree (media_id, media_origin)
+index mediaapi_thumbnail | mediaapi_thumbnail_index | CREATE UNIQUE INDEX mediaapi_thumbnail_index ON public.mediaapi_thumbnail USING btree (media_id, media_origin, width, height, resize_method)
+index msc2836_edges | msc2836_edges_uniq | CREATE UNIQUE INDEX msc2836_edges_uniq ON public.msc2836_edges USING btree (parent_event_id, child_event_id, rel_type)
+index msc2836_nodes | msc2836_nodes_pkey | CREATE UNIQUE INDEX msc2836_nodes_pkey ON public.msc2836_nodes USING btree (event_id)
+index relayapi_queue | relayapi_queue_json_nid_idx | CREATE INDEX relayapi_queue_json_nid_idx ON public.relayapi_queue USING btree (json_nid)
+index relayapi_queue | relayapi_queue_queue_json_nid_idx | CREATE UNIQUE INDEX relayapi_queue_queue_json_nid_idx ON public.relayapi_queue USING btree (json_nid, server_name)
+index relayapi_queue | relayapi_queue_server_name_idx | CREATE INDEX relayapi_queue_server_name_idx ON public.relayapi_queue USING btree (server_name)
+index relayapi_queue_json | relayapi_queue_json_json_nid_idx | CREATE UNIQUE INDEX relayapi_queue_json_json_nid_idx ON public.relayapi_queue_json USING btree (json_nid)
+index roomserver_client_transactions | roomserver_client_transactions_inserted_ts_idx | CREATE INDEX roomserver_client_transactions_inserted_ts_idx ON public.roomserver_client_transactions USING btree (inserted_ts)
+index roomserver_client_transactions | roomserver_client_transactions_pkey | CREATE UNIQUE INDEX roomserver_client_transactions_pkey ON public.roomserver_client_transactions USING btree (room_id, sender_id, session_id, transaction_id)
+index roomserver_event_json | roomserver_event_json_pkey | CREATE UNIQUE INDEX roomserver_event_json_pkey ON public.roomserver_event_json USING btree (event_nid)
+index roomserver_event_state_keys | roomserver_event_state_key_unique | CREATE UNIQUE INDEX roomserver_event_state_key_unique ON public.roomserver_event_state_keys USING btree (event_state_key)
+index roomserver_event_state_keys | roomserver_event_state_keys_pkey | CREATE UNIQUE INDEX roomserver_event_state_keys_pkey ON public.roomserver_event_state_keys USING btree (event_state_key_nid)
+index roomserver_event_types | roomserver_event_type_unique | CREATE UNIQUE INDEX roomserver_event_type_unique ON public.roomserver_event_types USING btree (event_type)
+index roomserver_event_types | roomserver_event_types_pkey | CREATE UNIQUE INDEX roomserver_event_types_pkey ON public.roomserver_event_types USING btree (event_type_nid)
+index roomserver_events | roomserver_event_event_type_nid_idx | CREATE INDEX roomserver_event_event_type_nid_idx ON public.roomserver_events USING btree (event_type_nid)
+index roomserver_events | roomserver_event_id_unique | CREATE UNIQUE INDEX roomserver_event_id_unique ON public.roomserver_events USING btree (event_id)
+index roomserver_events | roomserver_event_state_key_nid_idx | CREATE INDEX roomserver_event_state_key_nid_idx ON public.roomserver_events USING btree (event_state_key_nid)
+index roomserver_events | roomserver_events_memberships_idx | CREATE INDEX roomserver_events_memberships_idx ON public.roomserver_events USING btree (room_nid, event_state_key_nid) WHERE (event_type_nid = 5)
+index roomserver_events | roomserver_events_pkey | CREATE UNIQUE INDEX roomserver_events_pkey ON public.roomserver_events USING btree (event_nid)
+index roomserver_invites | roomserver_invites_active_idx | CREATE INDEX roomserver_invites_active_idx ON public.roomserver_invites USING btree (target_nid, room_nid) WHERE (NOT retired)
+index roomserver_invites | roomserver_invites_pkey | CREATE UNIQUE INDEX roomserver_invites_pkey ON public.roomserver_invites USING btree (invite_event_id)
+index roomserver_membership | roomserver_membership_room_nid_target_nid_key | CREATE UNIQUE INDEX roomserver_membership_room_nid_target_nid_key ON public.roomserver_membership USING btree (room_nid, target_nid)
+index roomserver_partial_state_rooms | idx_partial_state_rooms_created | CREATE INDEX idx_partial_state_rooms_created ON public.roomserver_partial_state_rooms USING btree (created_at)
+index roomserver_partial_state_rooms | roomserver_partial_state_rooms_pkey | CREATE UNIQUE INDEX roomserver_partial_state_rooms_pkey ON public.roomserver_partial_state_rooms USING btree (room_nid)
+index roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_pkey | CREATE UNIQUE INDEX roomserver_partial_state_rooms_servers_pkey ON public.roomserver_partial_state_rooms_servers USING btree (room_nid, server_name)
+index roomserver_previous_events | roomserver_previous_event_id_unique | CREATE UNIQUE INDEX roomserver_previous_event_id_unique ON public.roomserver_previous_events USING btree (previous_event_id)
+index roomserver_published | roomserver_published_pkey | CREATE UNIQUE INDEX roomserver_published_pkey ON public.roomserver_published USING btree (room_id, appservice_id, network_id)
+index roomserver_redactions | roomserver_redactions_pkey | CREATE UNIQUE INDEX roomserver_redactions_pkey ON public.roomserver_redactions USING btree (redaction_event_id)
+index roomserver_redactions | roomserver_redactions_redacts_event_id | CREATE INDEX roomserver_redactions_redacts_event_id ON public.roomserver_redactions USING btree (redacts_event_id)
+index roomserver_reported_events | roomserver_reported_events_pkey | CREATE UNIQUE INDEX roomserver_reported_events_pkey ON public.roomserver_reported_events USING btree (id)
+index roomserver_room_aliases | roomserver_room_aliases_pkey | CREATE UNIQUE INDEX roomserver_room_aliases_pkey ON public.roomserver_room_aliases USING btree (alias)
+index roomserver_room_aliases | roomserver_room_id_idx | CREATE INDEX roomserver_room_id_idx ON public.roomserver_room_aliases USING btree (room_id)
+index roomserver_rooms | roomserver_room_id_unique | CREATE UNIQUE INDEX roomserver_room_id_unique ON public.roomserver_rooms USING btree (room_id)
+index roomserver_rooms | roomserver_rooms_pkey | CREATE UNIQUE INDEX roomserver_rooms_pkey ON public.roomserver_rooms USING btree (room_nid)
+index roomserver_state_block | roomserver_state_block_pkey | CREATE UNIQUE INDEX roomserver_state_block_pkey ON public.roomserver_state_block USING btree (state_block_nid)
+index roomserver_state_block | roomserver_state_block_state_block_hash_key | CREATE UNIQUE INDEX roomserver_state_block_state_block_hash_key ON public.roomserver_state_block USING btree (state_block_hash)
+index roomserver_state_snapshots | roomserver_state_snapshots_pkey | CREATE UNIQUE INDEX roomserver_state_snapshots_pkey ON public.roomserver_state_snapshots USING btree (state_snapshot_nid)
+index roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | CREATE UNIQUE INDEX roomserver_state_snapshots_state_snapshot_hash_key ON public.roomserver_state_snapshots USING btree (state_snapshot_hash)
+index roomserver_user_room_keys | roomserver_user_room_keys_pk | CREATE UNIQUE INDEX roomserver_user_room_keys_pk ON public.roomserver_user_room_keys USING btree (user_nid, room_nid)
+index syncapi_account_data_type | syncapi_account_data_id_idx | CREATE UNIQUE INDEX syncapi_account_data_id_idx ON public.syncapi_account_data_type USING btree (id, type)
+index syncapi_account_data_type | syncapi_account_data_type_pkey | CREATE UNIQUE INDEX syncapi_account_data_type_pkey ON public.syncapi_account_data_type USING btree (id)
+index syncapi_account_data_type | syncapi_account_data_unique | CREATE UNIQUE INDEX syncapi_account_data_unique ON public.syncapi_account_data_type USING btree (user_id, room_id, type)
+index syncapi_backward_extremities | syncapi_backward_extremities_pkey | CREATE UNIQUE INDEX syncapi_backward_extremities_pkey ON public.syncapi_backward_extremities USING btree (room_id, event_id, prev_event_id)
+index syncapi_current_room_state | syncapi_current_room_state_eventid_idx | CREATE UNIQUE INDEX syncapi_current_room_state_eventid_idx ON public.syncapi_current_room_state USING btree (event_id)
+index syncapi_current_room_state | syncapi_current_room_state_type_state_key_idx | CREATE INDEX syncapi_current_room_state_type_state_key_idx ON public.syncapi_current_room_state USING btree (type, state_key)
+index syncapi_current_room_state | syncapi_event_id_idx | CREATE UNIQUE INDEX syncapi_event_id_idx ON public.syncapi_current_room_state USING btree (event_id, room_id, type, sender, contains_url)
+index syncapi_current_room_state | syncapi_membership_idx | CREATE INDEX syncapi_membership_idx ON public.syncapi_current_room_state USING btree (type, state_key, membership) WHERE ((membership IS NOT NULL) AND (membership <> 'leave'::text))
+index syncapi_current_room_state | syncapi_room_state_unique | CREATE UNIQUE INDEX syncapi_room_state_unique ON public.syncapi_current_room_state USING btree (room_id, type, state_key)
+index syncapi_filter | syncapi_filter_id_key | CREATE UNIQUE INDEX syncapi_filter_id_key ON public.syncapi_filter USING btree (id)
+index syncapi_filter | syncapi_filter_localpart | CREATE INDEX syncapi_filter_localpart ON public.syncapi_filter USING btree (localpart)
+index syncapi_filter | syncapi_filter_pkey | CREATE UNIQUE INDEX syncapi_filter_pkey ON public.syncapi_filter USING btree (id, localpart)
+index syncapi_ignores | syncapi_ignores_pkey | CREATE UNIQUE INDEX syncapi_ignores_pkey ON public.syncapi_ignores USING btree (user_id)
+index syncapi_invite_events | syncapi_invite_events_pkey | CREATE UNIQUE INDEX syncapi_invite_events_pkey ON public.syncapi_invite_events USING btree (id)
+index syncapi_invite_events | syncapi_invites_event_id_idx | CREATE INDEX syncapi_invites_event_id_idx ON public.syncapi_invite_events USING btree (event_id)
+index syncapi_invite_events | syncapi_invites_target_user_id_idx | CREATE INDEX syncapi_invites_target_user_id_idx ON public.syncapi_invite_events USING btree (target_user_id, id)
+index syncapi_memberships | syncapi_memberships_unique | CREATE UNIQUE INDEX syncapi_memberships_unique ON public.syncapi_memberships USING btree (room_id, user_id, membership)
+index syncapi_notification_data | syncapi_notification_data_pkey | CREATE UNIQUE INDEX syncapi_notification_data_pkey ON public.syncapi_notification_data USING btree (id)
+index syncapi_notification_data | syncapi_notification_data_unique | CREATE UNIQUE INDEX syncapi_notification_data_unique ON public.syncapi_notification_data USING btree (user_id, room_id)
+index syncapi_output_room_events | syncapi_output_room_event_id_idx | CREATE UNIQUE INDEX syncapi_output_room_event_id_idx ON public.syncapi_output_room_events USING btree (event_id)
+index syncapi_output_room_events | syncapi_output_room_events_add_state_ids_idx | CREATE INDEX syncapi_output_room_events_add_state_ids_idx ON public.syncapi_output_room_events USING btree (((add_state_ids IS NOT NULL)))
+index syncapi_output_room_events | syncapi_output_room_events_exclude_from_sync_idx | CREATE INDEX syncapi_output_room_events_exclude_from_sync_idx ON public.syncapi_output_room_events USING btree (exclude_from_sync)
+index syncapi_output_room_events | syncapi_output_room_events_pkey | CREATE UNIQUE INDEX syncapi_output_room_events_pkey ON public.syncapi_output_room_events USING btree (id)
+index syncapi_output_room_events | syncapi_output_room_events_recent_events_idx | CREATE INDEX syncapi_output_room_events_recent_events_idx ON public.syncapi_output_room_events USING btree (room_id, exclude_from_sync, id, sender, type)
+index syncapi_output_room_events | syncapi_output_room_events_remove_state_ids_idx | CREATE INDEX syncapi_output_room_events_remove_state_ids_idx ON public.syncapi_output_room_events USING btree (((remove_state_ids IS NOT NULL)))
+index syncapi_output_room_events | syncapi_output_room_events_room_id_idx | CREATE INDEX syncapi_output_room_events_room_id_idx ON public.syncapi_output_room_events USING btree (room_id)
+index syncapi_output_room_events | syncapi_output_room_events_sender_idx | CREATE INDEX syncapi_output_room_events_sender_idx ON public.syncapi_output_room_events USING btree (sender)
+index syncapi_output_room_events | syncapi_output_room_events_timestamp_idx | CREATE INDEX syncapi_output_room_events_timestamp_idx ON public.syncapi_output_room_events USING btree (room_id, origin_server_ts, id)
+index syncapi_output_room_events | syncapi_output_room_events_type_idx | CREATE INDEX syncapi_output_room_events_type_idx ON public.syncapi_output_room_events USING btree (type)
+index syncapi_output_room_events_topology | syncapi_event_topological_position_idx | CREATE UNIQUE INDEX syncapi_event_topological_position_idx ON public.syncapi_output_room_events_topology USING btree (topological_position, stream_position, room_id)
+index syncapi_output_room_events_topology | syncapi_output_room_events_topology_pkey | CREATE UNIQUE INDEX syncapi_output_room_events_topology_pkey ON public.syncapi_output_room_events_topology USING btree (event_id)
+index syncapi_peeks | syncapi_peeks_room_id_idx | CREATE INDEX syncapi_peeks_room_id_idx ON public.syncapi_peeks USING btree (room_id)
+index syncapi_peeks | syncapi_peeks_room_id_user_id_device_id_key | CREATE UNIQUE INDEX syncapi_peeks_room_id_user_id_device_id_key ON public.syncapi_peeks USING btree (room_id, user_id, device_id)
+index syncapi_peeks | syncapi_peeks_user_id_device_id_idx | CREATE INDEX syncapi_peeks_user_id_device_id_idx ON public.syncapi_peeks USING btree (user_id, device_id)
+index syncapi_presence | presence_presences_unique | CREATE UNIQUE INDEX presence_presences_unique ON public.syncapi_presence USING btree (user_id)
+index syncapi_presence | syncapi_presence_pkey | CREATE UNIQUE INDEX syncapi_presence_pkey ON public.syncapi_presence USING btree (id)
+index syncapi_presence | syncapi_presence_user_id | CREATE INDEX syncapi_presence_user_id ON public.syncapi_presence USING btree (user_id)
+index syncapi_receipts | syncapi_receipts_pkey | CREATE UNIQUE INDEX syncapi_receipts_pkey ON public.syncapi_receipts USING btree (id)
+index syncapi_receipts | syncapi_receipts_room_id | CREATE INDEX syncapi_receipts_room_id ON public.syncapi_receipts USING btree (room_id)
+index syncapi_receipts | syncapi_receipts_unique | CREATE UNIQUE INDEX syncapi_receipts_unique ON public.syncapi_receipts USING btree (room_id, receipt_type, user_id, thread_id)
+index syncapi_relations | syncapi_relations_pkey | CREATE UNIQUE INDEX syncapi_relations_pkey ON public.syncapi_relations USING btree (id)
+index syncapi_relations | syncapi_relations_unique | CREATE UNIQUE INDEX syncapi_relations_unique ON public.syncapi_relations USING btree (room_id, event_id, child_event_id, rel_type)
+index syncapi_send_to_device | syncapi_send_to_device_pkey | CREATE UNIQUE INDEX syncapi_send_to_device_pkey ON public.syncapi_send_to_device USING btree (id)
+index syncapi_send_to_device | syncapi_send_to_device_user_id_device_id_idx | CREATE INDEX syncapi_send_to_device_user_id_device_id_idx ON public.syncapi_send_to_device USING btree (user_id, device_id)
+index syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_lists_pkey ON public.syncapi_sliding_sync_connection_lists USING btree (connection_key, list_name)
+index syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_conn_idx | CREATE INDEX syncapi_sliding_sync_connection_positions_conn_idx ON public.syncapi_sliding_sync_connection_positions USING btree (connection_key)
+index syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_positions_pkey ON public.syncapi_sliding_sync_connection_positions USING btree (connection_position)
+index syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_conn_idx | CREATE INDEX syncapi_sliding_sync_connection_receipts_conn_idx ON public.syncapi_sliding_sync_connection_receipts USING btree (connection_key)
+index syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_receipts_pkey ON public.syncapi_sliding_sync_connection_receipts USING btree (connection_key, room_id, receipt_type, user_id, thread_id)
+index syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_room_idx | CREATE INDEX syncapi_sliding_sync_connection_receipts_room_idx ON public.syncapi_sliding_sync_connection_receipts USING btree (room_id)
+index syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_state_conn_idx | CREATE INDEX syncapi_sliding_sync_connection_required_state_conn_idx ON public.syncapi_sliding_sync_connection_required_state USING btree (connection_key)
+index syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_state_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_required_state_pkey ON public.syncapi_sliding_sync_connection_required_state USING btree (required_state_id)
+index syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_configs_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_room_configs_pkey ON public.syncapi_sliding_sync_connection_room_configs USING btree (connection_position, room_id)
+index syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_streams_pkey ON public.syncapi_sliding_sync_connection_streams USING btree (connection_position, room_id, stream)
+index syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connections_pkey ON public.syncapi_sliding_sync_connections USING btree (connection_key)
+index syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_id_device_id_conn_id_key | CREATE UNIQUE INDEX syncapi_sliding_sync_connections_user_id_device_id_conn_id_key ON public.syncapi_sliding_sync_connections USING btree (user_id, device_id, conn_id)
+index syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_idx | CREATE INDEX syncapi_sliding_sync_connections_user_idx ON public.syncapi_sliding_sync_connections USING btree (user_id)
+index syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_encrypted_idx | CREATE INDEX syncapi_sliding_sync_joined_rooms_encrypted_idx ON public.syncapi_sliding_sync_joined_rooms USING btree (is_encrypted) WHERE (is_encrypted = true)
+index syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_joined_rooms_pkey ON public.syncapi_sliding_sync_joined_rooms USING btree (room_id)
+index syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_room_type_idx | CREATE INDEX syncapi_sliding_sync_joined_rooms_room_type_idx ON public.syncapi_sliding_sync_joined_rooms USING btree (room_type) WHERE (room_type IS NOT NULL)
+index syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_stream_ordering_idx | CREATE INDEX syncapi_sliding_sync_joined_rooms_stream_ordering_idx ON public.syncapi_sliding_sync_joined_rooms USING btree (event_stream_ordering DESC)
+index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_forgotten_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_forgotten_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (user_id, forgotten) WHERE (forgotten = 0)
+index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_membership_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_membership_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (user_id, membership)
+index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_membership_snapshots_pkey ON public.syncapi_sliding_sync_membership_snapshots USING btree (room_id, user_id)
+index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_stream_ordering_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_stream_ordering_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (event_stream_ordering DESC)
+index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_user_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_user_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (user_id)
+index syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_rooms_to_recalculate_pkey ON public.syncapi_sliding_sync_rooms_to_recalculate USING btree (room_id)
+index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_pkey | CREATE UNIQUE INDEX syncapi_unpartialstated_rooms_pkey ON public.syncapi_unpartialstated_rooms USING btree (id)
+index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_room_id | CREATE INDEX syncapi_unpartialstated_rooms_room_id ON public.syncapi_unpartialstated_rooms USING btree (room_id)
+index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_user_id | CREATE INDEX syncapi_unpartialstated_rooms_user_id ON public.syncapi_unpartialstated_rooms USING btree (user_id)
+index userapi_account_datas | userapi_account_datas_idx | CREATE UNIQUE INDEX userapi_account_datas_idx ON public.userapi_account_datas USING btree (localpart, server_name, room_id, type)
+index userapi_accounts | userapi_accounts_idx | CREATE UNIQUE INDEX userapi_accounts_idx ON public.userapi_accounts USING btree (localpart, server_name)
+index userapi_daily_stats | daily_stats_unique | CREATE UNIQUE INDEX daily_stats_unique ON public.userapi_daily_stats USING btree ("timestamp", server_name)
+index userapi_daily_visits | userapi_daily_visits_localpart_device_timestamp_idx | CREATE UNIQUE INDEX userapi_daily_visits_localpart_device_timestamp_idx ON public.userapi_daily_visits USING btree (localpart, device_id, "timestamp")
+index userapi_daily_visits | userapi_daily_visits_localpart_timestamp_idx | CREATE INDEX userapi_daily_visits_localpart_timestamp_idx ON public.userapi_daily_visits USING btree (localpart, "timestamp")
+index userapi_daily_visits | userapi_daily_visits_timestamp_idx | CREATE INDEX userapi_daily_visits_timestamp_idx ON public.userapi_daily_visits USING btree ("timestamp")
+index userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | CREATE UNIQUE INDEX userapi_dehydrated_devices_pkey ON public.userapi_dehydrated_devices USING btree (user_id)
+index userapi_devices | userapi_device_localpart_id_idx | CREATE UNIQUE INDEX userapi_device_localpart_id_idx ON public.userapi_devices USING btree (localpart, server_name, device_id)
+index userapi_devices | userapi_devices_pkey | CREATE UNIQUE INDEX userapi_devices_pkey ON public.userapi_devices USING btree (access_token)
+index userapi_external_ids | userapi_external_ids_localpart_idx | CREATE INDEX userapi_external_ids_localpart_idx ON public.userapi_external_ids USING btree (localpart, server_name)
+index userapi_external_ids | userapi_external_ids_pkey | CREATE UNIQUE INDEX userapi_external_ids_pkey ON public.userapi_external_ids USING btree (provider_id, external_id)
+index userapi_key_backup_versions | userapi_key_backup_versions_idx | CREATE UNIQUE INDEX userapi_key_backup_versions_idx ON public.userapi_key_backup_versions USING btree (user_id, version)
+index userapi_key_backups | userapi_key_backups_idx | CREATE UNIQUE INDEX userapi_key_backups_idx ON public.userapi_key_backups USING btree (user_id, room_id, session_id, version)
+index userapi_key_backups | userapi_key_backups_versions_idx | CREATE INDEX userapi_key_backups_versions_idx ON public.userapi_key_backups USING btree (user_id, version)
+index userapi_login_tokens | userapi_login_tokens_expiration_idx | CREATE INDEX userapi_login_tokens_expiration_idx ON public.userapi_login_tokens USING btree (token_expires_at)
+index userapi_login_tokens | userapi_login_tokens_pkey | CREATE UNIQUE INDEX userapi_login_tokens_pkey ON public.userapi_login_tokens USING btree (token)
+index userapi_notification_events | userapi_notification_events_pkey | CREATE UNIQUE INDEX userapi_notification_events_pkey ON public.userapi_notification_events USING btree (room_id, event_id)
+index userapi_notification_events | userapi_notification_events_thread_idx | CREATE INDEX userapi_notification_events_thread_idx ON public.userapi_notification_events USING btree (room_id, thread_id)
+index userapi_notification_receipt_locks | userapi_notification_receipt_locks_pkey | CREATE UNIQUE INDEX userapi_notification_receipt_locks_pkey ON public.userapi_notification_receipt_locks USING btree (room_id)
+index userapi_notifications | userapi_notification_localpart_id_idx | CREATE INDEX userapi_notification_localpart_id_idx ON public.userapi_notifications USING btree (localpart, server_name, id)
+index userapi_notifications | userapi_notification_localpart_room_id_event_id_idx | CREATE INDEX userapi_notification_localpart_room_id_event_id_idx ON public.userapi_notifications USING btree (localpart, server_name, room_id, event_id)
+index userapi_notifications | userapi_notification_localpart_room_id_id_idx | CREATE INDEX userapi_notification_localpart_room_id_id_idx ON public.userapi_notifications USING btree (localpart, server_name, room_id, id)
+index userapi_notifications | userapi_notification_room_id_idx | CREATE INDEX userapi_notification_room_id_idx ON public.userapi_notifications USING btree (room_id, id)
+index userapi_notifications | userapi_notifications_pkey | CREATE UNIQUE INDEX userapi_notifications_pkey ON public.userapi_notifications USING btree (id)
+index userapi_openid_tokens | userapi_openid_tokens_pkey | CREATE UNIQUE INDEX userapi_openid_tokens_pkey ON public.userapi_openid_tokens USING btree (token)
+index userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | CREATE UNIQUE INDEX userapi_pending_notification_receipts_pkey ON public.userapi_pending_notification_receipts USING btree (room_id, event_id, localpart, server_name, thread_id)
+index userapi_profiles | userapi_profiles_idx | CREATE UNIQUE INDEX userapi_profiles_idx ON public.userapi_profiles USING btree (localpart, server_name)
+index userapi_pushers | userapi_pusher_app_id_pushkey_idx | CREATE INDEX userapi_pusher_app_id_pushkey_idx ON public.userapi_pushers USING btree (app_id, pushkey)
+index userapi_pushers | userapi_pusher_app_id_pushkey_localpart_idx | CREATE UNIQUE INDEX userapi_pusher_app_id_pushkey_localpart_idx ON public.userapi_pushers USING btree (app_id, pushkey, localpart, server_name)
+index userapi_pushers | userapi_pusher_localpart_idx | CREATE INDEX userapi_pusher_localpart_idx ON public.userapi_pushers USING btree (localpart, server_name)
+index userapi_pushers | userapi_pushers_pkey | CREATE UNIQUE INDEX userapi_pushers_pkey ON public.userapi_pushers USING btree (id)
+index userapi_registration_tokens | userapi_registration_tokens_pkey | CREATE UNIQUE INDEX userapi_registration_tokens_pkey ON public.userapi_registration_tokens USING btree (token)
+index userapi_threepids | userapi_threepid_idx | CREATE INDEX userapi_threepid_idx ON public.userapi_threepids USING btree (localpart, server_name)
+index userapi_threepids | userapi_threepids_pkey | CREATE UNIQUE INDEX userapi_threepids_pkey ON public.userapi_threepids USING btree (threepid, medium)
+index zendrite_ha_compatibility | zendrite_ha_compatibility_pkey | CREATE UNIQUE INDEX zendrite_ha_compatibility_pkey ON public.zendrite_ha_compatibility USING btree (id)
+index zendrite_ha_ownership | zendrite_ha_ownership_pkey | CREATE UNIQUE INDEX zendrite_ha_ownership_pkey ON public.zendrite_ha_ownership USING btree (id)
+index zendrite_ha_ownership_history | zendrite_ha_ownership_history_pkey | CREATE UNIQUE INDEX zendrite_ha_ownership_history_pkey ON public.zendrite_ha_ownership_history USING btree (generation)
+constraint db_migrations | db_migrations_pkey | PRIMARY KEY (version)
+constraint db_migrations | db_migrations_time_not_null | NOT NULL "time"
+constraint db_migrations | db_migrations_version_not_null | NOT NULL version
+constraint db_migrations | db_migrations_zendrite_version_not_null | NOT NULL zendrite_version
+constraint federationsender_assumed_offline | federationsender_assumed_offline_pkey | PRIMARY KEY (server_name)
+constraint federationsender_assumed_offline | federationsender_assumed_offline_server_name_not_null | NOT NULL server_name
+constraint federationsender_blacklist | federationsender_blacklist_server_name_key | UNIQUE (server_name)
+constraint federationsender_blacklist | federationsender_blacklist_server_name_not_null | NOT NULL server_name
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_creation_ts_not_null | NOT NULL creation_ts
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_peek_id_not_null | NOT NULL peek_id
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_renewal_interval_not_null | NOT NULL renewal_interval
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_renewed_ts_not_null | NOT NULL renewed_ts
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_not_null | NOT NULL room_id
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
+constraint federationsender_inbound_peeks | federationsender_inbound_peeks_server_name_not_null | NOT NULL server_name
+constraint federationsender_joined_hosts | federationsender_joined_hosts_event_id_not_null | NOT NULL event_id
+constraint federationsender_joined_hosts | federationsender_joined_hosts_room_id_not_null | NOT NULL room_id
+constraint federationsender_joined_hosts | federationsender_joined_hosts_server_name_not_null | NOT NULL server_name
+constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_notary_id_not_null | NOT NULL notary_id
+constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_pkey1 | PRIMARY KEY (notary_id)
+constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_response_json_not_null | NOT NULL response_json
+constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_server_name_not_null | NOT NULL server_name
+constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_valid_until_not_null | NOT NULL valid_until
+constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_meta_server_name_key_id_key | UNIQUE (server_name, key_id)
+constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metada_server_name_not_null | NOT NULL server_name
+constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metadata_key_id_not_null | NOT NULL key_id
+constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metadata_notary_id_not_null | NOT NULL notary_id
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_creation_ts_not_null | NOT NULL creation_ts
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_peek_id_not_null | NOT NULL peek_id
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_renewal_interval_not_null | NOT NULL renewal_interval
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_renewed_ts_not_null | NOT NULL renewed_ts
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_not_null | NOT NULL room_id
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
+constraint federationsender_outbound_peeks | federationsender_outbound_peeks_server_name_not_null | NOT NULL server_name
+constraint federationsender_queue_edus | federationsender_queue_edus_edu_type_not_null | NOT NULL edu_type
+constraint federationsender_queue_edus | federationsender_queue_edus_expires_at_not_null | NOT NULL expires_at
+constraint federationsender_queue_edus | federationsender_queue_edus_json_nid_not_null | NOT NULL json_nid
+constraint federationsender_queue_edus | federationsender_queue_edus_server_name_not_null | NOT NULL server_name
+constraint federationsender_queue_json | federationsender_queue_json_json_body_not_null | NOT NULL json_body
+constraint federationsender_queue_json | federationsender_queue_json_json_nid_not_null | NOT NULL json_nid
+constraint federationsender_queue_pdus | federationsender_queue_pdus_json_nid_not_null | NOT NULL json_nid
+constraint federationsender_queue_pdus | federationsender_queue_pdus_server_name_not_null | NOT NULL server_name
+constraint federationsender_queue_pdus | federationsender_queue_pdus_transaction_id_not_null | NOT NULL transaction_id
+constraint federationsender_relay_servers | federationsender_relay_server_server_name_relay_server_name_key | UNIQUE (server_name, relay_server_name)
+constraint federationsender_relay_servers | federationsender_relay_servers_relay_server_name_not_null | NOT NULL relay_server_name
+constraint federationsender_relay_servers | federationsender_relay_servers_server_name_not_null | NOT NULL server_name
+constraint federationsender_retry_state | federationsender_retry_state_failure_count_not_null | NOT NULL failure_count
+constraint federationsender_retry_state | federationsender_retry_state_pkey | PRIMARY KEY (server_name)
+constraint federationsender_retry_state | federationsender_retry_state_retry_until_not_null | NOT NULL retry_until
+constraint federationsender_retry_state | federationsender_retry_state_server_name_not_null | NOT NULL server_name
+constraint keydb_server_keys | keydb_server_keys_expired_ts_not_null | NOT NULL expired_ts
+constraint keydb_server_keys | keydb_server_keys_server_key_id_not_null | NOT NULL server_key_id
+constraint keydb_server_keys | keydb_server_keys_server_key_not_null | NOT NULL server_key
+constraint keydb_server_keys | keydb_server_keys_server_name_and_key_id_not_null | NOT NULL server_name_and_key_id
+constraint keydb_server_keys | keydb_server_keys_server_name_not_null | NOT NULL server_name
+constraint keydb_server_keys | keydb_server_keys_unique | UNIQUE (server_name, server_key_id)
+constraint keydb_server_keys | keydb_server_keys_valid_until_ts_not_null | NOT NULL valid_until_ts
+constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_key_data_not_null | NOT NULL key_data
+constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_key_type_not_null | NOT NULL key_type
+constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_pkey | PRIMARY KEY (user_id, key_type)
+constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_user_id_not_null | NOT NULL user_id
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_origin_key_id_not_null | NOT NULL origin_key_id
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_origin_user_id_not_null | NOT NULL origin_user_id
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_pkey | PRIMARY KEY (origin_user_id, origin_key_id, target_user_id, target_key_id)
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_signature_not_null | NOT NULL signature
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_target_key_id_not_null | NOT NULL target_key_id
+constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_target_user_id_not_null | NOT NULL target_user_id
+constraint keyserver_device_keys | keyserver_device_keys_device_id_not_null | NOT NULL device_id
+constraint keyserver_device_keys | keyserver_device_keys_key_json_not_null | NOT NULL key_json
+constraint keyserver_device_keys | keyserver_device_keys_stream_id_not_null | NOT NULL stream_id
+constraint keyserver_device_keys | keyserver_device_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
+constraint keyserver_device_keys | keyserver_device_keys_unique | UNIQUE (user_id, device_id)
+constraint keyserver_device_keys | keyserver_device_keys_user_id_not_null | NOT NULL user_id
+constraint keyserver_fallback_keys | keyserver_fallback_keys_algorithm_not_null | NOT NULL algorithm
+constraint keyserver_fallback_keys | keyserver_fallback_keys_device_id_not_null | NOT NULL device_id
+constraint keyserver_fallback_keys | keyserver_fallback_keys_key_id_not_null | NOT NULL key_id
+constraint keyserver_fallback_keys | keyserver_fallback_keys_key_json_not_null | NOT NULL key_json
+constraint keyserver_fallback_keys | keyserver_fallback_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
+constraint keyserver_fallback_keys | keyserver_fallback_keys_unique | UNIQUE (user_id, device_id, algorithm)
+constraint keyserver_fallback_keys | keyserver_fallback_keys_used_not_null | NOT NULL used
+constraint keyserver_fallback_keys | keyserver_fallback_keys_user_id_not_null | NOT NULL user_id
+constraint keyserver_key_changes | keyserver_key_changes_change_id_not_null | NOT NULL change_id
+constraint keyserver_key_changes | keyserver_key_changes_pkey | PRIMARY KEY (change_id)
+constraint keyserver_key_changes | keyserver_key_changes_unique_per_user | UNIQUE (user_id)
+constraint keyserver_key_changes | keyserver_key_changes_user_id_not_null | NOT NULL user_id
+constraint keyserver_one_time_keys | keyserver_one_time_keys_algorithm_not_null | NOT NULL algorithm
+constraint keyserver_one_time_keys | keyserver_one_time_keys_device_id_not_null | NOT NULL device_id
+constraint keyserver_one_time_keys | keyserver_one_time_keys_key_id_not_null | NOT NULL key_id
+constraint keyserver_one_time_keys | keyserver_one_time_keys_key_json_not_null | NOT NULL key_json
+constraint keyserver_one_time_keys | keyserver_one_time_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
+constraint keyserver_one_time_keys | keyserver_one_time_keys_unique | UNIQUE (user_id, device_id, key_id, algorithm)
+constraint keyserver_one_time_keys | keyserver_one_time_keys_user_id_not_null | NOT NULL user_id
+constraint keyserver_stale_device_lists | keyserver_stale_device_lists_domain_not_null | NOT NULL domain
+constraint keyserver_stale_device_lists | keyserver_stale_device_lists_is_stale_not_null | NOT NULL is_stale
+constraint keyserver_stale_device_lists | keyserver_stale_device_lists_pkey | PRIMARY KEY (user_id)
+constraint keyserver_stale_device_lists | keyserver_stale_device_lists_ts_added_secs_not_null | NOT NULL ts_added_secs
+constraint keyserver_stale_device_lists | keyserver_stale_device_lists_user_id_not_null | NOT NULL user_id
+constraint mediaapi_media_repository | mediaapi_media_repository_base64hash_not_null | NOT NULL base64hash
+constraint mediaapi_media_repository | mediaapi_media_repository_content_type_not_null | NOT NULL content_type
+constraint mediaapi_media_repository | mediaapi_media_repository_creation_ts_not_null | NOT NULL creation_ts
+constraint mediaapi_media_repository | mediaapi_media_repository_file_size_bytes_not_null | NOT NULL file_size_bytes
+constraint mediaapi_media_repository | mediaapi_media_repository_media_id_not_null | NOT NULL media_id
+constraint mediaapi_media_repository | mediaapi_media_repository_media_origin_not_null | NOT NULL media_origin
+constraint mediaapi_media_repository | mediaapi_media_repository_upload_name_not_null | NOT NULL upload_name
+constraint mediaapi_media_repository | mediaapi_media_repository_user_id_not_null | NOT NULL user_id
+constraint mediaapi_thumbnail | mediaapi_thumbnail_content_type_not_null | NOT NULL content_type
+constraint mediaapi_thumbnail | mediaapi_thumbnail_creation_ts_not_null | NOT NULL creation_ts
+constraint mediaapi_thumbnail | mediaapi_thumbnail_file_size_bytes_not_null | NOT NULL file_size_bytes
+constraint mediaapi_thumbnail | mediaapi_thumbnail_height_not_null | NOT NULL height
+constraint mediaapi_thumbnail | mediaapi_thumbnail_media_id_not_null | NOT NULL media_id
+constraint mediaapi_thumbnail | mediaapi_thumbnail_media_origin_not_null | NOT NULL media_origin
+constraint mediaapi_thumbnail | mediaapi_thumbnail_resize_method_not_null | NOT NULL resize_method
+constraint mediaapi_thumbnail | mediaapi_thumbnail_width_not_null | NOT NULL width
+constraint msc2836_edges | msc2836_edges_child_event_id_not_null | NOT NULL child_event_id
+constraint msc2836_edges | msc2836_edges_parent_event_id_not_null | NOT NULL parent_event_id
+constraint msc2836_edges | msc2836_edges_parent_room_id_not_null | NOT NULL parent_room_id
+constraint msc2836_edges | msc2836_edges_parent_servers_not_null | NOT NULL parent_servers
+constraint msc2836_edges | msc2836_edges_rel_type_not_null | NOT NULL rel_type
+constraint msc2836_edges | msc2836_edges_uniq | UNIQUE (parent_event_id, child_event_id, rel_type)
+constraint msc2836_nodes | msc2836_nodes_event_id_not_null | NOT NULL event_id
+constraint msc2836_nodes | msc2836_nodes_explored_not_null | NOT NULL explored
+constraint msc2836_nodes | msc2836_nodes_origin_server_ts_not_null | NOT NULL origin_server_ts
+constraint msc2836_nodes | msc2836_nodes_pkey | PRIMARY KEY (event_id)
+constraint msc2836_nodes | msc2836_nodes_room_id_not_null | NOT NULL room_id
+constraint msc2836_nodes | msc2836_nodes_unsigned_children_count_not_null | NOT NULL unsigned_children_count
+constraint msc2836_nodes | msc2836_nodes_unsigned_children_hash_not_null | NOT NULL unsigned_children_hash
+constraint relayapi_queue | relayapi_queue_json_nid_not_null | NOT NULL json_nid
+constraint relayapi_queue | relayapi_queue_server_name_not_null | NOT NULL server_name
+constraint relayapi_queue | relayapi_queue_transaction_id_not_null | NOT NULL transaction_id
+constraint relayapi_queue_json | relayapi_queue_json_json_body_not_null | NOT NULL json_body
+constraint relayapi_queue_json | relayapi_queue_json_json_nid_not_null | NOT NULL json_nid
+constraint roomserver_client_transactions | roomserver_client_transactions_event_id_not_null | NOT NULL event_id
+constraint roomserver_client_transactions | roomserver_client_transactions_inserted_ts_not_null | NOT NULL inserted_ts
+constraint roomserver_client_transactions | roomserver_client_transactions_pkey | PRIMARY KEY (room_id, sender_id, session_id, transaction_id)
+constraint roomserver_client_transactions | roomserver_client_transactions_room_id_not_null | NOT NULL room_id
+constraint roomserver_client_transactions | roomserver_client_transactions_sender_id_not_null | NOT NULL sender_id
+constraint roomserver_client_transactions | roomserver_client_transactions_session_id_not_null | NOT NULL session_id
+constraint roomserver_client_transactions | roomserver_client_transactions_transaction_id_not_null | NOT NULL transaction_id
+constraint roomserver_event_json | roomserver_event_json_event_json_not_null | NOT NULL event_json
+constraint roomserver_event_json | roomserver_event_json_event_nid_not_null | NOT NULL event_nid
+constraint roomserver_event_json | roomserver_event_json_pkey | PRIMARY KEY (event_nid)
+constraint roomserver_event_state_keys | roomserver_event_state_key_unique | UNIQUE (event_state_key)
+constraint roomserver_event_state_keys | roomserver_event_state_keys_event_state_key_nid_not_null | NOT NULL event_state_key_nid
+constraint roomserver_event_state_keys | roomserver_event_state_keys_event_state_key_not_null | NOT NULL event_state_key
+constraint roomserver_event_state_keys | roomserver_event_state_keys_pkey | PRIMARY KEY (event_state_key_nid)
+constraint roomserver_event_types | roomserver_event_type_unique | UNIQUE (event_type)
+constraint roomserver_event_types | roomserver_event_types_event_type_nid_not_null | NOT NULL event_type_nid
+constraint roomserver_event_types | roomserver_event_types_event_type_not_null | NOT NULL event_type
+constraint roomserver_event_types | roomserver_event_types_pkey | PRIMARY KEY (event_type_nid)
+constraint roomserver_events | roomserver_event_id_unique | UNIQUE (event_id)
+constraint roomserver_events | roomserver_events_auth_event_nids_not_null | NOT NULL auth_event_nids
+constraint roomserver_events | roomserver_events_depth_not_null | NOT NULL depth
+constraint roomserver_events | roomserver_events_event_id_not_null | NOT NULL event_id
+constraint roomserver_events | roomserver_events_event_nid_not_null | NOT NULL event_nid
+constraint roomserver_events | roomserver_events_event_state_key_nid_not_null | NOT NULL event_state_key_nid
+constraint roomserver_events | roomserver_events_event_type_nid_not_null | NOT NULL event_type_nid
+constraint roomserver_events | roomserver_events_is_rejected_not_null | NOT NULL is_rejected
+constraint roomserver_events | roomserver_events_pkey | PRIMARY KEY (event_nid)
+constraint roomserver_events | roomserver_events_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_events | roomserver_events_sent_to_output_not_null | NOT NULL sent_to_output
+constraint roomserver_events | roomserver_events_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
+constraint roomserver_invites | roomserver_invites_invite_event_id_not_null | NOT NULL invite_event_id
+constraint roomserver_invites | roomserver_invites_invite_event_json_not_null | NOT NULL invite_event_json
+constraint roomserver_invites | roomserver_invites_pkey | PRIMARY KEY (invite_event_id)
+constraint roomserver_invites | roomserver_invites_retired_not_null | NOT NULL retired
+constraint roomserver_invites | roomserver_invites_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_invites | roomserver_invites_sender_nid_not_null | NOT NULL sender_nid
+constraint roomserver_invites | roomserver_invites_target_nid_not_null | NOT NULL target_nid
+constraint roomserver_membership | roomserver_membership_event_nid_not_null | NOT NULL event_nid
+constraint roomserver_membership | roomserver_membership_forgotten_not_null | NOT NULL forgotten
+constraint roomserver_membership | roomserver_membership_membership_nid_not_null | NOT NULL membership_nid
+constraint roomserver_membership | roomserver_membership_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_membership | roomserver_membership_room_nid_target_nid_key | UNIQUE (room_nid, target_nid)
+constraint roomserver_membership | roomserver_membership_sender_nid_not_null | NOT NULL sender_nid
+constraint roomserver_membership | roomserver_membership_target_local_not_null | NOT NULL target_local
+constraint roomserver_membership | roomserver_membership_target_nid_not_null | NOT NULL target_nid
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_created_at_not_null | NOT NULL created_at
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_device_lists_stream_id_not_null | NOT NULL device_lists_stream_id
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_join_event_nid_not_null | NOT NULL join_event_nid
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_joined_via_not_null | NOT NULL joined_via
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_pkey | PRIMARY KEY (room_nid)
+constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_pkey | PRIMARY KEY (room_nid, server_name)
+constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_room_nid_fkey | FOREIGN KEY (room_nid) REFERENCES roomserver_partial_state_rooms(room_nid) ON DELETE CASCADE
+constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_server_name_not_null | NOT NULL server_name
+constraint roomserver_previous_events | roomserver_previous_event_id_unique | UNIQUE (previous_event_id)
+constraint roomserver_previous_events | roomserver_previous_events_event_nids_not_null | NOT NULL event_nids
+constraint roomserver_previous_events | roomserver_previous_events_previous_event_id_not_null | NOT NULL previous_event_id
+constraint roomserver_published | roomserver_published_appservice_id_not_null | NOT NULL appservice_id
+constraint roomserver_published | roomserver_published_network_id_not_null | NOT NULL network_id
+constraint roomserver_published | roomserver_published_pkey | PRIMARY KEY (room_id, appservice_id, network_id)
+constraint roomserver_published | roomserver_published_published_not_null | NOT NULL published
+constraint roomserver_published | roomserver_published_room_id_not_null | NOT NULL room_id
+constraint roomserver_redactions | roomserver_redactions_pkey | PRIMARY KEY (redaction_event_id)
+constraint roomserver_redactions | roomserver_redactions_redaction_event_id_not_null | NOT NULL redaction_event_id
+constraint roomserver_redactions | roomserver_redactions_redacts_event_id_not_null | NOT NULL redacts_event_id
+constraint roomserver_redactions | roomserver_redactions_validated_not_null | NOT NULL validated
+constraint roomserver_reported_events | roomserver_reported_events_event_nid_not_null | NOT NULL event_nid
+constraint roomserver_reported_events | roomserver_reported_events_event_sender_nid_not_null | NOT NULL event_sender_nid
+constraint roomserver_reported_events | roomserver_reported_events_id_not_null | NOT NULL id
+constraint roomserver_reported_events | roomserver_reported_events_pkey | PRIMARY KEY (id)
+constraint roomserver_reported_events | roomserver_reported_events_received_ts_not_null | NOT NULL received_ts
+constraint roomserver_reported_events | roomserver_reported_events_reporting_user_nid_not_null | NOT NULL reporting_user_nid
+constraint roomserver_reported_events | roomserver_reported_events_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_room_aliases | roomserver_room_aliases_alias_not_null | NOT NULL alias
+constraint roomserver_room_aliases | roomserver_room_aliases_creator_id_not_null | NOT NULL creator_id
+constraint roomserver_room_aliases | roomserver_room_aliases_pkey | PRIMARY KEY (alias)
+constraint roomserver_room_aliases | roomserver_room_aliases_room_id_not_null | NOT NULL room_id
+constraint roomserver_rooms | roomserver_room_id_unique | UNIQUE (room_id)
+constraint roomserver_rooms | roomserver_rooms_last_event_sent_nid_not_null | NOT NULL last_event_sent_nid
+constraint roomserver_rooms | roomserver_rooms_latest_event_nids_not_null | NOT NULL latest_event_nids
+constraint roomserver_rooms | roomserver_rooms_pkey | PRIMARY KEY (room_nid)
+constraint roomserver_rooms | roomserver_rooms_resync_state_nid_not_null | NOT NULL resync_state_nid
+constraint roomserver_rooms | roomserver_rooms_room_id_not_null | NOT NULL room_id
+constraint roomserver_rooms | roomserver_rooms_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_rooms | roomserver_rooms_room_version_not_null | NOT NULL room_version
+constraint roomserver_rooms | roomserver_rooms_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
+constraint roomserver_state_block | roomserver_state_block_event_nids_not_null | NOT NULL event_nids
+constraint roomserver_state_block | roomserver_state_block_pkey | PRIMARY KEY (state_block_nid)
+constraint roomserver_state_block | roomserver_state_block_state_block_hash_key | UNIQUE (state_block_hash)
+constraint roomserver_state_block | roomserver_state_block_state_block_nid_not_null | NOT NULL state_block_nid
+constraint roomserver_state_snapshots | roomserver_state_snapshots_pkey | PRIMARY KEY (state_snapshot_nid)
+constraint roomserver_state_snapshots | roomserver_state_snapshots_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_state_snapshots | roomserver_state_snapshots_state_block_nids_not_null | NOT NULL state_block_nids
+constraint roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | UNIQUE (state_snapshot_hash)
+constraint roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
+constraint roomserver_user_room_keys | roomserver_user_room_keys_pk | PRIMARY KEY (user_nid, room_nid)
+constraint roomserver_user_room_keys | roomserver_user_room_keys_pseudo_id_pub_key_not_null | NOT NULL pseudo_id_pub_key
+constraint roomserver_user_room_keys | roomserver_user_room_keys_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_user_room_keys | roomserver_user_room_keys_user_nid_not_null | NOT NULL user_nid
+constraint syncapi_account_data_type | syncapi_account_data_type_id_not_null | NOT NULL id
+constraint syncapi_account_data_type | syncapi_account_data_type_pkey | PRIMARY KEY (id)
+constraint syncapi_account_data_type | syncapi_account_data_type_room_id_not_null | NOT NULL room_id
+constraint syncapi_account_data_type | syncapi_account_data_type_type_not_null | NOT NULL type
+constraint syncapi_account_data_type | syncapi_account_data_type_user_id_not_null | NOT NULL user_id
+constraint syncapi_account_data_type | syncapi_account_data_unique | UNIQUE (user_id, room_id, type)
+constraint syncapi_backward_extremities | syncapi_backward_extremities_event_id_not_null | NOT NULL event_id
+constraint syncapi_backward_extremities | syncapi_backward_extremities_pkey | PRIMARY KEY (room_id, event_id, prev_event_id)
+constraint syncapi_backward_extremities | syncapi_backward_extremities_prev_event_id_not_null | NOT NULL prev_event_id
+constraint syncapi_backward_extremities | syncapi_backward_extremities_room_id_not_null | NOT NULL room_id
+constraint syncapi_current_room_state | syncapi_current_room_state_contains_url_not_null | NOT NULL contains_url
+constraint syncapi_current_room_state | syncapi_current_room_state_event_id_not_null | NOT NULL event_id
+constraint syncapi_current_room_state | syncapi_current_room_state_headered_event_json_not_null | NOT NULL headered_event_json
+constraint syncapi_current_room_state | syncapi_current_room_state_history_visibility_not_null | NOT NULL history_visibility
+constraint syncapi_current_room_state | syncapi_current_room_state_room_id_not_null | NOT NULL room_id
+constraint syncapi_current_room_state | syncapi_current_room_state_sender_not_null | NOT NULL sender
+constraint syncapi_current_room_state | syncapi_current_room_state_state_key_not_null | NOT NULL state_key
+constraint syncapi_current_room_state | syncapi_current_room_state_type_not_null | NOT NULL type
+constraint syncapi_current_room_state | syncapi_room_state_unique | UNIQUE (room_id, type, state_key)
+constraint syncapi_filter | syncapi_filter_filter_not_null | NOT NULL filter
+constraint syncapi_filter | syncapi_filter_id_key | UNIQUE (id)
+constraint syncapi_filter | syncapi_filter_id_not_null | NOT NULL id
+constraint syncapi_filter | syncapi_filter_localpart_not_null | NOT NULL localpart
+constraint syncapi_filter | syncapi_filter_pkey | PRIMARY KEY (id, localpart)
+constraint syncapi_ignores | syncapi_ignores_ignores_json_not_null | NOT NULL ignores_json
+constraint syncapi_ignores | syncapi_ignores_pkey | PRIMARY KEY (user_id)
+constraint syncapi_ignores | syncapi_ignores_user_id_not_null | NOT NULL user_id
+constraint syncapi_invite_events | syncapi_invite_events_deleted_not_null | NOT NULL deleted
+constraint syncapi_invite_events | syncapi_invite_events_event_id_not_null | NOT NULL event_id
+constraint syncapi_invite_events | syncapi_invite_events_headered_event_json_not_null | NOT NULL headered_event_json
+constraint syncapi_invite_events | syncapi_invite_events_id_not_null | NOT NULL id
+constraint syncapi_invite_events | syncapi_invite_events_pkey | PRIMARY KEY (id)
+constraint syncapi_invite_events | syncapi_invite_events_room_id_not_null | NOT NULL room_id
+constraint syncapi_invite_events | syncapi_invite_events_target_user_id_not_null | NOT NULL target_user_id
+constraint syncapi_memberships | syncapi_memberships_event_id_not_null | NOT NULL event_id
+constraint syncapi_memberships | syncapi_memberships_membership_not_null | NOT NULL membership
+constraint syncapi_memberships | syncapi_memberships_room_id_not_null | NOT NULL room_id
+constraint syncapi_memberships | syncapi_memberships_stream_pos_not_null | NOT NULL stream_pos
+constraint syncapi_memberships | syncapi_memberships_topological_pos_not_null | NOT NULL topological_pos
+constraint syncapi_memberships | syncapi_memberships_unique | UNIQUE (room_id, user_id, membership)
+constraint syncapi_memberships | syncapi_memberships_user_id_not_null | NOT NULL user_id
+constraint syncapi_notification_data | syncapi_notification_data_highlight_count_not_null | NOT NULL highlight_count
+constraint syncapi_notification_data | syncapi_notification_data_id_not_null | NOT NULL id
+constraint syncapi_notification_data | syncapi_notification_data_notification_count_not_null | NOT NULL notification_count
+constraint syncapi_notification_data | syncapi_notification_data_pkey | PRIMARY KEY (id)
+constraint syncapi_notification_data | syncapi_notification_data_room_id_not_null | NOT NULL room_id
+constraint syncapi_notification_data | syncapi_notification_data_unique | UNIQUE (user_id, room_id)
+constraint syncapi_notification_data | syncapi_notification_data_user_id_not_null | NOT NULL user_id
+constraint syncapi_output_room_events | syncapi_output_room_event_id_idx | UNIQUE (event_id)
+constraint syncapi_output_room_events | syncapi_output_room_events_contains_url_not_null | NOT NULL contains_url
+constraint syncapi_output_room_events | syncapi_output_room_events_event_id_not_null | NOT NULL event_id
+constraint syncapi_output_room_events | syncapi_output_room_events_headered_event_json_not_null | NOT NULL headered_event_json
+constraint syncapi_output_room_events | syncapi_output_room_events_history_visibility_not_null | NOT NULL history_visibility
+constraint syncapi_output_room_events | syncapi_output_room_events_id_not_null | NOT NULL id
+constraint syncapi_output_room_events | syncapi_output_room_events_origin_server_ts_not_null | NOT NULL origin_server_ts
+constraint syncapi_output_room_events | syncapi_output_room_events_pkey | PRIMARY KEY (id)
+constraint syncapi_output_room_events | syncapi_output_room_events_room_id_not_null | NOT NULL room_id
+constraint syncapi_output_room_events | syncapi_output_room_events_sender_not_null | NOT NULL sender
+constraint syncapi_output_room_events | syncapi_output_room_events_type_not_null | NOT NULL type
+constraint syncapi_output_room_events_topology | syncapi_output_room_events_topolo_topological_position_not_null | NOT NULL topological_position
+constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_event_id_not_null | NOT NULL event_id
+constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_pkey | PRIMARY KEY (event_id)
+constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_room_id_not_null | NOT NULL room_id
+constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_stream_position_not_null | NOT NULL stream_position
+constraint syncapi_peeks | syncapi_peeks_creation_ts_not_null | NOT NULL creation_ts
+constraint syncapi_peeks | syncapi_peeks_deleted_not_null | NOT NULL deleted
+constraint syncapi_peeks | syncapi_peeks_device_id_not_null | NOT NULL device_id
+constraint syncapi_peeks | syncapi_peeks_room_id_not_null | NOT NULL room_id
+constraint syncapi_peeks | syncapi_peeks_room_id_user_id_device_id_key | UNIQUE (room_id, user_id, device_id)
+constraint syncapi_peeks | syncapi_peeks_user_id_not_null | NOT NULL user_id
+constraint syncapi_presence | presence_presences_unique | UNIQUE (user_id)
+constraint syncapi_presence | syncapi_presence_id_not_null | NOT NULL id
+constraint syncapi_presence | syncapi_presence_last_active_ts_not_null | NOT NULL last_active_ts
+constraint syncapi_presence | syncapi_presence_pkey | PRIMARY KEY (id)
+constraint syncapi_presence | syncapi_presence_presence_not_null | NOT NULL presence
+constraint syncapi_presence | syncapi_presence_user_id_not_null | NOT NULL user_id
+constraint syncapi_receipts | syncapi_receipts_event_id_not_null | NOT NULL event_id
+constraint syncapi_receipts | syncapi_receipts_id_not_null | NOT NULL id
+constraint syncapi_receipts | syncapi_receipts_pkey | PRIMARY KEY (id)
+constraint syncapi_receipts | syncapi_receipts_receipt_ts_not_null | NOT NULL receipt_ts
+constraint syncapi_receipts | syncapi_receipts_receipt_type_not_null | NOT NULL receipt_type
+constraint syncapi_receipts | syncapi_receipts_room_id_not_null | NOT NULL room_id
+constraint syncapi_receipts | syncapi_receipts_thread_id_not_null | NOT NULL thread_id
+constraint syncapi_receipts | syncapi_receipts_unique | UNIQUE (room_id, receipt_type, user_id, thread_id)
+constraint syncapi_receipts | syncapi_receipts_user_id_not_null | NOT NULL user_id
+constraint syncapi_relations | syncapi_relations_child_event_id_not_null | NOT NULL child_event_id
+constraint syncapi_relations | syncapi_relations_child_event_type_not_null | NOT NULL child_event_type
+constraint syncapi_relations | syncapi_relations_event_id_not_null | NOT NULL event_id
+constraint syncapi_relations | syncapi_relations_id_not_null | NOT NULL id
+constraint syncapi_relations | syncapi_relations_pkey | PRIMARY KEY (id)
+constraint syncapi_relations | syncapi_relations_rel_type_not_null | NOT NULL rel_type
+constraint syncapi_relations | syncapi_relations_room_id_not_null | NOT NULL room_id
+constraint syncapi_relations | syncapi_relations_unique | UNIQUE (room_id, event_id, child_event_id, rel_type)
+constraint syncapi_send_to_device | syncapi_send_to_device_content_not_null | NOT NULL content
+constraint syncapi_send_to_device | syncapi_send_to_device_device_id_not_null | NOT NULL device_id
+constraint syncapi_send_to_device | syncapi_send_to_device_id_not_null | NOT NULL id
+constraint syncapi_send_to_device | syncapi_send_to_device_pkey | PRIMARY KEY (id)
+constraint syncapi_send_to_device | syncapi_send_to_device_user_id_not_null | NOT NULL user_id
+constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_connection_key_not_null | NOT NULL connection_key
+constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_list_name_not_null | NOT NULL list_name
+constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_pkey | PRIMARY KEY (connection_key, list_name)
+constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_room_ids_not_null | NOT NULL room_ids
+constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_po_connection_position_not_null | NOT NULL connection_position
+constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positio_connection_key_not_null | NOT NULL connection_key
+constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_created_ts_not_null | NOT NULL created_ts
+constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_pkey | PRIMARY KEY (connection_position)
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connectio_last_delivered_event_id_not_null | NOT NULL last_delivered_event_id
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_rece_last_delivered_ts_not_null | NOT NULL last_delivered_ts
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipt_connection_key_not_null | NOT NULL connection_key
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_pkey | PRIMARY KEY (connection_key, room_id, receipt_type, user_id, thread_id)
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_receipt_type_not_null | NOT NULL receipt_type
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_room_id_not_null | NOT NULL room_id
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_thread_id_not_null | NOT NULL thread_id
+constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_user_id_not_null | NOT NULL user_id
+constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_requ_required_state_id_not_null | NOT NULL required_state_id
+constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_require_connection_key_not_null | NOT NULL connection_key
+constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_require_required_state_not_null | NOT NULL required_state
+constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_st_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_state_pkey | PRIMARY KEY (required_state_id)
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_ro_connection_position_not_null | NOT NULL connection_position
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_c_connection_position_fkey | FOREIGN KEY (connection_position) REFERENCES syncapi_sliding_sync_connection_positions(connection_position) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_co_timeline_limit_not_null | NOT NULL timeline_limit
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_con_required_state_id_fkey | FOREIGN KEY (required_state_id) REFERENCES syncapi_sliding_sync_connection_required_state(required_state_id) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_configs_pkey | PRIMARY KEY (connection_position, room_id)
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_configs_room_id_not_null | NOT NULL room_id
+constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_required_state_id_not_null | NOT NULL required_state_id
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_st_connection_position_not_null | NOT NULL connection_position
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_stream_connection_position_fkey | FOREIGN KEY (connection_position) REFERENCES syncapi_sliding_sync_connection_positions(connection_position) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_last_token_not_null | NOT NULL last_token
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_pkey | PRIMARY KEY (connection_position, room_id, stream)
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_room_id_not_null | NOT NULL room_id
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_room_status_not_null | NOT NULL room_status
+constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_stream_not_null | NOT NULL stream
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_conn_id_not_null | NOT NULL conn_id
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_connection_key_not_null | NOT NULL connection_key
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_created_ts_not_null | NOT NULL created_ts
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_device_id_not_null | NOT NULL device_id
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_pkey | PRIMARY KEY (connection_key)
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_id_device_id_conn_id_key | UNIQUE (user_id, device_id, conn_id)
+constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_id_not_null | NOT NULL user_id
+constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_room_event_stream_ordering_not_null | NOT NULL event_stream_ordering
+constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_is_encrypted_not_null | NOT NULL is_encrypted
+constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_pkey | PRIMARY KEY (room_id)
+constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_room_id_not_null | NOT NULL room_id
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership__event_stream_ordering_not_null | NOT NULL event_stream_ordering
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_sn_membership_event_id_not_null | NOT NULL membership_event_id
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapsh_has_known_state_not_null | NOT NULL has_known_state
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_forgotten_not_null | NOT NULL forgotten
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_is_encrypted_not_null | NOT NULL is_encrypted
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_membership_not_null | NOT NULL membership
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_pkey | PRIMARY KEY (room_id, user_id)
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_room_id_not_null | NOT NULL room_id
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_sender_not_null | NOT NULL sender
+constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_user_id_not_null | NOT NULL user_id
+constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_pkey | PRIMARY KEY (room_id)
+constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_room_id_not_null | NOT NULL room_id
+constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_created_at_not_null | NOT NULL created_at
+constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_id_not_null | NOT NULL id
+constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_pkey | PRIMARY KEY (id)
+constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_room_id_not_null | NOT NULL room_id
+constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_user_id_not_null | NOT NULL user_id
+constraint userapi_account_datas | userapi_account_datas_content_not_null | NOT NULL content
+constraint userapi_account_datas | userapi_account_datas_localpart_not_null | NOT NULL localpart
+constraint userapi_account_datas | userapi_account_datas_server_name_not_null | NOT NULL server_name
+constraint userapi_account_datas | userapi_account_datas_type_not_null | NOT NULL type
+constraint userapi_accounts | userapi_accounts_account_type_not_null | NOT NULL account_type
+constraint userapi_accounts | userapi_accounts_created_ts_not_null | NOT NULL created_ts
+constraint userapi_accounts | userapi_accounts_localpart_not_null | NOT NULL localpart
+constraint userapi_accounts | userapi_accounts_server_name_not_null | NOT NULL server_name
+constraint userapi_daily_stats | daily_stats_unique | UNIQUE ("timestamp", server_name)
+constraint userapi_daily_stats | userapi_daily_stats_active_e2ee_rooms_not_null | NOT NULL active_e2ee_rooms
+constraint userapi_daily_stats | userapi_daily_stats_active_rooms_not_null | NOT NULL active_rooms
+constraint userapi_daily_stats | userapi_daily_stats_e2ee_messages_not_null | NOT NULL e2ee_messages
+constraint userapi_daily_stats | userapi_daily_stats_messages_not_null | NOT NULL messages
+constraint userapi_daily_stats | userapi_daily_stats_sent_e2ee_messages_not_null | NOT NULL sent_e2ee_messages
+constraint userapi_daily_stats | userapi_daily_stats_sent_messages_not_null | NOT NULL sent_messages
+constraint userapi_daily_stats | userapi_daily_stats_server_name_not_null | NOT NULL server_name
+constraint userapi_daily_stats | userapi_daily_stats_timestamp_not_null | NOT NULL "timestamp"
+constraint userapi_daily_visits | userapi_daily_visits_device_id_not_null | NOT NULL device_id
+constraint userapi_daily_visits | userapi_daily_visits_localpart_not_null | NOT NULL localpart
+constraint userapi_daily_visits | userapi_daily_visits_timestamp_not_null | NOT NULL "timestamp"
+constraint userapi_dehydrated_devices | userapi_dehydrated_devices_created_ts_not_null | NOT NULL created_ts
+constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_data_not_null | NOT NULL device_data
+constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_id_not_null | NOT NULL device_id
+constraint userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | PRIMARY KEY (user_id)
+constraint userapi_dehydrated_devices | userapi_dehydrated_devices_user_id_not_null | NOT NULL user_id
+constraint userapi_devices | userapi_devices_access_token_not_null | NOT NULL access_token
+constraint userapi_devices | userapi_devices_created_ts_not_null | NOT NULL created_ts
+constraint userapi_devices | userapi_devices_device_id_not_null | NOT NULL device_id
+constraint userapi_devices | userapi_devices_last_seen_ts_not_null | NOT NULL last_seen_ts
+constraint userapi_devices | userapi_devices_localpart_not_null | NOT NULL localpart
+constraint userapi_devices | userapi_devices_pkey | PRIMARY KEY (access_token)
+constraint userapi_devices | userapi_devices_server_name_not_null | NOT NULL server_name
+constraint userapi_devices | userapi_devices_session_id_not_null | NOT NULL session_id
+constraint userapi_external_ids | userapi_external_ids_external_id_not_null | NOT NULL external_id
+constraint userapi_external_ids | userapi_external_ids_localpart_not_null | NOT NULL localpart
+constraint userapi_external_ids | userapi_external_ids_pkey | PRIMARY KEY (provider_id, external_id)
+constraint userapi_external_ids | userapi_external_ids_provider_id_not_null | NOT NULL provider_id
+constraint userapi_external_ids | userapi_external_ids_server_name_not_null | NOT NULL server_name
+constraint userapi_key_backup_versions | userapi_key_backup_versions_algorithm_not_null | NOT NULL algorithm
+constraint userapi_key_backup_versions | userapi_key_backup_versions_auth_data_not_null | NOT NULL auth_data
+constraint userapi_key_backup_versions | userapi_key_backup_versions_deleted_not_null | NOT NULL deleted
+constraint userapi_key_backup_versions | userapi_key_backup_versions_etag_not_null | NOT NULL etag
+constraint userapi_key_backup_versions | userapi_key_backup_versions_user_id_not_null | NOT NULL user_id
+constraint userapi_key_backups | userapi_key_backups_first_message_index_not_null | NOT NULL first_message_index
+constraint userapi_key_backups | userapi_key_backups_forwarded_count_not_null | NOT NULL forwarded_count
+constraint userapi_key_backups | userapi_key_backups_is_verified_not_null | NOT NULL is_verified
+constraint userapi_key_backups | userapi_key_backups_room_id_not_null | NOT NULL room_id
+constraint userapi_key_backups | userapi_key_backups_session_data_not_null | NOT NULL session_data
+constraint userapi_key_backups | userapi_key_backups_session_id_not_null | NOT NULL session_id
+constraint userapi_key_backups | userapi_key_backups_user_id_not_null | NOT NULL user_id
+constraint userapi_key_backups | userapi_key_backups_version_not_null | NOT NULL version
+constraint userapi_login_tokens | userapi_login_tokens_pkey | PRIMARY KEY (token)
+constraint userapi_login_tokens | userapi_login_tokens_token_expires_at_not_null | NOT NULL token_expires_at
+constraint userapi_login_tokens | userapi_login_tokens_token_not_null | NOT NULL token
+constraint userapi_login_tokens | userapi_login_tokens_user_id_not_null | NOT NULL user_id
+constraint userapi_notification_events | userapi_notification_events_event_id_not_null | NOT NULL event_id
+constraint userapi_notification_events | userapi_notification_events_notification_id_not_null | NOT NULL notification_id
+constraint userapi_notification_events | userapi_notification_events_pkey | PRIMARY KEY (room_id, event_id)
+constraint userapi_notification_events | userapi_notification_events_room_id_not_null | NOT NULL room_id
+constraint userapi_notification_events | userapi_notification_events_stream_pos_not_null | NOT NULL stream_pos
+constraint userapi_notification_events | userapi_notification_events_thread_id_not_null | NOT NULL thread_id
+constraint userapi_notification_receipt_locks | userapi_notification_receipt_locks_pkey | PRIMARY KEY (room_id)
+constraint userapi_notification_receipt_locks | userapi_notification_receipt_locks_room_id_not_null | NOT NULL room_id
+constraint userapi_notifications | userapi_notifications_event_id_not_null | NOT NULL event_id
+constraint userapi_notifications | userapi_notifications_highlight_not_null | NOT NULL highlight
+constraint userapi_notifications | userapi_notifications_id_not_null | NOT NULL id
+constraint userapi_notifications | userapi_notifications_localpart_not_null | NOT NULL localpart
+constraint userapi_notifications | userapi_notifications_notification_json_not_null | NOT NULL notification_json
+constraint userapi_notifications | userapi_notifications_pkey | PRIMARY KEY (id)
+constraint userapi_notifications | userapi_notifications_read_not_null | NOT NULL read
+constraint userapi_notifications | userapi_notifications_room_id_not_null | NOT NULL room_id
+constraint userapi_notifications | userapi_notifications_server_name_not_null | NOT NULL server_name
+constraint userapi_notifications | userapi_notifications_stream_pos_not_null | NOT NULL stream_pos
+constraint userapi_notifications | userapi_notifications_ts_ms_not_null | NOT NULL ts_ms
+constraint userapi_openid_tokens | userapi_openid_tokens_localpart_not_null | NOT NULL localpart
+constraint userapi_openid_tokens | userapi_openid_tokens_pkey | PRIMARY KEY (token)
+constraint userapi_openid_tokens | userapi_openid_tokens_server_name_not_null | NOT NULL server_name
+constraint userapi_openid_tokens | userapi_openid_tokens_token_expires_at_ms_not_null | NOT NULL token_expires_at_ms
+constraint userapi_openid_tokens | userapi_openid_tokens_token_not_null | NOT NULL token
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_created_ts_not_null | NOT NULL created_ts
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_event_id_not_null | NOT NULL event_id
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_localpart_not_null | NOT NULL localpart
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | PRIMARY KEY (room_id, event_id, localpart, server_name, thread_id)
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_room_id_not_null | NOT NULL room_id
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_server_name_not_null | NOT NULL server_name
+constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_thread_id_not_null | NOT NULL thread_id
+constraint userapi_profiles | userapi_profiles_localpart_not_null | NOT NULL localpart
+constraint userapi_profiles | userapi_profiles_server_name_not_null | NOT NULL server_name
+constraint userapi_pushers | userapi_pushers_app_display_name_not_null | NOT NULL app_display_name
+constraint userapi_pushers | userapi_pushers_app_id_not_null | NOT NULL app_id
+constraint userapi_pushers | userapi_pushers_data_not_null | NOT NULL data
+constraint userapi_pushers | userapi_pushers_device_display_name_not_null | NOT NULL device_display_name
+constraint userapi_pushers | userapi_pushers_id_not_null | NOT NULL id
+constraint userapi_pushers | userapi_pushers_kind_not_null | NOT NULL kind
+constraint userapi_pushers | userapi_pushers_lang_not_null | NOT NULL lang
+constraint userapi_pushers | userapi_pushers_localpart_not_null | NOT NULL localpart
+constraint userapi_pushers | userapi_pushers_pkey | PRIMARY KEY (id)
+constraint userapi_pushers | userapi_pushers_pushkey_not_null | NOT NULL pushkey
+constraint userapi_pushers | userapi_pushers_pushkey_ts_ms_not_null | NOT NULL pushkey_ts_ms
+constraint userapi_pushers | userapi_pushers_server_name_not_null | NOT NULL server_name
+constraint userapi_registration_tokens | userapi_registration_tokens_pkey | PRIMARY KEY (token)
+constraint userapi_registration_tokens | userapi_registration_tokens_token_not_null | NOT NULL token
+constraint userapi_threepids | userapi_threepids_localpart_not_null | NOT NULL localpart
+constraint userapi_threepids | userapi_threepids_medium_not_null | NOT NULL medium
+constraint userapi_threepids | userapi_threepids_pkey | PRIMARY KEY (threepid, medium)
+constraint userapi_threepids | userapi_threepids_server_name_not_null | NOT NULL server_name
+constraint userapi_threepids | userapi_threepids_threepid_not_null | NOT NULL threepid
+constraint zendrite_ha_compatibility | zendrite_ha_compatibility_fingerprint_not_null | NOT NULL fingerprint
+constraint zendrite_ha_compatibility | zendrite_ha_compatibility_id_check | CHECK ((id = 1))
+constraint zendrite_ha_compatibility | zendrite_ha_compatibility_id_not_null | NOT NULL id
+constraint zendrite_ha_compatibility | zendrite_ha_compatibility_pkey | PRIMARY KEY (id)
+constraint zendrite_ha_ownership | zendrite_ha_ownership_acquired_at_not_null | NOT NULL acquired_at
+constraint zendrite_ha_ownership | zendrite_ha_ownership_generation_not_null | NOT NULL generation
+constraint zendrite_ha_ownership | zendrite_ha_ownership_id_check | CHECK ((id = 1))
+constraint zendrite_ha_ownership | zendrite_ha_ownership_id_not_null | NOT NULL id
+constraint zendrite_ha_ownership | zendrite_ha_ownership_owner_not_null | NOT NULL owner
+constraint zendrite_ha_ownership | zendrite_ha_ownership_pkey | PRIMARY KEY (id)
+constraint zendrite_ha_ownership | zendrite_ha_ownership_scope_not_null | NOT NULL scope
+constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_acquired_at_not_null | NOT NULL acquired_at
+constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_generation_not_null | NOT NULL generation
+constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_owner_not_null | NOT NULL owner
+constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_pkey | PRIMARY KEY (generation)
+constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_scope_not_null | NOT NULL scope
+sequence federationsender_notary_server_keys_json_pkey | bigint | 1
+sequence federationsender_queue_json_json_nid_seq | bigint | 1
+sequence keyserver_key_changes_seq | bigint | 1
+sequence relayapi_queue_json_json_nid_seq | bigint | 1
+sequence roomserver_event_nid_seq | bigint | 1
+sequence roomserver_event_state_key_nid_seq | bigint | 1
+sequence roomserver_event_type_nid_seq | bigint | 1
+sequence roomserver_reported_events_id_seq | bigint | 1
+sequence roomserver_room_nid_seq | bigint | 1
+sequence roomserver_state_block_nid_seq | bigint | 1
+sequence roomserver_state_snapshot_nid_seq | bigint | 1
+sequence syncapi_filter_id_seq | integer | 1
+sequence syncapi_notification_data_id_seq | bigint | 1
+sequence syncapi_presence_id | bigint | 1
+sequence syncapi_receipt_id | bigint | 1
+sequence syncapi_relation_id | bigint | 1
+sequence syncapi_send_to_device_id | bigint | 1
+sequence syncapi_sliding_sync_connection_positio_connection_position_seq | bigint | 1
+sequence syncapi_sliding_sync_connection_required__required_state_id_seq | bigint | 1
+sequence syncapi_sliding_sync_connections_connection_key_seq | bigint | 1
+sequence syncapi_stream_id | bigint | 1
+sequence syncapi_unpartialstated_rooms_id | bigint | 1
+sequence userapi_device_session_id_seq | bigint | 1
+sequence userapi_key_backup_versions_seq | bigint | 1
+sequence userapi_notifications_id_seq | bigint | 1
+sequence userapi_pushers_id_seq | bigint | 1
+migration federationapi: add expiresat column
+migration federationsender: drop federationsender_rooms
+migration keyserver: cross signing signature indexes
+migration keyserver: refactor key changes
+migration roomserver: add device_lists_stream_id to partial state rooms
+migration roomserver: add forgotten column
+migration roomserver: add resync_state_nid to rooms
+migration roomserver: drop column reference_sha from roomserver_events
+migration roomserver: drop column reference_sha from roomserver_prev_events
+migration roomserver: published appservice
+migration roomserver: published appservice pkey
+migration roomserver: state blocks refactor
+migration syncapi: add connection receipts table for sliding sync
+migration syncapi: add history visibility column (current_room_state)
+migration syncapi: add history visibility column (output_room_events)
+migration syncapi: create sliding sync room metadata tables
+migration syncapi: create sliding sync tables
+migration syncapi: drop sent_by_token
+migration syncapi: fix sequences
+migration syncapi: rename dupe index (output_room_events)
+migration syncapi: set history visibility for existing events
+migration syncapi: store output event timestamps separately
+migration syncapi: threaded receipts
+migration userapi: add account type
+migration userapi: add is active
+migration userapi: add last_seen_ts
+migration userapi: notification event threads
+migration userapi: rename tables
+migration userapi: server names
+migration userapi: server names populate
+stream {"name":"InputRoomEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":86400000000000,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"InputDeviceListUpdate","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"InputSigningKeyUpdate","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputRoomEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputAppserviceEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputPushEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputSendToDeviceEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputKeyChangeEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputTypingEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":60000000000,"max_msgs_per_subject":0,"storage":"memory","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputClientData","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputReceiptEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputNotificationData","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":0,"max_msgs_per_subject":0,"storage":"file","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}
+stream {"name":"OutputPresenceEvent","retention":"interest","max_consumers":0,"max_msgs":0,"max_bytes":0,"discard":"old","max_age":300000000000,"max_msgs_per_subject":0,"storage":"memory","num_replicas":0,"compression":"none","allow_direct":false,"mirror_direct":false,"consumer_limits":{},"allow_msg_ttl":false}

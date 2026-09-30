@@ -154,7 +154,7 @@ func StartHTTP(
 				http.Error(w, "Homeserver is not ready", http.StatusServiceUnavailable)
 				return
 			}
-			if !processContext.Do(func() { externalRouter.ServeHTTP(w, r) }) {
+			if !processContext.Serve(func() { externalRouter.ServeHTTP(w, r) }) {
 				http.Error(w, "Homeserver is stopping", http.StatusServiceUnavailable)
 			}
 		}),

@@ -237,3 +237,91 @@ func TestStartupPanicCancellation(t *testing.T) {
 		})
 	}
 }
+
+// activeHomeserver runs a homeserver until it is active and reports its
+// process context. The returned channel yields Run's result.
+func activeHomeserver(t *testing.T) (*Homeserver, *process.ProcessContext, context.CancelCauseFunc, <-chan error) {
+	t.Helper()
+	processes := make(chan *process.ProcessContext, 1)
+	h := New(func(p *process.ProcessContext) error { processes <- p; return nil }, time.Second)
+	ownership, cancel := context.WithCancelCause(t.Context())
+	result := make(chan error, 1)
+	go func() { result <- h.Run(ownership) }()
+	p := await(t, processes)
+	deadline := time.After(5 * time.Second)
+	for h.State() != Active {
+		select {
+		case <-deadline:
+			t.Fatal("never became active")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	return h, p, cancel, result
+}
+
+// A planned handover keeps serving through the grace period, wakes long
+// polls, and returns only once the requests in flight have finished.
+func TestHandOverWaitsForRequestsInFlight(t *testing.T) {
+	h, p, cancel, result := activeHomeserver(t)
+	defer cancel(nil)
+	release := make(chan struct{})
+	serving := make(chan struct{})
+	go p.Serve(func() { close(serving); <-release })
+	await(t, serving)
+	handedOver := make(chan struct{})
+	go func() { h.HandOver(20*time.Millisecond, 5*time.Second); close(handedOver) }()
+	await(t, process.Quiescing(p.Context()))
+	if h.State() != HandingOver || !h.Ready() {
+		t.Fatalf("a handing-over homeserver must keep admitting requests, state %s", h.State())
+	}
+	select {
+	case <-handedOver:
+		t.Fatal("handover returned with a request in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	await(t, handedOver)
+	if p.Context().Err() != nil {
+		t.Fatal("handover must leave stopping to the caller")
+	}
+	h.Stop()
+	if err := await(t, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandOverIsBounded(t *testing.T) {
+	h, p, cancel, result := activeHomeserver(t)
+	defer cancel(nil)
+	release := make(chan struct{})
+	defer close(release)
+	serving := make(chan struct{})
+	go p.Serve(func() { close(serving); <-release })
+	await(t, serving)
+	started := time.Now()
+	h.HandOver(10*time.Millisecond, 200*time.Millisecond)
+	if elapsed := time.Since(started); elapsed < 200*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("handover took %s, want its 200ms timeout", elapsed)
+	}
+	cancel(nil)
+	<-result
+}
+
+// Only an active homeserver hands over. Ownership loss during a handover
+// ends it at once, because nothing may be served after that.
+func TestHandOverOnlyWhileActive(t *testing.T) {
+	standby := New(func(*process.ProcessContext) error { return nil }, time.Second)
+	done := make(chan struct{})
+	go func() { standby.HandOver(time.Hour, time.Hour); close(done) }()
+	await(t, done)
+
+	h, p, cancel, result := activeHomeserver(t)
+	go p.Serve(func() { <-p.WaitForShutdown() })
+	handedOver := make(chan struct{})
+	go func() { h.HandOver(time.Hour, time.Hour); close(handedOver) }()
+	await(t, process.Quiescing(p.Context()))
+	cancel(errors.New("lease lost"))
+	await(t, handedOver)
+	<-result
+}

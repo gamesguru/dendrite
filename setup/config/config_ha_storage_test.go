@@ -78,7 +78,7 @@ func TestHAStorageValidation(t *testing.T) {
 func TestHACompatibility(t *testing.T) {
 	c := haStorageConfig()
 	c.Global.PrivateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
-	original, err := c.HACompatibility("binary-one")
+	original, err := c.HACompatibility()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestHACompatibility(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			copy := *c
 			tc.change(&copy)
-			got, err := copy.HACompatibility("binary-one")
+			got, err := copy.HACompatibility()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,9 +116,11 @@ func TestHACompatibility(t *testing.T) {
 			}
 		})
 	}
-	other, err := c.HACompatibility("binary-two")
-	if err != nil || other == original {
-		t.Fatal("mixed binaries accepted")
+	// The executable is not part of the deployment's identity: the upgrade
+	// contract decides which builds may share it.
+	again, err := c.HACompatibility()
+	if err != nil || again != original {
+		t.Fatal("the deployment identity is not stable")
 	}
 }
 
@@ -130,7 +132,7 @@ func TestHACompatibilityMSCs(t *testing.T) {
 		c := haStorageConfig()
 		c.Global.PrivateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 		c.MSCs.MSCs = mscs
-		got, err := c.HACompatibility("binary-one")
+		got, err := c.HACompatibility()
 		if err != nil {
 			t.Fatal(err)
 		}

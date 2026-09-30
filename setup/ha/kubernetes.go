@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 )
 
 // Run preserves standalone behavior without constructing any Kubernetes client
@@ -66,7 +68,47 @@ func Run(ctx context.Context, cfg config.HA, metrics *config.Metrics, app Applic
 	defer func() { _ = listener.Close() }()
 	go serve()
 	logrus.WithField("address", listener.Addr().String()).Info("HA status listener started")
+	if p, ok := gate.(preparer); ok {
+		status.ExpectPreparation(cfg.Version, Release())
+		prepareCtx, stopPreparing := context.WithCancelCause(ctx)
+		defer stopPreparing(nil)
+		go prepare(prepareCtx, p, cfg, status)
+	}
 	return runKubernetes(ctx, cfg, client, app, gate, shutdownTimeout, status)
+}
+
+// preparer checks whether this candidate may take over the deployment.
+type preparer interface {
+	Prepare(context.Context) (Recorded, error)
+}
+
+// prepare reports, while this candidate is a standby, whether it may take
+// over: whether it reaches the database and whether the deployment's upgrade
+// contract admits its build. It only informs readiness and status; the Lease
+// lock repeats the check before every acquisition, which is what enforces it.
+func prepare(ctx context.Context, p preparer, cfg config.HA, status *Status) {
+	contract := Release()
+	logrus.WithFields(logrus.Fields{"version": cfg.Version, "contract": contract.String()}).Info("HA upgrade contract")
+	ticker := time.NewTicker(cfg.RetryPeriod)
+	defer ticker.Stop()
+	for {
+		switch status.Phase() {
+		case PhaseStarting, PhaseStandby:
+			recorded, err := p.Prepare(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			status.Prepared(cfg.Version, contract, recorded, err)
+		case PhaseFencing, PhaseRecovering, PhaseActive, PhaseHandingOver, PhaseDraining, PhaseStopped:
+			// Leadership is final: a candidate never returns to standby.
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // newLeaseClient permits a slow request to use the renewal window. The retry
@@ -85,8 +127,8 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 		Client:     client,
 		LockConfig: resourcelock.ResourceLockConfig{Identity: candidate.Identity},
 	}}, failures: failures, leases: client.Leases(candidate.LeaseNamespace), compatibility: cfg.Compatibility, leaseName: candidate.LeaseName, identity: candidate.Identity}
-	if r, ok := gate.(interface{ Reachable(context.Context) error }); ok {
-		lock.acquirable = r.Reachable
+	if a, ok := gate.(interface{ Acquirable(context.Context) error }); ok {
+		lock.acquirable = a.Acquirable
 	}
 	acquired := make(chan context.Context, 1)
 	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
@@ -108,6 +150,10 @@ func runKubernetes(ctx context.Context, cfg config.HA, client coordination.Coord
 	if err == nil && ctx.Err() != nil {
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.RenewDeadline)
 		defer cancel()
+		// A pull request this process left at the broker could otherwise
+		// take the successor's first message for this room, which would then
+		// wait the whole acknowledgement timeout before redelivery.
+		jetstream.WaitForOwnedPulls(releaseCtx)
 		releaseLease(releaseCtx, lock, candidate.Identity)
 	}
 	return err
@@ -145,8 +191,10 @@ func releaseLease(ctx context.Context, lock resourcelock.Interface, identity str
 // It also refuses to take the Lease while acquirable fails. A candidate that
 // cannot reach the database would hold the Lease through the whole ownership
 // timeout without fencing, and then leave it to expire, keeping a healthy
-// standby out for both. Renewals are never refused: a holder that loses the
-// database gives the Lease up through its gate instead.
+// standby out for both. A build that the deployment's upgrade contract does
+// not admit would retire the running owner and then fail to replace it.
+// Renewals are never refused: a holder that loses the database gives the
+// Lease up through its gate instead.
 type permissionLock struct {
 	resourcelock.Interface
 	failures      chan<- error
@@ -170,12 +218,16 @@ func (l *permissionLock) checkAcquirable(ctx context.Context) error {
 	err := l.acquirable(ctx)
 	if err != nil {
 		if !l.blocked.Swap(true) {
-			logrus.WithError(err).Warn("Not acquiring the HA Lease while this candidate cannot reach the database")
+			if errors.Is(err, ErrIncompatibleBuild) {
+				logrus.WithError(err).Error("Not acquiring the HA Lease: this build may not take over the running deployment")
+			} else {
+				logrus.WithError(err).Warn("Not acquiring the HA Lease while this candidate cannot reach the database")
+			}
 		}
 		return fmt.Errorf("not acquiring the HA Lease: %w", err)
 	}
 	if l.blocked.Swap(false) {
-		logrus.Info("The database is reachable again; contending for the HA Lease")
+		logrus.Info("This candidate may take over again; contending for the HA Lease")
 	}
 	return nil
 }

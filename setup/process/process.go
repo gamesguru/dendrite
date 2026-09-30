@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -21,6 +22,12 @@ type ProcessContext struct {
 	ctx         context.Context     // canceled when Stop is called
 	shutdown    context.CancelFunc  // shut down Zendrite
 	degraded    map[string]struct{} // reasons why the process is degraded
+	// quiescing is closed when a planned handover begins, before shutdown.
+	quiescing   chan struct{}
+	quiesceOnce sync.Once
+	// requests counts HTTP requests being served, so a planned handover can
+	// wait for them before it cancels the application.
+	requests atomic.Int64
 }
 
 func NewProcessContext() *ProcessContext {
@@ -31,10 +38,11 @@ func NewProcessContext() *ProcessContext {
 func NewProcessContextWithParent(parent context.Context) *ProcessContext {
 	ctx, shutdown := context.WithCancel(parent) //nolint:forbidigo
 	p := &ProcessContext{
-		ctx:      ctx,
-		shutdown: shutdown,
-		wg:       sync.WaitGroup{},
-		degraded: make(map[string]struct{}),
+		ctx:       ctx,
+		shutdown:  shutdown,
+		wg:        sync.WaitGroup{},
+		degraded:  make(map[string]struct{}),
+		quiescing: make(chan struct{}),
 	}
 	context.AfterFunc(ctx, p.WaitForComponentsToFinish)
 	return p
@@ -171,6 +179,34 @@ func (b *ProcessContext) Do(f func()) bool {
 	defer b.wg.Done()
 	f()
 	return true
+}
+
+// Serve runs an HTTP request as application work, like Do, and counts it as
+// in flight until it returns.
+func (b *ProcessContext) Serve(f func()) bool {
+	b.requests.Add(1)
+	defer b.requests.Add(-1)
+	return b.Do(f)
+}
+
+// InFlight reports how many HTTP requests are being served.
+func (b *ProcessContext) InFlight() int64 { return b.requests.Load() }
+
+// Quiesce announces a planned handover. The application keeps running and
+// serving, but work that would otherwise wait for a long time, such as a
+// long-polling sync, should answer now so that its client can reconnect to
+// the successor.
+func (b *ProcessContext) Quiesce() {
+	b.quiesceOnce.Do(func() { close(b.quiescing) })
+}
+
+// Quiescing is closed once a planned handover has begun. Without an
+// application owner it is nil, which never fires.
+func Quiescing(ctx context.Context) <-chan struct{} {
+	if b, ok := ctx.Value(contextKey{}).(*ProcessContext); ok {
+		return b.quiescing
+	}
+	return nil
 }
 
 // Lifetime returns the application context for work that must outlive a request.

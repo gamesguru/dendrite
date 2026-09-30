@@ -12,11 +12,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
@@ -223,5 +226,44 @@ func TestSyncRequestDoesNotSkipPositionsItCouldNotRead(t *testing.T) {
 	}
 	if got := db.snapshotCount(); got < 2 {
 		t.Errorf("expected the sync to retry the failed read, got %d snapshot attempts", got)
+	}
+}
+
+// A planned handover wakes a waiting long poll, which answers with the
+// client's own token as if its timeout had been reached, so the client's
+// next sync reaches the successor instead of being cut.
+func TestLongPollAnswersWhenHandoverBegins(t *testing.T) {
+	device := &userapi.Device{UserID: "@alice:localhost", ID: "05LqQkIj"}
+	logrustest.NewGlobal()
+	rp := newCancellationTestPool(&snapshotCountingDB{}, device)
+	rp.userAPI = otkUserAPI{}
+	since, err := types.NewStreamTokenFromString(nonEmptySinceToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp.Notifier.SetCurrentPosition(since)
+
+	p := process.NewProcessContext()
+	defer p.ShutdownZendrite()
+	req := httptest.NewRequest("GET", "/_matrix/client/v3/sync?timeout=60000&since="+since.String(), nil).WithContext(p.Context())
+	answered := make(chan util.JSONResponse, 1)
+	go func() { answered <- rp.OnIncomingSyncRequest(req, device) }()
+	select {
+	case <-answered:
+		t.Fatal("the long poll answered before the handover")
+	case <-time.After(100 * time.Millisecond):
+	}
+	p.Quiesce()
+	select {
+	case res := <-answered:
+		resp, ok := res.JSON.(*types.Response)
+		if res.Code != 200 || !ok {
+			t.Fatalf("unexpected response %d %T", res.Code, res.JSON)
+		}
+		if resp.NextBatch.String() != since.String() {
+			t.Errorf("next_batch %s, want the client's token %s", resp.NextBatch, since)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the long poll kept waiting through the handover")
 	}
 }

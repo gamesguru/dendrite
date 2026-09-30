@@ -166,26 +166,40 @@ func (g *PostgresGate) Acquire(ctx context.Context, candidate Candidate) error {
 	return nil
 }
 
-// Reachable reports whether this candidate can reach the HA database, within
-// one retry period. The Lease lock checks it before every acquisition attempt,
-// so a candidate cut off from the database leaves the Lease to one that can
-// fence.
-func (g *PostgresGate) Reachable(ctx context.Context) error {
+// Acquirable reports whether this candidate may take the Lease now. It must
+// reach the HA database within one retry period, and the deployment's
+// compatibility record must admit this build.
+//
+// The Lease lock checks it before every acquisition attempt. A candidate cut
+// off from the database therefore leaves the Lease to one that can fence, and
+// an incompatible build never takes the Lease at all: taking it would retire
+// the running owner before the build found out that it cannot replace it.
+func (g *PostgresGate) Acquirable(ctx context.Context) error {
+	_, err := g.Prepare(ctx)
+	return err
+}
+
+// Prepare reads the deployment's compatibility record on a connection that
+// is not an application backend, and reports whether it admits this build.
+// It never writes: a standby must not change storage that the running owner
+// uses, so the record is only written by an activation, after fencing.
+func (g *PostgresGate) Prepare(ctx context.Context) (Recorded, error) {
 	ctx, cancel := context.WithTimeout(ctx, g.interval())
 	defer cancel()
 	conn, err := g.connect(ctx)
 	if err != nil {
-		return err
+		return Recorded{}, err
 	}
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), ownershipCloseTimeout)
 		defer closeCancel()
 		_ = conn.Close(closeCtx)
 	}()
-	if err = conn.Ping(ctx); err != nil {
-		return fmt.Errorf("ping the HA database: %w", err)
+	recorded, err := readCompatibility(ctx, conn)
+	if err != nil {
+		return Recorded{}, err
 	}
-	return nil
+	return recorded, Release().Admit(g.cfg.Compatibility, recorded)
 }
 
 const (

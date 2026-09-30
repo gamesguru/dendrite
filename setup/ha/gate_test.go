@@ -46,9 +46,9 @@ func TestPostgresGateReportsTheBlockingBoundary(t *testing.T) {
 func TestPostgresGateReachable(t *testing.T) {
 	dsn, cleanup := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	defer cleanup()
-	require.NoError(t, NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour)).Reachable(t.Context()))
+	require.NoError(t, NewPostgresGate(dsn, testHAConfig(time.Hour, time.Hour)).Acquirable(t.Context()))
 	unreachable := NewPostgresGate("postgresql://zendrite@127.0.0.1:1/nonexistent", testHAConfig(time.Hour, time.Hour))
-	require.Error(t, unreachable.Reachable(t.Context()))
+	require.Error(t, unreachable.Acquirable(t.Context()))
 }
 
 func TestPostgresGateDoesNotActivateOnCancellation(t *testing.T) {

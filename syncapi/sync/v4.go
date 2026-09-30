@@ -22,6 +22,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
@@ -571,6 +572,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: timeoutResp,
+				}
+			case <-process.Quiescing(req.Context()): //nolint:contextcheck
+				// A planned handover answers as if the timeout had been
+				// reached, so the next request reaches the successor.
+				logrus.Info("[V4_SYNC] Answering early for a planned handover")
+				return util.JSONResponse{
+					Code: http.StatusOK,
+					JSON: rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout"), //nolint:contextcheck
 				}
 			case <-req.Context().Done():
 				// Client disconnected
