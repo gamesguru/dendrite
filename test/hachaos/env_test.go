@@ -249,6 +249,14 @@ func (e *environment) dumpGoroutines(ctx context.Context, label string) {
 		}
 		e.timeline.add(eventNote, sl.name, "goroutines saved to %s", name)
 	}
+	// Room input runs only for rooms the active candidate has heard of from
+	// its stream-wide subscription, so show whether that still exists.
+	name := fmt.Sprintf("jetstream-%s.txt", label)
+	if err := os.WriteFile(filepath.Join(e.logs, name), []byte(e.nats.streamConsumers("InputRoomEvent")), 0o644); err != nil {
+		e.timeline.add(eventNote, "", "input stream state %s failed: %v", label, err)
+		return
+	}
+	e.timeline.add(eventNote, "", "input stream state saved to %s", name)
 }
 
 // watchSetup dumps the candidates' goroutines if a setup step is still

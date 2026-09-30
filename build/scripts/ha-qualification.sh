@@ -168,5 +168,10 @@ for result in "$HACHAOS_ARTIFACTS"/*/result.json; do
     echo "==== $(basename "$dir"): $(basename "$dump"), request and room input goroutines"
     awk 'BEGIN { RS = ""; ORS = "\n\n" } /zendrite\/(clientapi\/routing|roomserver\/internal|roomserver\/producers)\// && !/jetstream\.FetchOwned/' "$dump" | head -n 300 || true
   done
+  for state in "$dir"/jetstream-*.txt; do
+    [[ -f "$state" ]] || continue
+    echo "==== $(basename "$dir"): $(basename "$state")"
+    head -n 60 "$state"
+  done
 done
 exit "$status"

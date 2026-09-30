@@ -356,25 +356,10 @@ func (r *Inputer) Start() error {
 	if r.EnableMetrics {
 		prometheus.MustRegister(roomserverInputBackpressure, processRoomEventDuration)
 	}
-	_, err := r.JetStream.Subscribe(
-		"", // This is blank because we specified it in BindStream.
-		func(m *nats.Msg) {
-			r.ProcessContext.Do(func() {
-				roomID := m.Header.Get(jetstream.RoomID)
-				meta, _ := m.Metadata()
-				r.startWorkerForRoom(roomID, meta.Sequence.Stream, m)
-			})
-		},
-		nats.HeadersOnly(),
-		nats.DeliverAll(),
-		nats.AckExplicit(),
-		// The room's worker acknowledges each announcement once the room's
-		// durable consumer exists, rather than as soon as this callback
-		// returns, so the input stream keeps the event until then.
-		nats.ManualAck(),
-		nats.ReplayInstant(),
-		nats.BindStream(r.InputRoomEventTopic),
-	)
+	announcements, err := r.subscribeAnnouncements()
+	if err == nil {
+		r.ProcessContext.Go(func() { r.watchAnnouncements(announcements) })
+	}
 
 	r.ProcessContext.Go(r.expireClientTransactions)
 
@@ -393,6 +378,69 @@ func (r *Inputer) Start() error {
 	}
 
 	return err
+}
+
+// announcerInactiveThreshold is how long the broker keeps the stream-wide
+// headers-only consumer while this process is not connected to it. That
+// consumer is ephemeral, so the broker deletes it after five seconds without
+// a listener by default, which a reconnect easily exceeds once the client has
+// to wait between attempts. While it is gone, the input stream, which keeps a
+// message only while some consumer needs it, discards every event for a room
+// that has no durable consumer yet, such as a room being created or peeked.
+var announcerInactiveThreshold = 5 * time.Minute
+
+// announcerCheckInterval spaces checks that the stream-wide headers-only
+// consumer still exists.
+var announcerCheckInterval = 10 * time.Second
+
+// subscribeAnnouncements creates the stream-wide headers-only consumer that
+// announces each queued event to its room's worker.
+func (r *Inputer) subscribeAnnouncements() (*nats.Subscription, error) {
+	return r.JetStream.Subscribe(
+		"", // This is blank because we specified it in BindStream.
+		func(m *nats.Msg) {
+			r.ProcessContext.Do(func() {
+				roomID := m.Header.Get(jetstream.RoomID)
+				meta, _ := m.Metadata()
+				r.startWorkerForRoom(roomID, meta.Sequence.Stream, m)
+			})
+		},
+		nats.HeadersOnly(),
+		nats.DeliverAll(),
+		nats.AckExplicit(),
+		// The room's worker acknowledges each announcement once the room's
+		// durable consumer exists, rather than as soon as this callback
+		// returns, so the input stream keeps the event until then.
+		nats.ManualAck(),
+		nats.ReplayInstant(),
+		nats.InactiveThreshold(announcerInactiveThreshold),
+		nats.BindStream(r.InputRoomEventTopic),
+	)
+}
+
+// watchAnnouncements recreates the stream-wide headers-only consumer if the
+// broker deletes it, as after a disconnect longer than
+// announcerInactiveThreshold. Nothing else would notice: the subscription
+// stays open but receives nothing, so no room gets a worker again once its
+// current one stops, and synchronous input for a new room waits forever.
+// The new consumer delivers the stream from the start again, which announces
+// every room that still has events queued.
+func (r *Inputer) watchAnnouncements(sub *nats.Subscription) {
+	ctx := r.ProcessContext.Context()
+	for process.Sleep(ctx, announcerCheckInterval) {
+		if sub != nil {
+			if _, err := sub.ConsumerInfo(); !errors.Is(err, nats.ErrConsumerNotFound) {
+				continue
+			}
+			logrus.Error("The broker deleted the room input announcement consumer, recreating it")
+			_ = sub.Unsubscribe()
+		}
+		var err error
+		if sub, err = r.subscribeAnnouncements(); err != nil {
+			sub = nil
+			logrus.WithError(err).Error("Failed to recreate the room input announcement consumer, retrying")
+		}
+	}
 }
 
 // clientTransactionRetention is how long a client transaction ID keeps

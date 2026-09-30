@@ -263,6 +263,34 @@ func (c *natsCluster) consumerState(stream, durable string) string {
 		info.Name, info.Delivered.Stream, info.AckFloor.Stream, info.NumPending, info.NumAckPending, info.NumRedelivered, info.NumWaiting)
 }
 
+// streamConsumers describes a stream and every consumer on it, including
+// ephemeral ones, which shows whether a candidate's stream-wide subscription
+// still exists.
+func (c *natsCluster) streamConsumers(stream string) string {
+	nc, err := nats.Connect(c.directURLs(), nats.Timeout(2*time.Second), nats.Name(harnessApp))
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	defer nc.Close()
+	js, err := nc.JetStream(nats.MaxWait(5 * time.Second))
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	s, err := js.StreamInfo(topicPrefix + stream)
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "stream %s: messages=%d first_seq=%d last_seq=%d consumers=%d\n",
+		s.Config.Name, s.State.Msgs, s.State.FirstSeq, s.State.LastSeq, s.State.Consumers)
+	for info := range js.Consumers(topicPrefix + stream) {
+		fmt.Fprintf(&b, "consumer %s: durable=%q filter=%q headers_only=%t delivered_stream_seq=%d ack_floor_stream_seq=%d num_pending=%d num_ack_pending=%d push_bound=%t\n",
+			info.Name, info.Config.Durable, info.Config.FilterSubject, info.Config.HeadersOnly,
+			info.Delivered.Stream, info.AckFloor.Stream, info.NumPending, info.NumAckPending, info.PushBound)
+	}
+	return b.String()
+}
+
 // streamLeader reports the node that leads a stream's replica group.
 func (c *natsCluster) streamLeader(stream string) (*natsNode, error) {
 	nc, err := nats.Connect(c.directURLs(), nats.Timeout(2*time.Second), nats.Name(harnessApp))
