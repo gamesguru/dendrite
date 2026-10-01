@@ -48,12 +48,21 @@ func JetStreamConsumer(
 
 	durable += "Pull"
 	if ownership != nil {
-		if err := ConfigureHADelivery(ctx, js, subj, durable); err != nil {
+		err := retryAPI(ctx, "configure durable "+durable, func() error {
+			return ConfigureHADelivery(ctx, js, subj, durable)
+		})
+		if err != nil {
 			return err
 		}
 		opts = append(opts, nats.AckWait(HAConsumerAckWait))
 	}
-	sub, err := js.PullSubscribe(subj, durable, opts...)
+	// Subscribing creates the durable if needed, and binds to it if a timed
+	// out attempt created it after all.
+	var sub *nats.Subscription
+	err := retryAPI(ctx, "subscribe to durable "+durable, func() (err error) {
+		sub, err = js.PullSubscribe(subj, durable, opts...)
+		return err
+	})
 	if err != nil {
 		sentry.CaptureException(err)
 		logrus.WithContext(ctx).WithError(err).Warnf("Failed to configure durable %q", durable)

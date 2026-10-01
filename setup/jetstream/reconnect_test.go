@@ -81,8 +81,11 @@ func TestHAReconnectResumesDurableWorkWithOneBrokerDown(t *testing.T) {
 	require.Eventually(t, func() bool { _, infoErr := raw.AccountInfo(); return infoErr == nil }, 15*time.Second, 100*time.Millisecond)
 	js, _ := setupNATS(p, cfg, nc, owner)
 	name := cfg.Prefixed(InputRoomEvent)
-	_, err = js.AddConsumer(name, &nats.ConsumerConfig{Durable: "pending", AckPolicy: nats.AckExplicitPolicy, AckWait: 500 * time.Millisecond})
-	require.NoError(t, err)
+	// A freshly formed cluster can take longer than one request to place the consumer.
+	require.NoError(t, retryAPI(t.Context(), "add consumer", func() error {
+		_, addErr := js.AddConsumer(name, &nats.ConsumerConfig{Durable: "pending", AckPolicy: nats.AckExplicitPolicy, AckWait: 500 * time.Millisecond})
+		return addErr
+	}))
 	sub, err := js.PullSubscribe(name, "pending", nats.Bind(name, "pending"))
 	require.NoError(t, err)
 	_, err = js.Publish(name, []byte("committed before disconnect"))

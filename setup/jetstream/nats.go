@@ -307,61 +307,79 @@ func checkAndConfigureStreams(process *process.ProcessContext, cfg *config.JetSt
 func configureStreams(process *process.ProcessContext, cfg *config.JetStream, js natsclient.JetStreamContext) error {
 	ha := cfg.Matrix != nil && cfg.Matrix.HA.Enabled
 	for _, template := range streams {
-		desired := *template
-		desired.Name = cfg.Prefixed(template.Name)
-		desired.Subjects = []string{desired.Name, desired.Name + ".>"}
-		desired.Replicas = cfg.Replicas
-		if desired.Replicas == 0 {
-			desired.Replicas = 1
-		}
-		if ha {
-			desired.Storage = natsclient.FileStorage
-		} else if cfg.InMemory {
-			desired.Storage = natsclient.MemoryStorage
-		}
-		info, err := js.StreamInfo(desired.Name, natsclient.Context(process.Context()))
-		if err != nil && !errors.Is(err, natsclient.ErrStreamNotFound) {
-			return fmt.Errorf("inspect stream %s: %w", desired.Name, err)
-		}
-		establishReplication := info == nil || info.Config.Replicas != desired.Replicas
-		if info == nil {
-			info, err = js.AddStream(&desired, natsclient.Context(process.Context()))
-			if err != nil && !ha && desired.Storage == natsclient.FileStorage {
-				desired.Storage = natsclient.MemoryStorage
-				info, err = js.AddStream(&desired, natsclient.Context(process.Context()))
-				if err == nil {
-					process.Degraded(fmt.Errorf("stream %s is running in memory", desired.Name))
-				}
-			}
-		} else {
-			current := info.Config
-			if !ha && cfg.Replicas == 0 {
-				// An omitted standalone setting does not authorize downscaling operator replicas.
-				desired.Replicas = current.Replicas
-			}
-			if ha && (current.Storage != desired.Storage || current.Retention != desired.Retention || current.MaxAge != desired.MaxAge || !slices.Equal(current.Subjects, desired.Subjects)) {
-				return fmt.Errorf("stream %s requires an offline storage/retention/subject migration; refusing to discard queued data", desired.Name)
-			}
-			if current.Storage != desired.Storage || current.Retention != desired.Retention || current.MaxAge != desired.MaxAge || !slices.Equal(current.Subjects, desired.Subjects) || current.Replicas != desired.Replicas {
-				current.Storage = desired.Storage
-				current.Retention = desired.Retention
-				current.MaxAge = desired.MaxAge
-				current.Subjects = desired.Subjects
-				current.Replicas = desired.Replicas
-				info, err = js.UpdateStream(&current, natsclient.Context(process.Context()))
-			}
-		}
+		// A stream created or resized by an attempt whose reply was lost must
+		// still finish replicating, although a retry finds it already in place.
+		establishReplication := false
+		err := retryAPI(process.Context(), "configure stream "+cfg.Prefixed(template.Name), func() error {
+			return configureStream(process, cfg, js, ha, template, &establishReplication)
+		})
 		if err != nil {
-			return fmt.Errorf("configure stream %s without deleting data: %w", desired.Name, err)
+			return err
 		}
-		if info == nil || info.Config.Storage != desired.Storage || info.Config.Replicas != desired.Replicas {
-			return fmt.Errorf("stream %s did not establish requested storage and replication", desired.Name)
-		}
-		if ha {
-			if err = waitForReplicas(process.Context(), js, desired.Name, desired.Replicas, establishReplication); err != nil {
-				return err
+	}
+	return nil
+}
+
+// configureStream establishes one stream. It inspects the stream first, so it
+// can be repeated after a request timed out without knowing whether it applied.
+// It sets establishReplication once the stream needs all its replicas current.
+//
+//nolint:contextcheck,nolintlint // ProcessContext owns the lifetime, as in configureStreams.
+func configureStream(process *process.ProcessContext, cfg *config.JetStream, js natsclient.JetStreamContext, ha bool, template *natsclient.StreamConfig, establishReplication *bool) error {
+	desired := *template
+	desired.Name = cfg.Prefixed(template.Name)
+	desired.Subjects = []string{desired.Name, desired.Name + ".>"}
+	desired.Replicas = cfg.Replicas
+	if desired.Replicas == 0 {
+		desired.Replicas = 1
+	}
+	if ha {
+		desired.Storage = natsclient.FileStorage
+	} else if cfg.InMemory {
+		desired.Storage = natsclient.MemoryStorage
+	}
+	info, err := js.StreamInfo(desired.Name, natsclient.Context(process.Context()))
+	if err != nil && !errors.Is(err, natsclient.ErrStreamNotFound) {
+		return fmt.Errorf("inspect stream %s: %w", desired.Name, err)
+	}
+	if info == nil || info.Config.Replicas != desired.Replicas {
+		*establishReplication = true
+	}
+	if info == nil {
+		info, err = js.AddStream(&desired, natsclient.Context(process.Context()))
+		if err != nil && !ha && desired.Storage == natsclient.FileStorage {
+			desired.Storage = natsclient.MemoryStorage
+			info, err = js.AddStream(&desired, natsclient.Context(process.Context()))
+			if err == nil {
+				process.Degraded(fmt.Errorf("stream %s is running in memory", desired.Name))
 			}
 		}
+	} else {
+		current := info.Config
+		if !ha && cfg.Replicas == 0 {
+			// An omitted standalone setting does not authorize downscaling operator replicas.
+			desired.Replicas = current.Replicas
+		}
+		if ha && (current.Storage != desired.Storage || current.Retention != desired.Retention || current.MaxAge != desired.MaxAge || !slices.Equal(current.Subjects, desired.Subjects)) {
+			return fmt.Errorf("stream %s requires an offline storage/retention/subject migration; refusing to discard queued data", desired.Name)
+		}
+		if current.Storage != desired.Storage || current.Retention != desired.Retention || current.MaxAge != desired.MaxAge || !slices.Equal(current.Subjects, desired.Subjects) || current.Replicas != desired.Replicas {
+			current.Storage = desired.Storage
+			current.Retention = desired.Retention
+			current.MaxAge = desired.MaxAge
+			current.Subjects = desired.Subjects
+			current.Replicas = desired.Replicas
+			info, err = js.UpdateStream(&current, natsclient.Context(process.Context()))
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("configure stream %s without deleting data: %w", desired.Name, err)
+	}
+	if info == nil || info.Config.Storage != desired.Storage || info.Config.Replicas != desired.Replicas {
+		return fmt.Errorf("stream %s did not establish requested storage and replication", desired.Name)
+	}
+	if ha {
+		return waitForReplicas(process.Context(), js, desired.Name, desired.Replicas, *establishReplication)
 	}
 	return nil
 }
