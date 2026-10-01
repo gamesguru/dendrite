@@ -467,21 +467,13 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 		return fmt.Errorf("sanityCheckAuthChain: %w", err)
 	}
 
-	// If we've got this far, the remote server is peeking.
-	if renewing {
-		if err = r.db.RenewOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval); err != nil {
-			return err
-		}
-	} else {
-		if err = r.db.AddOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval); err != nil {
-			return err
-		}
-	}
-
-	// logrus.Warnf("got respPeek %#v", respPeek)
 	// Send the newly returned state to the roomserver to update our local view.
+	// Waiting for it is bounded: a lost reply must fail this peek, so that the
+	// next one tries again, rather than hold it forever.
+	inputCtx, cancel := context.WithTimeout(ctx, outboundPeekInputTimeout)
+	defer cancel()
 	if err = roomserverAPI.SendEventWithState(
-		ctx, r.rsAPI, r.cfg.Matrix.ServerName,
+		inputCtx, r.rsAPI, r.cfg.Matrix.ServerName,
 		roomserverAPI.KindNew,
 		// use the authorized state from CheckStateResponse
 		&fclient.RespState{
@@ -496,8 +488,18 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 		return fmt.Errorf("r.producer.SendEventWithState: %w", err)
 	}
 
-	return nil
+	// Record the peek only once its state is stored. A peek recorded earlier
+	// would make every later peek skip the remote while the room has no
+	// state here, which leaves the room unreadable until the peek expires.
+	if renewing {
+		return r.db.RenewOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval)
+	}
+	return r.db.AddOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval)
 }
+
+// outboundPeekInputTimeout bounds how long a peek waits for the roomserver to
+// store the peeked room's state. Tests shorten it.
+var outboundPeekInputTimeout = time.Minute
 
 // PerformLeaveRequest implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformLeave(
