@@ -49,10 +49,16 @@ A candidate that exhausts this budget stays unready and reports the boundary tha
 Election timings trade how quickly a crashed owner is replaced against how long a healthy owner survives a stalled Kubernetes control plane.
 Start from one of these profiles:
 
-| Profile | `lease_duration` | `renew_deadline` | `retry_period` | `ownership_timeout` | Crash detected within | Use when |
-| --- | --- | --- | --- | --- | --- | --- |
-| Default | 30s | 20s | 5s | 45s | 35 seconds | Any control plane, including etcd members spread across data centers and managed control planes whose stall behavior is unknown. |
-| Faster failover | 20s | 15s | 2s | 30s | 22 seconds | A control plane whose Lease write latency you monitor and have seen stay well under 15 seconds, including during etcd leader elections. |
+| Setting | Default | Faster failover |
+| --- | --- | --- |
+| `lease_duration` | 30s | 20s |
+| `renew_deadline` | 20s | 15s |
+| `retry_period` | 5s | 2s |
+| `ownership_timeout` | 45s | 30s |
+| Crash detected within | 35 seconds | 22 seconds |
+
+- **Default:** Use with any control plane, including etcd members spread across data centers and managed control planes whose stall behavior is unknown.
+- **Faster failover:** Use with a control plane whose Lease write latency you monitor and have seen stay well under 15 seconds, including during etcd leader elections.
 
 The Helm chart's `ha.leaseDuration`, `ha.renewDeadline`, `ha.retryPeriod` and `ha.ownershipTimeout` values set these fields, and its defaults are the default profile.
 Timings are not part of the deployment identity, so a normal rolling update can change them.
