@@ -49,7 +49,7 @@ func TestCopyForwardAccountDataState(t *testing.T) {
 		state := connState()
 		state.AccountDataWritten = map[string]bool{fresh: true}
 
-		rp.copyForwardAccountDataState(context.Background(), state)
+		require.NoError(t, rp.copyForwardAccountDataState(context.Background(), state))
 
 		require.Contains(t, db.writes, streamKey(carried, accountDataStream))
 		assert.Equal(t, token, db.writes[streamKey(carried, accountDataStream)].lastToken,
@@ -66,7 +66,7 @@ func TestCopyForwardAccountDataState(t *testing.T) {
 
 		// AccountDataWritten is nil: the account_data extension was disabled or
 		// errored on this request, so nothing was written for any room.
-		rp.copyForwardAccountDataState(context.Background(), connState())
+		require.NoError(t, rp.copyForwardAccountDataState(context.Background(), connState()))
 
 		assert.Contains(t, db.writes, streamKey(carried, accountDataStream))
 		assert.Contains(t, db.writes, streamKey(fresh, accountDataStream))
@@ -80,7 +80,7 @@ func TestCopyForwardAccountDataState(t *testing.T) {
 		state := connState()
 		state.ConnectionPosition = 0
 
-		rp.copyForwardAccountDataState(context.Background(), state)
+		require.NoError(t, rp.copyForwardAccountDataState(context.Background(), state))
 
 		assert.Empty(t, db.writes, "there is no new position to write rows to")
 	})
@@ -91,12 +91,12 @@ func TestCopyForwardAccountDataState(t *testing.T) {
 		db := newMockStreamStateDB()
 		rp := &RequestPool{db: db}
 
-		rp.copyForwardAccountDataState(context.Background(), &V4ConnectionState{
+		require.NoError(t, rp.copyForwardAccountDataState(context.Background(), &V4ConnectionState{
 			ConnectionPosition: accountDataTestPosition,
 			PreviousStreamStates: map[string]map[string]*types.SlidingSyncStreamState{
 				carried: {"events": {RoomStatus: "live", LastToken: token}},
 			},
-		})
+		}))
 
 		assert.Empty(t, db.writes)
 	})

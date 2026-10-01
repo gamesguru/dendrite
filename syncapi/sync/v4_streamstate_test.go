@@ -95,10 +95,11 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		db := newMockStreamStateDB()
 		rp := &RequestPool{db: db}
 
-		copied := rp.copyForwardStreamStates(context.Background(), connState(), map[string]types.RoomSubscriptionConfig{
+		copied, err := rp.copyForwardStreamStates(context.Background(), connState(), map[string]types.RoomSubscriptionConfig{
 			sentRoom: {TimelineLimit: 10},
 		})
 
+		require.NoError(t, err)
 		assert.Equal(t, 1, copied)
 		require.Contains(t, db.writes, streamKey(droppedRoom, "events"))
 		assert.Equal(t, streamStateWrite{
@@ -115,10 +116,11 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		db := newMockStreamStateDB()
 		rp := &RequestPool{db: db}
 
-		rp.copyForwardStreamStates(context.Background(), connState(), map[string]types.RoomSubscriptionConfig{
+		_, err := rp.copyForwardStreamStates(context.Background(), connState(), map[string]types.RoomSubscriptionConfig{
 			sentRoom: {TimelineLimit: 10},
 		})
 
+		require.NoError(t, err)
 		// The room is written by the main response loop instead, which marks it live.
 		assert.NotContains(t, db.writes, streamKey(sentRoom, "events"))
 	})
@@ -131,8 +133,9 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		state := connState()
 		state.PreviousStreamStates[droppedRoom]["events"].RoomStatus = types.HaveSentRoomPreviously.String()
 
-		copied := rp.copyForwardStreamStates(context.Background(), state, nil)
+		copied, err := rp.copyForwardStreamStates(context.Background(), state, nil)
 
+		require.NoError(t, err)
 		assert.Equal(t, 2, copied)
 		assert.Equal(t, lastToken, db.writes[streamKey(droppedRoom, "events")].lastToken,
 			"the gap start must not move forward while a room stays unsent")
@@ -150,7 +153,10 @@ func TestCopyForwardStreamStates(t *testing.T) {
 			},
 		}
 
-		assert.Equal(t, 0, rp.copyForwardStreamStates(context.Background(), state, nil))
+		copied, err := rp.copyForwardStreamStates(context.Background(), state, nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, copied)
 		assert.Empty(t, db.writes)
 	})
 
@@ -161,8 +167,9 @@ func TestCopyForwardStreamStates(t *testing.T) {
 		db.failFor[droppedRoom] = true
 		rp := &RequestPool{db: db}
 
-		copied := rp.copyForwardStreamStates(context.Background(), connState(), nil)
+		copied, err := rp.copyForwardStreamStates(context.Background(), connState(), nil)
 
+		require.NoError(t, err, "a genuine write failure is logged, not treated as cancellation")
 		assert.Equal(t, 1, copied)
 		assert.NotContains(t, db.writes, streamKey(droppedRoom, "events"))
 		assert.Contains(t, db.writes, streamKey(sentRoom, "events"))

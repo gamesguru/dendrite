@@ -138,6 +138,11 @@ func findRelevantRoomIDsForExtension(
 //
 // For now, we process all extensions together. Future optimization: split by PreProcess/PostProcess.
 //
+// Once ctx is done it stops and returns the context's error rather than an
+// extension failure per remaining extension: the snapshot is rolled back with
+// the request, so later reads would only fail with "transaction has already
+// been committed or rolled back".
+//
 // ResponselLists: The actual lists from the sliding sync response (for extension filtering).
 // RoomSubscriptions: The actual room subscriptions from the sliding sync request (for extension filtering).
 func (rp *RequestPool) ProcessExtensions(
@@ -164,10 +169,17 @@ func (rp *RequestPool) ProcessExtensions(
 	// Track updated positions from extensions (like v3 sync stream providers)
 	updatedPos := toPos
 
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
 	// Process to_device extension (PreProcess)
 	if req.Extensions.ToDevice != nil && req.Extensions.ToDevice.Enabled {
 		toDeviceResp, err := rp.processToDeviceExtension(ctx, snapshot, userID, deviceID, req.Extensions.ToDevice, fromPos, toPos)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
 			logrus.WithError(err).Error("Failed to process to_device extension")
 			// Continue anyway - extensions are optional
 		} else {
@@ -175,10 +187,17 @@ func (rp *RequestPool) ProcessExtensions(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
 	// Process e2ee extension (PreProcess, MSC3884)
 	if req.Extensions.E2EE != nil && req.Extensions.E2EE.Enabled {
 		e2eeResp, err := rp.processE2EEExtension(ctx, snapshot, userID, deviceID, isInitialSync, fromPos, toPos)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
 			logrus.WithError(err).Error("Failed to process e2ee extension")
 			// Continue anyway - extensions are optional
 		} else {
@@ -186,10 +205,17 @@ func (rp *RequestPool) ProcessExtensions(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
 	// Process account_data extension (PostProcess)
 	if req.Extensions.AccountData != nil && req.Extensions.AccountData.Enabled {
 		accountDataResp, accountDataLastPos, err := rp.processAccountDataExtension(ctx, snapshot, connState, userID, req.Extensions.AccountData.Lists, req.Extensions.AccountData.Rooms, fromPos, toPos, responseLists, roomSubscriptions)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
 			logrus.WithError(err).Error("Failed to process account_data extension")
 			// Return empty response on error - clients expect the field to be present with proper structure
 			resp.AccountData = &types.AccountDataResponse{
@@ -218,10 +244,17 @@ func (rp *RequestPool) ProcessExtensions(
 	// Track delivered receipts for connection state update in write transaction
 	var deliveredReceipts []types.OutputReceiptEvent
 
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
 	// Process receipts extension (PostProcess)
 	if req.Extensions.Receipts != nil && req.Extensions.Receipts.Enabled {
 		receiptsResp, receiptsLastPos, receiptsDelivered, err := rp.processReceiptsExtension(ctx, snapshot, connectionKey, userID, req.Extensions.Receipts.Lists, req.Extensions.Receipts.Rooms, fromPos, toPos, responseLists, roomSubscriptions)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
 			logrus.WithError(err).Error("Failed to process receipts extension")
 			// Return empty response on error - clients expect the field to be present
 			resp.Receipts = &types.ReceiptsResponse{Rooms: make(map[string]synctypes.ClientEvent)}
@@ -245,10 +278,17 @@ func (rp *RequestPool) ProcessExtensions(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
 	// Process typing extension (PostProcess)
 	if req.Extensions.Typing != nil && req.Extensions.Typing.Enabled {
 		typingResp, err := rp.processTypingExtension(ctx, snapshot, userID, req.Extensions.Typing.Lists, req.Extensions.Typing.Rooms, fromPos, toPos, responseLists, roomSubscriptions)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
 			logrus.WithError(err).Error("Failed to process typing extension")
 			// Return empty response on error - clients expect the field to be present
 			resp.Typing = &types.TypingResponse{Rooms: make(map[string]synctypes.ClientEvent)}
@@ -504,9 +544,15 @@ func (rp *RequestPool) persistAccountDataRoomState(
 	}
 
 	for roomID, pos := range roomPositions {
+		if ctx.Err() != nil {
+			return
+		}
 		delivered := toPos
 		delivered.AccountDataPosition = pos
 		if err := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, accountDataStream, "live", delivered.String()); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			logrus.WithError(err).WithField("room_id", roomID).Warn("[ACCOUNT_DATA] Failed to persist account_data stream state")
 			continue
 		}
@@ -524,12 +570,19 @@ func (rp *RequestPool) persistAccountDataRoomState(
 // or because the query errored - would otherwise leave the new position with no
 // account_data rows at all, resetting every room's floor to 0 and forcing a
 // full rescan and re-delivery.
-func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connState *V4ConnectionState) {
+//
+// Once the request context is done it stops and returns the context's error:
+// the response will not be acknowledged, so the position it writes to is
+// discarded on the client's retry anyway.
+func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connState *V4ConnectionState) error {
 	if connState == nil || connState.ConnectionPosition == 0 {
-		return
+		return nil
 	}
 
 	for roomID, streams := range connState.PreviousStreamStates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if connState.AccountDataWritten[roomID] {
 			continue // already written with a fresh position
 		}
@@ -538,9 +591,13 @@ func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connStat
 			continue
 		}
 		if err := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, accountDataStream, prevState.RoomStatus, prevState.LastToken); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			logrus.WithError(err).WithField("room_id", roomID).Warn("[ACCOUNT_DATA] Failed to copy forward account_data stream state")
 		}
 	}
+	return nil
 }
 
 // processAccountDataExtension handles account data extension.
