@@ -121,6 +121,17 @@ func GetEvent(
 			JSON: spec.InternalServerError{},
 		}
 	}
+	bundler, err := internal.NewRelationBundler(ctx, db, rsAPI, *userID)
+	if err == nil {
+		err = bundler.BundleEvent(ctx, events[0], clientEvent, synctypes.FormatAll)
+	}
+	if err != nil {
+		logger.WithError(err).Error("GetEvent: failed to bundle relations")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 
 	return util.JSONResponse{
 		Code: http.StatusOK,

@@ -571,9 +571,9 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 	return
 }
 
-func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID, roomID string, notificationCount, highlightCount int) (pos types.StreamPosition, err error) {
+func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		pos, err = d.NotificationData.UpsertRoomUnreadCounts(ctx, txn, userID, roomID, notificationCount, highlightCount)
+		pos, err = d.NotificationData.UpsertRoomUnreadCounts(ctx, txn, userID, data)
 		return err
 	})
 	return

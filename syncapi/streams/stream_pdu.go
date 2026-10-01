@@ -111,6 +111,7 @@ func (p *PDUStreamProvider) CompleteSync(
 	if err = p.addIgnoredUsersToFilter(ctx, snapshot, req, &eventFilter); err != nil {
 		req.Log.WithError(err).Error("unable to update event filter with ignored users")
 	}
+	bundler := p.newSyncBundler(snapshot, req)
 
 	eventFormat := synctypes.FormatSync
 	if req.Filter.EventFormat == synctypes.EventFormatFederation {
@@ -140,7 +141,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, false,
-			events.Events, events.Limited, eventFormat, to,
+			events.Events, events.Limited, eventFormat, to, bundler,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -178,7 +179,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, true,
-				events.Events, events.Limited, eventFormat, to,
+				events.Events, events.Limited, eventFormat, to, bundler,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -267,6 +268,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 	if err = p.addIgnoredUsersToFilter(ctx, snapshot, req, &eventFilter); err != nil {
 		req.Log.WithError(err).Error("unable to update event filter with ignored users")
 	}
+	bundler := p.newSyncBundler(snapshot, req)
 
 	dbEvents, err := p.getRecentEvents(ctx, stateDeltas, r, eventFilter, snapshot)
 	if err != nil {
@@ -295,7 +297,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 			}
 		}
 		var pos types.StreamPosition
-		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents); err != nil {
+		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents, bundler); err != nil {
 			if req.Context.Err() != nil || abandonsSync(err) {
 				// Stay at from: a position past this room's events would
 				// tell the client it has seen events it was never sent.
@@ -394,6 +396,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	stateFilter *synctypes.StateFilter,
 	req *types.SyncRequest,
 	dbEvents map[string]types.RecentEvents,
+	bundler *syncBundler,
 ) (types.StreamPosition, error) {
 	var err error
 	recentStreamEvents := dbEvents[delta.RoomID].Events
@@ -571,6 +574,9 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		// If we are limited by the filter AND the history visibility filter
 		// didn't "remove" events, return that the response is limited.
 		jr.Timeline.Limited = (limited && len(events) == len(recentEvents)) || delta.NewlyJoined
+		if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, r.High()); err != nil {
+			return r.From, err
+		}
 		jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
@@ -593,6 +599,9 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
 		jr.Timeline.Limited = limited
+		if err = bundler.bundle(ctx, jr.Timeline, recentEvents, eventFormat, r.High()); err != nil {
+			return r.From, err
+		}
 		jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
@@ -619,6 +628,9 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		// If we are limited by the filter AND the history visibility filter
 		// didn't "remove" events, return that the response is limited.
 		lr.Timeline.Limited = limited && len(events) == len(recentEvents)
+		if err = bundler.bundle(ctx, lr.Timeline, events, eventFormat, r.High()); err != nil {
+			return r.From, err
+		}
 		lr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
@@ -639,6 +651,65 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	}
 
 	return latestPosition, nil
+}
+
+// syncBundler adds bundled aggregations to the limited timelines of one sync
+// response. Its bundler is built on first use and then shared by all rooms.
+type syncBundler struct {
+	snapshot storage.DatabaseTransaction
+	rsAPI    roomserverAPI.SyncRoomserverAPI
+	req      *types.SyncRequest
+	bundler  *internal.RelationBundler
+}
+
+func (p *PDUStreamProvider) newSyncBundler(snapshot storage.DatabaseTransaction, req *types.SyncRequest) *syncBundler {
+	return &syncBundler{snapshot: snapshot, rsAPI: p.rsAPI, req: req}
+}
+
+// bundle adds bundled aggregations to a limited timeline, as the spec
+// requires. An unlimited timeline already carries every child the client has
+// not seen, so the client aggregates those itself, and the timeline is only
+// stripped of aggregations that arrived with the events. Children after upTo
+// are left for the client to aggregate from a later response.
+//
+// Bundles are an optimisation for the client, so any failure other than one
+// that abandons the sync serves the timeline without them rather than
+// dropping the room from the response.
+func (s *syncBundler) bundle(
+	ctx context.Context, timeline *types.Timeline, events []*rstypes.HeaderedEvent, format synctypes.ClientEventFormat, upTo types.StreamPosition,
+) error {
+	if !timeline.Limited {
+		return internal.StripRelations(timeline.Events)
+	}
+	err := s.init(ctx)
+	if err == nil {
+		err = s.bundler.UpTo(upTo).Bundle(ctx, events, timeline.Events, format)
+	}
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil || abandonsSync(err) {
+		return fmt.Errorf("bundling relations: %w", err)
+	}
+	logrus.WithError(err).WithField("user_id", s.req.Device.UserID).Warn("Failed to bundle relations, serving the timeline without them")
+	return internal.StripRelations(timeline.Events)
+}
+
+func (s *syncBundler) init(ctx context.Context) error {
+	if s.bundler != nil {
+		return nil
+	}
+	userID, err := spec.NewUserID(s.req.Device.UserID, true)
+	if err != nil {
+		return err
+	}
+	watermark, err := s.snapshot.MaxStreamPositionForRelations(ctx)
+	if err != nil {
+		return err
+	}
+	// The ignored users were loaded into the request along with the timeline filter.
+	s.bundler = internal.NewRelationBundlerAt(s.snapshot, s.rsAPI, *userID, &s.req.IgnoredUsers, watermark)
+	return nil
 }
 
 // applyHistoryVisibilityFilter gets the current room state and supplies it to ApplyHistoryVisibilityFilter, to make
@@ -708,6 +779,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	limited bool,
 	eventFormat synctypes.ClientEventFormat,
 	sentAt types.StreamPosition,
+	bundler *syncBundler,
 ) (jr *types.JoinResponse, err error) {
 	jr = types.NewJoinResponse()
 	// TODO: When filters are added, we may need to call this multiple times to get enough events.
@@ -811,6 +883,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// If we are limited by the filter AND the history visibility filter
 	// didn't "remove" events, return that the response is limited.
 	jr.Timeline.Limited = limited && len(events) == len(recentEvents)
+	if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, sentAt); err != nil {
+		return jr, err
+	}
 	jr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(stateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})

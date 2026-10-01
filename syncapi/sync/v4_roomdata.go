@@ -18,6 +18,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	syncinternal "codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
@@ -259,7 +260,7 @@ func (rp *RequestPool) getTimelineEvents(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
 	roomID string,
-	_ string, // userID unused - timeline retrieval is room-scoped
+	userID string, // only used to bundle relations, timeline retrieval is room-scoped
 	limit int,
 	roomState types.RoomStreamState,
 	currentPos types.StreamingToken,
@@ -371,6 +372,7 @@ func (rp *RequestPool) getTimelineEvents(
 
 		clientEvents = append(clientEvents, *clientEvent)
 	}
+	rp.bundleTimeline(ctx, snapshot, userID, events.Events, clientEvents, events.Limited, fromPos)
 
 	logrus.WithFields(logrus.Fields{
 		"room_id":        roomID,
@@ -387,6 +389,36 @@ func (rp *RequestPool) getTimelineEvents(
 
 	// Return the events, limited flag, and num_live count
 	return clientEvents, events.Limited, numLive, nil
+}
+
+// bundleTimeline adds bundled aggregations to a limited timeline, the same
+// way as /sync does. Children after upTo are left for the client to
+// aggregate from a later response. A failure serves the timeline without
+// bundles, since they are only an optimisation for the client.
+func (rp *RequestPool) bundleTimeline(
+	ctx context.Context, snapshot storage.DatabaseTransaction, userID string,
+	events []types.StreamEvent, clients []synctypes.ClientEvent, limited bool, upTo types.StreamPosition,
+) {
+	err := syncinternal.StripRelations(clients)
+	if err != nil || !limited {
+		return
+	}
+	user, err := spec.NewUserID(userID, true)
+	if err != nil {
+		return
+	}
+	headered := make([]*rstypes.HeaderedEvent, 0, len(events))
+	for _, event := range events {
+		headered = append(headered, event.HeaderedEvent)
+	}
+	bundler, err := syncinternal.NewRelationBundler(ctx, snapshot, rp.rsAPI, *user)
+	if err == nil {
+		err = bundler.UpTo(upTo).Bundle(ctx, headered, clients, synctypes.FormatSync)
+	}
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).Warn("Failed to bundle relations, serving the timeline without them")
+		_ = syncinternal.StripRelations(clients)
+	}
 }
 
 // getRoomNameFromDB retrieves m.room.name state event from database.

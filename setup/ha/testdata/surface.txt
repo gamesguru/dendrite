@@ -228,6 +228,7 @@ column syncapi_notification_data | highlight_count | bigint | NO | 0
 column syncapi_notification_data | id | bigint | NO | nextval('syncapi_notification_data_id_seq'::regclass)
 column syncapi_notification_data | notification_count | bigint | NO | 0
 column syncapi_notification_data | room_id | text | NO |
+column syncapi_notification_data | thread_counts | text | YES |
 column syncapi_notification_data | user_id | text | NO |
 column syncapi_output_room_events | add_state_ids | ARRAY | YES |
 column syncapi_output_room_events | contains_url | boolean | NO |
@@ -1205,6 +1206,7 @@ migration syncapi: create sliding sync room metadata tables
 migration syncapi: create sliding sync tables
 migration syncapi: drop sent_by_token
 migration syncapi: fix sequences
+migration syncapi: notification thread counts
 migration syncapi: rename dupe index (output_room_events)
 migration syncapi: set history visibility for existing events
 migration syncapi: store output event timestamps separately

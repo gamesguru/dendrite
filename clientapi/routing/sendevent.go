@@ -21,6 +21,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -386,6 +387,10 @@ func generateSendEvent(
 		}
 	}
 
+	if res := validateThreadRelation(ctx, rsAPI, roomID, r); res != nil {
+		return nil, res
+	}
+
 	identity, err := rsAPI.SigningIdentityFor(ctx, *validRoomID, *fullUserID)
 	if err != nil {
 		return nil, &util.JSONResponse{
@@ -462,4 +467,32 @@ func generateSendEvent(
 	}
 
 	return e.PDU, nil
+}
+
+// validateThreadRelation rejects a thread whose root is itself a relation,
+// as the spec asks of servers. An unknown root is left for clients to handle.
+func validateThreadRelation(ctx context.Context, rsAPI api.ClientRoomserverAPI, roomID string, content map[string]any) *util.JSONResponse {
+	relation, ok := content["m.relates_to"].(map[string]any)
+	if !ok || relation["rel_type"] != "m.thread" {
+		return nil
+	}
+	rootID, ok := relation["event_id"].(string)
+	if !ok || rootID == "" {
+		return nil
+	}
+	var res api.QueryEventsByIDResponse
+	if err := rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{RoomID: roomID, EventIDs: []string{rootID}}, &res); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("rsAPI.QueryEventsByID failed")
+		return &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	for _, root := range res.Events {
+		// The roomserver does not filter by room, and another room's event must not be probed.
+		if root.EventID() == rootID && root.RoomID().String() == roomID && gjson.GetBytes(root.Content(), `m\.relates_to.rel_type`).Str != "" {
+			return &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.Unknown("Cannot start a thread from an event with a relation"),
+			}
+		}
+	}
+	return nil
 }

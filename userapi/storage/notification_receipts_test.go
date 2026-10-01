@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
@@ -144,5 +145,43 @@ func TestNotificationReceiptConcurrentEvent(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, total)
 		}
+	})
+}
+
+func TestRoomThreadNotificationCounts(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, backend)
+		defer cleanup()
+		notify := func(i int, thread string, highlight bool) {
+			eventID := fmt.Sprintf("$event%d", i)
+			require.NoError(t, db.InsertNotification(ctx, "alice", "localhost", eventID, uint64(i+1), map[string]any{"highlight": highlight}, &api.Notification{RoomID: "!room:test", Event: synctypes.ClientEvent{Content: []byte(`{}`)}}))
+			if thread != "" {
+				_, err := db.StoreNotificationEvent(ctx, "!room:test", eventID, thread, uint64(i+1))
+				require.NoError(t, err)
+			}
+		}
+		notify(0, "main", false)
+		notify(1, "$a", true)
+		notify(2, "$a", false)
+		notify(3, "$b", false)
+		// A notification whose thread is not recorded yet belongs to the main timeline.
+		notify(4, "", true)
+		counts, err := db.GetRoomThreadNotificationCounts(ctx, "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Equal(t, map[string]eventutil.ThreadNotificationCounts{
+			"main": {UnreadNotificationCount: 2, UnreadHighlightCount: 1},
+			"$a":   {UnreadNotificationCount: 2, UnreadHighlightCount: 1},
+			"$b":   {UnreadNotificationCount: 1},
+		}, counts)
+		// A threaded receipt only clears its own thread.
+		_, err = db.SetNotificationsReadForReceipt(ctx, "alice", "localhost", "!room:test", "$event2", "$a")
+		require.NoError(t, err)
+		counts, err = db.GetRoomThreadNotificationCounts(ctx, "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.NotContains(t, counts, "$a")
+		require.Equal(t, 2, counts["main"].UnreadNotificationCount)
+		counts, err = db.GetRoomThreadNotificationCounts(ctx, "bob", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Empty(t, counts)
 	})
 }

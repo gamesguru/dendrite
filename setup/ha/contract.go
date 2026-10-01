@@ -45,7 +45,11 @@ type Contract struct {
 // fields. Raise UpgradeFrom when this build cannot take over from an older
 // one, and RollbackTo when an older build cannot take over from this one;
 // either turns the transition into an offline upgrade.
-var release = Contract{Protocol: 1, Level: 1, UpgradeFrom: 1, RollbackTo: 1}
+var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, RollbackTo: 1}
+
+// releaseLevel is the current shared-state surface level. Level 2 stores
+// per-thread notification counts.
+const releaseLevel = 2
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

@@ -32,31 +32,32 @@ The [v1.3 changes](https://spec.matrix.org/v1.3/changelog/) introduce optional `
 | --- | --- | --- |
 | Messages without `from` | `syncapi/routing/messages.go` constructs earliest/latest topology positions according to direction. | Implemented path; this alone does not certify pagination. |
 | Refresh tokens | `clientapi/routing/routing.go` registers `/v3/refresh` only with MSC3861; `msc3861_sso_compat.go` delegates refresh to the provider. | Configuration-dependent, not native password-login refresh support; non-expiring tokens alone are not a blocker. |
-| Relationship retrieval | `syncapi/routing/routing.go` registers all three `/v1/rooms/{roomID}/relations/...` forms. | Routes exist, but behavior blocks advertisement; see below. |
-| Aggregation framework and relaxed replies | `syncapi/synctypes/clientevent.go` preserves event content and unsigned data, but does not calculate bundled relations. | v1.3 defines no relation type requiring aggregation, so absent bundles alone are not a v1.3 blocker; later versions do require them. |
+| Relationship retrieval | `syncapi/routing/relations.go` serves all three `/v1/rooms/{roomID}/relations/...` forms in topological order; `syncapi/routing/relations_test.go` covers them. | Implemented; see below. |
+| Aggregation framework and relaxed replies | `syncapi/internal/aggregations.go` calculates bundled relations for the endpoints the spec lists, including limited `/sync` timelines. | v1.3 defines no relation type requiring aggregation; the framework is covered by `syncapi/aggregations_test.go`. |
 | `knock_restricted` | Room-version handling uses gomatrixserverlib; `roomserver/roomserver_test.go` exercises restricted and knock-restricted joins with room version 10. | Implementation and focused tests exist; not evidence for unrelated client APIs. |
 
 The [v1.3 relations endpoint](https://spec.matrix.org/v1.3/client-server-api/#get_matrixclientv1roomsroomidrelationseventid) accepts pagination tokens from `/messages` and `/sync`, returns children in topological order, and specifies 404 for a missing or inaccessible parent.
-In `syncapi/routing/relations.go`, `from` and `to` are parsed with `types.NewStreamPositionFromString`, which accepts decimal integers rather than the topology and streaming tokens emitted by those endpoints.
-`syncapi/storage/shared/storage_sync.go` and the SQL relations tables use relation stream positions rather than event topology for pagination.
-The handler filters child events for history visibility but never loads and checks the parent; an unknown parent can produce an empty successful response.
-These are behavioral gaps even though all three routes exist, and prevent promoting v1.3.
+`syncapi/routing/relations.go` accepts its own tokens, `/messages` topology tokens and `/sync` stream tokens for `from` and `to`, with the same cursor semantics as `/messages`.
+The storage query orders children by event topology, so a backfilled child sorts by its depth rather than its arrival.
+A missing parent, one in another room and one hidden by history visibility all return 404 `M_NOT_FOUND`.
+Children hidden by history visibility or sent by ignored users are left out, and each child carries its own bundled aggregations.
+These resolve the relations gaps that blocked v1.3, which still needs the full review described below before it is advertised.
 
 ### v1.4 and v1.5
 
 The [v1.4 changes](https://spec.matrix.org/v1.4/changelog/) add edits, threads, private and threaded receipts, room-type directory filters, room-type preservation on upgrade, a server-ACL push rule, and media CORP headers.
-The v1.3 relations blockers remain relevant.
+The v1.3 relations behavior is covered above.
 
 | Requirement | Implementation evidence | Assessment |
 | --- | --- | --- |
 | Private receipts | `clientapi/routing/receipt.go` accepts `m.read.private`; `readmarker.go` accepts optional markers; `syncapi/streams/stream_receipt.go` excludes another user's private receipts. | Retain the existing MSC2285 compatibility flag. |
-| Thread listing | No `/v1/rooms/{roomID}/threads` route in client or sync routing. | Missing endpoint. |
-| Threaded receipts and notification counts | `SetReceipt` does not parse `thread_id`; receipt production carries no thread identifier. | Room-level receipts do not establish threaded behavior. |
-| Edit and thread bundles | Relations are stored and retrievable, but client event conversion does not generate `unsigned.m.relations` summaries. | Handling raw edits/replies is not server-side aggregation support. |
+| Thread listing | `syncapi/routing/threads.go` serves `/v1/rooms/{roomID}/threads` with `include` filtering and pagination. | Implemented; covered by `threads_test.go`. |
+| Threaded receipts and notification counts | `clientapi/routing/receipt.go` validates `thread_id`, receipts keep their thread identity, and `syncapi/streams/stream_notificationdata.go` serves per-thread counts when the filter sets `unread_thread_notifications`. | Implemented; covered by `TestThreadNotificationCounts` and `TestThreadReplyCountedInThread`. |
+| Edit and thread bundles | `syncapi/internal/aggregations.go` bundles the latest valid edit under `m.replace` and the thread summary under `m.thread`, filtered for history visibility and ignored users. | Implemented. |
 | Other v1.4 additions | Require a separate behavioral pass for filters, upgrades, push rules, and media headers after the above blockers are fixed. | Not certified by this audit. |
 
 [v1.5](https://spec.matrix.org/v1.5/changelog/) adds reference relations and documents in-room verification requests.
-Generic relation storage can retain `m.reference` events, but its presence does not prove the required bundling and pagination behavior.
+References are bundled under `m.reference` and can be paginated through `/relations`.
 Neither v1.4 nor v1.5 is eligible for advertisement.
 MSC2836's experimental relationship API is not the stable `m.thread` protocol or thread-list endpoint.
 
@@ -64,10 +65,10 @@ MSC2836's experimental relationship API is not the stable `m.thread` protocol or
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.6](https://spec.matrix.org/v1.6/changelog/) | `/v1/rooms/{roomID}/timestamp_to_event` is absent from client and sync routing, in addition to the earlier relations/thread gaps. | Do not advertise. |
+| [v1.6](https://spec.matrix.org/v1.6/changelog/) | `syncapi/routing/timestamp_to_event.go` serves `/v1/rooms/{roomID}/timestamp_to_event`; the release still needs the full review described below. | Do not advertise yet. |
 | [v1.7](https://spec.matrix.org/v1.7/changelog/) | Reactions can be stored as relations; this does not demonstrate aggregated reaction behavior, asynchronous media upload, or login-token issuance. | No full certification; earlier blockers remain. |
-| [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` does not parse `recurse` or traverse descendant relations as required by the recursive relations API. | Do not advertise. |
-| [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; earlier relations/thread/timestamp blockers still prevent a version bump. |
+| [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` parses `recurse`, follows relations three levels deep and reports `recursion_depth`; other v1.10 changes are unaudited. | Do not advertise. |
+| [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |
 | [v1.15 room summaries](https://spec.matrix.org/v1.15/client-server-api/#room-summaries) | `/v1/room_summary/{roomIDOrAlias}` calls `GetRoomSummary`; `room_summary_test.go` tests access, response shape, and caching. | Selected feature implemented, not full v1.15 certification. |
 | [v1.19](https://spec.matrix.org/v1.19/client-server-api/) | Earlier mandatory behavior remains unresolved; no full audit of intervening releases has established conformance. | Do not advertise the latest version based on route counts. |
 
@@ -114,6 +115,6 @@ The existing `TestMSC3861_VersionsAdvertisesMSC2965` additionally covers discove
 go test -tags goolm ./clientapi/routing -run 'TestVersions|TestMSC3861_VersionsAdvertisesMSC2965' -count=1
 ```
 
-Before raising the ceiling, fix the identified blockers and add behavioral tests for parent visibility, interoperable pagination tokens, topological ordering, bundles, threaded receipts, and newly required endpoints.
+Before raising the ceiling, fix any remaining blockers and add behavioral tests for newly required endpoints.
 Then review every server requirement and applicable clarification in the candidate release, run the relevant conformance suites in supported authentication configurations, and record that evidence here alongside the version-list change.
 Do not equate a passing discovery test with protocol conformance.

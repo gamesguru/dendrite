@@ -59,6 +59,11 @@ func TestDefaultRules(t *testing.T) {
 			inputBytes: []byte(`{"rule_id":".m.rule.roomnotif","default":true,"enabled":true,"conditions":[{"kind":"event_match","key":"content.body","pattern":"@room"},{"kind":"sender_notification_permission","key":"room"}],"actions":["notify",{"set_tweak":"highlight"}]}`),
 			want:       mRuleRoomNotifDefinition,
 		},
+		{
+			name:       ".m.rule.suppress_edits",
+			inputBytes: []byte(`{"rule_id":".m.rule.suppress_edits","default":true,"enabled":true,"conditions":[{"kind":"event_property_is","key":"content.m\\.relates_to.rel_type","value":"m.replace"}],"actions":[]}`),
+			want:       *mRuleSuppressEditsDefinition(),
+		},
 		// Default content rules
 		{
 			name:       ".m.rule.contains_user_name",

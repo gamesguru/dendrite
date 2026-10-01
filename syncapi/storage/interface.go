@@ -125,6 +125,11 @@ type DatabaseTransaction interface {
 	GetPresences(ctx context.Context, userID []string) ([]*types.PresenceInternal, error)
 	PresenceAfter(ctx context.Context, after types.StreamPosition, filter synctypes.EventFilter) (map[string]*types.PresenceInternal, error)
 	ThreadRelations(ctx context.Context, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error)
+	// RelationsInTopologicalRange returns a page of a parent's children, following relations
+	// of relations up to maxDepth levels, in topology order.
+	RelationsInTopologicalRange(ctx context.Context, roomID, eventID, relType, eventType string, maxDepth int, from, to types.TopologyToken, backwards bool, limit int) ([]types.TopologicalRelation, error)
+	// RelationTypesFor reports which of relTypes have children for each parent event, up to the relation watermark.
+	RelationTypesFor(ctx context.Context, roomID string, eventIDs, relTypes []string, watermark types.StreamPosition) (map[string]map[string]bool, error)
 	RelationsFor(ctx context.Context, roomID, eventID, relType, eventType string, from, to types.StreamPosition, backwards bool, limit int) (events []types.StreamEvent, prevBatch, nextBatch string, err error)
 	// UnPartialStatedRoomsInRange returns room IDs that became fully-stated (completed
 	// partial state resync) for a user in the given range. MSC3706 faster joins.
@@ -226,7 +231,7 @@ type SharedUsers interface {
 
 type Notifications interface {
 	// UpsertRoomUnreadNotificationCounts updates the notification statistics about a (user, room) key.
-	UpsertRoomUnreadNotificationCounts(ctx context.Context, userID, roomID string, notificationCount, highlightCount int) (types.StreamPosition, error)
+	UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (types.StreamPosition, error)
 }
 
 type SlidingSync interface {

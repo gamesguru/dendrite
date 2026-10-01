@@ -20,6 +20,21 @@ func DefaultGlobalRuleSet(localpart string, serverName spec.ServerName) *RuleSet
 	}
 }
 
+// UpgradeDefaultRules supplies default rules introduced after the stored
+// rules were created. Existing rules, actions, enablement and custom
+// ordering are left intact.
+func UpgradeDefaultRules(rules *RuleSet, localpart string, serverName spec.ServerName) {
+	AddMentionRules(rules, localpart, serverName)
+	for _, rule := range rules.Override {
+		if rule.RuleID == MRuleSuppressEdits {
+			return
+		}
+	}
+	// The spec places it after every other default override rule, and user
+	// rules of the same kind take precedence over server defaults.
+	rules.Override = append(rules.Override, mRuleSuppressEditsDefinition())
+}
+
 // AddMentionRules supplies newly introduced defaults when reading stored rules.
 // Existing rules, actions, enablement and custom ordering are left intact.
 // New rules inherit the corresponding legacy preference on the first upgrade.

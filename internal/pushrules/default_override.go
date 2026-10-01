@@ -15,6 +15,7 @@ func defaultOverrideRules(userID string) []*Rule {
 		&mRuleTombstoneDefinition,
 		&mRuleReactionDefinition,
 		&mRuleACLsDefinition,
+		mRuleSuppressEditsDefinition(),
 	}
 }
 
@@ -30,6 +31,7 @@ const (
 	MRuleRoomNotif           = ".m.rule.roomnotif"
 	MRuleReaction            = ".m.rule.reaction"
 	MRuleRoomACLs            = ".m.rule.room.server_acl"
+	MRuleSuppressEdits       = ".m.rule.suppress_edits"
 )
 
 var (
@@ -205,6 +207,20 @@ func mRuleIsUserMentionDefinition(userID string) *Rule {
 		RuleID: MRuleIsUserMention, Default: true, Enabled: true,
 		Conditions: []*Condition{{Kind: EventPropertyContainsCondition, Key: `content.m\.mentions.user_ids`, Value: value}},
 		Actions:    []*Action{{Kind: NotifyAction}, {Kind: SetTweakAction, Tweak: SoundTweak, Value: "default"}, {Kind: SetTweakAction, Tweak: HighlightTweak}},
+	}
+}
+
+// mRuleSuppressEditsDefinition stops event replacements from notifying, as
+// added in v1.9 of the spec. It is the last default override rule.
+func mRuleSuppressEditsDefinition() *Rule {
+	return &Rule{
+		RuleID: MRuleSuppressEdits, Default: true, Enabled: true,
+		Conditions: []*Condition{{
+			Kind:  EventPropertyIsCondition,
+			Key:   `content.m\.relates_to.rel_type`,
+			Value: json.RawMessage(`"m.replace"`),
+		}},
+		Actions: []*Action{},
 	}
 }
 

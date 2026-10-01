@@ -209,6 +209,27 @@ func Context(
 		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 
+	ev := synctypes.ToClientEventDefault(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
+	}, requestedEvent)
+	bundler, err := internal.NewRelationBundler(ctx, snapshot, rsAPI, *userID)
+	if err == nil {
+		err = bundler.Bundle(ctx, eventsBeforeFiltered, eventsBeforeClient, synctypes.FormatAll)
+	}
+	if err == nil {
+		err = bundler.Bundle(ctx, eventsAfterFiltered, eventsAfterClient, synctypes.FormatAll)
+	}
+	if err == nil {
+		err = bundler.BundleEvent(ctx, &requestedEvent, &ev, synctypes.FormatAll)
+	}
+	if err != nil {
+		logrus.WithError(err).Error("unable to bundle relations")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
 	newState := state
 	if filter.LazyLoadMembers {
 		allEvents := make([]*rstypes.HeaderedEvent, 0, len(eventsBeforeFiltered)+len(eventsAfterFiltered)+1)
@@ -228,9 +249,6 @@ func Context(
 		}
 	}
 
-	ev := synctypes.ToClientEventDefault(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
-	}, requestedEvent)
 	response := ContextRespsonse{
 		Event:        &ev,
 		EventsAfter:  eventsAfterClient,

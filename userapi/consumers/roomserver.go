@@ -411,8 +411,13 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	// TODO: does it have to be set? It's not required, and
 	// removing it means we can send all notifications to
 	// e.g. Element's Push gateway in one go.
+	var notified []string
 	for _, mem := range members {
-		if err := s.notifyLocal(ctx, event, mem, roomSize, roomName, streamPos); err != nil {
+		inserted, err := s.notifyLocal(ctx, event, mem, roomSize, roomName, streamPos)
+		if inserted {
+			notified = append(notified, mem.UserID)
+		}
+		if err != nil {
 			log.WithFields(log.Fields{
 				"localpart": mem.Localpart,
 			}).WithError(err).Error("Unable to push to local user")
@@ -420,11 +425,23 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 		}
 	}
 
+	var users []string
 	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
-	if err != nil {
-		return err
+	if err == nil {
+		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos)
 	}
-	users, err := s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos)
+	// Counts are published once the event's thread is recorded, so that a
+	// new notification is counted in its thread rather than the main timeline.
+	// They are published even if recording failed, counting the event in the
+	// main timeline, because the notifications are already stored and pushed.
+	for _, userID := range notified {
+		if slices.Contains(users, userID) {
+			continue
+		}
+		if publishErr := s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); publishErr != nil {
+			log.WithField("user_id", userID).WithError(publishErr).Error("Unable to send notification counts")
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -601,14 +618,15 @@ func unmarshalCanonicalAlias(event *rstypes.HeaderedEvent) (string, error) {
 }
 
 // notifyLocal finds the right push actions for a local user, given an event.
-func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstypes.HeaderedEvent, mem *localMembership, roomSize int, roomName string, streamPos uint64) error {
+// It reports whether it stored a notification, even when a later step fails.
+func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstypes.HeaderedEvent, mem *localMembership, roomSize int, roomName string, streamPos uint64) (bool, error) {
 	actions, err := s.evaluatePushRules(ctx, event, mem, roomSize)
 	if err != nil {
-		return fmt.Errorf("s.evaluatePushRules: %w", err)
+		return false, fmt.Errorf("s.evaluatePushRules: %w", err)
 	}
 	a, tweaks, err := pushrules.ActionsToTweaks(actions)
 	if err != nil {
-		return fmt.Errorf("pushrules.ActionsToTweaks: %w", err)
+		return false, fmt.Errorf("pushrules.ActionsToTweaks: %w", err)
 	}
 
 	if a != pushrules.NotifyAction {
@@ -617,18 +635,18 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 			"room_id":   event.RoomID().String(),
 			"localpart": mem.Localpart,
 		}).Tracef("Push rule evaluation rejected the event")
-		return nil
+		return false, nil
 	}
 
 	devicesByURLAndFormat, profileTag, err := s.localPushDevices(ctx, mem.Localpart, mem.Domain, tweaks)
 	if err != nil {
-		return fmt.Errorf("s.localPushDevices: %w", err)
+		return false, fmt.Errorf("s.localPushDevices: %w", err)
 	}
 	clientEvent, err := synctypes.ToClientEvent(event, synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return s.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	n := &api.Notification{
@@ -646,17 +664,13 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		TS:         spec.AsTimestamp(time.Now()),
 	}
 	if err = s.db.InsertNotification(ctx, mem.Localpart, mem.Domain, event.EventID(), streamPos, tweaks, n); err != nil {
-		return fmt.Errorf("s.db.InsertNotification: %w", err)
-	}
-
-	if err = s.syncProducer.GetAndSendNotificationData(ctx, mem.UserID, event.RoomID().String()); err != nil {
-		return fmt.Errorf("s.syncProducer.GetAndSendNotificationData: %w", err)
+		return false, fmt.Errorf("s.db.InsertNotification: %w", err)
 	}
 
 	// We do this after InsertNotification. Thus, this should always return >=1.
 	userNumUnreadNotifs, err := s.db.GetNotificationCount(ctx, mem.Localpart, mem.Domain, tables.AllNotifications)
 	if err != nil {
-		return fmt.Errorf("s.db.GetNotificationCount: %w", err)
+		return true, fmt.Errorf("s.db.GetNotificationCount: %w", err)
 	}
 
 	log.WithFields(log.Fields{
@@ -722,7 +736,7 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		}
 	})
 
-	return nil
+	return true, nil
 }
 
 // evaluatePushRules fetches and evaluates the push rules of a local

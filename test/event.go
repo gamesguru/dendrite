@@ -26,6 +26,7 @@ type eventMods struct {
 	keyID          gomatrixserverlib.KeyID
 	privKey        ed25519.PrivateKey
 	authEvents     []string
+	redacts        string
 }
 
 type eventModifier func(e *eventMods)
@@ -63,6 +64,13 @@ func WithKeyID(keyID gomatrixserverlib.KeyID) eventModifier {
 func WithPrivateKey(pkey ed25519.PrivateKey) eventModifier {
 	return func(e *eventMods) {
 		e.privKey = pkey
+	}
+}
+
+// WithRedacts sets the top-level redacts field of a redaction event.
+func WithRedacts(eventID string) eventModifier {
+	return func(e *eventMods) {
+		e.redacts = eventID
 	}
 }
 

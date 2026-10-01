@@ -79,7 +79,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	notificationData, err := NewPostgresNotificationDataTable(d.db)
+	notificationData, err := NewPostgresNotificationDataTable(ctx, d.db)
 	if err != nil {
 		return nil, err
 	}

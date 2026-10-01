@@ -25,6 +25,8 @@ import (
 
 	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -277,7 +279,7 @@ func (d *Database) QueryPushRules(
 		return nil, err
 	}
 
-	pushrules.AddMentionRules(&pushRules.Global, localpart, serverName)
+	pushrules.UpgradeDefaultRules(&pushRules.Global, localpart, serverName)
 	return &pushRules, nil
 }
 
@@ -350,7 +352,7 @@ func upgradeMentionAccountData(data json.RawMessage, localpart string, serverNam
 	if global == nil {
 		return data, nil
 	}
-	pushrules.AddMentionRules(global, localpart, serverName)
+	pushrules.UpgradeDefaultRules(global, localpart, serverName)
 	raw, err := json.Marshal(global)
 	if err != nil {
 		return nil, err
@@ -945,6 +947,32 @@ func (d *Database) GetNotificationCount(ctx context.Context, localpart string, s
 
 func (d *Database) GetRoomNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (total int64, highlight int64, _ error) {
 	return d.Notifications.SelectRoomCounts(ctx, nil, localpart, serverName, roomID)
+}
+
+// GetRoomThreadNotificationCounts counts a user's unread notifications in a
+// room by thread. A notification whose event has no recorded thread counts
+// towards the main timeline.
+func (d *Database) GetRoomThreadNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (map[string]eventutil.ThreadNotificationCounts, error) {
+	// The literal 'main' is eventutil.MainThread.
+	rows, err := d.DB.QueryContext(ctx, `SELECT COALESCE(e.thread_id, 'main'), COUNT(*), SUM(CASE WHEN n.highlight THEN 1 ELSE 0 END)
+	FROM userapi_notifications n
+	LEFT JOIN userapi_notification_events e ON e.room_id = n.room_id AND e.event_id = n.event_id
+	WHERE n.localpart = $1 AND n.server_name = $2 AND n.room_id = $3 AND NOT n.read
+	GROUP BY COALESCE(e.thread_id, 'main')`, localpart, serverName, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "GetRoomThreadNotificationCounts: rows.close() failed")
+	counts := make(map[string]eventutil.ThreadNotificationCounts)
+	for rows.Next() {
+		var threadID string
+		var thread eventutil.ThreadNotificationCounts
+		if err = rows.Scan(&threadID, &thread.UnreadNotificationCount, &thread.UnreadHighlightCount); err != nil {
+			return nil, err
+		}
+		counts[threadID] = thread
+	}
+	return counts, rows.Err()
 }
 
 func (d *Database) DeleteOldNotifications(ctx context.Context) error {

@@ -169,3 +169,69 @@ func TestEventMatchEscapedProperty(t *testing.T) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }
+
+func TestSuppressEdits(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, want string
+	}{
+		{"edit", `{"type":"m.room.message","content":{"body":"* hi","m.new_content":{"body":"hi"},"m.relates_to":{"rel_type":"m.replace","event_id":"$original"}}}`, MRuleSuppressEdits},
+		{"encrypted edit", `{"type":"m.room.encrypted","content":{"ciphertext":"x","m.relates_to":{"rel_type":"m.replace","event_id":"$original"}}}`, MRuleSuppressEdits},
+		// An edit that newly mentions the user still notifies them.
+		{"edit with mention", `{"type":"m.room.message","content":{"body":"* hi","m.mentions":{"user_ids":["@alice:example.com"]},"m.relates_to":{"rel_type":"m.replace","event_id":"$original"}}}`, MRuleIsUserMention},
+		{"thread reply", `{"type":"m.room.message","content":{"body":"hi","m.relates_to":{"rel_type":"m.thread","event_id":"$root"}}}`, MRuleMessage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var event map[string]any
+			if err := json.Unmarshal([]byte(tc.event), &event); err != nil {
+				t.Fatal(err)
+			}
+			event["room_id"] = "!room:example.com"
+			raw, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule, err := NewRuleSetEvaluator(mentionContext{fakeEvaluationContext{3}, false}, DefaultGlobalRuleSet("alice", "example.com")).MatchEvent(mustEventFromJSON(t, string(raw)), UserIDForSender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rule == nil || rule.RuleID != tc.want {
+				t.Fatalf("got %+v, want %s", rule, tc.want)
+			}
+			if tc.want == MRuleSuppressEdits && len(rule.Actions) != 0 {
+				t.Fatalf("suppress_edits must not notify, got %+v", rule.Actions)
+			}
+		})
+	}
+}
+
+func TestUpgradeDefaultRulesAddsSuppressEdits(t *testing.T) {
+	rules := DefaultGlobalRuleSet("alice", "example.com")
+	custom := &Rule{RuleID: "custom", Enabled: true, Actions: []*Action{{Kind: NotifyAction}}}
+	stored := []*Rule{}
+	for _, rule := range rules.Override {
+		if rule.RuleID != MRuleSuppressEdits {
+			stored = append(stored, rule)
+		}
+	}
+	stored = append(stored, custom)
+	rules.Override = stored
+	UpgradeDefaultRules(rules, "alice", "example.com")
+	last := rules.Override[len(rules.Override)-1]
+	if last.RuleID != MRuleSuppressEdits || rules.Override[len(rules.Override)-2] != custom {
+		t.Fatalf("suppress_edits must follow the stored rules, got %s", last.RuleID)
+	}
+	// A user who disabled the rule keeps it disabled.
+	last.Enabled = false
+	before, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	UpgradeDefaultRules(rules, "alice", "example.com")
+	after, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(string(before), string(after)); diff != "" {
+		t.Fatalf("not idempotent: %s", diff)
+	}
+}

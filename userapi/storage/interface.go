@@ -16,6 +16,7 @@ import (
 
 	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
@@ -145,6 +146,8 @@ type Notification interface {
 	GetNotifications(ctx context.Context, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error)
 	GetNotificationCount(ctx context.Context, localpart string, serverName spec.ServerName, filter tables.NotificationFilter) (int64, error)
 	GetRoomNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (total int64, highlight int64, _ error)
+	// GetRoomThreadNotificationCounts counts a user's unread notifications in a room by thread.
+	GetRoomThreadNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (map[string]eventutil.ThreadNotificationCounts, error)
 	DeleteOldNotifications(ctx context.Context) error
 }
 

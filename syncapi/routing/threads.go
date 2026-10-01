@@ -20,7 +20,6 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -119,7 +118,10 @@ func Threads(req *http.Request, device *userapi.Device, syncDB storage.Database,
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return util.ErrorResponse(err)
 	}
-	reader := threadReader{snapshot: snapshot, rsAPI: rsAPI, userID: *userID, roomID: rawRoomID, watermark: cursor.Watermark, ignores: ignores}
+	reader := threadReader{
+		snapshot: snapshot, rsAPI: rsAPI, userID: *userID, roomID: rawRoomID, watermark: cursor.Watermark, ignores: ignores,
+		bundler: internal.NewRelationBundlerAt(snapshot, rsAPI, *userID, ignores, cursor.Watermark),
+	}
 	response, err := reader.page(req.Context(), cursor, limit)
 	if err != nil {
 		return util.ErrorResponse(err)
@@ -156,6 +158,7 @@ type threadReader struct {
 	roomID    string
 	watermark types.StreamPosition
 	ignores   *types.IgnoredUsers
+	bundler   *internal.RelationBundler
 }
 
 func (r *threadReader) page(ctx context.Context, cursor threadCursor, limit int) (*ThreadsResponse, error) {
@@ -251,31 +254,13 @@ func (r *threadReader) root(ctx context.Context, rootID string) (*threadSummary,
 		return nil, err
 	}
 	root := roots[0]
-	if gjson.GetBytes(root.Content(), `m\.relates_to.rel_type`).Exists() {
-		return nil, nil
-	}
 	clientRoot, err := r.clientEvent(ctx, root)
 	if err != nil {
 		return nil, err
 	}
-	participated := clientRoot.Sender == r.userID.String()
-	var latest *rstypes.HeaderedEvent
-	var latestStream types.StreamPosition
-	count := 0
-	err = r.eachRelation(ctx, rootID, "m.thread", func(event *rstypes.HeaderedEvent, pos types.StreamPosition, sender string) error {
-		count++
-		participated = participated || sender == r.userID.String()
-		if latest == nil || event.Depth() > latest.Depth() || (event.Depth() == latest.Depth() && pos > latestStream) {
-			latest, latestStream = event, pos
-		}
-		return nil
-	})
-	if err != nil {
+	summary, err := r.bundler.ThreadSummary(ctx, root, clientRoot.Sender)
+	if err != nil || summary == nil {
 		return nil, err
-	}
-
-	if latest == nil {
-		return nil, nil
 	}
 	if r.ignored(clientRoot.Sender) {
 		// Events() returns a freshly decoded PDU, so redaction cannot mutate shared state.
@@ -285,127 +270,12 @@ func (r *threadReader) root(ctx context.Context, rootID string) (*threadSummary,
 			return nil, err
 		}
 	}
-	clientLatest, err := r.clientEvent(ctx, latest)
-	if err != nil {
+	if err = r.bundler.BundleEditsAndReferences(ctx, root, clientRoot, synctypes.FormatAll); err != nil {
 		return nil, err
 	}
-	if err = r.bundleRelations(ctx, root, clientRoot); err != nil {
+	if err = r.bundler.AddThreadBundle(ctx, clientRoot, summary, synctypes.FormatAll); err != nil {
 		return nil, err
 	}
-	if err = r.bundleRelations(ctx, latest, clientLatest); err != nil {
-		return nil, err
-	}
-	bundle := struct {
-		LatestEvent  *synctypes.ClientEvent `json:"latest_event"`
-		Count        int                    `json:"count"`
-		Participated bool                   `json:"current_user_participated"`
-	}{clientLatest, count, participated}
-	unsigned := clientRoot.Unsigned
-	if len(unsigned) == 0 {
-		unsigned = []byte(`{}`)
-	}
-	clientRoot.Unsigned, err = sjson.SetBytes(unsigned, `m\.relations.m\.thread`, bundle)
-	return &threadSummary{event: clientRoot, latestID: latest.EventID(), position: types.TopologyToken{Depth: types.StreamPosition(latest.Depth()), PDUPosition: latestStream}, participated: participated}, err
-}
-
-// eachRelation filters before aggregating so neither IDs nor counts reveal hidden events.
-func (r *threadReader) eachRelation(ctx context.Context, eventID, relType string, visit func(*rstypes.HeaderedEvent, types.StreamPosition, string) error) error {
-	var from types.StreamPosition
-	for {
-		replies, _, next, err := r.snapshot.RelationsFor(ctx, r.roomID, eventID, relType, "", from, r.watermark, false, threadPageSize)
-		if err != nil {
-			return err
-		}
-		events := make([]*rstypes.HeaderedEvent, 0, len(replies))
-		positions := make(map[string]types.StreamPosition, len(replies))
-		for _, reply := range replies {
-			events = append(events, reply.HeaderedEvent)
-			positions[reply.EventID()] = reply.StreamPosition
-		}
-		events, err = r.visible(ctx, events)
-		if err != nil {
-			return err
-		}
-		for _, event := range events {
-			sender, err := r.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
-			if err != nil {
-				return err
-			}
-			if sender == nil || r.ignored(sender.String()) {
-				continue
-			}
-			if err = visit(event, positions[event.EventID()], sender.String()); err != nil {
-				return err
-			}
-		}
-		if next == "" {
-			return nil
-		}
-		from, err = types.NewStreamPositionFromString(next)
-		if err != nil {
-			return err
-		}
-	}
-}
-
-// bundleRelations includes references and the latest valid edit on roots and
-// latest replies. It deliberately does not recurse into edits or references.
-func (r *threadReader) bundleRelations(ctx context.Context, event *rstypes.HeaderedEvent, client *synctypes.ClientEvent) error {
-	unsigned := client.Unsigned
-	if len(unsigned) == 0 {
-		unsigned = []byte(`{}`)
-	}
-	// Never reuse aggregations received from another server or for another user.
-	var err error
-	unsigned, err = sjson.DeleteBytes(unsigned, `m\.relations`)
-	if err != nil {
-		return err
-	}
-	client.Unsigned = unsigned
-	if event.StateKey() != nil {
-		return nil
-	}
-	var references []map[string]string
-	err = r.eachRelation(ctx, event.EventID(), "m.reference", func(child *rstypes.HeaderedEvent, _ types.StreamPosition, _ string) error {
-		references = append(references, map[string]string{"event_id": child.EventID()})
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if len(references) > 0 {
-		client.Unsigned, err = sjson.SetBytes(client.Unsigned, `m\.relations.m\.reference`, map[string]any{"chunk": references})
-		if err != nil {
-			return err
-		}
-	}
-	if event.Redacted() || r.ignored(client.Sender) || gjson.GetBytes(event.Content(), `m\.relates_to.rel_type`).Str == "m.replace" {
-		return nil
-	}
-	var edit *rstypes.HeaderedEvent
-	err = r.eachRelation(ctx, event.EventID(), "m.replace", func(child *rstypes.HeaderedEvent, _ types.StreamPosition, sender string) error {
-		if child.StateKey() != nil || child.Type() != event.Type() || sender != client.Sender || child.Redacted() {
-			return nil
-		}
-		if child.Type() != "m.room.encrypted" && !gjson.GetBytes(child.Content(), `m\.new_content`).IsObject() {
-			return nil
-		}
-		if edit == nil || child.OriginServerTS() > edit.OriginServerTS() || (child.OriginServerTS() == edit.OriginServerTS() && child.EventID() > edit.EventID()) {
-			edit = child
-		}
-		return nil
-	})
-	if err != nil || edit == nil {
-		return err
-	}
-	clientEdit, err := r.clientEvent(ctx, edit)
-	if err != nil {
-		return err
-	}
-	clientEdit.Unsigned, err = sjson.DeleteBytes(clientEdit.Unsigned, `m\.relations`)
-	if err != nil {
-		return err
-	}
-	client.Unsigned, err = sjson.SetBytes(client.Unsigned, `m\.relations.m\.replace`, clientEdit)
-	return err
+	position := types.TopologyToken{Depth: types.StreamPosition(summary.Latest.Depth()), PDUPosition: summary.LatestStream}
+	return &threadSummary{event: clientRoot, latestID: summary.Latest.EventID(), position: position, participated: summary.Participated}, nil
 }

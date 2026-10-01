@@ -425,9 +425,17 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	start = *r.from
 
-	return synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(filteredEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	clientEvents = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(filteredEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
-	}), start, end, nil
+	})
+	bundler, err := internal.NewRelationBundler(ctx, r.snapshot, rsAPI, r.deviceUserID)
+	if err != nil {
+		return []synctypes.ClientEvent{}, *r.from, *r.to, err
+	}
+	if err = bundler.Bundle(ctx, filteredEvents, clientEvents, synctypes.FormatAll); err != nil {
+		return []synctypes.ClientEvent{}, *r.from, *r.to, err
+	}
+	return clientEvents, start, end, nil
 }
 
 func (r *messagesReq) getStartEnd(events []*rstypes.HeaderedEvent) (start, end types.TopologyToken, err error) {
