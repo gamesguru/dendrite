@@ -338,6 +338,48 @@ func (s *currentRoomStateStatements) DeleteRoomStateByEventID(
 	return err
 }
 
+// DeleteRoomStateByEventIDs loops over DeleteRoomStateByEventID: SQLite runs
+// in-process, so a statement per row costs no network round trip.
+func (s *currentRoomStateStatements) DeleteRoomStateByEventIDs(
+	ctx context.Context, txn *sql.Tx, eventIDs []string,
+) error {
+	for _, eventID := range eventIDs {
+		if err := s.DeleteRoomStateByEventID(ctx, txn, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpsertRoomStates loops over UpsertRoomState, which already gives the
+// last-wins semantics of the interface.
+func (s *currentRoomStateStatements) UpsertRoomStates(
+	ctx context.Context, txn *sql.Tx, upserts []tables.StateUpsert, addedAt types.StreamPosition,
+) error {
+	for _, u := range upserts {
+		if err := s.UpsertRoomState(ctx, txn, u.Event, u.Membership, addedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *currentRoomStateStatements) SelectStateEvents(
+	ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple,
+) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error) {
+	result := make(map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, len(keys))
+	for _, key := range keys {
+		ev, err := s.SelectStateEvent(ctx, txn, roomID, key.EventType, key.StateKey)
+		if err != nil {
+			return nil, err
+		}
+		if ev != nil {
+			result[key] = ev
+		}
+	}
+	return result, nil
+}
+
 func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {

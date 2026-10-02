@@ -304,13 +304,30 @@ func (d *Database) updateRoomState(
 	topoPosition types.StreamPosition,
 ) error {
 	// remove first, then add, as we do not ever delete state, but do replace state which is a remove followed by an add.
-	for _, eventID := range removedEventIDs {
-		if err := d.CurrentRoomState.DeleteRoomStateByEventID(ctx, txn, eventID); err != nil {
-			return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventID: %w", err)
-		}
+	if err := d.CurrentRoomState.DeleteRoomStateByEventIDs(ctx, txn, removedEventIDs); err != nil {
+		return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventIDs: %w", err)
 	}
 
-	for _, event := range addedEvents {
+	upserts, members, err := stateUpserts(addedEvents)
+	if err != nil {
+		return err
+	}
+	if err = d.Memberships.UpsertMemberships(ctx, txn, members, pduPosition, topoPosition); err != nil {
+		return fmt.Errorf("d.Memberships.UpsertMemberships: %w", err)
+	}
+	if err = d.CurrentRoomState.UpsertRoomStates(ctx, txn, upserts, pduPosition); err != nil {
+		return fmt.Errorf("d.CurrentRoomState.UpsertRoomStates: %w", err)
+	}
+	return nil
+}
+
+// stateUpserts turns the state events among events into current state rows,
+// and separately returns the m.room.member events, which also update the
+// memberships table. Non-state events are skipped.
+func stateUpserts(events []*rstypes.HeaderedEvent) ([]tables.StateUpsert, []*rstypes.HeaderedEvent, error) {
+	upserts := make([]tables.StateUpsert, 0, len(events))
+	var members []*rstypes.HeaderedEvent
+	for _, event := range events {
 		if event.StateKey() == nil {
 			// ignore non state events
 			continue
@@ -319,20 +336,14 @@ func (d *Database) updateRoomState(
 		if event.Type() == "m.room.member" {
 			value, err := event.Membership()
 			if err != nil {
-				return fmt.Errorf("event.Membership: %w", err)
+				return nil, nil, fmt.Errorf("event.Membership: %w", err)
 			}
 			membership = &value
-			if err = d.Memberships.UpsertMembership(ctx, txn, event, pduPosition, topoPosition); err != nil {
-				return fmt.Errorf("d.Memberships.UpsertMembership: %w", err)
-			}
+			members = append(members, event)
 		}
-
-		if err := d.CurrentRoomState.UpsertRoomState(ctx, txn, event, membership, pduPosition); err != nil {
-			return fmt.Errorf("d.CurrentRoomState.UpsertRoomState: %w", err)
-		}
+		upserts = append(upserts, tables.StateUpsert{Event: event, Membership: membership})
 	}
-
-	return nil
+	return upserts, members, nil
 }
 
 func (d *Database) GetFilter(
@@ -983,27 +994,16 @@ func (d *Database) PopulateRoomStateAfterResync(ctx context.Context, stateEvents
 		pduPosition = types.StreamPosition(maxEventID)
 
 		// Populate current room state for each state event
-		for _, event := range stateEvents {
-			if event.StateKey() == nil {
-				// ignore non state events
-				continue
-			}
-			var membership *string
-			if event.Type() == "m.room.member" {
-				value, membershipErr := event.Membership()
-				if membershipErr != nil {
-					return fmt.Errorf("event.Membership: %w", membershipErr)
-				}
-				membership = &value
-				// Also update the memberships table for sync API
-				if upsertErr := d.Memberships.UpsertMembership(ctx, txn, event, pduPosition, 0); upsertErr != nil {
-					return fmt.Errorf("d.Memberships.UpsertMembership: %w", upsertErr)
-				}
-			}
-
-			if upsertErr := d.CurrentRoomState.UpsertRoomState(ctx, txn, event, membership, pduPosition); upsertErr != nil {
-				return fmt.Errorf("d.CurrentRoomState.UpsertRoomState: %w", upsertErr)
-			}
+		upserts, members, upsertErr := stateUpserts(stateEvents)
+		if upsertErr != nil {
+			return upsertErr
+		}
+		// Also update the memberships table for sync API
+		if upsertErr = d.Memberships.UpsertMemberships(ctx, txn, members, pduPosition, 0); upsertErr != nil {
+			return fmt.Errorf("d.Memberships.UpsertMemberships: %w", upsertErr)
+		}
+		if upsertErr = d.CurrentRoomState.UpsertRoomStates(ctx, txn, upserts, pduPosition); upsertErr != nil {
+			return fmt.Errorf("d.CurrentRoomState.UpsertRoomStates: %w", upsertErr)
 		}
 
 		return nil

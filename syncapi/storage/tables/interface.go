@@ -106,9 +106,19 @@ type Topology interface {
 
 type CurrentRoomState interface {
 	SelectStateEvent(ctx context.Context, txn *sql.Tx, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	// SelectStateEvents returns the current state events of a room for the
+	// given type and state key pairs, keyed by the stored type and state key.
+	// Pairs with no current state are absent from the result.
+	SelectStateEvents(ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	SelectEventsWithEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StreamEvent, error)
 	UpsertRoomState(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, membership *string, addedAt types.StreamPosition) error
+	// UpsertRoomStates writes many state events in as few statements as the
+	// backend allows. When two upserts share a type and state key, the later
+	// one wins, as it would with repeated UpsertRoomState calls.
+	UpsertRoomStates(ctx context.Context, txn *sql.Tx, upserts []StateUpsert, addedAt types.StreamPosition) error
 	DeleteRoomStateByEventID(ctx context.Context, txn *sql.Tx, eventID string) error
+	// DeleteRoomStateByEventIDs removes the current state rows for every given event ID.
+	DeleteRoomStateByEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) error
 	DeleteRoomStateForRoom(ctx context.Context, txn *sql.Tx, roomID string) error
 	// SelectCurrentState returns all the current state events for the given room.
 	SelectCurrentState(ctx context.Context, txn *sql.Tx, roomID string, stateFilter *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
@@ -202,8 +212,19 @@ type Receipts interface {
 	DeleteConnectionReceiptsForRoom(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID string) error
 }
 
+// StateUpsert is one current state row written by CurrentRoomState.UpsertRoomStates.
+type StateUpsert struct {
+	Event *rstypes.HeaderedEvent
+	// Membership is the content.membership of an m.room.member event, nil otherwise.
+	Membership *string
+}
+
 type Memberships interface {
 	UpsertMembership(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, streamPos, topologicalPos types.StreamPosition) error
+	// UpsertMemberships records many m.room.member events in as few statements
+	// as the backend allows, with the same last-wins semantics as repeated
+	// UpsertMembership calls.
+	UpsertMemberships(ctx context.Context, txn *sql.Tx, events []*rstypes.HeaderedEvent, streamPos, topologicalPos types.StreamPosition) error
 	SelectMembershipCount(ctx context.Context, txn *sql.Tx, roomID, membership string, pos types.StreamPosition) (count int, err error)
 	SelectMembershipForUser(ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error)
 	PurgeMemberships(ctx context.Context, txn *sql.Tx, roomID string) error

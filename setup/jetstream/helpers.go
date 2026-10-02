@@ -68,7 +68,7 @@ func JetStreamConsumer(
 		logrus.WithContext(ctx).WithError(err).Warnf("Failed to configure durable %q", durable)
 		return err
 	}
-	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, batch, f, ownership) })
+	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, durable, batch, f, ownership) })
 	return nil
 }
 
@@ -145,10 +145,11 @@ func redeliveryBackoff(attempts uint64) time.Duration {
 }
 
 func jetStreamConsumerWorker(
-	ctx context.Context, sub *nats.Subscription, subj string, batch int,
+	ctx context.Context, sub *nats.Subscription, subj, durable string, batch int,
 	f func(ctx context.Context, msgs []*nats.Msg) bool,
 	ownership Ownership,
 ) {
+	progress := newConsumerProgress(durable)
 	// ownedOrStop reports whether this activation may still act on the stream.
 	// A retired owner must not fetch or acknowledge: acknowledging work it did
 	// not complete would discard it, so the consumer stops and leaves the
@@ -228,7 +229,9 @@ func jetStreamConsumerWorker(
 			}
 		}
 		stopProgress := KeepAliveDelivery(ctx, ownership, msgs)
+		progress.start(msgs)
 		acknowledge := f(ctx, msgs)
+		progress.finish()
 		stopProgress()
 		// Ownership can be lost while the callback is running, so it is
 		// rechecked here rather than only before the fetch.
@@ -240,7 +243,9 @@ func jetStreamConsumerWorker(
 				if err = ackWithin(ctx, msg.AckSync); err != nil {
 					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.AckSync: %w", err))
 					sentry.CaptureException(err)
+					continue
 				}
+				progress.acked()
 			}
 		} else {
 			for _, msg := range msgs {

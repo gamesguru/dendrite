@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
@@ -36,6 +38,11 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
+
+// largeStateUpdate is the number of state changes from which a room event's
+// processing is logged with its timings. The consumer is serial, so such an
+// event holds up every later event, including those of unrelated rooms.
+const largeStateUpdate = 1000
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
 type OutputRoomEventConsumer struct {
@@ -251,6 +258,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		trace.SetTag("state_key", *ev.StateKey())
 	}
 
+	started := time.Now()
 	addsStateEvents, missingEventIDs := msg.NeededStateEventIDs()
 
 	// Work out the list of events we need to find out about. Either
@@ -309,17 +317,11 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}
 	}
 
-	ev, err := s.updateStateEvent(ev)
+	err := s.updateStateEvents(ctx, append([]*rstypes.HeaderedEvent{ev}, addsStateEvents...))
 	if err != nil {
 		return err
 	}
-
-	for i := range addsStateEvents {
-		addsStateEvents[i], err = s.updateStateEvent(addsStateEvents[i])
-		if err != nil {
-			return err
-		}
-	}
+	prepared := time.Now()
 
 	if msg.RewritesState {
 		// A RewritesState event replaces the room's entire current state in the
@@ -360,6 +362,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	// later room events overtake it, and crashing to retry it costs an HA
 	// leadership change. WriteEvent is one transaction with idempotent
 	// inserts, so repeating it is safe.
+	writeStarted := time.Now()
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
 		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
@@ -380,6 +383,17 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 			"del":        msg.RemovesStateEventIDs,
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
+	}
+	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
+		log.WithFields(log.Fields{
+			"room_id":        ev.RoomID().String(),
+			"event_id":       ev.EventID(),
+			"adds_state":     len(msg.AddsStateEventIDs),
+			"removes_state":  len(msg.RemovesStateEventIDs),
+			"rewrites_state": msg.RewritesState,
+			"prepare":        prepared.Sub(started).String(),
+			"write":          time.Since(writeStarted).String(),
+		}).Info("Wrote a large sync API state update")
 	}
 	if err = s.writeFTS(ev, pduPos); err != nil {
 		if s.cfg.Matrix.HA.Enabled {
@@ -782,57 +796,76 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	return nil
 }
 
-func (s *OutputRoomEventConsumer) updateStateEvent(event *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
-	event.StateKeyResolved = event.StateKey()
-	if event.StateKey() == nil {
-		return event, nil
-	}
-	stateKey := *event.StateKey()
+// updateStateEvents resolves the state key and sender of each state event and
+// sets the unsigned prev_content of the state it replaces. The replaced state
+// is read in one snapshot with one batched lookup per room: a transaction and
+// a query per event dominated the cost of rewriting a room with tens of
+// thousands of state events.
+func (s *OutputRoomEventConsumer) updateStateEvents(ctx context.Context, events []*rstypes.HeaderedEvent) (err error) {
+	keys := map[string][]gomatrixserverlib.StateKeyTuple{}
+	var stateEvents []*rstypes.HeaderedEvent
+	for _, event := range events {
+		event.StateKeyResolved = event.StateKey()
+		if event.StateKey() == nil {
+			continue
+		}
+		if stateKey := *event.StateKey(); stateKey != "" {
+			sku, queryErr := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(stateKey))
+			if queryErr == nil && sku != nil {
+				sKeyUser := sku.String()
+				event.StateKeyResolved = &sKeyUser
+			}
+		}
+		userID, queryErr := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
+		if queryErr != nil {
+			return queryErr
+		}
+		event.UserID = *userID
 
-	snapshot, err := s.db.NewDatabaseSnapshot(s.ctx)
+		roomID := event.RoomID().String()
+		keys[roomID] = append(keys[roomID], stateKeyOf(event))
+		stateEvents = append(stateEvents, event)
+	}
+	if len(stateEvents) == 0 {
+		return nil
+	}
+
+	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var succeeded bool
 	defer sqlutil.EndTransactionWithCheck(snapshot, &succeeded, &err)
 
-	sKeyUser := ""
-	if stateKey != "" {
-		var sku *spec.UserID
-		sku, err = s.rsAPI.QueryUserIDForSender(s.ctx, event.RoomID(), spec.SenderID(stateKey))
-		if err == nil && sku != nil {
-			sKeyUser = sku.String()
-			event.StateKeyResolved = &sKeyUser
+	prevEvents := make(map[string]map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, len(keys))
+	for roomID, roomKeys := range keys {
+		if prevEvents[roomID], err = snapshot.GetStateEvents(ctx, roomID, roomKeys); err != nil {
+			return err
 		}
 	}
-
-	prevEvent, err := snapshot.GetStateEvent(
-		s.ctx, event.RoomID().String(), event.Type(), sKeyUser,
-	)
-	if err != nil {
-		return event, err
-	}
-
-	userID, err := s.rsAPI.QueryUserIDForSender(s.ctx, event.RoomID(), event.SenderID())
-	if err != nil {
-		return event, err
-	}
-
-	event.UserID = *userID
-
-	if prevEvent == nil || prevEvent.EventID() == event.EventID() {
-		return event, nil
-	}
-
-	prev := synctypes.PrevEventRef{
-		PrevContent:   prevEvent.Content(),
-		ReplacesState: prevEvent.EventID(),
-		PrevSenderID:  string(prevEvent.SenderID()),
-	}
-
-	event.PDU, err = event.SetUnsigned(prev)
 	succeeded = true
-	return event, err
+
+	for _, event := range stateEvents {
+		prevEvent := prevEvents[event.RoomID().String()][stateKeyOf(event)]
+		if prevEvent == nil || prevEvent.EventID() == event.EventID() {
+			continue
+		}
+		prev := synctypes.PrevEventRef{
+			PrevContent:   prevEvent.Content(),
+			ReplacesState: prevEvent.EventID(),
+			PrevSenderID:  string(prevEvent.SenderID()),
+		}
+		if event.PDU, err = event.SetUnsigned(prev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stateKeyOf is the key a state event is stored under in the current state
+// table, which holds the resolved state key rather than the raw one.
+func stateKeyOf(event *rstypes.HeaderedEvent) gomatrixserverlib.StateKeyTuple {
+	return gomatrixserverlib.StateKeyTuple{EventType: event.Type(), StateKey: *event.StateKeyResolved}
 }
 
 func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPosition types.StreamPosition) error {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
@@ -242,6 +243,12 @@ func (d *DatabaseTransaction) GetStateEvent(
 	ctx context.Context, roomID, evType, stateKey string,
 ) (*rstypes.HeaderedEvent, error) {
 	return d.CurrentRoomState.SelectStateEvent(ctx, d.txn, roomID, evType, stateKey)
+}
+
+func (d *DatabaseTransaction) GetStateEvents(
+	ctx context.Context, roomID string, keys []gomatrixserverlib.StateKeyTuple,
+) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error) {
+	return d.CurrentRoomState.SelectStateEvents(ctx, d.txn, roomID, keys)
 }
 
 func (d *DatabaseTransaction) GetStateEventsForRoom(

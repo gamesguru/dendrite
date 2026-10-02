@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -435,9 +436,47 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 	return result, nil
 }
 
-// selectEvents returns the events for the given event IDs. If an event is
+// SelectEvents binds at most selectEventsChunkSize event IDs per query.
+// SQLite refuses a statement with more than 32766 variables, which the state
+// of a room with tens of thousands of members exceeds.
+const selectEventsChunkSize = 999
+
+// SelectEvents returns the events for the given event IDs. If an event is
 // missing from the database, it will be omitted.
 func (s *outputRoomEventsStatements) SelectEvents(
+	ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool,
+) ([]types.StreamEvent, error) {
+	if filter == nil {
+		// No filter returns every requested event, as on PostgreSQL. A
+		// default limit here made Events silently drop all but 20.
+		filter = &synctypes.RoomEventFilter{}
+	}
+	if len(eventIDs) <= selectEventsChunkSize {
+		return s.selectEvents(ctx, txn, eventIDs, filter, preserveOrder)
+	}
+	// Each chunk applies the filter and limit, then the combined result is cut
+	// back to the limit in the stream order a single query would have used.
+	var streamEvents []types.StreamEvent
+	for chunk := range slices.Chunk(eventIDs, selectEventsChunkSize) {
+		events, err := s.selectEvents(ctx, txn, chunk, filter, false)
+		if err != nil {
+			return nil, err
+		}
+		streamEvents = append(streamEvents, events...)
+	}
+	sort.SliceStable(streamEvents, func(i, j int) bool {
+		return streamEvents[i].StreamPosition < streamEvents[j].StreamPosition
+	})
+	if filter.Limit > 0 && len(streamEvents) > filter.Limit {
+		streamEvents = streamEvents[:filter.Limit]
+	}
+	if preserveOrder {
+		return inRequestOrder(streamEvents, eventIDs), nil
+	}
+	return streamEvents, nil
+}
+
+func (s *outputRoomEventsStatements) selectEvents(
 	ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool,
 ) ([]types.StreamEvent, error) {
 	iEventIDs := make([]any, len(eventIDs))
@@ -446,9 +485,6 @@ func (s *outputRoomEventsStatements) SelectEvents(
 	}
 	selectSQL := strings.Replace(selectEventsSQL, "($1)", sqlutil.QueryVariadic(len(eventIDs)), 1)
 
-	if filter == nil {
-		filter = &synctypes.RoomEventFilter{Limit: 20} //nolint:mnd
-	}
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectSQL, iEventIDs,
 		filter.Senders, filter.NotSenders,
@@ -470,20 +506,25 @@ func (s *outputRoomEventsStatements) SelectEvents(
 		return nil, err
 	}
 	if preserveOrder {
-		var returnEvents []types.StreamEvent
-		eventMap := make(map[string]types.StreamEvent)
-		for _, ev := range streamEvents {
-			eventMap[ev.EventID()] = ev
-		}
-		for _, eventID := range eventIDs {
-			ev, ok := eventMap[eventID]
-			if ok {
-				returnEvents = append(returnEvents, ev)
-			}
-		}
-		return returnEvents, nil
+		return inRequestOrder(streamEvents, eventIDs), nil
 	}
 	return streamEvents, nil
+}
+
+// inRequestOrder returns the events in the order their IDs were requested.
+func inRequestOrder(streamEvents []types.StreamEvent, eventIDs []string) []types.StreamEvent {
+	var returnEvents []types.StreamEvent
+	eventMap := make(map[string]types.StreamEvent)
+	for _, ev := range streamEvents {
+		eventMap[ev.EventID()] = ev
+	}
+	for _, eventID := range eventIDs {
+		ev, ok := eventMap[eventID]
+		if ok {
+			returnEvents = append(returnEvents, ev)
+		}
+	}
+	return returnEvents
 }
 
 func (s *outputRoomEventsStatements) DeleteEventsForRoom(

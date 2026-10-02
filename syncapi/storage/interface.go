@@ -83,6 +83,9 @@ type DatabaseTransaction interface {
 	// If no event could be found, returns nil
 	// If there was an issue during the retrieval, returns an error
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	// GetStateEvents is GetStateEvent for many type and state key pairs at
+	// once, keyed by pair. Pairs with no current state are absent.
+	GetStateEvents(ctx context.Context, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	// GetStateEventsForRoom fetches the state events for a given room.
 	// Returns an empty slice if no state events could be found for this room.
 	// Returns an error if there was an issue with the retrieval.
