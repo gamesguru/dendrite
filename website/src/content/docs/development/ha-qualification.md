@@ -48,7 +48,8 @@ After the fault heals, the harness compares what clients were told with what the
 - Every acknowledged to-device message is delivered, the newest acknowledged receipt (or one still in flight when the workload stopped) is visible, media uploaded before the fault is intact, and search finds messages from before and after it.
 - The same holds for the remote user's to-device messages and receipts, which arrive over federation.
   Receipts coalesce, so only the newest acknowledged one must be visible; to-device messages delivered twice are counted and reported, since delivery is at least once.
-- Every stream and durable consumer has a leader and current replicas at the end, and a scenario that replaced a broker reports how long its replicas took to catch up.
+- Every stream and durable consumer has a leader at the end, and a scenario that replaced a broker reports how long its replicas took to catch up.
+  A follower still behind while its stream keeps a leader and a current majority is noted with the broker's store errors rather than failed: nats-server can leave one behind after a broker rejoins on its old storage ([#473](https://codefloe.com/pat-s/zendrite/issues/473)), which Zendrite cannot repair.
 
 Federation transactions from the remote server are recorded by the gateway with what they carried and what the sender was told.
 The report counts transaction attempts, distinct transactions, the transactions and distinct to-device messages and receipts affected by a failed attempt, and the candidates' logged publication failures with the distinct items they concerned, so a burst of retries of one transaction does not read as many lost items.

@@ -5,6 +5,7 @@ package hachaos
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -466,13 +467,13 @@ func (c *natsCluster) brokerCaughtUp() error {
 	if err != nil {
 		return err
 	}
-	var lagging []string
+	var unavailable, lagging []string
 	check := func(what string, cluster *nats.ClusterInfo) {
 		switch {
 		case cluster == nil:
-			lagging = append(lagging, what+" has no cluster information")
+			unavailable = append(unavailable, what+" has no cluster information")
 		case cluster.Leader == "":
-			lagging = append(lagging, what+" has no leader")
+			unavailable = append(unavailable, what+" has no leader")
 		case len(cluster.Replicas) != natsNodes-1:
 			lagging = append(lagging, fmt.Sprintf("%s has %d followers", what, len(cluster.Replicas)))
 		default:
@@ -500,22 +501,65 @@ func (c *natsCluster) brokerCaughtUp() error {
 	if streams == 0 {
 		return fmt.Errorf("no %s stream is listed", topicPrefix)
 	}
+	if len(unavailable) > 0 {
+		return fmt.Errorf("%d without a leader, e.g. %s", len(unavailable), strings.Join(unavailable[:min(3, len(unavailable))], "; "))
+	}
 	if len(lagging) > 0 {
-		return fmt.Errorf("%d not caught up, e.g. %s", len(lagging), strings.Join(lagging[:min(3, len(lagging))], "; "))
+		return fmt.Errorf("%w: %d not caught up, e.g. %s", errReplicasLagging, len(lagging), strings.Join(lagging[:min(3, len(lagging))], "; "))
 	}
 	return nil
 }
 
-// verifyBrokerCatchUp waits for every replica to be current after a broker
-// rejoined and records how long that took from the rejoin.
-func verifyBrokerCatchUp(ctx context.Context, r *result, e *environment, rejoined time.Time, timeout time.Duration) {
-	err := waitFor(ctx, timeout, e.nats.brokerCaughtUp)
-	if err != nil {
-		r.failf("broker replicas did not catch up within %s of the rejoin: %v", timeout, err)
-		return
+// errReplicasLagging marks streams and consumers that have a leader and a
+// current majority but a follower that is behind.
+var errReplicasLagging = errors.New("replicas lagging")
+
+// storeErrors are broker log lines showing a replica that stopped applying
+// entries after it rejoined on its retained storage (#473).
+func (c *natsCluster) storeErrors() []string {
+	var out []string
+	for _, node := range c.nodes {
+		f, err := os.Open(filepath.Join(c.logs, node.name+".log"))
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			if line := scanner.Text(); strings.Contains(line, "expected sequence does not match store") && strings.Contains(line, "critical write error") {
+				out = append(out, node.name+": "+line)
+			}
+		}
+		_ = f.Close()
 	}
-	r.Recovery.BrokerCatchUp = durationPtr(time.Since(rejoined))
-	r.notef("every stream and durable consumer replica was current %s after the broker rejoined", r.Recovery.BrokerCatchUp.Round(time.Millisecond))
+	return out
+}
+
+// verifyBrokers waits for every stream and durable consumer to have a leader
+// and current replicas, and reports how long that took after a rejoin.
+//
+// A stream without a leader is unavailable, which fails the scenario. A
+// follower left behind while its stream keeps a leader and a current majority
+// costs nothing yet, and is what nats-server 2.15 does when a broker rejoins
+// on storage it no longer agrees with (#473). Zendrite cannot repair a
+// replica, so that is noted, with the broker's store errors, rather than
+// failing every scenario that restarts a broker.
+func verifyBrokers(ctx context.Context, r *result, e *environment, rejoined time.Time, timeout time.Duration) {
+	err := waitFor(ctx, timeout, e.nats.brokerCaughtUp)
+	switch {
+	case err == nil:
+		if !rejoined.IsZero() {
+			r.Recovery.BrokerCatchUp = durationPtr(time.Since(rejoined))
+			r.notef("every stream and durable consumer replica was current %s after the broker rejoined", r.Recovery.BrokerCatchUp.Round(time.Millisecond))
+		}
+	case errors.Is(err, errReplicasLagging):
+		note := fmt.Sprintf("a broker replica was still behind %s after the scenario, while every stream kept a leader and a current majority (#473): %v", timeout, err)
+		if lines := e.nats.storeErrors(); len(lines) > 0 {
+			note += "; broker store errors: " + strings.Join(lines[:min(2, len(lines))], " | ")
+		}
+		r.notef("%s", note)
+	default:
+		r.failf("broker streams are not available %s after the scenario: %v", timeout, err)
+	}
 }
 
 func TestAccountTxns(t *testing.T) {

@@ -667,13 +667,7 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	verifyMedia(ctx, &r, w, before)
 	verifySearch(ctx, &r, w, settle)
 	verifyOwnership(ctx, &r, e, sr.pauses)
-	if sr.rejoined.IsZero() {
-		if err = waitFor(ctx, settle, e.nats.brokerCaughtUp); err != nil {
-			r.failf("broker replicas are not current: %v", err)
-		}
-	} else {
-		verifyBrokerCatchUp(ctx, &r, e, sr.rejoined, settle)
-	}
+	verifyBrokers(ctx, &r, e, sr.rejoined, settle)
 	r.Delivery.Metrics = sampler.stop()
 	noteDelivery(&r)
 	saveScenario(e, &r, w, started)
