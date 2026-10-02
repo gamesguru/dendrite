@@ -88,6 +88,14 @@ func renderReport(s settings, results []result) string {
 		c := r.Counts
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", r.Name, c.Acked, c.Lost, c.Unserved, c.Duplicated, c.DuplicatedAcrossTakeover, c.Retried, c.Unacked, c.UnackedCommitted, c.RemoteAcked, c.ToDeviceAcked, c.Unavailable)
 	}
+	fmt.Fprintf(&b, "\n## Federated delivery\n\n")
+	fmt.Fprintf(&b, "Transactions the remote server sent to the HA server, carrying the remote user's messages, to-device messages and read receipts.\n")
+	fmt.Fprintf(&b, "Attempts count every request, including retries; transactions count distinct transaction IDs; items count distinct to-device messages and receipts carried by a failed attempt.\n\n")
+	fmt.Fprintf(&b, "| Scenario | Attempts | Failed attempts | Cut off | Transactions | Affected | Never acknowledged | Items in failed attempts | PDU errors | To-device acked | Missing | Duplicated | Receipts acked | Broker catch-up |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	for _, r := range results {
+		d := r.Delivery
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s |\n", r.Name, d.Attempts, d.Failed, d.CutOff, d.Transactions, d.Affected, d.Undelivered, d.ItemsAffected, d.PDUErrors, d.ToDeviceAcked, d.ToDeviceMissing, d.ToDeviceDuplicated, d.ReceiptsAcked, seconds(r.Recovery.BrokerCatchUp))
+	}
 	renderUpgrades(&b, results)
 	fmt.Fprintf(&b, "\n## Ownership boundaries\n\n")
 	fmt.Fprintf(&b, "| Scenario | Audited commits | Broker publications | Retired-generation publications | Media writes | Federation requests |\n| --- | --- | --- | --- | --- | --- |\n")

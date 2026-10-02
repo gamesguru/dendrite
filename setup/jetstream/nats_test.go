@@ -41,6 +41,23 @@ func TestNATSConnectOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("detects a silent broker within about 30 seconds", func(t *testing.T) {
+		t.Parallel()
+		opts, err := natsConnectOptions(nil, &config.JetStream{}, nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var nopts natsclient.Options
+		for _, opt := range opts {
+			if err := opt(&nopts); err != nil {
+				t.Fatalf("applying option: %v", err)
+			}
+		}
+		if detect := nopts.PingInterval * time.Duration(nopts.MaxPingsOut+1); detect > 30*time.Second {
+			t.Fatalf("a silent broker is detected after %s (ping %s, %d outstanding)", detect, nopts.PingInterval, nopts.MaxPingsOut)
+		}
+	})
+
 	t.Run("missing credentials file returns a clear error", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.JetStream{

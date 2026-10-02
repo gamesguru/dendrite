@@ -31,6 +31,7 @@ While a fault is injected, clients keep working the way a careful client does:
 - A syncing client long-polls with its existing token across takeover.
 - To-device messages, read receipts, media uploads and downloads, and search run alongside.
 - A user on the remote server writes to the same room, and syncs to receive local messages over federation.
+  The remote user also sends to-device messages and read receipts to the local user, which reach the HA server only as EDUs in federation transactions.
 - Every server runs with the HA-qualified MSCs `msc2444`, `msc2753` and `msc2836` enabled; `HACHAOS_MSCS=none` turns them off.
   An MSC probe sends thread replies into world-readable room version 11 and 12 rooms, which a local user peeks into via `/sync` and a remote user peeks into over federation.
   The local user also peeks into a room on the remote server, in which the remote user writes.
@@ -45,6 +46,14 @@ After the fault heals, the harness compares what clients were told with what the
 - Every acknowledged thread reply is returned by `/event_relationships`, and reaches the local and remote peekers with the tokens they held before the fault.
   Every acknowledged write in the remote room reaches the local peeker.
 - Every acknowledged to-device message is delivered, the newest acknowledged receipt (or one still in flight when the workload stopped) is visible, media uploaded before the fault is intact, and search finds messages from before and after it.
+- The same holds for the remote user's to-device messages and receipts, which arrive over federation.
+  Receipts coalesce, so only the newest acknowledged one must be visible; to-device messages delivered twice are counted and reported, since delivery is at least once.
+- Every stream and durable consumer has a leader and current replicas at the end, and a scenario that replaced a broker reports how long its replicas took to catch up.
+
+Federation transactions from the remote server are recorded by the gateway with what they carried and what the sender was told.
+The report counts transaction attempts, distinct transactions, the transactions and distinct to-device messages and receipts affected by a failed attempt, and the candidates' logged publication failures with the distinct items they concerned, so a burst of retries of one transaction does not read as many lost items.
+When an item is missing, `missing-federated-*.txt` lists every attempt that carried it.
+The harness also samples the publish, consumer and transaction metrics of the serving candidate and reports how much they moved.
 
 It also checks ownership at every protected boundary:
 
@@ -84,6 +93,13 @@ The report lists them separately, with the maximum and 99th percentile write lat
 | `rolling-upgrade-successor-fails` | The candidate taking over during a rolling upgrade is killed while it activates. |
 | `rolling-upgrade-broker-leader-lost` | The broker leading the room input stream is killed while the owner hands over during a rolling upgrade. |
 | `msc-relationship-index-failure` | PostgreSQL rejects MSC2836 relationship index writes, and the active candidate is replaced before they are allowed again. |
+| `nats-broker-host-frozen` | The broker the active candidate uses stops responding without closing connections, as on a host that goes NotReady, and is replaced on its storage after an extended absence. |
+| `nats-broker-replaced-empty` | The receipt stream leader is killed and replaced, after an extended absence, by a broker with empty storage that must catch up. |
+| `nats-publish-acks-lost` | Broker traffic towards the active candidate is held for 15 seconds, so every publication is ambiguous until it is retried. |
+
+The broker scenarios keep each broker away for 90 seconds in the `ci` tier and four minutes otherwise.
+During the first two, the remote server abandons a transaction after 20 seconds, as a sender's request timeout does, which cancels the request while the HA server is still publishing.
+No takeover is needed when one broker of three is lost, so they are held to a 60 second recovery objective.
 
 ## Running it
 
@@ -105,7 +121,7 @@ HACHAOS_CONTAINER=1 HACHAOS_SCENARIOS=leader-sigkill HACHAOS_SEARCH_HISTORY=4000
 Each run writes `report.md`, `results.json` and, per scenario, every process log, a timeline of faults and phase changes, and the client ledger to `.hachaos/artifacts`.
 The report counts the HTTP 503 responses the client workload received between the fault and the end of recovery.
 
-CI runs the `ci` tier on changes to HA code, split into four parallel groups, in `.crow/ha-qualification.yaml`.
+CI runs the `ci` tier on changes to HA code, split into five parallel groups, in `.crow/ha-qualification.yaml`.
 A shared build step downloads the control-plane tools and compiles Zendrite, the upgrade binaries and the test harness once; the groups then run in separate containers against those binaries.
 The upgrade binaries are the same source with another version string and HA upgrade contract: `zendrite-next` is the adjacent level, which a rolling upgrade admits, and `zendrite-unadmitted` is a level that needs the offline upgrade.
 Their contracts are set at link time through `setup/ha.contractOverride`, which configuration cannot change.

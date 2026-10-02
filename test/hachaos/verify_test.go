@@ -33,8 +33,10 @@ type result struct {
 	Generations []ownershipRecord `json:"generations,omitempty"`
 	Counts      counts            `json:"counts"`
 	// Upgrade reports a planned upgrade's uninterrupted-service measurements.
-	Upgrade  *upgradeReport `json:"upgrade,omitempty"`
-	Duration time.Duration  `json:"duration"`
+	Upgrade *upgradeReport `json:"upgrade,omitempty"`
+	// Delivery traces what the remote server sent over federation.
+	Delivery delivery      `json:"delivery"`
+	Duration time.Duration `json:"duration"`
 }
 
 // recovery is measured from fault injection to the first success. A nil
@@ -46,7 +48,10 @@ type recovery struct {
 	Sync               *time.Duration `json:"sync,omitempty"`
 	FederationInbound  *time.Duration `json:"federation_inbound,omitempty"`
 	FederationOutbound *time.Duration `json:"federation_outbound,omitempty"`
-	Disrupted          bool           `json:"disrupted"`
+	// BrokerCatchUp runs from a broker rejoining the cluster to every stream
+	// and durable consumer replica being current again.
+	BrokerCatchUp *time.Duration `json:"broker_catch_up,omitempty"`
+	Disrupted     bool           `json:"disrupted"`
 	// SuspendsObjective marks scenarios where the design deliberately stops
 	// serving until a dependency returns, such as a control-plane outage.
 	SuspendsObjective bool `json:"suspends_objective,omitempty"`
@@ -61,6 +66,9 @@ type counts struct {
 	Lost        int `json:"lost_writes"`
 	Unserved    int `json:"stored_but_missing_from_messages"`
 	Duplicated  int `json:"duplicated_writes"`
+	// RepeatedByMessages counts writes stored once that paginating
+	// /messages returned more than once.
+	RepeatedByMessages int `json:"repeated_by_messages,omitempty"`
 	// DuplicatedAcrossTakeover counts retries whose first attempt reached the
 	// retired owner, which the process-local transaction cache cannot catch.
 	DuplicatedAcrossTakeover int `json:"duplicated_across_takeover"`
@@ -158,6 +166,7 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 			acquisitions = append(acquisitions, h.AcquiredAt)
 		}
 	}
+	var repeated []string
 	for _, s := range sends {
 		if s.Attempts > 1 {
 			r.Counts.Retried++
@@ -197,6 +206,13 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 					ids = append(ids, ev.EventID)
 				}
 			}
+			if distinct := slices.Compact(slices.Sorted(slices.Values(ids))); len(distinct) == 1 {
+				// One stored event that pagination returned on two pages:
+				// a /messages defect, not a duplicated write.
+				r.Counts.RepeatedByMessages++
+				repeated = append(repeated, distinct[0])
+				continue
+			}
 			diagnosis := fmt.Sprintf("transaction %s, acknowledged event %s, attempts %d, first %s, acked %s\nevents with its body in /messages: %v\n\n",
 				s.Txn, s.EventID, s.Attempts, s.First.Format(time.RFC3339Nano), s.AckedAt.Format(time.RFC3339Nano), ids)
 			for _, id := range slices.Compact(slices.Sorted(slices.Values(ids))) {
@@ -217,6 +233,11 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 				r.failf("logical transaction %s produced %d events", s.Txn, n)
 			}
 		}
+	}
+
+	if len(repeated) > 0 {
+		r.notef("%d write(s) stored once were returned more than once by paginating /messages, e.g. %s; a pagination defect, not a duplicated write (see repeated-by-messages.txt)", len(repeated), repeated[0])
+		_ = os.WriteFile(filepath.Join(e.logs, "repeated-by-messages.txt"), []byte(diagnosePages(ctx, e, w, repeated)), 0o644)
 	}
 
 	// Remote writes arrive over federation once the remote retries.
@@ -314,6 +335,39 @@ func verifyClientState(ctx context.Context, r *result, w *workload, e *environme
 		r.failf("sync: %s", f)
 	}
 	verifyReceipt(ctx, r, w, e, receipts, settle)
+}
+
+// diagnosePages pages /messages backwards again and lists each page's tokens
+// and where the repeated events fall, with their topology positions.
+func diagnosePages(ctx context.Context, e *environment, w *workload, repeated []string) string {
+	var b strings.Builder
+	c := newClient(e.router.url()).withToken(w.alice)
+	from := ""
+	for page := 0; page < 100; page++ {
+		events, end, err := c.pageWithLimit(ctx, w.room, from, 500)
+		if err != nil {
+			fmt.Fprintf(&b, "page %d from %q: %v\n", page, from, err)
+			break
+		}
+		fmt.Fprintf(&b, "page %d from %q end %q: %d events", page, from, end, len(events))
+		if len(events) > 0 {
+			fmt.Fprintf(&b, ", first %s, last %s", events[0].EventID, events[len(events)-1].EventID)
+		}
+		b.WriteString("\n")
+		for i, ev := range events {
+			if slices.Contains(repeated, ev.EventID) {
+				fmt.Fprintf(&b, "  [%d] %s\n", i, ev.EventID)
+			}
+		}
+		if end == "" || len(events) == 0 {
+			break
+		}
+		from = end
+	}
+	for _, id := range repeated {
+		b.WriteString("\n" + e.pg.diagnoseEvent(ctx, id))
+	}
+	return b.String()
 }
 
 // spansTakeover reports whether a write's first attempt preceded a successor

@@ -74,32 +74,34 @@ func TestLargeStateRewriteUnrelatedRoomLatency(t *testing.T) {
 		}
 	}
 
-	aliceUser := test.NewUser(t)
-	bobUser := test.NewUser(t)
-	largeRoom := test.NewRoom(t, aliceUser)
-	setupEvents := slices.Clone(largeRoom.Events())
-	for i := range n {
-		largeRoom.CreateAndInsert(t, aliceUser, spec.MRoomMember, map[string]any{"membership": spec.Invite},
-			test.WithStateKey(fmt.Sprintf("@member%d:test", i)))
-	}
-	rewrite := largeRoom.CreateAndInsert(t, aliceUser, "m.room.topic", map[string]any{"topic": "large"}, test.WithStateKey(""))
-	largeState := largeRoom.CurrentState()
-	largeStateIDs := make([]string, len(largeState))
-	stateByID := make(map[string]*rstypes.HeaderedEvent, len(largeState))
-	for i, ev := range largeState {
-		largeStateIDs[i] = ev.EventID()
-		stateByID[ev.EventID()] = ev
-	}
-
-	smallRoom := test.NewRoom(t, bobUser)
-	const smallMessages = 20
-	messages := make([]*rstypes.HeaderedEvent, smallMessages)
-	for i := range messages {
-		messages[i] = smallRoom.CreateAndInsert(t, bobUser, "m.room.message", map[string]any{"body": fmt.Sprintf("message %d", i), "msgtype": "m.text"})
-	}
-	smallSetup := smallRoom.Events()[:len(smallRoom.Events())-smallMessages]
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// The database subtests run in parallel, and writing an event sets
+		// fields on it, so each gets its own events.
+		aliceUser := test.NewUser(t)
+		bobUser := test.NewUser(t)
+		largeRoom := test.NewRoom(t, aliceUser)
+		setupEvents := slices.Clone(largeRoom.Events())
+		for i := range n {
+			largeRoom.CreateAndInsert(t, aliceUser, spec.MRoomMember, map[string]any{"membership": spec.Invite},
+				test.WithStateKey(fmt.Sprintf("@member%d:test", i)))
+		}
+		rewrite := largeRoom.CreateAndInsert(t, aliceUser, "m.room.topic", map[string]any{"topic": "large"}, test.WithStateKey(""))
+		largeState := largeRoom.CurrentState()
+		largeStateIDs := make([]string, len(largeState))
+		stateByID := make(map[string]*rstypes.HeaderedEvent, len(largeState))
+		for i, ev := range largeState {
+			largeStateIDs[i] = ev.EventID()
+			stateByID[ev.EventID()] = ev
+		}
+
+		smallRoom := test.NewRoom(t, bobUser)
+		const smallMessages = 20
+		messages := make([]*rstypes.HeaderedEvent, smallMessages)
+		for i := range messages {
+			messages[i] = smallRoom.CreateAndInsert(t, bobUser, "m.room.message", map[string]any{"body": fmt.Sprintf("message %d", i), "msgtype": "m.text"})
+		}
+		smallSetup := smallRoom.Events()[:len(smallRoom.Events())-smallMessages]
+
 		alice := userapi.Device{ID: "ALICEID", UserID: aliceUser.ID, AccessToken: "ALICE_BEARER_TOKEN", AccountType: userapi.AccountTypeUser}
 		bob := userapi.Device{ID: "BOBID", UserID: bobUser.ID, AccessToken: "BOB_BEARER_TOKEN", AccountType: userapi.AccountTypeUser}
 

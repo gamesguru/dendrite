@@ -555,6 +555,41 @@ func (c *pgCluster) diagnoseEvent(ctx context.Context, eventID string) string {
 
 // receiptState lists a user's stored receipts in a room, with the stream
 // position of each receipt's event, so a receipt that moved backwards shows.
+// ToDeviceState lists the to-device messages the sync API still holds for a
+// device: they are deleted once the device syncs past them.
+func (c *pgCluster) toDeviceState(ctx context.Context, user, device string, nonces []string) string {
+	var b strings.Builder
+	err := c.query(ctx, func(conn *pgx.Conn) error {
+		var maxID *int64
+		if err := conn.QueryRow(ctx, "SELECT max(id) FROM syncapi_send_to_device").Scan(&maxID); err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "max to-device id %v\nheld for %s %s (id, nonce found):\n", deref(maxID), user, device)
+		rows, err := conn.Query(ctx, "SELECT id, content FROM syncapi_send_to_device WHERE user_id = $1 AND device_id = $2 ORDER BY id", user, device)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var content string
+			if err = rows.Scan(&id, &content); err != nil {
+				return err
+			}
+			for _, n := range nonces {
+				if strings.Contains(content, n) {
+					fmt.Fprintf(&b, "  %d %s\n", id, n)
+				}
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		fmt.Fprintf(&b, "diagnosis failed: %v\n", err)
+	}
+	return b.String()
+}
+
 func (c *pgCluster) receiptState(ctx context.Context, room, user string, events ...string) string {
 	var b strings.Builder
 	err := c.query(ctx, func(conn *pgx.Conn) error {

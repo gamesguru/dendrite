@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,7 @@ func Publish(ctx context.Context, js nats.JetStreamContext, msg *nats.Msg) (*nat
 	if msg.Header.Get(nats.MsgIdHdr) == "" {
 		msg.Header.Set(nats.MsgIdHdr, uuid.NewString())
 	}
+	stream := streamOf(msg.Subject)
 	for {
 		attempt, cancel := context.WithTimeout(ctx, publishAttemptTimeout)
 		ack, err := js.PublishMsg(msg, nats.Context(attempt))
@@ -43,11 +45,36 @@ func Publish(ctx context.Context, js nats.JetStreamContext, msg *nats.Msg) (*nat
 			return ack, nil
 		}
 		if ctx.Err() != nil || !retryablePublishError(err) {
+			publishFailures.WithLabelValues(stream, publishFailureReason(ctx, err)).Inc()
 			return nil, err
 		}
+		publishRetries.WithLabelValues(stream).Inc()
 		if !process.Sleep(ctx, FetchRetryDelay) {
+			publishFailures.WithLabelValues(stream, publishFailureReason(ctx, err)).Inc()
 			return nil, fmt.Errorf("%w: %w", ctx.Err(), err)
 		}
+	}
+}
+
+// streamOf reduces a subject to its stream's subject, dropping the per-room
+// suffix of the input stream, so the metric label stays bounded.
+func streamOf(subject string) string {
+	stream, _, _ := strings.Cut(subject, ".")
+	return stream
+}
+
+// publishFailureReason classifies a publication that was given up: the caller
+// stopped waiting, or the broker or ownership barrier refused it.
+func publishFailureReason(ctx context.Context, err error) string {
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		return "canceled"
+	case ctx.Err() != nil:
+		return "deadline"
+	case retryablePublishError(err):
+		return "unavailable"
+	default:
+		return "refused"
 	}
 }
 

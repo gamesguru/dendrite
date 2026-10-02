@@ -1,12 +1,15 @@
 package jetstream
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,4 +82,38 @@ func TestPublishReturnsRefusals(t *testing.T) {
 	_, err := Publish(t.Context(), js, &nats.Msg{Subject: "refused", Data: []byte("event")})
 	require.Error(t, err)
 	require.Less(t, time.Since(started), time.Second)
+}
+
+// TestPublishCountsFailures checks that a publication given up on is visible
+// in the metrics, labeled by stream and reason, with the per-room suffix of
+// the input stream removed.
+func TestPublishCountsFailures(t *testing.T) {
+	s := storageTestServer(t, "standalone", nil)
+	owner := &testOwnership{generation: 1}
+	owner.lose(errors.New("retired"), true)
+	js := Protected(storageTestClient(t, s), owner)
+	refused := publishFailures.WithLabelValues("PrefixInputRoomEvent", "refused")
+	before := counterValue(refused)
+	_, err := Publish(t.Context(), js, &nats.Msg{Subject: "PrefixInputRoomEvent._room_server", Data: []byte("event")})
+	require.Error(t, err)
+	require.Equal(t, before+1, counterValue(refused))
+
+	// The caller stops waiting while the stream cannot answer.
+	ctx, cancel := context.WithCancelCause(t.Context())
+	canceled := publishFailures.WithLabelValues("missing", "canceled")
+	retries := publishRetries.WithLabelValues("missing")
+	before, retriedBefore := counterValue(canceled), counterValue(retries)
+	time.AfterFunc(time.Second, func() { cancel(errors.New("the caller gave up")) })
+	_, err = Publish(ctx, storageTestClient(t, s), &nats.Msg{Subject: "missing", Data: []byte("event")})
+	require.Error(t, err)
+	require.Equal(t, before+1, counterValue(canceled))
+	require.Greater(t, counterValue(retries), retriedBefore)
+}
+
+func counterValue(c prometheus.Counter) float64 {
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		panic(err)
+	}
+	return m.GetCounter().GetValue()
 }

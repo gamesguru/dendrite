@@ -64,7 +64,7 @@ func Setup(
 
 	if enableMetrics {
 		prometheus.MustRegister(
-			internal.PDUCountTotal, internal.EDUCountTotal,
+			internal.PDUCountTotal, internal.EDUCountTotal, internal.TxnCountTotal,
 		)
 	}
 

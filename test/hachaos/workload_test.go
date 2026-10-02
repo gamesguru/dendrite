@@ -39,10 +39,18 @@ type workload struct {
 	bobSeen      map[string]time.Time
 	remoteSeen   map[string]time.Time
 	toDeviceSeen map[string]time.Time
-	syncFailures []string
-	syncs        []syncTrace
-	lastBobEvent string
-	serial       int
+	// toDeviceDeliveries counts how often each to-device nonce reached Bob,
+	// which exposes a retried federation transaction delivered twice.
+	toDeviceDeliveries map[string]int
+	// remoteToDevice and remoteReceipts are sent by the remote user and
+	// reach the HA server only over federation.
+	remoteToDevice  []*sendRecord
+	remoteReceipts  []*sendRecord
+	lastRemoteEvent string
+	syncFailures    []string
+	syncs           []syncTrace
+	lastBobEvent    string
+	serial          int
 	// since is each syncing client's last token once its syncer stops.
 	since map[string]string
 	// gaps are limited timelines still to be filled from prev_batch.
@@ -107,7 +115,10 @@ func nonce() string {
 // startWorkload creates the users and room, joins a remote user over
 // federation, and starts writers and syncers for both servers.
 func startWorkload(ctx context.Context, e *environment) (*workload, error) {
-	w := &workload{e: e, bobSeen: map[string]time.Time{}, remoteSeen: map[string]time.Time{}, toDeviceSeen: map[string]time.Time{}, since: map[string]string{}}
+	w := &workload{
+		e: e, bobSeen: map[string]time.Time{}, remoteSeen: map[string]time.Time{}, toDeviceSeen: map[string]time.Time{},
+		toDeviceDeliveries: map[string]int{}, since: map[string]string{},
+	}
 	var err error
 	if w.alice, err = registerRetrying(ctx, e.router.url(), "alice"); err != nil {
 		return nil, err
@@ -154,6 +165,8 @@ func startWorkload(ctx context.Context, e *environment) (*workload, error) {
 	w.run(func() { w.syncer(running, w.remote, remoteSince, w.remoteSeen, false) })
 	w.run(func() { w.toDeviceSender(running) })
 	w.run(func() { w.receiptSender(running) })
+	w.run(func() { w.remoteToDeviceSender(running) })
+	w.run(func() { w.remoteReceiptSender(running) })
 	if len(e.settings.mscs) > 0 {
 		if w.msc, err = startMSCProbe(ctx, w); err != nil {
 			w.halt()
@@ -376,10 +389,15 @@ type syncTrace struct {
 	End       time.Time `json:"end"`
 	Limited   bool      `json:"limited,omitempty"`
 	Events    []string  `json:"events,omitempty"`
+	// ToDevice lists the nonces of the to-device messages delivered.
+	ToDevice []string `json:"to_device,omitempty"`
 }
 
 func (w *workload) trace(c *mxClient, since string, resp *syncResponse, start time.Time) {
 	t := syncTrace{User: c.user, Since: since, NextBatch: resp.NextBatch, Start: start, End: time.Now()}
+	for _, ev := range resp.ToDevice.Events {
+		t.ToDevice = append(t.ToDevice, ev.Content.Nonce)
+	}
 	if joined, ok := resp.Rooms.Join[w.room]; ok {
 		t.Limited = joined.Timeline.Limited
 		for _, ev := range joined.Timeline.Events {
@@ -458,6 +476,8 @@ func (w *workload) observe(resp *syncResponse, since string, c *mxClient, seen m
 			}
 			if local {
 				w.lastBobEvent = ev.EventID
+			} else {
+				w.lastRemoteEvent = ev.EventID
 			}
 		}
 	}
@@ -466,6 +486,7 @@ func (w *workload) observe(resp *syncResponse, since string, c *mxClient, seen m
 			if _, ok := w.toDeviceSeen[ev.Content.Nonce]; !ok {
 				w.toDeviceSeen[ev.Content.Nonce] = now
 			}
+			w.toDeviceDeliveries[ev.Content.Nonce]++
 		}
 	}
 	w.mu.Unlock()
@@ -507,6 +528,48 @@ func (w *workload) receiptSender(ctx context.Context) {
 		w.receipts = append(w.receipts, rec)
 		w.mu.Unlock()
 		w.retry(ctx, "receipt", rec, func(ctx context.Context) error { return w.bob.receipt(ctx, w.room, eventID) })
+	}
+}
+
+// remoteToDeviceSender sends to-device messages from the remote user to Bob,
+// which the HA server receives as EDUs in federation transactions.
+func (w *workload) remoteToDeviceSender(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		rec := &sendRecord{Txn: w.nextTxn("remote-td"), Nonce: nonce(), First: time.Now()}
+		w.mu.Lock()
+		w.remoteToDevice = append(w.remoteToDevice, rec)
+		w.mu.Unlock()
+		w.retry(ctx, "remote-to-device", rec, func(ctx context.Context) error {
+			return w.remote.sendToDevice(ctx, rec.Txn, w.bob.user, w.bob.device, rec.Nonce)
+		})
+	}
+}
+
+// remoteReceiptSender marks the newest message the remote user has seen as
+// read. The remote server federates each receipt to the HA server.
+func (w *workload) remoteReceiptSender(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
+		w.mu.Lock()
+		eventID := w.lastRemoteEvent
+		w.mu.Unlock()
+		if eventID == "" {
+			continue
+		}
+		rec := &sendRecord{Txn: eventID, Nonce: eventID, First: time.Now()}
+		w.mu.Lock()
+		w.remoteReceipts = append(w.remoteReceipts, rec)
+		w.mu.Unlock()
+		w.retry(ctx, "remote-receipt", rec, func(ctx context.Context) error { return w.remote.receipt(ctx, w.room, eventID) })
 	}
 }
 
@@ -603,6 +666,19 @@ func (w *workload) snapshot() (sends, remoteSends, toDevice, receipts []sendReco
 		receipts = append(receipts, *r)
 	}
 	return sends, remoteSends, toDevice, receipts
+}
+
+// federatedSnapshot copies the operations the remote user sent to Bob.
+func (w *workload) federatedSnapshot() (toDevice, receipts []sendRecord) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, r := range w.remoteToDevice {
+		toDevice = append(toDevice, *r)
+	}
+	for _, r := range w.remoteReceipts {
+		receipts = append(receipts, *r)
+	}
+	return toDevice, receipts
 }
 
 // mediaProbe uploads a blob and remembers it, so the verifier can prove it

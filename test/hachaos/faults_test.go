@@ -24,6 +24,8 @@ type run struct {
 	// plannedUntil is when a planned upgrade or restart finished.
 	plannedUntil time.Time
 	search       *searchProbe
+	// rejoined is when a broker that was lost rejoined the cluster.
+	rejoined time.Time
 }
 
 // faultf records the moment of injection, which every recovery time is

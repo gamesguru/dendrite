@@ -4,6 +4,7 @@ package hachaos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,12 +29,14 @@ type natsCluster struct {
 	mu       sync.Mutex
 	effects  []brokerEffect
 	receipts []receiptPublication
+	toDevice []toDevicePublication
 	watcher  *nats.Conn
 }
 
 type natsNode struct {
 	name    string
 	config  string
+	store   string
 	port    int
 	monitor int
 	proxy   *proxy
@@ -56,11 +59,21 @@ type receiptPublication struct {
 	Generation string
 }
 
+// toDevicePublication is one to-device message published for the sync API,
+// identified by the workload nonce in its content.
+type toDevicePublication struct {
+	At     time.Time
+	Nonce  string
+	Sender string
+	MsgID  string
+}
+
 const (
-	natsNodes    = 3
-	topicPrefix  = "HAChaos"
-	generationH  = "Zendrite-HA-Generation"
-	receiptTopic = topicPrefix + "OutputReceiptEvent"
+	natsNodes     = 3
+	topicPrefix   = "HAChaos"
+	generationH   = "Zendrite-HA-Generation"
+	receiptTopic  = topicPrefix + "OutputReceiptEvent"
+	toDeviceTopic = topicPrefix + "OutputSendToDeviceEvent"
 )
 
 const natsConfig = `
@@ -111,6 +124,7 @@ func startNATS(ctx context.Context, dir, logs, bin string, o *owners, tl *timeli
 		if err := os.MkdirAll(store, 0o755); err != nil {
 			return nil, err
 		}
+		node.store = store
 		node.config = filepath.Join(dir, node.name+".conf")
 		body := fmt.Sprintf(natsConfig, node.name, node.port, node.monitor, store, clusterPorts[i], strings.Join(routes, ", "))
 		if err := os.WriteFile(node.config, []byte(body), 0o644); err != nil {
@@ -197,6 +211,19 @@ func (c *natsCluster) watch() error {
 		if strings.HasPrefix(msg.Reply, "$JS.ACK.") {
 			return
 		}
+		if msg.Subject == toDeviceTopic {
+			var out struct {
+				Sender  string `json:"sender"`
+				Content struct {
+					Nonce string `json:"nonce"`
+				} `json:"content"`
+			}
+			if json.Unmarshal(msg.Data, &out) == nil && out.Content.Nonce != "" {
+				c.mu.Lock()
+				c.toDevice = append(c.toDevice, toDevicePublication{At: time.Now(), Nonce: out.Content.Nonce, Sender: out.Sender, MsgID: msg.Header.Get(nats.MsgIdHdr)})
+				c.mu.Unlock()
+			}
+		}
 		if msg.Subject == receiptTopic {
 			c.mu.Lock()
 			c.receipts = append(c.receipts, receiptPublication{
@@ -228,6 +255,12 @@ func (c *natsCluster) publications() []brokerEffect {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]brokerEffect(nil), c.effects...)
+}
+
+func (c *natsCluster) toDevicePublications() []toDevicePublication {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]toDevicePublication(nil), c.toDevice...)
 }
 
 func (c *natsCluster) receiptPublications() []receiptPublication {

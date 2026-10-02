@@ -30,7 +30,10 @@ type scenario struct {
 	// uninterrupted marks planned operations, during which no client or
 	// inbound federation request may fail at all.
 	uninterrupted bool
-	run           func(ctx context.Context, s *run) error
+	// target, when set, replaces the recovery objective for a fault that a
+	// candidate must ride out without a takeover.
+	target time.Duration
+	run    func(ctx context.Context, s *run) error
 }
 
 var allTiers = []string{tierCI, tierFull, tierReference}
@@ -494,6 +497,9 @@ func scenarios() []scenario {
 		successorFailsScenario(),
 		brokerLossScenario(),
 		mscIndexFailureScenario(),
+		brokerHostFrozenScenario(),
+		brokerReplacedEmptyScenario(),
+		publishAcksLostScenario(),
 	}
 }
 
@@ -519,6 +525,9 @@ var scenarioGroups = map[string]string{
 	"rolling-upgrade-successor-fails":    "lifecycle",
 	"rolling-upgrade-broker-leader-lost": "dependency",
 	"msc-relationship-index-failure":     "dependency",
+	"nats-broker-host-frozen":            "broker",
+	"nats-broker-replaced-empty":         "broker",
+	"nats-publish-acks-lost":             "broker",
 }
 
 func selectScenarios(t *testing.T, s settings) []scenario {
@@ -576,6 +585,10 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	ctx := t.Context()
 	r = result{Name: sc.name, Description: sc.description, Tier: s.tier, Timings: s.timings}
 	r.Recovery.Target = s.target
+	if sc.target > 0 {
+		r.Recovery.Target = sc.target
+		r.notef("recovery objective for this scenario: %s", sc.target)
+	}
 	r.Recovery.SuspendsObjective = sc.suspends
 	defer func() {
 		r.Duration = time.Since(started)
@@ -602,6 +615,8 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 		return r
 	}
 	defer w.halt()
+	sampler := startMetricsSampler(e)
+	defer sampler.stop()
 	for _, n := range w.setupNotes {
 		r.notef("%s", n)
 	}
@@ -629,7 +644,7 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	// chance to succeed against the successor.
 	// Remote servers back off after a failed send, so inbound federation
 	// can lag client traffic; wait for both, up to the objective.
-	recoverBy := r.FaultAt.Add(s.target)
+	recoverBy := r.FaultAt.Add(r.Recovery.Target)
 	for time.Now().Before(recoverBy) {
 		_, wrote := recoveredAt(w.outcomes(kindWrite), r.FaultAt)
 		_, federated := recoveredAt(e.federationOutcomes(true), r.FaultAt)
@@ -647,10 +662,20 @@ func runScenario(t *testing.T, s settings, sc scenario) (r result) {
 	r.Counts.Unavailable = int(w.unavailable.Load())
 	settle := 2 * time.Minute
 	verifyClientState(ctx, &r, w, e, settle)
+	verifyFederatedDelivery(ctx, &r, w, e, settle)
 	verifyMSCs(ctx, &r, w.msc, settle)
 	verifyMedia(ctx, &r, w, before)
 	verifySearch(ctx, &r, w, settle)
 	verifyOwnership(ctx, &r, e, sr.pauses)
+	if sr.rejoined.IsZero() {
+		if err = waitFor(ctx, settle, e.nats.brokerCaughtUp); err != nil {
+			r.failf("broker replicas are not current: %v", err)
+		}
+	} else {
+		verifyBrokerCatchUp(ctx, &r, e, sr.rejoined, settle)
+	}
+	r.Delivery.Metrics = sampler.stop()
+	noteDelivery(&r)
 	saveScenario(e, &r, w, started)
 	return r
 }
@@ -665,7 +690,9 @@ func saveScenario(e *environment, r *result, w *workload, started time.Time) {
 	if w != nil {
 		sends, remoteSends, toDevice, receipts := w.snapshot()
 		saved["sends"], saved["remote_sends"], saved["to_device"], saved["receipts"], saved["syncs"] = sends, remoteSends, toDevice, receipts, w.syncTraces()
+		saved["remote_to_device"], saved["remote_receipts"] = w.federatedSnapshot()
 	}
+	saved["inbound_transactions"] = e.fed.inboundTxns()
 	body, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
 		return

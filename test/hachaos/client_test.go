@@ -250,7 +250,16 @@ func (c *mxClient) sync(ctx context.Context, since string, timeout time.Duration
 
 // page fetches one page of a room's history backwards from a token.
 func (c *mxClient) page(ctx context.Context, room, from string) ([]roomEvent, string, error) {
-	q := url.Values{"dir": {"b"}, "limit": {"100"}, "from": {from}}
+	return c.pageWithLimit(ctx, room, from, 100)
+}
+
+// pageWithLimit fetches one page backwards from a token, or from the end of
+// the room when from is empty.
+func (c *mxClient) pageWithLimit(ctx context.Context, room, from string, limit int) ([]roomEvent, string, error) {
+	q := url.Values{"dir": {"b"}, "limit": {fmt.Sprint(limit)}}
+	if from != "" {
+		q.Set("from", from)
+	}
 	var page struct {
 		Chunk []roomEvent `json:"chunk"`
 		End   string      `json:"end"`

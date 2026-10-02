@@ -96,9 +96,20 @@ steps:
     commands:
       - bash build/scripts/ha-qualification.sh TestQualification
 
+  broker:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: broker
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/broker
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
   publish-evidence:
     image: docker.io/library/alpine:3.24
-    depends_on: [crash, partition, dependency, lifecycle]
+    depends_on: [crash, partition, dependency, lifecycle, broker]
     when:
       - event: [manual, cron]
         status: [success, failure]
@@ -109,7 +120,7 @@ steps:
       - apk add --no-cache curl >/dev/null
       - |
         status=0
-        for group in crash partition dependency lifecycle; do
+        for group in crash partition dependency lifecycle broker; do
           tar -czf "evidence-$$group.tar.gz" -C .hachaos/artifacts "$$group" || { status=1; continue; }
           curl --fail -sS -H "Authorization: token $TOKEN" --upload-file "evidence-$$group.tar.gz" \
             "https://codefloe.com/api/packages/pat-s/generic/zendrite-ha-evidence/${CI_PIPELINE_NUMBER}/$$group.tar.gz" || status=1

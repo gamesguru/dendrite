@@ -8,9 +8,13 @@ package producers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -57,8 +61,16 @@ func (p *SyncAPIProducer) SendReceipt(
 	return err
 }
 
+// SendToDevice queues a to-device message from a remote sender for each of
+// the target's devices. Every device is attempted; the error reports the
+// devices that could not be queued.
+//
+// A sender retries a refused transaction with the same message ID, so the
+// publication for each device carries a message ID derived from it. The
+// stream then stores a message queued by an earlier attempt only once, within
+// its deduplication window.
 func (p *SyncAPIProducer) SendToDevice(
-	ctx context.Context, sender, userID, deviceID, eventType string,
+	ctx context.Context, sender, userID, deviceID, eventType, messageID string,
 	message json.RawMessage,
 ) error {
 	devices := []string{}
@@ -92,7 +104,8 @@ func (p *SyncAPIProducer) SendToDevice(
 		"num_devices": len(devices),
 		"type":        eventType,
 	}).Tracef("Producing to topic '%s'", p.TopicSendToDeviceEvent)
-	for i, device := range devices {
+	var errs []error
+	for _, device := range devices {
 		ote := &types.OutputSendToDeviceEvent{
 			UserID:   userID,
 			DeviceID: device,
@@ -112,17 +125,24 @@ func (p *SyncAPIProducer) SendToDevice(
 		m.Data = eventJSON
 		m.Header.Set("sender", sender)
 		m.Header.Set(jetstream.UserID, userID)
+		if messageID != "" {
+			m.Header.Set(nats.MsgIdHdr, toDeviceMsgID(sender, messageID, userID, device))
+		}
 
 		if _, err = jetstream.Publish(ctx, p.JetStream, m); err != nil {
-			if i < len(devices)-1 {
-				log.WithError(err).Warn("sendToDevice failed to PublishMsg, trying further devices")
-				continue
-			}
-			log.WithError(err).Error("sendToDevice failed to PublishMsg for all devices")
-			return err
+			log.WithError(err).WithField("device_id", device).Warn("sendToDevice failed to PublishMsg, trying further devices")
+			errs = append(errs, fmt.Errorf("device %s: %w", device, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// toDeviceMsgID identifies one device's copy of a remote to-device message.
+// The specification makes message_id unique per sending device, and a
+// sender's server reuses it when it retries.
+func toDeviceMsgID(sender, messageID, userID, deviceID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{sender, messageID, userID, deviceID}, "\x00")))
+	return "fed-to-device-" + hex.EncodeToString(sum[:])
 }
 
 func (p *SyncAPIProducer) SendTyping(

@@ -68,6 +68,7 @@ func JetStreamConsumer(
 		logrus.WithContext(ctx).WithError(err).Warnf("Failed to configure durable %q", durable)
 		return err
 	}
+	process.Go(ctx, func() { monitorBacklog(ctx, sub, durable) })
 	process.Go(ctx, func() { jetStreamConsumerWorker(ctx, sub, subj, durable, batch, f, ownership) })
 	return nil
 }
@@ -165,6 +166,7 @@ func jetStreamConsumerWorker(
 		}
 		return true
 	}
+	failures := 0
 	for {
 		// If the parent context has given up then there's no point in
 		// carrying on doing anything, so stop the listener.
@@ -201,16 +203,32 @@ func jetStreamConsumerWorker(
 				// Pull request was invalidated, try again.
 				continue
 			case IsTransientFetchError(err):
+				countFetchError(durable)
 				if !process.Sleep(ctx, FetchRetryDelay) {
 					return
 				}
 				continue
-			default:
-				// Something else went wrong.
-				logrus.WithContext(ctx).WithField("subject", subj).WithError(err).Warn("Error on pull subscriber fetch")
+			case errors.Is(err, nats.ErrBadSubscription) || errors.Is(err, nats.ErrConnectionClosed):
+				// The subscription or connection is gone for good; fetching
+				// again cannot succeed. The stalled-consumer gauge shows the
+				// work left behind.
+				countFetchError(durable)
+				logrus.WithContext(ctx).WithField("subject", subj).WithError(err).Error("Stopping consumer: its subscription is closed")
 				return
+			default:
+				// A worker that returns is never restarted, which strands
+				// the durable's queued work until the process restarts, so
+				// an unrecognized failure is retried with a backoff.
+				countFetchError(durable)
+				failures++
+				logrus.WithContext(ctx).WithField("subject", subj).WithError(err).Warn("Error on pull subscriber fetch, retrying")
+				if !process.Sleep(ctx, redeliveryBackoff(uint64(failures))) {
+					return
+				}
+				continue
 			}
 		}
+		failures = 0
 		if len(msgs) < 1 {
 			continue
 		}

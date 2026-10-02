@@ -154,6 +154,17 @@ func maxPayloadBelowEmbedded(limit int64) bool {
 	return limit < embeddedMaxPayload
 }
 
+// A broker on a host that stops responding keeps its connections open, so
+// only unanswered pings reveal it. With the client defaults, two minutes
+// between pings and two outstanding, a candidate kept publishing into the
+// silent connection for four to six minutes before reconnecting to a healthy
+// broker; every request that published in that window failed. These values
+// detect it within about 30 seconds, at the cost of one ping every 10 seconds.
+const (
+	stalePingInterval = 10 * time.Second
+	staleMaxPingsOut  = 2
+)
+
 // natsConnectOptions builds the NATS client options used for external
 // JetStream connections. When a credentials file is configured, the file is
 // validated upfront so that missing or malformed credentials produce a clear
@@ -166,6 +177,8 @@ func natsConnectOptions(process *process.ProcessContext, cfg *config.JetStream, 
 	}
 	opts := []natsclient.Option{
 		natsclient.Name(name),
+		natsclient.PingInterval(stalePingInterval),
+		natsclient.MaxPingsOutstanding(staleMaxPingsOut),
 		natsclient.MaxReconnects(-1), // Try forever
 		natsclient.ReconnectJitter(time.Second, time.Second),
 		natsclient.ReconnectWait(time.Second * 10), //nolint:mnd

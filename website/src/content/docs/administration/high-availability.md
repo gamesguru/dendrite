@@ -125,6 +125,20 @@ Candidate identity and ownership generation are deliberately never labels, becau
 Alert on no ready leader, repeated elections, stuck recovery, repeated fencing failures, and a candidate whose build the upgrade contract refuses.
 The chart ships these rules; see [Helm setup](/installation/helm/helm/).
 
+A degraded broker does not fail any probe, so these metrics, which every deployment exposes, are the way to see it:
+
+| Metric | Meaning |
+| --- | --- |
+| `zendrite_jetstream_publish_retries_total{stream}` | Publication attempts lost to a broker failure and retried under the same message ID. |
+| `zendrite_jetstream_publish_failures_total{stream,reason}` | Publications given up on: `canceled` or `deadline` when the caller stopped waiting, `unavailable` when no broker answered, `refused` when the broker or the ownership barrier rejected it. |
+| `zendrite_jetstream_consumer_pending_messages{consumer}` | Messages waiting behind the last one delivered, also read from the broker every 30 seconds so that it keeps growing when a consumer stops fetching. |
+| `zendrite_jetstream_consumer_last_ack_timestamp_seconds{consumer}` | When the consumer last acknowledged a message. |
+| `zendrite_jetstream_consumer_fetch_errors_total{consumer}` | Failed pull requests, such as those during a leader election. |
+| `zendrite_federationapi_recv_transactions_total{outcome}` | Inbound federation transactions, `ok` or `retry` when one was refused because an event or EDU could not be queued. |
+
+Alert when a consumer has pending messages and has not acknowledged one for a few minutes, `zendrite_jetstream_consumer_pending_messages > 0 and time() - zendrite_jetstream_consumer_last_ack_timestamp_seconds > 300`, and when `zendrite_jetstream_publish_failures_total` or the `retry` outcome keeps increasing for more than a few minutes.
+A short burst of retries and fetch errors during a broker restart or leader election is expected.
+
 Note that `zendrite_ha_shutdown_duration_seconds` is set as the process drains, so a scrape may not catch it before the process exits.
 Treat it as a best-effort signal and read the logs for the authoritative shutdown record.
 
@@ -387,6 +401,7 @@ Not supported, and not planned for this iteration:
 - Zero-downtime failover after an unplanned failure. Takeover restarts the homeserver and rebuilds process-local state; routing that holds requests only hides it while the takeover is shorter than the hold.
 - Rolling upgrades that the contract does not admit, and automatic schema downgrade.
 - Exactly-once external delivery. Federation, appservice, and push retries can duplicate remote deliveries.
+  See [Inbound federation delivery](#inbound-federation-delivery) for what an inbound transaction guarantees.
 - Non-Kubernetes election backends.
 
 The [qualification report](/development/ha-qualification-report/) measures recovery against the ADR reference workload.
@@ -430,3 +445,25 @@ A single headless service address can resolve to an unresponsive broker before t
 Existing replicated streams need an elected leader and a current majority for activation; creation or replica-count changes still wait for every configured replica.
 No recovery path reduces the configured replica count or deletes queued data.
 Active traffic and candidate probes consult fencing validity as well as lifecycle state, so a resumed retired owner cannot re-enter routing while lease renewal is still timing out.
+
+A broker whose host stops responding keeps its connections open, so nothing tells the client it is gone.
+Zendrite pings its broker every 10 seconds and reconnects to another one after two unanswered pings, so a silent broker costs about 30 seconds of failed publications rather than the four to six minutes of the NATS client defaults.
+No takeover is needed: the owner keeps its ownership and resumes once it reaches a broker that has a current majority.
+A broker that rejoins, on its old storage or on an empty volume, catches up from its peers; check that every stream and consumer replica is current before taking another broker down.
+
+### Inbound federation delivery
+
+A remote server is told a transaction succeeded only once its contents are queued in the broker.
+The guarantees depend on what the transaction carries:
+
+- **Events.** An event that fails its checks is reported in the response, as the specification requires.
+  An event that could not be queued fails the whole transaction with HTTP 503, so the sender retries it; the roomserver ignores events it already has.
+- **To-device messages, device list updates and signing key updates.** One that could not be queued fails the transaction with HTTP 503 as well.
+  Retried to-device messages are deduplicated by the sender's `message_id` for two minutes, the broker's deduplication window; a retry later than that can deliver a message twice, which clients already tolerate.
+- **Read receipts.** Receipts are also retried this way, but they coalesce: a newer receipt from the same user replaces an older one, so only the newest is guaranteed to become visible.
+- **Typing notifications and presence.** These are best effort and expire within seconds, so one that could not be queued is dropped rather than making the sender resend the transaction.
+
+An accepted transaction is processed to completion for up to two minutes, even if the sender disconnects, so a sender that times out and retries the same transaction receives the outcome of the attempt still running rather than a partial result.
+A retry joins a running attempt only when it carries the same events and EDUs; a retry that reuses the transaction ID with more content, as older Zendrite and Dendrite senders do, is processed on its own.
+Zendrite itself now sends a retry under a new transaction ID whenever its content changed, since a destination may answer a known ID with its earlier outcome.
+Each refused transaction is logged as `Refusing federation transaction for a retry` and counted in `zendrite_federationapi_recv_transactions_total{outcome="retry"}`.

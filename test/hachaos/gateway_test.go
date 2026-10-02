@@ -4,6 +4,7 @@ package hachaos
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,12 +12,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,6 +41,11 @@ type gateway struct {
 	routes  map[string]*httputil.ReverseProxy
 	faults  map[string]fault
 	effects []fedEffect
+	txns    []inboundTxn
+	// inboundCutoff, when set, abandons an inbound transaction to the HA
+	// server that has not been answered in time, as a sender's request
+	// timeout or a proxy's server timeout does.
+	inboundCutoff time.Duration
 }
 
 // fedEffect is one federation request as it arrived at its destination.
@@ -47,6 +56,102 @@ type fedEffect struct {
 	Method string    `json:"method"`
 	Path   string    `json:"path"`
 	Status int       `json:"status"`
+}
+
+// inboundTxn is one attempt by the remote server to deliver a transaction to
+// the HA server: what it carried and what the sender was told. Attempts that
+// share a transaction ID are retries of one transaction.
+type inboundTxn struct {
+	At     time.Time `json:"at"`
+	End    time.Time `json:"end"`
+	TxnID  string    `json:"txn_id"`
+	Status int       `json:"status"`
+	// CutOff marks an attempt the gateway abandoned after inboundCutoff,
+	// which cancels the request the HA server was processing.
+	CutOff bool           `json:"cut_off,omitempty"`
+	PDUs   int            `json:"pdus"`
+	EDUs   map[string]int `json:"edus,omitempty"`
+	// Receipts are "user event" pairs, ToDevice the workload nonces.
+	Receipts []string `json:"receipts,omitempty"`
+	ToDevice []string `json:"to_device,omitempty"`
+	// PDUErrors are the per-event errors in a 200 response.
+	PDUErrors map[string]string `json:"pdu_errors,omitempty"`
+}
+
+// ok reports whether the sender was told the transaction was delivered.
+func (t inboundTxn) ok() bool { return t.Status/100 == 2 }
+
+const sendPath = "/_matrix/federation/v1/send/"
+
+// parseInboundTxn records what a transaction carries.
+func parseInboundTxn(path string, body []byte) inboundTxn {
+	t := inboundTxn{TxnID: strings.TrimPrefix(path, sendPath), EDUs: map[string]int{}}
+	var txn struct {
+		PDUs []json.RawMessage `json:"pdus"`
+		EDUs []struct {
+			Type    string          `json:"edu_type"`
+			Content json.RawMessage `json:"content"`
+		} `json:"edus"`
+	}
+	if json.Unmarshal(body, &txn) != nil {
+		return t
+	}
+	t.PDUs = len(txn.PDUs)
+	for _, edu := range txn.EDUs {
+		t.EDUs[edu.Type]++
+		switch edu.Type {
+		case "m.receipt":
+			var rooms map[string]map[string]map[string]struct {
+				EventIDs []string `json:"event_ids"`
+			}
+			_ = json.Unmarshal(edu.Content, &rooms)
+			for _, byType := range rooms {
+				for user, receipt := range byType["m.read"] {
+					for _, id := range receipt.EventIDs {
+						t.Receipts = append(t.Receipts, user+" "+id)
+					}
+				}
+			}
+		case "m.direct_to_device":
+			var msg struct {
+				Messages map[string]map[string]struct {
+					Nonce string `json:"nonce"`
+				} `json:"messages"`
+			}
+			_ = json.Unmarshal(edu.Content, &msg)
+			for _, byDevice := range msg.Messages {
+				for _, content := range byDevice {
+					if content.Nonce != "" {
+						t.ToDevice = append(t.ToDevice, content.Nonce)
+					}
+				}
+			}
+		}
+	}
+	return t
+}
+
+// pduErrors reads the per-event errors from a transaction response.
+func pduErrors(body []byte) map[string]string {
+	var resp struct {
+		PDUs map[string]struct {
+			Error string `json:"error"`
+		} `json:"pdus"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return nil
+	}
+	var out map[string]string
+	for id, res := range resp.PDUs {
+		if res.Error == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[id] = res.Error
+	}
+	return out
 }
 
 func startGateway(o *owners, tl *timeline) (*gateway, error) {
@@ -95,6 +200,22 @@ func (g *gateway) heal() {
 	g.cond.Broadcast()
 	g.mu.Unlock()
 	g.timeline.add(eventFault, "federation", "healed")
+}
+
+// setInboundCutoff abandons inbound transactions to the HA server that take
+// longer than d; zero waits for every answer.
+func (g *gateway) setInboundCutoff(d time.Duration) {
+	g.mu.Lock()
+	g.inboundCutoff = d
+	g.mu.Unlock()
+	g.timeline.add(eventFault, "federation", "inbound transactions to the HA server cut off after %s", d)
+}
+
+// inboundTxns lists every attempt to deliver a transaction to the HA server.
+func (g *gateway) inboundTxns() []inboundTxn {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]inboundTxn(nil), g.txns...)
 }
 
 func (g *gateway) faultFor(owner string) fault {
@@ -177,6 +298,10 @@ func (g *gateway) handle(conn net.Conn) {
 				w.WriteHeader(http.StatusBadGateway)
 				return
 			}
+			if owner == "remote" && host == haServerName && r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, sendPath) {
+				g.forwardTxn(w, r, reverse, arrived)
+				return
+			}
 			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			reverse.ServeHTTP(recorder, r)
 			g.mu.Lock()
@@ -185,6 +310,50 @@ func (g *gateway) handle(conn net.Conn) {
 		}),
 	}
 	_ = server.Serve(&singleListener{conn: tunnel})
+}
+
+// forwardTxn forwards an inbound transaction to the HA server and records
+// what it carried and what the sender was told.
+func (g *gateway) forwardTxn(w http.ResponseWriter, r *http.Request, reverse *httputil.ReverseProxy, arrived time.Time) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	txn := parseInboundTxn(r.URL.Path, body)
+	txn.At = arrived
+	g.mu.Lock()
+	cutoff := g.inboundCutoff
+	g.mu.Unlock()
+	ctx := r.Context()
+	if cutoff > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cutoff)
+		defer cancel()
+	}
+	recorder := &bodyRecorder{statusRecorder: statusRecorder{ResponseWriter: w, status: http.StatusOK}}
+	reverse.ServeHTTP(recorder, r.WithContext(ctx))
+	txn.End, txn.Status = time.Now(), recorder.status
+	txn.CutOff = cutoff > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded)
+	if txn.ok() {
+		txn.PDUErrors = pduErrors(recorder.body.Bytes())
+	}
+	g.mu.Lock()
+	g.effects = append(g.effects, fedEffect{At: arrived, Owner: "remote", Host: haServerName, Method: r.Method, Path: r.URL.Path, Status: txn.Status})
+	g.txns = append(g.txns, txn)
+	g.mu.Unlock()
+}
+
+// bodyRecorder keeps a copy of a response body as it is written.
+type bodyRecorder struct {
+	statusRecorder
+	body bytes.Buffer
+}
+
+func (r *bodyRecorder) Write(b []byte) (int, error) {
+	r.body.Write(b)
+	return r.ResponseWriter.Write(b)
 }
 
 func (g *gateway) requests() []fedEffect {

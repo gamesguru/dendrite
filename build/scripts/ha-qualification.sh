@@ -18,7 +18,7 @@
 #                      full: every scenario with the reference timings
 #                      reference: full, seeded with the ADR reference workload
 #   HACHAOS_SCENARIOS  comma-separated scenario names to run (default: the tier's set)
-#   HACHAOS_GROUP      crash, partition, dependency or lifecycle: one CI group
+#   HACHAOS_GROUP      crash, partition, dependency, lifecycle or broker: one CI group
 #   HACHAOS_PHASE      all (default), build, or run using already-built tools
 #   HACHAOS_ARTIFACTS  output directory (default .hachaos/artifacts/<timestamp>)
 #   HACHAOS_CONTAINER  1 to run inside a golang container via Docker

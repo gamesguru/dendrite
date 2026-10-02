@@ -30,6 +30,34 @@ var consumerRedeliveries = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Messages refused by a consumer and scheduled for redelivery.",
 }, []string{"subject"})
 
+// publishRetries counts publication attempts lost to a broker failure and
+// retried: an acknowledgement that never came, a broker that is reconnecting,
+// or a stream electing a leader. Each retry is an ambiguous publication that
+// the stream deduplicates by message ID. A steady rate means a broker is
+// unhealthy even while every probe passes.
+var publishRetries = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "zendrite", Subsystem: "jetstream", Name: "publish_retries_total",
+	Help: "Publication attempts lost to a broker failure and retried.",
+}, []string{"stream"})
+
+// publishFailures counts publications given up on, by reason: canceled or
+// deadline when the caller stopped waiting, unavailable when the broker never
+// answered, refused when the broker or ownership barrier rejected it. What a
+// failure costs depends on the caller; the federation API refuses the
+// transaction so its sender retries.
+var publishFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "zendrite", Subsystem: "jetstream", Name: "publish_failures_total",
+	Help: "Publications given up on, by reason.",
+}, []string{"stream", "reason"})
+
+// consumerFetchErrors counts failed pull requests, such as those lost to a
+// broker failure or a consumer leader election. A worker that keeps failing
+// leaves consumer_pending_messages standing while consumer_last_ack ages.
+var consumerFetchErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "zendrite", Subsystem: "jetstream", Name: "consumer_fetch_errors_total",
+	Help: "Failed pull requests of a durable consumer, other than an idle pull expiring.",
+}, []string{"consumer"})
+
 // The consumer progress metrics below are labeled by the durable consumer
 // name, such as ZendriteSyncAPIRoomServerConsumerPull, which is a fixed set.
 //
@@ -88,6 +116,7 @@ func init() { //nolint:gochecknoinits // Matches the existing component metric r
 		retiredGenerationMessages, consumerRedeliveries,
 		consumerProcessingSeconds, consumerMessageAge, consumerProcessingStarted,
 		consumerProcessingMessage, consumerPending, consumerLastAck,
+		publishRetries, publishFailures, consumerFetchErrors,
 	)
 }
 
