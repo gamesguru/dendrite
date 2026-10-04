@@ -515,9 +515,9 @@ func (c *natsCluster) brokerCaughtUp() error {
 var errReplicasLagging = errors.New("replicas lagging")
 
 // storeErrors are broker log lines showing a replica that stopped applying
-// entries after it rejoined on its retained storage (#473).
-func (c *natsCluster) storeErrors() []string {
-	var out []string
+// entries after it rejoined on its retained storage (#473), by broker.
+func (c *natsCluster) storeErrors() map[*natsNode][]string {
+	out := map[*natsNode][]string{}
 	for _, node := range c.nodes {
 		f, err := os.Open(filepath.Join(c.logs, node.name+".log"))
 		if err != nil {
@@ -526,7 +526,7 @@ func (c *natsCluster) storeErrors() []string {
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			if line := scanner.Text(); strings.Contains(line, "expected sequence does not match store") && strings.Contains(line, "critical write error") {
-				out = append(out, node.name+": "+line)
+				out[node] = append(out[node], node.name+": "+line)
 			}
 		}
 		_ = f.Close()
@@ -553,13 +553,47 @@ func verifyBrokers(ctx context.Context, r *result, e *environment, rejoined time
 		}
 	case errors.Is(err, errReplicasLagging):
 		note := fmt.Sprintf("a broker replica was still behind %s after the scenario, while every stream kept a leader and a current majority (#473): %v", timeout, err)
-		if lines := e.nats.storeErrors(); len(lines) > 0 {
+		stuck := e.nats.storeErrors()
+		var lines []string
+		for _, node := range e.nats.nodes {
+			lines = append(lines, stuck[node]...)
+		}
+		if len(lines) > 0 {
 			note += "; broker store errors: " + strings.Join(lines[:min(2, len(lines))], " | ")
 		}
 		r.notef("%s", note)
+		if len(stuck) > 0 {
+			restartStuckBrokers(ctx, r, e, stuck, timeout)
+		}
 	default:
 		r.failf("broker streams are not available %s after the scenario: %v", timeout, err)
 	}
+}
+
+// restartStuckBrokers applies the documented remedy for a broker that stopped
+// applying a stream (#473): restart it on its storage, as deleting its pod
+// does, one broker at a time, and wait for the replicas to catch up. Every
+// occurrence thus tests the operator runbook, and a remedy that does not work
+// fails the scenario.
+func restartStuckBrokers(ctx context.Context, r *result, e *environment, stuck map[*natsNode][]string, timeout time.Duration) {
+	var err error
+	for _, node := range e.nats.nodes {
+		if len(stuck[node]) == 0 {
+			continue
+		}
+		e.timeline.add(eventFault, node.name, "restart the broker that stopped applying a stream (#473 remedy)")
+		node.proc.stop(30 * time.Second)
+		if err = e.nats.restart(ctx, node); err != nil {
+			r.failf("restarting %s, which stopped applying a stream, failed: %v", node.name, err)
+			return
+		}
+		restarted := time.Now()
+		if err = waitFor(ctx, timeout, e.nats.brokerCaughtUp); err == nil {
+			r.notef("restarting %s, which stopped applying a stream, brought every replica current in %s (#473 remedy)", node.name, time.Since(restarted).Round(time.Millisecond))
+			return
+		}
+	}
+	r.failf("restarting the brokers that stopped applying a stream did not bring their replicas current within %s, so the runbook's remedy does not work (#473): %v", timeout, err)
 }
 
 func TestAccountTxns(t *testing.T) {

@@ -137,6 +137,7 @@ func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsc
 		logrus.WithError(err).Panic("Unable to get JetStream context")
 	}
 	checkAndConfigureStreams(process, cfg, js, nc)
+	go monitorReplicas(process, cfg, js, defaultReplicaCheckInterval)
 	if cfg.Matrix != nil && cfg.Matrix.HA.Enabled {
 		js = Protected(js, ownership)
 	}

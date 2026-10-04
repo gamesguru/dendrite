@@ -134,10 +134,15 @@ A degraded broker does not fail any probe, so these metrics, which every deploym
 | `zendrite_jetstream_consumer_pending_messages{consumer}` | Messages waiting behind the last one delivered, also read from the broker every 30 seconds so that it keeps growing when a consumer stops fetching. |
 | `zendrite_jetstream_consumer_last_ack_timestamp_seconds{consumer}` | When the consumer last acknowledged a message. |
 | `zendrite_jetstream_consumer_fetch_errors_total{consumer}` | Failed pull requests, such as those during a leader election. |
+| `zendrite_jetstream_stream_replica_current{stream,replica}` | 1 while the broker `replica` is current with the stream's leader, 0 while it is behind or offline, read from the broker every 30 seconds. |
+| `zendrite_jetstream_stream_replica_lag{stream,replica}` | Entries the broker `replica` is behind the stream's leader, as the leader reports. |
 | `zendrite_federationapi_recv_transactions_total{outcome}` | Inbound federation transactions, `ok` or `retry` when one was refused because an event or EDU could not be queued. |
 
 Alert when a consumer has pending messages and has not acknowledged one for a few minutes, `zendrite_jetstream_consumer_pending_messages > 0 and time() - zendrite_jetstream_consumer_last_ack_timestamp_seconds > 300`, and when `zendrite_jetstream_publish_failures_total` or the `retry` outcome keeps increasing for more than a few minutes.
 A short burst of retries and fetch errors during a broker restart or leader election is expected.
+Also alert when a stream replica stays behind, `max by (stream, replica) (zendrite_jetstream_stream_replica_current) == 0` for 10 minutes: the stream still works, but losing one more broker would leave it without a quorum.
+Every candidate exports the same reading, hence the `max`.
+See [A broker replica that stops catching up](#a-broker-replica-that-stops-catching-up).
 
 Note that `zendrite_ha_shutdown_duration_seconds` is set as the process drains, so a scrape may not catch it before the process exits.
 Treat it as a best-effort signal and read the logs for the authoritative shutdown record.
@@ -450,6 +455,23 @@ A broker whose host stops responding keeps its connections open, so nothing tell
 Zendrite pings its broker every 10 seconds and reconnects to another one after two unanswered pings, so a silent broker costs about 30 seconds of failed publications rather than the four to six minutes of the NATS client defaults.
 No takeover is needed: the owner keeps its ownership and resumes once it reaches a broker that has a current majority.
 A broker that rejoins, on its old storage or on an empty volume, catches up from its peers; check that every stream and consumer replica is current before taking another broker down.
+
+### A broker replica that stops catching up
+
+nats-server 2.15 can stop applying a stream on a broker that rejoined on its retained storage, for example after its node was NotReady and the pod was replaced ([#473](https://codefloe.com/pat-s/zendrite/issues/473)).
+The stream keeps its leader and a current majority, so Zendrite keeps working and nothing is lost, but losing one more broker would leave the stream without a quorum.
+The broker does not recover on its own.
+
+To recognize it:
+
+- `zendrite_jetstream_stream_replica_current` stays 0 for one broker and one or more streams while that broker is running.
+- Zendrite logs `JetStream stream replica is not catching up with its leader` with the stream and the broker after five minutes, and `JetStream stream replica caught up with its leader` once it recovers.
+- The broker logs `critical write error: expected sequence does not match store` for the stream, and its full `/healthz` on the monitoring port reports a `stream write error`.
+
+To recover, restart that broker, for example by deleting its pod, and let it start on the same volume.
+The restarted broker reloads the stream from its storage and catches up from the leader within seconds; check that `zendrite_jetstream_stream_replica_current` returns to 1 for every stream.
+Restart one broker at a time, and only while the other brokers are current.
+Wiping its volume is not needed, and `nats stream cluster peer-remove` does not help: in a three-broker cluster there is no spare broker to move the replica to.
 
 ### Inbound federation delivery
 

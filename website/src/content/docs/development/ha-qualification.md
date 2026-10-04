@@ -50,6 +50,7 @@ After the fault heals, the harness compares what clients were told with what the
   Receipts coalesce, so only the newest acknowledged one must be visible; to-device messages delivered twice are counted and reported, since delivery is at least once.
 - Every stream and durable consumer has a leader at the end, and a scenario that replaced a broker reports how long its replicas took to catch up.
   A follower still behind while its stream keeps a leader and a current majority is noted with the broker's store errors rather than failed: nats-server can leave one behind after a broker rejoins on its old storage ([#473](https://codefloe.com/pat-s/zendrite/issues/473)), which Zendrite cannot repair.
+  When that broker logged the store error, the harness then restarts it on its storage, as the [runbook](/administration/high-availability/#a-broker-replica-that-stops-catching-up) prescribes; the scenario fails if its replicas do not catch up then.
 
 Federation transactions from the remote server are recorded by the gateway with what they carried and what the sender was told.
 The report counts transaction attempts, distinct transactions, the transactions and distinct to-device messages and receipts affected by a failed attempt, and the candidates' logged publication failures with the distinct items they concerned, so a burst of retries of one transaction does not read as many lost items.
