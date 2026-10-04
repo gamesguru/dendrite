@@ -458,9 +458,12 @@ A broker that rejoins, on its old storage or on an empty volume, catches up from
 
 ### A broker replica that stops catching up
 
-nats-server 2.15 can stop applying a stream on a broker that rejoined on its retained storage, for example after its node was NotReady and the pod was replaced ([#473](https://codefloe.com/pat-s/zendrite/issues/473)).
+A broker that rejoined on its retained storage can stop applying a stream, for example after its node was NotReady and the pod was replaced ([#473](https://codefloe.com/pat-s/zendrite/issues/473)).
 The stream keeps its leader and a current majority, so Zendrite keeps working and nothing is lost, but losing one more broker would leave the stream without a quorum.
 The broker does not recover on its own.
+
+This is a regression in nats-server 2.15 that only occurs with `sync_interval: always`, which HA requires ([nats-io/nats-server#8709](https://github.com/nats-io/nats-server/issues/8709)).
+2.15.0, 2.15.1-RC.1 and the development branch as of October 2, 2026 are affected; 2.14.7 is not.
 
 To recognize it:
 
