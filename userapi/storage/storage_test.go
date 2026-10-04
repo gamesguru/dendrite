@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -424,6 +426,104 @@ func Test_Profile(t *testing.T) {
 		assert.NoError(t, err, "unable to search profiles")
 		assert.Equal(t, 1, len(searchRes))
 		assert.Equal(t, *wantProfile, searchRes[0])
+	})
+}
+
+func Test_ProfileFields(t *testing.T) {
+	alice := test.NewUser(t)
+	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+	assert.NoError(t, err)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+
+		_, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeUser)
+		assert.NoError(t, err, "failed to create account")
+
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz", json.RawMessage(`"Europe/Berlin"`)))
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "org.example.job", json.RawMessage(`{"title":"Engineer"}`)))
+		// Setting a field again replaces its value.
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz", json.RawMessage(`"Europe/London"`)))
+		profile, err := db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]json.RawMessage{
+			"m.tz":            json.RawMessage(`"Europe/London"`),
+			"org.example.job": json.RawMessage(`{"title":"Engineer"}`),
+		}, profile.Fields)
+
+		// Deleting a field that is not set is not an error.
+		assert.NoError(t, db.DeleteProfileField(ctx, aliceLocalpart, aliceDomain, "org.example.unset"))
+		assert.NoError(t, db.DeleteProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz"))
+		profile, err = db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]json.RawMessage{"org.example.job": json.RawMessage(`{"title":"Engineer"}`)}, profile.Fields)
+
+		// Deactivation clears the custom fields.
+		assert.NoError(t, db.DeactivateAccount(ctx, aliceLocalpart, aliceDomain))
+		profile, err = db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Nil(t, profile.Fields)
+	})
+}
+
+func Test_ProfileSizeLimit(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+
+		t.Run("boundary", func(t *testing.T) {
+			localpart, domain := "sizelimit", spec.ServerName("localhost")
+			_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+			assert.NoError(t, err, "failed to create account")
+
+			// A string field that brings the profile to exactly the limit fits.
+			empty := &authtypes.Profile{Fields: map[string]json.RawMessage{"org.example.big": json.RawMessage(`""`)}}
+			base, err := empty.Size()
+			assert.NoError(t, err)
+			fill := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize-base) + `"`)
+			assert.NoError(t, db.SetProfileField(ctx, localpart, domain, "org.example.big", fill))
+			profile, err := db.GetProfileByLocalpart(ctx, localpart, domain)
+			assert.NoError(t, err)
+			size, err := profile.Size()
+			assert.NoError(t, err)
+			assert.Equal(t, authtypes.MaxProfileSize, size)
+
+			// One more byte, in a field or the display name, does not.
+			over := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize-base+1) + `"`)
+			assert.ErrorIs(t, db.SetProfileField(ctx, localpart, domain, "org.example.big", over), api.ErrProfileTooLarge)
+			_, _, err = db.SetDisplayName(ctx, localpart, domain, "x")
+			assert.ErrorIs(t, err, api.ErrProfileTooLarge)
+			_, _, err = db.SetAvatarURL(ctx, localpart, domain, "mxc://x")
+			assert.ErrorIs(t, err, api.ErrProfileTooLarge)
+		})
+
+		t.Run("concurrent writes", func(t *testing.T) {
+			localpart, domain := "concurrent", spec.ServerName("localhost")
+			_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+			assert.NoError(t, err, "failed to create account")
+
+			// Each write fits on its own, but together they exceed the limit.
+			value := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize/8) + `"`)
+			var wg sync.WaitGroup
+			for i := range 16 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := db.SetProfileField(ctx, localpart, domain, fmt.Sprintf("org.example.f%d", i), value)
+					if err != nil && !errors.Is(err, api.ErrProfileTooLarge) {
+						t.Errorf("SetProfileField: %v", err)
+					}
+				}()
+			}
+			wg.Wait()
+			profile, err := db.GetProfileByLocalpart(ctx, localpart, domain)
+			assert.NoError(t, err)
+			size, err := profile.Size()
+			assert.NoError(t, err)
+			assert.LessOrEqual(t, size, authtypes.MaxProfileSize)
+			assert.Equal(t, 7, len(profile.Fields))
+		})
 	})
 }
 

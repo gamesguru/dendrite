@@ -623,6 +623,115 @@ func TestSetAvatarURL(t *testing.T) {
 	})
 }
 
+func TestProfileFields(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.ClientAPI.RateLimiting.Enabled = false
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		routers := httputil.NewRouters()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+		asPI := appservice.NewInternalAPI(processCtx, cfg, natsInstance, userAPI, rsAPI)
+
+		AddPublicRoutes(processCtx, routers, cfg, natsInstance, base.CreateFederationClient(cfg, nil), rsAPI, asPI, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+
+		accessTokens := map[*test.User]userDevice{
+			alice: {},
+			bob:   {},
+		}
+		createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+
+		do := func(method, path, body string, user *test.User) *httptest.ResponseRecorder {
+			t.Helper()
+			req := httptest.NewRequest(method, path, strings.NewReader(body))
+			if user != nil {
+				req.Header.Set("Authorization", "Bearer "+accessTokens[user].accessToken)
+			}
+			rec := httptest.NewRecorder()
+			routers.Client.ServeHTTP(rec, req)
+			return rec
+		}
+		profilePath := "/_matrix/client/v3/profile/" + alice.ID
+
+		rec := do(http.MethodGet, "/_matrix/client/v3/capabilities", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		for _, capability := range []string{`m\.profile_fields`, `uk\.tcpip\.msc4133\.profile_fields`, `m\.set_displayname`, `m\.set_avatar_url`} {
+			assert.True(t, gjson.GetBytes(rec.Body.Bytes(), "capabilities."+capability+".enabled").Bool(), capability)
+		}
+
+		// Custom fields hold any JSON value, at the stable and unstable path.
+		rec = do(http.MethodPut, profilePath+"/org.example.job", `{"org.example.job":{"title":"Engineer"}}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodPut, "/_matrix/client/unstable/uk.tcpip.msc4133/profile/"+alice.ID+"/m.tz", `{"m.tz":"Europe/Berlin"}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+		rec = do(http.MethodGet, profilePath+"/org.example.job", "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"org.example.job":{"title":"Engineer"}}`, rec.Body.String())
+		rec = do(http.MethodGet, "/_matrix/client/unstable/uk.tcpip.msc4133/profile/"+alice.ID+"/m.tz", "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"m.tz":"Europe/Berlin"}`, rec.Body.String())
+
+		// The whole profile includes the custom fields.
+		rec = do(http.MethodGet, profilePath, "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, fmt.Sprintf(`{"displayname":%q,"m.tz":"Europe/Berlin","org.example.job":{"title":"Engineer"}}`, alice.Localpart), rec.Body.String())
+
+		// The display name is still set through the generic endpoint.
+		rec = do(http.MethodPut, profilePath+"/displayname", `{"displayname":"Alice"}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath+"/displayname", "", nil)
+		assert.JSONEq(t, `{"displayname":"Alice"}`, rec.Body.String())
+
+		// Invalid requests.
+		for _, tc := range []struct {
+			name, key, body string
+			user            *test.User
+			wantCode        int
+			wantErrCode     string
+		}{
+			{"other user", "m.tz", `{"m.tz":"Europe/Berlin"}`, bob, http.StatusForbidden, "M_FORBIDDEN"},
+			{"unauthenticated", "m.tz", `{"m.tz":"Europe/Berlin"}`, nil, http.StatusUnauthorized, "M_MISSING_TOKEN"},
+			{"missing key in body", "m.tz", `{"m.other":"x"}`, alice, http.StatusBadRequest, "M_MISSING_PARAM"},
+			{"not an object", "m.tz", `"Europe/Berlin"`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"time zone not a string", "m.tz", `{"m.tz":1}`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"display name not a string", "displayname", `{"displayname":{}}`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"key without namespace", "nonamespace", `{"nonamespace":1}`, alice, http.StatusBadRequest, "M_INVALID_PARAM"},
+			{"key outside the grammar", "org.example-x", `{"org.example-x":1}`, alice, http.StatusBadRequest, "M_INVALID_PARAM"},
+			{"key too large", "org." + strings.Repeat("a", 252), `{}`, alice, http.StatusBadRequest, "M_KEY_TOO_LARGE"},
+			{"profile too large", "org.example.big", `{"org.example.big":"` + strings.Repeat("a", 64*1024) + `"}`, alice, http.StatusBadRequest, "M_PROFILE_TOO_LARGE"},
+			{"name makes profile too large", "displayname", `{"displayname":"` + strings.Repeat("a", 64*1024) + `"}`, alice, http.StatusBadRequest, "M_PROFILE_TOO_LARGE"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := do(http.MethodPut, profilePath+"/"+tc.key, tc.body, tc.user)
+				assert.Equal(t, tc.wantCode, rec.Code, rec.Body.String())
+				assert.Equal(t, tc.wantErrCode, gjson.GetBytes(rec.Body.Bytes(), "errcode").Str)
+			})
+		}
+
+		// Deleting a custom field removes it, and deleting the display name clears it.
+		rec = do(http.MethodDelete, profilePath+"/org.example.job", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath+"/org.example.job", "", nil)
+		assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+		assert.Equal(t, "M_NOT_FOUND", gjson.GetBytes(rec.Body.Bytes(), "errcode").Str)
+		rec = do(http.MethodDelete, profilePath+"/displayname", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath, "", nil)
+		assert.JSONEq(t, `{"m.tz":"Europe/Berlin"}`, rec.Body.String())
+		rec = do(http.MethodDelete, profilePath+"/m.tz", "", bob)
+		assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	})
+}
+
 func TestTyping(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)

@@ -7,16 +7,19 @@
 package routing
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
 	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
@@ -29,6 +32,17 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
+// maxProfileKeyLength is the longest profile field name, in bytes (MSC4133).
+const maxProfileKeyLength = 255
+
+// profileFieldTimeZone is the profile field holding the user's IANA time zone.
+const profileFieldTimeZone = "m.tz"
+
+// customProfileKey is the grammar of custom profile field names in the
+// specification: a namespaced identifier such as "m.tz" or
+// "org.example.job_title".
+var customProfileKey = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
 // GetProfile implements GET /profile/{userID}.
 func GetProfile(
 	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
@@ -36,174 +50,265 @@ func GetProfile(
 	asAPI appserviceAPI.AppServiceInternalAPI,
 	federation fclient.FederationClient,
 ) util.JSONResponse {
+	profile, errRes := lookupProfile(req, profileAPI, cfg, userID, asAPI, federation)
+	if errRes != nil {
+		return *errRes
+	}
+
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: profile.ClientFields(),
+	}
+}
+
+// GetProfileField implements GET /profile/{userID}/{keyName}.
+func GetProfileField(
+	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
+	userID, key string,
+	asAPI appserviceAPI.AppServiceInternalAPI,
+	federation fclient.FederationClient,
+) util.JSONResponse {
+	if len(key) > maxProfileKeyLength {
+		return keyTooLarge()
+	}
+	profile, errRes := lookupProfile(req, profileAPI, cfg, userID, asAPI, federation)
+	if errRes != nil {
+		return *errRes
+	}
+
+	switch key {
+	case authtypes.ProfileFieldDisplayName:
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			JSON: eventutil.UserProfile{DisplayName: profile.DisplayName},
+		}
+	case authtypes.ProfileFieldAvatarURL:
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			JSON: eventutil.UserProfile{AvatarURL: profile.AvatarURL},
+		}
+	}
+	value, ok := profile.Fields[key]
+	if !ok {
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("The requested profile key does not exist."),
+		}
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: map[string]json.RawMessage{key: value},
+	}
+}
+
+// lookupProfile wraps getProfile, turning its errors into responses.
+func lookupProfile(
+	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
+	userID string,
+	asAPI appserviceAPI.AppServiceInternalAPI,
+	federation fclient.FederationClient,
+) (*authtypes.Profile, *util.JSONResponse) {
 	profile, err := getProfile(req.Context(), profileAPI, cfg, userID, asAPI, federation)
 	if err != nil {
 		if errors.Is(err, appserviceAPI.ErrProfileNotExists) {
-			return util.JSONResponse{
+			return nil, &util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound("The user does not exist or does not have a profile"),
 			}
 		}
 
 		util.GetLogger(req.Context()).WithError(err).Error("getProfile failed")
-		return util.JSONResponse{
+		return nil, &util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
 	}
-
-	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: eventutil.UserProfile{
-			AvatarURL:   profile.AvatarURL,
-			DisplayName: profile.DisplayName,
-		},
-	}
+	return profile, nil
 }
 
-// GetAvatarURL implements GET /profile/{userID}/avatar_url.
-func GetAvatarURL(
-	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
-	userID string, asAPI appserviceAPI.AppServiceInternalAPI,
-	federation fclient.FederationClient,
-) util.JSONResponse {
-	profile := GetProfile(req, profileAPI, cfg, userID, asAPI, federation)
-	p, ok := profile.JSON.(eventutil.UserProfile)
-	// not a profile response, so most likely an error, return that
-	if !ok {
-		return profile
-	}
-
-	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: eventutil.UserProfile{
-			AvatarURL: p.AvatarURL,
-		},
-	}
-}
-
-// SetAvatarURL implements PUT /profile/{userID}/avatar_url.
-func SetAvatarURL(
+// SetProfileField implements PUT /profile/{userID}/{keyName}.
+func SetProfileField(
 	req *http.Request, profileAPI userapi.ProfileAPI,
-	device *userapi.Device, userID string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
+	device *userapi.Device, userID, key string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
 ) util.JSONResponse {
-	if userID != device.UserID {
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden("userID does not match the current user"),
-		}
+	localpart, domain, errRes := authorizeProfileChange(req, device, userID, key, cfg)
+	if errRes != nil {
+		return *errRes
 	}
-
-	var r eventutil.UserProfile
-	if resErr := httputil.UnmarshalJSONRequest(req, &r); resErr != nil {
-		return *resErr
-	}
-
-	localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
-	if err != nil {
-		util.GetLogger(req.Context()).WithError(err).Error("gomatrixserverlib.SplitID failed")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}
-	}
-
-	if !cfg.Matrix.IsLocalServerName(domain) {
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden("userID does not belong to a locally configured domain"),
-		}
-	}
-
-	evTime, err := httputil.ParseTSParam(req)
-	if err != nil {
+	if !isValidProfileKey(key) {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.InvalidParam(err.Error()),
+			JSON: spec.InvalidParam("Invalid profile key."),
 		}
 	}
 
-	profile, changed, err := profileAPI.SetAvatarURL(req.Context(), localpart, domain, r.AvatarURL)
-	if err != nil {
-		util.GetLogger(req.Context()).WithError(err).Error("profileAPI.SetAvatarURL failed")
+	var body map[string]json.RawMessage
+	if resErr := httputil.UnmarshalJSONRequest(req, &body); resErr != nil {
+		return *resErr
+	}
+	value, ok := body[key]
+	if !ok {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam(fmt.Sprintf("A required parameter is missing: %s.", key)),
+		}
+	}
+
+	switch key {
+	case authtypes.ProfileFieldDisplayName, authtypes.ProfileFieldAvatarURL:
+		// A null value clears the field, as it always has.
+		var name *string
+		if err := json.Unmarshal(value, &name); err != nil {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON(fmt.Sprintf("%s must be a string.", key)),
+			}
+		}
+		var newValue string
+		if name != nil {
+			newValue = *name
+		}
+		return setProfileName(req, profileAPI, device, userID, localpart, domain, key, newValue, rsAPI)
+	case profileFieldTimeZone:
+		var tz string
+		if err := json.Unmarshal(value, &tz); err != nil {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON(fmt.Sprintf("%s must be a string.", key)),
+			}
+		}
+	}
+
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, value); err != nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON(err.Error()),
+		}
+	}
+	err := profileAPI.SetProfileField(req.Context(), localpart, domain, key, compact.Bytes())
+	switch {
+	case errors.Is(err, userapi.ErrProfileTooLarge):
+		return profileTooLarge()
+	case err != nil:
+		util.GetLogger(req.Context()).WithError(err).Error("profileAPI.SetProfileField failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
 	}
-	// No need to build new membership events, since nothing changed
-	if !changed {
-		return util.JSONResponse{
-			Code: http.StatusOK,
-			JSON: struct{}{},
-		}
-	}
-
-	response, err := updateProfile(req.Context(), rsAPI, device, profile, userID, evTime)
-	if err != nil {
-		return response
-	}
-
 	return util.JSONResponse{
 		Code: http.StatusOK,
 		JSON: struct{}{},
 	}
 }
 
-// GetDisplayName implements GET /profile/{userID}/displayname.
-func GetDisplayName(
-	req *http.Request, profileAPI userapi.ProfileAPI, cfg *config.ClientAPI,
-	userID string, asAPI appserviceAPI.AppServiceInternalAPI,
-	federation fclient.FederationClient,
+// DeleteProfileField implements DELETE /profile/{userID}/{keyName}.
+// Deleting the display name or avatar URL clears it.
+func DeleteProfileField(
+	req *http.Request, profileAPI userapi.ProfileAPI,
+	device *userapi.Device, userID, key string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
 ) util.JSONResponse {
-	profile := GetProfile(req, profileAPI, cfg, userID, asAPI, federation)
-	p, ok := profile.JSON.(eventutil.UserProfile)
-	// not a profile response, so most likely an error, return that
-	if !ok {
-		return profile
+	localpart, domain, errRes := authorizeProfileChange(req, device, userID, key, cfg)
+	if errRes != nil {
+		return *errRes
 	}
 
+	switch key {
+	case authtypes.ProfileFieldDisplayName, authtypes.ProfileFieldAvatarURL:
+		return setProfileName(req, profileAPI, device, userID, localpart, domain, key, "", rsAPI)
+	}
+
+	if err := profileAPI.DeleteProfileField(req.Context(), localpart, domain, key); err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("profileAPI.DeleteProfileField failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: eventutil.UserProfile{
-			DisplayName: p.DisplayName,
-		},
+		JSON: struct{}{},
 	}
 }
 
-// SetDisplayName implements PUT /profile/{userID}/displayname.
-func SetDisplayName(
-	req *http.Request, profileAPI userapi.ProfileAPI,
-	device *userapi.Device, userID string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI,
-) util.JSONResponse {
+// authorizeProfileChange checks that the device may change the given field of
+// the user's profile, and returns the user's localpart and domain.
+func authorizeProfileChange(
+	req *http.Request, device *userapi.Device, userID, key string, cfg *config.ClientAPI,
+) (string, spec.ServerName, *util.JSONResponse) {
 	if userID != device.UserID {
-		return util.JSONResponse{
+		return "", "", &util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden("userID does not match the current user"),
 		}
 	}
-
-	var r eventutil.UserProfile
-	if resErr := httputil.UnmarshalJSONRequest(req, &r); resErr != nil {
-		return *resErr
+	// Guests may only change their display name.
+	if device.AccountType == userapi.AccountTypeGuest && key != authtypes.ProfileFieldDisplayName {
+		return "", "", &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.GuestAccessForbidden("Guest access not allowed"),
+		}
+	}
+	if len(key) > maxProfileKeyLength {
+		res := keyTooLarge()
+		return "", "", &res
 	}
 
 	localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("gomatrixserverlib.SplitID failed")
-		return util.JSONResponse{
+		return "", "", &util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
 	}
 
 	if !cfg.Matrix.IsLocalServerName(domain) {
-		return util.JSONResponse{
+		return "", "", &util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden("userID does not belong to a locally configured domain"),
 		}
 	}
+	return localpart, domain, nil
+}
 
+// isValidProfileKey reports whether a profile field may be set under key.
+func isValidProfileKey(key string) bool {
+	switch key {
+	case authtypes.ProfileFieldDisplayName, authtypes.ProfileFieldAvatarURL:
+		return true
+	}
+	return customProfileKey.MatchString(key)
+}
+
+func keyTooLarge() util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusBadRequest,
+		JSON: spec.MatrixError{
+			ErrCode: "M_KEY_TOO_LARGE",
+			Err:     fmt.Sprintf("The key name exceeds the maximum allowed length of %d bytes.", maxProfileKeyLength),
+		},
+	}
+}
+
+func profileTooLarge() util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusBadRequest,
+		JSON: spec.MatrixError{
+			ErrCode: "M_PROFILE_TOO_LARGE",
+			Err:     fmt.Sprintf("The profile data exceeds the maximum allowed size of %d bytes.", authtypes.MaxProfileSize),
+		},
+	}
+}
+
+// setProfileName sets the display name or avatar URL, which unlike other
+// profile fields are copied into the user's membership events.
+func setProfileName(
+	req *http.Request, profileAPI userapi.ProfileAPI, device *userapi.Device,
+	userID, localpart string, domain spec.ServerName, key, value string,
+	rsAPI api.ClientRoomserverAPI,
+) util.JSONResponse {
 	evTime, err := httputil.ParseTSParam(req)
 	if err != nil {
 		return util.JSONResponse{
@@ -212,9 +317,16 @@ func SetDisplayName(
 		}
 	}
 
-	profile, changed, err := profileAPI.SetDisplayName(req.Context(), localpart, domain, r.DisplayName)
-	if err != nil {
-		util.GetLogger(req.Context()).WithError(err).Error("profileAPI.SetDisplayName failed")
+	setName := profileAPI.SetDisplayName
+	if key == authtypes.ProfileFieldAvatarURL {
+		setName = profileAPI.SetAvatarURL
+	}
+	profile, changed, err := setName(req.Context(), localpart, domain, value)
+	switch {
+	case errors.Is(err, userapi.ErrProfileTooLarge):
+		return profileTooLarge()
+	case err != nil:
+		util.GetLogger(req.Context()).WithError(err).WithField("field", key).Error("failed to set profile field")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
@@ -316,23 +428,16 @@ func getProfile(
 	}
 
 	if !cfg.Matrix.IsLocalServerName(domain) {
-		profile, fedErr := federation.LookupProfile(ctx, cfg.Matrix.ServerName, domain, userID, "")
+		profile, fedErr := remoteProfile(ctx, cfg, federation, domain, userID)
 		if fedErr != nil {
-			var x gomatrix.HTTPError
-			if errors.As(fedErr, &x) {
-				if x.Code == http.StatusNotFound {
-					return nil, appserviceAPI.ErrProfileNotExists
-				}
+			var x spec.HTTPError
+			if errors.As(fedErr, &x) && x.Code == http.StatusNotFound {
+				return nil, appserviceAPI.ErrProfileNotExists
 			}
-
 			return nil, fedErr
 		}
-
-		return &authtypes.Profile{
-			Localpart:   localpart,
-			DisplayName: profile.DisplayName,
-			AvatarURL:   profile.AvatarURL,
-		}, nil
+		profile.Localpart = localpart
+		return profile, nil
 	}
 
 	profile, err := appserviceAPI.RetrieveUserProfile(ctx, userID, asAPI, profileAPI)
@@ -340,6 +445,46 @@ func getProfile(
 		return nil, err
 	}
 
+	return profile, nil
+}
+
+// remoteProfile fetches a remote user's whole profile over federation. It
+// uses the signed transport because LookupProfile only decodes the display
+// name and avatar URL, not custom fields.
+func remoteProfile(
+	ctx context.Context, cfg *config.ClientAPI, federation fclient.FederationClient,
+	domain spec.ServerName, userID string,
+) (*authtypes.Profile, error) {
+	fedReq := fclient.NewFederationRequest(
+		http.MethodGet, cfg.Matrix.ServerName, domain,
+		"/_matrix/federation/v1/query/profile?user_id="+url.QueryEscape(userID),
+	)
+	if err := fedReq.Sign(cfg.Matrix.ServerName, cfg.Matrix.KeyID, cfg.Matrix.PrivateKey); err != nil {
+		return nil, err
+	}
+	httpReq, err := fedReq.HTTPRequest()
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err = federation.DoRequestAndParseResponse(ctx, httpReq, &fields); err != nil {
+		return nil, err
+	}
+
+	profile := &authtypes.Profile{}
+	// A display name or avatar URL that is not a string is left out, as
+	// LookupProfile used to do.
+	if raw, ok := fields[authtypes.ProfileFieldDisplayName]; ok {
+		_ = json.Unmarshal(raw, &profile.DisplayName)
+		delete(fields, authtypes.ProfileFieldDisplayName)
+	}
+	if raw, ok := fields[authtypes.ProfileFieldAvatarURL]; ok {
+		_ = json.Unmarshal(raw, &profile.AvatarURL)
+		delete(fields, authtypes.ProfileFieldAvatarURL)
+	}
+	if len(fields) > 0 {
+		profile.Fields = fields
+	}
 	return profile, nil
 }
 

@@ -38,6 +38,8 @@ type Profile interface {
 	SearchProfiles(ctx context.Context, searchString string, limit int) ([]authtypes.Profile, error)
 	SetAvatarURL(ctx context.Context, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error)
 	SetDisplayName(ctx context.Context, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
+	SetProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error
+	DeleteProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string) error
 }
 
 type Account interface {

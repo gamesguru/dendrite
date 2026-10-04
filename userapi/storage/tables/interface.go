@@ -96,9 +96,18 @@ type OpenIDTable interface {
 type ProfileTable interface {
 	InsertProfile(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 	SelectProfileByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*authtypes.Profile, error)
+	SelectProfileForUpdate(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (*authtypes.Profile, error)
 	SetAvatarURL(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error)
 	SetDisplayName(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
 	SelectProfilesBySearch(ctx context.Context, searchString string, limit int) ([]authtypes.Profile, error)
+}
+
+// ProfileFieldsTable stores the custom profile fields of accounts (MSC4133).
+type ProfileFieldsTable interface {
+	UpsertProfileField(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error
+	SelectProfileFields(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (map[string]json.RawMessage, error)
+	DeleteProfileField(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fieldName string) error
+	DeleteProfileFields(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 }
 
 type ThreePIDTable interface {

@@ -45,6 +45,20 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool) 
 			"m.3pid_changes": map[string]bool{
 				"enabled": !oidcEnabled,
 			},
+			// Every profile field may be set (MSC4133). m.set_displayname and
+			// m.set_avatar_url must agree with m.profile_fields.
+			"m.profile_fields": map[string]bool{
+				"enabled": true,
+			},
+			"uk.tcpip.msc4133.profile_fields": map[string]bool{
+				"enabled": true,
+			},
+			"m.set_displayname": map[string]bool{
+				"enabled": true,
+			},
+			"m.set_avatar_url": map[string]bool{
+				"enabled": true,
+			},
 		},
 	}
 

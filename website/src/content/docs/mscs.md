@@ -53,6 +53,26 @@ State events, and aggregations that arrive with events over federation, are neve
 | [MSC3765](https://github.com/matrix-org/matrix-spec-proposals/pull/3765) | Rich text in room topics | 1.15 | Not implemented |
 | [MSC4267](https://github.com/matrix-org/matrix-spec-proposals/pull/4267) | Forget room on leave ([`m.forget_forced_upon_leave` capability](https://spec.matrix.org/v1.18/client-server-api/#mforget_forced_upon_leave-capability)) | 1.18 | Implemented (opt-in via [`auto_forget_on_leave`](/administration/auto-forget-on-leave/)) |
 
+## Profiles
+
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC4133](https://github.com/matrix-org/matrix-spec-proposals/pull/4133) | Extended profiles: custom profile fields | 1.16 | Implemented: see [custom profile fields](#custom-profile-fields) |
+| [MSC4175](https://github.com/matrix-org/matrix-spec-proposals/pull/4175) | Time zone profile field (`m.tz`) | 1.16 | Implemented: `m.tz` must be a string |
+
+### Custom profile fields
+
+`GET`, `PUT` and `DELETE /_matrix/client/v3/profile/{userId}/{keyName}` read, set and remove any profile field, and `GET /_matrix/client/v3/profile/{userId}` returns them all.
+The same endpoints are served under `/_matrix/client/unstable/uk.tcpip.msc4133/`, and `/versions` advertises `uk.tcpip.msc4133` and `uk.tcpip.msc4133.stable`.
+`/capabilities` reports `m.profile_fields` (and `uk.tcpip.msc4133.profile_fields`) as enabled without restrictions, together with `m.set_displayname` and `m.set_avatar_url`.
+
+A custom field name is a namespaced identifier such as `org.example.job_title`, at most 255 bytes long, and its value can be any JSON.
+A profile, including its display name and avatar URL, is limited to 64 KiB of canonical JSON; a change that would exceed this fails with `M_PROFILE_TOO_LARGE`.
+Only the display name and avatar URL are copied into membership events; deleting either one clears it.
+Guests may only change their display name.
+`/_matrix/federation/v1/query/profile` serves every field, also one at a time via `field`, and profiles of remote users include their custom fields.
+Deactivating an account removes its custom fields.
+
 ## Encryption & Security
 
 | MSC | Title | Spec | Status |

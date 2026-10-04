@@ -421,6 +421,10 @@ column userapi_pending_notification_receipts | localpart | text | NO |
 column userapi_pending_notification_receipts | room_id | text | NO |
 column userapi_pending_notification_receipts | server_name | text | NO |
 column userapi_pending_notification_receipts | thread_id | text | NO |
+column userapi_profile_fields | field_name | text | NO |
+column userapi_profile_fields | field_value | text | NO |
+column userapi_profile_fields | localpart | text | NO |
+column userapi_profile_fields | server_name | text | NO |
 column userapi_profiles | avatar_url | text | YES |
 column userapi_profiles | display_name | text | YES |
 column userapi_profiles | localpart | text | NO |
@@ -632,6 +636,7 @@ index userapi_notifications | userapi_notification_room_id_idx | CREATE INDEX us
 index userapi_notifications | userapi_notifications_pkey | CREATE UNIQUE INDEX userapi_notifications_pkey ON public.userapi_notifications USING btree (id)
 index userapi_openid_tokens | userapi_openid_tokens_pkey | CREATE UNIQUE INDEX userapi_openid_tokens_pkey ON public.userapi_openid_tokens USING btree (token)
 index userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | CREATE UNIQUE INDEX userapi_pending_notification_receipts_pkey ON public.userapi_pending_notification_receipts USING btree (room_id, event_id, localpart, server_name, thread_id)
+index userapi_profile_fields | userapi_profile_fields_pkey | CREATE UNIQUE INDEX userapi_profile_fields_pkey ON public.userapi_profile_fields USING btree (localpart, server_name, field_name)
 index userapi_profiles | userapi_profiles_idx | CREATE UNIQUE INDEX userapi_profiles_idx ON public.userapi_profiles USING btree (localpart, server_name)
 index userapi_pushers | userapi_pusher_app_id_pushkey_idx | CREATE INDEX userapi_pusher_app_id_pushkey_idx ON public.userapi_pushers USING btree (app_id, pushkey)
 index userapi_pushers | userapi_pusher_app_id_pushkey_localpart_idx | CREATE UNIQUE INDEX userapi_pusher_app_id_pushkey_localpart_idx ON public.userapi_pushers USING btree (app_id, pushkey, localpart, server_name)
@@ -1124,6 +1129,11 @@ constraint userapi_pending_notification_receipts | userapi_pending_notification_
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_room_id_not_null | NOT NULL room_id
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_server_name_not_null | NOT NULL server_name
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_thread_id_not_null | NOT NULL thread_id
+constraint userapi_profile_fields | userapi_profile_fields_field_name_not_null | NOT NULL field_name
+constraint userapi_profile_fields | userapi_profile_fields_field_value_not_null | NOT NULL field_value
+constraint userapi_profile_fields | userapi_profile_fields_localpart_not_null | NOT NULL localpart
+constraint userapi_profile_fields | userapi_profile_fields_pkey | PRIMARY KEY (localpart, server_name, field_name)
+constraint userapi_profile_fields | userapi_profile_fields_server_name_not_null | NOT NULL server_name
 constraint userapi_profiles | userapi_profiles_localpart_not_null | NOT NULL localpart
 constraint userapi_profiles | userapi_profiles_server_name_not_null | NOT NULL server_name
 constraint userapi_pushers | userapi_pushers_app_display_name_not_null | NOT NULL app_display_name

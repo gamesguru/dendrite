@@ -104,6 +104,8 @@ func Setup(
 		"org.matrix.msc3916.stable":     true,
 		"org.matrix.simplified_msc3575": true, // MSC4186: Simplified Sliding Sync
 		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
+		"uk.tcpip.msc4133":              true, // MSC4133: custom profile fields, unstable path
+		"uk.tcpip.msc4133.stable":       true, // MSC4133: custom profile fields, v3 path
 	}
 	// Configuration entries alone do not establish implementation support.
 	// Keep this list aligned with setup/mscs.EnableMSC and the discovery audit.
@@ -1117,53 +1119,33 @@ func Setup(
 		}),
 	).Methods(http.MethodGet, http.MethodOptions)
 
-	v3mux.Handle("/profile/{userID}/avatar_url",
-		httputil.MakeExternalAPI("profile_avatar_url", func(req *http.Request) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-			if err != nil {
-				return util.ErrorResponse(err)
-			}
-			return GetAvatarURL(req, userAPI, cfg, vars["userID"], asAPI, federation)
-		}),
-	).Methods(http.MethodGet, http.MethodOptions)
-
-	v3mux.Handle("/profile/{userID}/avatar_url",
-		httputil.MakeAuthAPI("profile_avatar_url", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			if r := rateLimits.Limit(req, device); r != nil {
-				return *r
-			}
-			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-			if err != nil {
-				return util.ErrorResponse(err)
-			}
-			return SetAvatarURL(req, userAPI, device, vars["userID"], cfg, rsAPI)
-		}),
-	).Methods(http.MethodPut, http.MethodOptions)
-	// Browsers use the OPTIONS HTTP method to check if the CORS policy allows
-	// PUT requests, so we need to allow this method
-
-	v3mux.Handle("/profile/{userID}/displayname",
-		httputil.MakeExternalAPI("profile_displayname", func(req *http.Request) util.JSONResponse {
-			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-			if err != nil {
-				return util.ErrorResponse(err)
-			}
-			return GetDisplayName(req, userAPI, cfg, vars["userID"], asAPI, federation)
-		}),
-	).Methods(http.MethodGet, http.MethodOptions)
-
-	v3mux.Handle("/profile/{userID}/displayname",
-		httputil.MakeAuthAPI("profile_displayname", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			if r := rateLimits.Limit(req, device); r != nil {
-				return *r
-			}
-			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-			if err != nil {
-				return util.ErrorResponse(err)
-			}
-			return SetDisplayName(req, userAPI, device, vars["userID"], cfg, rsAPI)
-		}, httputil.WithAllowGuests()),
-	).Methods(http.MethodPut, http.MethodOptions)
+	// Profile fields (MSC4133), served at both the stable and the unstable path.
+	getProfileField := httputil.MakeExternalAPI("profile_field", func(req *http.Request) util.JSONResponse {
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		return GetProfileField(req, userAPI, cfg, vars["userID"], vars["keyName"], asAPI, federation)
+	})
+	// Guests may set their display name, which SetProfileField and
+	// DeleteProfileField check.
+	changeProfileField := httputil.MakeAuthAPI("profile_field", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		if r := rateLimits.Limit(req, device); r != nil {
+			return *r
+		}
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if req.Method == http.MethodDelete {
+			return DeleteProfileField(req, userAPI, device, vars["userID"], vars["keyName"], cfg, rsAPI)
+		}
+		return SetProfileField(req, userAPI, device, vars["userID"], vars["keyName"], cfg, rsAPI)
+	}, httputil.WithAllowGuests())
+	v3mux.Handle("/profile/{userID}/{keyName}", getProfileField).Methods(http.MethodGet, http.MethodOptions)
+	v3mux.Handle("/profile/{userID}/{keyName}", changeProfileField).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
+	unstableMux.Handle("/uk.tcpip.msc4133/profile/{userID}/{keyName}", getProfileField).Methods(http.MethodGet, http.MethodOptions)
+	unstableMux.Handle("/uk.tcpip.msc4133/profile/{userID}/{keyName}", changeProfileField).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
 	// Browsers use the OPTIONS HTTP method to check if the CORS policy allows
 	// PUT requests, so we need to allow this method
 
