@@ -606,14 +606,17 @@ func (w *worker) _next() {
 	if err = jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
 		return
 	}
-	w.lastActivity = time.Now()
 
 	// Try to unmarshal the input room event. If the JSON unmarshalling
 	// fails then we'll terminate the message — this notifies NATS that
 	// we are done with the message and never want to see it again.
 	msg := msgs[0]
 	meta, _ := msg.Metadata()
+	// A synchronous caller reads these under the lock to describe the worker.
+	w.Lock()
+	w.lastActivity = time.Now()
 	w.durableSeq = meta.Sequence.Stream
+	w.Unlock()
 
 	var inputRoomEvent api.InputRoomEvent
 	if err = json.Unmarshal(msg.Data, &inputRoomEvent); err != nil {
@@ -696,8 +699,10 @@ func (w *worker) _next() {
 	// that everything was OK.
 	if replyTo := msg.Header.Get("sync"); replyTo != "" {
 		reply := &nats.Msg{Subject: replyTo, Data: []byte(errString), Header: nats.Header{}}
+		// The event ID lets a caller that waits too long say which of its
+		// inputs went unanswered.
+		reply.Header.Set("event_id", inputRoomEvent.Event.EventID())
 		if duplicateOf != "" {
-			reply.Header.Set("event_id", inputRoomEvent.Event.EventID())
 			reply.Header.Set("duplicate_of", duplicateOf)
 		}
 		if err = w.r.NATSClient.PublishMsg(reply); err != nil {
@@ -710,12 +715,20 @@ func (w *worker) _next() {
 	}
 }
 
+// queuedInput is an input queued on the input stream for a synchronous caller.
+type queuedInput struct {
+	roomID  string
+	eventID string
+	seq     uint64
+}
+
 // queueInputRoomEvents queues events into the roomserver input
-// stream in NATS.
+// stream in NATS. For a synchronous request it also returns where each input
+// was queued.
 func (r *Inputer) queueInputRoomEvents(
 	ctx context.Context,
 	request *api.InputRoomEventsRequest,
-) (replySub *nats.Subscription, err error) {
+) (replySub *nats.Subscription, queued []queuedInput, err error) {
 	// If the request is synchronous then we need to create a
 	// temporary inbox to wait for responses on, and then create
 	// a subscription to it. If it's asynchronous then we won't
@@ -725,13 +738,13 @@ func (r *Inputer) queueInputRoomEvents(
 		replyTo = nats.NewInbox()
 		replySub, err = r.NATSClient.SubscribeSync(replyTo)
 		if err != nil {
-			return nil, fmt.Errorf("r.NATSClient.SubscribeSync: %w", err)
+			return nil, nil, fmt.Errorf("r.NATSClient.SubscribeSync: %w", err)
 		}
 		if replySub == nil {
 			// This shouldn't ever happen, but it doesn't hurt to check
 			// because we can potentially avoid a nil pointer panic later
 			// if it did for some reason.
-			return nil, fmt.Errorf("expected a subscription to the temporary inbox")
+			return nil, nil, fmt.Errorf("expected a subscription to the temporary inbox")
 		}
 	}
 
@@ -751,15 +764,19 @@ func (r *Inputer) queueInputRoomEvents(
 		msg.Header.Set("virtual_host", string(request.VirtualHost))
 		msg.Data, err = json.Marshal(e)
 		if err != nil {
-			return nil, fmt.Errorf("json.Marshal: %w", err)
+			return nil, nil, fmt.Errorf("json.Marshal: %w", err)
 		}
-		if _, err = jetstream.Publish(ctx, r.JetStream, msg); err != nil {
+		ack, pubErr := jetstream.Publish(ctx, r.JetStream, msg)
+		if err = pubErr; err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  roomID,
 				"event_id": e.Event.EventID(),
 				"subj":     subj,
 			}).Error("Roomserver failed to queue async event")
-			return nil, fmt.Errorf("r.JetStream.PublishMsg: %w", err)
+			return nil, nil, fmt.Errorf("r.JetStream.PublishMsg: %w", err)
+		}
+		if replySub != nil {
+			queued = append(queued, queuedInput{roomID: roomID, eventID: e.Event.EventID(), seq: ack.Sequence})
 		}
 
 		// Now that the event is queued, increment the room backpressure
@@ -775,7 +792,7 @@ func (r *Inputer) InputRoomEvents(
 	response *api.InputRoomEventsResponse,
 ) {
 	// Queue up the event into the roomserver.
-	replySub, err := r.queueInputRoomEvents(ctx, request)
+	replySub, queued, err := r.queueInputRoomEvents(ctx, request)
 	if err != nil {
 		response.ErrMsg = err.Error()
 		return
@@ -792,12 +809,29 @@ func (r *Inputer) InputRoomEvents(
 	// input we submitted. The last error value we receive will
 	// be the one returned as the error string.
 	defer replySub.Drain() //nolint:errcheck
+	unanswered := make(map[string]queuedInput, len(queued))
+	for _, q := range queued {
+		unanswered[q.eventID] = q
+	}
+	started := time.Now()
+	warned := false
 	for i := 0; i < len(request.InputRoomEvents); i++ {
-		msg, err := replySub.NextMsgWithContext(ctx)
+		waitCtx, cancel := ctx, context.CancelFunc(func() {})
+		if !warned {
+			waitCtx, cancel = context.WithDeadline(ctx, started.Add(syncInputReplyOverdue))
+		}
+		msg, err := replySub.NextMsgWithContext(waitCtx)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) && !warned && ctx.Err() == nil {
+			warned = true
+			r.warnUnansweredInput(ctx, unanswered, len(request.InputRoomEvents)-i, time.Since(started))
+			msg, err = replySub.NextMsgWithContext(ctx)
+		}
 		if err != nil {
 			response.ErrMsg = err.Error()
 			return
 		}
+		delete(unanswered, msg.Header.Get("event_id"))
 		if len(msg.Data) > 0 {
 			response.ErrMsg = string(msg.Data)
 		}
@@ -808,6 +842,65 @@ func (r *Inputer) InputRoomEvents(
 			response.DuplicateOf[msg.Header.Get("event_id")] = original
 		}
 	}
+}
+
+// syncInputReplyOverdue is how long a synchronous caller waits for the
+// roomserver's replies before it reports which of its inputs are unanswered.
+// It keeps waiting afterwards, for as long as its context allows.
+var syncInputReplyOverdue = 30 * time.Second
+
+// warnUnansweredInput reports a synchronous input whose replies are overdue,
+// with what the room's worker and durable consumer have done since. Every
+// input is processed and answered in turn, so a reply that never comes means
+// the input was lost on its way to the worker or its reply on the way back.
+func (r *Inputer) warnUnansweredInput(ctx context.Context, unanswered map[string]queuedInput, missing int, waited time.Duration) {
+	events := make([]string, 0, len(unanswered))
+	rooms := map[string]bool{}
+	for _, q := range unanswered {
+		events = append(events, fmt.Sprintf("%s@%d", q.eventID, q.seq))
+		rooms[q.roomID] = true
+	}
+	state := make([]string, 0, len(rooms))
+	for roomID := range rooms {
+		state = append(state, fmt.Sprintf("%s: worker %s; consumer %s", roomID, r.describeWorker(roomID), r.describeRoomConsumer(ctx, roomID)))
+	}
+	logrus.WithFields(logrus.Fields{
+		"missing_replies": missing,
+		"unanswered":      events,
+		"rooms":           state,
+		"waited":          waited.Round(time.Second).String(),
+	}).Warn("The roomserver has not answered synchronous input")
+}
+
+// describeWorker summarizes the room's worker for diagnostics.
+func (r *Inputer) describeWorker(roomID string) string {
+	v, ok := r.workers.Load(roomID)
+	if !ok {
+		return "none"
+	}
+	w, ok := v.(*worker)
+	if !ok {
+		return "invalid"
+	}
+	w.Lock()
+	defer w.Unlock()
+	return fmt.Sprintf("running=%t subscribed=%t announced_seq=%d processed_seq=%d held_announcements=%d last_activity=%s",
+		w.ctx != nil && w.ctx.Err() == nil, w.subscription != nil, w.ephemeralSeq, w.durableSeq, len(w.announcements),
+		time.Since(w.lastActivity).Round(time.Second))
+}
+
+// describeRoomConsumer summarizes the room's durable consumer for diagnostics.
+func (r *Inputer) describeRoomConsumer(ctx context.Context, roomID string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) //nolint:mnd
+	defer cancel()
+	stream := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
+	consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(roomID))
+	info, err := r.JetStream.ConsumerInfo(stream, consumer, nats.Context(ctx))
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("delivered_seq=%d ack_floor_seq=%d num_pending=%d num_ack_pending=%d num_redelivered=%d num_waiting=%d",
+		info.Delivered.Stream, info.AckFloor.Stream, info.NumPending, info.NumAckPending, info.NumRedelivered, info.NumWaiting)
 }
 
 var roomserverInputBackpressure = prometheus.NewGaugeVec(

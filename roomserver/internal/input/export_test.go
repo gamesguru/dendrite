@@ -5,8 +5,18 @@
 
 package input
 
+import "time"
+
 // ExpireMissingStateCooldowns ends every room's missing-state cooldown, as if
 // its duration had passed.
 func (r *Inputer) ExpireMissingStateCooldowns() {
 	r.missingStateCooldown.Clear()
+}
+
+// SetSyncInputReplyOverdue changes how long synchronous input waits before it
+// reports unanswered inputs, returning a function that restores it.
+func SetSyncInputReplyOverdue(d time.Duration) func() {
+	old := syncInputReplyOverdue
+	syncInputReplyOverdue = d
+	return func() { syncInputReplyOverdue = old }
 }
