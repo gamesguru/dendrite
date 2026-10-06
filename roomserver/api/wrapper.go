@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -266,8 +267,7 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 		util.GetLogger(ctx).WithError(err).Error("QueryBulkStateContent failed")
 		return nil, err
 	}
-	chunk := make([]PublicRoom, len(roomIDs))
-	i := 0
+	chunk := make([]PublicRoom, 0, len(stateRes.Rooms))
 	for roomID, data := range stateRes.Rooms {
 		pub := PublicRoom{PublicRoom: fclient.PublicRoom{RoomID: roomID}}
 		joinCount := 0
@@ -312,10 +312,45 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 			pub.GuestCanJoin = true
 		}
 		pub.JoinedMembersCount = joinCount
-		chunk[i] = pub
-		i++
+		chunk = append(chunk, pub)
 	}
 	return chunk, nil
+}
+
+// MatchesRoomType reports whether a room of the given type passes a
+// room_types filter (MSC3827). A nil filter matches every room, and a nil
+// entry matches rooms without a type.
+func MatchesRoomType(roomType *string, types []*string) bool {
+	if types == nil {
+		return true
+	}
+	for _, wanted := range types {
+		if wanted == nil && roomType == nil || wanted != nil && roomType != nil && *wanted == *roomType {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterPublicRooms keeps the rooms whose type passes roomTypes and whose
+// name, topic or canonical alias contains searchTerm, ignoring case.
+func FilterPublicRooms(rooms []PublicRoom, searchTerm string, roomTypes []*string) []PublicRoom {
+	if searchTerm == "" && roomTypes == nil {
+		return rooms
+	}
+	normalizedTerm := strings.ToLower(searchTerm)
+	result := make([]PublicRoom, 0)
+	for _, room := range rooms {
+		if !MatchesRoomType(room.RoomType, roomTypes) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(room.Name), normalizedTerm) ||
+			strings.Contains(strings.ToLower(room.Topic), normalizedTerm) ||
+			strings.Contains(strings.ToLower(room.CanonicalAlias), normalizedTerm) {
+			result = append(result, room)
+		}
+	}
+	return result
 }
 
 func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVersion, senderID string, createContentJSON json.RawMessage, additionalCreators []string) (map[string]any, error) {

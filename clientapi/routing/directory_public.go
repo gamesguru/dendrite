@@ -71,19 +71,9 @@ func remotePublicRooms(ctx context.Context, request PublicRoomReq, federation fc
 	if err := federation.DoRequestAndParseResponse(ctx, httpReq, &response); err != nil {
 		return nil, err
 	}
+	// Servers that predate MSC3827 ignore the room type filter.
+	response.Chunk = roomserverAPI.FilterPublicRooms(response.Chunk, "", request.Filter.RoomTypes)
 	return &response, nil
-}
-
-func matchesRoomType(roomType *string, types []*string) bool {
-	if types == nil {
-		return true
-	}
-	for _, wanted := range types {
-		if wanted == nil && roomType == nil || wanted != nil && roomType != nil && *wanted == *roomType {
-			return true
-		}
-	}
-	return false
 }
 
 // GetPostPublicRooms implements GET and POST /publicRooms.
@@ -165,7 +155,7 @@ func publicRooms(
 		rooms = getPublicRoomsFromCache()
 	}
 
-	rooms = filterRooms(rooms, request.Filter)
+	rooms = roomserverAPI.FilterPublicRooms(rooms, request.Filter.SearchTerms, request.Filter.RoomTypes)
 	response.TotalRoomCountEstimate = len(rooms)
 
 	chunk, prev, next := sliceInto(rooms, offset, limit)
@@ -179,28 +169,6 @@ func publicRooms(
 		response.Chunk = chunk
 	}
 	return &response, err
-}
-
-func filterRooms(rooms []roomserverAPI.PublicRoom, roomFilter filter) []roomserverAPI.PublicRoom {
-	if roomFilter.SearchTerms == "" && roomFilter.RoomTypes == nil {
-		return rooms
-	}
-
-	normalizedTerm := strings.ToLower(roomFilter.SearchTerms)
-
-	result := make([]roomserverAPI.PublicRoom, 0)
-	for _, room := range rooms {
-		if !matchesRoomType(room.RoomType, roomFilter.RoomTypes) {
-			continue
-		}
-		if strings.Contains(strings.ToLower(room.Name), normalizedTerm) ||
-			strings.Contains(strings.ToLower(room.Topic), normalizedTerm) ||
-			strings.Contains(strings.ToLower(room.CanonicalAlias), normalizedTerm) {
-			result = append(result, room)
-		}
-	}
-
-	return result
 }
 
 // fillPublicRoomsReq fills the Limit, Since and Filter attributes of a GET or POST request

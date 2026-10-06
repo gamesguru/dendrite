@@ -208,7 +208,15 @@ func (f *directoryFederation) DoRequestAndParseResponse(_ context.Context, req *
 func TestPublicRoomsRemoteRoomTypes(t *testing.T) {
 	var cfg config.Zendrite
 	cfg.Defaults(config.DefaultOpts{Generate: true, SingleDatabase: true})
-	for _, roomFilter := range []string{`{}`, `{"room_types":[]}`, `{"room_types":[null]}`, `{"room_types":["m.space"]}`, `{"room_types":[null,"m.space","org.example.custom",""],"generic_search_term":"hello"}`} {
+	// The remote returns a space whatever the filter; it is dropped unless the
+	// filter admits spaces, for servers that ignore room_types.
+	for roomFilter, wantSpace := range map[string]bool{
+		`{}`:                         true,
+		`{"room_types":[]}`:          false,
+		`{"room_types":[null]}`:      false,
+		`{"room_types":["m.space"]}`: true,
+		`{"room_types":[null,"m.space","org.example.custom",""],"generic_search_term":"hello"}`: true,
+	} {
 		t.Run(roomFilter, func(t *testing.T) {
 			fed := &directoryFederation{t: t, wantFilter: roomFilter}
 			req := httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/publicRooms?server=remote.test", strings.NewReader(`{"limit":7,"since":"Topaque","include_all_networks":true,"filter":`+roomFilter+`}`))
@@ -218,7 +226,11 @@ func TestPublicRoomsRemoteRoomTypes(t *testing.T) {
 			body, err := json.Marshal(res.JSON)
 			require.NoError(t, err)
 			require.Contains(t, string(body), `"next_batch":"Tnext"`)
-			require.Contains(t, string(body), `"room_type":"m.space"`)
+			if wantSpace {
+				require.Contains(t, string(body), `"room_id":"!remote:remote.test"`)
+			} else {
+				require.NotContains(t, string(body), `"room_id":"!remote:remote.test"`)
+			}
 		})
 	}
 	t.Run("remote error", func(t *testing.T) {

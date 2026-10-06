@@ -54,7 +54,8 @@ The v1.3 relations behavior is covered above.
 | Thread listing | `syncapi/routing/threads.go` serves `/v1/rooms/{roomID}/threads` with `include` filtering and pagination. | Implemented; covered by `threads_test.go`. |
 | Threaded receipts and notification counts | `clientapi/routing/receipt.go` validates `thread_id`, receipts keep their thread identity, and `syncapi/streams/stream_notificationdata.go` serves per-thread counts when the filter sets `unread_thread_notifications`. | Implemented; covered by `TestThreadNotificationCounts` and `TestThreadReplyCountedInThread`. |
 | Edit and thread bundles | `syncapi/internal/aggregations.go` bundles the latest valid edit under `m.replace` and the thread summary under `m.thread`, filtered for history visibility and ignored users. | Implemented. |
-| Other v1.4 additions | Require a separate behavioral pass for filters, upgrades, push rules, and media headers after the above blockers are fixed. | Not certified by this audit. |
+| Room-type directory filters | `clientapi/routing/directory_public.go` and `federationapi/routing/publicrooms.go` filter with `roomserver/api.FilterPublicRooms` and return `room_type`; remote client results are filtered again. | Implemented; covered by `TestPublicRoomsRoomTypes`, `TestPublicRoomsRemoteRoomTypes` and `TestFederationPublicRoomsRoomTypes`. |
+| Other v1.4 additions | Require a separate behavioral pass for upgrades, push rules, and media headers after the above blockers are fixed. | Not certified by this audit. |
 
 [v1.5](https://spec.matrix.org/v1.5/changelog/) adds reference relations and documents in-room verification requests.
 References are bundled under `m.reference` and can be paginated through `/relations`.
