@@ -109,7 +109,7 @@ func TestVersions(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 					t.Fatal(err)
 				}
-				wantVersions := []string{"r0.0.1", "r0.1.0", "r0.2.0", "r0.3.0", "r0.4.0", "r0.5.0", "r0.6.1", "v1.0", "v1.1", "v1.2"}
+				wantVersions := []string{"r0.0.1", "r0.1.0", "r0.2.0", "r0.3.0", "r0.4.0", "r0.5.0", "r0.6.1", "v1.0", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5"}
 				if !reflect.DeepEqual(response.Versions, wantVersions) {
 					t.Errorf("versions = %v, want %v", response.Versions, wantVersions)
 				}

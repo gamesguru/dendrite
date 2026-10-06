@@ -5,9 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` retains the existing advertised versions: `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, `v1.0`, `v1.1`, and `v1.2`.
-The audit for [issue #320](https://codefloe.com/pat-s/zendrite/issues/320) does not establish support for any newer complete client-server specification version.
-The existing list is a compatibility baseline, not a new certification of every historical requirement.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.5`.
+The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
+`v1.3`, `v1.4` and `v1.5` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.6` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -41,7 +42,8 @@ The [v1.3 relations endpoint](https://spec.matrix.org/v1.3/client-server-api/#ge
 The storage query orders children by event topology, so a backfilled child sorts by its depth rather than its arrival.
 A missing parent, one in another room and one hidden by history visibility all return 404 `M_NOT_FOUND`.
 Children hidden by history visibility or sent by ignored users are left out, and each child carries its own bundled aggregations.
-These resolve the relations gaps that blocked v1.3, which still needs the full review described below before it is advertised.
+These resolve the relations gaps that blocked v1.3.
+Timestamp massaging (MSC3316) is limited to application services, and v1.3 is advertised.
 
 ### v1.4 and v1.5
 
@@ -55,18 +57,21 @@ The v1.3 relations behavior is covered above.
 | Threaded receipts and notification counts | `clientapi/routing/receipt.go` validates `thread_id`, receipts keep their thread identity, and `syncapi/streams/stream_notificationdata.go` serves per-thread counts when the filter sets `unread_thread_notifications`. | Implemented; covered by `TestThreadNotificationCounts` and `TestThreadReplyCountedInThread`. |
 | Edit and thread bundles | `syncapi/internal/aggregations.go` bundles the latest valid edit under `m.replace` and the thread summary under `m.thread`, filtered for history visibility and ignored users. | Implemented. |
 | Room-type directory filters | `clientapi/routing/directory_public.go` and `federationapi/routing/publicrooms.go` filter with `roomserver/api.FilterPublicRooms` and return `room_type`; remote client results are filtered again. | Implemented; covered by `TestPublicRoomsRoomTypes`, `TestPublicRoomsRemoteRoomTypes` and `TestFederationPublicRoomsRoomTypes`. |
-| Other v1.4 additions | Require a separate behavioral pass for upgrades, push rules, and media headers after the above blockers are fixed. | Not certified by this audit. |
+| Room upgrades | `roomserver/internal/perform/perform_upgrade.go` copies the old create event's content, including `type`, into the new create event. | Implemented. |
+| Server ACL push rule | `internal/pushrules/default_override.go` installs `.m.rule.room.server_acl`. | Implemented. |
+| Media CORP header | `mediaapi/routing/routing.go` sends `Cross-Origin-Resource-Policy: cross-origin`. | Implemented. |
 
 [v1.5](https://spec.matrix.org/v1.5/changelog/) adds reference relations and documents in-room verification requests.
 References are bundled under `m.reference` and can be paginated through `/relations`.
-Neither v1.4 nor v1.5 is eligible for advertisement.
+Application service `users` namespaces only match local users (MSC3905).
+Both v1.4 and v1.5 are advertised.
 MSC2836's experimental relationship API is not the stable `m.thread` protocol or thread-list endpoint.
 
 ### v1.6 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.6](https://spec.matrix.org/v1.6/changelog/) | `syncapi/routing/timestamp_to_event.go` serves `/v1/rooms/{roomID}/timestamp_to_event`; the release still needs the full review described below. | Do not advertise yet. |
+| [v1.6](https://spec.matrix.org/v1.6/changelog/) | `syncapi/routing/timestamp_to_event.go` serves `/v1/rooms/{roomID}/timestamp_to_event`, but the federation `timestamp_to_event` endpoint (MSC3030) and `GET /_matrix/key/v2/query/{serverName}` without a key ID (MSC3938) are missing. | Do not advertise yet. |
 | [v1.7](https://spec.matrix.org/v1.7/changelog/) | Reactions can be stored as relations; this does not demonstrate aggregated reaction behavior, asynchronous media upload, or login-token issuance. | No full certification; earlier blockers remain. |
 | [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` parses `recurse`, follows relations three levels deep and reports `recursion_depth`; other v1.10 changes are unaudited. | Do not advertise. |
 | [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |

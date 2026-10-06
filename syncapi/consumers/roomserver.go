@@ -130,6 +130,15 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 			// in the special case where the event redacts itself, just pass the message through because
 			// we will never see the other part of the pair
 			if event.Redacts() != event.EventID() {
+				// Application services receive redactions as they arrive,
+				// like any other event. NAK on failure, or the redaction is
+				// never delivered.
+				if s.asProducer != nil {
+					if err = s.asProducer.ProduceRoomEvents(msg); err != nil {
+						log.WithError(err).Warn("failed to produce OutputAppserviceEvent")
+						return false
+					}
+				}
 				// syncapi stores the redaction only once it is validated, but
 				// userapi still needs it now: it keeps a notification-less
 				// record so that read receipts pointing at a redaction resolve.
