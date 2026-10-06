@@ -749,27 +749,56 @@ func (d *Database) UpsertBackupKeys(
 		if err != nil {
 			return err
 		}
+		etag = oldETag
 		if changed {
-			// update the etag
-			var newETag string
-			if oldETag == "" {
-				newETag = "1"
-			} else {
-				oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
-				if err != nil {
-					return fmt.Errorf("failed to parse old etag: %w", err)
-				}
-				newETag = strconv.FormatInt(oldETagInt+1, 10)
-			}
-			etag = newETag
-			return d.KeyBackupVersions.UpdateKeyBackupETag(ctx, txn, userID, version, newETag)
-		} else {
-			etag = oldETag
+			etag, err = d.bumpKeyBackupETag(ctx, txn, userID, version, oldETag)
 		}
-
-		return nil
+		return err
 	})
 	return
+}
+
+func (d *Database) DeleteBackupKeys(
+	ctx context.Context, version, userID, filterRoomID, filterSessionID string,
+) (count int64, etag string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		versionResult, _, _, oldETag, deleted, err := d.KeyBackupVersions.SelectKeyBackup(ctx, txn, userID, version)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			return sql.ErrNoRows
+		}
+		removed, err := d.KeyBackups.DeleteKeys(ctx, txn, userID, versionResult, filterRoomID, filterSessionID)
+		if err != nil {
+			return fmt.Errorf("d.KeyBackups.DeleteKeys: %w", err)
+		}
+		etag = oldETag
+		if removed > 0 {
+			if etag, err = d.bumpKeyBackupETag(ctx, txn, userID, versionResult, oldETag); err != nil {
+				return err
+			}
+		}
+		count, err = d.KeyBackups.CountKeys(ctx, txn, userID, versionResult)
+		return err
+	})
+	return
+}
+
+// bumpKeyBackupETag stores and returns the next etag of a backup version,
+// whose keys have changed.
+func (d *Database) bumpKeyBackupETag(
+	ctx context.Context, txn *sql.Tx, userID, version, oldETag string,
+) (string, error) {
+	newETag := "1"
+	if oldETag != "" {
+		oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse old etag: %w", err)
+		}
+		newETag = strconv.FormatInt(oldETagInt+1, 10)
+	}
+	return newETag, d.KeyBackupVersions.UpdateKeyBackupETag(ctx, txn, userID, version, newETag)
 }
 
 // GetDeviceByAccessToken returns the device matching the given access token.

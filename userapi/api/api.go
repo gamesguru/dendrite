@@ -125,6 +125,7 @@ type ClientUserAPI interface {
 
 type KeyBackupAPI interface {
 	DeleteKeyBackup(ctx context.Context, userID, version string) (bool, error)
+	DeleteBackupKeys(ctx context.Context, req *DeleteBackupKeysRequest) (*PerformKeyBackupResponse, error)
 	PerformKeyBackup(ctx context.Context, req *PerformKeyBackupRequest) (string, error)
 	QueryKeyBackup(ctx context.Context, req *QueryKeyBackupRequest) (*QueryKeyBackupResponse, error)
 	UpdateBackupKeyAuthData(ctx context.Context, req *PerformKeyBackupRequest) (*PerformKeyBackupResponse, error)
@@ -212,6 +213,15 @@ type PerformKeyBackupResponse struct {
 
 	KeyCount int64  // only set if Keys were given in the request
 	KeyETag  string // only set if Keys were given in the request
+}
+
+// DeleteBackupKeysRequest deletes keys from a backup version: all of them,
+// those of RoomID if it is set, or the session SessionID of RoomID.
+type DeleteBackupKeysRequest struct {
+	UserID    string
+	Version   string
+	RoomID    string
+	SessionID string
 }
 
 type QueryKeyBackupRequest struct {

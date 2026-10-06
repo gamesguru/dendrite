@@ -808,6 +808,21 @@ func (a *UserInternalAPI) uploadBackupKeys(ctx context.Context, req *api.Perform
 	return res, nil
 }
 
+func (a *UserInternalAPI) DeleteBackupKeys(ctx context.Context, req *api.DeleteBackupKeysRequest) (*api.PerformKeyBackupResponse, error) {
+	res := &api.PerformKeyBackupResponse{Version: req.Version}
+	count, etag, err := a.DB.DeleteBackupKeys(ctx, req.Version, req.UserID, req.RoomID, req.SessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+			return res, nil
+		}
+		return res, fmt.Errorf("failed to delete keys: %w", err)
+	}
+	res.Exists = true
+	res.KeyCount = count
+	res.KeyETag = etag
+	return res, nil
+}
+
 func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyBackupRequest) (*api.QueryKeyBackupResponse, error) {
 	res := &api.QueryKeyBackupResponse{}
 	version, algorithm, authData, etag, deleted, err := a.DB.GetKeyBackup(ctx, req.UserID, req.Version)

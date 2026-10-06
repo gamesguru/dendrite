@@ -202,6 +202,43 @@ func UploadBackupKeys(
 	}
 }
 
+// DeleteBackupKeys deletes keys from a backup version: all of them, those of
+// roomID if it is set, or the session sessionID of roomID.
+// Implements DELETE /_matrix/client/v3/room_keys/keys, /room_keys/keys/{roomId}
+// and /room_keys/keys/{roomId}/{sessionId}.
+func DeleteBackupKeys(
+	req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device, version, roomID, sessionID string,
+) util.JSONResponse {
+	if version == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("version must be specified"),
+		}
+	}
+	res, err := userAPI.DeleteBackupKeys(req.Context(), &userapi.DeleteBackupKeysRequest{
+		UserID:    device.UserID,
+		Version:   version,
+		RoomID:    roomID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return util.ErrorResponse(fmt.Errorf("DeleteBackupKeys: %w", err))
+	}
+	if !res.Exists {
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("backup version not found"),
+		}
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: keyBackupSessionResponse{
+			Count: res.KeyCount,
+			ETag:  res.KeyETag,
+		},
+	}
+}
+
 // Get keys from a given backup version. Response returned varies depending on if roomID and sessionID are set.
 func GetBackupKeys(
 	req *http.Request, userAPI userapi.ClientUserAPI, device *userapi.Device, version, roomID, sessionID string,

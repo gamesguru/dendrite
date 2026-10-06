@@ -1706,6 +1706,34 @@ func Setup(
 
 	// Deleting E2E Backup Keys
 
+	deleteBackupKeys := httputil.MakeAuthAPI("delete_backup_keys", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		return DeleteBackupKeys(req, userAPI, device, req.URL.Query().Get("version"), "", "")
+	})
+
+	deleteBackupKeysRoom := httputil.MakeAuthAPI("delete_backup_keys_room", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		return DeleteBackupKeys(req, userAPI, device, req.URL.Query().Get("version"), vars["roomID"], "")
+	})
+
+	deleteBackupKeysRoomSession := httputil.MakeAuthAPI("delete_backup_keys_room_session", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		return DeleteBackupKeys(req, userAPI, device, req.URL.Query().Get("version"), vars["roomID"], vars["sessionID"])
+	})
+
+	v3mux.Handle("/room_keys/keys", deleteBackupKeys).Methods(http.MethodDelete, http.MethodOptions)
+	v3mux.Handle("/room_keys/keys/{roomID}", deleteBackupKeysRoom).Methods(http.MethodDelete, http.MethodOptions)
+	v3mux.Handle("/room_keys/keys/{roomID}/{sessionID}", deleteBackupKeysRoomSession).Methods(http.MethodDelete, http.MethodOptions)
+
+	unstableMux.Handle("/room_keys/keys", deleteBackupKeys).Methods(http.MethodDelete, http.MethodOptions)
+	unstableMux.Handle("/room_keys/keys/{roomID}", deleteBackupKeysRoom).Methods(http.MethodDelete, http.MethodOptions)
+	unstableMux.Handle("/room_keys/keys/{roomID}/{sessionID}", deleteBackupKeysRoomSession).Methods(http.MethodDelete, http.MethodOptions)
+
 	// Cross-signing device keys
 
 	postDeviceSigningKeys := httputil.MakeAuthAPI("post_device_signing_keys", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

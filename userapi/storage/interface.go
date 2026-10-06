@@ -100,6 +100,11 @@ type KeyBackup interface {
 	UpsertBackupKeys(ctx context.Context, version, userID string, uploads []api.InternalKeyBackupSession) (count int64, etag string, err error)
 	GetBackupKeys(ctx context.Context, version, userID, filterRoomID, filterSessionID string) (result map[string]map[string]api.KeyBackupSession, err error)
 	CountBackupKeys(ctx context.Context, version, userID string) (count int64, err error)
+	// DeleteBackupKeys deletes the keys of a backup version, only those of
+	// filterRoomID if it is set, and only the session filterSessionID of that
+	// room if that is set too. It returns sql.ErrNoRows if the version does
+	// not exist or was deleted.
+	DeleteBackupKeys(ctx context.Context, version, userID, filterRoomID, filterSessionID string) (count int64, etag string, err error)
 }
 
 type LoginToken interface {

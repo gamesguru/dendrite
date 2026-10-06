@@ -72,6 +72,7 @@ type KeyBackupTable interface {
 	SelectKeys(ctx context.Context, txn *sql.Tx, userID, version string) (map[string]map[string]api.KeyBackupSession, error)
 	SelectKeysByRoomID(ctx context.Context, txn *sql.Tx, userID, version, roomID string) (map[string]map[string]api.KeyBackupSession, error)
 	SelectKeysByRoomIDAndSessionID(ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string) (map[string]map[string]api.KeyBackupSession, error)
+	DeleteKeys(ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string) (int64, error)
 }
 
 type KeyBackupVersionTable interface {
