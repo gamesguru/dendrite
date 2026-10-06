@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -402,4 +403,24 @@ func TestAutoPurgeMode_BackwardsCompat(t *testing.T) {
 			t.Fatalf("expected error for unknown mode, got nil")
 		}
 	})
+}
+
+func TestRefreshableAccessTokenLifetime(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.RefreshableAccessTokenLifetime != 5*time.Minute {
+		t.Fatalf("default lifetime is %s, want 5m", c.RefreshableAccessTokenLifetime)
+	}
+	if err := yaml.Unmarshal([]byte("refreshable_access_token_lifetime: 0s"), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.RefreshableAccessTokenLifetime != 0 {
+		t.Fatalf("0s parsed as %s", c.RefreshableAccessTokenLifetime)
+	}
+	errs := ConfigErrors{}
+	c.RefreshableAccessTokenLifetime = -time.Second
+	c.Verify(&errs)
+	if len(errs) == 0 {
+		t.Fatal("negative lifetime was accepted")
+	}
 }

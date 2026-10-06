@@ -314,7 +314,7 @@ func setProfileName(
 	userID, localpart string, domain spec.ServerName, key, value string,
 	rsAPI api.ClientRoomserverAPI,
 ) util.JSONResponse {
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,

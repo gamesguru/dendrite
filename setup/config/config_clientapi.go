@@ -67,6 +67,13 @@ type ClientAPI struct {
 	// (default "5m"). Parsed as a time.Duration string.
 	AltchaExpiry string `yaml:"altcha_expiry"`
 
+	// RefreshableAccessTokenLifetime is how long an access token issued with
+	// a refresh token (MSC2918) remains valid. Clients ask for a refresh token
+	// with `refresh_token: true` on /login and /register. The default is five
+	// minutes, as in Synapse. Zero issues no refresh tokens and access tokens
+	// that never expire.
+	RefreshableAccessTokenLifetime time.Duration `yaml:"refreshable_access_token_lifetime"`
+
 	// TURN options
 	TURN TURN `yaml:"turn"`
 
@@ -89,6 +96,7 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 	c.AltchaHMACKey = ""
 	c.AltchaMaxNumber = 50000
 	c.AltchaExpiry = "5m"
+	c.RefreshableAccessTokenLifetime = 5 * time.Minute //nolint:mnd
 	c.RegistrationDisabled = true
 	c.OpenRegistrationWithoutVerificationEnabled = false
 	c.RateLimiting.Defaults()
@@ -108,6 +116,9 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 		if !trusted {
 			configErrs.Add("client_api.email_validation_server must be listed in global.trusted_third_party_id_servers")
 		}
+	}
+	if c.RefreshableAccessTokenLifetime < 0 {
+		configErrs.Add("client_api.refreshable_access_token_lifetime must not be negative")
 	}
 	c.TURN.Verify(configErrs)
 	c.RateLimiting.Verify(configErrs)

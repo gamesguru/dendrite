@@ -77,7 +77,7 @@ func VerifyUserFromRequest(
 	if res.Device == nil {
 		if res.SoftLogout {
 			// The token expired but the session is intact; the client should
-			// refresh its token (OAuth 2.0 API) instead of logging out.
+			// refresh its token instead of logging out.
 			return nil, &util.JSONResponse{
 				Code: http.StatusUnauthorized,
 				JSON: struct {

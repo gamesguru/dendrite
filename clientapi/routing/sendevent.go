@@ -163,7 +163,7 @@ func SendEvent(
 		}
 	}
 
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,

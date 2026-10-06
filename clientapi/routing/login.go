@@ -63,7 +63,7 @@ func Login(
 			return *authErr
 		}
 		// make a device/access token
-		authErr2 := completeAuth(req.Context(), cfg.Matrix, userAPI, login, req.RemoteAddr, req.UserAgent())
+		authErr2 := completeAuth(req.Context(), cfg, userAPI, login, req.RemoteAddr, req.UserAgent())
 		cleanup(req.Context(), &authErr2)
 		return authErr2
 	}
@@ -74,7 +74,7 @@ func Login(
 }
 
 func completeAuth(
-	ctx context.Context, cfg *config.Global, userAPI userapi.ClientUserAPI, login *auth.Login,
+	ctx context.Context, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, login *auth.Login,
 	ipAddr, userAgent string,
 ) util.JSONResponse {
 	token, err := auth.GenerateAccessToken()
@@ -85,8 +85,16 @@ func completeAuth(
 			JSON: spec.InternalServerError{},
 		}
 	}
+	refresh, err := newRefreshableTokens(refreshableLifetime(cfg, login.RefreshToken))
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("failed to generate refresh token")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 
-	localpart, serverName, err := userutil.ParseUsernameParam(login.Username(), cfg)
+	localpart, serverName, err := userutil.ParseUsernameParam(login.Username(), cfg.Matrix)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("auth.ParseUsernameParam failed")
 		return util.JSONResponse{
@@ -97,13 +105,15 @@ func completeAuth(
 
 	var performRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
-		DeviceDisplayName: login.InitialDisplayName,
-		DeviceID:          login.DeviceID,
-		AccessToken:       token,
-		Localpart:         localpart,
-		ServerName:        serverName,
-		IPAddr:            ipAddr,
-		UserAgent:         userAgent,
+		DeviceDisplayName:    login.InitialDisplayName,
+		DeviceID:             login.DeviceID,
+		AccessToken:          token,
+		Localpart:            localpart,
+		ServerName:           serverName,
+		IPAddr:               ipAddr,
+		UserAgent:            userAgent,
+		RefreshToken:         refresh.refreshToken,
+		AccessTokenExpiresTS: refresh.expiresTS,
 	}, &performRes)
 	if err != nil {
 		return util.JSONResponse{
@@ -115,9 +125,11 @@ func completeAuth(
 	return util.JSONResponse{
 		Code: http.StatusOK,
 		JSON: loginResponse{
-			UserID:      performRes.Device.UserID,
-			AccessToken: performRes.Device.AccessToken,
-			DeviceID:    performRes.Device.ID,
+			UserID:       performRes.Device.UserID,
+			AccessToken:  performRes.Device.AccessToken,
+			DeviceID:     performRes.Device.ID,
+			RefreshToken: refresh.refreshToken,
+			ExpiresInMs:  refresh.expiresInMs,
 		},
 	}
 }

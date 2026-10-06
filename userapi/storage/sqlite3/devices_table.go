@@ -51,7 +51,21 @@ const selectDevicesCountSQL = "" +
 	"SELECT COUNT(access_token) FROM userapi_devices"
 
 const selectDeviceByTokenSQL = "" +
-	"SELECT session_id, device_id, localpart, server_name FROM userapi_devices WHERE access_token = $1"
+	"SELECT session_id, device_id, localpart, server_name, access_token_expires_ts, prev_refresh_token_hash IS NOT NULL FROM userapi_devices WHERE access_token = $1"
+
+const updateDeviceRefreshTokenSQL = "" +
+	"UPDATE userapi_devices SET access_token_expires_ts = $1, refresh_token_hash = $2 WHERE localpart = $3 AND server_name = $4 AND device_id = $5"
+
+// The presented token is either the current refresh token, which becomes the
+// previous one, or the previous one, which stays valid until the new access
+// token is used.
+const refreshDeviceTokensSQL = "" +
+	"UPDATE userapi_devices SET access_token = $1, access_token_expires_ts = $2, refresh_token_hash = $3, prev_refresh_token_hash = $4" +
+	" WHERE refresh_token_hash = $4 OR prev_refresh_token_hash = $4" +
+	" RETURNING session_id, device_id, localpart, server_name"
+
+const clearPrevRefreshTokenSQL = "" +
+	"UPDATE userapi_devices SET prev_refresh_token_hash = NULL WHERE access_token = $1"
 
 const selectDeviceByIDSQL = "" +
 	"SELECT display_name, last_seen_ts, ip FROM userapi_devices WHERE localpart = $1 AND server_name = $2 AND device_id = $3"
@@ -91,6 +105,9 @@ type devicesStatements struct {
 	updateDeviceNameStmt         *sql.Stmt
 	updateDeviceAccessTokenStmt  *sql.Stmt
 	updateDeviceLastSeenStmt     *sql.Stmt
+	updateDeviceRefreshTokenStmt *sql.Stmt
+	refreshDeviceTokensStmt      *sql.Stmt
+	clearPrevRefreshTokenStmt    *sql.Stmt
 	deleteDeviceStmt             *sql.Stmt
 	deleteDevicesByLocalpartStmt *sql.Stmt
 	serverName                   spec.ServerName
@@ -110,6 +127,10 @@ func NewSQLiteDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Devic
 		Version: "userapi: add last_seen_ts",
 		Up:      deltas.UpLastSeenTSIP,
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "userapi: add refresh tokens",
+		Up:      tables.AddDeviceRefreshTokens,
+	})
 	if err = m.Up(context.Background()); err != nil {
 		return nil, err
 	}
@@ -126,6 +147,9 @@ func NewSQLiteDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Devic
 		{&s.deleteDevicesByLocalpartStmt, deleteDevicesByLocalpartSQL},
 		{&s.selectDevicesByIDStmt, selectDevicesByIDSQL},
 		{&s.updateDeviceLastSeenStmt, updateDeviceLastSeen},
+		{&s.updateDeviceRefreshTokenStmt, updateDeviceRefreshTokenSQL},
+		{&s.refreshDeviceTokensStmt, refreshDeviceTokensSQL},
+		{&s.clearPrevRefreshTokenStmt, clearPrevRefreshTokenSQL},
 	}.Prepare(db)
 }
 
@@ -258,7 +282,7 @@ func (s *devicesStatements) SelectDeviceByToken(
 	var localpart string
 	var serverName spec.ServerName
 	stmt := s.selectDeviceByTokenStmt
-	err := stmt.QueryRowContext(ctx, accessToken).Scan(&dev.SessionID, &dev.ID, &localpart, &serverName)
+	err := stmt.QueryRowContext(ctx, accessToken).Scan(&dev.SessionID, &dev.ID, &localpart, &serverName, &dev.AccessTokenExpiresTS, &dev.PrevRefreshTokenValid)
 	if err == nil {
 		dev.UserID = userutil.MakeUserID(localpart, serverName)
 		dev.AccessToken = accessToken
@@ -376,5 +400,44 @@ func (s *devicesStatements) UpdateDeviceLastSeen(ctx context.Context, txn *sql.T
 	lastSeenTs := time.Now().UnixNano() / 1000000 //nolint:mnd
 	stmt := sqlutil.TxStmt(txn, s.updateDeviceLastSeenStmt)
 	_, err := stmt.ExecContext(ctx, lastSeenTs, ipAddr, userAgent, localpart, serverName, deviceID)
+	return err
+}
+
+// UpdateDeviceRefreshToken makes the device's access token expire at expiresTS
+// and stores the hash of its refresh token.
+func (s *devicesStatements) UpdateDeviceRefreshToken(
+	ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName,
+	deviceID string, expiresTS int64, refreshTokenHash string,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.updateDeviceRefreshTokenStmt).ExecContext(ctx, expiresTS, refreshTokenHash, localpart, serverName, deviceID)
+	return err
+}
+
+// RefreshDeviceTokens replaces the access and refresh tokens of the device
+// holding the given refresh token. Returns sql.ErrNoRows if no device holds it.
+func (s *devicesStatements) RefreshDeviceTokens(
+	ctx context.Context, txn *sql.Tx, refreshTokenHash, accessToken string,
+	expiresTS int64, newRefreshTokenHash string,
+) (*api.Device, error) {
+	var dev api.Device
+	var localpart string
+	var serverName spec.ServerName
+	err := sqlutil.TxStmt(txn, s.refreshDeviceTokensStmt).QueryRowContext(
+		ctx, accessToken, expiresTS, newRefreshTokenHash, refreshTokenHash,
+	).Scan(&dev.SessionID, &dev.ID, &localpart, &serverName)
+	if err != nil {
+		return nil, err
+	}
+	dev.UserID = userutil.MakeUserID(localpart, serverName)
+	dev.AccessToken = accessToken
+	dev.AccessTokenExpiresTS = expiresTS
+	dev.PrevRefreshTokenValid = true
+	return &dev, nil
+}
+
+// ClearPrevRefreshToken revokes the previous refresh token of the device that
+// holds the given access token.
+func (s *devicesStatements) ClearPrevRefreshToken(ctx context.Context, txn *sql.Tx, accessToken string) error {
+	_, err := sqlutil.TxStmt(txn, s.clearPrevRefreshTokenStmt).ExecContext(ctx, accessToken)
 	return err
 }

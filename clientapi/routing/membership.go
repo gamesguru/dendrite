@@ -37,7 +37,7 @@ func SendBan(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -143,7 +143,7 @@ func SendKick(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -227,7 +227,7 @@ func SendUnban(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -284,7 +284,7 @@ func SendInvite(
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 	identityClient *fclient.Client,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -516,13 +516,13 @@ func loadProfile(
 	return profile, err
 }
 
-func extractRequestData(req *http.Request) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
+func extractRequestData(req *http.Request, device *userapi.Device) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		resErr = reqErr
 		return
 	}
 
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		resErr = &util.JSONResponse{
 			Code: http.StatusBadRequest,

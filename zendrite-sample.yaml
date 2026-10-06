@@ -234,6 +234,12 @@ client_api:
   # Leave empty to require an explicit id_server in email verification requests.
   email_validation_server: ''
 
+  # Lifetime of access tokens issued with a refresh token, for clients that request
+  # one on login or registration. Such clients renew their access token through
+  # /refresh before it expires. Clients that do not ask keep non-expiring access
+  # tokens. Set to 0s to issue no refresh tokens.
+  refreshable_access_token_lifetime: 5m
+
   # Whether to require reCAPTCHA for registration. If you have enabled registration
   # then this is HIGHLY RECOMMENDED to reduce the risk of your homeserver being used
   # for coordinated spam attacks.

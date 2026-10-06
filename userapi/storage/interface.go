@@ -87,6 +87,15 @@ type Device interface {
 	// access token rotation, where the device is unchanged but the token is not.
 	UpdateDeviceAccessToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, accessToken string) error
 	UpdateDeviceLastSeen(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
+	// SetDeviceRefreshToken makes the device's access token expire at expiresTS
+	// and stores the hash of its refresh token (MSC2918).
+	SetDeviceRefreshToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID string, expiresTS int64, refreshTokenHash string) error
+	// RefreshDeviceTokens replaces the access and refresh tokens of the device
+	// holding the refresh token. Returns sql.ErrNoRows for an unknown or revoked token.
+	RefreshDeviceTokens(ctx context.Context, refreshTokenHash, accessToken string, expiresTS int64, newRefreshTokenHash string) (*api.Device, error)
+	// ClearPrevRefreshToken revokes the refresh token that was used to obtain
+	// the given access token, once that access token has been used.
+	ClearPrevRefreshToken(ctx context.Context, accessToken string) error
 	RemoveDevices(ctx context.Context, localpart string, serverName spec.ServerName, devices []string) error
 	// RemoveAllDevices deleted all devices for this user. Returns the devices deleted.
 	RemoveAllDevices(ctx context.Context, localpart string, serverName spec.ServerName, exceptDeviceID string) (devices []api.Device, err error)

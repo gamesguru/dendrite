@@ -105,6 +105,7 @@ type ClientUserAPI interface {
 	PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 	PerformAccountCreation(ctx context.Context, req *PerformAccountCreationRequest, res *PerformAccountCreationResponse) error
 	PerformDeviceCreation(ctx context.Context, req *PerformDeviceCreationRequest, res *PerformDeviceCreationResponse) error
+	PerformRefreshToken(ctx context.Context, req *PerformRefreshTokenRequest, res *PerformRefreshTokenResponse) error
 	PerformDeviceUpdate(ctx context.Context, req *PerformDeviceUpdateRequest, res *PerformDeviceUpdateResponse) error
 	PerformDeviceDeletion(ctx context.Context, req *PerformDeviceDeletionRequest, res *PerformDeviceDeletionResponse) error
 	PerformPasswordUpdate(ctx context.Context, req *PerformPasswordUpdateRequest, res *PerformPasswordUpdateResponse) error
@@ -303,8 +304,8 @@ type QueryAccessTokenResponse struct {
 	Device *Device
 	Err    string // e.g ErrorForbidden
 	// SoftLogout is true when the token was rejected because it expired and the
-	// client may refresh it, rather than the session being destroyed. Only set
-	// when MSC3861 delegated authentication is in use.
+	// client may refresh it, rather than the session being destroyed, with
+	// MSC3861 delegated authentication or a native refresh token (MSC2918).
 	SoftLogout bool
 }
 
@@ -410,12 +411,31 @@ type PerformDeviceCreationRequest struct {
 	// FromRegistration determines if this request comes from registering a new account
 	// and is in most cases false.
 	FromRegistration bool
+
+	// RefreshToken, if set, is issued with the access token, which then
+	// expires at AccessTokenExpiresTS (MSC2918).
+	RefreshToken         string
+	AccessTokenExpiresTS int64
 }
 
 // PerformDeviceCreationResponse is the response for PerformDeviceCreation.
 type PerformDeviceCreationResponse struct {
 	DeviceCreated bool
 	Device        *Device
+}
+
+// PerformRefreshTokenRequest exchanges a refresh token for new tokens (MSC2918).
+type PerformRefreshTokenRequest struct {
+	RefreshToken         string
+	AccessToken          string // the new access token
+	NewRefreshToken      string
+	AccessTokenExpiresTS int64
+}
+
+// PerformRefreshTokenResponse is the response for PerformRefreshToken.
+type PerformRefreshTokenResponse struct {
+	// Device is nil if the refresh token is unknown or revoked.
+	Device *Device
 }
 
 // PerformAccountDeactivationRequest is the request for PerformAccountDeactivation.
@@ -480,6 +500,12 @@ type Device struct {
 	// this is the appservice ID.
 	AppserviceID string
 	AccountType  AccountType
+	// AccessTokenExpiresTS is when the access token expires, as a unix
+	// timestamp in milliseconds, or 0 if it never expires (MSC2918).
+	AccessTokenExpiresTS int64
+	// PrevRefreshTokenValid is true while the refresh token used to obtain
+	// the access token stays valid, until the access token is first used.
+	PrevRefreshTokenValid bool
 }
 
 func (d *Device) UserDomain() spec.ServerName {

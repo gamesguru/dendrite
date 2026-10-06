@@ -957,6 +957,15 @@ func Setup(
 				return Login(req, userAPI, cfg)
 			}),
 		).Methods(http.MethodGet, http.MethodPost, http.MethodOptions)
+
+		v3mux.Handle("/refresh",
+			httputil.MakeExternalAPI("refresh", func(req *http.Request) util.JSONResponse {
+				if r := rateLimits.Limit(req, nil); r != nil {
+					return *r
+				}
+				return Refresh(req, userAPI, cfg)
+			}),
+		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
 	if oidcEnabled {

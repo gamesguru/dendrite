@@ -63,6 +63,9 @@ type DevicesTable interface {
 	SelectDevicesByLocalpart(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, exceptDeviceID string) ([]api.Device, error)
 	SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error)
 	UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
+	UpdateDeviceRefreshToken(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID string, expiresTS int64, refreshTokenHash string) error
+	RefreshDeviceTokens(ctx context.Context, txn *sql.Tx, refreshTokenHash, accessToken string, expiresTS int64, newRefreshTokenHash string) (*api.Device, error)
+	ClearPrevRefreshToken(ctx context.Context, txn *sql.Tx, accessToken string) error
 }
 
 type KeyBackupTable interface {

@@ -8,7 +8,9 @@ package internal
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -317,6 +319,12 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 	if err != nil {
 		return err
 	}
+	if req.RefreshToken != "" {
+		if err = a.DB.SetDeviceRefreshToken(ctx, req.Localpart, serverName, dev.ID, req.AccessTokenExpiresTS, hashRefreshToken(req.RefreshToken)); err != nil {
+			return err
+		}
+		dev.AccessTokenExpiresTS = req.AccessTokenExpiresTS
+	}
 	res.DeviceCreated = true
 	res.Device = dev
 	if req.NoDeviceListUpdate || isExisting {
@@ -324,6 +332,24 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 	}
 	// create empty device keys and upload them to trigger device list changes
 	return a.deviceListUpdate(dev.UserID, []string{dev.ID}, req.FromRegistration) //nolint:contextcheck
+}
+
+// PerformRefreshToken replaces the access and refresh tokens of the device
+// that holds the given refresh token (MSC2918).
+func (a *UserInternalAPI) PerformRefreshToken(ctx context.Context, req *api.PerformRefreshTokenRequest, res *api.PerformRefreshTokenResponse) error {
+	dev, err := a.DB.RefreshDeviceTokens(ctx, hashRefreshToken(req.RefreshToken), req.AccessToken, req.AccessTokenExpiresTS, hashRefreshToken(req.NewRefreshToken))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	res.Device = dev
+	return err
+}
+
+// hashRefreshToken returns the form of a refresh token that is stored, so a
+// database leak does not reveal usable refresh tokens.
+func hashRefreshToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.PerformDeviceDeletionRequest, res *api.PerformDeviceDeletionResponse) error {
@@ -588,6 +614,19 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 			return nil
 		}
 		return err
+	}
+	if device.AccessTokenExpiresTS != 0 && time.Now().UnixMilli() >= device.AccessTokenExpiresTS {
+		// The client must use its refresh token to get a new access token.
+		res.SoftLogout = true
+		return nil
+	}
+	if device.PrevRefreshTokenValid {
+		// The client received its new tokens, so the refresh token it used
+		// to obtain them can no longer be repeated.
+		if err = a.DB.ClearPrevRefreshToken(ctx, req.AccessToken); err != nil {
+			return err
+		}
+		device.PrevRefreshTokenValid = false
 	}
 	localPart, domain, err := gomatrixserverlib.SplitID('@', device.UserID)
 	if err != nil {

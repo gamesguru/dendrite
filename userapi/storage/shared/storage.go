@@ -951,6 +951,38 @@ func (d *Database) UpdateDeviceAccessToken(
 	})
 }
 
+// SetDeviceRefreshToken makes the device's access token expire at expiresTS
+// and stores the hash of its refresh token.
+func (d *Database) SetDeviceRefreshToken(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+	deviceID string, expiresTS int64, refreshTokenHash string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Devices.UpdateDeviceRefreshToken(ctx, txn, localpart, serverName, deviceID, expiresTS, refreshTokenHash)
+	})
+}
+
+// RefreshDeviceTokens replaces the access and refresh tokens of the device
+// holding the given refresh token hash.
+func (d *Database) RefreshDeviceTokens(
+	ctx context.Context, refreshTokenHash, accessToken string,
+	expiresTS int64, newRefreshTokenHash string,
+) (dev *api.Device, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		dev, err = d.Devices.RefreshDeviceTokens(ctx, txn, refreshTokenHash, accessToken, expiresTS, newRefreshTokenHash)
+		return err
+	})
+	return dev, err
+}
+
+// ClearPrevRefreshToken revokes the previous refresh token of the device
+// holding the given access token.
+func (d *Database) ClearPrevRefreshToken(ctx context.Context, accessToken string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Devices.ClearPrevRefreshToken(ctx, txn, accessToken)
+	})
+}
+
 // RemoveDevices revokes one or more devices by deleting the entry in the database
 // matching with the given device IDs and user ID localpart.
 // If the devices don't exist, it will not return an error

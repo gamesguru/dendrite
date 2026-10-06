@@ -365,12 +365,15 @@ column userapi_dehydrated_devices | device_data | text | NO |
 column userapi_dehydrated_devices | device_id | text | NO |
 column userapi_dehydrated_devices | user_id | text | NO |
 column userapi_devices | access_token | text | NO |
+column userapi_devices | access_token_expires_ts | bigint | NO | 0
 column userapi_devices | created_ts | bigint | NO |
 column userapi_devices | device_id | text | NO |
 column userapi_devices | display_name | text | YES |
 column userapi_devices | ip | text | YES |
 column userapi_devices | last_seen_ts | bigint | NO |
 column userapi_devices | localpart | text | NO |
+column userapi_devices | prev_refresh_token_hash | text | YES |
+column userapi_devices | refresh_token_hash | text | YES |
 column userapi_devices | server_name | text | NO |
 column userapi_devices | session_id | bigint | NO | nextval('userapi_device_session_id_seq'::regclass)
 column userapi_devices | user_agent | text | YES |
@@ -619,6 +622,8 @@ index userapi_daily_visits | userapi_daily_visits_timestamp_idx | CREATE INDEX u
 index userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | CREATE UNIQUE INDEX userapi_dehydrated_devices_pkey ON public.userapi_dehydrated_devices USING btree (user_id)
 index userapi_devices | userapi_device_localpart_id_idx | CREATE UNIQUE INDEX userapi_device_localpart_id_idx ON public.userapi_devices USING btree (localpart, server_name, device_id)
 index userapi_devices | userapi_devices_pkey | CREATE UNIQUE INDEX userapi_devices_pkey ON public.userapi_devices USING btree (access_token)
+index userapi_devices | userapi_devices_prev_refresh_token_idx | CREATE UNIQUE INDEX userapi_devices_prev_refresh_token_idx ON public.userapi_devices USING btree (prev_refresh_token_hash)
+index userapi_devices | userapi_devices_refresh_token_idx | CREATE UNIQUE INDEX userapi_devices_refresh_token_idx ON public.userapi_devices USING btree (refresh_token_hash)
 index userapi_external_ids | userapi_external_ids_localpart_idx | CREATE INDEX userapi_external_ids_localpart_idx ON public.userapi_external_ids USING btree (localpart, server_name)
 index userapi_external_ids | userapi_external_ids_pkey | CREATE UNIQUE INDEX userapi_external_ids_pkey ON public.userapi_external_ids USING btree (provider_id, external_id)
 index userapi_key_backup_versions | userapi_key_backup_versions_idx | CREATE UNIQUE INDEX userapi_key_backup_versions_idx ON public.userapi_key_backup_versions USING btree (user_id, version)
@@ -1068,6 +1073,7 @@ constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_data_n
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_id_not_null | NOT NULL device_id
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | PRIMARY KEY (user_id)
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_user_id_not_null | NOT NULL user_id
+constraint userapi_devices | userapi_devices_access_token_expires_ts_not_null | NOT NULL access_token_expires_ts
 constraint userapi_devices | userapi_devices_access_token_not_null | NOT NULL access_token
 constraint userapi_devices | userapi_devices_created_ts_not_null | NOT NULL created_ts
 constraint userapi_devices | userapi_devices_device_id_not_null | NOT NULL device_id
@@ -1224,6 +1230,7 @@ migration syncapi: threaded receipts
 migration userapi: add account type
 migration userapi: add is active
 migration userapi: add last_seen_ts
+migration userapi: add refresh tokens
 migration userapi: case-fold email 3PIDs
 migration userapi: notification event threads
 migration userapi: rename tables

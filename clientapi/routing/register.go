@@ -255,6 +255,9 @@ type registerRequest struct {
 	// Prevent this user from logging in
 	InhibitLogin eventutil.WeakBoolean `json:"inhibit_login"`
 
+	// The client supports refresh tokens (MSC2918)
+	RefreshToken bool `json:"refresh_token"`
+
 	// Application Services place Type in the root of their registration
 	// request, whereas clients place it in the authDict struct.
 	Type authtypes.LoginType `json:"type"`
@@ -293,9 +296,11 @@ func newUserInteractiveResponse(
 
 // https://spec.matrix.org/v1.7/client-server-api/#post_matrixclientv3register
 type registerResponse struct {
-	UserID      string `json:"user_id"`
-	AccessToken string `json:"access_token,omitempty"`
-	DeviceID    string `json:"device_id,omitempty"`
+	UserID       string `json:"user_id"`
+	AccessToken  string `json:"access_token,omitempty"`
+	DeviceID     string `json:"device_id,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresInMs  int    `json:"expires_in_ms,omitempty"`
 }
 
 // recaptchaResponse represents the HTTP response from a Google Recaptcha server.
@@ -531,6 +536,7 @@ func Register(
 		r.DeviceID = data.DeviceID
 		r.InitialDisplayName = data.InitialDisplayName
 		r.InhibitLogin = data.InhibitLogin
+		r.RefreshToken = data.RefreshToken
 		// Check if the user already registered using this session, if so, return that result
 		if response, ok := sessions.getCompletedRegistration(sessionID); ok {
 			return util.JSONResponse{
@@ -850,7 +856,7 @@ func handleApplicationServiceRegistration(
 	return completeRegistration(
 		req.Context(), userAPI, r.Username, r.ServerName, "", "", appserviceID, req.RemoteAddr,
 		req.UserAgent(), r.Auth.Session, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
-		userapi.AccountTypeAppService,
+		userapi.AccountTypeAppService, refreshableLifetime(cfg, r.RefreshToken),
 	)
 }
 
@@ -870,7 +876,7 @@ func checkAndCompleteFlow(
 		resp := completeRegistration(
 			req.Context(), userAPI, r.Username, r.ServerName, "", r.Password, "", req.RemoteAddr,
 			req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
-			userapi.AccountTypeUser,
+			userapi.AccountTypeUser, refreshableLifetime(cfg, r.RefreshToken),
 		)
 		finaliseRegistrationToken(req, userAPI, sessionID, resp.Code == http.StatusOK)
 		return resp
@@ -977,6 +983,7 @@ func completeRegistration(
 	inhibitLogin eventutil.WeakBoolean,
 	deviceDisplayName, deviceID *string,
 	accType userapi.AccountType,
+	refreshLifetime time.Duration,
 ) util.JSONResponse {
 	if username == "" {
 		return util.JSONResponse{
@@ -1032,6 +1039,13 @@ func completeRegistration(
 			JSON: spec.Unknown("Failed to generate access token"),
 		}
 	}
+	refresh, err := newRefreshableTokens(refreshLifetime)
+	if err != nil {
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("Failed to generate refresh token"),
+		}
+	}
 
 	if displayName != "" {
 		_, _, err = userAPI.SetDisplayName(ctx, username, serverName, displayName)
@@ -1045,14 +1059,16 @@ func completeRegistration(
 
 	var devRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
-		Localpart:         username,
-		ServerName:        serverName,
-		AccessToken:       token,
-		DeviceDisplayName: deviceDisplayName,
-		DeviceID:          deviceID,
-		IPAddr:            ipAddr,
-		UserAgent:         userAgent,
-		FromRegistration:  true,
+		Localpart:            username,
+		ServerName:           serverName,
+		AccessToken:          token,
+		DeviceDisplayName:    deviceDisplayName,
+		DeviceID:             deviceID,
+		IPAddr:               ipAddr,
+		UserAgent:            userAgent,
+		FromRegistration:     true,
+		RefreshToken:         refresh.refreshToken,
+		AccessTokenExpiresTS: refresh.expiresTS,
 	}, &devRes)
 	if err != nil {
 		return util.JSONResponse{
@@ -1062,9 +1078,11 @@ func completeRegistration(
 	}
 
 	result := registerResponse{
-		UserID:      devRes.Device.UserID,
-		AccessToken: devRes.Device.AccessToken,
-		DeviceID:    devRes.Device.ID,
+		UserID:       devRes.Device.UserID,
+		AccessToken:  devRes.Device.AccessToken,
+		DeviceID:     devRes.Device.ID,
+		RefreshToken: refresh.refreshToken,
+		ExpiresInMs:  refresh.expiresInMs,
 	}
 	sessions.addCompletedRegistration(sessionID, result)
 
@@ -1252,7 +1270,7 @@ func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.Clien
 	if ssrr.Admin {
 		accType = userapi.AccountTypeAdmin
 	}
-	return completeRegistration(req.Context(), userAPI, ssrr.User, cfg.Matrix.ServerName, ssrr.DisplayName, ssrr.Password, "", req.RemoteAddr, req.UserAgent(), "", false, &ssrr.User, &deviceID, accType)
+	return completeRegistration(req.Context(), userAPI, ssrr.User, cfg.Matrix.ServerName, ssrr.DisplayName, ssrr.Password, "", req.RemoteAddr, req.UserAgent(), "", false, &ssrr.User, &deviceID, accType, 0)
 }
 
 // RegistrationTokenValidity implements the unauthenticated MSC3231 validity check.
