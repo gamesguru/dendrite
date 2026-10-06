@@ -1224,6 +1224,7 @@ migration syncapi: threaded receipts
 migration userapi: add account type
 migration userapi: add is active
 migration userapi: add last_seen_ts
+migration userapi: case-fold email 3PIDs
 migration userapi: notification event threads
 migration userapi: rename tables
 migration userapi: server names

@@ -55,12 +55,17 @@ type threepidStatements struct {
 	deleteThreePIDStmt              *sql.Stmt
 }
 
-func NewSQLiteThreePIDTable(db *sql.DB) (tables.ThreePIDTable, error) {
+func NewSQLiteThreePIDTable(ctx context.Context, db *sql.DB) (tables.ThreePIDTable, error) {
 	s := &threepidStatements{
 		db: db,
 	}
 	_, err := db.Exec(threepidSchema)
 	if err != nil {
+		return nil, err
+	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: case-fold email 3PIDs", Up: tables.FoldEmailThreePIDs})
+	if err = m.Up(ctx); err != nil {
 		return nil, err
 	}
 	return s, sqlutil.StatementList{

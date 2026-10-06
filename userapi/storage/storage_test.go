@@ -632,6 +632,42 @@ func Test_ThreePID(t *testing.T) {
 	})
 }
 
+// Test_ThreePIDCaseFolding covers MSC2265: email addresses match whatever
+// their case, while other media are compared as given.
+func Test_ThreePIDCaseFolding(t *testing.T) {
+	alice := test.NewUser(t)
+	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+	assert.NoError(t, err)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateUserDatabase(t, dbType)
+		defer closeDB()
+
+		assert.NoError(t, db.SaveThreePIDAssociation(ctx, "Strauß@Example.com", aliceLocalpart, aliceDomain, "email"))
+		threepids, err := db.GetThreePIDsForLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, []authtypes.ThreePID{{Address: "strauss@example.com", Medium: "email"}}, threepids)
+
+		for _, address := range []string{"strauss@example.com", "STRAUSS@EXAMPLE.COM", "Strauß@example.com"} {
+			gotLocalpart, _, err := db.GetLocalpartForThreePID(ctx, address, "email")
+			assert.NoError(t, err)
+			assert.Equal(t, aliceLocalpart, gotLocalpart, address)
+		}
+		err = db.SaveThreePIDAssociation(ctx, "STRAUSS@example.com", "someone_else", aliceDomain, "email")
+		assert.ErrorIs(t, err, storage.Err3PIDInUse)
+
+		assert.NoError(t, db.SaveThreePIDAssociation(ctx, "Bob", aliceLocalpart, aliceDomain, "msisdn"))
+		gotLocalpart, _, err := db.GetLocalpartForThreePID(ctx, "bob", "msisdn")
+		assert.NoError(t, err)
+		assert.Empty(t, gotLocalpart, "only email addresses are case-folded")
+
+		assert.NoError(t, db.RemoveThreePIDAssociation(ctx, "STRAUSS@EXAMPLE.COM", "email", aliceLocalpart, aliceDomain))
+		threepids, err = db.GetThreePIDsForLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, []authtypes.ThreePID{{Address: "Bob", Medium: "msisdn"}}, threepids)
+	})
+}
+
 func Test_Notification(t *testing.T) {
 	alice := test.NewUser(t)
 	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)

@@ -46,6 +46,7 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		return *reqErr
 	}
+	body.Email = authtypes.CanonicalThreePIDAddress("email", body.Email)
 	if body.IDServer == "" {
 		body.IDServer = cfg.EmailValidationServer
 		if body.IDServer == "" {
@@ -251,6 +252,7 @@ func Add3PID(req *http.Request, userAPI api.ClientUserAPI, device *api.Device, c
 const threePIDBindingPrefix = "org.zendrite.threepid_binding."
 
 func bindingDataType(medium, address string) string {
+	address = authtypes.CanonicalThreePIDAddress(medium, address)
 	return fmt.Sprintf("%s%x", threePIDBindingPrefix, sha256.Sum256([]byte(medium+"\x00"+address)))
 }
 
@@ -351,6 +353,7 @@ func remove3PID(req *http.Request, userAPI api.ClientUserAPI, device *api.Device
 	if body.Medium != "email" && body.Medium != "msisdn" {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam("Unsupported medium")}
 	}
+	body.Address = authtypes.CanonicalThreePIDAddress(body.Medium, body.Address)
 	servers := map[string]bool{body.IDServer: true}
 	if body.IDServer == "" {
 		var err error

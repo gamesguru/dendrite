@@ -115,6 +115,7 @@ func CheckAndProcessInvite(
 		err = ErrMissingParameter{}
 		return
 	}
+	body.Address = authtypes.CanonicalThreePIDAddress(body.Medium, body.Address)
 
 	lookupRes, storeInviteRes, err := queryIDServer(ctx, db, cfg, device, body, roomID)
 	if err != nil {

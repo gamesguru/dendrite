@@ -82,7 +82,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteProfileFieldsTable: %w", err)
 	}
-	threePIDTable, err := NewSQLiteThreePIDTable(db)
+	threePIDTable, err := NewSQLiteThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteThreePIDTable: %w", err)
 	}

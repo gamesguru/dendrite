@@ -48,8 +48,9 @@ type Contract struct {
 var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, RollbackTo: 1}
 
 // releaseLevel is the current shared-state surface level. Level 2 stores
-// per-thread notification counts, and level 3 custom profile fields.
-const releaseLevel = 3
+// per-thread notification counts, level 3 custom profile fields, and level 4
+// case-folds stored email 3PIDs.
+const releaseLevel = 4
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

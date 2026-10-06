@@ -467,6 +467,7 @@ func (d *Database) SaveThreePIDAssociation(
 	localpart string, serverName spec.ServerName,
 	medium string,
 ) (err error) {
+	threepid = authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		user, domain, err := d.ThreePIDs.SelectLocalpartForThreePID(
 			ctx, txn, threepid, medium,
@@ -497,7 +498,16 @@ func (d *Database) SaveThreePIDAssociation(
 func (d *Database) RemoveThreePIDAssociation(
 	ctx context.Context, threepid string, medium string, localpart string, serverName spec.ServerName,
 ) (err error) {
+	canonical := authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.ThreePIDs.DeleteThreePID(ctx, txn, canonical, medium, localpart, serverName); err != nil {
+			return err
+		}
+		if canonical == threepid {
+			return nil
+		}
+		// An address stored before case folding, which the migration could not
+		// fold because its folded form was taken, is removed as given.
 		return d.ThreePIDs.DeleteThreePID(ctx, txn, threepid, medium, localpart, serverName)
 	})
 }
@@ -510,6 +520,7 @@ func (d *Database) RemoveThreePIDAssociation(
 func (d *Database) GetLocalpartForThreePID(
 	ctx context.Context, threepid string, medium string,
 ) (localpart string, serverName spec.ServerName, err error) {
+	threepid = authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.ThreePIDs.SelectLocalpartForThreePID(ctx, nil, threepid, medium)
 }
 

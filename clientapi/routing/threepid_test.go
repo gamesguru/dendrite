@@ -454,3 +454,47 @@ func TestRequestEmailTokenIdentityErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestThreePIDEmailCaseFolding covers MSC2265 for the requests Zendrite makes
+// on behalf of the client: identity servers see case-folded email addresses,
+// and a binding is found whatever the case of the address given to unbind it.
+func TestThreePIDEmailCaseFolding(t *testing.T) {
+	cfg := threePIDConfig()
+	cfg.EmailValidationServer = "id.example"
+	device := &api.Device{UserID: "@alice:test"}
+	userAPI := &threePIDUserAPI{data: make(map[string]json.RawMessage)}
+	var requested, unbound []string
+	client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/_matrix/identity/api/v1/validate/email/requestToken":
+			require.NoError(t, req.ParseForm())
+			requested = append(requested, req.Form.Get("email"))
+			return identityResponse(200, `{"sid":"casefold-session"}`), nil
+		case "/_matrix/identity/v2/3pid/bind":
+			return identityResponse(200, `{"address":"Strauß@Example.com","medium":"email"}`), nil
+		case "/_matrix/identity/v2/3pid/unbind":
+			var body struct {
+				ThreePID struct {
+					Address string `json:"address"`
+				} `json:"threepid"`
+			}
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+			unbound = append(unbound, body.ThreePID.Address)
+			return identityResponse(200, `{}`), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL)
+			return nil, errors.New("unexpected request")
+		}
+	})))
+
+	res := RequestEmailToken(threePIDRequest(`{"email":" Strauß@Example.COM","client_secret":"casefold","send_attempt":1}`), userAPI, cfg, client)
+	requireThreePIDResponse(t, res, 200, "")
+	require.Equal(t, []string{"strauss@example.com"}, requested)
+
+	bind := `{"sid":"sid","client_secret":"secret","id_server":"id.example","id_access_token":"token"}`
+	requireThreePIDResponse(t, Bind3PID(threePIDRequest(bind), userAPI, device, cfg, client), 200, "")
+	res = Unbind3PID(threePIDRequest(`{"medium":"email","address":"STRAUSS@example.com"}`), userAPI, device, cfg, client)
+	requireThreePIDResponse(t, res, 200, "")
+	require.Equal(t, map[string]string{"id_server_unbind_result": "success"}, res.JSON)
+	require.Equal(t, []string{"strauss@example.com"}, unbound)
+}

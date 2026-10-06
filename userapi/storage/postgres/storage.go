@@ -85,7 +85,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresProfileFieldsTable: %w", err)
 	}
-	threePIDTable, err := NewPostgresThreePIDTable(db)
+	threePIDTable, err := NewPostgresThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresThreePIDTable: %w", err)
 	}
