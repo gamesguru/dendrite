@@ -266,6 +266,10 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 			Version: migrationName,
 			Up:      deltas.UpRenameOutputRoomEventsIndex,
 		},
+		sqlutil.Migration{
+			Version: "syncapi: restore event IDs of redacted output events",
+			Up:      deltas.UpRestoreOutputRoomEventIDs,
+		},
 	)
 	err = m.Up(context.Background())
 	if err != nil {

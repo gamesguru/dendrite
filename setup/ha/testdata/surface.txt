@@ -1224,6 +1224,7 @@ migration syncapi: drop sent_by_token
 migration syncapi: fix sequences
 migration syncapi: notification thread counts
 migration syncapi: rename dupe index (output_room_events)
+migration syncapi: restore event IDs of redacted output events
 migration syncapi: set history visibility for existing events
 migration syncapi: store output event timestamps separately
 migration syncapi: threaded receipts

@@ -49,8 +49,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 
 // releaseLevel is the current shared-state surface level. Level 2 stores
 // per-thread notification counts, level 3 custom profile fields, level 4
-// case-folds stored email 3PIDs, and level 5 adds refresh tokens to devices.
-const releaseLevel = 5
+// case-folds stored email 3PIDs, level 5 adds refresh tokens to devices, and
+// level 6 restores the event IDs of redacted output events.
+const releaseLevel = 6
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

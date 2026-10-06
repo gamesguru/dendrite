@@ -33,6 +33,10 @@ func (h *HeaderedEvent) CacheCost() int {
 }
 
 func (h *HeaderedEvent) MarshalJSON() ([]byte, error) {
+	// Room v3+ events compute their ID lazily, and Redact drops the cached one.
+	// ToHeaderedJSON reads only the cache, so resolve the ID first or the
+	// header is written empty (fixed in gomatrixserverlib#25).
+	h.EventID()
 	return h.ToHeaderedJSON()
 }
 
