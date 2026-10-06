@@ -136,7 +136,8 @@ func (a *ApplicationService) IsInterestedInRoomID(
 }
 
 // IsInterestedInUserID returns a bool on whether an application service's
-// namespace includes the given user ID.
+// namespace includes the given user ID. User namespaces only cover local
+// users (MSC3905); callers that may see remote users must check that first.
 func (a *ApplicationService) IsInterestedInUserID(
 	userID string,
 ) bool {

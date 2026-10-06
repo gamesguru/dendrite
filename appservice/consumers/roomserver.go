@@ -262,14 +262,14 @@ func (s *OutputRoomEventConsumer) appserviceIsInterestedInEvent(ctx context.Cont
 	switch {
 	case appservice.URL == "":
 		return false
-	case appservice.IsInterestedInUserID(user):
+	case s.isInterestedInUser(appservice, user):
 		return true
 	case appservice.IsInterestedInRoomID(event.RoomID().String()):
 		return true
 	}
 
 	if event.Type() == spec.MRoomMember && event.StateKey() != nil {
-		if appservice.IsInterestedInUserID(*event.StateKey()) {
+		if s.isInterestedInUser(appservice, *event.StateKey()) {
 			return true
 		}
 	}
@@ -292,6 +292,17 @@ func (s *OutputRoomEventConsumer) appserviceIsInterestedInEvent(ctx context.Cont
 
 	// Check if any of the members in the room match the appservice
 	return s.appserviceJoinedAtEvent(ctx, event, appservice)
+}
+
+// isInterestedInUser reports whether userID is a local user in one of the
+// application service's user namespaces. User namespaces never match remote
+// users (MSC3905), so a remote user cannot make an event interesting.
+func (s *OutputRoomEventConsumer) isInterestedInUser(appservice *config.ApplicationService, userID string) bool {
+	_, domain, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil || !s.cfg.Matrix.IsLocalServerName(domain) {
+		return false
+	}
+	return appservice.IsInterestedInUserID(userID)
 }
 
 // appserviceJoinedAtEvent returns a boolean depending on whether a given
@@ -323,7 +334,7 @@ func (s *OutputRoomEventConsumer) appserviceJoinedAtEvent(ctx context.Context, e
 			case err != nil:
 				continue
 			case membership.Membership == spec.Join:
-				if appservice.IsInterestedInUserID(*ev.StateKey) {
+				if s.isInterestedInUser(appservice, *ev.StateKey) {
 					return true
 				}
 			}
