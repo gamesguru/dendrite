@@ -28,6 +28,7 @@ type ClientAPI struct {
 
 	// EmailValidationServer handles email verification when clients omit id_server.
 	// Use a hostname listed in global.trusted_third_party_id_servers, without a scheme.
+	// Zendrite registers with it as the server notices user to use its v2 API.
 	EmailValidationServer string `yaml:"email_validation_server"`
 	// If set, prevents guest accounts from being created. Only takes
 	// effect if registration is enabled, otherwise guests registration

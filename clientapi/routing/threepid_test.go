@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -22,6 +23,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth"
 	"codefloe.com/pat-s/zendrite/clientapi/threepid"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -67,7 +69,19 @@ func (a *threePIDUserAPI) QueryAccountByPassword(_ context.Context, req *api.Que
 
 type threePIDTransport func(*http.Request) (*http.Response, error)
 
-func (f threePIDTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+// RoundTrip answers the homeserver's registration with the identity server,
+// which it makes before its first request without a client token.
+func (f threePIDTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == "/_matrix/identity/v2/account/register" {
+		return identityResponse(200, `{"token":"server-token"}`), nil
+	}
+	return f(req)
+}
+
+func (a *threePIDUserAPI) PerformOpenIDTokenCreation(_ context.Context, req *api.PerformOpenIDTokenCreationRequest, res *api.PerformOpenIDTokenCreationResponse) error {
+	res.Token = api.OpenIDToken{Token: "openid", UserID: req.UserID, ExpiresAtMS: time.Now().Add(time.Hour).UnixMilli()}
+	return nil
+}
 
 func identityResponse(code int, body string) *http.Response {
 	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
@@ -127,11 +141,12 @@ func TestAdd3PID(t *testing.T) {
 				require.Contains(t, req.URL.Path, "getValidated3pid")
 				checks++
 				if tc.validation != "" {
-					return identityResponse(200, tc.validation), nil
+					return identityResponse(400, tc.validation), nil
 				}
 				return identityResponse(200, `{"address":"alice@example.com","medium":"email","validated_at":1}`), nil
 			})))
-			_, err := threepid.CreateSession(t.Context(), threepid.EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, cfg, client)
+			identity := threepid.IdentityAuth{UserAPI: userAPI, Config: cfg, Client: client}
+			_, err := threepid.CreateSession(t.Context(), threepid.EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, identity)
 			require.NoError(t, err)
 			body := tc.body
 			if body == "" {
@@ -302,13 +317,16 @@ func TestLegacy3PID(t *testing.T) {
 				client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
 					if strings.HasSuffix(req.URL.Path, "/bind") {
 						binds++
-						return identityResponse(200, `{}`), nil
+						require.Equal(t, "Bearer token", req.Header.Get("Authorization"))
+						return identityResponse(200, `{"address":"alice@example.com","medium":"email"}`), nil
 					}
+					require.Equal(t, "/_matrix/identity/v2/3pid/getValidated3pid", req.URL.Path)
+					require.Equal(t, "Bearer token", req.Header.Get("Authorization"))
 					require.Equal(t, "s&sid=injected", req.URL.Query().Get("sid"))
 					require.Equal(t, "c&client_secret=injected", req.URL.Query().Get("client_secret"))
 					return identityResponse(200, `{"address":"alice@example.com","medium":"email"}`), nil
 				})))
-				body := fmt.Sprintf(`{"three_pid_creds":{"sid":"s&sid=injected","client_secret":"c&client_secret=injected","id_server":"id.example"},"bind":%t}`, bind)
+				body := fmt.Sprintf(`{"three_pid_creds":{"sid":"s&sid=injected","client_secret":"c&client_secret=injected","id_server":"id.example","id_access_token":"token"},"bind":%t}`, bind)
 				res := CheckAndSave3PIDAssociation(threePIDRequest(body), userAPI, &api.Device{UserID: "@alice:test"}, threePIDConfig(), client)
 				if duplicate {
 					requireThreePIDResponse(t, res, 400, "M_THREEPID_IN_USE")
@@ -386,13 +404,14 @@ func TestRequestEmailTokenWithoutIdentityServer(t *testing.T) {
 				require.Equal(t, "https", req.URL.Scheme)
 				require.Equal(t, tc.expected, req.URL.Host)
 				switch req.URL.Path {
-				case "/_matrix/identity/api/v1/validate/email/requestToken":
-					require.NoError(t, req.ParseForm())
-					require.Equal(t, "alice@example.com", req.Form.Get("email"))
-					require.Equal(t, tc.name, req.Form.Get("client_secret"))
-					require.Equal(t, "1", req.Form.Get("send_attempt"))
+				case "/_matrix/identity/v2/validate/email/requestToken":
+					var body map[string]any
+					require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+					require.Equal(t, map[string]any{"email": "alice@example.com", "client_secret": tc.name, "send_attempt": float64(1)}, body)
+					require.Equal(t, "Bearer server-token", req.Header.Get("Authorization"))
 					return identityResponse(200, `{"sid":"email-session"}`), nil
-				case "/_matrix/identity/api/v1/3pid/getValidated3pid":
+				case "/_matrix/identity/v2/3pid/getValidated3pid":
+					require.Equal(t, "Bearer server-token", req.Header.Get("Authorization"))
 					require.Equal(t, "email-session", req.URL.Query().Get("sid"))
 					require.Equal(t, tc.name, req.URL.Query().Get("client_secret"))
 					return identityResponse(200, `{"address":"alice@example.com","medium":"email","validated_at":1}`), nil
@@ -455,6 +474,29 @@ func TestRequestEmailTokenIdentityErrors(t *testing.T) {
 	}
 }
 
+type nonMemberRoomserverAPI struct {
+	roomserverAPI.ClientRoomserverAPI
+}
+
+func (nonMemberRoomserverAPI) QueryMembershipForUser(_ context.Context, _ *roomserverAPI.QueryMembershipForUserRequest, res *roomserverAPI.QueryMembershipForUserResponse) error {
+	res.IsInRoom = false
+	return nil
+}
+
+// TestThreePIDInviteNeedsMembership checks that a 3PID invite from someone
+// who is not in the room never reaches the identity server, which would
+// otherwise learn the room's details and email them to the invitee.
+func TestThreePIDInviteNeedsMembership(t *testing.T) {
+	client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("identity server contacted: %s", req.URL)
+		return nil, errors.New("unexpected request")
+	})))
+	body := `{"id_server":"id.example","id_access_token":"token","medium":"email","address":"bob@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	res := SendInvite(req, &threePIDUserAPI{}, &api.Device{UserID: "@alice:test"}, "!room:test", threePIDConfig(), nonMemberRoomserverAPI{}, nil, client)
+	requireThreePIDResponse(t, res, http.StatusForbidden, "M_FORBIDDEN")
+}
+
 // TestThreePIDEmailCaseFolding covers MSC2265 for the requests Zendrite makes
 // on behalf of the client: identity servers see case-folded email addresses,
 // and a binding is found whatever the case of the address given to unbind it.
@@ -466,9 +508,12 @@ func TestThreePIDEmailCaseFolding(t *testing.T) {
 	var requested, unbound []string
 	client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
-		case "/_matrix/identity/api/v1/validate/email/requestToken":
-			require.NoError(t, req.ParseForm())
-			requested = append(requested, req.Form.Get("email"))
+		case "/_matrix/identity/v2/validate/email/requestToken":
+			var body struct {
+				Email string `json:"email"`
+			}
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+			requested = append(requested, body.Email)
 			return identityResponse(200, `{"sid":"casefold-session"}`), nil
 		case "/_matrix/identity/v2/3pid/bind":
 			return identityResponse(200, `{"address":"Strauß@Example.com","medium":"email"}`), nil

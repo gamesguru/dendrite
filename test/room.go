@@ -41,6 +41,7 @@ type Room struct {
 	preset        Preset
 	guestCanJoin  bool
 	noPowerLevels bool
+	roomType      string
 	visibility    gomatrixserverlib.HistoryVisibility
 	creator       *User
 
@@ -124,6 +125,9 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 	// (the sender is the implicit creator).
 	if !verImpl.PrivilegedCreators() {
 		createContent["creator"] = r.creator.ID
+	}
+	if r.roomType != "" {
+		createContent["type"] = r.roomType
 	}
 	createEv := r.CreateAndInsert(t, r.creator, spec.MRoomCreate, createContent, WithStateKey(""))
 	// For domainless room IDs (v12+), derive the room ID from the create event.
@@ -299,6 +303,13 @@ func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) RoomModifier
 func RoomVersion(ver gomatrixserverlib.RoomVersion) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.Version = ver
+	}
+}
+
+// RoomType sets the room's type in its create event, such as m.space.
+func RoomType(roomType string) RoomModifier {
+	return func(t *testing.T, r *Room) {
+		r.roomType = roomType
 	}
 }
 

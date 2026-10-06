@@ -227,7 +227,9 @@ client_api:
 
   # Identity server used for email verification when clients such as Element omit id_server.
   # Set a hostname (without https://) listed in global.trusted_third_party_id_servers.
-  # The server must support the legacy identity API v1 email validation endpoints.
+  # Zendrite uses the identity service API v2 and registers with this server as the
+  # server notices user (server_notices.local_part), which the identity server checks
+  # with an OpenID token over federation, so it must be able to reach this homeserver.
   # Email addresses and verification client secrets are sent to this server.
   # Leave empty to require an explicit id_server in email verification requests.
   email_validation_server: ''

@@ -1229,14 +1229,34 @@ func Test3PID(t *testing.T) {
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 
 		identityServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.Contains(r.URL.String(), "getValidated3pid"):
+			// The homeserver registers with the v2 API and authenticates every
+			// other request with the token it got.
+			switch r.URL.Path {
+			case "/_matrix/identity/v2/account/register":
+				_, _ = w.Write([]byte(`{"token":"server-token"}`))
+				return
+			case "/_matrix/identity/v2/3pid/unbind":
+				// Signed with the server's key rather than a token.
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer server-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"errcode":"M_UNAUTHORIZED","error":"no token"}`))
+				return
+			}
+			switch r.URL.Path {
+			case "/_matrix/identity/v2/3pid/getValidated3pid":
 				resp := threepid.GetValidatedResponse{}
 				switch r.URL.Query().Get("client_secret") {
 				case "fail":
-					resp.ErrCode = string(spec.ErrorSessionNotValidated)
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"errcode":"M_SESSION_NOT_VALIDATED","error":"not validated"}`))
+					return
 				case "fail2":
-					resp.ErrCode = "some other error"
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"errcode":"M_UNKNOWN","error":"some other error"}`))
+					return
 				case "fail3":
 					_, _ = w.Write([]byte("{invalidJson"))
 					return
@@ -1248,9 +1268,13 @@ func Test3PID(t *testing.T) {
 					resp.Address = "somerandom@address.com"
 				}
 				_ = json.NewEncoder(w).Encode(resp)
-			case strings.Contains(r.URL.String(), "requestToken"):
+			case "/_matrix/identity/v2/3pid/bind":
+				_, _ = w.Write([]byte(`{"medium":"email","address":"somerandom@address.com"}`))
+			case "/_matrix/identity/v2/validate/email/requestToken":
 				resp := threepid.SID{SID: "randomSID"}
 				_ = json.NewEncoder(w).Encode(resp)
+			default:
+				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
 		defer identityServer.Close()

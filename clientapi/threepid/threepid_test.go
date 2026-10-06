@@ -40,7 +40,8 @@ func TestCheckAssociation(t *testing.T) {
 			client := fclient.NewClient(fclient.WithTransport(identityTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: tc.code, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			})))
-			verified, _, _, err := CheckAssociation(t.Context(), Credentials{SID: "sid", Secret: "secret", IDServer: "id.example"}, cfg, client)
+			auth := IdentityAuth{Token: "token", Config: cfg, Client: client}
+			verified, _, _, err := CheckAssociation(t.Context(), Credentials{SID: "sid", Secret: "secret", IDServer: "id.example"}, auth)
 			require.Equal(t, tc.verified, verified)
 			if tc.fails {
 				require.Error(t, err)
@@ -71,7 +72,8 @@ func TestCreateSessionErrorDetails(t *testing.T) {
 	client := fclient.NewClient(fclient.WithTransport(identityTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"errcode":"M_FORBIDDEN","error":"Verification disabled"}`))}, nil
 	})))
-	sid, err := CreateSession(t.Context(), EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, cfg, client)
+	auth := IdentityAuth{Token: "token", Config: cfg, Client: client}
+	sid, err := CreateSession(t.Context(), EmailAssociationRequest{IDServer: "id.example", Secret: "secret", Email: "alice@example.com"}, auth)
 	require.Empty(t, sid)
 	require.ErrorContains(t, err, "id.example (HTTP 403)")
 	require.ErrorContains(t, err, "M_FORBIDDEN")

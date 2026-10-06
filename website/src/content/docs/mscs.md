@@ -100,6 +100,9 @@ Deactivating an account removes its custom fields.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC2265](https://github.com/matrix-org/matrix-spec-proposals/pull/2265) | Case folding of email addresses | 1.1 | Implemented: email 3PIDs are case-folded before they are stored, looked up or sent to an identity server. Addresses stored by older versions are folded on upgrade, except where the folded form is already in use, which is logged |
+| [MSC2713](https://github.com/matrix-org/matrix-spec-proposals/pull/2713) | Remove deprecated identity service endpoints | 1.1 | Implemented: identity servers are only called through the authenticated v2 API, with the client's `id_access_token` or, for `email_validation_server`, a token the homeserver registers for its server notices user. 3PID invites require `id_access_token` and use hashed lookups |
+| [MSC3288](https://github.com/matrix-org/matrix-spec-proposals/pull/3288) | Room type in `store-invite` | 1.2 | Implemented: 3PID invites send `room_type`, along with the room's name, avatar, join rule and alias |
+| [MSC2858](https://github.com/matrix-org/matrix-spec-proposals/pull/2858) | Multiple SSO identity providers | 1.1 | Not applicable: SSO is only available through [MSC3861](#msc3861-oidc-delegated-authentication), where the authentication service offers the upstream providers, so the `m.login.sso` flow lists no `identity_providers` |
 | [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Available through MSC3861 delegated authentication |
 | [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | 1.15 | Opt-in (`msc3861`) |
 

@@ -539,6 +539,7 @@ func Setup(
 			return SendBan(req, userAPI, device, vars["roomID"], cfg, rsAPI, asAPI)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
+	threePIDClient := base.CreateIdentityClient(zendriteCfg)
 	v3mux.Handle("/rooms/{roomID}/invite",
 		httputil.MakeAuthAPI("membership", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			if r := rateLimits.Limit(req, device); r != nil {
@@ -548,7 +549,7 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
-			return SendInvite(req, userAPI, device, vars["roomID"], cfg, rsAPI, asAPI)
+			return SendInvite(req, userAPI, device, vars["roomID"], cfg, rsAPI, asAPI, threePIDClient)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/rooms/{roomID}/kick",
@@ -1148,8 +1149,6 @@ func Setup(
 	unstableMux.Handle("/uk.tcpip.msc4133/profile/{userID}/{keyName}", changeProfileField).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
 	// Browsers use the OPTIONS HTTP method to check if the CORS policy allows
 	// PUT requests, so we need to allow this method
-
-	threePIDClient := base.CreateIdentityClient(zendriteCfg)
 
 	v3mux.Handle("/account/3pid",
 		httputil.MakeAuthAPI("account_3pid", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

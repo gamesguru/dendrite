@@ -48,7 +48,10 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 	}
 	body.Email = authtypes.CanonicalThreePIDAddress("email", body.Email)
 	if body.IDServer == "" {
+		// The homeserver authenticates with its own token to the server it
+		// is configured with.
 		body.IDServer = cfg.EmailValidationServer
+		body.IDAccessToken = ""
 		if body.IDServer == "" {
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
@@ -87,7 +90,8 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 		}
 	}
 
-	resp.SID, err = threepid.CreateSession(req.Context(), body, cfg, client)
+	auth := threepid.IdentityAuth{Token: body.IDAccessToken, UserAPI: threePIDAPI, Config: cfg, Client: client}
+	resp.SID, err = threepid.CreateSession(req.Context(), body, auth)
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("threepid.CreateSession failed")
 		return threePIDError(err, body.IDServer)
@@ -118,7 +122,8 @@ func save3PIDAssociation(req *http.Request, threePIDAPI api.ClientUserAPI, devic
 	}
 
 	// Check if the association has been validated
-	verified, address, medium, err := threepid.CheckAssociation(req.Context(), body.Creds, cfg, client)
+	auth := threepid.IdentityAuth{Token: body.Creds.IDAccessToken, UserAPI: threePIDAPI, Config: cfg, Client: client}
+	verified, address, medium, err := threepid.CheckAssociation(req.Context(), body.Creds, auth)
 	{
 		var errCase0 threepid.ErrNotTrusted
 		switch {
@@ -170,13 +175,9 @@ func save3PIDAssociation(req *http.Request, threePIDAPI api.ClientUserAPI, devic
 
 	if body.Bind {
 		// Publish the association on the identity server if requested
-		err = threepid.PublishAssociation(req.Context(), body.Creds, device.UserID, cfg, client)
-		if err != nil {
-			util.GetLogger(req.Context()).WithError(err).Error("threepid.PublishAssociation failed")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.Unknown("Internal server error"),
-			}
+		if _, err = threepid.Bind(req.Context(), body.Creds, device.UserID, auth); err != nil {
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.Bind failed")
+			return threePIDError(err, body.Creds.IDServer)
 		}
 		if err = saveBinding(req, threePIDAPI, device.UserID, medium, address, body.Creds.IDServer, true); err != nil {
 			return util.ErrorResponse(err)
@@ -271,17 +272,15 @@ func threePIDError(err error, server string) util.JSONResponse {
 
 // Bind3PID publishes a binding without modifying the local account association.
 func Bind3PID(req *http.Request, userAPI api.ClientUserAPI, device *api.Device, cfg *config.ClientAPI, client *fclient.Client) util.JSONResponse {
-	var body struct {
-		threepid.Credentials
-		AccessToken string `json:"id_access_token"`
-	}
+	var body threepid.Credentials
 	if res := httputil.UnmarshalJSONRequest(req, &body); res != nil {
 		return *res
 	}
-	if body.SID == "" || body.Secret == "" || body.IDServer == "" || body.AccessToken == "" {
+	if body.SID == "" || body.Secret == "" || body.IDServer == "" || body.IDAccessToken == "" {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("sid, client_secret, id_server and id_access_token are required")}
 	}
-	result, err := threepid.Bind(req.Context(), body.Credentials, body.AccessToken, device.UserID, cfg, client)
+	auth := threepid.IdentityAuth{Token: body.IDAccessToken, UserAPI: userAPI, Config: cfg, Client: client}
+	result, err := threepid.Bind(req.Context(), body, device.UserID, auth)
 	if err != nil {
 		return threePIDError(err, body.IDServer)
 	}

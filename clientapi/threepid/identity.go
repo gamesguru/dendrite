@@ -5,7 +5,6 @@
 package threepid
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,31 +38,12 @@ func identityError(resp *http.Response) error {
 	return &IdentityServerError{Code: resp.StatusCode, MatrixError: matrixError, Body: body}
 }
 
-// Bind publishes an association using the authenticated identity service v2 API.
-func Bind(ctx context.Context, creds Credentials, token, userID string, cfg *config.ClientAPI, client *fclient.Client) (GetValidatedResponse, error) {
+// Bind publishes an association between a validated third-party identifier
+// and a Matrix user ID on the identity server.
+func Bind(ctx context.Context, creds Credentials, userID string, auth IdentityAuth) (GetValidatedResponse, error) {
 	var result GetValidatedResponse
-	if err := isTrusted(creds.IDServer, cfg); err != nil {
-		return result, err
-	}
-	body, err := json.Marshal(map[string]string{"sid": creds.SID, "client_secret": creds.Secret, "mxid": userID})
-	if err != nil {
-		return result, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+creds.IDServer+"/_matrix/identity/v2/3pid/bind", bytes.NewReader(body))
-	if err != nil {
-		return result, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.DoHTTPRequest(ctx, req)
-	if err != nil {
-		return result, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return result, identityError(resp)
-	}
-	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	body := map[string]string{"sid": creds.SID, "client_secret": creds.Secret, "mxid": userID}
+	if err := auth.do(ctx, creds.IDServer, http.MethodPost, "/_matrix/identity/v2/3pid/bind", nil, body, &result); err != nil {
 		return result, err
 	}
 	if result.Address == "" || (result.Medium != "email" && result.Medium != "msisdn") {
