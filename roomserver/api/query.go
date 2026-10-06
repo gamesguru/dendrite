@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -441,7 +442,30 @@ type QueryLeftUsersResponse struct {
 }
 
 type JoinRoomQuerier struct {
-	Roomserver RestrictedJoinAPI
+	Roomserver            RestrictedJoinAPI
+	TargetRoomID          string
+	allowedRoomMembership bool
+}
+
+const (
+	ErrorUnableToGrantJoin     spec.MatrixErrorCode = "M_UNABLE_TO_GRANT_JOIN"
+	ErrorUnableToAuthoriseJoin spec.MatrixErrorCode = "M_UNABLE_TO_AUTHORISE_JOIN" //nolint:misspell // Matrix specifies British spelling.
+)
+
+// RestrictedJoinError corrects the legacy error codes returned by
+// gomatrixserverlib. A validated allow condition with no local authorizing
+// user needs another server to grant the join; unknown conditions cannot be
+// authorized. Track the membership check instead of matching error messages.
+func (rq *JoinRoomQuerier) RestrictedJoinError(err error) error {
+	var matrixErr spec.MatrixError
+	if !errors.As(err, &matrixErr) || matrixErr.ErrCode != spec.ErrorUnableToAuthoriseJoin {
+		return err
+	}
+	matrixErr.ErrCode = ErrorUnableToAuthoriseJoin
+	if rq.allowedRoomMembership {
+		matrixErr.ErrCode = ErrorUnableToGrantJoin
+	}
+	return matrixErr
 }
 
 func (rq *JoinRoomQuerier) CurrentStateEvent(ctx context.Context, roomID spec.RoomID, eventType string, stateKey string) (gomatrixserverlib.PDU, error) {
@@ -478,6 +502,10 @@ func (rq *JoinRoomQuerier) RestrictedRoomJoinInfo(ctx context.Context, roomID sp
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.GetLocallyJoinedUsers failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)
+	}
+
+	if roomID.String() != rq.TargetRoomID && res.IsInRoom && userJoinedToRoom {
+		rq.allowedRoomMembership = true
 	}
 
 	return &gomatrixserverlib.RestrictedRoomJoinInfo{

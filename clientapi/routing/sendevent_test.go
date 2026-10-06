@@ -202,7 +202,7 @@ func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 
 		cfg := &config.ClientAPI{}
 
-		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil)
+		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil, nil)
 
 		if resp.Code != http.StatusOK {
 			t.Fatalf("non-200 HTTP code returned: %v\nfull response: %v", resp.Code, resp)
@@ -248,7 +248,7 @@ func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 
 		cfg := &config.ClientAPI{}
 
-		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil)
+		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil, nil)
 
 		if resp.Code != http.StatusOK {
 			t.Fatalf("non-200 HTTP code returned: %v\nfull response: %v", resp.Code, resp)
@@ -324,7 +324,7 @@ func TestSendEventConcurrentTransactionRetries(t *testing.T) {
 				t.Error(reqErr)
 				return
 			}
-			responses <- SendEvent(req, device, roomID, "m.room.message", &txnID, nil, &config.ClientAPI{}, rs, cache)
+			responses <- SendEvent(req, device, roomID, "m.room.message", &txnID, nil, &config.ClientAPI{}, rs, cache, nil)
 		})
 	}
 	group.Wait()

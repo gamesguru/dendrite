@@ -38,7 +38,8 @@ const upsertFallbackKeysSQL = "" +
 	"INSERT INTO keyserver_fallback_keys (user_id, device_id, key_id, algorithm, ts_added_secs, key_json, used)" +
 	" VALUES ($1, $2, $3, $4, $5, $6, false)" +
 	" ON CONFLICT (user_id, device_id, algorithm)" +
-	" DO UPDATE SET key_id = $3, key_json = $6, used = false"
+	" DO UPDATE SET key_id = $3, key_json = $6, used = false" +
+	" WHERE keyserver_fallback_keys.key_id <> $3 OR keyserver_fallback_keys.key_json <> $6"
 
 const selectFallbackUnusedAlgorithmsSQL = "" +
 	"SELECT algorithm FROM keyserver_fallback_keys WHERE user_id = $1 AND device_id = $2 AND used = false"
@@ -130,7 +131,7 @@ func (s *fallbackKeysStatements) SelectAndUpdateFallbackKey(
 		return nil, err
 	}
 	updateFallbackKeyUsedStmt := sqlutil.TxStmtContext(ctx, txn, s.updateFallbackKeyUsedStmt)
-	_, err = updateFallbackKeyUsedStmt.ExecContext(ctx, userID, deviceID, algorithm, keyID)
+	_, err = updateFallbackKeyUsedStmt.ExecContext(ctx, userID, deviceID, keyID, algorithm)
 	return map[string]json.RawMessage{
 		algorithm + ":" + keyID: json.RawMessage(keyJSON),
 	}, err

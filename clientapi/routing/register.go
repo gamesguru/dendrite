@@ -9,6 +9,7 @@ package routing
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1252,4 +1253,35 @@ func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.Clien
 		accType = userapi.AccountTypeAdmin
 	}
 	return completeRegistration(req.Context(), userAPI, ssrr.User, cfg.Matrix.ServerName, ssrr.DisplayName, ssrr.Password, "", req.RemoteAddr, req.UserAgent(), "", false, &ssrr.User, &deviceID, accType)
+}
+
+// RegistrationTokenValidity implements the unauthenticated MSC3231 validity check.
+func RegistrationTokenValidity(req *http.Request, userAPI userapi.ClientUserAPI, cfg *config.ClientAPI) util.JSONResponse {
+	if cfg.RegistrationDisabled && !cfg.RegistrationRequiresToken {
+		return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Registration is not enabled on this homeserver.")}
+	}
+	tokenString := req.URL.Query().Get("token")
+	if tokenString == "" {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("missing registration token")}
+	}
+	token, err := userAPI.PerformAdminGetRegistrationToken(req.Context(), tokenString)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		util.GetLogger(req.Context()).WithError(err).Error("failed to query registration token")
+		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	valid := err == nil && token != nil
+	if valid && token.ExpiryTime != nil {
+		valid = *token.ExpiryTime > time.Now().UnixMilli()
+	}
+	if valid && token.UsesAllowed != nil {
+		var used int64
+		if token.Pending != nil {
+			used += int64(*token.Pending)
+		}
+		if token.Completed != nil {
+			used += int64(*token.Completed)
+		}
+		valid = used < int64(*token.UsesAllowed)
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: map[string]bool{"valid": valid}}
 }

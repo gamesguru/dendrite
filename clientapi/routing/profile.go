@@ -117,6 +117,11 @@ func lookupProfile(
 			}
 		}
 
+		var remoteErr spec.HTTPError
+		if errors.As(err, &remoteErr) && remoteErr.Code == http.StatusForbidden {
+			return nil, &util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Profile lookup is forbidden by the remote server.")}
+		}
+
 		util.GetLogger(req.Context()).WithError(err).Error("getProfile failed")
 		return nil, &util.JSONResponse{
 			Code: http.StatusInternalServerError,

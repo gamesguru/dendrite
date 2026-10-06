@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -70,6 +71,7 @@ func SendEvent(
 	cfg *config.ClientAPI,
 	rsAPI api.ClientRoomserverAPI,
 	txnCache *transactions.Cache,
+	federation fclient.FederationClient,
 ) util.JSONResponse {
 	roomVersion, err := rsAPI.QueryRoomVersionForRoom(req.Context(), roomID)
 	if err != nil {
@@ -187,30 +189,9 @@ func SendEvent(
 				JSON: spec.InvalidParam("Request contains invalid aliases."),
 			}
 		}
-		aliasRes := &api.GetAliasesForRoomIDResponse{}
-		if err = rsAPI.GetAliasesForRoomID(req.Context(), &api.GetAliasesForRoomIDRequest{RoomID: roomID}, aliasRes); err != nil {
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
-		}
-		var found int
-		requestAliases := make([]string, len(aliasReq.AltAliases)+1)
-		copy(requestAliases, aliasReq.AltAliases)
-		requestAliases[len(aliasReq.AltAliases)] = aliasReq.Alias
-		for _, alias := range aliasRes.Aliases {
-			for _, altAlias := range requestAliases {
-				if altAlias == alias {
-					found++
-				}
-			}
-		}
-		// check that we found at least the same amount of existing aliases as are in the request
-		if aliasReq.Alias != "" && found < len(requestAliases) {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.BadAlias("No matching alias found."),
-			}
+
+		if resErr = validateCanonicalAliases(req.Context(), aliasReq, roomID, cfg, rsAPI, federation); resErr != nil {
+			return *resErr
 		}
 	}
 
@@ -493,6 +474,59 @@ func validateThreadRelation(ctx context.Context, rsAPI api.ClientRoomserverAPI, 
 				JSON: spec.Unknown("Cannot start a thread from an event with a relation"),
 			}
 		}
+	}
+	return nil
+}
+
+// validateCanonicalAliases resolves newly advertised aliases, including remote ones.
+// Existing aliases need not be resolved again, as they may have been removed from
+// the directory since the previous state event (MSC2432).
+func validateCanonicalAliases(ctx context.Context, content api.AliasEvent, roomID string, cfg *config.ClientAPI, rsAPI api.ClientRoomserverAPI, federation fclient.FederationClient) *util.JSONResponse {
+	tuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCanonicalAlias, StateKey: ""}
+	var state api.QueryCurrentStateResponse
+	if err := rsAPI.QueryCurrentState(ctx, &api.QueryCurrentStateRequest{RoomID: roomID, StateTuples: []gomatrixserverlib.StateKeyTuple{tuple}}, &state); err != nil {
+		return &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	existing := make(map[string]bool)
+	if event := state.StateEvents[tuple]; event != nil {
+		var previous api.AliasEvent
+		if err := json.Unmarshal(event.Content(), &previous); err != nil {
+			return &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
+		existing[previous.Alias] = true
+		for _, alias := range previous.AltAliases {
+			existing[alias] = true
+		}
+	}
+	aliases := append([]string{}, content.AltAliases...)
+	if content.Alias != "" {
+		aliases = append(aliases, content.Alias)
+	}
+	for _, alias := range aliases {
+		if existing[alias] {
+			continue
+		}
+		_, domain, err := gomatrixserverlib.SplitID('#', alias)
+		if err != nil {
+			return &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam("Request contains invalid aliases.")}
+		}
+		var resolvedRoomID string
+		if cfg.Matrix.IsLocalServerName(domain) {
+			var result api.GetRoomIDForAliasResponse
+			if err = rsAPI.GetRoomIDForAlias(ctx, &api.GetRoomIDForAliasRequest{Alias: alias, IncludeAppservices: true}, &result); err != nil {
+				return &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+			}
+			resolvedRoomID = result.RoomID
+		} else {
+			result, lookupErr := federation.LookupRoomAlias(ctx, cfg.Matrix.ServerName, domain, alias)
+			if lookupErr == nil {
+				resolvedRoomID = result.RoomID
+			}
+		}
+		if resolvedRoomID != roomID {
+			return &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadAlias(fmt.Sprintf("The alias %q does not point to this room.", alias))}
+		}
+		existing[alias] = true
 	}
 	return nil
 }

@@ -1095,7 +1095,9 @@ func (r *Queryer) QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.Ro
 		return "", err
 	}
 
-	return verImpl.CheckRestrictedJoin(ctx, r.Cfg.Global.ServerName, &api.JoinRoomQuerier{Roomserver: r}, roomID, senderID)
+	querier := &api.JoinRoomQuerier{Roomserver: r, TargetRoomID: roomID.String()}
+	authorisedVia, err := verImpl.CheckRestrictedJoin(ctx, r.Cfg.Global.ServerName, querier, roomID, senderID)
+	return authorisedVia, querier.RestrictedJoinError(err)
 }
 
 func (r *Queryer) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {

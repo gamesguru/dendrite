@@ -407,7 +407,7 @@ func (r *Joiner) performJoinRoomByID(
 		}
 		// No local user can authorize the restricted join, but another server
 		// in the room may have one: join through it instead.
-		if errors.As(aerr, &matrixErr) && matrixErr.ErrCode == spec.ErrorUnableToAuthoriseJoin {
+		if errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
 			if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
 				delete(req.Content, "join_authorised_via_users_server") //nolint:misspell // Matrix spec uses British spelling
 				req.ServerNames = append(req.ServerNames, servers...)
@@ -415,8 +415,7 @@ func (r *Joiner) performJoinRoomByID(
 				return req.RoomIDOrAlias, joinedVia, err
 			}
 		}
-		// All other errors (database errors, InternalServerError, M_UNABLE_TO_AUTHORIZE_JOIN, etc.)
-		// are returned as-is and will become HTTP 500
+		// Return remaining errors to the client API for status mapping.
 		return "", "", aerr
 	} else if authorisedVia != "" {
 		req.Content["join_authorised_via_users_server"] = authorisedVia //nolint:misspell // Matrix spec uses British spelling

@@ -362,6 +362,15 @@ func Setup(
 	v3mux := publicAPIMux.PathPrefix("/{apiversion:(?:r0|v3)}/").Subrouter()
 
 	v1mux := publicAPIMux.PathPrefix("/v1/").Subrouter()
+	v1mux.Handle("/register/m.login.registration_token/validity", httputil.MakeExternalAPI("registration_token_validity", func(req *http.Request) util.JSONResponse {
+		if r := rateLimits.Limit(req, nil); r != nil {
+			return *r
+		}
+		if mscCfg.Enabled("msc3861") {
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Registration is delegated to the authentication service.")}
+		}
+		return RegistrationTokenValidity(req, userAPI, cfg)
+	})).Methods(http.MethodGet, http.MethodOptions)
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
 
@@ -576,7 +585,7 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
-			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, nil, cfg, rsAPI, nil)
+			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, nil, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/rooms/{roomID}/send/{eventType}/{txnID}",
@@ -587,7 +596,7 @@ func Setup(
 			}
 			txnID := vars["txnID"]
 			return SendEvent(req, device, vars["roomID"], vars["eventType"], &txnID,
-				nil, cfg, rsAPI, transactionsCache)
+				nil, cfg, rsAPI, transactionsCache, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPut, http.MethodOptions)
 
@@ -635,7 +644,7 @@ func Setup(
 			}
 			emptyString := ""
 			eventType := strings.TrimSuffix(vars["eventType"], "/")
-			return SendEvent(req, device, vars["roomID"], eventType, nil, &emptyString, cfg, rsAPI, nil)
+			return SendEvent(req, device, vars["roomID"], eventType, nil, &emptyString, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPut, http.MethodOptions)
 
@@ -646,7 +655,7 @@ func Setup(
 				return util.ErrorResponse(err)
 			}
 			stateKey := vars["stateKey"]
-			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, &stateKey, cfg, rsAPI, nil)
+			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, &stateKey, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPut, http.MethodOptions)
 
