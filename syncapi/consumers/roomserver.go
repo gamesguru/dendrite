@@ -898,6 +898,11 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 	case spec.MRoomTopic:
 		e.Content = gjson.GetBytes(ev.Content(), "topic").String()
 	case spec.MRoomRedaction:
+		// A redaction without a target redacts nothing. Deleting an empty ID
+		// fails every time, so the message would be redelivered forever.
+		if ev.Redacts() == "" {
+			return nil
+		}
 		log.Tracef("Redacting event: %s", ev.Redacts())
 		if err := s.fts.Delete(ev.Redacts()); err != nil {
 			return fmt.Errorf("failed to delete entry from fulltext index: %w", err)
@@ -917,7 +922,7 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 			relatedData := relatesTo.Map()
 			if _, ok := relatedData["rel_type"]; ok && relatedData["rel_type"].Str == "m.replace" {
 				// We remove the original event from the index
-				if srcEventID, ok := relatedData["event_id"]; ok {
+				if srcEventID, ok := relatedData["event_id"]; ok && srcEventID.Str != "" {
 					if err := s.fts.Delete(srcEventID.Str); err != nil {
 						if s.cfg.Matrix.HA.Enabled {
 							return err
