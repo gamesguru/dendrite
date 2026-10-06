@@ -107,8 +107,13 @@ func (f *Search) Index(elements ...IndexElement) error {
 	return f.FulltextIndex.Batch(batch)
 }
 
-// Delete deletes an indexed element by the eventID.
+// Delete deletes an indexed element by the eventID. An empty eventID names no
+// document, so there is nothing to delete; Bleve would reject it, and a caller
+// that retries on error would then retry forever.
 func (f *Search) Delete(eventID string) error {
+	if eventID == "" {
+		return nil
+	}
 	return f.FulltextIndex.Delete(eventID)
 }
 

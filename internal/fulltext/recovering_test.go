@@ -51,3 +51,13 @@ func TestRecoveringReplaysDeletionsTheRebuildUndid(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0, result.Total)
 }
+
+// An empty event ID names no document. Recording it would make every Finish
+// fail, so searches would stay refused forever.
+func TestRecoveringIgnoresEmptyDeletions(t *testing.T) {
+	fts, _ := mustOpenIndex(t, "")
+	recovering := fulltext.NewRecovering(fts)
+	require.NoError(t, recovering.Delete(""))
+	require.NoError(t, recovering.Finish())
+	require.True(t, recovering.Recovered())
+}
