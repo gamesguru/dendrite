@@ -191,6 +191,7 @@ type PerformLeaveRequest struct {
 	RoomID      string            `json:"room_id"`
 	UserID      string            `json:"user_id"`
 	ServerNames types.ServerNames `json:"server_names"`
+	Reason      string            `json:"reason,omitempty"`
 }
 
 type PerformLeaveResponse struct{}

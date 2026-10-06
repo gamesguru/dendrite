@@ -186,7 +186,11 @@ func (r *Leaver) performLeaveRoomByID(
 		RoomID:   req.RoomID,
 		Redacts:  "",
 	}
-	if err = proto.SetContent(map[string]any{"membership": "leave"}); err != nil {
+	content := map[string]any{"membership": spec.Leave}
+	if req.Reason != "" {
+		content["reason"] = req.Reason
+	}
+	if err = proto.SetContent(content); err != nil {
 		return nil, fmt.Errorf("eb.SetContent: %w", err)
 	}
 	if err = proto.SetUnsigned(struct{}{}); err != nil {
@@ -362,6 +366,7 @@ func (r *Leaver) performFederatedLeaveFromPending(
 		RoomID:      req.RoomID,
 		UserID:      req.Leaver.String(),
 		ServerNames: servers,
+		Reason:      req.Reason,
 	}
 	leaveRes := fsAPI.PerformLeaveResponse{}
 	if err := r.FSAPI.PerformLeave(ctx, &leaveReq, &leaveRes); err != nil {

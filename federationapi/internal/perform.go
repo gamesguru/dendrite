@@ -501,6 +501,22 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 // store the peeked room's state. Tests shorten it.
 var outboundPeekInputTimeout = time.Minute
 
+// leaveContent returns the content for a leave event built from a make_leave
+// template, with the given reason added when it is not empty.
+func leaveContent(template []byte, reason string) (map[string]any, error) {
+	content := map[string]any{}
+	if len(template) > 0 {
+		if err := json.Unmarshal(template, &content); err != nil {
+			return nil, err
+		}
+	}
+	content["membership"] = spec.Leave
+	if reason != "" {
+		content["reason"] = reason
+	}
+	return content, nil
+}
+
 // PerformLeaveRequest implements api.FederationInternalAPI.
 func (r *FederationInternalAPI) PerformLeave(
 	ctx context.Context,
@@ -565,9 +581,11 @@ func (r *FederationInternalAPI) PerformLeave(
 		respMakeLeave.LeaveEvent.Redacts = ""
 		leaveEB := verImpl.NewEventBuilderFromProtoEvent(&respMakeLeave.LeaveEvent)
 
-		if respMakeLeave.LeaveEvent.Content == nil {
-			content := map[string]any{
-				"membership": "leave",
+		if respMakeLeave.LeaveEvent.Content == nil || request.Reason != "" {
+			content, contentErr := leaveContent(respMakeLeave.LeaveEvent.Content, request.Reason)
+			if contentErr != nil {
+				logrus.WithError(contentErr).Warnf("respMakeLeave.LeaveEvent has invalid content")
+				continue
 			}
 			if err = leaveEB.SetContent(content); err != nil {
 				logrus.WithError(err).Warnf("respMakeLeave.LeaveEvent.SetContent failed")

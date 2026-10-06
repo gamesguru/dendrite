@@ -55,6 +55,8 @@ type PerformKnockRequest struct {
 type PerformLeaveRequest struct {
 	RoomID string
 	Leaver spec.UserID
+	// Reason is the optional reason for leaving, added to the leave event.
+	Reason string
 }
 
 type PerformLeaveResponse struct {
