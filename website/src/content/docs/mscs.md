@@ -16,6 +16,33 @@ Feature support does not imply support for an entire specification version; see 
 | --- | --- | --- | --- |
 | [MSC4186](https://github.com/matrix-org/matrix-spec-proposals/pull/4186) | Simplified Sliding Sync | N/A | Implemented (native, no proxy needed) |
 | [MSC3575](https://github.com/matrix-org/matrix-spec-proposals/pull/3575) | Sliding Sync (v1) | N/A | Implemented (legacy, superseded by MSC4186) |
+| [MSC4354](https://github.com/matrix-org/matrix-spec-proposals/pull/4354) | Sticky events | N/A | Implemented (unstable prefix): see [sticky events](#sticky-events) |
+| [MSC4480](https://github.com/matrix-org/matrix-spec-proposals/pull/4480) | Sliding sync extension: sticky events | N/A | Implemented: the `org.matrix.msc4354.sticky_events` extension |
+
+### Sticky events
+
+`/versions` advertises `org.matrix.msc4354` in `unstable_features`, which Element Call needs before it sends call memberships as sticky events.
+`PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}` accepts `org.matrix.msc4354.sticky_duration_ms` and puts it into the event as `msc4354_sticky.duration_ms`.
+As in Synapse, the duration must be a non-negative integer, otherwise the request fails with 400 `M_INVALID_PARAM`, and durations above an hour are kept in the event but count as one hour.
+The parameter is ignored when sending state events.
+
+An event stays sticky from the earlier of its `origin_server_ts` and the time Zendrite received it, for its duration of at most an hour.
+Redacting an event removes its stickiness.
+While an event is sticky, `/sync` delivers it in a `msc4354_sticky.events` section of its joined room, unless the timeline of the same response carries it after the timeline filter.
+Each sticky event is delivered once as the client's sync position advances, at most 100 per response, and joining a room delivers all of the room's sticky events at once.
+Sticky events of ignored users are left out, and with lazy-loaded members their senders' memberships are included.
+Sticky events in the sticky section and in timelines carry `unsigned.msc4354_sticky_duration_ttl_ms`, the milliseconds until they expire.
+
+Sliding sync delivers sticky events through the `org.matrix.msc4354.sticky_events` extension, for every joined room the lists or room subscriptions match, also outside the lists' windows.
+The extension takes `since` and `limit` (default 100), and answers with `rooms` and `next_batch`, or is left out when there is nothing to deliver.
+Sticky events in the timelines of the response are left out of the extension and carry their TTL in the timeline instead, when the extension is enabled.
+
+History visibility does not hide sticky events from joined users, in `/sync`, sliding sync, `/messages`, `/context`, `/event` and the other endpoints that filter by it.
+`/sync` and sliding sync timelines keep the usual rules, as sticky events reach clients through their own section.
+
+When a server joins a room, Zendrite sends it the sticky events that local users sent there and that are still sticky.
+Zendrite remembers these events in memory, so after a restart it only sends sticky events created since.
+Soft-failed sticky events are not re-evaluated when the room state changes.
 
 ## Messaging
 

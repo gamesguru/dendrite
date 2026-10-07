@@ -43,6 +43,7 @@ type OutputRoomEventConsumer struct {
 	queues        *queue.OutgoingQueues
 	topic         string
 	topicPresence string
+	sticky        *stickyTracker
 }
 
 // NewOutputRoomEventConsumer creates a new OutputRoomEventConsumer. Call Start() to begin consuming from room servers.
@@ -66,6 +67,7 @@ func NewOutputRoomEventConsumer(
 		durable:       cfg.Matrix.JetStream.Durable("FederationAPIRoomServerConsumer"),
 		topic:         cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
 		topicPresence: cfg.Matrix.JetStream.Prefixed(jetstream.RequestPresence),
+		sticky:        newStickyTracker(),
 	}
 }
 
@@ -160,6 +162,9 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 
 	case api.OutputTypePurgeRoom:
 		log.WithField("room_id", output.PurgeRoom.RoomID).Info("Purging room from federation API")
+		if s.sticky != nil {
+			s.sticky.forget(output.PurgeRoom.RoomID)
+		}
 		if err := s.db.PurgeRoom(ctx, output.PurgeRoom.RoomID); err != nil {
 			log.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from federation API")
 		} else {
@@ -253,12 +258,20 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 		}
 	}
 
+	s.trackStickyEvent(ore)
+
 	if oldJoinedHosts == nil {
 		// This means that there is nothing to update as this is a duplicate
 		// message.
 		// This can happen if zendrite crashed between reading the message and
 		// persisting the stream position.
 		return nil
+	}
+
+	// Servers that have just joined learn of the sticky events we sent before
+	// (MSC4354). After a state rewrite, the hosts are not newly joined.
+	if !rewritesState {
+		s.pushStickyEvents(ore.Event.RoomID().String(), oldJoinedHosts, addsJoinedHosts)
 	}
 
 	if ore.SendAsServer == api.DoNotSendToOtherServers {

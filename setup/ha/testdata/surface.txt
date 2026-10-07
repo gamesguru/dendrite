@@ -332,6 +332,11 @@ column syncapi_sliding_sync_membership_snapshots | sender | text | NO |
 column syncapi_sliding_sync_membership_snapshots | tombstone_successor_room_id | text | YES |
 column syncapi_sliding_sync_membership_snapshots | user_id | text | NO |
 column syncapi_sliding_sync_rooms_to_recalculate | room_id | text | NO |
+column syncapi_sticky_events | event_id | text | NO |
+column syncapi_sticky_events | expires_at | bigint | NO |
+column syncapi_sticky_events | id | bigint | NO | nextval('syncapi_sticky_event_id'::regclass)
+column syncapi_sticky_events | room_id | text | NO |
+column syncapi_sticky_events | sender | text | NO |
 column syncapi_unpartialstated_rooms | created_at | bigint | NO | (EXTRACT(epoch FROM now()) * (1000)::numeric)
 column syncapi_unpartialstated_rooms | id | bigint | NO | nextval('syncapi_unpartialstated_rooms_id'::regclass)
 column syncapi_unpartialstated_rooms | room_id | text | NO |
@@ -610,6 +615,10 @@ index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membershi
 index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_stream_ordering_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_stream_ordering_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (event_stream_ordering DESC)
 index syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_user_idx | CREATE INDEX syncapi_sliding_sync_membership_snapshots_user_idx ON public.syncapi_sliding_sync_membership_snapshots USING btree (user_id)
 index syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_rooms_to_recalculate_pkey ON public.syncapi_sliding_sync_rooms_to_recalculate USING btree (room_id)
+index syncapi_sticky_events | syncapi_sticky_events_event_id_unique | CREATE UNIQUE INDEX syncapi_sticky_events_event_id_unique ON public.syncapi_sticky_events USING btree (event_id)
+index syncapi_sticky_events | syncapi_sticky_events_expires_at_idx | CREATE INDEX syncapi_sticky_events_expires_at_idx ON public.syncapi_sticky_events USING btree (expires_at)
+index syncapi_sticky_events | syncapi_sticky_events_pkey | CREATE UNIQUE INDEX syncapi_sticky_events_pkey ON public.syncapi_sticky_events USING btree (id)
+index syncapi_sticky_events | syncapi_sticky_events_room_id_idx | CREATE INDEX syncapi_sticky_events_room_id_idx ON public.syncapi_sticky_events USING btree (room_id, id)
 index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_pkey | CREATE UNIQUE INDEX syncapi_unpartialstated_rooms_pkey ON public.syncapi_unpartialstated_rooms USING btree (id)
 index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_room_id | CREATE INDEX syncapi_unpartialstated_rooms_room_id ON public.syncapi_unpartialstated_rooms USING btree (room_id)
 index syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_user_id | CREATE INDEX syncapi_unpartialstated_rooms_user_id ON public.syncapi_unpartialstated_rooms USING btree (user_id)
@@ -1043,6 +1052,13 @@ constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_memb
 constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_user_id_not_null | NOT NULL user_id
 constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_pkey | PRIMARY KEY (room_id)
 constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_room_id_not_null | NOT NULL room_id
+constraint syncapi_sticky_events | syncapi_sticky_events_event_id_not_null | NOT NULL event_id
+constraint syncapi_sticky_events | syncapi_sticky_events_event_id_unique | UNIQUE (event_id)
+constraint syncapi_sticky_events | syncapi_sticky_events_expires_at_not_null | NOT NULL expires_at
+constraint syncapi_sticky_events | syncapi_sticky_events_id_not_null | NOT NULL id
+constraint syncapi_sticky_events | syncapi_sticky_events_pkey | PRIMARY KEY (id)
+constraint syncapi_sticky_events | syncapi_sticky_events_room_id_not_null | NOT NULL room_id
+constraint syncapi_sticky_events | syncapi_sticky_events_sender_not_null | NOT NULL sender
 constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_created_at_not_null | NOT NULL created_at
 constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_id_not_null | NOT NULL id
 constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_pkey | PRIMARY KEY (id)
@@ -1197,6 +1213,7 @@ sequence syncapi_send_to_device_id | bigint | 1
 sequence syncapi_sliding_sync_connection_positio_connection_position_seq | bigint | 1
 sequence syncapi_sliding_sync_connection_required__required_state_id_seq | bigint | 1
 sequence syncapi_sliding_sync_connections_connection_key_seq | bigint | 1
+sequence syncapi_sticky_event_id | bigint | 1
 sequence syncapi_stream_id | bigint | 1
 sequence syncapi_unpartialstated_rooms_id | bigint | 1
 sequence userapi_device_session_id_seq | bigint | 1

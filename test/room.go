@@ -190,6 +190,8 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 		Depth:    int64(depth),
 		Unsigned: unsigned,
 		Redacts:  mod.redacts,
+
+		UnstableSticky: mod.sticky,
 	})
 	err = builder.SetContent(content)
 	if err != nil {

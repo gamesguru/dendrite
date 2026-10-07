@@ -296,3 +296,28 @@ type UnPartialStatedRooms interface {
 	// PurgeUnPartialStatedRooms deletes all un-partial-stated records for a room.
 	PurgeUnPartialStatedRooms(ctx context.Context, txn *sql.Tx, roomID string) error
 }
+
+// StickyEvents tracks MSC4354 sticky events in their own stream, so that sync
+// can deliver unexpired sticky events beyond the timeline. Rows outlive their
+// expiry until they are cleaned up, so every read takes the current time.
+type StickyEvents interface {
+	// InsertStickyEvent adds an event to the sticky events stream and returns
+	// its position. An event already in the stream keeps its position.
+	InsertStickyEvent(ctx context.Context, txn *sql.Tx, roomID, eventID, sender string, expiresAt spec.Timestamp) (types.StreamPosition, error)
+	// SelectStickyEventsInRooms returns the sticky events in the given rooms
+	// that are unexpired at now, with positions after from and up to and
+	// including to, in stream order. A limit of zero or less returns them all.
+	SelectStickyEventsInRooms(ctx context.Context, txn *sql.Tx, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int) ([]types.StickyEvent, error)
+	// SelectStickyEventsByID returns those of the given events that are
+	// unexpired sticky events at now.
+	SelectStickyEventsByID(ctx context.Context, txn *sql.Tx, eventIDs []string, now spec.Timestamp) ([]types.StickyEvent, error)
+	// SelectMaxStickyEventID returns the latest position handed out in the
+	// sticky events stream, which deleting rows does not move back.
+	SelectMaxStickyEventID(ctx context.Context, txn *sql.Tx) (int64, error)
+	// DeleteStickyEvent removes an event from the stream, as when it is redacted.
+	DeleteStickyEvent(ctx context.Context, txn *sql.Tx, eventID string) error
+	// DeleteExpiredStickyEvents removes the events that have expired by now.
+	DeleteExpiredStickyEvents(ctx context.Context, txn *sql.Tx, now spec.Timestamp) error
+	// PurgeStickyEvents removes all sticky events of a room.
+	PurgeStickyEvents(ctx context.Context, txn *sql.Tx, roomID string) error
+}

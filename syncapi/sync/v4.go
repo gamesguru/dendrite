@@ -1397,7 +1397,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, connState, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions) //nolint:contextcheck
+		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, connState, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions, response.Rooms) //nolint:contextcheck
 		if ctx.Err() != nil {
 			return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
 		}
@@ -1541,6 +1541,11 @@ func v4ResponseHasUpdates(response types.SlidingSyncResponse) bool {
 
 		// Typing updates
 		if response.Extensions.Typing != nil && len(response.Extensions.Typing.Rooms) > 0 {
+			return true
+		}
+
+		// Sticky events (MSC4354)
+		if response.Extensions.StickyEvents != nil && len(response.Extensions.StickyEvents.Rooms) > 0 {
 			return true
 		}
 	}
@@ -1734,9 +1739,14 @@ func (rp *RequestPool) processRoomList(
 		// If list hasn't changed, return empty ops (no update needed)
 	}
 
+	matchedRoomIDs := make([]string, len(rooms))
+	for i, room := range rooms {
+		matchedRoomIDs[i] = room.RoomID
+	}
 	return types.SlidingList{
-		Count: totalCount,
-		Ops:   ops,
+		Count:          totalCount,
+		Ops:            ops,
+		MatchedRoomIDs: matchedRoomIDs,
 	}, nil
 }
 
@@ -1912,7 +1922,7 @@ func (rp *RequestPool) buildInterruptResponse(
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions)
+		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions, resp.Rooms)
 		if extErr != nil {
 			if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
 				return resp

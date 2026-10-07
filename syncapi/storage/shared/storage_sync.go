@@ -731,6 +731,9 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 		if err := d.Receipts.PurgeReceipts(ctx, txn, roomID); err != nil {
 			return fmt.Errorf("failed to purge receipts: %w", err)
 		}
+		if err := d.StickyEvents.PurgeStickyEvents(ctx, txn, roomID); err != nil {
+			return fmt.Errorf("failed to purge sticky events: %w", err)
+		}
 		return nil
 	})
 }
@@ -752,6 +755,28 @@ func (d *Database) PurgeRoomState(
 func (d *DatabaseTransaction) MaxStreamPositionForRelations(ctx context.Context) (types.StreamPosition, error) {
 	id, err := d.Relations.SelectMaxRelationID(ctx, d.txn)
 	return types.StreamPosition(id), err
+}
+
+func (d *DatabaseTransaction) MaxStreamPositionForStickyEvents(ctx context.Context) (types.StreamPosition, error) {
+	id, err := d.StickyEvents.SelectMaxStickyEventID(ctx, d.txn)
+	return types.StreamPosition(id), err
+}
+
+// StickyEventsInRooms returns the MSC4354 sticky events in the given rooms
+// that are unexpired at now, with stream positions after from and up to and
+// including to, in stream order. A limit of zero or less returns them all.
+func (d *DatabaseTransaction) StickyEventsInRooms(
+	ctx context.Context, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int,
+) ([]types.StickyEvent, error) {
+	return d.StickyEvents.SelectStickyEventsInRooms(ctx, d.txn, roomIDs, from, to, now, limit)
+}
+
+// StickyEventsByID returns those of the given events that are unexpired
+// MSC4354 sticky events at now.
+func (d *DatabaseTransaction) StickyEventsByID(
+	ctx context.Context, eventIDs []string, now spec.Timestamp,
+) ([]types.StickyEvent, error) {
+	return d.StickyEvents.SelectStickyEventsByID(ctx, d.txn, eventIDs, now)
 }
 
 func isStatefilterEmpty(filter *synctypes.StateFilter) bool {

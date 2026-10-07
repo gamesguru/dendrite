@@ -310,6 +310,9 @@ func (p *PDUStreamProvider) IncrementalSync(
 		// Reset the position, as it is only for the special case of newly joined rooms
 		if delta.NewlyJoined {
 			pos = newRange.From
+			if req.NewlyJoinedRooms != nil {
+				req.NewlyJoinedRooms[delta.RoomID] = struct{}{}
+			}
 		}
 		switch {
 		case r.Backwards && pos < newPos:
@@ -753,7 +756,7 @@ func applyHistoryVisibilityFilter(
 	}
 
 	startTime := time.Now()
-	events, err := internal.ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, "sync")
+	events, err := internal.ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, internal.SyncEndpoint)
 	if err != nil {
 		return nil, err
 	}

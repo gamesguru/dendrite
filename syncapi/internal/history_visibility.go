@@ -93,6 +93,10 @@ func (ev eventVisibility) allowed() (allowed bool) {
 	}
 }
 
+// SyncEndpoint is the endpoint name of sync timelines for
+// ApplyHistoryVisibilityFilter.
+const SyncEndpoint = "sync"
+
 // ApplyHistoryVisibilityFilter applies the room history visibility filter on types.HeaderedEvents.
 // Returns the filtered events and an error, if any.
 //
@@ -125,6 +129,12 @@ func ApplyHistoryVisibilityFilter(
 	}
 	visibilities := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
 
+	// MSC4354: joined users see unexpired sticky events whatever the history
+	// visibility. Sync timelines keep the usual rules, as in Synapse, since
+	// sync delivers sticky events in a section of their own.
+	now := time.Now()
+	showSticky := membershipCurrent == spec.Join && endpoint != SyncEndpoint
+
 	for _, ev := range events {
 		// Validate same room assumption
 		if ev.RoomID().String() != firstEvRoomID.String() {
@@ -139,6 +149,13 @@ func ApplyHistoryVisibilityFilter(
 				eventsFiltered = append(eventsFiltered, ev)
 				continue
 			}
+		}
+
+		// The time of receipt is not known here; origin_server_ts stands in
+		// for it unless it lies in the future.
+		if showSticky && ev.IsSticky(now, now) {
+			eventsFiltered = append(eventsFiltered, ev)
+			continue
 		}
 
 		// NOTSPEC: Always allow user to see their own membership events (spec contains more "rules")

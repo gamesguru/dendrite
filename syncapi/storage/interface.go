@@ -37,6 +37,14 @@ type DatabaseTransaction interface {
 	MaxStreamPositionForNotificationData(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForPresence(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForRelations(ctx context.Context) (types.StreamPosition, error)
+	MaxStreamPositionForStickyEvents(ctx context.Context) (types.StreamPosition, error)
+	// StickyEventsInRooms returns the MSC4354 sticky events in the given rooms
+	// that are unexpired at now, with stream positions after from and up to
+	// and including to, in stream order. A limit of zero or less returns them all.
+	StickyEventsInRooms(ctx context.Context, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int) ([]types.StickyEvent, error)
+	// StickyEventsByID returns those of the given events that are unexpired
+	// MSC4354 sticky events at now.
+	StickyEventsByID(ctx context.Context, eventIDs []string, now spec.Timestamp) ([]types.StickyEvent, error)
 
 	CurrentState(ctx context.Context, roomID string, stateFilterPart *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	GetStateDeltasForFullStateSync(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
@@ -160,6 +168,10 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility,
 	) (types.StreamPosition, error)
+	// InsertStickyEvent adds an MSC4354 sticky event to the sticky events
+	// stream and returns its position, which an event already in the stream
+	// keeps. It first removes the events that have expired by now.
+	InsertStickyEvent(ctx context.Context, roomID, eventID, sender string, expiresAt, now spec.Timestamp) (types.StreamPosition, error)
 	// PurgeRoomState completely purges room state from the sync API. This is done when
 	// receiving an output event that completely resets the state.
 	PurgeRoomState(ctx context.Context, roomID string) error

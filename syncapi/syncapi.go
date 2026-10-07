@@ -135,7 +135,7 @@ func AddPublicRoutes(
 
 	roomConsumer := consumers.NewOutputRoomEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
-		streams.InviteStreamProvider, rsAPI, index, asProducer, pushProducer,
+		streams.InviteStreamProvider, streams.StickyEventsStreamProvider, rsAPI, index, asProducer, pushProducer,
 	)
 	// Wire up the metadata worker for continuous updates (Phase 12 optimization)
 	roomConsumer.SetMetadataQueuer(metadataWorker)

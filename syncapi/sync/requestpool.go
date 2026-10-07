@@ -499,6 +499,15 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 						)
 					},
 				),
+				// After the PDU stream, whose timelines it reads.
+				StickyPosition: withTransaction(
+					syncReq.Since.StickyPosition,
+					func(txn storage.DatabaseTransaction) types.StreamPosition {
+						return rp.streams.StickyEventsStreamProvider.CompleteSync(
+							syncReq.Context, txn, syncReq,
+						)
+					},
+				),
 			}
 		} else {
 			// Incremental sync
@@ -581,6 +590,16 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 						return rp.streams.PresenceStreamProvider.IncrementalSync(
 							syncReq.Context, txn, syncReq,
 							syncReq.Since.PresencePosition, rp.Notifier.CurrentPosition().PresencePosition,
+						)
+					},
+				),
+				// After the PDU stream, whose timelines it reads.
+				StickyPosition: withTransaction(
+					syncReq.Since.StickyPosition,
+					func(txn storage.DatabaseTransaction) types.StreamPosition {
+						return rp.streams.StickyEventsStreamProvider.IncrementalSync(
+							syncReq.Context, txn, syncReq,
+							syncReq.Since.StickyPosition, rp.Notifier.CurrentPosition().StickyPosition,
 						)
 					},
 				),

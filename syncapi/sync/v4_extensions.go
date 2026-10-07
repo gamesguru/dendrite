@@ -157,6 +157,7 @@ func (rp *RequestPool) ProcessExtensions(
 	toPos types.StreamingToken,
 	responseLists map[string]types.SlidingList, // Actual lists in the response
 	roomSubscriptions map[string]bool, // Actual room subscriptions from request
+	responseRooms map[string]types.SlidingRoomData, // Rooms in the response, whose timelines sticky events skip
 ) (*types.ExtensionResponse, types.StreamingToken, []types.OutputReceiptEvent, error) {
 	// Return empty response if no extensions requested
 	if req.Extensions == nil {
@@ -294,6 +295,24 @@ func (rp *RequestPool) ProcessExtensions(
 			resp.Typing = &types.TypingResponse{Rooms: make(map[string]synctypes.ClientEvent)}
 		} else {
 			resp.Typing = typingResp
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, toPos, nil, err
+	}
+
+	// Process sticky events extension (MSC4354, MSC4480). Its position lives
+	// in its own since/next_batch tokens, not in the connection position.
+	if req.Extensions.StickyEvents != nil && req.Extensions.StickyEvents.Enabled {
+		stickyResp, err := rp.processStickyEventsExtension(ctx, snapshot, userID, req.Extensions.StickyEvents, toPos, responseLists, roomSubscriptions, responseRooms)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, toPos, nil, ctx.Err()
+			}
+			logrus.WithError(err).Error("Failed to process sticky events extension")
+		} else {
+			resp.StickyEvents = stickyResp
 		}
 	}
 

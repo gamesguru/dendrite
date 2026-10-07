@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -113,6 +114,9 @@ type StreamingToken struct {
 	DeviceListPosition       StreamPosition
 	NotificationDataPosition StreamPosition
 	PresencePosition         StreamPosition
+	// StickyPosition is the position in the MSC4354 sticky events stream.
+	// Tokens issued before the stream existed omit it, which reads as zero.
+	StickyPosition StreamPosition
 }
 
 // This will be used as a fallback by json.Marshal.
@@ -128,12 +132,12 @@ func (s *StreamingToken) UnmarshalText(text []byte) (err error) {
 
 func (t StreamingToken) String() string {
 	posStr := fmt.Sprintf(
-		"s%d_%d_%d_%d_%d_%d_%d_%d_%d",
+		"s%d_%d_%d_%d_%d_%d_%d_%d_%d_%d",
 		t.PDUPosition, t.TypingPosition,
 		t.ReceiptPosition, t.SendToDevicePosition,
 		t.InvitePosition, t.AccountDataPosition,
 		t.DeviceListPosition, t.NotificationDataPosition,
-		t.PresencePosition,
+		t.PresencePosition, t.StickyPosition,
 	)
 	return posStr
 }
@@ -159,12 +163,14 @@ func (t *StreamingToken) IsAfter(other StreamingToken) bool {
 		return true
 	case t.PresencePosition > other.PresencePosition:
 		return true
+	case t.StickyPosition > other.StickyPosition:
+		return true
 	}
 	return false
 }
 
 func (t *StreamingToken) IsEmpty() bool {
-	return t == nil || t.PDUPosition+t.TypingPosition+t.ReceiptPosition+t.SendToDevicePosition+t.InvitePosition+t.AccountDataPosition+t.DeviceListPosition+t.NotificationDataPosition+t.PresencePosition == 0
+	return t == nil || t.PDUPosition+t.TypingPosition+t.ReceiptPosition+t.SendToDevicePosition+t.InvitePosition+t.AccountDataPosition+t.DeviceListPosition+t.NotificationDataPosition+t.PresencePosition+t.StickyPosition == 0
 }
 
 // WithUpdates returns a copy of the StreamingToken with updates applied from another StreamingToken.
@@ -207,6 +213,9 @@ func (t *StreamingToken) ApplyUpdates(other StreamingToken) {
 	}
 	if other.PresencePosition > t.PresencePosition {
 		t.PresencePosition = other.PresencePosition
+	}
+	if other.StickyPosition > t.StickyPosition {
+		t.StickyPosition = other.StickyPosition
 	}
 }
 
@@ -299,7 +308,7 @@ func NewStreamTokenFromString(tok string) (token StreamingToken, err error) {
 	// s478_0_0_0_0_13.dl-0-2 but we have now removed partitioned stream positions
 	tok = strings.Split(tok, ".")[0]
 	parts := strings.Split(tok[1:], "_")
-	var positions [9]StreamPosition
+	var positions [10]StreamPosition
 	for i, p := range parts {
 		if i >= len(positions) {
 			break
@@ -322,6 +331,7 @@ func NewStreamTokenFromString(tok string) (token StreamingToken, err error) {
 		DeviceListPosition:       positions[6],
 		NotificationDataPosition: positions[7],
 		PresencePosition:         positions[8],
+		StickyPosition:           positions[9],
 	}
 	return token, nil
 }
@@ -457,11 +467,14 @@ type Summary struct {
 
 // JoinResponse represents a /sync response for a room which is under the 'join' or 'peek' key.
 type JoinResponse struct {
-	Summary              *Summary      `json:"summary,omitempty"`
-	State                *ClientEvents `json:"state,omitempty"`
-	Timeline             *Timeline     `json:"timeline,omitempty"`
-	Ephemeral            *ClientEvents `json:"ephemeral,omitempty"`
-	AccountData          *ClientEvents `json:"account_data,omitempty"`
+	Summary     *Summary      `json:"summary,omitempty"`
+	State       *ClientEvents `json:"state,omitempty"`
+	Timeline    *Timeline     `json:"timeline,omitempty"`
+	Ephemeral   *ClientEvents `json:"ephemeral,omitempty"`
+	AccountData *ClientEvents `json:"account_data,omitempty"`
+	// MSC4354Sticky holds unexpired sticky events that the timeline does not
+	// already carry (MSC4354).
+	MSC4354Sticky        *ClientEvents `json:"msc4354_sticky,omitempty"`
 	*UnreadNotifications `json:"unread_notifications,omitempty"`
 	// UnreadThreadNotifications holds per-thread counts, keyed by thread
 	// root, when the filter asks for them (MSC3773).
@@ -500,7 +513,7 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
-		if a.State == nil && a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil {
+		if a.State == nil && a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
 			a.UnreadNotifications = nil
 			a.UnreadThreadNotifications = nil
 		}
@@ -688,6 +701,28 @@ type RelationEntry struct {
 type TopologicalRelation struct {
 	EventID  string
 	Position TopologyToken
+}
+
+// MaxStickyEventsInSync is how many sticky events one sync response carries
+// at most, as suggested by MSC4354. Newly joined rooms are exempt.
+const MaxStickyEventsInSync = 100
+
+// StickyEvent is an MSC4354 sticky event in the sticky events stream.
+type StickyEvent struct {
+	// Position is the event's position in the sticky events stream.
+	Position StreamPosition
+	RoomID   string
+	EventID  string
+	// Sender is the user ID of the sender.
+	Sender string
+	// ExpiresAt is when the event stops being sticky.
+	ExpiresAt spec.Timestamp
+}
+
+// TTL reports how long the event remains sticky after now, or zero once it
+// has expired.
+func (e StickyEvent) TTL(now time.Time) time.Duration {
+	return max(e.ExpiresAt.Time().Sub(now), 0)
 }
 
 // ThreadRelation identifies a thread reply and its position in room topology.

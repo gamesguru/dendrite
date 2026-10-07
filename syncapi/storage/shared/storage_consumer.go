@@ -53,6 +53,7 @@ type Database struct {
 	SlidingSync             tables.SlidingSync
 	SlidingSyncRoomMetadata tables.SlidingSyncRoomMetadata
 	UnPartialStatedRooms    tables.UnPartialStatedRooms
+	StickyEvents            tables.StickyEvents
 }
 
 func (d *Database) NewDatabaseSnapshot(ctx context.Context) (*DatabaseTransaction, error) {
@@ -381,9 +382,29 @@ func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, reda
 
 	newEvent := &rstypes.HeaderedEvent{PDU: eventToRedact}
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.OutputEvents.UpdateEventJSON(ctx, txn, newEvent)
+		if err = d.OutputEvents.UpdateEventJSON(ctx, txn, newEvent); err != nil {
+			return err
+		}
+		// Redaction strips the sticky key, so the event stops being sticky.
+		return d.StickyEvents.DeleteStickyEvent(ctx, txn, redactedEventID)
 	})
 	return err
+}
+
+// InsertStickyEvent adds an MSC4354 sticky event to the sticky events stream
+// and returns its position, which an event already in the stream keeps. It
+// first removes the events that have expired by now.
+func (d *Database) InsertStickyEvent(
+	ctx context.Context, roomID, eventID, sender string, expiresAt, now spec.Timestamp,
+) (pos types.StreamPosition, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err = d.StickyEvents.DeleteExpiredStickyEvents(ctx, txn, now); err != nil {
+			return fmt.Errorf("d.StickyEvents.DeleteExpiredStickyEvents: %w", err)
+		}
+		pos, err = d.StickyEvents.InsertStickyEvent(ctx, txn, roomID, eventID, sender, expiresAt)
+		return err
+	})
+	return pos, err
 }
 
 // fetchStateEvents converts the set of event IDs into a set of events. It will fetch any which are missing from the database.

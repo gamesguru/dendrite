@@ -96,6 +96,7 @@ func newSyncRequest(req *http.Request, device userapi.Device, syncDB storage.Dat
 		Rooms:             make(map[string]string),   // Populated by the PDU stream
 		WantFullState:     wantFullState,             //
 		MembershipChanges: make(map[string]struct{}), // Populated by the PDU stream
+		NewlyJoinedRooms:  make(map[string]struct{}), // Populated by the PDU stream
 	}, nil
 }
 

@@ -27,6 +27,7 @@ type eventMods struct {
 	privKey        ed25519.PrivateKey
 	authEvents     []string
 	redacts        string
+	sticky         *gomatrixserverlib.StickyEventData
 }
 
 type eventModifier func(e *eventMods)
@@ -71,6 +72,13 @@ func WithPrivateKey(pkey ed25519.PrivateKey) eventModifier {
 func WithRedacts(eventID string) eventModifier {
 	return func(e *eventMods) {
 		e.redacts = eventID
+	}
+}
+
+// WithStickyDuration makes the event an MSC4354 sticky event for d.
+func WithStickyDuration(d time.Duration) eventModifier {
+	return func(e *eventMods) {
+		e.sticky = &gomatrixserverlib.StickyEventData{DurationMillis: d.Milliseconds()}
 	}
 }
 

@@ -128,6 +128,10 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	stickyEvents, err := NewSqliteStickyEventsTable(d.db, &d.streamID)
+	if err != nil {
+		return err
+	}
 
 	// apply migrations which need multiple tables
 	m := sqlutil.NewMigrator(d.db)
@@ -173,6 +177,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 		SlidingSync:             slidingSync,
 		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
 		UnPartialStatedRooms:    unPartialStatedRooms,
+		StickyEvents:            stickyEvents,
 	}
 	return nil
 }

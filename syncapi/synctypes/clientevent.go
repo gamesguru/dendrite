@@ -10,6 +10,7 @@ package synctypes
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -27,7 +28,15 @@ const (
 	// UnsignedFieldMSC4115Membership is the unstable field name for MSC4115
 	// Kept for backwards compatibility during transition period.
 	UnsignedFieldMSC4115Membership = "io.element.msc4115.membership"
+
+	// UnsignedFieldMSC4354StickyTTL is how many milliseconds an MSC4354
+	// sticky event remains sticky, under its unstable name.
+	UnsignedFieldMSC4354StickyTTL = "msc4354_sticky_duration_ttl_ms"
 )
+
+// MSC4354StickyKey is the unstable name of the top-level key that makes an
+// event sticky (MSC4354).
+const MSC4354StickyKey = "msc4354_sticky"
 
 // PrevEventRef represents a reference to a previous event in a state event upgrade.
 type PrevEventRef struct {
@@ -71,6 +80,8 @@ type ClientEvent struct {
 	Type           string         `json:"type"`
 	Unsigned       spec.RawJSON   `json:"unsigned,omitempty"`
 	Redacts        string         `json:"redacts,omitempty"`
+	// MSC4354Sticky is the event's unstable MSC4354 sticky key, if any.
+	MSC4354Sticky spec.RawJSON `json:"msc4354_sticky,omitempty"`
 
 	// Only sent to clients when `event_format` == `federation`.
 	ClientFederationFields
@@ -142,6 +153,9 @@ func ToClientEvent(se gomatrixserverlib.PDU, format ClientEventFormat, userIDFor
 		OriginServerTS: se.OriginServerTS(),
 		EventID:        se.EventID(),
 		Redacts:        se.Redacts(),
+	}
+	if sticky := gjson.GetBytes(se.JSON(), MSC4354StickyKey); sticky.IsObject() {
+		ce.MSC4354Sticky = spec.RawJSON(sticky.Raw)
 	}
 
 	switch format {
@@ -477,6 +491,26 @@ func AnnotateEventWithMembership(event *ClientEvent, membership string, useStabl
 		return fmt.Errorf("failed to set membership in unsigned: %w", err)
 	}
 
+	event.Unsigned = newUnsigned
+	return nil
+}
+
+// SetStickyTTL records in the unsigned section of a sticky event how long it
+// remains sticky, as MSC4354 requires when sending sticky events to clients.
+// An expired event carries no such field.
+func SetStickyTTL(event *ClientEvent, ttl time.Duration) error {
+	ms := ttl.Milliseconds()
+	if ms <= 0 {
+		return nil
+	}
+	unsigned := event.Unsigned
+	if len(unsigned) == 0 {
+		unsigned = spec.RawJSON("{}")
+	}
+	newUnsigned, err := sjson.SetBytes(unsigned, UnsignedFieldMSC4354StickyTTL, ms)
+	if err != nil {
+		return fmt.Errorf("failed to set the sticky TTL in unsigned: %w", err)
+	}
 	event.Unsigned = newUnsigned
 	return nil
 }

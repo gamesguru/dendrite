@@ -27,6 +27,9 @@ type SyncRequest struct {
 	MembershipChanges map[string]struct{}
 	// Updated by the PDU stream.
 	IgnoredUsers IgnoredUsers
+	// Rooms the user joined within this incremental sync. Updated by the PDU
+	// stream, read by the sticky events stream.
+	NewlyJoinedRooms map[string]struct{}
 }
 
 func (r *SyncRequest) IsRoomPresent(roomID string) bool {

@@ -103,6 +103,10 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
+	stickyEvents, err := NewPostgresStickyEventsTable(d.db)
+	if err != nil {
+		return nil, err
+	}
 
 	// apply migrations which need multiple tables
 	m := sqlutil.NewMigrator(d.db)
@@ -148,6 +152,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 		SlidingSync:             slidingSync,
 		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
 		UnPartialStatedRooms:    unPartialStatedRooms,
+		StickyEvents:            stickyEvents,
 	}
 	return &d, nil
 }

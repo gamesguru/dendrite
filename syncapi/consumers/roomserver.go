@@ -55,6 +55,7 @@ type OutputRoomEventConsumer struct {
 	db             storage.Database
 	pduStream      streams.StreamProvider
 	inviteStream   streams.StreamProvider
+	stickyStream   streams.StreamProvider
 	notifier       *notifier.Notifier
 	fts            fulltext.Indexer
 	asProducer     *producers.AppserviceEventProducer
@@ -71,6 +72,7 @@ func NewOutputRoomEventConsumer(
 	notifier *notifier.Notifier,
 	pduStream streams.StreamProvider,
 	inviteStream streams.StreamProvider,
+	stickyStream streams.StreamProvider,
 	rsAPI api.SyncRoomserverAPI,
 	fts fulltext.Indexer,
 	asProducer *producers.AppserviceEventProducer,
@@ -86,6 +88,7 @@ func NewOutputRoomEventConsumer(
 		notifier:     notifier,
 		pduStream:    pduStream,
 		inviteStream: inviteStream,
+		stickyStream: stickyStream,
 		rsAPI:        rsAPI,
 		fts:          fts,
 		asProducer:   asProducer,
@@ -404,6 +407,10 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 			"write":          time.Since(writeStarted).String(),
 		}).Info("Wrote a large sync API state update")
 	}
+	stickyPos, err := s.writeStickyEvent(ctx, ev, started)
+	if err != nil {
+		return err
+	}
 	if err = s.writeFTS(ev, pduPos); err != nil {
 		if s.cfg.Matrix.HA.Enabled {
 			return err
@@ -435,7 +442,8 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	notifyRegion, _ := zendriteInternal.StartRegion(ctx, "NotifySyncClients")
 	notifyRegion.SetTag("pdu_position", pduPos)
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
+	s.advanceSticky(stickyPos)
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 	notifyRegion.EndRegion()
 
 	return nil
@@ -445,6 +453,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	ctx context.Context, msg api.OutputOldRoomEvent,
 ) error {
 	ev := msg.Event
+	received := time.Now()
 
 	// TODO: The state key check when excluding from sync is designed
 	// to stop us from lying to clients with old state, whilst still
@@ -478,6 +487,15 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		return nil
 	}
 
+	// Old state events are kept from sync, so they are not delivered as
+	// sticky events either.
+	var stickyPos types.StreamPosition
+	if ev.StateKey() == nil {
+		if stickyPos, err = s.writeStickyEvent(ctx, ev, received); err != nil {
+			return err
+		}
+	}
+
 	if err = s.writeFTS(ev, pduPos); err != nil {
 		if s.cfg.Matrix.HA.Enabled {
 			return err
@@ -506,9 +524,40 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	s.queueRoomMetadataUpdate(ev, pduPos)
 
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
+	s.advanceSticky(stickyPos)
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 
 	return nil
+}
+
+// writeStickyEvent adds an event that is an unexpired MSC4354 sticky event to
+// the sticky events stream, and returns its position there. It returns 0 for
+// any other event. The sticky period
+// starts when the event was received, unless its origin_server_ts is earlier.
+func (s *OutputRoomEventConsumer) writeStickyEvent(
+	ctx context.Context, ev *rstypes.HeaderedEvent, received time.Time,
+) (types.StreamPosition, error) {
+	now := time.Now()
+	if !ev.IsSticky(now, received) {
+		return 0, nil
+	}
+	expiresAt := spec.AsTimestamp(ev.StickyEndTime(received))
+	var pos types.StreamPosition
+	err := sqlutil.RetryTransient(ctx, "sync API sticky event write of "+ev.EventID(), func() (err error) {
+		pos, err = s.db.InsertStickyEvent(ctx, ev.RoomID().String(), ev.EventID(), ev.UserID.String(), expiresAt, spec.AsTimestamp(now))
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("write sticky event %s: %w", ev.EventID(), err)
+	}
+	return pos, nil
+}
+
+// advanceSticky moves the sticky events stream on to pos, if there is one.
+func (s *OutputRoomEventConsumer) advanceSticky(pos types.StreamPosition) {
+	if pos > 0 && s.stickyStream != nil {
+		s.stickyStream.Advance(pos)
+	}
 }
 
 func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rstypes.HeaderedEvent, sp types.StreamPosition) (types.StreamPosition, error) {

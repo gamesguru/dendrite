@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -171,7 +172,15 @@ func SendEvent(
 		}
 	}
 
-	e, resErr := generateSendEvent(req.Context(), r, device, roomID, eventType, stateKey, rsAPI, evTime)
+	// Only message events can be made sticky from the client API.
+	var sticky *gomatrixserverlib.StickyEventData
+	if stateKey == nil {
+		if sticky, resErr = parseStickyDuration(req); resErr != nil {
+			return *resErr
+		}
+	}
+
+	e, resErr := generateSendEvent(req.Context(), r, device, roomID, eventType, stateKey, sticky, rsAPI, evTime)
 	if resErr != nil {
 		return *resErr
 	}
@@ -313,6 +322,7 @@ func generateSendEvent(
 	r map[string]any,
 	device *userapi.Device,
 	roomID, eventType string, stateKey *string,
+	sticky *gomatrixserverlib.StickyEventData,
 	rsAPI api.ClientRoomserverAPI,
 	evTime time.Time,
 ) (gomatrixserverlib.PDU, *util.JSONResponse) {
@@ -353,6 +363,7 @@ func generateSendEvent(
 		Type:     eventType,
 		StateKey: stateKey,
 	}
+	setSticky(&proto, sticky)
 	err = proto.SetContent(r)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("proto.SetContent failed")
@@ -448,6 +459,42 @@ func generateSendEvent(
 	}
 
 	return e.PDU, nil
+}
+
+// msc4354StickyDurationParam is the unstable query parameter that asks for a
+// sticky event (MSC4354).
+const msc4354StickyDurationParam = "org.matrix.msc4354.sticky_duration_ms"
+
+// parseStickyDuration reads the MSC4354 sticky duration of a send request,
+// which is nil if the request does not ask for a sticky event. As in Synapse,
+// any non-negative duration is accepted and kept in the event; servers work
+// out when stickiness ends with the duration capped at an hour.
+func parseStickyDuration(req *http.Request) (*gomatrixserverlib.StickyEventData, *util.JSONResponse) {
+	values, ok := req.URL.Query()[msc4354StickyDurationParam]
+	if !ok {
+		return nil, nil
+	}
+	durationMS, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam(fmt.Sprintf("Query parameter %q must be an integer", msc4354StickyDurationParam)),
+		}
+	}
+	if durationMS < 0 {
+		return nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam(fmt.Sprintf("Query parameter %q must be a non-negative integer", msc4354StickyDurationParam)),
+		}
+	}
+	return &gomatrixserverlib.StickyEventData{DurationMillis: durationMS}, nil
+}
+
+// setSticky makes the event built from proto an MSC4354 sticky event, unless
+// sticky is nil. Every way of sending an event passes the sticky duration of
+// the request through here.
+func setSticky(proto *gomatrixserverlib.ProtoEvent, sticky *gomatrixserverlib.StickyEventData) {
+	proto.UnstableSticky = sticky
 }
 
 // validateThreadRelation rejects a thread whose root is itself a relation,

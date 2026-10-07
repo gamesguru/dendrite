@@ -219,7 +219,7 @@ func TestProcessExtensionsStopsAtCancellation(t *testing.T) {
 		Typing:      &types.TypingRequest{Enabled: true},
 	}}
 
-	_, _, delivered, err := rp.ProcessExtensions(ctx, nil, nil, req, "@alice:localhost", "DEVICE", 1, nil, types.StreamingToken{}, nil, nil)
+	_, _, delivered, err := rp.ProcessExtensions(ctx, nil, nil, req, "@alice:localhost", "DEVICE", 1, nil, types.StreamingToken{}, nil, nil, nil)
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, delivered)
