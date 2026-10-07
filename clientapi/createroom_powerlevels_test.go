@@ -71,3 +71,85 @@ func TestCreateRoomInvitePowerLevel(t *testing.T) {
 		})
 	}
 }
+
+// Room versions with privileged creators (MSC4289) forbid creators in the
+// power levels' users map. Clients written for earlier versions, such as
+// Element Call, still put the creator there, so createRoom drops creators
+// from power_level_content_override, as Synapse does for room upgrades.
+func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	charlie := test.NewUser(t)
+	cfg, processCtx, closeDB := testrig.CreateConfig(t, test.DBTypeSQLite)
+	defer closeDB()
+	routers := httputil.NewRouters()
+	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+	natsInstance := jetstream.NATSInstance{}
+	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
+	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+	rsAPI.SetFederationAPI(nil, nil)
+	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+	accessTokens := map[*test.User]userDevice{alice: {}}
+	createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+
+	tests := map[string]struct {
+		body      map[string]any
+		wantUsers map[string]int64
+	}{
+		// The request Element Call sends when it creates a call room.
+		"v12, creator in users": {
+			body: map[string]any{
+				"room_version": "12",
+				"preset":       "public_chat",
+				"visibility":   "private",
+				"power_level_content_override": map[string]any{
+					"invite": 100,
+					"users":  map[string]any{alice.ID: 100, bob.ID: 50},
+				},
+			},
+			wantUsers: map[string]int64{bob.ID: 50},
+		},
+		"v12, additional creator in users": {
+			body: map[string]any{
+				"room_version":     "12",
+				"creation_content": map[string]any{"additional_creators": []string{charlie.ID}},
+				"power_level_content_override": map[string]any{
+					"users": map[string]any{alice.ID: 100, charlie.ID: 100, bob.ID: 50},
+				},
+			},
+			wantUsers: map[string]int64{bob.ID: 50},
+		},
+		"v10, creator in users is kept": {
+			body: map[string]any{
+				"room_version": "10",
+				"power_level_content_override": map[string]any{
+					"users": map[string]any{alice.ID: 100, bob.ID: 50},
+				},
+			},
+			wantUsers: map[string]int64{alice.ID: 100, bob.ID: 50},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			routers.Client.ServeHTTP(rec, test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/createRoom",
+				test.WithJSONBody(t, tc.body),
+				test.WithQueryParams(map[string]string{"access_token": accessTokens[alice].accessToken})))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			roomID, err := spec.NewRoomID(gjson.GetBytes(rec.Body.Bytes(), "room_id").Str)
+			require.NoError(t, err)
+			ev, err := rsAPI.CurrentStateEvent(context.Background(), *roomID, spec.MRoomPowerLevels, "")
+			require.NoError(t, err)
+			require.NotNil(t, ev)
+			gotUsers := map[string]int64{}
+			gjson.GetBytes(ev.Content(), "users").ForEach(func(k, v gjson.Result) bool {
+				gotUsers[k.Str] = v.Int()
+				return true
+			})
+			assert.Equal(t, tc.wantUsers, gotUsers)
+		})
+	}
+}
