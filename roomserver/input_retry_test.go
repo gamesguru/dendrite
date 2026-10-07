@@ -110,7 +110,10 @@ func TestAsyncInputRetriedWhenOwnInfrastructureFails(t *testing.T) {
 		// publication failed.
 		require.Eventually(t, func() bool { return js.published.Load() > published }, 10*time.Second, 50*time.Millisecond,
 			"the event was dropped instead of being retried once publication works again")
-		require.True(t, isLatestEvent(t, rsAPI, room.ID, next.EventID()))
+		// The output is published before the latest events are committed,
+		// so the publication can be seen before the commit.
+		require.Eventually(t, func() bool { return isLatestEvent(t, rsAPI, room.ID, next.EventID()) },
+			10*time.Second, 50*time.Millisecond, "the retried event never became a latest event")
 	})
 }
 

@@ -239,17 +239,19 @@ func TestWriteEventReplacesState(t *testing.T) {
 // in one statement. Both backends must return all of them: the sync API
 // consumer looks up the whole state of a room this way.
 func TestEventsReturnsEveryRequestedEvent(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-	for i := range 1200 {
-		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": strconv.Itoa(i), "msgtype": "m.text"})
-	}
-	ids := make([]string, len(room.Events()))
-	for i, ev := range room.Events() {
-		ids[i] = ev.EventID()
-	}
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Each backend gets its own room: the backends run in parallel, and
+		// WriteEvent sets the history visibility on the event it writes.
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		for i := range 1200 {
+			room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": strconv.Itoa(i), "msgtype": "m.text"})
+		}
+		ids := make([]string, len(room.Events()))
+		for i, ev := range room.Events() {
+			ids[i] = ev.EventID()
+		}
+
 		db, closeDB := MustCreateDatabase(t, dbType)
 		defer closeDB()
 		for _, ev := range room.Events() {
