@@ -53,11 +53,14 @@ func AddPublicRoutes(
 		ServerName:             cfg.Global.ServerName,
 	}
 
-	routing.Setup(
+	delayedEvents := routing.Setup(
 		routers,
 		cfg, rsAPI, asAPI,
 		userAPI, userDirectoryProvider, federation,
 		syncProducer, transactionsCache, fsAPI,
 		extRoomsProvider, caches, natsClient, enableMetrics, processContext.Context(),
 	)
+	// MSC4140: send the delayed events that become due, including those
+	// scheduled before this process started.
+	delayedEvents.Start(processContext.Context())
 }

@@ -42,6 +42,22 @@ type Profile interface {
 	DeleteProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string) error
 }
 
+// DelayedEvents stores MSC4140 delayed events.
+type DelayedEvents interface {
+	AddDelayedEvent(ctx context.Context, event *api.DelayedEvent, maxScheduled int) error
+	RestartDelayedEvent(ctx context.Context, delayID string, now spec.Timestamp) (bool, error)
+	CancelDelayedEvent(ctx context.Context, delayID string, now spec.Timestamp) (bool, error)
+	ClaimDelayedEvent(ctx context.Context, delayID string) (*api.DelayedEvent, error)
+	ClaimDueDelayedEvents(ctx context.Context, now spec.Timestamp, reclaim bool) ([]api.DelayedEvent, error)
+	UnclaimDelayedEvent(ctx context.Context, delayID string) error
+	FinalizeDelayedEvent(ctx context.Context, delayID, eventID string, sendErr json.RawMessage, now spec.Timestamp) error
+	CancelDelayedStateEvents(ctx context.Context, roomID, eventType, stateKey, exceptLocalpart string, exceptServerName spec.ServerName, now spec.Timestamp) error
+	PurgeDelayedEvents(ctx context.Context, before spec.Timestamp) error
+	GetDelayedEvent(ctx context.Context, delayID string) (*api.DelayedEvent, error)
+	GetDelayedEventsForUser(ctx context.Context, localpart string, serverName spec.ServerName, finalized bool) ([]api.DelayedEvent, error)
+	NextDelayedEventSendTS(ctx context.Context) (spec.Timestamp, bool, error)
+}
+
 type Account interface {
 	// CreateAccount makes a new account with the given login name and password, and creates an empty profile
 	// for this account. If no password is supplied, the account will be a passwordless account. If the
@@ -177,6 +193,7 @@ type UserDatabase interface {
 	Account
 	AccountData
 	DehydratedDevice
+	DelayedEvents
 	Device
 	ExternalID
 	KeyBackup

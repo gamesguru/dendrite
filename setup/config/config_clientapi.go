@@ -80,6 +80,9 @@ type ClientAPI struct {
 	// Rate-limiting options
 	RateLimiting RateLimiting `yaml:"rate_limiting"`
 
+	// DelayedEvents configures MSC4140 delayed events.
+	DelayedEvents DelayedEvents `yaml:"delayed_events"`
+
 	MSCs *MSCs `yaml:"-"`
 }
 
@@ -100,6 +103,7 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 	c.RegistrationDisabled = true
 	c.OpenRegistrationWithoutVerificationEnabled = false
 	c.RateLimiting.Defaults()
+	c.DelayedEvents.Defaults()
 }
 
 func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
@@ -122,6 +126,7 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 	}
 	c.TURN.Verify(configErrs)
 	c.RateLimiting.Verify(configErrs)
+	c.DelayedEvents.Verify(configErrs)
 	if c.RecaptchaEnabled {
 		if c.CaptchaProvider == "altcha" {
 			checkNotEmpty(configErrs, "client_api.altcha_hmac_key", c.AltchaHMACKey)
@@ -159,6 +164,49 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 				"start Zendrite with the -really-enable-open-registration command line flag. Otherwise, you " +
 				"should set the registration_disabled option in your Zendrite config.",
 		)
+	}
+}
+
+// DelayedEvents configures MSC4140 delayed events: events that a client
+// schedules for the server to send later unless the client restarts or
+// cancels them first. Element Call relies on them to end the call membership
+// of a client that disappears.
+type DelayedEvents struct {
+	// MaxDelay is the longest delay a client may request. Zero, the default
+	// as in Synapse, disables scheduling delayed events.
+	MaxDelay time.Duration `yaml:"max_event_delay_duration"`
+
+	// MaxPerUser is how many delayed events one user may have scheduled at
+	// once.
+	MaxPerUser int `yaml:"max_delayed_events_per_user"`
+
+	// ManagementRateLimiting limits the requests that restart, cancel, send
+	// or look up delayed events, per device or, without an access token, per
+	// address. Element Call restarts its delayed events every few seconds.
+	ManagementRateLimiting RateLimiting `yaml:"management_rate_limiting"`
+}
+
+// Enabled reports whether clients may schedule delayed events.
+func (d *DelayedEvents) Enabled() bool {
+	return d.MaxDelay > 0 && d.MaxPerUser > 0
+}
+
+func (d *DelayedEvents) Defaults() {
+	d.MaxDelay = 0
+	d.MaxPerUser = 100
+	// A burst of 20 requests, then one per second, as Element Call's
+	// documentation suggests for Synapse.
+	d.ManagementRateLimiting = RateLimiting{Enabled: true, Threshold: 20, CooloffMS: 20000} //nolint:mnd
+}
+
+func (d *DelayedEvents) Verify(configErrs *ConfigErrors) {
+	if d.MaxDelay < 0 {
+		configErrs.Add("client_api.delayed_events.max_event_delay_duration must not be negative")
+	}
+	checkPositive(configErrs, "client_api.delayed_events.max_delayed_events_per_user", int64(d.MaxPerUser))
+	if d.ManagementRateLimiting.Enabled {
+		checkPositive(configErrs, "client_api.delayed_events.management_rate_limiting.threshold", d.ManagementRateLimiting.Threshold)
+		checkPositive(configErrs, "client_api.delayed_events.management_rate_limiting.cooloff_ms", d.ManagementRateLimiting.CooloffMS)
 	}
 }
 

@@ -77,7 +77,7 @@ func Setup(
 	extRoomsProvider api.ExtraPublicRoomsProvider,
 	caches *caching.Caches,
 	natsClient *nats.Conn, enableMetrics bool, contexts ...context.Context,
-) {
+) *DelayedEvents {
 	ctx := context.Background()
 	if len(contexts) > 0 {
 		ctx = contexts[0]
@@ -103,6 +103,7 @@ func Setup(
 		"org.matrix.msc2285.stable":     true,
 		"org.matrix.msc3916.stable":     true,
 		"org.matrix.simplified_msc3575": true, // MSC4186: Simplified Sliding Sync
+		"org.matrix.msc4140":            cfg.DelayedEvents.Enabled(),
 		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
 		"org.matrix.msc4354":            true, // MSC4354: sticky events
 		"org.matrix.msc4222":            true, // MSC4222: state_after in /sync
@@ -379,6 +380,52 @@ func Setup(
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
 
+	// MSC4140: delayed events. Scheduling goes through the send and state
+	// endpoints below; these manage and look up scheduled events.
+	delayedEvents := newDelayedEvents(
+		cfg, rsAPI, userAPI, federation, transactionsCache,
+		rateLimits, httputil.NewRateLimits(&cfg.DelayedEvents.ManagementRateLimiting, ctx),
+	)
+	unstableMux.Handle("/org.matrix.msc4140/rooms/{roomID}/delayed_event/{eventType}/{txnID}",
+		httputil.MakeAuthAPI("delayed_event_schedule", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return delayedEvents.ScheduleUnstable(req, device, vars["roomID"], vars["eventType"], vars["txnID"])
+		}, httputil.WithAllowGuests()),
+	).Methods(http.MethodPut, http.MethodOptions)
+	unstableMux.Handle("/org.matrix.msc4140/delayed_events",
+		httputil.MakeAuthAPI("delayed_events", userAPI, delayedEvents.List, httputil.WithAllowGuests()),
+	).Methods(http.MethodGet, http.MethodOptions)
+	unstableMux.Handle("/org.matrix.msc4140/delayed_events/{delayID}",
+		httputil.MakeAuthAPI("delayed_event", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return delayedEvents.Get(req, device, vars["delayID"])
+		}, httputil.WithAllowGuests()),
+	).Methods(http.MethodGet, http.MethodOptions)
+	unstableMux.Handle("/org.matrix.msc4140/delayed_events/{delayID}",
+		delayedEvents.managementAPI("delayed_event_update", func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return delayedEvents.UpdateWithActionInBody(req, device, vars["delayID"])
+		}),
+	).Methods(http.MethodPost)
+	unstableMux.Handle("/org.matrix.msc4140/delayed_events/{delayID}/{action:cancel|restart|send}",
+		delayedEvents.managementAPI("delayed_event_update", func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return delayedEvents.Update(req, device, vars["delayID"], delayedEventAction(vars["action"]))
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	// MSC4143: MatrixRTC transports
 	unstableMux.Handle("/org.matrix.msc4143/rtc/transports",
 		httputil.MakeAuthAPI("rtc_transports", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
@@ -590,6 +637,9 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
+			if delayedEvents.Requested(req) {
+				return delayedEvents.Schedule(req, device, vars["roomID"], vars["eventType"], nil, nil)
+			}
 			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, nil, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPost, http.MethodOptions)
@@ -600,6 +650,9 @@ func Setup(
 				return util.ErrorResponse(err)
 			}
 			txnID := vars["txnID"]
+			if delayedEvents.Requested(req) {
+				return delayedEvents.Schedule(req, device, vars["roomID"], vars["eventType"], &txnID, nil)
+			}
 			return SendEvent(req, device, vars["roomID"], vars["eventType"], &txnID,
 				nil, cfg, rsAPI, transactionsCache, federation)
 		}, httputil.WithAllowGuests()),
@@ -649,6 +702,9 @@ func Setup(
 			}
 			emptyString := ""
 			eventType := strings.TrimSuffix(vars["eventType"], "/")
+			if delayedEvents.Requested(req) {
+				return delayedEvents.Schedule(req, device, vars["roomID"], eventType, nil, &emptyString)
+			}
 			return SendEvent(req, device, vars["roomID"], eventType, nil, &emptyString, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPut, http.MethodOptions)
@@ -660,6 +716,9 @@ func Setup(
 				return util.ErrorResponse(err)
 			}
 			stateKey := vars["stateKey"]
+			if delayedEvents.Requested(req) {
+				return delayedEvents.Schedule(req, device, vars["roomID"], vars["eventType"], nil, &stateKey)
+			}
 			return SendEvent(req, device, vars["roomID"], vars["eventType"], nil, &stateKey, cfg, rsAPI, nil, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodPut, http.MethodOptions)
@@ -1554,7 +1613,7 @@ func Setup(
 			if r := rateLimits.Limit(req, device); r != nil {
 				return *r
 			}
-			return GetCapabilities(rsAPI, oidcEnabled)
+			return GetCapabilities(rsAPI, oidcEnabled, &cfg.DelayedEvents)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
@@ -1878,4 +1937,6 @@ func Setup(
 			return DeleteEventReport(req, rsAPI, vars["reportID"])
 		}),
 	).Methods(http.MethodDelete, http.MethodOptions)
+
+	return delayedEvents
 }

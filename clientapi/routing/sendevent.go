@@ -63,8 +63,6 @@ var sendEventDuration = prometheus.NewHistogramVec(
 //	/rooms/{roomID}/send/{eventType}
 //	/rooms/{roomID}/send/{eventType}/{txnID}
 //	/rooms/{roomID}/state/{eventType}/{stateKey}
-//
-//nolint:gocyclo
 func SendEvent(
 	req *http.Request,
 	device *userapi.Device,
@@ -88,41 +86,18 @@ func SendEvent(
 		}
 	}
 
-	// Translate user ID state keys to room keys in pseudo ID rooms
-	if roomVersion == gomatrixserverlib.RoomVersionPseudoIDs && stateKey != nil {
-		parsedRoomID, innerErr := spec.NewRoomID(roomID)
-		if innerErr != nil {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.InvalidParam("invalid room ID"),
-			}
-		}
-
-		newStateKey, innerErr := synctypes.FromClientStateKey(*parsedRoomID, *stateKey, func(roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) { //nolint:contextcheck
-			return rsAPI.QuerySenderIDForUser(req.Context(), roomID, userID)
-		})
-		if innerErr != nil {
-			// TODO: work out better logic for failure cases (e.g. sender ID not found)
-			util.GetLogger(req.Context()).WithError(innerErr).Error("synctypes.FromClientStateKey failed")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
-		}
-		stateKey = newStateKey
+	stateKey, resErr := toRoomStateKey(req.Context(), rsAPI, roomVersion, roomID, stateKey)
+	if resErr != nil {
+		return *resErr
 	}
 
 	// create a mutex for the specific user in the specific room
 	// this avoids a situation where events that are received in quick succession are sent to the roomserver in a jumbled order
-	userID := device.UserID
-	domain := device.UserDomain()
-	mutexVal, _ := userRoomSendMutexes.LoadOrStore(roomID+userID, &sync.Mutex{})
-	mu, ok := mutexVal.(*sync.Mutex)
-	if !ok {
-		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	unlock, resErr := lockUserRoomSend(roomID, device.UserID)
+	if resErr != nil {
+		return *resErr
 	}
-	mu.Lock()
-	defer mu.Unlock()
+	defer unlock()
 	// Concurrent retries may have all missed the cache before waiting for the
 	// room lock. Recheck after acquiring it, before creating another event.
 	if txnID != nil {
@@ -132,36 +107,9 @@ func SendEvent(
 	}
 
 	var r map[string]any // must be a JSON object
-	resErr := httputil.UnmarshalJSONRequest(req, &r)
+	resErr = httputil.UnmarshalJSONRequest(req, &r)
 	if resErr != nil {
 		return *resErr
-	}
-
-	if stateKey != nil {
-		// If the existing/new state content are equal, return the existing event_id, making the request idempotent.
-		if resp := stateEqual(req.Context(), rsAPI, eventType, *stateKey, roomID, r); resp != nil {
-			return *resp
-		}
-	}
-
-	startedGeneratingEvent := time.Now()
-
-	// If we're sending a membership update, make sure to strip the authorized
-	// via key if it is present, otherwise other servers won't be able to auth
-	// the event if the room is set to the "restricted" join rule.
-	if eventType == spec.MRoomMember {
-		delete(r, "join_authorised_via_users_server") //nolint:misspell
-	}
-
-	// for power level events we need to replace the userID with the pseudoID
-	if roomVersion == gomatrixserverlib.RoomVersionPseudoIDs && eventType == spec.MRoomPowerLevels {
-		err = updatePowerLevels(req, r, roomID, rsAPI)
-		if err != nil {
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{Err: err.Error()},
-			}
-		}
 	}
 
 	evTime, err := httputil.ParseTSParam(req, device)
@@ -180,30 +128,6 @@ func SendEvent(
 		}
 	}
 
-	e, resErr := generateSendEvent(req.Context(), r, device, roomID, eventType, stateKey, sticky, rsAPI, evTime)
-	if resErr != nil {
-		return *resErr
-	}
-	timeToGenerateEvent := time.Since(startedGeneratingEvent)
-
-	// validate that the aliases exists
-	if eventType == spec.MRoomCanonicalAlias && stateKey != nil && *stateKey == "" {
-		aliasReq := api.AliasEvent{}
-		if err = json.Unmarshal(e.Content(), &aliasReq); err != nil {
-			return util.ErrorResponse(fmt.Errorf("unable to parse alias event: %w", err))
-		}
-		if !aliasReq.Valid() {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.InvalidParam("Request contains invalid aliases."),
-			}
-		}
-
-		if resErr = validateCanonicalAliases(req.Context(), aliasReq, roomID, cfg, rsAPI, federation); resErr != nil {
-			return *resErr
-		}
-	}
-
 	var txnAndSessionID *api.TransactionID
 	if txnID != nil {
 		txnAndSessionID = &api.TransactionID{
@@ -212,31 +136,13 @@ func SendEvent(
 		}
 	}
 
-	// Pass the new event to the roomserver. If this retries a transaction
-	// that already produced an event, possibly on another process before an
-	// HA takeover, the roomserver discards this event and names that one.
-	startedSubmittingEvent := time.Now()
-	eventID, err := api.SendEventForTransaction(
-		req.Context(), rsAPI,
-		&types.HeaderedEvent{PDU: e},
-		device.UserDomain(),
-		domain,
-		domain,
-		txnAndSessionID,
+	eventID, resErr := sendEventContent(
+		req.Context(), device, roomVersion, roomID, eventType, stateKey, sticky, r, evTime, txnAndSessionID,
+		cfg, rsAPI, federation,
 	)
-	if err != nil {
-		util.GetLogger(req.Context()).WithError(err).Error("SendEvents failed")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}
+	if resErr != nil {
+		return *resErr
 	}
-	timeToSubmitEvent := time.Since(startedSubmittingEvent)
-	util.GetLogger(req.Context()).WithFields(logrus.Fields{
-		"event_id":     eventID,
-		"room_id":      roomID,
-		"room_version": roomVersion,
-	}).Info("Sent event to roomserver")
 
 	res := util.JSONResponse{
 		Code: http.StatusOK,
@@ -246,16 +152,157 @@ func SendEvent(
 	if txnID != nil {
 		txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
 	}
+	return res
+}
+
+// toRoomStateKey translates user ID state keys to room keys in pseudo ID rooms.
+func toRoomStateKey(
+	ctx context.Context, rsAPI api.ClientRoomserverAPI,
+	roomVersion gomatrixserverlib.RoomVersion, roomID string, stateKey *string,
+) (*string, *util.JSONResponse) {
+	if roomVersion != gomatrixserverlib.RoomVersionPseudoIDs || stateKey == nil {
+		return stateKey, nil
+	}
+	parsedRoomID, err := spec.NewRoomID(roomID)
+	if err != nil {
+		return nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("invalid room ID"),
+		}
+	}
+	newStateKey, err := synctypes.FromClientStateKey(*parsedRoomID, *stateKey, func(roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
+		return rsAPI.QuerySenderIDForUser(ctx, roomID, userID)
+	})
+	if err != nil {
+		// TODO: work out better logic for failure cases (e.g. sender ID not found)
+		util.GetLogger(ctx).WithError(err).Error("synctypes.FromClientStateKey failed")
+		return nil, &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	return newStateKey, nil
+}
+
+// lockUserRoomSend takes the lock that orders one user's sends into one room,
+// and returns the function that releases it.
+func lockUserRoomSend(roomID, userID string) (func(), *util.JSONResponse) {
+	mutexVal, _ := userRoomSendMutexes.LoadOrStore(roomID+userID, &sync.Mutex{})
+	mu, ok := mutexVal.(*sync.Mutex)
+	if !ok {
+		return nil, &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	mu.Lock()
+	return mu.Unlock, nil
+}
+
+// sendEventContent builds an event from the room's current state as the
+// device's user and submits it to the roomserver, returning its event ID. The
+// caller holds the user's send lock for the room. Clients send through
+// SendEvent; the delayed event scheduler (MSC4140) calls this directly.
+//
+//nolint:gocyclo
+func sendEventContent(
+	ctx context.Context,
+	device *userapi.Device,
+	roomVersion gomatrixserverlib.RoomVersion,
+	roomID, eventType string, stateKey *string,
+	sticky *gomatrixserverlib.StickyEventData,
+	r map[string]any,
+	evTime time.Time,
+	txnAndSessionID *api.TransactionID,
+	cfg *config.ClientAPI,
+	rsAPI api.ClientRoomserverAPI,
+	federation fclient.FederationClient,
+) (string, *util.JSONResponse) {
+	domain := device.UserDomain()
+
+	if stateKey != nil {
+		// If the existing/new state content are equal, return the existing event_id, making the request idempotent.
+		if eventID, ok := stateEqual(ctx, rsAPI, eventType, *stateKey, roomID, r); ok {
+			return eventID, nil
+		}
+	}
+
+	startedGeneratingEvent := time.Now()
+
+	// If we're sending a membership update, make sure to strip the authorized
+	// via key if it is present, otherwise other servers won't be able to auth
+	// the event if the room is set to the "restricted" join rule.
+	if eventType == spec.MRoomMember {
+		delete(r, "join_authorised_via_users_server") //nolint:misspell
+	}
+
+	// for power level events we need to replace the userID with the pseudoID
+	if roomVersion == gomatrixserverlib.RoomVersionPseudoIDs && eventType == spec.MRoomPowerLevels {
+		if err := updatePowerLevels(ctx, r, roomID, rsAPI); err != nil {
+			return "", &util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{Err: err.Error()},
+			}
+		}
+	}
+
+	e, resErr := generateSendEvent(ctx, r, device, roomID, eventType, stateKey, sticky, rsAPI, evTime)
+	if resErr != nil {
+		return "", resErr
+	}
+	timeToGenerateEvent := time.Since(startedGeneratingEvent)
+
+	// validate that the aliases exists
+	if eventType == spec.MRoomCanonicalAlias && stateKey != nil && *stateKey == "" {
+		aliasReq := api.AliasEvent{}
+		if err := json.Unmarshal(e.Content(), &aliasReq); err != nil {
+			res := util.ErrorResponse(fmt.Errorf("unable to parse alias event: %w", err))
+			return "", &res
+		}
+		if !aliasReq.Valid() {
+			return "", &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.InvalidParam("Request contains invalid aliases."),
+			}
+		}
+
+		if resErr = validateCanonicalAliases(ctx, aliasReq, roomID, cfg, rsAPI, federation); resErr != nil {
+			return "", resErr
+		}
+	}
+
+	// Pass the new event to the roomserver. If this retries a transaction
+	// that already produced an event, possibly on another process before an
+	// HA takeover, the roomserver discards this event and names that one.
+	startedSubmittingEvent := time.Now()
+	eventID, err := api.SendEventForTransaction(
+		ctx, rsAPI,
+		&types.HeaderedEvent{PDU: e},
+		domain,
+		domain,
+		domain,
+		txnAndSessionID,
+	)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
+		return "", &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	timeToSubmitEvent := time.Since(startedSubmittingEvent)
+	util.GetLogger(ctx).WithFields(logrus.Fields{
+		"event_id":     eventID,
+		"room_id":      roomID,
+		"room_version": roomVersion,
+	}).Info("Sent event to roomserver")
 
 	// Take a note of how long it took to generate the event vs submit
 	// it to the roomserver.
 	sendEventDuration.With(prometheus.Labels{"action": "build"}).Observe(float64(timeToGenerateEvent.Milliseconds()))
 	sendEventDuration.With(prometheus.Labels{"action": "submit"}).Observe(float64(timeToSubmitEvent.Milliseconds()))
 
-	return res
+	return eventID, nil
 }
 
-func updatePowerLevels(req *http.Request, r map[string]any, roomID string, rsAPI api.ClientRoomserverAPI) error {
+func updatePowerLevels(ctx context.Context, r map[string]any, roomID string, rsAPI api.ClientRoomserverAPI) error {
 	users, ok := r["users"]
 	if !ok {
 		return nil
@@ -273,11 +320,11 @@ func updatePowerLevels(req *http.Request, r map[string]any, roomID string, rsAPI
 		if err != nil {
 			continue // we're modifying the map in place, so we're going to have invalid userIDs after the first iteration
 		}
-		senderID, err := rsAPI.QuerySenderIDForUser(req.Context(), *validRoomID, *uID)
+		senderID, err := rsAPI.QuerySenderIDForUser(ctx, *validRoomID, *uID)
 		if err != nil {
 			return err
 		} else if senderID == nil {
-			util.GetLogger(req.Context()).Warnf("sender ID not found for %s in %s", uID, *validRoomID)
+			util.GetLogger(ctx).Warnf("sender ID not found for %s in %s", uID, *validRoomID)
 			continue
 		}
 		userMap[string(*senderID)] = level
@@ -287,9 +334,9 @@ func updatePowerLevels(req *http.Request, r map[string]any, roomID string, rsAPI
 	return nil
 }
 
-// stateEqual compares the new and the existing state event content. If they are equal, returns a *util.JSONResponse
-// with the existing event_id, making this an idempotent request.
-func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID string, newContent map[string]any) *util.JSONResponse {
+// stateEqual compares the new and the existing state event content. If they
+// are equal, it returns the existing event ID, making the request idempotent.
+func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID string, newContent map[string]any) (string, bool) {
 	stateRes := api.QueryCurrentStateResponse{}
 	tuple := gomatrixserverlib.StateKeyTuple{
 		EventType: eventType,
@@ -300,21 +347,18 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 		StateTuples: []gomatrixserverlib.StateKeyTuple{tuple},
 	}, &stateRes)
 	if err != nil {
-		return nil
+		return "", false
 	}
 	if existingEvent, ok := stateRes.StateEvents[tuple]; ok {
 		var existingContent map[string]any
 		if err = json.Unmarshal(existingEvent.Content(), &existingContent); err != nil {
-			return nil
+			return "", false
 		}
 		if reflect.DeepEqual(existingContent, newContent) {
-			return &util.JSONResponse{
-				Code: http.StatusOK,
-				JSON: sendEventResponse{existingEvent.EventID()},
-			}
+			return existingEvent.EventID(), true
 		}
 	}
-	return nil
+	return "", false
 }
 
 func generateSendEvent(

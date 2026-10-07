@@ -164,7 +164,43 @@ Deactivating an account removes its custom fields.
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
+| [MSC4140](https://github.com/matrix-org/matrix-spec-proposals/pull/4140) | Cancellable delayed events | N/A | Implemented, disabled by default: see [delayed events](#delayed-events) |
 | [MSC4143](https://github.com/matrix-org/matrix-spec-proposals/pull/4143) | MatrixRTC transport discovery | N/A | Implemented (configure via [`rtc_foci`](/administration/matrixrtc/)) |
+
+### Delayed events
+
+[MSC4140](https://github.com/matrix-org/matrix-spec-proposals/pull/4140) lets a client schedule an event for the server to send later, unless the client restarts or cancels the schedule first.
+Element Call uses it to end the call membership of a client that crashes or loses its connection; see [MatrixRTC](/administration/matrixrtc/#delayed-events).
+Zendrite implements the unstable API that matrix-js-sdk and Synapse use:
+
+- The `org.matrix.msc4140.delay` query parameter, in milliseconds, on `PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}` and `PUT /_matrix/client/v3/rooms/{roomId}/state/{eventType}/{stateKey}` schedules the event and returns `{"delay_id": ...}` instead of an event ID.
+- `PUT /_matrix/client/unstable/org.matrix.msc4140/rooms/{roomId}/delayed_event/{eventType}/{txnId}` schedules an event from a body of `delay_ms`, `content` and an optional `state_key`.
+- `POST /_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delayId}/{cancel|restart|send}`, and the older form `POST .../delayed_events/{delayId}` with `{"action": ...}`, manage a scheduled event.
+  As in Synapse, these work without an access token, since the delay ID identifies the event; with one, they are rate-limited per device instead of per address.
+- `GET /_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delayId}` returns one of the user's delayed events, including a `finalised` object once it was sent, canceled or failed.
+- `GET /_matrix/client/unstable/org.matrix.msc4140/delayed_events` lists the user's scheduled events, or with `status=finalised` the finalized ones, optionally only those named by `delay_id` parameters, with the field names of earlier revisions (`delay`, `running_since`) included as Synapse does.
+  The list is not paginated, so `from` is ignored.
+
+When scheduling, the event is built against the room's current state, so a malformed event, or one the user may not send, is refused at once.
+A delay must be a positive integer; one above the maximum fails with 400 `ORG.MATRIX.MSC4140_DELAY_TOO_LARGE`, and a user with as many events scheduled as allowed gets 429 `M_LIMIT_EXCEEDED` with `Retry-After` set to when their next event is due.
+When delayed events are disabled, scheduling fails with 403 `M_FORBIDDEN`.
+
+At its send time, the event is built from the room state at that moment and sent through the same path as a client's send, including the authorization checks.
+A failure is recorded as the event's `finalised.error` and is not retried.
+The `send` action differs: if sending fails, it returns the error and keeps the event scheduled.
+The sent event carries `org.matrix.msc4140.delay_id` in its `unsigned` data in the sender's `/sync`, and no `transaction_id`.
+
+Retrying an action is safe: `send` succeeds for an event that was already sent, and `cancel` for one that was already canceled or failed.
+Other actions on a finalized event return 404 `M_NOT_FOUND` as in Synapse, rather than the 409 of the current MSC text, because matrix-js-sdk schedules a new delayed leave event when a restart finds none.
+
+A user's scheduled state event is canceled when another user changes the same state, and all of a user's delayed events are deleted when the account is deactivated.
+Finalized events are kept for seven days, and at most 1000 per user.
+
+Delayed events are stored in the user API database and sent by the process that serves clients.
+In HA deployments, that is the active process: a successor picks up the schedule from the database, and resends any event its predecessor was sending when it stopped.
+The resend uses the same roomserver transaction, keyed by the delay ID, so an event that did reach the room is not sent twice.
+
+`/versions` advertises `org.matrix.msc4140` while delayed events are enabled, and `/capabilities` reports the limits as `org.matrix.msc4140.delayed_events`, where a `max_delay_ms` of 0 means disabled.
 
 ## Opt-in MSCs
 

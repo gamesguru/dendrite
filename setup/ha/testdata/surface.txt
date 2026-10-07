@@ -369,6 +369,22 @@ column userapi_dehydrated_devices | created_ts | bigint | NO |
 column userapi_dehydrated_devices | device_data | text | NO |
 column userapi_dehydrated_devices | device_id | text | NO |
 column userapi_dehydrated_devices | user_id | text | NO |
+column userapi_delayed_events | content | text | NO |
+column userapi_delayed_events | delay_id | text | NO |
+column userapi_delayed_events | delay_ms | bigint | NO |
+column userapi_delayed_events | delayed_since_ts | bigint | NO |
+column userapi_delayed_events | device_id | text | NO |
+column userapi_delayed_events | error | text | YES |
+column userapi_delayed_events | event_id | text | YES |
+column userapi_delayed_events | event_type | text | NO |
+column userapi_delayed_events | finalized_ts | bigint | YES |
+column userapi_delayed_events | localpart | text | NO |
+column userapi_delayed_events | origin_server_ts | bigint | NO |
+column userapi_delayed_events | room_id | text | NO |
+column userapi_delayed_events | send_ts | bigint | NO |
+column userapi_delayed_events | server_name | text | NO |
+column userapi_delayed_events | state_key | text | YES |
+column userapi_delayed_events | status | text | NO |
 column userapi_devices | access_token | text | NO |
 column userapi_devices | access_token_expires_ts | bigint | NO | 0
 column userapi_devices | created_ts | bigint | NO |
@@ -629,6 +645,10 @@ index userapi_daily_visits | userapi_daily_visits_localpart_device_timestamp_idx
 index userapi_daily_visits | userapi_daily_visits_localpart_timestamp_idx | CREATE INDEX userapi_daily_visits_localpart_timestamp_idx ON public.userapi_daily_visits USING btree (localpart, "timestamp")
 index userapi_daily_visits | userapi_daily_visits_timestamp_idx | CREATE INDEX userapi_daily_visits_timestamp_idx ON public.userapi_daily_visits USING btree ("timestamp")
 index userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | CREATE UNIQUE INDEX userapi_dehydrated_devices_pkey ON public.userapi_dehydrated_devices USING btree (user_id)
+index userapi_delayed_events | userapi_delayed_events_pkey | CREATE UNIQUE INDEX userapi_delayed_events_pkey ON public.userapi_delayed_events USING btree (delay_id)
+index userapi_delayed_events | userapi_delayed_events_send_ts_idx | CREATE INDEX userapi_delayed_events_send_ts_idx ON public.userapi_delayed_events USING btree (send_ts) WHERE (status = 'scheduled'::text)
+index userapi_delayed_events | userapi_delayed_events_state_idx | CREATE INDEX userapi_delayed_events_state_idx ON public.userapi_delayed_events USING btree (room_id, event_type, state_key) WHERE ((state_key IS NOT NULL) AND (status = 'scheduled'::text))
+index userapi_delayed_events | userapi_delayed_events_user_idx | CREATE INDEX userapi_delayed_events_user_idx ON public.userapi_delayed_events USING btree (localpart, server_name)
 index userapi_devices | userapi_device_localpart_id_idx | CREATE UNIQUE INDEX userapi_device_localpart_id_idx ON public.userapi_devices USING btree (localpart, server_name, device_id)
 index userapi_devices | userapi_devices_pkey | CREATE UNIQUE INDEX userapi_devices_pkey ON public.userapi_devices USING btree (access_token)
 index userapi_devices | userapi_devices_prev_refresh_token_idx | CREATE UNIQUE INDEX userapi_devices_prev_refresh_token_idx ON public.userapi_devices USING btree (prev_refresh_token_hash)
@@ -1089,6 +1109,19 @@ constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_data_n
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_id_not_null | NOT NULL device_id
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | PRIMARY KEY (user_id)
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_user_id_not_null | NOT NULL user_id
+constraint userapi_delayed_events | userapi_delayed_events_content_not_null | NOT NULL content
+constraint userapi_delayed_events | userapi_delayed_events_delay_id_not_null | NOT NULL delay_id
+constraint userapi_delayed_events | userapi_delayed_events_delay_ms_not_null | NOT NULL delay_ms
+constraint userapi_delayed_events | userapi_delayed_events_delayed_since_ts_not_null | NOT NULL delayed_since_ts
+constraint userapi_delayed_events | userapi_delayed_events_device_id_not_null | NOT NULL device_id
+constraint userapi_delayed_events | userapi_delayed_events_event_type_not_null | NOT NULL event_type
+constraint userapi_delayed_events | userapi_delayed_events_localpart_not_null | NOT NULL localpart
+constraint userapi_delayed_events | userapi_delayed_events_origin_server_ts_not_null | NOT NULL origin_server_ts
+constraint userapi_delayed_events | userapi_delayed_events_pkey | PRIMARY KEY (delay_id)
+constraint userapi_delayed_events | userapi_delayed_events_room_id_not_null | NOT NULL room_id
+constraint userapi_delayed_events | userapi_delayed_events_send_ts_not_null | NOT NULL send_ts
+constraint userapi_delayed_events | userapi_delayed_events_server_name_not_null | NOT NULL server_name
+constraint userapi_delayed_events | userapi_delayed_events_status_not_null | NOT NULL status
 constraint userapi_devices | userapi_devices_access_token_expires_ts_not_null | NOT NULL access_token_expires_ts
 constraint userapi_devices | userapi_devices_access_token_not_null | NOT NULL access_token
 constraint userapi_devices | userapi_devices_created_ts_not_null | NOT NULL created_ts

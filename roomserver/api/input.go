@@ -128,6 +128,13 @@ type TransactionID struct {
 	TransactionID string `json:"id"`
 }
 
+// DelayedEventSessionID is the session ID of the transactions that send
+// MSC4140 delayed events, whose transaction ID is the delay ID. A resend after
+// a crash is then recognized as the same transaction. No device has a
+// negative session ID, so the delay ID is never reported as a transaction
+// ID; the sync API reports it to the sender as the event's delay ID instead.
+const DelayedEventSessionID int64 = -4140
+
 // InputRoomEventsRequest is a request to InputRoomEvents.
 type InputRoomEventsRequest struct {
 	InputRoomEvents []InputRoomEvent `json:"input_room_events"`

@@ -424,3 +424,41 @@ func TestRefreshableAccessTokenLifetime(t *testing.T) {
 		t.Fatal("negative lifetime was accepted")
 	}
 }
+
+func TestDelayedEventsConfig(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.DelayedEvents.Enabled() {
+		t.Fatal("delayed events are enabled by default")
+	}
+	if c.DelayedEvents.MaxPerUser != 100 {
+		t.Fatalf("default max_delayed_events_per_user is %d, want 100", c.DelayedEvents.MaxPerUser)
+	}
+	input := "delayed_events:\n  max_event_delay_duration: 24h\n  max_delayed_events_per_user: 10\n" +
+		"  management_rate_limiting:\n    enabled: true\n    threshold: 5\n    cooloff_ms: 1000\n"
+	if err := yaml.Unmarshal([]byte(input), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.DelayedEvents.MaxDelay != 24*time.Hour || c.DelayedEvents.MaxPerUser != 10 || !c.DelayedEvents.Enabled() {
+		t.Fatalf("parsed %+v", c.DelayedEvents)
+	}
+	if c.DelayedEvents.ManagementRateLimiting.Threshold != 5 || c.DelayedEvents.ManagementRateLimiting.CooloffMS != 1000 {
+		t.Fatalf("parsed management rate limiting %+v", c.DelayedEvents.ManagementRateLimiting)
+	}
+	errs := ConfigErrors{}
+	c.Verify(&errs)
+	if len(errs) != 0 {
+		t.Fatalf("valid configuration rejected: %v", errs)
+	}
+	c.DelayedEvents.MaxDelay = -time.Second
+	c.DelayedEvents.MaxPerUser = -1
+	c.Verify(&errs)
+	if len(errs) != 2 {
+		t.Fatalf("got errors %v, want one each for the negative delay and limit", errs)
+	}
+	c.DelayedEvents.MaxPerUser = 0
+	c.DelayedEvents.MaxDelay = time.Hour
+	if c.DelayedEvents.Enabled() {
+		t.Fatal("a limit of zero scheduled events does not disable delayed events")
+	}
+}

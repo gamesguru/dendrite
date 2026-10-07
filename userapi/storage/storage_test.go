@@ -467,6 +467,71 @@ func Test_ProfileFields(t *testing.T) {
 	})
 }
 
+func Test_DelayedEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		localpart, domain := "delayer", spec.ServerName("localhost")
+		_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+		assert.NoError(t, err, "failed to create account")
+
+		newEvent := func(delayID string, sendTS spec.Timestamp) *api.DelayedEvent {
+			return &api.DelayedEvent{
+				DelayID: delayID, Localpart: localpart, ServerName: domain,
+				RoomID: "!room:localhost", Type: "m.room.message", Content: json.RawMessage(`{}`),
+				DelayMS: 1000, DelayedSince: sendTS - 1000, SendTS: sendTS,
+			}
+		}
+
+		// The limit counts pending events, and reports when the next is due.
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("first", 5000), 2))
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("second", 3000), 2))
+		err = db.AddDelayedEvent(ctx, newEvent("third", 4000), 2)
+		var limitErr *api.DelayedEventLimitError
+		if assert.ErrorAs(t, err, &limitErr) {
+			assert.Equal(t, spec.Timestamp(3000), limitErr.NextSendTS)
+		}
+		event, err := db.GetDelayedEvent(ctx, "third")
+		assert.NoError(t, err)
+		assert.Nil(t, event, "an event over the limit is not stored")
+
+		// A claimed event still counts; a finalized one does not.
+		claimed, err := db.ClaimDelayedEvent(ctx, "second")
+		assert.NoError(t, err)
+		assert.NotNil(t, claimed)
+		assert.Error(t, db.AddDelayedEvent(ctx, newEvent("third", 4000), 2))
+		assert.NoError(t, db.FinalizeDelayedEvent(ctx, "second", "$event", nil, 3100))
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("third", 4000), 2))
+		canceled, err := db.CancelDelayedEvent(ctx, "third", 3200)
+		assert.NoError(t, err)
+		assert.True(t, canceled)
+		canceled, err = db.CancelDelayedEvent(ctx, "third", 3300)
+		assert.NoError(t, err)
+		assert.False(t, canceled, "a finalized event cannot be canceled again")
+
+		finalized, err := db.GetDelayedEventsForUser(ctx, localpart, domain, true)
+		assert.NoError(t, err)
+		assert.Len(t, finalized, 2)
+		assert.NoError(t, db.PurgeDelayedEvents(ctx, 3150))
+		finalized, err = db.GetDelayedEventsForUser(ctx, localpart, domain, true)
+		assert.NoError(t, err)
+		if assert.Len(t, finalized, 1) {
+			assert.Equal(t, "third", finalized[0].DelayID)
+		}
+
+		// Deactivation forgets every delayed event of the account.
+		assert.NoError(t, db.DeactivateAccount(ctx, localpart, domain))
+		for _, delayID := range []string{"first", "third"} {
+			event, err = db.GetDelayedEvent(ctx, delayID)
+			assert.NoError(t, err)
+			assert.Nil(t, event)
+		}
+		_, ok, err := db.NextDelayedEventSendTS(ctx)
+		assert.NoError(t, err)
+		assert.False(t, ok)
+	})
+}
+
 func Test_ProfileSizeLimit(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)

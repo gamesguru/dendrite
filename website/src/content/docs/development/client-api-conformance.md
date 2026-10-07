@@ -103,6 +103,7 @@ The explicit configurable list mirrors the implemented cases in `setup/mscs/mscs
 | `org.matrix.simplified_msc3575` | Always, existing compatibility flag. | Native sliding-sync handler and compatibility route in `syncapi/routing/routing.go`. |
 | `org.matrix.msc4143` | True only with nonempty `global.rtc_foci`; false otherwise. | RTC transport endpoint and well-known focus discovery share that configuration. |
 | `org.matrix.msc4222` | Always. | The `use_state_after` and `org.matrix.msc4222.use_state_after` `/sync` parameters in `syncapi/sync/request.go`, for clients that check the flag before opting in. |
+| `org.matrix.msc4140` | True only with a positive `client_api.delayed_events.max_event_delay_duration` and `max_delayed_events_per_user`; false otherwise. | Delayed event scheduling, management and scheduler in `clientapi/routing/delayed_events.go`, with the `org.matrix.msc4140.delayed_events` capability. |
 | `uk.tcpip.msc4133`, `uk.tcpip.msc4133.stable` | Always. | Profile field endpoints at the unstable and v3 paths in `clientapi/routing/profile.go`, with the `m.profile_fields` capability. |
 | `org.matrix.msc2444`, `org.matrix.msc2753`, `org.matrix.msc2836`, `org.matrix.msc3814` | Only when the respective implemented MSC is configured. | Federation peeking, client peeking, experimental relations, and dehydrated-device modules respectively. |
 | `org.matrix.msc3861` | Only when MSC3861 is enabled. | Delegated authentication routes and token introspection. |

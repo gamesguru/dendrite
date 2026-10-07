@@ -288,6 +288,21 @@ client_api:
     exempt_user_ids:
     #  - "@user:domain.com"
 
+  # MSC4140 delayed events, which Element Call uses to end the call membership of a
+  # client that crashes or loses its connection. Disabled while the maximum delay is 0s.
+  delayed_events:
+    # The longest delay a client may request, for example 24h.
+    max_event_delay_duration: 0s
+    # How many delayed events one user may have scheduled at once.
+    max_delayed_events_per_user: 100
+    # Limits restarting, canceling, sending and looking up delayed events, per device
+    # or, without an access token, per address. The defaults allow a burst of 20
+    # requests, then one per second.
+    management_rate_limiting:
+      enabled: true
+      threshold: 20
+      cooloff_ms: 20000
+
 # Configuration for the Federation API.
 federation_api:
   # How many times we will try to resend a failed transaction to a specific server. The

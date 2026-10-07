@@ -114,6 +114,39 @@ type ProfileFieldsTable interface {
 	DeleteProfileFields(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 }
 
+// DelayedEventsTable stores MSC4140 delayed events and, for a while, the
+// outcome of finalized ones.
+type DelayedEventsTable interface {
+	InsertDelayedEvent(ctx context.Context, txn *sql.Tx, event *api.DelayedEvent) error
+	SelectDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) (*api.DelayedEvent, error)
+	// SelectDelayedEventsForUser returns finalized events newest first, or
+	// pending (scheduled or sending) events in order of send time.
+	SelectDelayedEventsForUser(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, finalized bool) ([]api.DelayedEvent, error)
+	// CountPendingDelayedEvents counts a user's scheduled and sending events,
+	// and returns the earliest send time among them.
+	CountPendingDelayedEvents(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (count int, nextSendTS spec.Timestamp, err error)
+	RestartDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string, now spec.Timestamp) (bool, error)
+	// ClaimDelayedEvent marks a scheduled event as sending and returns it, or
+	// nil if it is not scheduled.
+	ClaimDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) (*api.DelayedEvent, error)
+	// ClaimDueDelayedEvents marks every scheduled event due at now as sending
+	// and returns them. With reclaim, events already sending are returned too.
+	ClaimDueDelayedEvents(ctx context.Context, txn *sql.Tx, now spec.Timestamp, reclaim bool) ([]api.DelayedEvent, error)
+	UnclaimDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) error
+	// FinalizeDelayedEvent finalizes an event in the from status with the
+	// given outcome, and reports whether it was in that status.
+	FinalizeDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string, from api.DelayedEventStatus, eventID string, sendErr json.RawMessage, now spec.Timestamp) (bool, error)
+	// CancelDelayedStateEvents finalizes the scheduled events for one piece
+	// of state, except those of the given user.
+	CancelDelayedStateEvents(ctx context.Context, txn *sql.Tx, roomID, eventType, stateKey, exceptLocalpart string, exceptServerName spec.ServerName, now spec.Timestamp) error
+	SelectNextSendTS(ctx context.Context, txn *sql.Tx) (spec.Timestamp, bool, error)
+	DeleteDelayedEventsForUser(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
+	// DeleteFinalizedDelayedEvents forgets events finalized before the given time.
+	DeleteFinalizedDelayedEvents(ctx context.Context, txn *sql.Tx, before spec.Timestamp) error
+	// DeleteExcessFinalizedDelayedEvents keeps only a user's newest finalized events.
+	DeleteExcessFinalizedDelayedEvents(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, keep int) error
+}
+
 type ThreePIDTable interface {
 	SelectLocalpartForThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string) (localpart string, serverName spec.ServerName, err error)
 	SelectThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)

@@ -128,6 +128,9 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 		if isNewRoomEvent {
 			event = output.NewRoomEvent.Event
+			if event != nil {
+				s.cancelDelayedStateEvents(ctx, output.NewRoomEvent)
+			}
 		} else {
 			event = output.NewInviteEvent.Event
 		}
@@ -161,6 +164,35 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// cancelDelayedStateEvents cancels other users' MSC4140 delayed events for
+// state that this event has just changed, as Synapse does: a delayed state
+// event must not overwrite state that someone else set in the meantime. A
+// user's own delayed events survive their own changes, so that clients may
+// update the state they will reset later.
+func (s *OutputRoomEventConsumer) cancelDelayedStateEvents(ctx context.Context, output *rsapi.OutputNewRoomEvent) {
+	event := output.Event
+	if event.StateKey() == nil || !slices.Contains(output.AddsStateEventIDs, event.EventID()) {
+		return
+	}
+	sender, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
+	if err != nil || sender == nil {
+		log.WithError(err).WithField("event_id", event.EventID()).Warn("userapi consumer: unknown sender, not canceling delayed state events")
+		return
+	}
+	// A remote sender is nobody's own change, so it cancels every local user's.
+	var exceptLocalpart string
+	var exceptServerName spec.ServerName
+	if s.cfg.Matrix.IsLocalServerName(sender.Domain()) {
+		exceptLocalpart, exceptServerName = sender.Local(), sender.Domain()
+	}
+	if err = s.db.CancelDelayedStateEvents(
+		ctx, event.RoomID().String(), event.Type(), *event.StateKey(),
+		exceptLocalpart, exceptServerName, spec.AsTimestamp(time.Now()),
+	); err != nil {
+		log.WithError(err).WithField("event_id", event.EventID()).Error("userapi consumer: failed to cancel delayed state events")
+	}
 }
 
 func (s *OutputRoomEventConsumer) storeMessageStats(ctx context.Context, eventType, eventSender, roomID string) {

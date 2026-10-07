@@ -118,15 +118,21 @@ func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Dev
 				}).WithError(err).Warnf("Failed to add transaction ID to event")
 				continue
 			}
-			if *deviceSenderID == in[i].SenderID() && device.SessionID == in[i].TransactionID.SessionID {
-				err := out[i].SetUnsignedField(
-					"transaction_id", in[i].TransactionID.TransactionID,
-				)
-				if err != nil {
-					logrus.WithFields(logrus.Fields{
-						"event_id": out[i].EventID(),
-					}).WithError(err).Warnf("Failed to add transaction ID to event")
-				}
+			if *deviceSenderID != in[i].SenderID() {
+				continue
+			}
+			// Delayed events (MSC4140) carry their delay ID, which every
+			// device of the sender may see, instead of a transaction ID.
+			field := "transaction_id"
+			if in[i].TransactionID.SessionID == api.DelayedEventSessionID {
+				field = `org\.matrix\.msc4140\.delay_id` // an sjson path
+			} else if device.SessionID != in[i].TransactionID.SessionID {
+				continue
+			}
+			if err = out[i].SetUnsignedField(field, in[i].TransactionID.TransactionID); err != nil {
+				logrus.WithFields(logrus.Fields{
+					"event_id": out[i].EventID(),
+				}).WithError(err).Warnf("Failed to add transaction ID to event")
 			}
 		}
 	}

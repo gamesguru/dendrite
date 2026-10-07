@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
@@ -32,6 +33,7 @@ func TestVersions(t *testing.T) {
 		"org.matrix.msc2285.stable":     true,
 		"org.matrix.msc3916.stable":     true,
 		"org.matrix.simplified_msc3575": true,
+		"org.matrix.msc4140":            false,
 		"org.matrix.msc4143":            false,
 		"org.matrix.msc4354":            true,
 		"org.matrix.msc4222":            true,
@@ -42,6 +44,7 @@ func TestVersions(t *testing.T) {
 		name     string
 		mscs     []string
 		rtcFoci  []config.RTCFocus
+		maxDelay time.Duration
 		features map[string]bool
 	}{
 		{name: "defaults"},
@@ -73,6 +76,11 @@ func TestVersions(t *testing.T) {
 			features: map[string]bool{"org.matrix.msc4143": true},
 		},
 		{
+			name:     "delayed events enabled",
+			maxDelay: 24 * time.Hour,
+			features: map[string]bool{"org.matrix.msc4140": true},
+		},
+		{
 			name: "unknown and inactive entries cannot advertise support",
 			mscs: []string{"msc9999", "msc2965", "msc2967", "msc4143", "msc4115", "msc3916", "msc3575"},
 		},
@@ -89,6 +97,7 @@ func TestVersions(t *testing.T) {
 			cfg.Defaults(config.DefaultOpts{})
 			cfg.MSCs.MSCs = tc.mscs
 			cfg.Global.RTCFoci = tc.rtcFoci
+			cfg.ClientAPI.DelayedEvents.MaxDelay = tc.maxDelay
 			// Values without the MSC enabled must not activate OIDC discovery.
 			cfg.MSCs.MSC3861.Issuer = "https://auth.example.com"
 			routers := httputil.NewRouters()

@@ -54,6 +54,34 @@ Element Call announces who is in a call with `m.rtc.member` events that it sends
 Zendrite supports them without configuration and advertises `org.matrix.msc4354` in `unstable_features`, which Element Call checks before using them.
 See [sticky events](/mscs/#sticky-events) for how they are delivered.
 
+## Delayed events
+
+Element Call keeps a "leave" call membership event scheduled on the server with [MSC4140](https://github.com/matrix-org/matrix-spec-proposals/pull/4140) delayed events, and restarts its timer every few seconds while the call runs.
+If the client crashes or loses its connection, the server sends the leave event when the timer runs out, and the user drops out of the call for everyone else.
+Without delayed events, such a user stays in the call until their membership expires.
+
+Delayed events are disabled by default, as in Synapse.
+Enable them by setting a maximum delay in the `client_api` section:
+
+```yaml
+client_api:
+  delayed_events:
+    max_event_delay_duration: 24h
+    max_delayed_events_per_user: 100
+    management_rate_limiting:
+      enabled: true
+      threshold: 20
+      cooloff_ms: 20000
+```
+
+`max_event_delay_duration` is the longest delay a client may request; `0s` disables delayed events.
+`max_delayed_events_per_user` caps how many events one user may have scheduled at once, and `0` also disables them.
+`management_rate_limiting` limits the requests that restart, cancel, send or look up delayed events, per device or, for requests without an access token, per address.
+A request takes one of `threshold` slots for `cooloff_ms` milliseconds, so the defaults above allow a burst of 20 requests and then one per second, which is what Element Call's documentation suggests for Synapse.
+Scheduling an event is limited by the general `client_api.rate_limiting` instead.
+
+See [MSC support](/mscs/#delayed-events) for the endpoints and their behaviour.
+
 ## Deprecated nested configuration
 
 Earlier Zendrite versions documented a nested spelling:

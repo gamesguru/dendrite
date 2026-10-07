@@ -90,6 +90,7 @@ type ClientUserAPI interface {
 	ProfileAPI
 	KeyBackupAPI
 	DehydratedDeviceAPI
+	DelayedEventsAPI
 	QueryNumericLocalpart(ctx context.Context, req *QueryNumericLocalpartRequest, res *QueryNumericLocalpartResponse) error
 	QueryDevices(ctx context.Context, req *QueryDevicesRequest, res *QueryDevicesResponse) error
 	QueryAccountData(ctx context.Context, req *QueryAccountDataRequest, res *QueryAccountDataResponse) error

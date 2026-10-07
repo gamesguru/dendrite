@@ -85,6 +85,10 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresProfileFieldsTable: %w", err)
 	}
+	delayedEventsTable, err := NewPostgresDelayedEventsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresDelayedEventsTable: %w", err)
+	}
 	threePIDTable, err := NewPostgresThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresThreePIDTable: %w", err)
@@ -131,6 +135,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
 		ProfileFields:         profileFieldsTable,
+		DelayedEvents:         delayedEventsTable,
 		ThreePIDs:             threePIDTable,
 		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,

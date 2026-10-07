@@ -82,6 +82,10 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteProfileFieldsTable: %w", err)
 	}
+	delayedEventsTable, err := NewSQLiteDelayedEventsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteDelayedEventsTable: %w", err)
+	}
 	threePIDTable, err := NewSQLiteThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteThreePIDTable: %w", err)
@@ -128,6 +132,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
 		ProfileFields:         profileFieldsTable,
+		DelayedEvents:         delayedEventsTable,
 		ThreePIDs:             threePIDTable,
 		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,

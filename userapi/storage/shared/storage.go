@@ -42,6 +42,7 @@ type Database struct {
 	Accounts              tables.AccountsTable
 	Profiles              tables.ProfileTable
 	ProfileFields         tables.ProfileFieldsTable
+	DelayedEvents         tables.DelayedEventsTable
 	AccountDatas          tables.AccountDataTable
 	ThreePIDs             tables.ThreePIDTable
 	ExternalIDs           tables.ExternalIDsTable
@@ -601,6 +602,11 @@ func (d *Database) SearchProfiles(ctx context.Context, searchString string, limi
 func (d *Database) DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error) {
 	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
 		if err := d.ProfileFields.DeleteProfileFields(ctx, nil, localpart, serverName); err != nil {
+			return err
+		}
+		// MSC4140: a deactivated account's delayed events must not be sent,
+		// and their content need not be kept.
+		if err := d.DelayedEvents.DeleteDelayedEventsForUser(ctx, nil, localpart, serverName); err != nil {
 			return err
 		}
 		return d.Accounts.DeactivateAccount(ctx, localpart, serverName)
