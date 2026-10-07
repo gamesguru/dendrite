@@ -44,6 +44,7 @@ func JoinRoomByIDOrAlias(
 		RoomIDOrAlias: roomIDOrAlias,
 		UserID:        device.UserID,
 		IsGuest:       device.AccountType == api.AccountTypeGuest,
+		LocalOnly:     device.AccountType == api.AccountTypeCallGuest,
 		Content:       map[string]any{},
 	}
 

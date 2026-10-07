@@ -159,6 +159,9 @@ func (d *DelayedEvents) schedule(
 	if r := d.rateLimits.Limit(req, device); r != nil {
 		return *r
 	}
+	if resErr := callGuestEventForbidden(device, eventType, stateKey); resErr != nil {
+		return *resErr
+	}
 	if !d.cfg.DelayedEvents.Enabled() {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
@@ -294,7 +297,7 @@ func (d *DelayedEvents) managementAPI(name string, f func(*http.Request, *userap
 			}
 		}
 		return f(req, device)
-	}, httputil.WithAllowGuests())
+	}, httputil.WithAllowGuests(), httputil.WithAllowCallGuests())
 }
 
 type delayedEventAction string

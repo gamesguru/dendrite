@@ -1141,3 +1141,53 @@ func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
 		}
 	})
 }
+
+func Test_GetActiveAccountsCreatedBefore(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateUserDatabase(t, dbType)
+		defer closeDB()
+
+		for _, acc := range []struct {
+			localpart   string
+			accountType api.AccountType
+		}{
+			{"guest1", api.AccountTypeCallGuest},
+			{"guest2", api.AccountTypeCallGuest},
+			{"gone", api.AccountTypeCallGuest},
+			{"normal", api.AccountTypeUser},
+			{"admin", api.AccountTypeAdmin},
+		} {
+			_, err := db.CreateAccount(ctx, acc.localpart, "localhost", "password", "", acc.accountType)
+			assert.NoError(t, err)
+		}
+		_, err := db.CreateAccount(ctx, "", "localhost", "", "", api.AccountTypeGuest)
+		assert.NoError(t, err)
+		assert.NoError(t, db.DeactivateAccount(ctx, "gone", "localhost"))
+
+		localparts := func(accounts []api.Account) []string {
+			out := make([]string, 0, len(accounts))
+			for _, acc := range accounts {
+				assert.Equal(t, api.AccountTypeCallGuest, acc.AccountType)
+				assert.Equal(t, "@"+acc.Localpart+":localhost", acc.UserID)
+				out = append(out, acc.Localpart)
+			}
+			return out
+		}
+
+		// Every account was created before an hour from now, but only the
+		// active call guests are returned.
+		later := time.Now().Add(time.Hour)
+		accounts, err := db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, later, 10)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"guest1", "guest2"}, localparts(accounts))
+
+		accounts, err = db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, later, 1)
+		assert.NoError(t, err)
+		assert.Len(t, accounts, 1)
+
+		// No account is older than an hour.
+		accounts, err = db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, time.Now().Add(-time.Hour), 10)
+		assert.NoError(t, err)
+		assert.Empty(t, accounts)
+	})
+}

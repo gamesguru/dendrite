@@ -83,6 +83,12 @@ Scheduling an event is limited by the general `client_api.rate_limiting` instead
 
 See [MSC support](/mscs/#delayed-events) for the endpoints and their behaviour.
 
+## Call guests
+
+To let people without a Matrix account join calls by link through the standalone Element Call app, enable [call guests](/administration/registration/#call-guests).
+They are restricted accounts that expire, so normal registration can stay closed.
+Because they are local users, lk-jwt-service gives them full access when your homeserver is in `LIVEKIT_FULL_ACCESS_HOMESERVERS`.
+
 ## Deprecated nested configuration
 
 Earlier Zendrite versions documented a nested spelling:

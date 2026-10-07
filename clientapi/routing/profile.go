@@ -255,6 +255,13 @@ func authorizeProfileChange(
 			JSON: spec.GuestAccessForbidden("Guest access not allowed"),
 		}
 	}
+	// So may call guests, whose name shows in the call.
+	if device.AccountType == userapi.AccountTypeCallGuest && key != authtypes.ProfileFieldDisplayName {
+		return "", "", &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden("Call guest accounts may only change their display name"),
+		}
+	}
 	if len(key) > maxProfileKeyLength {
 		res := keyTooLarge()
 		return "", "", &res

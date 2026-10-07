@@ -284,6 +284,9 @@ func MASProvisionUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.
 	if errRes := validateLocalpartNamespace(cfg, body.Localpart, cfg.Matrix.ServerName); errRes != nil {
 		return *errRes
 	}
+	if errRes := callGuestLocalpartReserved(body.Localpart); errRes != nil {
+		return *errRes
+	}
 
 	// Emails and the locked flag are owned by MAS under delegated auth:
 	// Zendrite's 3PID endpoints are disabled with MSC3861 and token

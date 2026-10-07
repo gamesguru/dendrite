@@ -303,6 +303,19 @@ client_api:
       threshold: 20
       cooloff_ms: 20000
 
+  # Restricted call guest accounts, which let people without a Matrix account join
+  # calls by link, for example through the standalone Element Call app. While enabled,
+  # every open sign-up through /register creates a call guest: it may only join rooms
+  # this server is already in, take part in calls and chat there, and is deactivated
+  # once its lifetime has passed. Requires registration_disabled: true. Registration
+  # tokens, the shared secret and application services still create normal accounts.
+  # Call guests get generated localparts starting with "call-guest-", a prefix no other
+  # account may use.
+  call_guests:
+    enabled: false
+    # How long a call guest account lives before it is deactivated.
+    lifetime: 24h
+
 # Configuration for the Federation API.
 federation_api:
   # How many times we will try to resend a failed transaction to a specific server. The

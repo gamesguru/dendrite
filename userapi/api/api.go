@@ -592,6 +592,11 @@ const (
 	AccountTypeAdmin AccountType = 3
 	// AccountTypeAppService indicates this is an appservice account.
 	AccountTypeAppService AccountType = 4
+	// AccountTypeCallGuest indicates this is a restricted call guest account:
+	// a password account from open sign-up while client_api.call_guests is
+	// enabled, which may only use the endpoints a call needs and is
+	// deactivated after client_api.call_guests.lifetime.
+	AccountTypeCallGuest AccountType = 5
 )
 
 type QueryPushersRequest struct {

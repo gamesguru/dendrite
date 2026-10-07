@@ -83,6 +83,11 @@ type ClientAPI struct {
 	// DelayedEvents configures MSC4140 delayed events.
 	DelayedEvents DelayedEvents `yaml:"delayed_events"`
 
+	// CallGuests configures restricted call guest accounts, which let people
+	// without a Matrix account join calls by link while normal registration
+	// stays closed.
+	CallGuests CallGuests `yaml:"call_guests"`
+
 	MSCs *MSCs `yaml:"-"`
 }
 
@@ -104,6 +109,7 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 	c.OpenRegistrationWithoutVerificationEnabled = false
 	c.RateLimiting.Defaults()
 	c.DelayedEvents.Defaults()
+	c.CallGuests.Defaults()
 }
 
 func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
@@ -127,6 +133,7 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 	c.TURN.Verify(configErrs)
 	c.RateLimiting.Verify(configErrs)
 	c.DelayedEvents.Verify(configErrs)
+	c.CallGuests.Verify(configErrs, c.RegistrationDisabled)
 	if c.RecaptchaEnabled {
 		if c.CaptchaProvider == "altcha" {
 			checkNotEmpty(configErrs, "client_api.altcha_hmac_key", c.AltchaHMACKey)
@@ -154,7 +161,10 @@ func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
 			checkNotEmpty(configErrs, "client_api.recaptcha_sitekey_class", c.RecaptchaSitekeyClass)
 		}
 	}
-	// Ensure there is any spam counter measure when enabling registration
+	// Ensure there is any spam counter measure when enabling registration.
+	// Call guest sign-up needs registration_disabled, so it never reaches this
+	// rule: it is deliberately allowed with only m.login.dummy, because call
+	// guests are restricted and expire.
 	if !c.RegistrationDisabled && !c.OpenRegistrationWithoutVerificationEnabled && !c.RecaptchaEnabled && !c.RegistrationRequiresToken {
 		configErrs.Add(
 			"You have tried to enable open registration without any secondary verification methods " +
@@ -207,6 +217,42 @@ func (d *DelayedEvents) Verify(configErrs *ConfigErrors) {
 	if d.ManagementRateLimiting.Enabled {
 		checkPositive(configErrs, "client_api.delayed_events.management_rate_limiting.threshold", d.ManagementRateLimiting.Threshold)
 		checkPositive(configErrs, "client_api.delayed_events.management_rate_limiting.cooloff_ms", d.ManagementRateLimiting.CooloffMS)
+	}
+}
+
+// CallGuests configures restricted call guest accounts. While enabled, every
+// open sign-up through /register creates a call guest: an account that can
+// only join rooms this server is already in, take part in calls and chat
+// there, and that is deactivated once its lifetime has passed. Normal
+// accounts still come from shared-secret registration, registration tokens
+// and application services.
+type CallGuests struct {
+	// Enable turns call guest sign-up on. It requires registration_disabled,
+	// so that open sign-ups never create normal accounts.
+	Enable bool `yaml:"enabled"`
+
+	// Lifetime is how long a call guest account lives before it is
+	// deactivated.
+	Lifetime time.Duration `yaml:"lifetime"`
+}
+
+// Enabled reports whether open sign-ups create call guests.
+func (g *CallGuests) Enabled() bool {
+	return g.Enable
+}
+
+func (g *CallGuests) Defaults() {
+	g.Enable = false
+	g.Lifetime = 24 * time.Hour //nolint:mnd
+}
+
+func (g *CallGuests) Verify(configErrs *ConfigErrors, registrationDisabled bool) {
+	if g.Lifetime <= 0 {
+		configErrs.Add("client_api.call_guests.lifetime must be positive")
+	}
+	if g.Enable && !registrationDisabled {
+		configErrs.Add("client_api.call_guests.enabled requires client_api.registration_disabled: " +
+			"while call guests are enabled every open sign-up creates a call guest, so open registration of normal accounts cannot be enabled as well")
 	}
 }
 

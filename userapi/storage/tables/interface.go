@@ -48,6 +48,10 @@ type AccountsTable interface {
 	// ReactivateAccount returns sql.ErrNoRows when no account matches.
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
+	// SelectActiveAccountsCreatedBefore returns up to limit accounts of the
+	// given type that are not deactivated and were created before the given
+	// time, oldest first.
+	SelectActiveAccountsCreatedBefore(ctx context.Context, accountType api.AccountType, before spec.Timestamp, limit int) ([]api.Account, error)
 }
 
 type DevicesTable interface {

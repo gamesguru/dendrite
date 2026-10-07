@@ -151,18 +151,20 @@ const countUserByAccountTypeSQL = `
 SELECT COUNT(*) FROM userapi_accounts WHERE account_type IN ($1)
 `
 
-// $1 = Guest AccountType
-// $3 & $4 = All non guest AccountType IDs.
+// ($1) and ($6) = All non guest AccountType IDs
+// $4 and $5 = Guest and call guest AccountTypes; $9 = timestamp.
+// SQLite numbers $-parameters in the order they first appear, so they must
+// appear in ascending order.
 const countRegisteredUserByTypeSQL = `
 SELECT user_type, COUNT(*) AS count FROM (
 	SELECT
     CASE
     	WHEN account_type IN ($1) AND appservice_id IS NULL THEN 'native'
-        WHEN account_type = $4 AND appservice_id IS NULL THEN 'guest'
-		WHEN account_type IN ($5) AND appservice_id IS NOT NULL THEN 'bridged'
+        WHEN account_type IN ($4, $5) AND appservice_id IS NULL THEN 'guest'
+		WHEN account_type IN ($6) AND appservice_id IS NOT NULL THEN 'bridged'
 	END AS user_type
     FROM userapi_accounts
-    WHERE created_ts > $8
+    WHERE created_ts > $9
 ) AS t GROUP BY user_type
 `
 
@@ -244,7 +246,7 @@ func (s *statsStatements) startTimers(ctx context.Context) {
 }
 
 func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
-	query := strings.Replace(countUserByAccountTypeSQL, "($1)", sqlutil.QueryVariadic(4), 1) //nolint:mnd
+	query := strings.Replace(countUserByAccountTypeSQL, "($1)", sqlutil.QueryVariadic(5), 1) //nolint:mnd
 	queryStmt, err := s.db.Prepare(query)
 	if err != nil {
 		return 0, err
@@ -252,13 +254,13 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 	defer internal.CloseAndLogIfError(ctx, queryStmt, "allUsers.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, queryStmt)
 	err = stmt.QueryRowContext(ctx,
-		1, 2, 3, 4, //nolint:mnd
+		api.AccountTypeUser, api.AccountTypeGuest, api.AccountTypeAdmin, api.AccountTypeAppService, api.AccountTypeCallGuest,
 	).Scan(&result)
 	return
 }
 
 func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
-	query := strings.Replace(countUserByAccountTypeSQL, "($1)", sqlutil.QueryVariadic(3), 1) //nolint:mnd
+	query := strings.Replace(countUserByAccountTypeSQL, "($1)", sqlutil.QueryVariadic(4), 1) //nolint:mnd
 	queryStmt, err := s.db.Prepare(query)
 	if err != nil {
 		return 0, err
@@ -266,17 +268,18 @@ func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (res
 	defer internal.CloseAndLogIfError(ctx, queryStmt, "nonBridgedUsers.StmtClose() failed")
 	stmt := sqlutil.TxStmt(txn, queryStmt)
 	err = stmt.QueryRowContext(ctx,
-		1, 2, 3, //nolint:mnd
+		api.AccountTypeUser, api.AccountTypeGuest, api.AccountTypeAdmin, api.AccountTypeCallGuest,
 	).Scan(&result)
 	return
 }
 
 func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx) (map[string]int64, error) {
-	// $1 = Guest AccountType; $2 = timestamp
-	// $3 & $4 = All non guest AccountType IDs
+	// See countRegisteredUserByTypeSQL for the parameters.
 	nonGuests := []api.AccountType{api.AccountTypeUser, api.AccountTypeAdmin, api.AccountTypeAppService}
 	countSQL := strings.Replace(countRegisteredUserByTypeSQL, "($1)", sqlutil.QueryVariadicOffset(len(nonGuests), 0), 1)
-	countSQL = strings.Replace(countSQL, "($5)", sqlutil.QueryVariadicOffset(len(nonGuests), 1+len(nonGuests)), 1)
+	// The guest and call guest types sit between the two nonGuests lists.
+	const guestTypes = 2
+	countSQL = strings.Replace(countSQL, "($6)", sqlutil.QueryVariadicOffset(len(nonGuests), len(nonGuests)+guestTypes), 1)
 	queryStmt, err := s.db.Prepare(countSQL)
 	if err != nil {
 		return nil, err
@@ -285,14 +288,15 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 	stmt := sqlutil.TxStmt(txn, queryStmt)
 	registeredAfter := time.Now().AddDate(0, 0, -30)
 
-	params := make([]any, len(nonGuests)*2+2)
+	params := make([]any, len(nonGuests)*2+guestTypes+1) // and the timestamp
 	// nonGuests is used twice
 	for i, v := range nonGuests {
-		params[i] = v                  // i: 0 1 2 => ($1, $2, $3)
-		params[i+1+len(nonGuests)] = v // i: 4 5 6 => ($5, $6, $7)
+		params[i] = v                           // i: 0 1 2 => ($1, $2, $3)
+		params[i+guestTypes+len(nonGuests)] = v // i: 5 6 7 => ($6, $7, $8)
 	}
 	params[3] = api.AccountTypeGuest              // $4
-	params[7] = spec.AsTimestamp(registeredAfter) // $8
+	params[4] = api.AccountTypeCallGuest          // $5
+	params[8] = spec.AsTimestamp(registeredAfter) // $9
 
 	rows, err := stmt.QueryContext(ctx, params...)
 	if err != nil {

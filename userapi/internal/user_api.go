@@ -173,7 +173,8 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 func postRegisterJoinRooms(cfg *config.UserAPI, acc *api.Account, rsAPI rsapi.UserRoomserverAPI) {
 	// POST register behavior: check if the user is a normal user.
 	// If the user is a normal user, add user to room specified in the configuration "auto_join_rooms".
-	if acc.AccountType != api.AccountTypeAppService && acc.AppServiceID == "" {
+	// Call guests only join the rooms of the calls they are given links to.
+	if acc.AccountType != api.AccountTypeAppService && acc.AccountType != api.AccountTypeCallGuest && acc.AppServiceID == "" {
 		for room := range cfg.AutoJoinRooms {
 			userID := userutil.MakeUserID(acc.Localpart, cfg.Matrix.ServerName)
 			err := addUserToRoom(context.Background(), rsAPI, cfg.AutoJoinRooms[room], acc.Localpart, userID)

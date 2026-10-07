@@ -147,13 +147,13 @@ SELECT COUNT(*) FROM userapi_accounts WHERE account_type = ANY($1)
 `
 
 // $1 = All non guest AccountType IDs
-// $2 = Guest AccountType.
+// $2 = Guest and call guest AccountTypes.
 const countRegisteredUserByTypeStmt = `
 SELECT user_type, COUNT(*) AS count FROM (
 	SELECT
     CASE
     	WHEN account_type = ANY($1) AND appservice_id IS NULL THEN 'native'
-        WHEN account_type = $2 AND appservice_id IS NULL THEN 'guest'
+        WHEN account_type = ANY($2) AND appservice_id IS NULL THEN 'guest'
         WHEN account_type = ANY($1) AND appservice_id IS NOT NULL THEN 'bridged'
 	END AS user_type
     FROM userapi_accounts
@@ -244,6 +244,7 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),
+			int64(api.AccountTypeCallGuest),
 		},
 	).Scan(&result)
 	return
@@ -256,6 +257,7 @@ func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (res
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
+			int64(api.AccountTypeCallGuest),
 		},
 	).Scan(&result)
 	return
@@ -271,7 +273,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),
 		},
-		api.AccountTypeGuest,
+		[]int64{int64(api.AccountTypeGuest), int64(api.AccountTypeCallGuest)},
 		spec.AsTimestamp(registeredAfter),
 	)
 	if err != nil {

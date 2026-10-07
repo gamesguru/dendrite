@@ -72,6 +72,9 @@ func SendEvent(
 	txnCache *transactions.Cache,
 	federation fclient.FederationClient,
 ) util.JSONResponse {
+	if resErr := callGuestEventForbidden(device, eventType, stateKey); resErr != nil {
+		return *resErr
+	}
 	roomVersion, err := rsAPI.QueryRoomVersionForRoom(req.Context(), roomID)
 	if err != nil {
 		return util.JSONResponse{

@@ -9,6 +9,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -71,6 +72,10 @@ type Account interface {
 	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
+	// type that are not deactivated and were created before the given time,
+	// oldest first.
+	GetActiveAccountsCreatedBefore(ctx context.Context, accountType api.AccountType, before time.Time, limit int) ([]api.Account, error)
 	SetPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) error
 }
 

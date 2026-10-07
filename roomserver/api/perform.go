@@ -33,12 +33,16 @@ type PerformCreateRoomRequest struct {
 }
 
 type PerformJoinRequest struct {
-	RoomIDOrAlias string            `json:"room_id_or_alias"`
-	UserID        string            `json:"user_id"`
-	IsGuest       bool              `json:"is_guest"`
-	Content       map[string]any    `json:"content"`
-	ServerNames   []spec.ServerName `json:"server_names"`
-	Unsigned      map[string]any    `json:"unsigned"`
+	RoomIDOrAlias string `json:"room_id_or_alias"`
+	UserID        string `json:"user_id"`
+	IsGuest       bool   `json:"is_guest"`
+	// LocalOnly refuses a join that would need federation: resolving a
+	// remote alias, or joining a room this server is not fully in. Call
+	// guests join this way.
+	LocalOnly   bool              `json:"local_only,omitempty"`
+	Content     map[string]any    `json:"content"`
+	ServerNames []spec.ServerName `json:"server_names"`
+	Unsigned    map[string]any    `json:"unsigned"`
 }
 
 // PerformKnockRequest asks to knock on a room, i.e. to request an invite.

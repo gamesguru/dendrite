@@ -15,6 +15,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS userapi_accounts (
     appservice_id TEXT,
     -- If the account is currently active
     is_deactivated BOOLEAN DEFAULT 0,
-	-- The account_type (user = 1, guest = 2, admin = 3, appservice = 4)
+	-- The account_type (user = 1, guest = 2, admin = 3, appservice = 4, call guest = 5)
 	account_type INTEGER NOT NULL
     -- TODO:
     -- upgraded_ts, devices, any email reset stuff?
@@ -70,6 +71,11 @@ const selectNewNumericLocalpartSQL = "" +
 
 const countAccountsSQL = "SELECT COUNT(*) FROM userapi_accounts"
 
+const selectActiveAccountsCreatedBeforeSQL = "" +
+	"SELECT localpart, server_name FROM userapi_accounts" +
+	" WHERE account_type = $1 AND created_ts < $2 AND is_deactivated = 0" +
+	" ORDER BY created_ts LIMIT $3"
+
 type accountsStatements struct {
 	db                            *sql.DB
 	insertAccountStmt             *sql.Stmt
@@ -81,6 +87,7 @@ type accountsStatements struct {
 	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
+	selectActiveCreatedBeforeStmt *sql.Stmt
 	serverName                    spec.ServerName
 }
 
@@ -120,6 +127,7 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
+		{&s.selectActiveCreatedBeforeStmt, selectActiveAccountsCreatedBeforeSQL},
 	}.Prepare(db)
 }
 
@@ -242,4 +250,24 @@ func (s *accountsStatements) SelectNewNumericLocalpart(
 		return 1, nil
 	}
 	return id + 1, err
+}
+
+func (s *accountsStatements) SelectActiveAccountsCreatedBefore(
+	ctx context.Context, accountType api.AccountType, before spec.Timestamp, limit int,
+) ([]api.Account, error) {
+	rows, err := s.selectActiveCreatedBeforeStmt.QueryContext(ctx, accountType, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectActiveAccountsCreatedBefore: rows.close() failed")
+	var accounts []api.Account
+	for rows.Next() {
+		acc := api.Account{AccountType: accountType}
+		if err = rows.Scan(&acc.Localpart, &acc.ServerName); err != nil {
+			return nil, err
+		}
+		acc.UserID = userutil.MakeUserID(acc.Localpart, acc.ServerName)
+		accounts = append(accounts, acc)
+	}
+	return accounts, rows.Err()
 }

@@ -312,6 +312,13 @@ func (config *Zendrite) Derive() error {
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeRegistrationToken}},
 		}
+		// A call guest signs up without a token. The CAPTCHA flows above
+		// already apply to call guests, so only this case needs the dummy
+		// flow added.
+		if config.ClientAPI.CallGuests.Enabled() {
+			config.Derived.Registration.Flows = append(config.Derived.Registration.Flows,
+				authtypes.Flow{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}})
+		}
 	default:
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}},

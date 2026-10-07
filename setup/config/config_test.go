@@ -462,3 +462,78 @@ func TestDelayedEventsConfig(t *testing.T) {
 		t.Fatal("a limit of zero scheduled events does not disable delayed events")
 	}
 }
+
+func TestCallGuestsConfig(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.CallGuests.Enabled() {
+		t.Fatal("call guests are enabled by default")
+	}
+	if c.CallGuests.Lifetime != 24*time.Hour {
+		t.Fatalf("default call guest lifetime is %s, want 24h", c.CallGuests.Lifetime)
+	}
+	if err := yaml.Unmarshal([]byte("call_guests:\n  enabled: true\n  lifetime: 2h\n"), &c); err != nil {
+		t.Fatal(err)
+	}
+	if !c.CallGuests.Enabled() || c.CallGuests.Lifetime != 2*time.Hour {
+		t.Fatalf("parsed %+v", c.CallGuests)
+	}
+
+	// Call guests with closed registration and no CAPTCHA or token pass,
+	// including the open-registration anti-spam rule.
+	errs := ConfigErrors{}
+	c.Verify(&errs)
+	if len(errs) != 0 {
+		t.Fatalf("valid configuration rejected: %v", errs)
+	}
+
+	errs = ConfigErrors{}
+	c.RegistrationDisabled = false
+	c.OpenRegistrationWithoutVerificationEnabled = true
+	c.Verify(&errs)
+	if len(errs) != 1 {
+		t.Fatalf("got errors %v, want one for call guests with open registration", errs)
+	}
+
+	errs = ConfigErrors{}
+	c.RegistrationDisabled = true
+	c.CallGuests.Lifetime = 0
+	c.Verify(&errs)
+	if len(errs) != 1 {
+		t.Fatalf("got errors %v, want one for the zero lifetime", errs)
+	}
+}
+
+func TestCallGuestsRegistrationFlows(t *testing.T) {
+	flows := func(c *Zendrite) [][]string {
+		t.Helper()
+		if err := c.Derive(); err != nil {
+			t.Fatal(err)
+		}
+		var out [][]string
+		for _, f := range c.Derived.Registration.Flows {
+			var stages []string
+			for _, s := range f.Stages {
+				stages = append(stages, string(s))
+			}
+			out = append(out, stages)
+		}
+		return out
+	}
+	c := &Zendrite{}
+	c.Defaults(DefaultOpts{})
+	c.ClientAPI.CallGuests.Enable = true
+
+	if got, want := flows(c), [][]string{{"m.login.dummy"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
+	c.ClientAPI.RegistrationRequiresToken = true
+	if got, want := flows(c), [][]string{{"m.login.registration_token"}, {"m.login.dummy"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
+	// A CAPTCHA applies to call guests too, so no dummy flow bypasses it.
+	c.ClientAPI.RecaptchaEnabled = true
+	if got, want := flows(c), [][]string{{"m.login.recaptcha"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
+}

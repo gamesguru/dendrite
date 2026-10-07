@@ -161,12 +161,33 @@ func NewInternalAPI(
 	}
 	process.Repeat(processContext.Context(), time.Minute, time.Hour, cleanOldNotifs)
 
+	// Call guests expire. The sweep runs even while call guest sign-up is
+	// disabled, so that disabling it also ends the accounts it created. Under
+	// HA only the active owner runs the homeserver, and so this sweep.
+	callGuestLifetime := zendriteCfg.ClientAPI.CallGuests.Lifetime
+	sweepCallGuests := func() {
+		ctx := processContext.Context()
+		n, sweepErr := userAPI.DeactivateExpiredCallGuests(ctx, callGuestLifetime, time.Now())
+		if sweepErr != nil {
+			logrus.WithError(sweepErr).Error("Failed to deactivate expired call guests")
+		}
+		if n > 0 {
+			logrus.WithField("count", n).Info("Deactivated expired call guests")
+		}
+	}
+	if callGuestLifetime > 0 {
+		process.Repeat(processContext.Context(), time.Minute, callGuestSweepInterval, sweepCallGuests)
+	}
+
 	if zendriteCfg.Global.ReportStats.Enabled {
 		util.StartPhoneHomeCollector(processContext.Context(), time.Now(), zendriteCfg, db)
 	}
 
 	return userAPI
 }
+
+// callGuestSweepInterval is how often expired call guests are deactivated.
+const callGuestSweepInterval = 10 * time.Minute
 
 func newRegisteredUsersGauge() prometheus.Gauge {
 	return prometheus.NewGauge(

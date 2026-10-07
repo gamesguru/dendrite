@@ -103,6 +103,15 @@ func (r *Joiner) performJoinRoomByAlias(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
 ) (string, spec.ServerName, error) {
+	if req.LocalOnly {
+		_, domain, err := gomatrixserverlib.SplitID('#', req.RoomIDOrAlias)
+		if err != nil {
+			return "", "", rsAPI.ErrInvalidID{Err: fmt.Errorf("alias %q is not in the correct format", req.RoomIDOrAlias)}
+		}
+		if !r.Cfg.Matrix.IsLocalServerName(domain) {
+			return "", "", errLocalJoinOnly
+		}
+	}
 	roomID, servers, err := resolveRoomAlias(ctx, r.Cfg, r.FSAPI, r.RSAPI, req.RoomIDOrAlias)
 	if err != nil {
 		return "", "", err
@@ -221,6 +230,9 @@ func (r *Joiner) performJoinRoomByID(
 		return "", "", fmt.Errorf("r.Queryer.QueryServerJoinedToRoom: %w", err)
 	}
 	serverInRoom := inRoomRes.IsInRoom
+	if req.LocalOnly && !serverInRoom {
+		return "", "", errLocalJoinOnly
+	}
 	forceFederatedJoin := len(req.ServerNames) > 0 && !serverInRoom
 
 	userID, err := spec.NewUserID(req.UserID, true)
@@ -482,10 +494,20 @@ func (r *Joiner) performJoinRoomByID(
 	return req.RoomIDOrAlias, userDomain, nil
 }
 
+// errLocalJoinOnly refuses a join that only federation could complete to a
+// user who may only join rooms this server is in.
+var errLocalJoinOnly = rsAPI.ErrNotAllowed{Err: errors.New("this account may only join rooms on this server")}
+
 func (r *Joiner) performFederatedJoinRoomByID(
 	ctx context.Context,
 	req *rsAPI.PerformJoinRequest,
 ) (spec.ServerName, error) {
+	// Every federated join passes through here, so this also covers a pending
+	// remote invite, a partial-state room and a restricted join that only a
+	// remote server can authorize.
+	if req.LocalOnly {
+		return "", errLocalJoinOnly
+	}
 	// Try joining by all of the supplied server names.
 	fedReq := fsAPI.PerformJoinRequest{
 		RoomID:      req.RoomIDOrAlias, // the room ID to try and join

@@ -613,6 +613,15 @@ func (d *Database) DeactivateAccount(ctx context.Context, localpart string, serv
 	})
 }
 
+// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
+// type that are not deactivated and were created before the given time,
+// oldest first.
+func (d *Database) GetActiveAccountsCreatedBefore(
+	ctx context.Context, accountType api.AccountType, before time.Time, limit int,
+) ([]api.Account, error) {
+	return d.Accounts.SelectActiveAccountsCreatedBefore(ctx, accountType, spec.AsTimestamp(before), limit)
+}
+
 // ReactivateAccount re-enables login for a previously deactivated account.
 // It is a no-op for accounts that are not deactivated and returns
 // sql.ErrNoRows when the account does not exist.

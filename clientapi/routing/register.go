@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -552,54 +553,41 @@ func Register(
 		return handleGuestRegistration(req, r, cfg, userAPI)
 	}
 
-	// Don't allow numeric usernames less than MAX_INT64.
-	if _, err = strconv.ParseInt(r.Username, 10, 64); err == nil {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.InvalidUsername("Numeric user IDs are reserved"),
-		}
-	}
-	// Auto generate a numeric username if r.Username is empty
-	if r.Username == "" {
-		nreq := &userapi.QueryNumericLocalpartRequest{
-			ServerName: r.ServerName,
-		}
-		nres := &userapi.QueryNumericLocalpartResponse{}
-		if err = userAPI.QueryNumericLocalpart(req.Context(), nreq, nres); err != nil {
-			util.GetLogger(req.Context()).WithError(err).Error("userAPI.QueryNumericLocalpart failed")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
-		}
-		r.Username = strconv.FormatInt(nres.ID, 10)
-	}
-
 	// Is this an appservice registration? It will be if the access
 	// token is supplied
 	accessToken, accessTokenErr := auth.ExtractAccessToken(req)
 
-	// Squash username to all lowercase letters
-	r.Username = strings.ToLower(r.Username)
-	switch {
-	case r.Type == authtypes.LoginTypeApplicationService && accessTokenErr == nil:
-		// Spec-compliant case (the access_token is specified and the login type
-		// is correctly set, so it's an appservice registration)
-		if err = internal.ValidateApplicationServiceUsername(r.Username, r.ServerName); err != nil {
-			return *internal.UsernameResponse(err)
+	// While open sign-ups create call guests, a registration without an
+	// access token creates either a call guest, whose localpart is generated
+	// when the account is made, or, with a registration token, a normal
+	// account, whose username is checked when the flow completes. Either way
+	// the requested username must not be checked or refused here.
+	if accessTokenErr != nil && callGuestRegistration(cfg, r.ServerName) {
+		r.Username = strings.ToLower(r.Username)
+	} else {
+		if resErr := prepareRequestedUsername(req.Context(), userAPI, &r); resErr != nil {
+			return *resErr
 		}
-	case accessTokenErr == nil:
-		// Non-spec-compliant case (the access_token is specified but the login
-		// type is not known or specified)
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.MissingParam("A known registration type (e.g. m.login.application_service) must be specified if an access_token is provided"),
-		}
-	default:
-		// Spec-compliant case (neither the access_token nor the login type are
-		// specified, so it's a normal user registration)
-		if err = internal.ValidateUsername(r.Username, r.ServerName); err != nil {
-			return *internal.UsernameResponse(err)
+		switch {
+		case r.Type == authtypes.LoginTypeApplicationService && accessTokenErr == nil:
+			// Spec-compliant case (the access_token is specified and the login type
+			// is correctly set, so it's an appservice registration)
+			if err = internal.ValidateApplicationServiceUsername(r.Username, r.ServerName); err != nil {
+				return *internal.UsernameResponse(err)
+			}
+		case accessTokenErr == nil:
+			// Non-spec-compliant case (the access_token is specified but the login
+			// type is not known or specified)
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.MissingParam("A known registration type (e.g. m.login.application_service) must be specified if an access_token is provided"),
+			}
+		default:
+			// Spec-compliant case (neither the access_token nor the login type are
+			// specified, so it's a normal user registration)
+			if resErr := validateUserLocalpart(r.Username, r.ServerName); resErr != nil {
+				return *resErr
+			}
 		}
 	}
 	if err = internal.ValidatePassword(r.Password); err != nil {
@@ -614,6 +602,45 @@ func Register(
 	}).Info("Processing registration request")
 
 	return handleRegistrationFlow(req, r, sessionID, cfg, userAPI, accessToken, accessTokenErr)
+}
+
+// prepareRequestedUsername refuses a numeric username, generates a numeric
+// one when none was requested, and lowercases it.
+func prepareRequestedUsername(ctx context.Context, userAPI userapi.ClientUserAPI, r *registerRequest) *util.JSONResponse {
+	// Don't allow numeric usernames less than MAX_INT64.
+	if _, err := strconv.ParseInt(r.Username, 10, 64); err == nil {
+		return &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidUsername("Numeric user IDs are reserved"),
+		}
+	}
+	// Auto generate a numeric username if r.Username is empty
+	if r.Username == "" {
+		nreq := &userapi.QueryNumericLocalpartRequest{
+			ServerName: r.ServerName,
+		}
+		nres := &userapi.QueryNumericLocalpartResponse{}
+		if err := userAPI.QueryNumericLocalpart(ctx, nreq, nres); err != nil {
+			util.GetLogger(ctx).WithError(err).Error("userAPI.QueryNumericLocalpart failed")
+			return &util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+		r.Username = strconv.FormatInt(nres.ID, 10)
+	}
+	// Squash username to all lowercase letters
+	r.Username = strings.ToLower(r.Username)
+	return nil
+}
+
+// validateUserLocalpart checks a localpart requested for a normal account:
+// it must be a valid username outside the call guest prefix.
+func validateUserLocalpart(localpart string, serverName spec.ServerName) *util.JSONResponse {
+	if err := internal.ValidateUsername(localpart, serverName); err != nil {
+		return internal.UsernameResponse(err)
+	}
+	return callGuestLocalpartReserved(localpart)
 }
 
 func handleGuestRegistration(
@@ -727,11 +754,9 @@ func handleRegistrationFlow(
 		)
 	}
 
-	registrationEnabled := !cfg.RegistrationDisabled
-	if v := cfg.Matrix.VirtualHost(r.ServerName); v != nil {
-		registrationEnabled, _ = v.RegistrationAllowed()
-	}
-	if !registrationEnabled && r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken {
+	registrationEnabled := registrationEnabledFor(cfg, r.ServerName)
+	if !registrationEnabled && !callGuestRegistration(cfg, r.ServerName) &&
+		r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(
@@ -744,7 +769,9 @@ func handleRegistrationFlow(
 	// service namespace. Skip this check if no app services are registered.
 	// If an access token is provided, ignore this check this is an appservice
 	// request and we will validate in validateApplicationService
-	if len(cfg.Derived.ApplicationServices) != 0 &&
+	// While open sign-ups create call guests, the username is checked when
+	// the flow completes instead.
+	if !callGuestRegistration(cfg, r.ServerName) && len(cfg.Derived.ApplicationServices) != 0 &&
 		localpartMatchesExclusiveNamespaces(cfg, r.Username) {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -816,6 +843,37 @@ func handleRegistrationFlow(
 		req, r, sessionID, cfg, userAPI)
 }
 
+// registrationEnabledFor reports whether open registration of normal accounts
+// is enabled for the given server name, honoring virtual hosts.
+func registrationEnabledFor(cfg *config.ClientAPI, serverName spec.ServerName) bool {
+	if v := cfg.Matrix.VirtualHost(serverName); v != nil {
+		enabled, _ := v.RegistrationAllowed()
+		return enabled
+	}
+	return !cfg.RegistrationDisabled
+}
+
+// callGuestRegistration reports whether open sign-ups on the given server
+// name create call guests: call guests are enabled and open registration of
+// normal accounts is not, globally or for the virtual host.
+func callGuestRegistration(cfg *config.ClientAPI, serverName spec.ServerName) bool {
+	return cfg.CallGuests.Enabled() && !registrationEnabledFor(cfg, serverName)
+}
+
+// registrationAccountType picks the kind of account a completed
+// user-interactive registration creates. A registration token always yields
+// a normal account; otherwise, while open registration is closed, the
+// registration can only have been let through for a call guest.
+func registrationAccountType(cfg *config.ClientAPI, serverName spec.ServerName, completed []authtypes.LoginType) userapi.AccountType {
+	if slices.Contains(completed, authtypes.LoginTypeRegistrationToken) {
+		return userapi.AccountTypeUser
+	}
+	if callGuestRegistration(cfg, serverName) {
+		return userapi.AccountTypeCallGuest
+	}
+	return userapi.AccountTypeUser
+}
+
 // handleApplicationServiceRegistration handles the registration of an
 // application service's user by validating the AS from its access token and
 // registering the user. Its two first parameters must be the two return values
@@ -873,11 +931,26 @@ func checkAndCompleteFlow(
 ) util.JSONResponse {
 	if checkFlowCompleted(flow, cfg.Derived.Registration.Flows) {
 		// This flow was completed, registration can continue
-		resp := completeRegistration(
-			req.Context(), userAPI, r.Username, r.ServerName, "", r.Password, "", req.RemoteAddr,
-			req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
-			userapi.AccountTypeUser, refreshableLifetime(cfg, r.RefreshToken),
-		)
+		accountType := registrationAccountType(cfg, r.ServerName, flow)
+		var resp util.JSONResponse
+		switch {
+		case accountType == userapi.AccountTypeCallGuest:
+			resp = completeCallGuestRegistration(req, r, sessionID, cfg, userAPI)
+		case callGuestRegistration(cfg, r.ServerName):
+			// Register let the username through unchecked, because it could
+			// not know yet that this would be a normal account.
+			if resErr := checkDeferredUsername(req.Context(), cfg, userAPI, &r); resErr != nil {
+				resp = *resErr
+				break
+			}
+			fallthrough
+		default:
+			resp = completeRegistration(
+				req.Context(), userAPI, r.Username, r.ServerName, "", r.Password, "", req.RemoteAddr,
+				req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
+				accountType, refreshableLifetime(cfg, r.RefreshToken),
+			)
+		}
 		finaliseRegistrationToken(req, userAPI, sessionID, resp.Code == http.StatusOK)
 		return resp
 	}
@@ -889,6 +962,55 @@ func checkAndCompleteFlow(
 		JSON: newUserInteractiveResponse(sessionID,
 			cfg.Derived.Registration.Flows, cfg.Derived.Registration.Params),
 	}
+}
+
+// checkDeferredUsername applies the username checks that Register skips while
+// open sign-ups create call guests, once the flow turns out to create a
+// normal account.
+func checkDeferredUsername(ctx context.Context, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, r *registerRequest) *util.JSONResponse {
+	if resErr := prepareRequestedUsername(ctx, userAPI, r); resErr != nil {
+		return resErr
+	}
+	if resErr := validateUserLocalpart(r.Username, r.ServerName); resErr != nil {
+		return resErr
+	}
+	if len(cfg.Derived.ApplicationServices) != 0 && localpartMatchesExclusiveNamespaces(cfg, r.Username) {
+		return &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.ASExclusive("This username is reserved by an application service."),
+		}
+	}
+	return nil
+}
+
+// completeCallGuestRegistration creates a call guest under a generated
+// localpart, ignoring the requested username, and retries on the unlikely
+// collision with an existing account.
+func completeCallGuestRegistration(
+	req *http.Request, r registerRequest, sessionID string,
+	cfg *config.ClientAPI, userAPI userapi.ClientUserAPI,
+) util.JSONResponse {
+	var resp util.JSONResponse
+	for range callGuestLocalpartAttempts {
+		localpart, err := newCallGuestLocalpart()
+		if err != nil {
+			util.GetLogger(req.Context()).WithError(err).Error("failed to generate a call guest localpart")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
+		if len(cfg.Derived.ApplicationServices) != 0 && localpartMatchesExclusiveNamespaces(cfg, localpart) {
+			continue
+		}
+		resp = completeRegistration(
+			req.Context(), userAPI, localpart, r.ServerName, "", r.Password, "", req.RemoteAddr,
+			req.UserAgent(), sessionID, r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
+			userapi.AccountTypeCallGuest, refreshableLifetime(cfg, r.RefreshToken),
+		)
+		if matrixErr, ok := resp.JSON.(spec.MatrixError); !ok || matrixErr.ErrCode != spec.ErrorUserInUse {
+			return resp
+		}
+	}
+	util.GetLogger(req.Context()).Error("failed to find a free call guest localpart")
+	return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 }
 
 // claimRegistrationToken validates a registration token submitted as part of a
@@ -1258,8 +1380,8 @@ func handleSharedSecretRegistration(cfg *config.ClientAPI, userAPI userapi.Clien
 	// downcase capitals
 	ssrr.User = strings.ToLower(ssrr.User)
 
-	if err = internal.ValidateUsername(ssrr.User, cfg.Matrix.ServerName); err != nil {
-		return *internal.UsernameResponse(err)
+	if resErr := validateUserLocalpart(ssrr.User, cfg.Matrix.ServerName); resErr != nil {
+		return *resErr
 	}
 	if err = internal.ValidatePassword(ssrr.Password); err != nil {
 		return *internal.PasswordResponse(err)
