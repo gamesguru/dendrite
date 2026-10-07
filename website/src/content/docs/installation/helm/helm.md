@@ -43,6 +43,29 @@ zendrite_config:
       conn_max_lifetime: -1
 ```
 
+## Element Call
+
+The chart can deploy the backend that [Element Call](/administration/matrixrtc/#deploying-element-call) needs: two LiveKit nodes and two lk-jwt-service replicas, sharing their state through an external Valkey or Redis.
+It then adds the backend to `rtc_foci`, enables delayed events for up to 24 hours, and serves LiveKit and lk-jwt-service on a host of their own through the Ingress or HTTPRoute the chart already creates.
+
+```yaml
+matrixRTC:
+  enabled: true
+  hostName: rtc.example.com
+  livekitAuth:
+    # a Secret with an API secret of at least 32 characters
+    existingSecret: livekit
+  redis:
+    # an HA Valkey, for example the valkey-io chart with Sentinel and HAProxy
+    address: valkey-haproxy.valkey.svc:6379
+    existingSecret: valkey
+```
+
+Each LiveKit pod runs with host networking on a node of its own, and clients send media straight to it on 7881/TCP and 7882/UDP, so open these ports on every node that may run LiveKit.
+A namespace that enforces the `baseline` Pod Security level rejects host networking and needs `privileged`.
+A stopping LiveKit pod serves its running calls until they end, for up to five hours, so a rollout waits for each node's calls.
+The [chart README](https://codefloe.com/devxy/helm-zendrite/src/branch/main/charts/zendrite/README.md) lists all `matrixRTC` values.
+
 ## High availability
 
 The chart can run several candidates with one ready, safely active homeserver.
