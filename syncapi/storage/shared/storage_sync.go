@@ -528,6 +528,27 @@ func (d *DatabaseTransaction) GetStateDeltas(
 	return deltas, joinedRoomIDs, nil
 }
 
+// RoomStateDelta returns the state changes of one room within the range: the
+// state events added in it that are still part of the room state at its end.
+// The state filter applies as for GetStateDeltas.
+func (d *DatabaseTransaction) RoomStateDelta(
+	ctx context.Context, device *userapi.Device, roomID string,
+	r types.Range, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	if isStatefilterEmpty(stateFilter) {
+		stateFilter = nil
+	}
+	stateNeeded, eventMap, err := d.OutputEvents.SelectStateInRange(ctx, d.txn, r, stateFilter, []string{roomID})
+	if err != nil {
+		return nil, err
+	}
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, state[roomID], rsAPI), nil
+}
+
 // GetStateDeltasForFullStateSync is a variant of getStateDeltas used for /sync
 // requests with full_state=true.
 // Fetches full state for all joined rooms and uses selectStateInRange to get

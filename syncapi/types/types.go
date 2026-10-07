@@ -453,6 +453,48 @@ type ClientEvents struct {
 	Events []synctypes.ClientEvent `json:"events,omitempty"`
 }
 
+// StateAfter is the state_after section of a room (MSC4222): the state
+// changes up to the end of the timeline. Unlike state, it is sent even when
+// empty, which tells the client that the server supports the opt-in.
+type StateAfter struct {
+	Events []synctypes.ClientEvent `json:"events"`
+}
+
+// The room response keys of the state_after section (MSC4222). A client
+// that opted in with the unstable query parameter gets the unstable key.
+const (
+	StateAfterKey         = "state_after"
+	UnstableStateAfterKey = "org.matrix.msc4222.state_after"
+)
+
+// newStateAfter returns the given state as a state_after section.
+func newStateAfter(state *ClientEvents) *StateAfter {
+	sa := &StateAfter{Events: []synctypes.ClientEvent{}}
+	if state != nil && len(state.Events) > 0 {
+		sa.Events = state.Events
+	}
+	return sa
+}
+
+// MoveStateToStateAfter replaces the state section of every joined, peeked
+// and left room with a state_after section under the given key (MSC4222).
+// The PDU stream has already put the state at the end of the timeline into
+// the state section of a client that opted in.
+func (r *Response) MoveStateToStateAfter(key string) {
+	if r.Rooms == nil {
+		return
+	}
+	for _, jr := range r.Rooms.Join {
+		jr.moveStateToStateAfter(key)
+	}
+	for _, jr := range r.Rooms.Peek {
+		jr.moveStateToStateAfter(key)
+	}
+	for _, lr := range r.Rooms.Leave {
+		lr.moveStateToStateAfter(key)
+	}
+}
+
 type Timeline struct {
 	Events    []synctypes.ClientEvent `json:"events"`
 	Limited   bool                    `json:"limited"`
@@ -467,11 +509,13 @@ type Summary struct {
 
 // JoinResponse represents a /sync response for a room which is under the 'join' or 'peek' key.
 type JoinResponse struct {
-	Summary     *Summary      `json:"summary,omitempty"`
-	State       *ClientEvents `json:"state,omitempty"`
-	Timeline    *Timeline     `json:"timeline,omitempty"`
-	Ephemeral   *ClientEvents `json:"ephemeral,omitempty"`
-	AccountData *ClientEvents `json:"account_data,omitempty"`
+	Summary            *Summary      `json:"summary,omitempty"`
+	State              *ClientEvents `json:"state,omitempty"`
+	StateAfter         *StateAfter   `json:"state_after,omitempty"`
+	UnstableStateAfter *StateAfter   `json:"org.matrix.msc4222.state_after,omitempty"`
+	Timeline           *Timeline     `json:"timeline,omitempty"`
+	Ephemeral          *ClientEvents `json:"ephemeral,omitempty"`
+	AccountData        *ClientEvents `json:"account_data,omitempty"`
 	// MSC4354Sticky holds unexpired sticky events that the timeline does not
 	// already carry (MSC4354).
 	MSC4354Sticky        *ClientEvents `json:"msc4354_sticky,omitempty"`
@@ -513,12 +557,27 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
-		if a.State == nil && a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
+		if a.State == nil && a.StateAfter.isEmpty() && a.UnstableStateAfter.isEmpty() &&
+			a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
 			a.UnreadNotifications = nil
 			a.UnreadThreadNotifications = nil
 		}
 	}
 	return json.Marshal(a)
+}
+
+func (jr *JoinResponse) moveStateToStateAfter(key string) {
+	sa := newStateAfter(jr.State)
+	jr.State = nil
+	if key == UnstableStateAfterKey {
+		jr.UnstableStateAfter = sa
+	} else {
+		jr.StateAfter = sa
+	}
+}
+
+func (sa *StateAfter) isEmpty() bool {
+	return sa == nil || len(sa.Events) == 0
 }
 
 // NewJoinResponse creates an empty response with initialized arrays.
@@ -626,8 +685,10 @@ func strippedStateWithEvent(
 
 // LeaveResponse represents a /sync response for a room which is under the 'leave' key.
 type LeaveResponse struct {
-	State    *ClientEvents `json:"state,omitempty"`
-	Timeline *Timeline     `json:"timeline,omitempty"`
+	State              *ClientEvents `json:"state,omitempty"`
+	StateAfter         *StateAfter   `json:"state_after,omitempty"`
+	UnstableStateAfter *StateAfter   `json:"org.matrix.msc4222.state_after,omitempty"`
+	Timeline           *Timeline     `json:"timeline,omitempty"`
 }
 
 func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
@@ -640,6 +701,16 @@ func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
 		a.Timeline = nil
 	}
 	return json.Marshal(a)
+}
+
+func (lr *LeaveResponse) moveStateToStateAfter(key string) {
+	sa := newStateAfter(lr.State)
+	lr.State = nil
+	if key == UnstableStateAfterKey {
+		lr.UnstableStateAfter = sa
+	} else {
+		lr.StateAfter = sa
+	}
 }
 
 // NewLeaveResponse creates an empty response with initialized arrays.

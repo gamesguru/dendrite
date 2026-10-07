@@ -34,6 +34,7 @@ func TestVersions(t *testing.T) {
 		"org.matrix.simplified_msc3575": true,
 		"org.matrix.msc4143":            false,
 		"org.matrix.msc4354":            true,
+		"org.matrix.msc4222":            true,
 		"uk.tcpip.msc4133":              true,
 		"uk.tcpip.msc4133.stable":       true,
 	}

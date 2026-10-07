@@ -309,7 +309,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 	// Extract values from request
 	syncReq, err := newSyncRequest(req, *device, rp.db)
 	if err != nil {
-		if errors.Is(err, types.ErrMalformedSyncToken) {
+		if errors.Is(err, types.ErrMalformedSyncToken) || errors.Is(err, errInvalidParam) {
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.InvalidParam(err.Error()),
@@ -319,6 +319,11 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			Code: http.StatusBadRequest,
 			JSON: spec.Unknown(err.Error()),
 		}
+	}
+	if syncReq.UseStateAfter() {
+		// MSC4222: rename the state section of every room, including those
+		// only other streams added, once the response is complete.
+		defer syncReq.Response.MoveStateToStateAfter(syncReq.StateAfter)
 	}
 
 	activeSyncRequests.Inc()

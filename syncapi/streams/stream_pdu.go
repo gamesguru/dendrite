@@ -140,7 +140,7 @@ func (p *PDUStreamProvider) CompleteSync(
 
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
-			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, false,
+			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, false,
 			events.Events, events.Limited, eventFormat, to, bundler,
 		)
 		if jerr != nil {
@@ -178,7 +178,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			var jr *types.JoinResponse
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
-				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.Device, true,
+				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, true,
 				events.Events, events.Limited, eventFormat, to, bundler,
 			)
 			if err != nil {
@@ -448,9 +448,24 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		}
 	}
 
+	// MSC4222: the state after the timeline of a room the user left is the
+	// state at their leave, without the changes the rest of the range holds.
+	if req.UseStateAfter() && (delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
+		delta.MembershipPos > r.Low() && delta.MembershipPos < r.High() {
+		delta.StateEvents, err = snapshot.RoomStateDelta(
+			ctx, device, delta.RoomID, types.Range{From: r.Low(), To: delta.MembershipPos}, stateFilter, p.rsAPI,
+		)
+		if err != nil {
+			return r.From, fmt.Errorf("snapshot.RoomStateDelta: %w", err)
+		}
+	}
+
 	if stateFilter.LazyLoadMembers {
+		// A client using state_after (MSC4222) does not apply the memberships
+		// in the timeline, so keep every membership change of the delta, as
+		// for a gappy sync.
 		delta.StateEvents, err = p.lazyLoadMembers(
-			ctx, snapshot, delta.RoomID, true, limited, stateFilter,
+			ctx, snapshot, delta.RoomID, true, limited || req.UseStateAfter(), stateFilter,
 			device, recentEvents, delta.StateEvents,
 			req.Since.PDUPosition, latestPosition,
 		)
@@ -527,9 +542,14 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 
 	// Now that we've filtered the timeline, work out which state events are still
 	// left. Anything that appears in the filtered timeline will be removed from the
-	// "state" section and kept in "timeline".
+	// "state" section and kept in "timeline". The state after the timeline
+	// (MSC4222) keeps them, as the client does not apply state from the timeline.
+	stateEvents := delta.StateEvents
+	if !req.UseStateAfter() {
+		stateEvents = removeDuplicates(stateEvents, events)
+	}
 	sEvents := gomatrixserverlib.HeaderedReverseTopologicalOrdering(
-		gomatrixserverlib.ToPDUs(removeDuplicates(delta.StateEvents, events)),
+		gomatrixserverlib.ToPDUs(stateEvents),
 		// sorting by auth events is not stable unless we know the create and historical PL events,
 		// which we don't for deltas like this.
 		gomatrixserverlib.TopologicalOrderByPrevEvents,
@@ -775,7 +795,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	snapshot storage.DatabaseTransaction,
 	roomID string,
 	stateFilter *synctypes.StateFilter,
-	wantFullState bool,
+	wantFullState, stateAfter bool,
 	device *userapi.Device,
 	isPeek bool,
 	recentStreamEvents []types.StreamEvent,
@@ -791,9 +811,11 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// Work our way through the timeline events and pick out the event IDs
 	// of any state events that appear in the timeline. We'll specifically
 	// exclude them at the next step, so that we don't get duplicate state
-	// events in both `recentStreamEvents` and `stateEvents`.
+	// events in both `recentStreamEvents` and `stateEvents`. The state after
+	// the timeline (MSC4222) is the current state, timeline events included,
+	// as the client does not apply state from the timeline.
 	var excludingEventIDs []string
-	if !wantFullState {
+	if !wantFullState && !stateAfter {
 		excludingEventIDs = make([]string, 0, len(recentStreamEvents))
 		for _, event := range recentStreamEvents {
 			if event.StateKey() != nil {
@@ -837,7 +859,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// If we are limited by the filter AND the history visibility filter
 	// didn't "remove" events, return that the response is limited.
 	limited = limited && len(events) == len(recentEvents)
-	stateEvents = removeDuplicates(stateEvents, events)
+	if !stateAfter {
+		stateEvents = removeDuplicates(stateEvents, events)
+	}
 	if stateFilter.LazyLoadMembers {
 		if err != nil {
 			return nil, err

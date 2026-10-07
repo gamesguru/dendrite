@@ -105,6 +105,7 @@ func Setup(
 		"org.matrix.simplified_msc3575": true, // MSC4186: Simplified Sliding Sync
 		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
 		"org.matrix.msc4354":            true, // MSC4354: sticky events
+		"org.matrix.msc4222":            true, // MSC4222: state_after in /sync
 		"uk.tcpip.msc4133":              true, // MSC4133: custom profile fields, unstable path
 		"uk.tcpip.msc4133.stable":       true, // MSC4133: custom profile fields, v3 path
 	}

@@ -18,6 +18,7 @@ Feature support does not imply support for an entire specification version; see 
 | [MSC3575](https://github.com/matrix-org/matrix-spec-proposals/pull/3575) | Sliding Sync (v1) | N/A | Implemented (legacy, superseded by MSC4186) |
 | [MSC4354](https://github.com/matrix-org/matrix-spec-proposals/pull/4354) | Sticky events | N/A | Implemented (unstable prefix): see [sticky events](#sticky-events) |
 | [MSC4480](https://github.com/matrix-org/matrix-spec-proposals/pull/4480) | Sliding sync extension: sticky events | N/A | Implemented: the `org.matrix.msc4354.sticky_events` extension |
+| [MSC4222](https://github.com/matrix-org/matrix-spec-proposals/pull/4222) | `state_after` in `/sync` | 1.16 | Implemented: with `use_state_after=true`, joined and left rooms carry `state_after`, the state at the end of the timeline, instead of `state`. The unstable `org.matrix.msc4222.use_state_after` parameter is answered with `org.matrix.msc4222.state_after`. See [state after the timeline](#state-after-the-timeline) |
 
 ### Sticky events
 
@@ -43,6 +44,16 @@ History visibility does not hide sticky events from joined users, in `/sync`, sl
 When a server joins a room, Zendrite sends it the sticky events that local users sent there and that are still sticky.
 Zendrite remembers these events in memory, so after a restart it only sends sticky events created since.
 Soft-failed sticky events are not re-evaluated when the room state changes.
+
+### State after the timeline
+
+A client that opts in to [MSC4222](https://github.com/matrix-org/matrix-spec-proposals/pull/4222) must not apply the state events of the timeline itself, so `state_after` holds them as well.
+An initial sync, a sync with `full_state=true` and a sync that newly joined a room send the room's whole current state.
+An incremental sync sends the state changes between the `since` token and the end of the timeline, including those of a gappy (`limited`) timeline.
+For a room the user left, the state ends at their leave.
+`state_after` is sent even when it is empty, and the `state` filter applies to it.
+With `lazy_load_members`, it holds the memberships of the timeline senders, and an incremental sync keeps every membership change.
+Zendrite advertises `org.matrix.msc4222` in `unstable_features` for clients that check it before opting in.
 
 ## Messaging
 

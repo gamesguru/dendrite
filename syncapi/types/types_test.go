@@ -287,3 +287,48 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestResponseMoveStateToStateAfter(t *testing.T) {
+	t.Parallel()
+	state := []synctypes.ClientEvent{{Type: "m.room.topic", Content: []byte("{}")}}
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{key: StateAfterKey, want: `"state_after"`},
+		{key: UnstableStateAfterKey, want: `"org.matrix.msc4222.state_after"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Parallel()
+			res := NewResponse()
+			res.Rooms.Join["!joined:test"] = NewJoinResponse()
+			res.Rooms.Join["!joined:test"].State.Events = state
+			// A room only another stream added still carries an empty state_after.
+			res.Rooms.Join["!typing:test"] = NewJoinResponse()
+			res.Rooms.Leave["!left:test"] = NewLeaveResponse()
+			res.MoveStateToStateAfter(tt.key)
+
+			for roomID, want := range map[string]string{
+				"!joined:test": `{` + tt.want + `:{"events":[{"content":{},"type":"m.room.topic"}]},` +
+					`"unread_notifications":{"highlight_count":0,"notification_count":0}}`,
+				"!typing:test": `{` + tt.want + `:{"events":[]}}`,
+			} {
+				got, err := json.Marshal(res.Rooms.Join[roomID])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != want {
+					t.Errorf("%s: got %s want %s", roomID, got, want)
+				}
+			}
+			got, err := json.Marshal(res.Rooms.Leave["!left:test"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := `{` + tt.want + `:{"events":[]}}`; string(got) != want {
+				t.Errorf("left room: got %s want %s", got, want)
+			}
+		})
+	}
+}

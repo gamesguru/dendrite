@@ -49,6 +49,9 @@ type DatabaseTransaction interface {
 	CurrentState(ctx context.Context, roomID string, stateFilterPart *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	GetStateDeltasForFullStateSync(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
 	GetStateDeltas(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
+	// RoomStateDelta returns the state events of one room added within the
+	// range that are still part of its state at the end of the range.
+	RoomStateDelta(ctx context.Context, device *userapi.Device, roomID string, r types.Range, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	RoomIDsWithMembership(ctx context.Context, userID string, membership string) ([]string, error)
 	// KickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
 	// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
