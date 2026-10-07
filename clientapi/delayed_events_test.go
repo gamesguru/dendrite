@@ -441,6 +441,51 @@ func TestDelayedEvents(t *testing.T) {
 			require.Equal(t, http.StatusOK, h.do(alice, http.MethodPost, delayedEventsPath+"/"+delayID+"/cancel", "").Code)
 		})
 
+		t.Run("a delayed message event can be sticky", func(t *testing.T) {
+			roomPath := "/_matrix/client/v3/rooms/" + url.PathEscape(h.room.ID)
+			sendNow := func(t *testing.T, delayID string) gjson.Result {
+				t.Helper()
+				require.Equal(t, http.StatusOK, h.do(alice, http.MethodPost, delayedEventsPath+"/"+delayID+"/send", "").Code)
+				eventID := h.get(alice, delayID).Get(wireFinalised + ".event_id").Str
+				require.NotEmpty(t, eventID)
+				// /event reads from the sync API, which consumes the event later.
+				var event gjson.Result
+				eventually(t, "the event reaches the sync API", func() bool {
+					rec := h.do(alice, http.MethodGet, roomPath+"/event/"+url.PathEscape(eventID), "")
+					event = gjson.ParseBytes(rec.Body.Bytes())
+					return rec.Code == http.StatusOK
+				})
+				return event
+			}
+			schedule := func(t *testing.T, method, path, body string) string {
+				t.Helper()
+				rec := h.do(alice, method, path, body)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				return gjson.GetBytes(rec.Body.Bytes(), "delay_id").Str
+			}
+
+			delayID := schedule(t, http.MethodPut,
+				roomPath+"/send/m.rtc.member/sticky1?org.matrix.msc4140.delay=3600000&org.matrix.msc4354.sticky_duration_ms=60000", `{"leave":true}`)
+			assert.Equal(t, int64(60000), sendNow(t, delayID).Get("msc4354_sticky.duration_ms").Int())
+
+			// The dedicated scheduling endpoint takes the same parameter.
+			delayID = schedule(t, http.MethodPut,
+				"/_matrix/client/unstable/org.matrix.msc4140/rooms/"+url.PathEscape(h.room.ID)+"/delayed_event/m.rtc.member/sticky2?org.matrix.msc4354.sticky_duration_ms=30000",
+				`{"delay_ms":3600000,"content":{"leave":true}}`)
+			assert.Equal(t, int64(30000), sendNow(t, delayID).Get("msc4354_sticky.duration_ms").Int())
+
+			// Without the parameter, and for state events, the event is not sticky.
+			delayID = schedule(t, http.MethodPut, roomPath+"/send/m.rtc.member/sticky3?org.matrix.msc4140.delay=3600000", `{"leave":true}`)
+			assert.False(t, sendNow(t, delayID).Get("msc4354_sticky").Exists())
+			delayID = schedule(t, http.MethodPut,
+				roomPath+"/state/"+delayedStateType+"/sticky?org.matrix.msc4140.delay=3600000&org.matrix.msc4354.sticky_duration_ms=60000", `{}`)
+			assert.False(t, sendNow(t, delayID).Get("msc4354_sticky").Exists())
+
+			assertErrCode(t, h.do(alice, http.MethodPut,
+				roomPath+"/send/m.rtc.member/sticky4?org.matrix.msc4140.delay=3600000&org.matrix.msc4354.sticky_duration_ms=-1", `{}`),
+				http.StatusBadRequest, "M_INVALID_PARAM")
+		})
+
 		t.Run("per-user limit", func(t *testing.T) {
 			for i := range maxScheduled {
 				h.mustScheduleState(charlie, fmt.Sprintf("limit-%d", i), fmt.Sprint(3600000-i*1000), `{}`)

@@ -56,12 +56,12 @@ CREATE INDEX IF NOT EXISTS userapi_delayed_events_state_idx ON userapi_delayed_e
 `
 
 const delayedEventColumns = "delay_id, localpart, server_name, device_id, room_id, event_type, state_key, content," +
-	" origin_server_ts, delay_ms, delayed_since_ts, send_ts, status, event_id, error, finalized_ts"
+	" origin_server_ts, delay_ms, delayed_since_ts, send_ts, status, event_id, error, finalized_ts, sticky_duration_ms"
 
 const insertDelayedEventSQL = "" +
 	"INSERT INTO userapi_delayed_events (delay_id, localpart, server_name, device_id, room_id, event_type, state_key, content," +
-	" origin_server_ts, delay_ms, delayed_since_ts, send_ts, status)" +
-	" VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'scheduled')"
+	" origin_server_ts, delay_ms, delayed_since_ts, send_ts, sticky_duration_ms, status)" +
+	" VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'scheduled')"
 
 const selectDelayedEventSQL = "" +
 	"SELECT " + delayedEventColumns + " FROM userapi_delayed_events WHERE delay_id = $1"
@@ -141,6 +141,14 @@ func NewSQLiteDelayedEventsTable(db *sql.DB) (tables.DelayedEventsTable, error) 
 	if err != nil {
 		return nil, err
 	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{
+		Version: "userapi: add delayed event sticky duration",
+		Up:      tables.AddDelayedEventStickyDuration,
+	})
+	if err = m.Up(context.Background()); err != nil {
+		return nil, err
+	}
 	return s, sqlutil.StatementList{
 		{&s.insertDelayedEventStmt, insertDelayedEventSQL},
 		{&s.selectDelayedEventStmt, selectDelayedEventSQL},
@@ -167,7 +175,7 @@ func (s *delayedEventsStatements) InsertDelayedEvent(
 	_, err := stmt.ExecContext(
 		ctx, event.DelayID, event.Localpart, event.ServerName, event.DeviceID,
 		event.RoomID, event.Type, event.StateKey, string(event.Content),
-		event.OriginServerTS, event.DelayMS, event.DelayedSince, event.SendTS,
+		event.OriginServerTS, event.DelayMS, event.DelayedSince, event.SendTS, event.StickyDurationMS,
 	)
 	return err
 }
@@ -313,12 +321,12 @@ func scanDelayedEvent(row rowScanner) (*api.DelayedEvent, error) {
 	var event api.DelayedEvent
 	var stateKey, eventID, sendErr sql.NullString
 	var content string
-	var finalizedTS sql.NullInt64
+	var finalizedTS, stickyDurationMS sql.NullInt64
 	if err := row.Scan(
 		&event.DelayID, &event.Localpart, &event.ServerName, &event.DeviceID,
 		&event.RoomID, &event.Type, &stateKey, &content,
 		&event.OriginServerTS, &event.DelayMS, &event.DelayedSince, &event.SendTS,
-		&event.Status, &eventID, &sendErr, &finalizedTS,
+		&event.Status, &eventID, &sendErr, &finalizedTS, &stickyDurationMS,
 	); err != nil {
 		return nil, err
 	}
@@ -331,6 +339,9 @@ func scanDelayedEvent(row rowScanner) (*api.DelayedEvent, error) {
 		event.Error = json.RawMessage(sendErr.String)
 	}
 	event.FinalizedTS = spec.Timestamp(finalizedTS.Int64)
+	if stickyDurationMS.Valid {
+		event.StickyDurationMS = &stickyDurationMS.Int64
+	}
 	return &event, nil
 }
 

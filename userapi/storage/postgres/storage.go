@@ -85,7 +85,7 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresProfileFieldsTable: %w", err)
 	}
-	delayedEventsTable, err := NewPostgresDelayedEventsTable(db)
+	delayedEventsTable, err := NewPostgresDelayedEventsTable(db) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresDelayedEventsTable: %w", err)
 	}

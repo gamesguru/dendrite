@@ -93,6 +93,9 @@ type DelayedEvent struct {
 	// to timestamp the event when it is sent.
 	OriginServerTS spec.Timestamp
 	DelayMS        int64
+	// StickyDurationMS makes the event an MSC4354 sticky event for that many
+	// milliseconds once it is sent. Nil for events that are not sticky.
+	StickyDurationMS *int64
 	// DelayedSince is when the event was scheduled or last restarted.
 	DelayedSince spec.Timestamp
 	SendTS       spec.Timestamp

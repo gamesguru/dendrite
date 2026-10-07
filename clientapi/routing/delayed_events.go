@@ -175,6 +175,15 @@ func (d *DelayedEvents) schedule(
 		}
 	}
 
+	// Like a direct send, only a message event can be made sticky (MSC4354).
+	var sticky *gomatrixserverlib.StickyEventData
+	if stateKey == nil {
+		var resErr *util.JSONResponse
+		if sticky, resErr = parseStickyDuration(req); resErr != nil {
+			return *resErr
+		}
+	}
+
 	if txnID != nil {
 		if res, ok := d.txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
 			return *res
@@ -217,7 +226,7 @@ func (d *DelayedEvents) schedule(
 	// The event is built again from the room state when it is sent. Building
 	// it now checks that it is well formed and that the user may send it, so
 	// that nothing is stored for a room the user cannot send to.
-	if _, resErr = generateSendEvent(ctx, content, device, roomID, eventType, roomStateKey, nil, d.rsAPI, d.now()); resErr != nil {
+	if _, resErr = generateSendEvent(ctx, content, device, roomID, eventType, roomStateKey, sticky, d.rsAPI, d.now()); resErr != nil {
 		return *resErr
 	}
 
@@ -243,6 +252,9 @@ func (d *DelayedEvents) schedule(
 		DelayMS:        delayMS,
 		DelayedSince:   now,
 		SendTS:         now + spec.Timestamp(delayMS),
+	}
+	if sticky != nil {
+		event.StickyDurationMS = &sticky.DurationMillis
 	}
 	err = d.userAPI.PerformDelayedEventAdd(ctx, event, d.cfg.DelayedEvents.MaxPerUser)
 	var limitErr *userapi.DelayedEventLimitError
@@ -543,15 +555,18 @@ func (d *DelayedEvents) sendEvent(ctx context.Context, event *userapi.DelayedEve
 		evTime = event.OriginServerTS.Time()
 	}
 
+	var sticky *gomatrixserverlib.StickyEventData
+	if event.StickyDurationMS != nil {
+		sticky = &gomatrixserverlib.StickyEventData{DurationMillis: *event.StickyDurationMS}
+	}
+
 	unlock, resErr := lockUserRoomSend(event.RoomID, device.UserID)
 	if resErr != nil {
 		return "", resErr
 	}
 	defer unlock()
-	// Delayed events are not sticky (MSC4354) yet: the sticky duration is not
-	// stored with them.
 	return sendEventContent(
-		ctx, device, roomVersion, event.RoomID, event.Type, stateKey, nil, content, evTime,
+		ctx, device, roomVersion, event.RoomID, event.Type, stateKey, sticky, content, evTime,
 		&api.TransactionID{SessionID: api.DelayedEventSessionID, TransactionID: event.DelayID},
 		d.cfg, d.rsAPI, d.federation,
 	)

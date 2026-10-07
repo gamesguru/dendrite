@@ -52,6 +52,7 @@ Without `rtc_foci`, none of the above is served and clients have no focus to dis
 
 Element Call announces who is in a call with `m.rtc.member` events that it sends as sticky events ([MSC4354](https://github.com/matrix-org/matrix-spec-proposals/pull/4354)).
 Zendrite supports them without configuration and advertises `org.matrix.msc4354` in `unstable_features`, which Element Call checks before using them.
+Element Call schedules its leave membership as a sticky event with [delayed events](#delayed-events), and Zendrite keeps it sticky when it sends it.
 See [sticky events](/mscs/#sticky-events) for how they are delivered.
 
 ## Delayed events

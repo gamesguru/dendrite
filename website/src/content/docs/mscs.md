@@ -189,6 +189,8 @@ At its send time, the event is built from the room state at that moment and sent
 A failure is recorded as the event's `finalised.error` and is not retried.
 The `send` action differs: if sending fails, it returns the error and keeps the event scheduled.
 The sent event carries `org.matrix.msc4140.delay_id` in its `unsigned` data in the sender's `/sync`, and no `transaction_id`.
+A message event scheduled with `org.matrix.msc4354.sticky_duration_ms`, through either scheduling endpoint, is sent as a [sticky event](#sticky-events), whose sticky period starts when it is sent.
+As for a direct send, the parameter is ignored for state events.
 
 Retrying an action is safe: `send` succeeds for an event that was already sent, and `cancel` for one that was already canceled or failed.
 Other actions on a finalized event return 404 `M_NOT_FOUND` as in Synapse, rather than the 409 of the current MSC text, because matrix-js-sdk schedules a new delayed leave event when a restart finds none.

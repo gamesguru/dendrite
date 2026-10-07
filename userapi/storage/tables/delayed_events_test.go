@@ -72,7 +72,7 @@ func TestDelayedEventsTable(t *testing.T) {
 	otherMember := "@bob:localhost"
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, closeDB := mustCreateDelayedEventsTable(t, dbType)
+		tab, closeDB := mustCreateDelayedEventsTable(t, dbType) //nolint:contextcheck
 		defer closeDB()
 
 		_, ok, err := tab.SelectNextSendTS(ctx, nil)
@@ -224,5 +224,35 @@ func TestDelayedEventsTable(t *testing.T) {
 		got, err = tab.SelectDelayedEvent(ctx, nil, "bob-state")
 		require.NoError(t, err)
 		assert.NotNil(t, got)
+	})
+}
+
+func TestDelayedEventsTableStickyDuration(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		tab, closeDB := mustCreateDelayedEventsTable(t, dbType) //nolint:contextcheck
+		defer closeDB()
+
+		duration := int64(60000)
+		sticky := newDelayedEvent("sticky", "alice", "!room:localhost", nil, 1000)
+		sticky.StickyDurationMS = &duration
+		plain := newDelayedEvent("plain", "alice", "!room:localhost", nil, 2000)
+		require.NoError(t, tab.InsertDelayedEvent(ctx, nil, sticky))
+		require.NoError(t, tab.InsertDelayedEvent(ctx, nil, plain))
+
+		got, err := tab.SelectDelayedEvent(ctx, nil, "sticky")
+		require.NoError(t, err)
+		require.NotNil(t, got.StickyDurationMS)
+		assert.Equal(t, duration, *got.StickyDurationMS)
+		got, err = tab.SelectDelayedEvent(ctx, nil, "plain")
+		require.NoError(t, err)
+		assert.Nil(t, got.StickyDurationMS)
+
+		// A claimed event keeps its sticky duration for the send.
+		claimed, err := tab.ClaimDueDelayedEvents(ctx, nil, 1000, false)
+		require.NoError(t, err)
+		require.Len(t, claimed, 1)
+		require.NotNil(t, claimed[0].StickyDurationMS)
+		assert.Equal(t, duration, *claimed[0].StickyDurationMS)
 	})
 }

@@ -82,7 +82,7 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteProfileFieldsTable: %w", err)
 	}
-	delayedEventsTable, err := NewSQLiteDelayedEventsTable(db)
+	delayedEventsTable, err := NewSQLiteDelayedEventsTable(db) //nolint:contextcheck
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteDelayedEventsTable: %w", err)
 	}
