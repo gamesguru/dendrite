@@ -181,8 +181,14 @@ func TestStickyEventsSlidingSyncHistoryVisibility(t *testing.T) {
 		env.send(sticky, regular, join)
 		env.waitFor(bob, room.ID, join)
 
-		lists := map[string]any{"main": map[string]any{"ranges": [][]int{{0, 10}}, "required_state": []any{}, "timeline_limit": 1}}
+		// History visibility hides both earlier events from the timeline, so
+		// the sticky one arrives through the extension instead.
+		lists := map[string]any{"main": map[string]any{"ranges": [][]int{{0, 10}}, "required_state": []any{}, "timeline_limit": 10}}
 		res := env.slidingSync(bob, "", lists, map[string]any{"enabled": true})
+		timeline := res.Get("rooms." + gjson.Escape(room.ID) + ".timeline")
+		require.True(t, timeline.Get(fmt.Sprintf(`#(event_id=="%s")`, join.EventID())).Exists(), timeline.Raw)
+		require.False(t, timeline.Get(fmt.Sprintf(`#(event_id=="%s")`, regular.EventID())).Exists(), timeline.Raw)
+		require.False(t, timeline.Get(fmt.Sprintf(`#(event_id=="%s")`, sticky.EventID())).Exists(), timeline.Raw)
 		require.Equal(t, []string{sticky.EventID()}, extensionStickyIDs(res, room.ID))
 	})
 }

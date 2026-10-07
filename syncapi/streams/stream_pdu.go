@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -513,10 +512,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	}
 
 	// Applies the history visibility rules
-	events, err := applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents)
+	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
 		if abandonsSync(err) {
-			return r.From, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
+			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 		}
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
 	}
@@ -735,60 +734,6 @@ func (s *syncBundler) init(ctx context.Context) error {
 	return nil
 }
 
-// applyHistoryVisibilityFilter gets the current room state and supplies it to ApplyHistoryVisibilityFilter, to make
-// sure we always return the required events in the timeline.
-func applyHistoryVisibilityFilter(
-	ctx context.Context,
-	snapshot storage.DatabaseTransaction,
-	rsAPI roomserverAPI.SyncRoomserverAPI,
-	roomID, userID string,
-	recentEvents []*rstypes.HeaderedEvent,
-) ([]*rstypes.HeaderedEvent, error) {
-	// We need to make sure we always include the latest state events, if they are in the timeline.
-	alwaysIncludeIDs := make(map[string]struct{})
-	var stateTypes []string
-	var senders []string
-	for _, ev := range recentEvents {
-		if ev.StateKey() != nil {
-			stateTypes = append(stateTypes, ev.Type())
-			senders = append(senders, string(ev.SenderID()))
-		}
-	}
-
-	// Only get the state again if there are state events in the timeline
-	if len(stateTypes) > 0 {
-		filter := synctypes.DefaultStateFilter()
-		filter.Types = &stateTypes
-		filter.Senders = &senders
-		stateEvents, err := snapshot.CurrentState(ctx, roomID, &filter, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current room state for history visibility calculation: %w", err)
-		}
-
-		for _, ev := range stateEvents {
-			alwaysIncludeIDs[ev.EventID()] = struct{}{}
-		}
-	}
-
-	parsedUserID, err := spec.NewUserID(userID, true)
-	if err != nil {
-		return nil, err
-	}
-
-	startTime := time.Now()
-	events, err := internal.ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, internal.SyncEndpoint)
-	if err != nil {
-		return nil, err
-	}
-	logrus.WithFields(logrus.Fields{
-		"duration": time.Since(startTime),
-		"room_id":  roomID,
-		"before":   len(recentEvents),
-		"after":    len(events),
-	}).Debugf("Applied history visibility (sync)")
-	return events, nil
-}
-
 //nolint:gocyclo
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	ctx context.Context,
@@ -847,10 +792,10 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	events := recentEvents
 	// Only apply history visibility checks if the response is for joined rooms
 	if !isPeek {
-		events, err = applyHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents)
+		events, err = internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents, internal.SyncEndpoint)
 		if err != nil {
 			if abandonsSync(err) {
-				return nil, fmt.Errorf("applyHistoryVisibilityFilter: %w", err)
+				return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 			}
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}

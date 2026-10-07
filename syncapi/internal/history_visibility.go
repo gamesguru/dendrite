@@ -21,6 +21,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 //nolint:gochecknoinits
@@ -93,9 +94,12 @@ func (ev eventVisibility) allowed() (allowed bool) {
 	}
 }
 
-// SyncEndpoint is the endpoint name of sync timelines for
+// The endpoint names of sync v2 and sliding sync timelines for
 // ApplyHistoryVisibilityFilter.
-const SyncEndpoint = "sync"
+const (
+	SyncEndpoint        = "sync"
+	SlidingSyncEndpoint = "sliding_sync"
+)
 
 // ApplyHistoryVisibilityFilter applies the room history visibility filter on types.HeaderedEvents.
 // Returns the filtered events and an error, if any.
@@ -130,10 +134,10 @@ func ApplyHistoryVisibilityFilter(
 	visibilities := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
 
 	// MSC4354: joined users see unexpired sticky events whatever the history
-	// visibility. Sync timelines keep the usual rules, as in Synapse, since
-	// sync delivers sticky events in a section of their own.
+	// visibility. Sync v2 and sliding sync timelines keep the usual rules, as
+	// in Synapse, since both deliver sticky events in a section of their own.
 	now := time.Now()
-	showSticky := membershipCurrent == spec.Join && endpoint != SyncEndpoint
+	showSticky := membershipCurrent == spec.Join && endpoint != SyncEndpoint && endpoint != SlidingSyncEndpoint
 
 	for _, ev := range events {
 		// Validate same room assumption
@@ -248,4 +252,61 @@ func visibilityForEvents(
 		result[eventID] = vis
 	}
 	return result
+}
+
+// ApplyTimelineHistoryVisibilityFilter applies the history visibility filter
+// to the timeline of a sync response. It always keeps the timeline's state
+// events that are part of the current room state, so the client learns the
+// latest state even if it cannot see the event that set it.
+func ApplyTimelineHistoryVisibilityFilter(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	rsAPI api.SyncRoomserverAPI,
+	roomID, userID string,
+	recentEvents []*types.HeaderedEvent,
+	endpoint string,
+) ([]*types.HeaderedEvent, error) {
+	// We need to make sure we always include the latest state events, if they are in the timeline.
+	alwaysIncludeIDs := make(map[string]struct{})
+	var stateTypes []string
+	var senders []string
+	for _, ev := range recentEvents {
+		if ev.StateKey() != nil {
+			stateTypes = append(stateTypes, ev.Type())
+			senders = append(senders, string(ev.SenderID()))
+		}
+	}
+
+	// Only get the state again if there are state events in the timeline
+	if len(stateTypes) > 0 {
+		filter := synctypes.DefaultStateFilter()
+		filter.Types = &stateTypes
+		filter.Senders = &senders
+		stateEvents, err := snapshot.CurrentState(ctx, roomID, &filter, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current room state for history visibility calculation: %w", err)
+		}
+
+		for _, ev := range stateEvents {
+			alwaysIncludeIDs[ev.EventID()] = struct{}{}
+		}
+	}
+
+	parsedUserID, err := spec.NewUserID(userID, true)
+	if err != nil {
+		return nil, err
+	}
+
+	startTime := time.Now()
+	events, err := ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	logrus.WithFields(logrus.Fields{
+		"duration": time.Since(startTime),
+		"room_id":  roomID,
+		"before":   len(recentEvents),
+		"after":    len(events),
+	}).Debugf("Applied history visibility (%s)", endpoint)
+	return events, nil
 }

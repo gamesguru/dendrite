@@ -260,7 +260,7 @@ func (rp *RequestPool) getTimelineEvents(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
 	roomID string,
-	userID string, // only used to bundle relations, timeline retrieval is room-scoped
+	userID string, // filters the timeline by history visibility and bundles relations
 	limit int,
 	roomState types.RoomStreamState,
 	currentPos types.StreamingToken,
@@ -341,6 +341,16 @@ func (rp *RequestPool) getTimelineEvents(
 		return []synctypes.ClientEvent{}, false, 0, nil
 	}
 
+	// Drop the events the user may not see under the room's history
+	// visibility, as sync v2 does. A failure fails closed: no timeline.
+	events.Events, err = rp.visibleStreamEvents(ctx, snapshot, roomID, userID, events.Events)
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("apply history visibility: %w", err)
+	}
+	if len(events.Events) == 0 {
+		return []synctypes.ClientEvent{}, events.Limited, 0, nil
+	}
+
 	// Calculate num_live BEFORE converting to ClientEvents (while we have StreamPosition)
 	// Uses Synapse's algorithm: Count how many events arrived after the request's from_token
 	// This is connection-level logic (based on request token), not room-level logic
@@ -389,6 +399,38 @@ func (rp *RequestPool) getTimelineEvents(
 
 	// Return the events, limited flag, and num_live count
 	return clientEvents, events.Limited, numLive, nil
+}
+
+// visibleStreamEvents returns the events the user may see under the room's
+// history visibility, in their original order.
+func (rp *RequestPool) visibleStreamEvents(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	roomID, userID string,
+	events []types.StreamEvent,
+) ([]types.StreamEvent, error) {
+	headered := make([]*rstypes.HeaderedEvent, len(events))
+	for i := range events {
+		headered[i] = events[i].HeaderedEvent
+	}
+	visible, err := syncinternal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, rp.rsAPI, roomID, userID, headered, syncinternal.SlidingSyncEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	if len(visible) == len(events) {
+		return events, nil
+	}
+	visibleIDs := make(map[string]struct{}, len(visible))
+	for _, ev := range visible {
+		visibleIDs[ev.EventID()] = struct{}{}
+	}
+	filtered := make([]types.StreamEvent, 0, len(visible))
+	for _, ev := range events {
+		if _, ok := visibleIDs[ev.EventID()]; ok {
+			filtered = append(filtered, ev)
+		}
+	}
+	return filtered, nil
 }
 
 // bundleTimeline adds bundled aggregations to a limited timeline, the same

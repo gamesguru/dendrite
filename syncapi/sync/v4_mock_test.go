@@ -268,6 +268,15 @@ func (m *mockRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spe
 	return spec.NewUserID(string(senderID), true)
 }
 
+func (m *mockRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
+	senderID := spec.SenderID(userID.String())
+	return &senderID, nil
+}
+
+func (m *mockRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, roomID spec.RoomID, eventIDs []string, senderID spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
+	return map[string]*rstypes.HeaderedEvent{}, nil
+}
+
 // mockUserAPI implements userapi.SyncUserAPI for testing.
 // Uses interface embedding to satisfy the interface without implementing all methods.
 type mockUserAPI struct {
@@ -365,8 +374,10 @@ func mockStreamEvent(eventJSON []byte, streamPos types.StreamPosition, caller st
 		panic(caller + ": failed to build mock event: " + err.Error())
 	}
 
+	// World readable, so the timeline's history visibility filter keeps the
+	// fixtures without the mocks having to model memberships.
 	return types.StreamEvent{
-		HeaderedEvent:  &rstypes.HeaderedEvent{PDU: event},
+		HeaderedEvent:  &rstypes.HeaderedEvent{PDU: event, Visibility: gomatrixserverlib.HistoryVisibilityWorldReadable},
 		StreamPosition: streamPos,
 	}
 }
