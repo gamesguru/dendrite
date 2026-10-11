@@ -463,7 +463,8 @@ The stream keeps its leader and a current majority, so Zendrite keeps working an
 The broker does not recover on its own.
 
 This is a regression in nats-server 2.15 that only occurs with `sync_interval: always`, which HA requires ([nats-io/nats-server#8709](https://github.com/nats-io/nats-server/issues/8709)).
-2.15.0, 2.15.1-RC.1 and the development branch as of October 2, 2026 are affected; 2.14.7 is not.
+2.15.0 and 2.15.1-RC.1 are affected; 2.14 releases are not.
+nats-server 2.15.1 fixes it ([nats-io/nats-server#8710](https://github.com/nats-io/nats-server/pull/8710)), so run your brokers on 2.15.1 or later.
 
 To recognize it:
 
