@@ -20,6 +20,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/federationapi"
@@ -566,6 +567,21 @@ func TestNotaryServer(t *testing.T) {
 				resp := routing.NotaryKeys(req, &cfg.FederationAPI, fedAPI, tc.pubKeyRequest)
 				// assert that we received the expected response
 				tc.validateFunc(t, resp)
+			})
+		}
+
+		// MSC3938 made the key ID optional in the GET form of the query.
+		routers := httputil.NewRouters()
+		federationapi.AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, nil, &test.NopJSONVerifier{}, nil, fedAPI, caching.DisableMetrics)
+		for _, path := range []string{"/_matrix/key/v2/query/servera", "/_matrix/key/v2/query/servera/ed25519:someID"} {
+			t.Run("GET "+path, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Host = string(cfg.Global.ServerName)
+				rec := httptest.NewRecorder()
+				routers.Keys.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Equal(t, "servera", gjson.GetBytes(rec.Body.Bytes(), "server_keys.0.server_name").Str)
+				assert.True(t, gjson.GetBytes(rec.Body.Bytes(), "server_keys.0.verify_keys.ed25519:someID").Exists())
 			})
 		}
 	})

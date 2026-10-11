@@ -188,7 +188,7 @@ func TestThreads(t *testing.T) {
 		require.Len(t, request("", http.StatusOK).Chunk, 3)
 		// The registered stable path requires authentication and serves authenticated requests.
 		router := httputil.NewRouter("/_matrix/client")
-		Setup(router, nil, db, &threadUserAPI{device: userapi.Device{UserID: alice.ID}}, rs, &config.SyncAPI{}, nil, nil, httputil.NewRateLimits(&config.RateLimiting{}))
+		Setup(router, nil, db, &threadUserAPI{device: userapi.Device{UserID: alice.ID}}, rs, &config.SyncAPI{}, nil, nil, httputil.NewRateLimits(&config.RateLimiting{}), nil)
 		for _, token := range []string{"", "valid"} {
 			req := httptest.NewRequest(http.MethodGet, "/_matrix/client/v1/rooms/"+room.ID+"/threads", nil)
 			if token != "" {

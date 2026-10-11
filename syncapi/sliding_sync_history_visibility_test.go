@@ -44,7 +44,7 @@ func testSlidingSyncHistoryVisibility(t *testing.T, dbType test.DBType) {
 	natsInstance := jetstream.NATSInstance{}
 	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 	rsAPI.SetFederationAPI(nil, nil)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, accountDataUserAPI{&syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}}, rsAPI, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, accountDataUserAPI{&syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 

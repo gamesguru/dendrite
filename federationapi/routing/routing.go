@@ -89,12 +89,15 @@ func Setup(
 		var pkReq *gomatrixserverlib.PublicKeyNotaryLookupRequest
 		serverName := spec.ServerName(vars["serverName"])
 		keyID := gomatrixserverlib.KeyID(vars["keyID"])
-		if serverName != "" && keyID != "" {
+		if serverName != "" {
+			// Without a key ID (MSC3938), an empty criteria map asks for all keys.
+			criteria := map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{}
+			if keyID != "" {
+				criteria[keyID] = gomatrixserverlib.PublicKeyNotaryQueryCriteria{}
+			}
 			pkReq = &gomatrixserverlib.PublicKeyNotaryLookupRequest{
 				ServerKeys: map[spec.ServerName]map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{
-					serverName: {
-						keyID: gomatrixserverlib.PublicKeyNotaryQueryCriteria{},
-					},
+					serverName: criteria,
 				},
 			}
 		}
@@ -124,6 +127,7 @@ func Setup(
 	v2keysmux.Handle("/server/", localKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/server", localKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/query", notaryKeys).Methods(http.MethodPost)
+	v2keysmux.Handle("/query/{serverName}", notaryKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/query/{serverName}/{keyID}", notaryKeys).Methods(http.MethodGet)
 
 	mu := internal.NewMutexByRoom()

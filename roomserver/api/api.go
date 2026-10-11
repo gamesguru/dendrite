@@ -218,6 +218,11 @@ type SyncRoomserverAPI interface {
 	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state (MSC3706 faster joins).
 	// Used by sync to filter rooms that may have incomplete state.
 	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
+
+	// QueryServerBannedFromRoom and QueryServerAllowedToSeeEvent guard the
+	// federation timestamp_to_event endpoint, which the sync API serves.
+	QueryServerBannedFromRoom(ctx context.Context, req *QueryServerBannedFromRoomRequest, res *QueryServerBannedFromRoomResponse) error
+	QueryServerAllowedToSeeEvent(ctx context.Context, serverName spec.ServerName, eventID string, roomID string) (allowed bool, err error)
 }
 
 type AppserviceRoomserverAPI interface {

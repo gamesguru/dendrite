@@ -137,11 +137,25 @@ Deactivating an account removes its custom fields.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC3706](https://github.com/matrix-org/matrix-spec-proposals/pull/3706) | Partial state in `/send_join` (faster joins) | 1.6 | Implemented |
+| [MSC3030](https://github.com/matrix-org/matrix-spec-proposals/pull/3030) | Jump to date API endpoint | 1.6 | Implemented: see [jump to date](#jump-to-date) |
+| [MSC3938](https://github.com/matrix-org/matrix-spec-proposals/pull/3938) | Remove deprecated `keyId` parameters from `/keys` endpoints | 1.6 | Implemented: `GET /_matrix/key/v2/query/{serverName}` returns all keys of the server. The deprecated forms with a key ID are still served |
 | [MSC2444](https://github.com/matrix-org/matrix-spec-proposals/pull/2444) | Peeking over federation | N/A | Opt-in (`msc2444`) |
 | [MSC4436](https://github.com/matrix-org/matrix-spec-proposals/pull/4436) | Case-insensitive server ACLs | 1.19 | Implemented: `allow` and `deny` globs match the whole server name, ignoring case |
 | [MSC2753](https://github.com/matrix-org/matrix-spec-proposals/pull/2753) | Peeking via `/sync` | N/A | Opt-in (`msc2753`) |
 | [MSC3821](https://github.com/matrix-org/matrix-spec-proposals/pull/3821) | Update redaction rules, again | 1.8 | Implemented: from room version 11, redacting an `m.room.member` event keeps `content.third_party_invite.signed`, so redacted events hash to the same event ID as on other servers |
 | [MSC4311](https://github.com/matrix-org/matrix-spec-proposals/pull/4311) | Create event in invite and knock stripped state | 1.16 | Implemented: `invite_room_state` and `knock_room_state` are sent as full PDUs including `m.room.create`. From room version 12, invites whose state holds PDUs that fail validation are rejected with `M_MISSING_PARAM`. Missing or stripped-only state is accepted with a warning, per the MSC's migration section, as are all failures in earlier room versions. Knock state entries that fail validation are dropped |
+
+### Jump to date
+
+`GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event` returns the event closest to `ts` in the direction `dir` that the user may see.
+`GET /_matrix/federation/v1/timestamp_to_event/{roomId}` answers the same question for another server, from local events only.
+It returns the closest event the requesting server may see, checking at most 1000 events, and a server banned by the room's ACL gets 403.
+
+The local history of a room can have gaps, for example before the server joined it.
+Zendrite knows them from the backward extremities, the events whose `prev_events` it never fetched.
+When such a gap can hold an event closer to `ts` than the local result, and the user may see the event after the gap, the client endpoint asks up to five other servers in the room, those with the most joined members first.
+The first server that answers decides: if its event is closer, Zendrite backfills it with up to 20 events before it, so that `/context` and `/messages` can use it, and returns it when the user may see it.
+Otherwise, or when no server answers, the local result stands.
 
 ## Application services
 

@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.5`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.6`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3`, `v1.4` and `v1.5` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.6` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.6` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.7` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -67,11 +67,20 @@ Application service `users` namespaces only match local users (MSC3905).
 Both v1.4 and v1.5 are advertised.
 MSC2836's experimental relationship API is not the stable `m.thread` protocol or thread-list endpoint.
 
-### v1.6 and later candidates
+### v1.6
+
+The [v1.6 changes](https://spec.matrix.org/v1.6/changelog/) add jump to date, remove the `keyId` parameters from the key endpoints, and extend `send_join` for faster joins.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Jump to date (MSC3030) | `syncapi/routing/timestamp_to_event.go` serves `/v1/rooms/{roomID}/timestamp_to_event` and the federation `/v1/timestamp_to_event/{roomID}`. When the local history has a gap that may hold a closer event, the client endpoint asks other servers in the room and backfills their answer. `timestamp_to_event_test.go` covers both endpoints and the remote lookup. | Implemented. |
+| Key queries without `keyId` (MSC3938) | `federationapi/routing/routing.go` serves `GET /_matrix/key/v2/query/{serverName}`; `TestNotaryServer` covers it. | Implemented. |
+| Faster joins (MSC3706, MSC3943) | `federationapi/internal/federationclient.go` joins with `omit_members=true`. Serving `send_join`, Zendrite always returns the full state with `members_omitted` unset, which the spec allows. | Compliant. |
+
+### v1.7 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.6](https://spec.matrix.org/v1.6/changelog/) | `syncapi/routing/timestamp_to_event.go` serves `/v1/rooms/{roomID}/timestamp_to_event`, but the federation `timestamp_to_event` endpoint (MSC3030) and `GET /_matrix/key/v2/query/{serverName}` without a key ID (MSC3938) are missing. | Do not advertise yet. |
 | [v1.7](https://spec.matrix.org/v1.7/changelog/) | Reactions can be stored as relations; this does not demonstrate aggregated reaction behavior, asynchronous media upload, or login-token issuance. | No full certification; earlier blockers remain. |
 | [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` parses `recurse`, follows relations three levels deep and reports `recursion_depth`; other v1.10 changes are unaudited. | Do not advertise. |
 | [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |

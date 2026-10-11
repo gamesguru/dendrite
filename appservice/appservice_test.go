@@ -535,7 +535,7 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		// Start the syncAPI to have `/joined_members` available
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		// start the consumer
 		appservice.NewInternalAPI(processCtx, cfg, natsInstance, usrAPI, rsAPI)

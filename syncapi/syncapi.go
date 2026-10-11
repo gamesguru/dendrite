@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -43,6 +45,8 @@ func AddPublicRoutes(
 	rsAPI api.SyncRoomserverAPI,
 	caches caching.LazyLoadCache,
 	enableMetrics bool,
+	fedClient fclient.FederationClient,
+	keyRing gomatrixserverlib.JSONVerifier,
 ) {
 	js, natsClient := natsInstance.Prepare(processContext, &zendriteCfg.Global.JetStream)
 
@@ -184,6 +188,9 @@ func AddPublicRoutes(
 	routing.Setup(
 		routers.Client, requestPool, syncDB, userAPI,
 		rsAPI, &zendriteCfg.SyncAPI, caches, index,
-		rateLimits,
+		rateLimits, fedClient,
 	)
+	if keyRing != nil {
+		routing.SetupFederation(routers.Federation, &zendriteCfg.SyncAPI, syncDB, rsAPI, keyRing)
+	}
 }

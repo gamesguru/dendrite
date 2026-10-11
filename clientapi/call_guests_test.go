@@ -59,7 +59,7 @@ func TestCallGuests(t *testing.T) {
 		rsAPI.SetFederationAPI(fsAPI, nil)
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 		rsAPI.SetUserAPI(userAPI)
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, transactions.New(processCtx.Context()), nil, userAPI, nil, nil, nil, caching.DisableMetrics)
 
 		accessTokens := map[*test.User]userDevice{alice: {}, guest: {}}

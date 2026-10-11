@@ -118,7 +118,7 @@ func TestLargeStateRewriteUnrelatedRoomLatency(t *testing.T) {
 			syncRoomserverAPI: syncRoomserverAPI{rooms: []*test.Room{largeRoom, smallRoom}},
 			events:            stateByID,
 		}
-		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice, bob}}, rsAPI, caches, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice, bob}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
 		if err != nil {
 			t.Fatalf("NewSyncServerDatasource: %s", err)

@@ -9,6 +9,7 @@ package routing
 import (
 	"net/http"
 
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
@@ -36,6 +37,7 @@ func Setup(
 	lazyLoadCache caching.LazyLoadCache,
 	fts fulltext.Indexer,
 	rateLimits *httputil.RateLimits,
+	federation fclient.FederationClient,
 ) {
 	v1unstablemux := csMux.PathPrefix("/{apiversion:(?:v1|unstable)}/").Subrouter()
 	v3mux := csMux.PathPrefix("/{apiversion:(?:r0|v3)}/").Subrouter()
@@ -81,7 +83,7 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
-			return TimestampToEvent(req, device, vars["roomID"], syncDB, rsAPI)
+			return TimestampToEvent(req, device, vars["roomID"], syncDB, rsAPI, cfg, federation)
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 

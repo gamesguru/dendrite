@@ -71,7 +71,7 @@ func newStickyEnv(t *testing.T, dbType test.DBType, users ...*test.User) *sticky
 	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 	rsAPI.SetFederationAPI(nil, nil)
 	env.rsAPI = rsAPI
-	AddPublicRoutes(processCtx, env.routers, cfg, cm, &natsInstance, accountDataUserAPI{&syncUserAPI{accounts: accounts}}, rsAPI, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, env.routers, cfg, cm, &natsInstance, accountDataUserAPI{&syncUserAPI{accounts: accounts}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 	db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
 	require.NoError(t, err)

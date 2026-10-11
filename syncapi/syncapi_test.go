@@ -148,7 +148,7 @@ func testSyncAccessTokens(t *testing.T, dbType test.DBType) {
 	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 	msgs := toNATSMsgs(t, cfg, room.Events()...)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
 	testrig.MustPublishMsgs(t, jsctx, msgs...)
 
 	testCases := []struct {
@@ -248,7 +248,7 @@ func testSyncEventFormatPowerLevels(t *testing.T, dbType test.DBType) {
 	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 	msgs := toNATSMsgs(t, cfg, room.Events()...)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
 	testrig.MustPublishMsgs(t, jsctx, msgs...)
 
 	testCases := []struct {
@@ -401,7 +401,7 @@ func testSyncAPICreateRoomSyncEarly(t *testing.T, dbType test.DBType) { //nolint
 	// m.room.history_visibility
 	msgs := toNATSMsgs(t, cfg, room.Events()...)
 	sinceTokens := make([]string, len(msgs))
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
 	for i, msg := range msgs {
 		testrig.MustPublishMsgs(t, jsctx, msg)
 		time.Sleep(100 * time.Millisecond)
@@ -489,7 +489,7 @@ func testSyncAPIUpdatePresenceImmediately(t *testing.T, dbType test.DBType) {
 
 	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{}, caches, caching.DisableMetrics, nil, nil)
 	w := httptest.NewRecorder()
 	routers.Client.ServeHTTP(w, test.NewRequest(t, "GET", "/_matrix/client/v3/sync", test.WithQueryParams(map[string]string{
 		"access_token": alice.AccessToken,
@@ -617,7 +617,7 @@ func testHistoryVisibility(t *testing.T, dbType test.DBType) {
 		// Use the actual internal roomserver API
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
-		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}, rsAPI, caches, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		for _, tc := range testCases {
 			testname := fmt.Sprintf("%s - %s", tc.historyVisibility, userType)
@@ -889,7 +889,7 @@ func TestGetMembership(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil)
 
-		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}, rsAPI, caches, caching.DisableMetrics)
+		AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{aliceDev, bobDev}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -959,7 +959,7 @@ func testSendToDevice(t *testing.T, dbType test.DBType) {
 
 	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{}, caches, caching.DisableMetrics, nil, nil)
 
 	producer := producers.SyncAPIProducer{
 		TopicSendToDeviceEvent: cfg.Global.JetStream.Prefixed(jetstream.OutputSendToDeviceEvent),
@@ -1181,7 +1181,7 @@ func testContext(t *testing.T, dbType test.DBType) {
 	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 	rsAPI.SetFederationAPI(nil, nil)
 
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, rsAPI, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 	room := test.NewRoom(t, user)
 
@@ -1365,7 +1365,7 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 	rsAPI.SetFederationAPI(nil, nil)
 
 	room := test.NewRoom(t, user)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
 
 	if err := rsapi.SendEvents(processCtx.Context(), rsAPI, rsapi.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
 		t.Fatalf("failed to send events: %v", err)
