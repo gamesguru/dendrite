@@ -71,6 +71,8 @@ Zendrite advertises `org.matrix.msc4222` in `unstable_features` for clients that
 | [MSC3773](https://github.com/matrix-org/matrix-spec-proposals/pull/3773) | Notifications for threads | 1.4 | Implemented: with `unread_thread_notifications` in the timeline filter, `/sync` reports `unread_thread_notifications` per thread root and `unread_notifications` for the main timeline only |
 | [MSC2836](https://github.com/matrix-org/matrix-spec-proposals/pull/2836) | Threading (generic relationships) | N/A | Opt-in (`msc2836`) |
 | [MSC2285](https://github.com/matrix-org/matrix-spec-proposals/pull/2285) | Private read receipts | 1.4 | Implemented |
+| [MSC2174](https://github.com/matrix-org/matrix-spec-proposals/pull/2174) | Move the `redacts` property to `content` | 1.8 | Implemented: from room version 11, redactions are applied from `content.redacts` and the top-level key is ignored. Clients receive `redacts` both at the top level and in `content` in every room version |
+| [MSC4169](https://github.com/matrix-org/matrix-spec-proposals/pull/4169) | Backwards-compatible redaction sending using `/send` | 1.18 | Implemented: `PUT /send/m.room.redaction` copies `content.redacts` to the top level, so it redacts in every room version. Advertised as `com.beeper.msc4169` in `/versions` |
 
 ### Bundled aggregations
 
@@ -91,6 +93,7 @@ State events, and aggregations that arrive with events over federation, are neve
 | [MSC3083](https://github.com/matrix-org/matrix-spec-proposals/pull/3083) | Restricted rooms (space-based membership) | 1.2 | Implemented: joins distinguish uncheckable conditions (`M_UNABLE_TO_AUTHORISE_JOIN`) from a missing local authorising user (`M_UNABLE_TO_GRANT_JOIN`) |
 | [MSC2403](https://github.com/matrix-org/matrix-spec-proposals/pull/2403) | Knocking | 1.1 | Implemented: `/knock`, `make_knock` and `send_knock`, `rooms.knock` in `/sync` and knocked rooms in sliding sync. A knock is rescinded with `/leave`. Kicks and bans that end an invite or knock are also sent to the target's server when it is not in the room |
 | [MSC2367](https://github.com/matrix-org/matrix-spec-proposals/pull/2367) | Reasons in all membership events | 1.1 | Implemented: `/join`, `/leave`, `/invite`, `/kick`, `/ban`, `/unban` and `/knock` accept `reason`. A leave through another server adds the reason to the `make_leave` template |
+| [MSC3820](https://github.com/matrix-org/matrix-spec-proposals/pull/3820) | Room version 11 | 1.8 | Implemented: includes the redaction changes of MSC2174 and MSC3821 |
 | [MSC3266](https://github.com/matrix-org/matrix-spec-proposals/pull/3266) | Room summary API | 1.15 | Implemented |
 | [MSC3765](https://github.com/matrix-org/matrix-spec-proposals/pull/3765) | Rich text in room topics | 1.15 | Not implemented |
 | [MSC4267](https://github.com/matrix-org/matrix-spec-proposals/pull/4267) | Forget room on leave ([`m.forget_forced_upon_leave` capability](https://spec.matrix.org/v1.18/client-server-api/#mforget_forced_upon_leave-capability)) | 1.18 | Implemented (opt-in via [`auto_forget_on_leave`](/administration/auto-forget-on-leave/)) |

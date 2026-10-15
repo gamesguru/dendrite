@@ -109,6 +109,7 @@ func Setup(
 		"org.matrix.msc4222":            true, // MSC4222: state_after in /sync
 		"uk.tcpip.msc4133":              true, // MSC4133: custom profile fields, unstable path
 		"uk.tcpip.msc4133.stable":       true, // MSC4133: custom profile fields, v3 path
+		"com.beeper.msc4169":            true, // MSC4169: redactions through /send in every room version
 	}
 	// Configuration entries alone do not establish implementation support.
 	// Keep this list aligned with setup/mscs.EnableMSC and the discovery audit.

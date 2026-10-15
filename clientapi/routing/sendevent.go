@@ -410,6 +410,23 @@ func generateSendEvent(
 		Type:     eventType,
 		StateKey: stateKey,
 	}
+	// MSC4169: a redaction sent through /send carries the redacted event ID
+	// in content.redacts. Copy it to the top level, where room versions before
+	// v11 expect it; /redact also sets both. It gets the same permission
+	// check as /redact.
+	if eventType == spec.MRoomRedaction && stateKey == nil {
+		redacts, ok := r["redacts"].(string)
+		if !ok || redacts == "" {
+			return nil, &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON("content.redacts must be an event ID"),
+			}
+		}
+		if res := checkRedactionAllowed(ctx, rsAPI, roomID, redacts, *senderID); res != nil {
+			return nil, res
+		}
+		proto.Redacts = redacts
+	}
 	setSticky(&proto, sticky)
 	err = proto.SetContent(r)
 	if err != nil {

@@ -599,6 +599,28 @@ func TestRedaction(t *testing.T) {
 			},
 		},
 		{
+			// MSC2174: from room version 11 the redacted event ID lives only
+			// in content.redacts, as other servers send it.
+			name:         "v11 redaction with only content.redacts",
+			wantRedacted: true,
+			roomVersion:  gomatrixserverlib.RoomVersionV11,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:        spec.MRoomRedaction,
+					SenderID:    alice.ID,
+					RoomID:      room.ID,
+					Depth:       redactedEvent.Depth() + 1,
+					PrevEvents:  []any{redactedEvent.EventID()},
+					Content:     map[string]any{"redacts": redactedEvent.EventID()},
+					RoomVersion: gomatrixserverlib.RoomVersionV11,
+				})
+				require.Empty(t, gjson.GetBytes(builderEv.JSON(), "redacts").Str)
+				room.InsertEvent(t, builderEv)
+			},
+		},
+		{
 			// Sanity check the negative case in v12: a non-creator on a
 			// different server, with no power-level entry, must still be
 			// denied.

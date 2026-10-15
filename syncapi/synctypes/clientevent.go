@@ -157,6 +157,13 @@ func ToClientEvent(se gomatrixserverlib.PDU, format ClientEventFormat, userIDFor
 	if sticky := gjson.GetBytes(se.JSON(), MSC4354StickyKey); sticky.IsObject() {
 		ce.MSC4354Sticky = spec.RawJSON(sticky.Raw)
 	}
+	// MSC2174: serve the redacted event ID both at the top level and in
+	// content, whichever of the two the room version uses.
+	if se.Type() == spec.MRoomRedaction && ce.Redacts != "" && !gjson.GetBytes(ce.Content, "redacts").Exists() {
+		if content, err := sjson.SetBytes(ce.Content, "redacts", ce.Redacts); err == nil {
+			ce.Content = content
+		}
+	}
 
 	switch format {
 	case FormatAll:
