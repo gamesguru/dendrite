@@ -67,6 +67,35 @@ However, it is **not recommended** to enable open registration, as this leaves y
 It isn't possible to enable open registration in Zendrite in a single step.
 If you try to disable the `registration_disabled` option without any secondary verification methods enabled (such as reCAPTCHA), Zendrite will log an error and fail to start.
 
+## Terms of service
+
+`client_api.registration_terms` lists policy documents, such as terms of service and a privacy policy, that new users must accept ([MSC1692](https://spec.matrix.org/v1.11/client-server-api/#terms-of-service-at-registration)).
+Every registration flow then ends with the `m.login.terms` stage, and clients show the policies with a link to each.
+Clients that do not support the stage open its fallback page at `/_matrix/client/v3/auth/m.login.terms/fallback/web`.
+
+```yaml
+client_api:
+  registration_terms:
+    - id: terms_of_service
+      version: "1.2"
+      translations:
+        en:
+          name: Terms of Service
+          url: https://example.com/terms-1.2-en.html
+        fr:
+          name: Conditions d'utilisation
+          url: https://example.com/terms-1.2-fr.html
+    - id: privacy_policy
+      version: "1.2"
+      translations:
+        en:
+          name: Privacy Policy
+          url: https://example.com/privacy-1.2-en.html
+```
+
+The `id` and `version` use the spec's opaque identifier grammar (letters, digits, `.`, `_`, `~` and `-`), and each URL must use `http` or `https`.
+Zendrite does not record which version a user accepted.
+
 ## Call guests
 
 Call guests let people without a Matrix account join calls on your homeserver by link, while normal registration stays closed.

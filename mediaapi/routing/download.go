@@ -29,6 +29,7 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
@@ -55,11 +56,13 @@ type downloadRequest struct {
 	MediaMetadata      *types.MediaMetadata
 	IsThumbnailRequest bool
 	ThumbnailSize      types.ThumbnailSize
-	Logger             *log.Entry
-	DownloadFilename   string
-	multipartResponse  bool // whether we need to return a multipart/mixed response (for requests coming in over federation)
-	fedClient          fclient.FederationClient
-	origin             spec.ServerName
+	// Animated is the animated parameter of a thumbnail request (MSC2705).
+	Animated          bool
+	Logger            *log.Entry
+	DownloadFilename  string
+	multipartResponse bool // whether we need to return a multipart/mixed response (for requests coming in over federation)
+	fedClient         fclient.FederationClient
+	origin            spec.ServerName
 	// pendingTimeout is how long to wait for media created with POST /create
 	// to be uploaded (timeout_ms).
 	pendingTimeout time.Duration
@@ -159,6 +162,7 @@ func Download(
 			Height:       height,
 			ResizeMethod: strings.ToLower(req.FormValue("method")),
 		}
+		dReq.Animated = req.FormValue("animated") == "true"
 		dReq.Logger.WithFields(log.Fields{
 			"RequestedWidth":        dReq.ThumbnailSize.Width,
 			"RequestedHeight":       dReq.ThumbnailSize.Height,
@@ -184,6 +188,10 @@ func Download(
 				Code: http.StatusGatewayTimeout,
 				JSON: spec.MatrixError{ErrCode: "M_NOT_YET_UPLOADED", Err: "Content has not yet been uploaded"},
 			})
+			return
+		}
+		if errors.Is(err, errThumbnailBusy) {
+			dReq.jsonErrorResponse(w, httputil.LimitExceededResponse("Too many thumbnails are being generated", time.Second))
 			return
 		}
 		// If the file is not found, don't send the details to the client, be more generic.
@@ -226,6 +234,9 @@ func (r *downloadRequest) jsonErrorResponse(w http.ResponseWriter, res util.JSON
 		}
 	}
 
+	for name, value := range res.Headers {
+		w.Header().Set(name, value)
+	}
 	// Set status code and write the body
 	w.WriteHeader(res.Code)
 	r.Logger.WithField("code", res.Code).Tracef("Responding (%d bytes)", len(resBytes))
@@ -376,12 +387,32 @@ func (r *downloadRequest) respondFromStore(
 	var responseFile io.ReadCloser
 	var responseMetadata *types.MediaMetadata
 	if r.IsThumbnailRequest {
-		thumbFile, thumbMetadata, resErr := r.getThumbnailFile(
-			ctx, r.MediaMetadata.Base64Hash, activeThumbnailGeneration, maxThumbnailGenerators,
-			db, dynamicThumbnails, thumbnailSizes, fileStore,
-		)
+		var thumbFile io.ReadCloser
+		var thumbMetadata *types.ThumbnailMetadata
+		// An animated image that fits the requested size answers a request
+		// for an animated thumbnail itself (MSC2705).
+		servesOriginal, resErr := r.animatedOriginalFits(ctx, fileStore)
 		if resErr != nil {
 			return nil, resErr
+		}
+		if !servesOriginal {
+			thumbFile, thumbMetadata, resErr = r.getThumbnailFile(
+				ctx, r.MediaMetadata.Base64Hash, activeThumbnailGeneration, maxThumbnailGenerators,
+				db, dynamicThumbnails, thumbnailSizes, fileStore,
+			)
+			if resErr != nil {
+				return nil, resErr
+			}
+		}
+		if thumbFile == nil && !servesOriginal && !r.Animated {
+			// An animated original must not answer a thumbnail request that
+			// did not ask for animation, so serve a still rendition (MSC2705).
+			thumbFile, thumbMetadata, resErr = r.getStaticThumbnailFile(
+				ctx, activeThumbnailGeneration, maxThumbnailGenerators, db, fileStore,
+			)
+			if resErr != nil {
+				return nil, resErr
+			}
 		}
 		if thumbFile == nil {
 			r.Logger.WithFields(log.Fields{
@@ -629,6 +660,82 @@ func (r *downloadRequest) getThumbnailFile(
 		} else {
 			return nil, nil, fmt.Errorf("fileStore.OpenThumbnail: %w", err)
 		}
+	}
+	if thumbSize != thumbnail.MediaMetadata.FileSizeBytes {
+		thumbFile.Close()
+		return nil, nil, errors.New("thumbnail file sizes in store and in database differ")
+	}
+	return thumbFile, thumbnail, nil
+}
+
+// animatedOriginalFits reports whether the request asks for an animated
+// thumbnail of an animated image no larger than the requested size.
+func (r *downloadRequest) animatedOriginalFits(ctx context.Context, fileStore filestore.FileStore) (bool, error) {
+	if !r.Animated {
+		return false, nil
+	}
+	animated, width, height, err := r.animatedOriginal(ctx, fileStore)
+	if err != nil {
+		return false, err
+	}
+	return animated && width <= r.ThumbnailSize.Width && height <= r.ThumbnailSize.Height, nil
+}
+
+// animatedOriginal reports whether the original file is an animated image,
+// and its size if so.
+func (r *downloadRequest) animatedOriginal(ctx context.Context, fileStore filestore.FileStore) (animated bool, width, height int, err error) {
+	if !thumbnailer.MayAnimate(string(r.MediaMetadata.ContentType)) {
+		return false, 0, 0, nil
+	}
+	file, _, err := fileStore.Open(ctx, r.MediaMetadata.Base64Hash)
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("fileStore.Open: %w", err)
+	}
+	defer file.Close()
+	animated, width, height = thumbnailer.AnimatedImage(file)
+	return animated, width, height, nil
+}
+
+// errThumbnailBusy reports that a still thumbnail of an animated image could
+// not be generated because too many thumbnails are being generated.
+var errThumbnailBusy = errors.New("too many thumbnails are being generated")
+
+// getStaticThumbnailFile returns a still rendition of the original file at its
+// own size if the original is animated, or nil if it is not.
+func (r *downloadRequest) getStaticThumbnailFile(
+	ctx context.Context,
+	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	maxThumbnailGenerators int,
+	db storage.Database,
+	fileStore filestore.FileStore,
+) (io.ReadCloser, *types.ThumbnailMetadata, error) {
+	animated, _, _, err := r.animatedOriginal(ctx, fileStore)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !animated {
+		return nil, nil, nil
+	}
+	size, busy, err := thumbnailer.GenerateStaticThumbnail(
+		ctx, r.MediaMetadata.Base64Hash, r.MediaMetadata,
+		activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("thumbnailer.GenerateStaticThumbnail: %w", err)
+	}
+	if busy {
+		return nil, nil, errThumbnailBusy
+	}
+	thumbnail, err := db.GetThumbnail(ctx, r.MediaMetadata.MediaID, r.MediaMetadata.Origin, size.Width, size.Height, size.ResizeMethod)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db.GetThumbnail: %w", err)
+	}
+	if thumbnail == nil {
+		return nil, nil, errors.New("static thumbnail was not stored")
+	}
+	thumbFile, thumbSize, err := fileStore.OpenThumbnail(ctx, r.MediaMetadata.Base64Hash, size)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fileStore.OpenThumbnail: %w", err)
 	}
 	if thumbSize != thumbnail.MediaMetadata.FileSizeBytes {
 		thumbFile.Close()

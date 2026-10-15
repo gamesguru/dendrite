@@ -236,6 +236,16 @@ client_api:
   # of whether registration is otherwise disabled.
   registration_shared_secret: ''
 
+  # Policy documents new users must accept when registering (MSC1692). Each
+  # needs an id, a version and at least one translation with a name and URL.
+  registration_terms:
+  #  - id: terms_of_service
+  #    version: "1.0"
+  #    translations:
+  #      en:
+  #        name: Terms of Service
+  #        url: https://example.com/terms-1.0.html
+
   # Identity server used for email verification when clients such as Element omit id_server.
   # Set a hostname (without https://) listed in global.trusted_third_party_id_servers.
   # Zendrite uses the identity service API v2 and registers with this server as the
@@ -472,6 +482,16 @@ media_api:
     max_pending_per_user: 10
     # The longest a download of not yet uploaded media waits (caps timeout_ms).
     max_download_wait: 60s
+
+  # URL previews (GET /_matrix/client/v1/media/preview_url). Disabled by
+  # default, as they make the server fetch URLs for its users. Only public
+  # addresses are fetched unless ip_range_whitelist allows more.
+  url_preview:
+    enabled: false
+    # ip_range_whitelist: ["10.20.0.0/16"]
+    # ip_range_blacklist: ["203.0.113.0/24"]
+    max_page_size_bytes: 10485760
+    cache_duration: 1h
 
 # Configuration for enabling experimental MSCs on this homeserver.
 mscs:

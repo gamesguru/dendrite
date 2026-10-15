@@ -22,6 +22,16 @@ type HeaderedEvent struct {
 	// 		It really should be the userKey instead.
 	UserID           spec.UserID
 	StateKeyResolved *string
+	// MembershipForRequester is the requesting user's membership at the
+	// event, served as unsigned.membership (MSC4115). The sync API sets it
+	// on copies of events it returns; it is never stored.
+	MembershipForRequester string
+}
+
+// RequesterMembership returns the requesting user's membership at the event,
+// or "" if it is not known.
+func (h *HeaderedEvent) RequesterMembership() string {
+	return h.MembershipForRequester
 }
 
 func (h *HeaderedEvent) CacheCost() int {

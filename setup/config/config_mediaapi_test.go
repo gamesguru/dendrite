@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,4 +39,22 @@ async_uploads:
 	c.AsyncUploads.MaxPendingPerUser = -1
 	c.Verify(&errs)
 	require.Len(t, errs, 1)
+}
+
+func TestURLPreviewConfig(t *testing.T) {
+	t.Parallel()
+	var c MediaAPI
+	c.Defaults(DefaultOpts{})
+	assert.False(t, c.URLPreview.Enabled, "URL previews are opt-in")
+	assert.Equal(t, DefaultURLPreviewMaxPageSizeBytes, c.URLPreview.MaxPageSize())
+	assert.Equal(t, DefaultURLPreviewCacheDuration, c.URLPreview.CacheTTL())
+
+	c.URLPreview.IPRangeWhitelist = []string{"10.0.0.0/8", "fd00::/8"}
+	c.URLPreview.IPRangeBlacklist = []string{"10.1.0.0/16"}
+	_, _, err := c.URLPreview.IPRanges()
+	assert.NoError(t, err)
+
+	c.URLPreview.IPRangeBlacklist = []string{"10.1.0.0"}
+	_, _, err = c.URLPreview.IPRanges()
+	assert.ErrorContains(t, err, "media_api.url_preview.ip_range_blacklist[0]")
 }

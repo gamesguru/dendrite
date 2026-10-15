@@ -325,6 +325,15 @@ func (config *Zendrite) Derive() error {
 		}
 	}
 
+	// MSC1692: every flow ends with accepting the registration terms.
+	if len(config.ClientAPI.RegistrationTerms) > 0 {
+		for i := range config.Derived.Registration.Flows {
+			flow := &config.Derived.Registration.Flows[i]
+			flow.Stages = append(flow.Stages, authtypes.LoginTypeTerms)
+		}
+		config.Derived.Registration.Params[authtypes.LoginTypeTerms] = RegistrationTermsParams(config.ClientAPI.RegistrationTerms)
+	}
+
 	// Load application service configuration files
 	if err := loadAppServices(&config.AppServiceAPI, &config.Derived); err != nil {
 		return err

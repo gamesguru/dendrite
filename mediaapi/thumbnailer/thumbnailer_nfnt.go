@@ -62,7 +62,7 @@ func GenerateThumbnails(
 		// Note: createThumbnail does locking based on activeThumbnailGeneration
 		busy, err = createThumbnail(
 			ctx, mediaHash, img, types.ThumbnailSize(singleConfig), mediaMetadata,
-			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, logger,
+			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, logger, false,
 		)
 		if err != nil {
 			logger.WithError(err).WithField("mediaHash", mediaHash).Error("Failed to generate thumbnails")
@@ -104,7 +104,7 @@ func GenerateThumbnail(
 	// Note: createThumbnail does locking based on activeThumbnailGeneration
 	busy, err = createThumbnail(
 		ctx, mediaHash, img, config, mediaMetadata, activeThumbnailGeneration,
-		maxThumbnailGenerators, fileStore, db, logger,
+		maxThumbnailGenerators, fileStore, db, logger, false,
 	)
 	if err != nil {
 		logger.WithError(err).WithFields(log.Fields{
@@ -116,6 +116,36 @@ func GenerateThumbnail(
 		return true, nil
 	}
 	return false, nil
+}
+
+// GenerateStaticThumbnail stores a still rendition of the source file at its
+// own size, for thumbnail requests of an animated image that the image would
+// otherwise answer itself (MSC2705). It returns the size it was stored under.
+func GenerateStaticThumbnail(
+	ctx context.Context,
+	mediaHash types.Base64Hash,
+	mediaMetadata *types.MediaMetadata,
+	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	maxThumbnailGenerators int,
+	fileStore filestore.FileStore,
+	db storage.Database,
+	logger *log.Entry,
+) (size types.ThumbnailSize, busy bool, errorReturn error) {
+	localPath, cleanup, err := fileStore.LocalPath(ctx, mediaHash)
+	if err != nil {
+		return size, false, err
+	}
+	defer cleanup()
+	img, err := readFile(localPath)
+	if err != nil {
+		return size, false, err
+	}
+	size = types.ThumbnailSize{Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), ResizeMethod: types.Scale}
+	busy, err = createThumbnail(
+		ctx, mediaHash, img, size, mediaMetadata, activeThumbnailGeneration,
+		maxThumbnailGenerators, fileStore, db, logger, true,
+	)
+	return size, busy, err
 }
 
 func readFile(src string) (image.Image, error) {
@@ -189,6 +219,7 @@ func createThumbnail(
 	fileStore filestore.FileStore,
 	db storage.Database,
 	logger *log.Entry,
+	fullSize bool,
 ) (busy bool, errorReturn error) {
 	logger = logger.WithFields(log.Fields{
 		"Width":        config.Width,
@@ -197,7 +228,7 @@ func createThumbnail(
 	})
 
 	// Check if request is larger than original
-	if config.Width >= img.Bounds().Dx() && config.Height >= img.Bounds().Dy() {
+	if !fullSize && config.Width >= img.Bounds().Dx() && config.Height >= img.Bounds().Dy() {
 		return false, nil
 	}
 

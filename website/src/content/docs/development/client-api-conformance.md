@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.10`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.11`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3` to `v1.10` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.11` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.11` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.12` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -16,7 +16,7 @@ Room versions returned by `/capabilities` are a separate namespace and must not 
 
 ## Scope and evidence
 
-This is a source-level audit of the next candidate versions, v1.3 through v1.10, with targeted checks of later features that could otherwise motivate raising the ceiling.
+This is a source-level audit of the next candidate versions, v1.3 through v1.11, with targeted checks of later features that could otherwise motivate raising the ceiling.
 It compares the release requirements with routing, handler behavior, storage, and existing tests in this repository.
 It does not claim an exhaustive behavioral certification through v1.19 or a fresh Sytest/Complement pass.
 A registered route establishes reachability only; authorization, pagination, response shape, and configuration dependence require separate evidence.
@@ -119,11 +119,24 @@ The [v1.10 changes](https://spec.matrix.org/v1.10/changelog/) add support discov
 | `Retry-After` (MSC4041) | `internal/httputil/rate_limiting.go` sets `Retry-After` next to `retry_after_ms`. | Implemented. |
 | Application service login without a valid `as_token` | `clientapi/auth/login_application_service.go` requires an application service token. | Implemented. |
 
-### v1.11 and later candidates
+### v1.11
+
+The [v1.11 changes](https://spec.matrix.org/v1.11/changelog/) add authenticated media with URL previews, animated thumbnails, terms of service at registration, membership metadata on events, and cross-signing uploads without UIA.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Authenticated media (MSC3916) | `mediaapi/routing/routing.go` serves the `/_matrix/client/v1/media/*` and `/_matrix/federation/v1/media/*` routes; `mediaapi/routing/url_preview.go` serves `preview_url` when `media_api.url_preview.enabled` is set, and `url_preview_test.go` covers OpenGraph parsing, images, caching and address blocking. | Implemented; previews are opt-in, as in Synapse. |
+| Animated thumbnails (MSC2705) | `mediaapi/routing/download.go` never answers a thumbnail request without `animated=true` with an animated image; `animated_thumbnail_test.go` and `thumbnailer/animated_test.go` cover GIF, APNG and WebP. | Implemented. |
+| Terms of service (MSC1692) | `client_api.registration_terms` adds `m.login.terms` to every registration flow, and `auth_fallback.go` serves its fallback page; `register_terms_test.go` covers both. | Implemented; optional. |
+| Membership on events (MSC4115) | `ApplyHistoryVisibilityFilter` records the requesting user's membership at each event, which `synctypes.ToClientEvent` serves as `unsigned.membership`; `membership_annotation_test.go` covers `/sync`, `/messages` and `/event`. | Implemented. |
+| Cross-signing without UIA (MSC3967) | `clientapi/routing/key_crosssigning.go` only asks for UIA when a master key exists and the upload changes the keys. | Implemented. |
+| Optional access token on `/account/password` and `/account/deactivate` | Both require an access token, which the spec allows: the server may offer different flows depending on whether a token is given. Password reset by email is not offered. | Compliant. |
+| Application services and `sender_localpart` | `setup/config/config_appservice.go` adds the `sender_localpart` user to the service's exclusive user namespaces, so events concerning it are delivered. | Implemented. |
+
+### v1.12 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |
 | [v1.15 room summaries](https://spec.matrix.org/v1.15/client-server-api/#room-summaries) | `/v1/room_summary/{roomIDOrAlias}` calls `GetRoomSummary`; `room_summary_test.go` tests access, response shape, and caching. | Selected feature implemented, not full v1.15 certification. |
 | [v1.19](https://spec.matrix.org/v1.19/client-server-api/) | Earlier mandatory behavior remains unresolved; no full audit of intervening releases has established conformance. | Do not advertise the latest version based on route counts. |
 

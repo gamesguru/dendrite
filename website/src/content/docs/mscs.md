@@ -104,6 +104,7 @@ State events, and aggregations that arrive with events over federation, are neve
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC3231](https://github.com/matrix-org/matrix-spec-proposals/pull/3231) | Token authenticated registration | 1.2 | Implemented: registration tokens and the rate-limited, unauthenticated `/v1/register/m.login.registration_token/validity` check |
+| [MSC1692](https://github.com/matrix-org/matrix-spec-proposals/pull/1692) | Terms of service at registration | 1.11 | Implemented (opt-in): with `client_api.registration_terms`, every registration flow ends with `m.login.terms`, whose params list the policies. The stage also has a fallback page at `/_matrix/client/v3/auth/m.login.terms/fallback/web` |
 
 ## Accounts
 
@@ -150,6 +151,7 @@ Deactivating an account removes its custom fields.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC2246](https://github.com/matrix-org/matrix-spec-proposals/pull/2246) | Asynchronous media uploads | 1.7 | Implemented: see [asynchronous uploads](#asynchronous-uploads) |
+| [MSC2705](https://github.com/matrix-org/matrix-spec-proposals/pull/2705) | Animated thumbnails | 1.11 | Implemented: without `animated=true`, thumbnails are never animated; an animated GIF, APNG or WebP that would answer the request itself is replaced by a still JPEG rendition. With `animated=true`, an animated image no larger than the requested size is served as it is, and larger ones get a still thumbnail, which the spec allows |
 | [MSC3860](https://github.com/matrix-org/matrix-spec-proposals/pull/3860) | Media download redirects | 1.7 | Implemented: `allow_redirect` is accepted, and Zendrite always serves media itself, which the spec allows. When a remote server answers a federation media request with a `Location` instead of the media, Zendrite fetches it from there, following up to five more redirects, and only from public addresses |
 
 ### Asynchronous uploads
@@ -164,15 +166,26 @@ A download waiting on one replica sees an upload completed on another within hal
 Expired reservations are deleted every hour.
 When a remote server answers 504 for its own media, the client gets 504 `M_NOT_YET_UPLOADED` too, and nothing is cached.
 
+### URL previews
+
+`GET /_matrix/client/v1/media/preview_url` (and the deprecated `/_matrix/media/v3/preview_url`) is opt-in with `media_api.url_preview.enabled`, as in Synapse, since it makes the server fetch URLs for its users; disabled, it answers 404 `M_UNRECOGNIZED`.
+For an HTML page it returns the `og:` properties of the page's head, falling back to `<title>` and the `description` meta tag.
+`og:image` is downloaded and stored as local media, and the preview carries its `mxc://` URI with `matrix:image:size`, `og:image:type`, `og:image:width` and `og:image:height`; a URL that points at an image gets the same fields for the image itself.
+
+Only public addresses are fetched: loopback, private, link-local, carrier-grade NAT and similar addresses are refused with 403 `M_FORBIDDEN`, also after redirects (at most five) and DNS changes, because the check applies to the address being connected to.
+`ip_range_whitelist` allows non-public ranges such as an internal wiki, and `ip_range_blacklist` refuses more ranges and takes precedence.
+Pages are read up to `max_page_size_bytes` (default 10 MiB) and images up to `max_file_size_bytes`; a failed fetch returns 502.
+Previews are cached in memory per URL for `cache_duration` (default `1h`), concurrent requests for the same URL share one fetch, and `ts` is ignored, which the spec allows.
+
 ## Encryption & Security
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC1219](https://github.com/matrix-org/matrix-spec-proposals/pull/1219) | Server-side key backup | 1.1 | Implemented: backup versions, and uploading, fetching and deleting keys for a version, a room or a session |
-| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented, except URL previews. A `Location` in a remote multipart response is followed, see [MSC3860](#media) |
+| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented, including [URL previews](#url-previews). A `Location` in a remote multipart response is followed, see [MSC3860](#media) |
 | [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | 1.2 | Implemented: ordinary and dehydrated devices upload reusable fallback keys; claims mark them used and sync reports unused algorithms |
 | [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | N/A | Opt-in (`msc3814`) |
-| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Implemented in sync; no opt-in required |
+| [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Implemented: `unsigned.membership` is the requesting user's membership at each event, including the change made by the user's own membership events, wherever events pass the history visibility filter (sync timelines, `/messages`, `/context`, `/event`, `/relations`, threads). Events without a known membership, such as the `state` section of `/sync`, carry none, which the spec allows |
 
 ## Federation
 

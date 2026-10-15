@@ -755,8 +755,12 @@ func handleRegistrationFlow(
 	}
 
 	registrationEnabled := registrationEnabledFor(cfg, r.ServerName)
+	// While registration is closed, a registration token still lets a user
+	// register; the terms stage is only accepted once the token is redeemed.
+	tokenRedeemed := slices.Contains(sessions.getCompletedStages(sessionID), authtypes.LoginTypeRegistrationToken)
 	if !registrationEnabled && !callGuestRegistration(cfg, r.ServerName) &&
-		r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken {
+		r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken &&
+		(r.Auth.Type != authtypes.LoginTypeTerms || !tokenRedeemed) {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(
@@ -824,6 +828,16 @@ func handleRegistrationFlow(
 			return resp
 		}
 		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeRegistrationToken)
+
+	case authtypes.LoginTypeTerms:
+		// Submitting the stage accepts every policy in its params (MSC1692).
+		if len(cfg.RegistrationTerms) == 0 {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.Unknown("This server has no registration terms"),
+			}
+		}
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeTerms)
 
 	case "":
 		// An empty auth type means that we want to fetch the available

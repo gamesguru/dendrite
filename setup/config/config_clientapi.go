@@ -22,6 +22,11 @@ type ClientAPI struct {
 	// command line parameter as it is not recommended.
 	OpenRegistrationWithoutVerificationEnabled bool `yaml:"-"`
 
+	// RegistrationTerms are policy documents, such as terms of service and
+	// a privacy policy, that new users must accept (MSC1692). Each one adds
+	// the m.login.terms stage to every registration flow.
+	RegistrationTerms []RegistrationPolicy `yaml:"registration_terms,omitempty"`
+
 	// If set, allows registration by anyone who also has the shared
 	// secret, even if registration is otherwise disabled.
 	RegistrationSharedSecret string `yaml:"registration_shared_secret"`
@@ -113,6 +118,7 @@ func (c *ClientAPI) Defaults(opts DefaultOpts) {
 }
 
 func (c *ClientAPI) Verify(configErrs *ConfigErrors) {
+	verifyRegistrationTerms(configErrs, c.RegistrationTerms)
 	if c.EmailValidationServer != "" {
 		trusted := false
 		if c.Matrix != nil {

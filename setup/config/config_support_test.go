@@ -65,3 +65,40 @@ support:
 		SupportPage: "https://example.org/support",
 	}, global.Support)
 }
+
+func TestRegistrationTermsVerify(t *testing.T) {
+	t.Parallel()
+	valid := RegistrationPolicy{ID: "tos", Version: "1.0", Translations: map[string]PolicyTranslation{"en": {Name: "Terms", URL: "https://example.org/tos"}}}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(p *RegistrationPolicy)
+		twice   bool
+		wantErr int
+	}{
+		{name: "valid", mutate: func(*RegistrationPolicy) {}},
+		{name: "duplicate id", mutate: func(*RegistrationPolicy) {}, twice: true, wantErr: 1},
+		{name: "bad id", mutate: func(p *RegistrationPolicy) { p.ID = "terms of service" }, wantErr: 1},
+		{name: "missing version", mutate: func(p *RegistrationPolicy) { p.Version = "" }, wantErr: 1},
+		{name: "no translations", mutate: func(p *RegistrationPolicy) { p.Translations = nil }, wantErr: 1},
+		{name: "reserved language", mutate: func(p *RegistrationPolicy) {
+			p.Translations = map[string]PolicyTranslation{"version": {Name: "x", URL: "https://example.org"}}
+		}, wantErr: 1},
+		{name: "missing name and bad url", mutate: func(p *RegistrationPolicy) {
+			p.Translations = map[string]PolicyTranslation{"en": {URL: "ftp://example.org"}}
+		}, wantErr: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			policy := valid
+			policy.Translations = map[string]PolicyTranslation{"en": valid.Translations["en"]}
+			tc.mutate(&policy)
+			policies := []RegistrationPolicy{policy}
+			if tc.twice {
+				policies = append(policies, policy)
+			}
+			var errs ConfigErrors
+			verifyRegistrationTerms(&errs, policies)
+			assert.Len(t, errs, tc.wantErr, errs)
+		})
+	}
+}

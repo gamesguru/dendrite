@@ -165,6 +165,16 @@ func ToClientEvent(se gomatrixserverlib.PDU, format ClientEventFormat, userIDFor
 		}
 	}
 
+	// MSC4115: the history visibility filter records the requesting user's
+	// membership at each event it lets through.
+	if m, ok := se.(interface{ RequesterMembership() string }); ok {
+		if membership := m.RequesterMembership(); membership != "" {
+			if err := AnnotateEventWithMembership(&ce, membership, true); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	switch format {
 	case FormatAll:
 		ce.RoomID = se.RoomID().String()

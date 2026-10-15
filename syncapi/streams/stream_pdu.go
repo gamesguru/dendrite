@@ -603,14 +603,6 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
 
-		// MSC4115: Add membership metadata to events (stable feature, enabled by default)
-		if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, "join", true); err != nil {
-			logrus.WithError(err).Warn("Failed to annotate incremental timeline events with membership")
-		}
-		if err := synctypes.AnnotateEventsWithMembership(jr.State.Events, "join", true); err != nil {
-			logrus.WithError(err).Warn("Failed to annotate incremental state events with membership")
-		}
-
 		req.Response.Rooms.Join[delta.RoomID] = jr
 
 	case spec.Peek:
@@ -656,18 +648,6 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		lr.State.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(delta.StateEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
-
-		// MSC4115: Annotate with appropriate membership ("leave" or "ban")
-		membership := "leave"
-		if delta.Membership == spec.Ban {
-			membership = "ban"
-		}
-		if err := synctypes.AnnotateEventsWithMembership(lr.Timeline.Events, membership, true); err != nil {
-			logrus.WithError(err).Warn("Failed to annotate leave/ban timeline events with membership")
-		}
-		if err := synctypes.AnnotateEventsWithMembership(lr.State.Events, membership, true); err != nil {
-			logrus.WithError(err).Warn("Failed to annotate leave/ban state events with membership")
-		}
 
 		req.Response.Rooms.Leave[delta.RoomID] = lr
 	}
@@ -862,16 +842,13 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 
-	// MSC4115: Add membership metadata to events
-	// TODO: Add config check for MSC enablement (currently enabled by default as it's stable)
-	// For joined rooms, annotate all events with "join" membership
-	// This is a simplified implementation - a full implementation would look up
-	// historical membership for each event, but this covers the common case
-	if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, "join", true); err != nil {
-		logrus.WithError(err).Warn("Failed to annotate timeline events with membership")
-	}
-	if err := synctypes.AnnotateEventsWithMembership(jr.State.Events, "join", true); err != nil {
-		logrus.WithError(err).Warn("Failed to annotate state events with membership")
+	// MSC4115: the history visibility filter annotates timeline events with
+	// the user's membership at each event. Peeked timelines skip the filter;
+	// the peeking user is not a member.
+	if isPeek {
+		if err := synctypes.AnnotateEventsWithMembership(jr.Timeline.Events, spec.Leave, true); err != nil {
+			logrus.WithError(err).Warn("Failed to annotate peek timeline events with membership")
+		}
 	}
 
 	return jr, nil

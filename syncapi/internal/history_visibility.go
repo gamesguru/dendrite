@@ -139,7 +139,7 @@ func ApplyHistoryVisibilityFilter(
 	if err != nil {
 		return nil, err
 	}
-	visibilities := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
+	visibilities, membershipKnown := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
 
 	// MSC4354: joined users see unexpired sticky events whatever the history
 	// visibility. Sync v2 and sliding sync timelines keep the usual rules, as
@@ -215,6 +215,9 @@ func ApplyHistoryVisibilityFilter(
 	if err = redactErasedSenders(ctx, rsAPI, eventsFiltered, nonMemberIdx); err != nil {
 		return nil, err
 	}
+	if membershipKnown {
+		annotateRequesterMembership(eventsFiltered, visibilities, senderID)
+	}
 	calculateHistoryVisibilityDuration.With(prometheus.Labels{"api": endpoint}).Observe(float64(time.Since(start).Milliseconds()))
 	return eventsFiltered, nil
 }
@@ -263,21 +266,45 @@ func redactErasedSenders(
 	return nil
 }
 
+// annotateRequesterMembership replaces the events with copies that carry the
+// requesting user's membership at each event, which clients receive as
+// unsigned.membership (MSC4115). The membership includes the change made by
+// the event itself, so the user's own membership events carry their own
+// membership. Copies keep events shared through caches unchanged.
+func annotateRequesterMembership(events []*types.HeaderedEvent, visibilities map[string]eventVisibility, senderID *spec.SenderID) {
+	for i, ev := range events {
+		membership := spec.Leave
+		if vis, ok := visibilities[ev.EventID()]; ok {
+			membership = vis.membershipAtEvent
+		}
+		if senderID != nil && ev.Type() == spec.MRoomMember && ev.StateKeyEquals(string(*senderID)) {
+			if own, err := ev.Membership(); err == nil {
+				membership = own
+			}
+		}
+		copied := *ev
+		copied.MembershipForRequester = membership
+		events[i] = &copied
+	}
+}
+
 // visibilityForEvents returns a map from eventID to eventVisibility containing the visibility and the membership
-// of `senderID` at the given event. If provided sender ID is nil, assume that membership is Leave
-// Returns an error if the roomserver can't calculate the memberships.
+// of `senderID` at the given event. If provided sender ID is nil, assume that membership is Leave.
+// MembershipKnown is false if the roomserver could not calculate the memberships, which then
+// default to leave.
 func visibilityForEvents(
 	ctx context.Context,
 	rsAPI api.SyncRoomserverAPI,
 	events []*types.HeaderedEvent,
 	senderID *spec.SenderID, roomID spec.RoomID,
-) map[string]eventVisibility {
+) (result map[string]eventVisibility, membershipKnown bool) {
 	eventIDs := make([]string, len(events))
 	for i := range events {
 		eventIDs[i] = events[i].EventID()
 	}
 
-	result := make(map[string]eventVisibility, len(eventIDs))
+	result = make(map[string]eventVisibility, len(eventIDs))
+	membershipKnown = true
 
 	// get the membership events for all eventIDs
 	var err error
@@ -285,6 +312,7 @@ func visibilityForEvents(
 	if senderID != nil {
 		membershipEvents, err = rsAPI.QueryMembershipAtEvent(ctx, roomID, eventIDs, *senderID)
 		if err != nil {
+			membershipKnown = false
 			logrus.WithError(err).Error("visibilityForEvents: failed to fetch membership at event, defaulting to 'leave'")
 		}
 	}
@@ -311,7 +339,7 @@ func visibilityForEvents(
 
 		result[eventID] = vis
 	}
-	return result
+	return result, membershipKnown
 }
 
 // ApplyTimelineHistoryVisibilityFilter applies the history visibility filter
