@@ -84,7 +84,7 @@ func SendEvent(
 	}
 	if txnID != nil {
 		// Try to fetch response from transactionsCache
-		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -104,7 +104,7 @@ func SendEvent(
 	// Concurrent retries may have all missed the cache before waiting for the
 	// room lock. Recheck after acquiring it, before creating another event.
 	if txnID != nil {
-		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -153,7 +153,7 @@ func SendEvent(
 	}
 	// Add response to transactionsCache
 	if txnID != nil {
-		txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
+		txnCache.AddTransaction(device, *txnID, req.URL, &res)
 	}
 	return res
 }
@@ -249,6 +249,11 @@ func sendEventContent(
 	e, resErr := generateSendEvent(ctx, r, device, roomID, eventType, stateKey, sticky, rsAPI, evTime)
 	if resErr != nil {
 		return "", resErr
+	}
+	if stateKey == nil {
+		if resErr = validateAnnotation(ctx, rsAPI, e, txnAndSessionID); resErr != nil {
+			return "", resErr
+		}
 	}
 	timeToGenerateEvent := time.Since(startedGeneratingEvent)
 
@@ -584,6 +589,32 @@ func validateThreadRelation(ctx context.Context, rsAPI api.ClientRoomserverAPI, 
 				Code: http.StatusBadRequest,
 				JSON: spec.Unknown("Cannot start a thread from an event with a relation"),
 			}
+		}
+	}
+	return nil
+}
+
+// validateAnnotation rejects an annotation that the sender has already made
+// with the same event type and key on the same event and not redacted, as
+// the spec asks of servers (MSC2677). The send lock for the sender and room
+// is held, so the sender cannot race this check with another request. A
+// retry of the transaction that produced the annotation is not rejected, so
+// that it is answered with the original event even after an HA takeover.
+func validateAnnotation(ctx context.Context, rsAPI api.ClientRoomserverAPI, e gomatrixserverlib.PDU, txnID *api.TransactionID) *util.JSONResponse {
+	relation := gjson.GetBytes(e.Content(), `m\.relates_to`)
+	targetID, key := relation.Get("event_id"), relation.Get("key")
+	if relation.Get("rel_type").Str != "m.annotation" || targetID.Type != gjson.String || key.Type != gjson.String {
+		return nil
+	}
+	exists, err := rsAPI.QueryAnnotationExists(ctx, e.RoomID().String(), targetID.Str, e.SenderID(), e.Type(), key.Str, txnID)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("rsAPI.QueryAnnotationExists failed")
+		return &util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	if exists {
+		return &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MatrixError{ErrCode: "M_DUPLICATE_ANNOTATION", Err: "Cannot send the same annotation twice"},
 		}
 	}
 	return nil

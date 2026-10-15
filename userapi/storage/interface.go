@@ -143,7 +143,9 @@ type LoginToken interface {
 	CreateLoginToken(ctx context.Context, data *api.LoginTokenData) (*api.LoginTokenMetadata, error)
 
 	// RemoveLoginToken removes the named token (and may clean up other expired tokens).
-	RemoveLoginToken(ctx context.Context, token string) error
+	// It reports whether the token existed and had not expired, which is true for
+	// only one of several concurrent callers.
+	RemoveLoginToken(ctx context.Context, token string) (bool, error)
 
 	// GetLoginTokenDataByToken returns the data associated with the given token.
 	// May return sql.ErrNoRows.

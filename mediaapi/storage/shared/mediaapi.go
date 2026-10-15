@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
@@ -49,6 +50,41 @@ func (d *Database) DeleteMediaMetadata(ctx context.Context, mediaID types.MediaI
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.MediaRepository.DeleteMedia(ctx, txn, mediaID, mediaOrigin)
 	})
+}
+
+// StorePendingMedia reserves a media ID created with POST /create, as long as
+// the user holds fewer than maxPending unexpired pending media IDs.
+func (d *Database) StorePendingMedia(ctx context.Context, mediaMetadata *types.MediaMetadata, maxPending int) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		count, err := d.MediaRepository.CountPendingMedia(ctx, txn, mediaMetadata.UserID, spec.AsTimestamp(time.Now()))
+		if err != nil {
+			return err
+		}
+		if count >= int64(maxPending) {
+			return types.ErrTooManyPendingUploads
+		}
+		return d.MediaRepository.InsertMedia(ctx, txn, mediaMetadata)
+	})
+}
+
+// CompletePendingMedia stores the content metadata of an upload to a pending
+// media ID. Only the first upload before the reservation expires succeeds.
+func (d *Database) CompletePendingMedia(ctx context.Context, mediaMetadata *types.MediaMetadata) (updated bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		updated, err = d.MediaRepository.UpdatePendingMedia(ctx, txn, mediaMetadata, spec.AsTimestamp(time.Now()))
+		return err
+	})
+	return updated, err
+}
+
+// DeleteExpiredPendingMedia deletes pending media IDs whose reservation expired.
+// It only matches expired rows, so concurrent sweeps on several replicas are safe.
+func (d *Database) DeleteExpiredPendingMedia(ctx context.Context) (deleted int64, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		deleted, err = d.MediaRepository.DeleteExpiredPendingMedia(ctx, txn, spec.AsTimestamp(time.Now()))
+		return err
+	})
+	return deleted, err
 }
 
 // GetMediaMetadataByHash returns metadata about media stored on this server.

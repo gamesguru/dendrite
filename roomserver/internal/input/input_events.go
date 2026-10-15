@@ -651,6 +651,15 @@ func (r *Inputer) processRoomEvent(
 		return nil
 	}
 
+	// Index an accepted annotation, so that its sender can be stopped from
+	// sending it again (MSC2677). This runs after MaybeRedactEvent, which
+	// strips the content of an annotation whose redaction arrived first, so
+	// that it is not indexed. The index only serves that check, so failing
+	// to update it does not fail the event.
+	if err = r.DB.StoreAnnotation(ctx, roomInfo, event); err != nil {
+		logger.WithError(err).Warn("Failed to index annotation")
+	}
+
 	// TODO: Revist this to ensure we don't replace a current state mxid_mapping with an older one.
 	if event.Version() == gomatrixserverlib.RoomVersionPseudoIDs && event.Type() == spec.MRoomMember {
 		mapping := gomatrixserverlib.MemberContent{}

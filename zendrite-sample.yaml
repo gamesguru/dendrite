@@ -452,6 +452,16 @@ media_api:
       height: 480
       method: scale
 
+  # Asynchronous uploads: clients reserve an mxc:// URI with POST /create and
+  # upload the content later with PUT /upload/{serverName}/{mediaId}.
+  async_uploads:
+    # How long a created mxc:// URI stays reserved for its upload.
+    unused_expiry: 24h
+    # How many created but not yet uploaded mxc:// URIs a user may hold at once.
+    max_pending_per_user: 10
+    # The longest a download of not yet uploaded media waits (caps timeout_ms).
+    max_download_wait: 60s
+
 # Configuration for enabling experimental MSCs on this homeserver.
 mscs:
   mscs:

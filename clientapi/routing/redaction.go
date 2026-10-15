@@ -79,7 +79,7 @@ func SendRedaction(
 
 	if txnID != nil {
 		// Try to fetch response from transactionsCache
-		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -149,7 +149,7 @@ func SendRedaction(
 
 	// Add response to transactionsCache
 	if txnID != nil {
-		txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
+		txnCache.AddTransaction(device, *txnID, req.URL, &res)
 	}
 
 	return res

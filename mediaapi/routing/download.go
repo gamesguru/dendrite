@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -59,6 +60,10 @@ type downloadRequest struct {
 	multipartResponse  bool // whether we need to return a multipart/mixed response (for requests coming in over federation)
 	fedClient          fclient.FederationClient
 	origin             spec.ServerName
+	// pendingTimeout is how long to wait for media created with POST /create
+	// to be uploaded (timeout_ms).
+	pendingTimeout time.Duration
+	pendingUploads *PendingUploads
 }
 
 // Taken from: https://github.com/matrix-org/synapse/blob/c3627d0f99ed5a23479305dc2bd0e71ca25ce2b1/synapse/media/_base.py#L53C1-L84
@@ -113,6 +118,7 @@ func Download(
 	fedClient fclient.FederationClient,
 	activeRemoteRequests *types.ActiveRemoteRequests,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	pendingUploads *PendingUploads,
 	isThumbnailRequest bool,
 	customFilename string,
 	federationRequest bool,
@@ -135,6 +141,8 @@ func Download(
 		multipartResponse: federationRequest,
 		origin:            cfg.Matrix.ServerName,
 		fedClient:         fedClient,
+		pendingTimeout:    pendingTimeout(req, cfg),
+		pendingUploads:    pendingUploads,
 	}
 
 	if dReq.IsThumbnailRequest {
@@ -169,6 +177,15 @@ func Download(
 		client, activeRemoteRequests, activeThumbnailGeneration,
 	)
 	if err != nil {
+		if errors.Is(err, errNotYetUploaded) {
+			// The content may still arrive, so this must not be cached.
+			w.Header().Set("Cache-Control", "no-store")
+			dReq.jsonErrorResponse(w, util.JSONResponse{
+				Code: http.StatusGatewayTimeout,
+				JSON: spec.MatrixError{ErrCode: "M_NOT_YET_UPLOADED", Err: "Content has not yet been uploaded"},
+			})
+			return
+		}
 		// If the file is not found, don't send the details to the client, be more generic.
 		if errors.Is(err, filestore.ErrNotFound) {
 			dReq.Logger.WithError(err).Error("failed to open file")
@@ -271,6 +288,18 @@ func (r *downloadRequest) doDownload(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("db.GetMediaMetadata: %w", err)
+	}
+	if mediaMetadata != nil && mediaMetadata.IsPending() {
+		// The media ID was created with POST /create but its content hasn't
+		// been uploaded yet, so wait for it up to timeout_ms.
+		mediaMetadata, err = r.waitForPendingUpload(ctx, db, mediaMetadata)
+		if err != nil {
+			return nil, err
+		}
+		if mediaMetadata == nil {
+			// The media ID expired, so treat it as unknown.
+			return nil, nil
+		}
 	}
 	if mediaMetadata == nil {
 		if r.MediaMetadata.Origin == cfg.Matrix.ServerName {
@@ -866,11 +895,24 @@ func (r *downloadRequest) fetchRemoteFile(
 	isAuthed := true
 	resp, err := r.fedClient.DownloadMedia(ctx, r.origin, r.MediaMetadata.Origin, string(r.MediaMetadata.MediaID))
 	if err != nil || (resp != nil && resp.StatusCode != http.StatusOK) {
+		// The remote created the media ID but hasn't received its content yet.
+		// Don't treat that as missing, so a later request tries again.
+		notYetUploaded := resp != nil && resp.StatusCode == http.StatusGatewayTimeout
+		if resp != nil {
+			resp.Body.Close()
+		}
 		isAuthed = false
 		// try again on the unauthed endpoint
 		// create request for remote file
 		resp, err = client.CreateMediaDownloadRequest(ctx, r.MediaMetadata.Origin, string(r.MediaMetadata.MediaID))
 		if err != nil || (resp != nil && resp.StatusCode != http.StatusOK) {
+			if resp != nil {
+				resp.Body.Close()
+				notYetUploaded = notYetUploaded || resp.StatusCode == http.StatusGatewayTimeout
+			}
+			if notYetUploaded {
+				return false, fmt.Errorf("file with media ID %q on %s: %w", r.MediaMetadata.MediaID, r.MediaMetadata.Origin, errNotYetUploaded)
+			}
 			if resp != nil && resp.StatusCode == http.StatusNotFound {
 				return false, fmt.Errorf("file with media ID %q does not exist on %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
 			}
@@ -886,8 +928,17 @@ func (r *downloadRequest) fetchRemoteFile(
 	var contentLength int64
 	var reader io.Reader
 	var parseErr error
+	dispositionHeader := resp.Header.Get("Content-Disposition")
 	if isAuthed {
-		contentLength, reader, parseErr = parseMultipartResponse(r, resp, maxFileSizeBytes)
+		var part *mediaPart
+		part, parseErr = parseMultipartResponse(ctx, r, resp, maxFileSizeBytes)
+		if part != nil {
+			defer part.Close()
+			contentLength, reader = part.contentLength, part.reader
+			if part.disposition != "" {
+				dispositionHeader = part.disposition
+			}
+		}
 	} else {
 		// The reader returned here will be limited either by the Content-Length
 		// and/or the configured maximum media size.
@@ -905,7 +956,6 @@ func (r *downloadRequest) fetchRemoteFile(
 
 	r.MediaMetadata.FileSizeBytes = types.FileSizeBytes(contentLength)
 
-	dispositionHeader := resp.Header.Get("Content-Disposition")
 	if _, params, e := mime.ParseMediaType(dispositionHeader); e == nil {
 		if params["filename"] != "" {
 			r.MediaMetadata.UploadName = types.Filename(params["filename"])
@@ -958,48 +1008,72 @@ func (r *downloadRequest) fetchRemoteFile(
 	return duplicate, nil
 }
 
-func parseMultipartResponse(r *downloadRequest, resp *http.Response, maxFileSizeBytes config.FileSizeBytes) (int64, io.Reader, error) {
+// mediaPart is the media of a multipart federation media response.
+type mediaPart struct {
+	contentLength int64
+	reader        io.Reader
+	// disposition is the Content-Disposition of the media, if any.
+	disposition string
+	// body is the response body of a followed redirect, closed by Close.
+	body io.Closer
+}
+
+// Close releases the response body of a followed redirect.
+func (p *mediaPart) Close() {
+	if p.body != nil {
+		p.body.Close()
+	}
+}
+
+func parseMultipartResponse(ctx context.Context, r *downloadRequest, resp *http.Response, maxFileSizeBytes config.FileSizeBytes) (*mediaPart, error) {
 	_, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if params["boundary"] == "" {
-		return 0, nil, fmt.Errorf("no boundary header found on media %s from %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
+		return nil, fmt.Errorf("no boundary header found on media %s from %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
 	}
 	mr := multipart.NewReader(resp.Body, params["boundary"])
 
 	// Get the first, JSON, part
 	p, err := mr.NextPart()
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer p.Close()
 
 	if p.Header.Get("Content-Type") != "application/json" {
-		return 0, nil, fmt.Errorf("first part of the response must be application/json")
+		return nil, fmt.Errorf("first part of the response must be application/json")
 	}
 	// Try to parse media meta information
 	meta := mediaMeta{}
 	if err = json.NewDecoder(p).Decode(&meta); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer p.Close()
 
 	// Get the actual media content
 	p, err = mr.NextPart()
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
-	redirect := p.Header.Get("Location")
-	if redirect != "" {
-		return 0, nil, fmt.Errorf("location header is not yet supported")
+	// The remote may point at the media instead of including it (MSC3860).
+	if location := p.Header.Get("Location"); location != "" {
+		return r.fetchMediaRedirect(ctx, location, maxFileSizeBytes)
 	}
 
 	contentLength, reader, err := r.GetContentLengthAndReader(p.Header.Get("Content-Length"), p, maxFileSizeBytes)
 	// For multipart requests, we need to get the Content-Type of the second part, which is the actual media
 	r.MediaMetadata.ContentType = types.ContentType(p.Header.Get("Content-Type"))
-	return contentLength, reader, err
+	if err != nil {
+		return nil, err
+	}
+	return &mediaPart{
+		contentLength: contentLength,
+		reader:        reader,
+		disposition:   p.Header.Get("Content-Disposition"),
+	}, nil
 }
 
 // contentDispositionFor returns the Content-Disposition for a given

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,9 +37,10 @@ func Test_Multipart(t *testing.T) {
 	assert.NoError(t, err)
 	defer resp.Body.Close()
 	// contentLength is always 0, since there's no Content-Length header on the multipart part.
-	_, reader, err := parseMultipartResponse(r, resp, 1000)
+	part, err := parseMultipartResponse(context.Background(), r, resp, 1000)
 	assert.NoError(t, err)
-	gotResponse, err := io.ReadAll(reader)
+	defer part.Close()
+	gotResponse, err := io.ReadAll(part.reader)
 	assert.NoError(t, err)
 	assert.Equal(t, responseBody, string(gotResponse))
 }

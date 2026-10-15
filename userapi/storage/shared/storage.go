@@ -1075,10 +1075,15 @@ func generateLoginToken() (string, error) {
 }
 
 // RemoveLoginToken removes the named token (and may clean up other expired tokens).
-func (d *Database) RemoveLoginToken(ctx context.Context, token string) error {
-	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+// It reports whether the token existed and had not expired.
+func (d *Database) RemoveLoginToken(ctx context.Context, token string) (consumed bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if consumed, err = d.LoginTokens.ConsumeLoginToken(ctx, txn, token); err != nil {
+			return err
+		}
 		return d.LoginTokens.DeleteLoginToken(ctx, txn, token)
 	})
+	return
 }
 
 // GetLoginTokenDataByToken returns the data associated with the given token.

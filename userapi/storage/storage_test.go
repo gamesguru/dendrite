@@ -351,8 +351,14 @@ func Test_LoginToken(t *testing.T) {
 		assert.Equal(t, wantLoginToken, gotLoginToken, "unexpected login token")
 
 		// remove the login token again
-		err = db.RemoveLoginToken(ctx, gotMetadata.Token)
+		consumed, err := db.RemoveLoginToken(ctx, gotMetadata.Token)
 		assert.NoError(t, err, "unable to remove login token")
+		assert.True(t, consumed, "first removal did not consume the token")
+
+		// a second removal finds nothing to consume
+		consumed, err = db.RemoveLoginToken(ctx, gotMetadata.Token)
+		assert.NoError(t, err, "unable to remove login token")
+		assert.False(t, consumed, "second removal consumed the token again")
 
 		// check if the token was actually deleted
 		_, err = db.GetLoginTokenDataByToken(ctx, gotMetadata.Token)

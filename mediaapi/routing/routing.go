@@ -60,6 +60,7 @@ func Setup(
 	activeThumbnailGeneration := &types.ActiveThumbnailGeneration{
 		PathToResult: map[string]*types.ThumbnailGenerationResult{},
 	}
+	pendingUploads := NewPendingUploads()
 
 	uploadHandler := httputil.MakeAuthAPI(
 		"upload", userAPI,
@@ -68,6 +69,34 @@ func Setup(
 				return *r
 			}
 			return Upload(req, &cfg.MediaAPI, dev, db, fileStore, activeThumbnailGeneration)
+		},
+	)
+
+	// MSC2246 asynchronous uploads: reserve an mxc:// URI, upload later.
+	createHandler := httputil.MakeAuthAPI(
+		"create", userAPI,
+		func(req *http.Request, dev *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, dev); r != nil {
+				return *r
+			}
+			return CreateMedia(req, &cfg.MediaAPI, dev, db)
+		},
+	)
+
+	uploadToPendingHandler := httputil.MakeAuthAPI(
+		"upload_pending", userAPI,
+		func(req *http.Request, dev *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, dev); r != nil {
+				return *r
+			}
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return UploadToPending(
+				req, &cfg.MediaAPI, dev, db, fileStore, activeThumbnailGeneration, pendingUploads,
+				spec.ServerName(vars["serverName"]), types.MediaID(vars["mediaId"]),
+			)
 		},
 	)
 
@@ -86,41 +115,43 @@ func Setup(
 	})
 
 	v3mux.Handle("/upload", uploadHandler).Methods(http.MethodPost, http.MethodOptions)
+	v3mux.Handle("/upload/{serverName}/{mediaId}", uploadToPendingHandler).Methods(http.MethodPut, http.MethodOptions)
+	routers.Media.Handle("/v1/create", createHandler).Methods(http.MethodPost, http.MethodOptions)
 	v3mux.Handle("/config", configHandler).Methods(http.MethodGet, http.MethodOptions)
 
 	activeRemoteRequests := &types.ActiveRemoteRequests{
 		MXCToResult: map[string]*types.RemoteRequestResult{},
 	}
 
-	downloadHandler := makeDownloadAPI("download_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false)
+	downloadHandler := makeDownloadAPI("download_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, false)
 	v3mux.Handle("/download/{serverName}/{mediaId}", downloadHandler).Methods(http.MethodGet, http.MethodOptions)
 	v3mux.Handle("/download/{serverName}/{mediaId}/{downloadName}", downloadHandler).Methods(http.MethodGet, http.MethodOptions)
 
 	v3mux.Handle(
 		"/thumbnail/{serverName}/{mediaId}",
-		makeDownloadAPI("thumbnail_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false),
+		makeDownloadAPI("thumbnail_unauthed", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, false),
 	).Methods(http.MethodGet, http.MethodOptions)
 
 	// v1 client endpoints requiring auth. Call guests may download media to
 	// display it in the rooms they joined, but not upload any.
-	downloadHandlerAuthed := httputil.MakeHTTPAPI("download", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("download_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth(), httputil.WithAllowCallGuests())
+	downloadHandlerAuthed := httputil.MakeHTTPAPI("download", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("download_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, false), httputil.WithAuth(), httputil.WithAllowCallGuests())
 	v1mux.Handle("/config", configHandler).Methods(http.MethodGet, http.MethodOptions)
 	v1mux.Handle("/download/{serverName}/{mediaId}", downloadHandlerAuthed).Methods(http.MethodGet, http.MethodOptions)
 	v1mux.Handle("/download/{serverName}/{mediaId}/{downloadName}", downloadHandlerAuthed).Methods(http.MethodGet, http.MethodOptions)
 
 	v1mux.Handle(
 		"/thumbnail/{serverName}/{mediaId}",
-		httputil.MakeHTTPAPI("thumbnail", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("thumbnail_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, false), httputil.WithAuth(), httputil.WithAllowCallGuests()),
+		httputil.MakeHTTPAPI("thumbnail", userAPI, cfg.Global.Metrics.Enabled, makeDownloadAPI("thumbnail_authed_client", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, false), httputil.WithAuth(), httputil.WithAllowCallGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
 	// same, but for federation
 	v1fedMux.Handle("/download/{mediaId}", federationrouting.MakeFedHTTPAPI(
 		cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
-		makeDownloadAPI("download_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
+		makeDownloadAPI("download_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, true),
 	)).Methods(http.MethodGet, http.MethodOptions)
 	v1fedMux.Handle("/thumbnail/{mediaId}", federationrouting.MakeFedHTTPAPI(
 		cfg.Global.ServerName, cfg.Global.IsLocalServerName, keyRing,
-		makeDownloadAPI("thumbnail_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, true),
+		makeDownloadAPI("thumbnail_authed_federation", &cfg.MediaAPI, rateLimits, db, fileStore, client, federationClient, activeRemoteRequests, activeThumbnailGeneration, pendingUploads, true),
 	)).Methods(http.MethodGet, http.MethodOptions)
 }
 
@@ -176,6 +207,7 @@ func makeDownloadAPI(
 	fedClient fclient.FederationClient,
 	activeRemoteRequests *types.ActiveRemoteRequests,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	pendingUploads *PendingUploads,
 	forFederation bool,
 ) http.HandlerFunc {
 	var counterVec *prometheus.CounterVec
@@ -233,6 +265,9 @@ func makeDownloadAPI(
 			}
 		}
 
+		// allow_redirect (MSC3860) is accepted and ignored: media is always
+		// served from our own store, never redirected.
+
 		// Cache media for at least one day.
 		w.Header().Set("Cache-Control", "public,max-age=86400,s-maxage=86400")
 
@@ -248,6 +283,7 @@ func makeDownloadAPI(
 			fedClient,
 			activeRemoteRequests,
 			activeThumbnailGeneration,
+			pendingUploads,
 			strings.HasPrefix(name, "thumbnail"),
 			vars["downloadName"],
 			forFederation,

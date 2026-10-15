@@ -36,6 +36,9 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool, 
 			"m.change_password": map[string]bool{
 				"enabled": !oidcEnabled,
 			},
+			"m.get_login_token": map[string]bool{
+				"enabled": !oidcEnabled,
+			},
 			"m.room_versions": map[string]any{
 				"default":   rsAPI.DefaultRoomVersion(),
 				"available": versionsMap,

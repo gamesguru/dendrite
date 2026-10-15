@@ -1164,6 +1164,22 @@ func (r *Queryer) QueryAdminEventReports(ctx context.Context, from uint64, limit
 	return r.DB.QueryAdminEventReports(ctx, from, limit, backwards, userID, roomID)
 }
 
+// QueryAnnotationExists implements api.ClientRoomserverAPI.
+func (r *Queryer) QueryAnnotationExists(
+	ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key string, transactionID *api.TransactionID,
+) (bool, error) {
+	// The annotation this transaction produced, if it was already sent.
+	var transactionEventID string
+	if transactionID != nil {
+		var err error
+		transactionEventID, err = r.DB.ClientTransactionEventID(ctx, roomID, string(senderID), transactionID.SessionID, transactionID.TransactionID)
+		if err != nil {
+			return false, fmt.Errorf("r.DB.ClientTransactionEventID: %w", err)
+		}
+	}
+	return r.DB.AnnotationExists(ctx, roomID, targetEventID, senderID, eventType, key, transactionEventID)
+}
+
 // QueryAdminEventReport returns a single event report.
 func (r *Queryer) QueryAdminEventReport(ctx context.Context, reportID uint64) (api.QueryAdminEventReportResponse, error) {
 	return r.DB.QueryAdminEventReport(ctx, reportID)

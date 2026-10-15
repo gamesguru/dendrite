@@ -209,6 +209,11 @@ type Database interface {
 	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
 	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
 	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
+	// AnnotationExists reports whether the sender has an unredacted annotation
+	// of the given event type and key on the target event (MSC2677), other
+	// than the event excludeEventID, which may be empty.
+	AnnotationExists(ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key, excludeEventID string) (bool, error)
 
 	// Partial state methods for MSC3706 faster joins
 	// IsRoomPartialState returns true if the room has partial state from a faster join
@@ -286,6 +291,9 @@ type RoomDatabase interface {
 	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
 	// ExpireClientTransactions forgets transactions recorded before the given time.
 	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	// StoreAnnotation records the event if it is an annotation (MSC2677) that
+	// has not been redacted.
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
 }
 
 type EventDatabase interface {

@@ -1047,6 +1047,9 @@ func TestCapabilities(t *testing.T) {
 			"m.change_password": map[string]bool{
 				"enabled": true,
 			},
+			"m.get_login_token": map[string]bool{
+				"enabled": true,
+			},
 			"m.room_versions": map[string]any{
 				"default":   defaultRoomVersion,
 				"available": versionsMap,

@@ -37,6 +37,9 @@ type flow struct {
 	// OAuthAwarePreferred indicates the m.login.sso flow is preferred over
 	// other flows, as defined for OAuth 2.0 aware clients (spec v1.18).
 	OAuthAwarePreferred bool `json:"oauth_aware_preferred,omitempty"`
+	// GetLoginToken indicates that logged-in clients can create tokens for
+	// the m.login.token flow with POST /login/get_token (spec v1.7).
+	GetLoginToken bool `json:"get_login_token,omitempty"`
 }
 
 // Login implements GET and POST /login.
@@ -46,7 +49,10 @@ func Login(
 ) util.JSONResponse {
 	switch req.Method {
 	case http.MethodGet:
-		loginFlows := []flow{{Type: authtypes.LoginTypePassword}}
+		loginFlows := []flow{
+			{Type: authtypes.LoginTypePassword},
+			{Type: authtypes.LoginTypeToken, GetLoginToken: true},
+		}
 		if len(cfg.Derived.ApplicationServices) > 0 {
 			loginFlows = append(loginFlows, flow{Type: authtypes.LoginTypeApplicationService})
 		}

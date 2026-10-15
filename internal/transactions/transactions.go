@@ -15,6 +15,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/setup/process"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // DefaultCleanupPeriod represents the default time duration after which cacheCleanService runs.
@@ -23,11 +24,22 @@ const DefaultCleanupPeriod time.Duration = 30 * time.Minute
 type txnsMap map[CacheKey]*util.JSONResponse
 
 // CacheKey is the type for the key in a transactions cache.
-// This is needed because the spec requires transaction IDs to have a per-access token scope.
+// The spec scopes transaction IDs to a device and an endpoint (MSC3970),
+// so a refreshed access token keeps the transactions of its device.
 type CacheKey struct {
-	AccessToken string
-	TxnID       string
-	Endpoint    string
+	Scope    string
+	TxnID    string
+	Endpoint string
+}
+
+// scope returns the part of the cache key that identifies who sent a request.
+// Application services share one scope per application service, whichever user
+// they masquerade as, as their as_token did before transactions were scoped to devices.
+func scope(device *userapi.Device) string {
+	if device.AppserviceID != "" {
+		return "as\x00" + device.AppserviceID
+	}
+	return "device\x00" + device.UserID + "\x00" + device.ID
 }
 
 // Cache represents a temporary store for response entries.
@@ -60,14 +72,14 @@ func NewWithCleanupPeriod(cleanupPeriod time.Duration, contexts ...context.Conte
 	return &t
 }
 
-// FetchTransaction looks up an entry for the (accessToken, txnID, req.URL) tuple in Cache.
+// FetchTransaction looks up an entry for the (device, txnID, req.URL) tuple in Cache.
 // Looks in both the txnMaps.
 // Returns (JSON response, true) if txnID is found, else the returned bool is false.
-func (t *Cache) FetchTransaction(accessToken, txnID string, u *url.URL) (*util.JSONResponse, bool) {
+func (t *Cache) FetchTransaction(device *userapi.Device, txnID string, u *url.URL) (*util.JSONResponse, bool) {
 	t.RLock()
 	defer t.RUnlock()
 	for _, txns := range t.txnsMaps {
-		res, ok := txns[CacheKey{accessToken, txnID, filepath.Dir(u.Path)}]
+		res, ok := txns[CacheKey{scope(device), txnID, filepath.Dir(u.Path)}]
 		if ok {
 			return res, true
 		}
@@ -75,12 +87,12 @@ func (t *Cache) FetchTransaction(accessToken, txnID string, u *url.URL) (*util.J
 	return nil, false
 }
 
-// AddTransaction adds an entry for the (accessToken, txnID, req.URL) tuple in Cache.
+// AddTransaction adds an entry for the (device, txnID, req.URL) tuple in Cache.
 // Adds to the front txnMap.
-func (t *Cache) AddTransaction(accessToken, txnID string, u *url.URL, res *util.JSONResponse) {
+func (t *Cache) AddTransaction(device *userapi.Device, txnID string, u *url.URL, res *util.JSONResponse) {
 	t.Lock()
 	defer t.Unlock()
-	t.txnsMaps[0][CacheKey{accessToken, txnID, filepath.Dir(u.Path)}] = res
+	t.txnsMaps[0][CacheKey{scope(device), txnID, filepath.Dir(u.Path)}] = res
 }
 
 // cacheCleanService is responsible for cleaning up entries after cleanupPeriod.

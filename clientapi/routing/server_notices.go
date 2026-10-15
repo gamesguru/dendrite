@@ -67,7 +67,7 @@ func SendServerNotice(
 
 	if txnID != nil {
 		// Try to fetch response from transactionsCache
-		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -267,7 +267,7 @@ func SendServerNotice(
 	}
 	// Add response to transactionsCache
 	if txnID != nil {
-		txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
+		txnCache.AddTransaction(device, *txnID, req.URL, &res)
 	}
 
 	// Take a note of how long it took to generate the event vs submit

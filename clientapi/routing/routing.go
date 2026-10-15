@@ -197,6 +197,7 @@ func Setup(
 					"v1.4",
 					"v1.5",
 					"v1.6",
+					"v1.7",
 				}, UnstableFeatures: unstableFeatures},
 			}
 		}),
@@ -390,6 +391,31 @@ func Setup(
 		}
 		return RegistrationTokenValidity(req, userAPI, cfg)
 	})).Methods(http.MethodGet, http.MethodOptions)
+
+	// MSC2659: the as_token authenticates the request, so it does not go
+	// through MakeAuthAPI, which only accepts an as_token together with user_id.
+	v1mux.Handle("/appservice/{appserviceId}/ping", httputil.MakeExternalAPI("appservice_ping", func(req *http.Request) util.JSONResponse {
+		vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		return AppservicePing(req, &zendriteCfg.AppServiceAPI, vars["appserviceId"])
+	})).Methods(http.MethodPost, http.MethodOptions)
+
+	// MSC3882: login tokens need password re-authentication, which is not
+	// available when authentication is delegated.
+	if oidcEnabled {
+		v1mux.Handle("/login/get_token", msc3861ForbiddenHandler("login_get_token")).Methods(http.MethodPost, http.MethodOptions)
+	} else {
+		v1mux.Handle("/login/get_token",
+			httputil.MakeAuthAPI("login_get_token", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+				if r := rateLimits.Limit(req, device); r != nil {
+					return *r
+				}
+				return GetLoginToken(req, userInteractiveAuth, userAPI, device)
+			}),
+		).Methods(http.MethodPost, http.MethodOptions)
+	}
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
 

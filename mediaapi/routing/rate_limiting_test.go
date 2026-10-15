@@ -14,7 +14,7 @@ import (
 func TestDownloadRateLimitHTTPResponse(t *testing.T) {
 	cfg := &config.MediaAPI{Matrix: &config.Global{}}
 	limiter := httputil.NewRateLimits(&config.RateLimiting{Enabled: true, Threshold: 0, CooloffMS: 1500})
-	handler := makeDownloadAPI("download", cfg, limiter, nil, nil, nil, nil, nil, nil, false)
+	handler := makeDownloadAPI("download", cfg, limiter, nil, nil, nil, nil, nil, nil, nil, false)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)

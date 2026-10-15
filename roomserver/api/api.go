@@ -311,6 +311,12 @@ type ClientRoomserverAPI interface {
 	QueryAdminEventReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (QueryAdminEventReportResponse, error)
 	PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	// QueryAnnotationExists reports whether the sender already has an
+	// unredacted annotation of the given event type and key on the target
+	// event, which the sender may then not send again (MSC2677). An
+	// annotation produced by the given client transaction, if any, is not
+	// counted, so that a retry of that transaction is not rejected.
+	QueryAnnotationExists(ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key string, transactionID *TransactionID) (bool, error)
 }
 
 type UserRoomserverAPI interface {

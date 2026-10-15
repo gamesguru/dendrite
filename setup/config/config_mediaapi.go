@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 )
 
 type MediaAPI struct {
@@ -36,6 +37,54 @@ type MediaAPI struct {
 
 	// A list of thumbnail sizes to be pre-generated for downloaded remote / uploaded content
 	ThumbnailSizes []ThumbnailSize `yaml:"thumbnail_sizes"`
+
+	// AsyncUploads configures asynchronous uploads, where a client reserves
+	// an mxc:// URI with POST /create and uploads the content later.
+	AsyncUploads AsyncUploads `yaml:"async_uploads,omitempty"`
+}
+
+// AsyncUploads contains the limits for asynchronous media uploads (MSC2246).
+type AsyncUploads struct {
+	// UnusedExpiry is how long a created mxc:// URI stays reserved for its
+	// upload. Default: 24h.
+	UnusedExpiry time.Duration `yaml:"unused_expiry"`
+	// MaxPendingPerUser caps how many created but not yet uploaded mxc:// URIs
+	// a single user may hold at once. Default: 10.
+	MaxPendingPerUser int `yaml:"max_pending_per_user"`
+	// MaxDownloadWait caps the timeout_ms a download may wait for pending
+	// media to be uploaded. Default: 60s.
+	MaxDownloadWait time.Duration `yaml:"max_download_wait"`
+}
+
+// Defaults for asynchronous media uploads, also used when a value is unset.
+const (
+	DefaultAsyncUploadUnusedExpiry      = 24 * time.Hour
+	DefaultAsyncUploadMaxPendingPerUser = 10
+	DefaultAsyncUploadMaxDownloadWait   = time.Minute
+)
+
+// Expiry returns how long a created mxc:// URI stays reserved.
+func (c AsyncUploads) Expiry() time.Duration {
+	if c.UnusedExpiry <= 0 {
+		return DefaultAsyncUploadUnusedExpiry
+	}
+	return c.UnusedExpiry
+}
+
+// MaxPending returns how many pending uploads a user may hold at once.
+func (c AsyncUploads) MaxPending() int {
+	if c.MaxPendingPerUser <= 0 {
+		return DefaultAsyncUploadMaxPendingPerUser
+	}
+	return c.MaxPendingPerUser
+}
+
+// MaxWait returns the longest a download waits for pending media.
+func (c AsyncUploads) MaxWait() time.Duration {
+	if c.MaxDownloadWait <= 0 {
+		return DefaultAsyncUploadMaxDownloadWait
+	}
+	return c.MaxDownloadWait
 }
 
 // MediaStorage selects the backend used to persist media files.
@@ -84,6 +133,11 @@ var DefaultMaxFileSizeBytes = FileSizeBytes(10485760) //nolint:mnd
 func (c *MediaAPI) Defaults(opts DefaultOpts) {
 	c.MaxFileSizeBytes = DefaultMaxFileSizeBytes
 	c.MaxThumbnailGenerators = 10
+	c.AsyncUploads = AsyncUploads{
+		UnusedExpiry:      DefaultAsyncUploadUnusedExpiry,
+		MaxPendingPerUser: DefaultAsyncUploadMaxPendingPerUser,
+		MaxDownloadWait:   DefaultAsyncUploadMaxDownloadWait,
+	}
 	if opts.Generate {
 		c.ThumbnailSizes = []ThumbnailSize{
 			{
@@ -123,6 +177,9 @@ func (c *MediaAPI) StorageType() string {
 func (c *MediaAPI) Verify(configErrs *ConfigErrors) {
 	checkPositive(configErrs, "media_api.max_file_size_bytes", int64(c.MaxFileSizeBytes))
 	checkPositive(configErrs, "media_api.max_thumbnail_generators", int64(c.MaxThumbnailGenerators))
+	checkPositive(configErrs, "media_api.async_uploads.unused_expiry", int64(c.AsyncUploads.UnusedExpiry))
+	checkPositive(configErrs, "media_api.async_uploads.max_pending_per_user", int64(c.AsyncUploads.MaxPendingPerUser))
+	checkPositive(configErrs, "media_api.async_uploads.max_download_wait", int64(c.AsyncUploads.MaxDownloadWait))
 
 	for i, size := range c.ThumbnailSizes {
 		checkPositive(configErrs, fmt.Sprintf("media_api.thumbnail_sizes[%d].width", i), int64(size.Width))

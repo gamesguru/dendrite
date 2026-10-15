@@ -64,7 +64,8 @@ Zendrite advertises `org.matrix.msc4222` in `unstable_features` for clients that
 | [MSC2676](https://github.com/matrix-org/matrix-spec-proposals/pull/2676) | Message editing | 1.4 | Implemented: the latest valid edit is bundled under `m.replace`, in the v1.7 format; invalid edits are ignored, and a redacted original carries no edits |
 | [MSC3316](https://github.com/matrix-org/matrix-spec-proposals/pull/3316) | Timestamp massaging | 1.3 | Implemented: the `ts` parameter on `/send`, `/state`, membership endpoints, `/createRoom` and profile updates only applies to requests made with an application service token, and is ignored otherwise |
 | [MSC3958](https://github.com/matrix-org/matrix-spec-proposals/pull/3958) | Suppress notifications from message edits | 1.9 | Implemented: the `.m.rule.suppress_edits` default push rule, also added to existing accounts' rules |
-| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | 1.7 | Partial: relation storage and retrieval; the spec defines no server-side aggregation for annotations |
+| [MSC2677](https://github.com/matrix-org/matrix-spec-proposals/pull/2677) | Reactions | 1.7 | Implemented: relations are stored and served through `/relations`. Sending an annotation that the sender has already made, with the same event type and key on the same event and not redacted, fails with 400 `M_DUPLICATE_ANNOTATION`; retrying the original transaction still returns its event. The spec defines no server-side aggregation for annotations |
+| [MSC3970](https://github.com/matrix-org/matrix-spec-proposals/pull/3970) | Scope transaction IDs to devices | 1.7 | Implemented: `/send`, `/redact`, `/sendToDevice`, delayed events and server notices recognise a retransmission by device, endpoint and transaction ID, so it survives a refreshed access token. Application services share one scope per application service, whichever user they act as |
 | [MSC3267](https://github.com/matrix-org/matrix-spec-proposals/pull/3267) | Reference relations | 1.5 | Implemented: references are bundled under `m.reference` |
 | [MSC3440](https://github.com/matrix-org/matrix-spec-proposals/pull/3440) | Threading via `m.thread` | 1.4 | Implemented: `m.thread` aggregations, `GET /v1/rooms/{roomId}/threads`, and 400 `M_UNKNOWN` for a thread rooted at an event that is itself a relation |
 | [MSC3771](https://github.com/matrix-org/matrix-spec-proposals/pull/3771) | Threaded read receipts | 1.4 | Implemented: receipts carry `thread_id` and clear only their thread's notifications |
@@ -125,12 +126,31 @@ Guests may only change their display name.
 `/_matrix/federation/v1/query/profile` serves every field, also one at a time via `field`, and profiles of remote users include their custom fields.
 Deactivating an account removes its custom fields.
 
+## Media
+
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC2246](https://github.com/matrix-org/matrix-spec-proposals/pull/2246) | Asynchronous media uploads | 1.7 | Implemented: see [asynchronous uploads](#asynchronous-uploads) |
+| [MSC3860](https://github.com/matrix-org/matrix-spec-proposals/pull/3860) | Media download redirects | 1.7 | Implemented: `allow_redirect` is accepted, and Zendrite always serves media itself, which the spec allows. When a remote server answers a federation media request with a `Location` instead of the media, Zendrite fetches it from there, following up to five more redirects, and only from public addresses |
+
+### Asynchronous uploads
+
+`POST /_matrix/media/v1/create` reserves an `mxc://` URI and returns it with `unused_expires_at`, after which an unused reservation lapses (`media_api.async_uploads.unused_expiry`, default `24h`).
+A user may hold `media_api.async_uploads.max_pending_per_user` reservations (default 10) that are not uploaded or expired; beyond that, `/create` fails with 429 `M_LIMIT_EXCEEDED`.
+`PUT /_matrix/media/v3/upload/{serverName}/{mediaId}` uploads the content.
+Only the user who created the URI may upload (403 `M_FORBIDDEN`), only once (409 `M_CANNOT_OVERWRITE_MEDIA`), and only before it expires (404 `M_NOT_FOUND`).
+
+Downloads and thumbnails of a reserved URI, over the client and federation APIs, wait for the upload for `timeout_ms` (default 20 seconds, at most `media_api.async_uploads.max_download_wait`, default `60s`), and then fail with 504 `M_NOT_YET_UPLOADED`.
+A download waiting on one replica sees an upload completed on another within half a second.
+Expired reservations are deleted every hour.
+When a remote server answers 504 for its own media, the client gets 504 `M_NOT_YET_UPLOADED` too, and nothing is cached.
+
 ## Encryption & Security
 
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC1219](https://github.com/matrix-org/matrix-spec-proposals/pull/1219) | Server-side key backup | 1.1 | Implemented: backup versions, and uploading, fetching and deleting keys for a version, a room or a session |
-| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented |
+| [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) | Authenticated media | 1.11 | Implemented, except URL previews. A `Location` in a remote multipart response is followed, see [MSC3860](#media) |
 | [MSC2732](https://github.com/matrix-org/matrix-spec-proposals/pull/2732) | OLM fallback keys | 1.2 | Implemented: ordinary and dehydrated devices upload reusable fallback keys; claims mark them used and sync reports unused algorithms |
 | [MSC3814](https://github.com/matrix-org/matrix-spec-proposals/pull/3814) | Dehydrated devices v2 | N/A | Opt-in (`msc3814`) |
 | [MSC4115](https://github.com/matrix-org/matrix-spec-proposals/pull/4115) | Membership metadata on events | 1.11 | Implemented in sync; no opt-in required |
@@ -165,6 +185,7 @@ Otherwise, or when no server answers, the local result stands.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC3905](https://github.com/matrix-org/matrix-spec-proposals/pull/3905) | Application services should only be interested in local users | 1.5 | Implemented: `users` namespaces only match users on this server or its virtual hosts, so a remote sender, member or joined user no longer makes an event interesting to an application service |
+| [MSC2659](https://github.com/matrix-org/matrix-spec-proposals/pull/2659) | Application service ping endpoint | 1.7 | Implemented: `POST /_matrix/client/v1/appservice/{appserviceId}/ping`, authenticated with the application service's `as_token`, calls `POST /_matrix/app/v1/ping` with the `hs_token` and the `transaction_id`, and returns `duration_ms`. Failures return `M_URL_NOT_SET`, `M_CONNECTION_FAILED`, `M_CONNECTION_TIMEOUT` (after 30 seconds) or `M_BAD_STATUS` with the status and up to 4 KiB of the body |
 
 ## Authentication
 
@@ -175,6 +196,7 @@ Otherwise, or when no server answers, the local result stands.
 | [MSC3288](https://github.com/matrix-org/matrix-spec-proposals/pull/3288) | Room type in `store-invite` | 1.2 | Implemented: 3PID invites send `room_type`, along with the room's name, avatar, join rule and alias |
 | [MSC2858](https://github.com/matrix-org/matrix-spec-proposals/pull/2858) | Multiple SSO identity providers | 1.1 | Not applicable: SSO is only available through [MSC3861](#msc3861-oidc-delegated-authentication), where the authentication service offers the upstream providers, so the `m.login.sso` flow lists no `identity_providers` |
 | [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Implemented: clients sending `refresh_token: true` to `/login` or `/register` get a refresh token and an access token that expires after `client_api.refreshable_access_token_lifetime` (default `5m`, `0s` disables refresh tokens), which `/refresh` renews. An expired access token returns 401 `M_UNKNOWN_TOKEN` with `soft_logout: true`. A used refresh token stays valid until its successor is used, so a lost `/refresh` response can be retried. With [MSC3861](#msc3861-oidc-delegated-authentication), the authentication service issues the tokens |
+| [MSC3882](https://github.com/matrix-org/matrix-spec-proposals/pull/3882) | Sign in a new session from an existing one | 1.7 | Implemented: `POST /_matrix/client/v1/login/get_token` asks for the password every time and returns a single-use `m.login.token` that expires after two minutes. `/login` lists the `m.login.token` flow with `get_login_token: true`, and `/capabilities` reports `m.get_login_token`. Redeeming a token deletes it first, so concurrent logins cannot share one. With [MSC3861](#msc3861-oidc-delegated-authentication), the endpoint returns 403 and the capability is disabled |
 | [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | 1.15 | Opt-in (`msc3861`) |
 
 ## VoIP

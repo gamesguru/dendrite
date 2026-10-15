@@ -93,6 +93,7 @@ type KeyBackupVersionTable interface {
 type LoginTokenTable interface {
 	InsertLoginToken(ctx context.Context, txn *sql.Tx, metadata *api.LoginTokenMetadata, data *api.LoginTokenData) error
 	DeleteLoginToken(ctx context.Context, txn *sql.Tx, token string) error
+	ConsumeLoginToken(ctx context.Context, txn *sql.Tx, token string) (bool, error)
 	SelectLoginToken(ctx context.Context, token string) (*api.LoginTokenData, error)
 }
 

@@ -54,6 +54,9 @@ func AddPublicRoutes(
 		fileStore = filestore.Guarded(fileStore, owner)
 	}
 
+	// Every replica may sweep: the delete only matches expired rows.
+	go routing.SweepExpiredPendingMedia(ctx, mediaDB)
+
 	routing.Setup(
 		routers, cfg, mediaDB, fileStore, userAPI, client, fedClient, keyRing, ctx,
 	)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -68,6 +69,8 @@ type EventDatabase struct {
 	PrevEventsTable     tables.PreviousEvents
 	RedactionsTable     tables.Redactions
 	ReportedEventsTable tables.ReportedEvents
+	// AnnotationsTable indexes unredacted annotations (MSC2677).
+	AnnotationsTable tables.Annotations
 }
 
 func (d *Database) SupportsConcurrentRoomInputs() bool {
@@ -1117,6 +1120,12 @@ func (d *EventDatabase) MaybeRedactEvent(
 		err = d.RedactionsTable.MarkRedactionValidated(ctx, txn, redactionEvent.EventID(), true)
 		if err != nil {
 			return fmt.Errorf("d.RedactionsTable.MarkRedactionValidated: %w", err)
+		}
+
+		// A redacted annotation no longer counts as a duplicate.
+		err = d.AnnotationsTable.DeleteAnnotation(ctx, txn, redactedEvent.EventID())
+		if err != nil {
+			return fmt.Errorf("d.AnnotationsTable.DeleteAnnotation: %w", err)
 		}
 
 		// We remove the entry from the cache, as if we just "StoreRoomServerEvent", we can't be
@@ -2484,4 +2493,50 @@ func (d *Database) ExpireClientTransactions(ctx context.Context, before time.Tim
 		return err
 	})
 	return removed, err
+}
+
+// annotationOf returns the target event ID and key of an m.annotation
+// relation (MSC2677) in the given event content.
+func annotationOf(content []byte) (targetEventID, key string, ok bool) {
+	relation := gjson.GetBytes(content, `m\.relates_to`)
+	target, annotationKey := relation.Get("event_id"), relation.Get("key")
+	if relation.Get("rel_type").Str != "m.annotation" || target.Type != gjson.String || annotationKey.Type != gjson.String {
+		return "", "", false
+	}
+	// PostgreSQL cannot store a NUL character in text, so such annotations
+	// are not indexed on either database.
+	if strings.ContainsRune(target.Str, 0) || strings.ContainsRune(annotationKey.Str, 0) {
+		return "", "", false
+	}
+	return target.Str, annotationKey.Str, true
+}
+
+// StoreAnnotation implements storage.RoomDatabase. It records the event if
+// it is an annotation, unless the event has already been redacted.
+func (d *Database) StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error {
+	targetEventID, key, ok := annotationOf(event.Content())
+	if !ok {
+		return nil
+	}
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.AnnotationsTable.InsertAnnotation(
+			ctx, txn, roomInfo.RoomNID, event.EventID(), targetEventID, string(event.SenderID()), event.Type(), key,
+		)
+	})
+}
+
+// AnnotationExists implements storage.Database.
+func (d *Database) AnnotationExists(
+	ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key, excludeEventID string,
+) (bool, error) {
+	if strings.ContainsRune(targetEventID, 0) || strings.ContainsRune(key, 0) {
+		return false, nil // never indexed, see annotationOf
+	}
+	roomInfo, err := d.RoomInfo(ctx, roomID)
+	if err != nil || roomInfo == nil {
+		return false, err
+	}
+	return d.AnnotationsTable.SelectAnnotationExists(
+		ctx, nil, roomInfo.RoomNID, targetEventID, string(senderID), eventType, key, excludeEventID,
+	)
 }

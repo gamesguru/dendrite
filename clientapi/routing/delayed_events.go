@@ -188,7 +188,7 @@ func (d *DelayedEvents) schedule(
 	}
 
 	if txnID != nil {
-		if res, ok := d.txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := d.txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -221,7 +221,7 @@ func (d *DelayedEvents) schedule(
 	}
 	defer unlock()
 	if txnID != nil {
-		if res, ok := d.txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := d.txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -278,7 +278,7 @@ func (d *DelayedEvents) schedule(
 		JSON: delayedEventScheduledResponse{DelayID: event.DelayID},
 	}
 	if txnID != nil {
-		d.txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
+		d.txnCache.AddTransaction(device, *txnID, req.URL, &res)
 	}
 	return res
 }

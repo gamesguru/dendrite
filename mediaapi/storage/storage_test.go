@@ -4,6 +4,10 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
+
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
@@ -141,5 +145,143 @@ func TestThumbnailsStorage(t *testing.T) {
 				}
 			}
 		})
+	})
+}
+
+func TestPendingMedia(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateDatabase(t, dbType)
+		defer close()
+		ctx := context.Background()
+		now := spec.AsTimestamp(time.Now())
+		alice := types.MatrixUserID("@alice:localhost")
+		pending := func(id types.MediaID, expiresAt spec.Timestamp) *types.MediaMetadata {
+			return &types.MediaMetadata{
+				MediaID:         id,
+				Origin:          "localhost",
+				UserID:          alice,
+				UnusedExpiresAt: expiresAt,
+			}
+		}
+
+		// The per-user limit only counts unexpired pending media.
+		require.NoError(t, db.StorePendingMedia(ctx, pending("expired", now-1000), 2))
+		require.NoError(t, db.StorePendingMedia(ctx, pending("first", now+60_000), 2))
+		require.NoError(t, db.StorePendingMedia(ctx, pending("second", now+60_000), 2))
+		require.ErrorIs(t, db.StorePendingMedia(ctx, pending("third", now+60_000), 2), types.ErrTooManyPendingUploads)
+		require.NoError(t, db.StorePendingMedia(ctx, &types.MediaMetadata{
+			MediaID: "bob", Origin: "localhost", UserID: "@bob:localhost", UnusedExpiresAt: now + 60_000,
+		}, 2), "the limit is per user")
+
+		got, err := db.GetMediaMetadata(ctx, "first", "localhost")
+		require.NoError(t, err)
+		require.True(t, got.IsPending())
+		require.Equal(t, now+60_000, got.UnusedExpiresAt)
+
+		// Pending media must never be matched by hash.
+		withHash := pending("hashed", now+60_000)
+		withHash.UserID = "@carol:localhost"
+		withHash.Base64Hash = "cGVuZGluZw"
+		require.NoError(t, db.StorePendingMedia(ctx, withHash, 2))
+		byHash, err := db.GetMediaMetadataByHash(ctx, "cGVuZGluZw", "localhost")
+		require.NoError(t, err)
+		require.Nil(t, byHash)
+
+		content := &types.MediaMetadata{
+			MediaID:       "first",
+			Origin:        "localhost",
+			ContentType:   "text/plain",
+			FileSizeBytes: 5,
+			UploadName:    "hello.txt",
+			Base64Hash:    "aGVsbG8",
+			UserID:        "@mallory:localhost",
+		}
+		updated, err := db.CompletePendingMedia(ctx, content)
+		require.NoError(t, err)
+		require.False(t, updated, "another user must not complete the upload")
+
+		content.UserID = alice
+		updated, err = db.CompletePendingMedia(ctx, content)
+		require.NoError(t, err)
+		require.True(t, updated)
+		updated, err = db.CompletePendingMedia(ctx, content)
+		require.NoError(t, err)
+		require.False(t, updated, "uploaded media must not be overwritten")
+
+		got, err = db.GetMediaMetadata(ctx, "first", "localhost")
+		require.NoError(t, err)
+		require.False(t, got.IsPending())
+		require.Equal(t, content.Base64Hash, got.Base64Hash)
+		require.Equal(t, content.ContentType, got.ContentType)
+		require.Equal(t, content.UploadName, got.UploadName)
+		require.Equal(t, content.FileSizeBytes, got.FileSizeBytes)
+		byHash, err = db.GetMediaMetadataByHash(ctx, content.Base64Hash, "localhost")
+		require.NoError(t, err)
+		require.NotNil(t, byHash)
+		require.Equal(t, types.MediaID("first"), byHash.MediaID)
+
+		// An expired reservation can't be completed and is swept.
+		expiredContent := *content
+		expiredContent.MediaID = "expired"
+		updated, err = db.CompletePendingMedia(ctx, &expiredContent)
+		require.NoError(t, err)
+		require.False(t, updated)
+
+		deleted, err := db.DeleteExpiredPendingMedia(ctx)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), deleted)
+		deleted, err = db.DeleteExpiredPendingMedia(ctx)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), deleted, "the sweep must be idempotent")
+		got, err = db.GetMediaMetadata(ctx, "expired", "localhost")
+		require.NoError(t, err)
+		require.Nil(t, got)
+		for _, id := range []types.MediaID{"first", "second", "bob", "hashed"} {
+			got, err = db.GetMediaMetadata(ctx, id, "localhost")
+			require.NoError(t, err)
+			require.NotNil(t, got, "%s must survive the sweep", id)
+		}
+	})
+}
+
+// TestPendingMediaMigration checks that a media repository created before
+// asynchronous uploads gains the unused_expires_ts column, and that existing
+// media is treated as uploaded.
+func TestPendingMediaMigration(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		connStr, close := test.PrepareDBConnectionString(t, dbType)
+		defer close()
+		opts := &config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		rawDB, _, err := cm.Connection(opts)
+		require.NoError(t, err)
+		_, err = rawDB.Exec(`CREATE TABLE mediaapi_media_repository (
+    media_id TEXT NOT NULL,
+    media_origin TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    creation_ts BIGINT NOT NULL,
+    upload_name TEXT NOT NULL,
+    base64hash TEXT NOT NULL,
+    user_id TEXT NOT NULL
+);
+CREATE UNIQUE INDEX mediaapi_media_repository_index ON mediaapi_media_repository (media_id, media_origin);
+INSERT INTO mediaapi_media_repository VALUES ('old', 'localhost', 'text/plain', 3, 1, 'old.txt', 'b2xk', '@alice:localhost');`)
+		require.NoError(t, err)
+
+		db, err := storage.NewMediaAPIDatasource(cm, opts)
+		require.NoError(t, err)
+		ctx := context.Background()
+		got, err := db.GetMediaMetadata(ctx, "old", "localhost")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.False(t, got.IsPending())
+		byHash, err := db.GetMediaMetadataByHash(ctx, "b2xk", "localhost")
+		require.NoError(t, err)
+		require.NotNil(t, byHash)
+		require.NoError(t, db.StorePendingMedia(ctx, &types.MediaMetadata{
+			MediaID: "new", Origin: "localhost", UserID: "@alice:localhost",
+			UnusedExpiresAt: spec.AsTimestamp(time.Now().Add(time.Hour)),
+		}, 1))
 	})
 }

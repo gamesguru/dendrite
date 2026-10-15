@@ -205,6 +205,19 @@ type ClientTransactions interface {
 	DeleteClientTransactionsBefore(ctx context.Context, txn *sql.Tx, insertedTS int64) (int64, error)
 }
 
+// Annotations indexes the m.annotation relations (MSC2677) of accepted,
+// unredacted events, so that a user can be stopped from sending the same
+// annotation twice.
+type Annotations interface {
+	// InsertAnnotation records an annotation unless a validated redaction of
+	// it is already known.
+	InsertAnnotation(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, annotationEventID, targetEventID, senderID, eventType, key string) error
+	// SelectAnnotationExists reports whether a matching annotation other than
+	// excludeEventID is recorded.
+	SelectAnnotationExists(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetEventID, senderID, eventType, key, excludeEventID string) (bool, error)
+	DeleteAnnotation(ctx context.Context, txn *sql.Tx, annotationEventID string) error
+}
+
 type Published interface {
 	UpsertRoomPublished(ctx context.Context, txn *sql.Tx, roomID, appserviceID, networkID string, published bool) (err error)
 	SelectPublishedFromRoomID(ctx context.Context, txn *sql.Tx, roomID string) (published bool, err error)

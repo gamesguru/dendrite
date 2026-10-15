@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.6`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.7`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3` to `v1.6` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.7` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.7` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.8` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -16,7 +16,7 @@ Room versions returned by `/capabilities` are a separate namespace and must not 
 
 ## Scope and evidence
 
-This is a source-level audit of the next candidate versions, v1.3 through v1.6, with targeted checks of later features that could otherwise motivate raising the ceiling.
+This is a source-level audit of the next candidate versions, v1.3 through v1.7, with targeted checks of later features that could otherwise motivate raising the ceiling.
 It compares the release requirements with routing, handler behavior, storage, and existing tests in this repository.
 It does not claim an exhaustive behavioral certification through v1.19 or a fresh Sytest/Complement pass.
 A registered route establishes reachability only; authorization, pagination, response shape, and configuration dependence require separate evidence.
@@ -77,11 +77,23 @@ The [v1.6 changes](https://spec.matrix.org/v1.6/changelog/) add jump to date, re
 | Key queries without `keyId` (MSC3938) | `federationapi/routing/routing.go` serves `GET /_matrix/key/v2/query/{serverName}`; `TestNotaryServer` covers it. | Implemented. |
 | Faster joins (MSC3706, MSC3943) | `federationapi/internal/federationclient.go` joins with `omit_members=true`. Serving `send_join`, Zendrite always returns the full state with `members_omitted` unset, which the spec allows. | Compliant. |
 
-### v1.7 and later candidates
+### v1.7
+
+The [v1.7 changes](https://spec.matrix.org/v1.7/changelog/) add asynchronous media uploads, media download redirects, the application service ping, reactions, signing in from an existing session, and scope transaction IDs to devices.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Asynchronous uploads (MSC2246) | `mediaapi/routing/async_upload.go` serves `POST /v1/create` and `PUT /upload/{serverName}/{mediaId}`, and makes downloads of pending media wait for `timeout_ms` before 504 `M_NOT_YET_UPLOADED`. `async_upload_test.go` covers the errors, concurrent uploads, waiting across replicas and the pending limit. | Implemented. |
+| Media redirects (MSC3860) | Zendrite never redirects, which the spec allows. `mediaapi/routing/media_redirect.go` follows a `Location` in a remote federation media response; `media_redirect_test.go` covers it. | Compliant. |
+| Application service ping (MSC2659) | `clientapi/routing/appservice_ping.go` serves `POST /v1/appservice/{appserviceId}/ping`; `appservice_ping_test.go` covers every error code. | Implemented. |
+| Duplicate annotations (MSC2677) | `roomserver_annotations` indexes unredacted annotations, and `validateAnnotation` in `clientapi/routing/sendevent.go` returns 400 `M_DUPLICATE_ANNOTATION`; `clientapi/annotations_test.go` covers it. | Implemented. |
+| Login tokens (MSC3882) | `clientapi/routing/login_token.go` serves `POST /v1/login/get_token` behind password re-authentication, with the `m.get_login_token` capability and `get_login_token` on the `m.login.token` flow; `login_token_test.go` covers single use. | Implemented; disabled with MSC3861, which the spec allows. |
+| Transaction IDs per device (MSC3970) | `internal/transactions` keys its cache by device, or by application service, and endpoint. | Implemented. |
+
+### v1.8 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.7](https://spec.matrix.org/v1.7/changelog/) | Reactions can be stored as relations; this does not demonstrate aggregated reaction behavior, asynchronous media upload, or login-token issuance. | No full certification; earlier blockers remain. |
 | [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` parses `recurse`, follows relations three levels deep and reports `recursion_depth`; other v1.10 changes are unaudited. | Do not advertise. |
 | [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |
 | [v1.15 room summaries](https://spec.matrix.org/v1.15/client-server-api/#room-summaries) | `/v1/room_summary/{roomIDOrAlias}` calls `GetRoomSummary`; `room_summary_test.go` tests access, response shape, and caching. | Selected feature implemented, not full v1.15 certification. |
