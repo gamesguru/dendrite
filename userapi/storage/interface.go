@@ -87,6 +87,9 @@ type AccountData interface {
 	// If no account data could be found, returns nil
 	// Returns an error if there was an issue with the retrieval
 	GetAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) (data json.RawMessage, err error)
+	// RemoveAllAccountData deletes all global and room account data of a
+	// user, such as when the user is erased (MSC4025).
+	RemoveAllAccountData(ctx context.Context, localpart string, serverName spec.ServerName) error
 	QueryPushRules(ctx context.Context, localpart string, serverName spec.ServerName) (*pushrules.AccountRuleSets, error)
 }
 

@@ -35,6 +35,8 @@ type AccountDataTable interface {
 	InsertAccountData(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, dataType string, content json.RawMessage) error
 	SelectAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (map[string]json.RawMessage, map[string]map[string]json.RawMessage, error)
 	SelectAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) (data json.RawMessage, err error)
+	// DeleteAccountData deletes all global and room account data of a user.
+	DeleteAccountData(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 }
 
 type AccountsTable interface {

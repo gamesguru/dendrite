@@ -67,6 +67,10 @@ type Global struct {
 	// Advertised in .well-known/matrix/client as org.matrix.msc4143.rtc_foci
 	RTCFoci []RTCFocus `yaml:"rtc_foci,omitempty"`
 
+	// Server admin contacts and support page served at
+	// /.well-known/matrix/support (MSC1929). Unset, the endpoint returns 404.
+	Support Support `yaml:"support,omitempty"`
+
 	// Disables federation. Zendrite will not be able to make any outbound HTTP requests
 	// to other servers and the federation API will not be exposed.
 	DisableFederation bool `yaml:"disable_federation"`
@@ -155,6 +159,7 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 		}
 	}
 
+	c.Support.Verify(configErrs)
 	c.HA.Verify(configErrs)
 	c.JetStream.Verify(configErrs)
 	c.Metrics.Verify(configErrs)

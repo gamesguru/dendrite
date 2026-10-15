@@ -25,6 +25,11 @@ import (
 type Database interface {
 	UserRoomKeys
 	ReportedEvents
+	// SetUserErased marks a local user as erased (MSC4025), or clears the
+	// mark when the account is reactivated.
+	SetUserErased(ctx context.Context, userID string, erased bool) error
+	// ErasedUsers returns the subset of userIDs that is erased.
+	ErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error)
 	// Do we support processing input events for more than one room at a time?
 	SupportsConcurrentRoomInputs() bool
 	AssignRoomNID(ctx context.Context, roomID spec.RoomID, roomVersion gomatrixserverlib.RoomVersion) (roomNID types.RoomNID, err error)

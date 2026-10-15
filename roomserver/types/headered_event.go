@@ -72,3 +72,28 @@ func NewEventJSONsFromHeaderedEvents(hes []*HeaderedEvent) gomatrixserverlib.Eve
 	}
 	return result
 }
+
+// RedactedCopy returns a redacted copy of the event, leaving the event
+// itself, which may be shared through a cache, untouched.
+func RedactedCopy(event gomatrixserverlib.PDU) (gomatrixserverlib.PDU, error) {
+	if headered, ok := event.(*HeaderedEvent); ok {
+		event = headered.Unwrap()
+	}
+	if event.Redacted() {
+		return event, nil
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(event.Version())
+	if err != nil {
+		return nil, err
+	}
+	redactedJSON, err := verImpl.RedactEventJSON(event.JSON())
+	if err != nil {
+		return nil, err
+	}
+	if redactedJSON, err = gomatrixserverlib.EnforcedCanonicalJSON(redactedJSON, event.Version()); err != nil {
+		return nil, err
+	}
+	// Keep the event ID: Redact would drop it, and an ID computed from the
+	// JSON again is wrong for events whose ID is not the reference hash.
+	return verImpl.NewEventFromTrustedJSONWithEventID(event.EventID(), redactedJSON, true)
+}

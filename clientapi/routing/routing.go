@@ -172,6 +172,17 @@ func Setup(
 		})).Methods(http.MethodGet, http.MethodHead, http.MethodOptions)
 	}
 
+	// MSC1929: without configured contacts or support page the route stays
+	// unregistered, so the well-known router answers 404 as the spec asks.
+	if support := cfg.Matrix.Support; support.Enabled() {
+		wkMux.Handle("/support", httputil.MakeExternalAPI("wellknown_support", func(r *http.Request) util.JSONResponse {
+			return util.JSONResponse{
+				Code: http.StatusOK,
+				JSON: support,
+			}
+		})).Methods(http.MethodGet, http.MethodHead, http.MethodOptions)
+	}
+
 	// Retain the existing ceiling: newer routes do not establish version
 	// conformance. See development/client-api-conformance in the documentation
 	// for the audit and remaining blockers.
@@ -198,6 +209,9 @@ func Setup(
 					"v1.5",
 					"v1.6",
 					"v1.7",
+					"v1.8",
+					"v1.9",
+					"v1.10",
 				}, UnstableFeatures: unstableFeatures},
 			}
 		}),
@@ -977,7 +991,7 @@ func Setup(
 				if r := rateLimits.Limit(req, device); r != nil {
 					return *r
 				}
-				return Deactivate(req, userInteractiveAuth, userAPI, device)
+				return Deactivate(req, userInteractiveAuth, userAPI, device, cfg, threePIDClient)
 			}, httputil.WithAllowCallGuests()),
 		).Methods(http.MethodPost, http.MethodOptions)
 	}

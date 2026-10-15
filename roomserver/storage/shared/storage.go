@@ -52,6 +52,8 @@ type Database struct {
 	Purge              tables.Purge
 	UserRoomKeyTable   tables.UserRoomKeys
 	PartialStateTable  tables.PartialState
+	// ErasedUsersTable records users erased on deactivation (MSC4025).
+	ErasedUsersTable tables.ErasedUsers
 	// ClientTransactionsTable maps client transaction IDs to their events.
 	ClientTransactionsTable tables.ClientTransactions
 	GetRoomUpdaterFn        func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
@@ -2539,4 +2541,22 @@ func (d *Database) AnnotationExists(
 	return d.AnnotationsTable.SelectAnnotationExists(
 		ctx, nil, roomInfo.RoomNID, targetEventID, string(senderID), eventType, key, excludeEventID,
 	)
+}
+
+// SetUserErased implements storage.Database.
+func (d *Database) SetUserErased(ctx context.Context, userID string, erased bool) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if erased {
+			return d.ErasedUsersTable.InsertErasedUser(ctx, txn, userID, time.Now().UnixMilli())
+		}
+		return d.ErasedUsersTable.DeleteErasedUser(ctx, txn, userID)
+	})
+}
+
+// ErasedUsers implements storage.Database.
+func (d *Database) ErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	if len(userIDs) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	return d.ErasedUsersTable.SelectErasedUsers(ctx, nil, userIDs)
 }

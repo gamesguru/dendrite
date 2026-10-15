@@ -17,6 +17,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 // GetEvent returns the requested event.
@@ -34,9 +35,19 @@ func GetEvent(
 		return *err
 	}
 
-	err = allowedToSeeEvent(ctx, request.Origin(), rsAPI, eventID, event.RoomID().String())
-	if err != nil {
-		return *err
+	allowed, redact, visErr := rsAPI.QueryServerEventVisibility(ctx, request.Origin(), event)
+	if visErr != nil {
+		return util.ErrorResponse(visErr)
+	}
+	if !allowed {
+		return util.MessageResponse(http.StatusForbidden, "server not allowed to see event")
+	}
+	// The sender is erased and the server had no member in the room when
+	// the event was sent (MSC4025).
+	if redact {
+		if event, visErr = types.RedactedCopy(event); visErr != nil {
+			return util.ErrorResponse(visErr)
+		}
 	}
 
 	return util.JSONResponse{Code: http.StatusOK, JSON: gomatrixserverlib.Transaction{

@@ -443,6 +443,10 @@ type PerformRefreshTokenResponse struct {
 type PerformAccountDeactivationRequest struct {
 	Localpart  string
 	ServerName spec.ServerName // optional: if blank, default server name used
+	// Erase asks for the user's events to be served redacted to anyone who
+	// was not in the room when they were sent, and deletes the user's
+	// account data and 3PIDs (MSC4025).
+	Erase bool
 }
 
 // PerformAccountDeactivationResponse is the response for PerformAccountDeactivation.

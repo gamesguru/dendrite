@@ -60,6 +60,14 @@ type eventVisibility struct {
 	membershipCurrent string
 }
 
+// member reports whether the user saw the event as a member of the room:
+// joined, or invited under invited visibility. Only other viewers are served
+// redacted copies of events sent by erased users (MSC4025).
+func (ev eventVisibility) member() bool {
+	return ev.membershipAtEvent == spec.Join ||
+		(ev.membershipAtEvent == spec.Invite && ev.visibility == gomatrixserverlib.HistoryVisibilityInvited)
+}
+
 // allowed checks the eventVisibility if the user is allowed to see the event.
 // Rules as defined by https://spec.matrix.org/v1.3/client-server-api/#server-behaviour-5
 func (ev eventVisibility) allowed() (allowed bool) {
@@ -138,6 +146,8 @@ func ApplyHistoryVisibilityFilter(
 	// in Synapse, since both deliver sticky events in a section of their own.
 	now := time.Now()
 	showSticky := membershipCurrent == spec.Join && endpoint != SyncEndpoint && endpoint != SlidingSyncEndpoint
+	// Indexes into eventsFiltered of events visible without membership.
+	var nonMemberIdx []int
 
 	for _, ev := range events {
 		// Validate same room assumption
@@ -196,11 +206,61 @@ func ApplyHistoryVisibilityFilter(
 		// do the actual check
 		allowed := evVis.allowed()
 		if allowed {
+			if !evVis.member() {
+				nonMemberIdx = append(nonMemberIdx, len(eventsFiltered))
+			}
 			eventsFiltered = append(eventsFiltered, ev)
 		}
 	}
+	if err = redactErasedSenders(ctx, rsAPI, eventsFiltered, nonMemberIdx); err != nil {
+		return nil, err
+	}
 	calculateHistoryVisibilityDuration.With(prometheus.Labels{"api": endpoint}).Observe(float64(time.Since(start).Milliseconds()))
 	return eventsFiltered, nil
+}
+
+// redactErasedSenders replaces the events at the given indexes, which the
+// user sees without having been a member of the room when they were sent,
+// with redacted copies if their sender is erased (MSC4025).
+func redactErasedSenders(
+	ctx context.Context, rsAPI api.SyncRoomserverAPI,
+	events []*types.HeaderedEvent, indexes []int,
+) error {
+	if len(indexes) == 0 {
+		return nil
+	}
+	senders := make(map[string][]int, len(indexes)) // user ID -> indexes
+	for _, i := range indexes {
+		ev := events[i]
+		userID, err := rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
+		if err != nil || userID == nil {
+			continue
+		}
+		senders[userID.String()] = append(senders[userID.String()], i)
+	}
+	if len(senders) == 0 {
+		return nil
+	}
+	userIDs := make([]string, 0, len(senders))
+	for userID := range senders {
+		userIDs = append(userIDs, userID)
+	}
+	erased, err := rsAPI.QueryErasedUsers(ctx, userIDs)
+	if err != nil {
+		return fmt.Errorf("rsAPI.QueryErasedUsers: %w", err)
+	}
+	for userID := range erased {
+		for _, i := range senders[userID] {
+			redacted, err := types.RedactedCopy(events[i])
+			if err != nil {
+				return fmt.Errorf("types.RedactedCopy: %w", err)
+			}
+			copied := *events[i]
+			copied.PDU = redacted
+			events[i] = &copied
+		}
+	}
+	return nil
 }
 
 // visibilityForEvents returns a map from eventID to eventVisibility containing the visibility and the membership

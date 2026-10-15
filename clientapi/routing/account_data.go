@@ -87,7 +87,15 @@ func SaveAccountData(
 		}
 	}
 
-	if dataType == "m.fully_read" || dataType == "m.push_rules" || strings.HasPrefix(dataType, threePIDBindingPrefix) {
+	// The spec reserves these types for the server: a 405 with M_BAD_JSON
+	// rejects them for both global and room account data (MSC4010).
+	if dataType == "m.fully_read" || dataType == "m.push_rules" {
+		return util.JSONResponse{
+			Code: http.StatusMethodNotAllowed,
+			JSON: spec.BadJSON(fmt.Sprintf("Cannot set %s through this API.", dataType)),
+		}
+	}
+	if strings.HasPrefix(dataType, threePIDBindingPrefix) {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(fmt.Sprintf("Unable to modify %q using this API", dataType)),

@@ -223,6 +223,9 @@ type SyncRoomserverAPI interface {
 	// federation timestamp_to_event endpoint, which the sync API serves.
 	QueryServerBannedFromRoom(ctx context.Context, req *QueryServerBannedFromRoomRequest, res *QueryServerBannedFromRoomResponse) error
 	QueryServerAllowedToSeeEvent(ctx context.Context, serverName spec.ServerName, eventID string, roomID string) (allowed bool, err error)
+	// QueryErasedUsers returns the subset of userIDs that asked for erasure
+	// when deactivating their account (MSC4025).
+	QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error)
 }
 
 type AppserviceRoomserverAPI interface {
@@ -327,6 +330,9 @@ type UserRoomserverAPI interface {
 	QueryCurrentState(ctx context.Context, req *QueryCurrentStateRequest, res *QueryCurrentStateResponse) error
 	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error
 	PerformAdminEvacuateUser(ctx context.Context, userID string) (affected []string, err error)
+	// PerformUserErasure marks a local user as erased (MSC4025), or clears
+	// the mark when erased is false.
+	PerformUserErasure(ctx context.Context, userID spec.UserID, erased bool) error
 	PerformJoin(ctx context.Context, req *PerformJoinRequest) (roomID string, joinedVia spec.ServerName, err error)
 	JoinedUserCount(ctx context.Context, roomID string) (int, error)
 }
@@ -357,6 +363,10 @@ type FederationRoomserverAPI interface {
 	QueryMissingEvents(ctx context.Context, req *QueryMissingEventsRequest, res *QueryMissingEventsResponse) error
 	// Query whether a server is allowed to see an event
 	QueryServerAllowedToSeeEvent(ctx context.Context, serverName spec.ServerName, eventID string, roomID string) (allowed bool, err error)
+	// QueryServerEventVisibility reports whether a server is allowed to see
+	// an event, and whether it must get a redacted copy because the sender
+	// is erased and the server had no member in the room at the event.
+	QueryServerEventVisibility(ctx context.Context, serverName spec.ServerName, event gomatrixserverlib.PDU) (allowed, redact bool, err error)
 	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
 	QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (string, error)
 	PerformInboundPeek(ctx context.Context, req *PerformInboundPeekRequest, res *PerformInboundPeekResponse) error

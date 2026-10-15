@@ -450,3 +450,13 @@ func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint
 func (r *Admin) AdminQueryEmptyRooms(ctx context.Context) ([]string, error) {
 	return r.DB.EmptyRooms(ctx)
 }
+
+// PerformUserErasure marks a local user as erased, so that their events are
+// served redacted to anyone who was not in the room when they were sent
+// (MSC4025), or clears the mark when the account is reactivated.
+func (r *Admin) PerformUserErasure(ctx context.Context, userID spec.UserID, erased bool) error {
+	if !r.Cfg.Matrix.IsLocalServerName(userID.Domain()) {
+		return fmt.Errorf("user %q is not local", userID.String())
+	}
+	return r.DB.SetUserErased(ctx, userID.String(), erased)
+}

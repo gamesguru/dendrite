@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.7`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.10`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3` to `v1.7` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.8` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.10` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.11` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -16,7 +16,7 @@ Room versions returned by `/capabilities` are a separate namespace and must not 
 
 ## Scope and evidence
 
-This is a source-level audit of the next candidate versions, v1.3 through v1.7, with targeted checks of later features that could otherwise motivate raising the ceiling.
+This is a source-level audit of the next candidate versions, v1.3 through v1.10, with targeted checks of later features that could otherwise motivate raising the ceiling.
 It compares the release requirements with routing, handler behavior, storage, and existing tests in this repository.
 It does not claim an exhaustive behavioral certification through v1.19 or a fresh Sytest/Complement pass.
 A registered route establishes reachability only; authorization, pagination, response shape, and configuration dependence require separate evidence.
@@ -90,11 +90,39 @@ The [v1.7 changes](https://spec.matrix.org/v1.7/changelog/) add asynchronous med
 | Login tokens (MSC3882) | `clientapi/routing/login_token.go` serves `POST /v1/login/get_token` behind password re-authentication, with the `m.get_login_token` capability and `get_login_token` on the `m.login.token` flow; `login_token_test.go` covers single use. | Implemented; disabled with MSC3861, which the spec allows. |
 | Transaction IDs per device (MSC3970) | `internal/transactions` keys its cache by device, or by application service, and endpoint. | Implemented. |
 
-### v1.8 and later candidates
+### v1.8
+
+The [v1.8 changes](https://spec.matrix.org/v1.8/changelog/) add room version 11, `matrix-fed` SRV discovery, `+` in user IDs, and require reporters of an event to be joined to its room.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Room version 11 (MSC3820, MSC2174, MSC2175, MSC2176, MSC3821, MSC3989) | gomatrixserverlib implements the version; the roomserver applies room v11 redactions from `content.redacts` and keeps `third_party_invite.signed` when redacting membership events. | Implemented. |
+| `matrix-fed` SRV records (MSC4040) | gomatrixserverlib's `fclient/resolve.go` looks up `_matrix-fed._tcp` before the deprecated `_matrix._tcp`. | Implemented. |
+| `+` in user IDs (MSC4009) | `internal/validate.go` accepts `+` in localparts. | Implemented. |
+| Reporting events (MSC2249) | `clientapi/routing/report_event.go` returns 404 unless the reporter is joined to the room. | Implemented. |
+
+### v1.9
+
+[v1.9](https://spec.matrix.org/v1.9/changelog/) adds the `.m.rule.suppress_edits` default push rule (MSC3958), which `internal/pushrules/default_override.go` installs; the other changes are clarifications.
+
+### v1.10
+
+The [v1.10 changes](https://spec.matrix.org/v1.10/changelog/) add support discovery, local erasure requests, recursive relations, optional authentication on `/versions`, and `Retry-After` on rate limits, and reserve `m.push_rules` in the account data API.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Support discovery (MSC1929) | `clientapi/routing/routing.go` serves `/.well-known/matrix/support` from `global.support`, or 404 when unset; `wellknown_support_test.go` and `config_support_test.go` cover it. | Implemented. |
+| Erasure requests (MSC4025) | `/account/deactivate` and the MAS `delete_user` call record the user in `roomserver_erased_users`. `ApplyHistoryVisibilityFilter` and the federation `/event`, `/backfill` and `/get_missing_events` paths serve their events redacted to viewers without membership at the event; account data and 3PIDs are deleted. `clientapi/erasure_test.go`, `roomserver/erasure_test.go` and `history_visibility_erasure_test.go` cover it. | Implemented. |
+| Push rules in account data (MSC4010) | `clientapi/routing/account_data.go` rejects `m.push_rules` and `m.fully_read` with 405 `M_BAD_JSON`; `TestServerManagedAccountData` covers it. | Implemented. |
+| Recursive relations (MSC3981) | `syncapi/routing/relations.go` parses `recurse`, follows relations three levels deep and reports `recursion_depth`. | Implemented. |
+| Optional authentication on `/versions` (MSC4026) | `/versions` ignores credentials; `versions_test.go` covers unauthenticated and invalid bearer requests. | Compliant. |
+| `Retry-After` (MSC4041) | `internal/httputil/rate_limiting.go` sets `Retry-After` next to `retry_after_ms`. | Implemented. |
+| Application service login without a valid `as_token` | `clientapi/auth/login_application_service.go` requires an application service token. | Implemented. |
+
+### v1.11 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |
-| [v1.10](https://spec.matrix.org/v1.10/changelog/) | `Relations` parses `recurse`, follows relations three levels deep and reports `recursion_depth`; other v1.10 changes are unaudited. | Do not advertise. |
 | [v1.11](https://spec.matrix.org/v1.11/changelog/) | `mediaapi/routing/routing.go` registers authenticated client media routes, and sync annotates membership without an MSC4115 switch. | Keep feature-level discovery; no full review of the intervening releases has been recorded. |
 | [v1.15 room summaries](https://spec.matrix.org/v1.15/client-server-api/#room-summaries) | `/v1/room_summary/{roomIDOrAlias}` calls `GetRoomSummary`; `room_summary_test.go` tests access, response shape, and caching. | Selected feature implemented, not full v1.15 certification. |
 | [v1.19](https://spec.matrix.org/v1.19/client-server-api/) | Earlier mandatory behavior remains unresolved; no full audit of intervening releases has established conformance. | Do not advertise the latest version based on route counts. |

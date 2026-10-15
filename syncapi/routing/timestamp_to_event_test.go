@@ -389,3 +389,12 @@ func TestTimestampToEventRemote(t *testing.T) {
 		})
 	})
 }
+
+// QueryErasedUsers reports that no user is erased (MSC4025).
+func (*timestampRoomserver) QueryErasedUsers(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
+
+func (*timestampRoomserver) QueryUserIDForSender(_ context.Context, _ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	return senderID.ToUserID(), nil
+}

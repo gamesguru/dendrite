@@ -601,6 +601,42 @@ func (r *Queryer) QueryServerAllowedToSeeEvent(
 	)
 }
 
+// QueryServerEventVisibility implements api.FederationRoomserverAPI.
+func (r *Queryer) QueryServerEventVisibility(
+	ctx context.Context,
+	serverName spec.ServerName,
+	event gomatrixserverlib.PDU,
+) (allowed, redact bool, err error) {
+	info, err := r.DB.RoomInfo(ctx, event.RoomID().String())
+	if err != nil {
+		return false, false, err
+	}
+	if info == nil || info.IsStub() {
+		return false, false, nil
+	}
+	isInRoom, err := r.DB.GetServerInRoom(ctx, info.RoomNID, serverName)
+	if err != nil {
+		return false, false, fmt.Errorf("r.DB.GetServerInRoom: %w", err)
+	}
+	allowed, member, err := helpers.CheckServerEventAccess(
+		ctx, r.DB, info, event.RoomID().String(), event.EventID(), serverName, isInRoom, r,
+	)
+	if err != nil || !allowed || member {
+		return allowed, false, err
+	}
+	erased, err := helpers.ErasedSenderEvents(ctx, r.DB, r, []gomatrixserverlib.PDU{event}, map[string]struct{}{event.EventID(): {}})
+	if err != nil {
+		return false, false, err
+	}
+	_, redact = erased[event.EventID()]
+	return true, redact, nil
+}
+
+// QueryErasedUsers implements api.SyncRoomserverAPI.
+func (r *Queryer) QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	return r.DB.ErasedUsers(ctx, userIDs)
+}
+
 // QueryMissingEvents implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMissingEvents(
 	ctx context.Context,
@@ -664,7 +700,13 @@ func missingEventsResponse(
 	for _, event := range loadedEvents {
 		if !eventsToFilter[event.EventID()] {
 			if _, ok := redactEventIDs[event.EventID()]; ok {
-				event.Redact()
+				// Loaded events can be shared through the event cache, so
+				// redact a copy. A copy that cannot be made is left out.
+				redacted, err := types.RedactedCopy(event)
+				if err != nil {
+					continue
+				}
+				event = redacted
 			}
 			events = append(events, &types.HeaderedEvent{PDU: event})
 		}

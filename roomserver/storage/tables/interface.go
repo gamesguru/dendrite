@@ -218,6 +218,15 @@ type Annotations interface {
 	DeleteAnnotation(ctx context.Context, txn *sql.Tx, annotationEventID string) error
 }
 
+// ErasedUsers records local users who asked for erasure when deactivating
+// their account (MSC4025).
+type ErasedUsers interface {
+	InsertErasedUser(ctx context.Context, txn *sql.Tx, userID string, erasedTS int64) error
+	DeleteErasedUser(ctx context.Context, txn *sql.Tx, userID string) error
+	// SelectErasedUsers returns the subset of userIDs that is erased.
+	SelectErasedUsers(ctx context.Context, txn *sql.Tx, userIDs []string) (map[string]struct{}, error)
+}
+
 type Published interface {
 	UpsertRoomPublished(ctx context.Context, txn *sql.Tx, roomID, appserviceID, networkID string, published bool) (err error)
 	SelectPublishedFromRoomID(ctx context.Context, txn *sql.Tx, roomID string) (published bool, err error)

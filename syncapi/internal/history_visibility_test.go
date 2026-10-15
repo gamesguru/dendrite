@@ -20,6 +20,19 @@ type mockHisVisRoomserverAPI struct {
 	rsapi.RoomserverInternalAPI
 	events []*types.HeaderedEvent
 	roomID string
+	// membershipAt overrides the membership event at the given event IDs.
+	membershipAt map[string]*types.HeaderedEvent
+	erased       map[string]struct{}
+}
+
+func (s *mockHisVisRoomserverAPI) QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	for _, userID := range userIDs {
+		if _, ok := s.erased[userID]; ok {
+			result[userID] = struct{}{}
+		}
+	}
+	return result, nil
 }
 
 func (s *mockHisVisRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, roomID spec.RoomID, eventIDs []string, senderID spec.SenderID) (map[string]*types.HeaderedEvent, error) {
@@ -27,6 +40,10 @@ func (s *mockHisVisRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, ro
 		membershipMap := map[string]*types.HeaderedEvent{}
 
 		for _, queriedEventID := range eventIDs {
+			if ev, ok := s.membershipAt[queriedEventID]; ok {
+				membershipMap[queriedEventID] = ev
+				continue
+			}
 			for _, event := range s.events {
 				if event.EventID() == queriedEventID {
 					membershipMap[queriedEventID] = event

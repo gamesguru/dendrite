@@ -381,3 +381,8 @@ func mockStreamEvent(eventJSON []byte, streamPos types.StreamPosition, caller st
 		StreamPosition: streamPos,
 	}
 }
+
+// QueryErasedUsers reports that no user is erased (MSC4025).
+func (*mockRoomserverAPI) QueryErasedUsers(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}

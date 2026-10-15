@@ -105,6 +105,25 @@ State events, and aggregations that arrive with events over federation, are neve
 | --- | --- | --- | --- |
 | [MSC3231](https://github.com/matrix-org/matrix-spec-proposals/pull/3231) | Token authenticated registration | 1.2 | Implemented: registration tokens and the rate-limited, unauthenticated `/v1/register/m.login.registration_token/validity` check |
 
+## Accounts
+
+| MSC | Title | Spec | Status |
+| --- | --- | --- | --- |
+| [MSC1929](https://github.com/matrix-org/matrix-spec-proposals/pull/1929) | Homeserver admin contact and support page | 1.10 | Implemented: `/.well-known/matrix/support` serves `global.support` and returns 404 when it is unset |
+| [MSC4010](https://github.com/matrix-org/matrix-spec-proposals/pull/4010) | Push rules and account data | 1.10 | Implemented: setting `m.push_rules` or `m.fully_read` through `/account_data` fails with 405 `M_BAD_JSON`, for global and room account data |
+| [MSC4025](https://github.com/matrix-org/matrix-spec-proposals/pull/4025) | Local user erasure requests | 1.10 | Implemented: see [erasure](#erasure) |
+
+### Erasure
+
+`POST /_matrix/client/v3/account/deactivate` with `"erase": true`, and the MAS `delete_user` call with `erase`, mark the user as erased in `roomserver_erased_users`.
+From then on, their events are served redacted to clients and servers that see them only through `shared` or `world_readable` history visibility, in `/messages`, `/context`, `/event`, `/relations`, threads, `/sync` timelines, and federation `/event`, `/backfill` and `/get_missing_events`.
+A user who was joined when an event was sent, or invited under `invited` visibility, still sees it unredacted, as does a server that had such a user; this follows Synapse and approximates "joined before the erasure".
+No redaction events are sent and nothing is shared over federation, so other servers may still serve unredacted copies.
+Erasure also deletes the user's account data and 3PIDs, after their identity server bindings have been removed.
+Reactivating the account lifts the erasure, as in Synapse.
+
+Deactivation, with or without `erase`, unbinds the user's 3PIDs from `id_server`, or from every identity server that holds a binding, and reports `id_server_unbind_result`.
+
 ## Profiles
 
 | MSC | Title | Spec | Status |

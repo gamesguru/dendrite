@@ -672,9 +672,9 @@ type masDeleteUserRequest struct {
 	Erase     bool   `json:"erase"`
 }
 
-// MASDeleteUser deactivates a user account. The erase flag is best-effort:
-// deactivation removes devices and pushers, but no GDPR-style content purge
-// is performed.
+// MASDeleteUser deactivates a user account. With erase, the user's events
+// are served redacted to anyone who was not in the room when they were sent,
+// and the user's account data and 3PIDs are deleted (MSC4025).
 // POST /_synapse/mas/delete_user.
 func MASDeleteUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
 	var body masDeleteUserRequest
@@ -689,14 +689,11 @@ func MASDeleteUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.Cli
 		return *errRes
 	}
 
-	if body.Erase {
-		logrus.WithField("localpart", body.Localpart).Info("MAS admin: erase requested on user deletion; data purge is best-effort")
-	}
-
 	var deactivateRes userapi.PerformAccountDeactivationResponse
 	if err := userAPI.PerformAccountDeactivation(req.Context(), &userapi.PerformAccountDeactivationRequest{
 		Localpart:  body.Localpart,
 		ServerName: cfg.Matrix.ServerName,
+		Erase:      body.Erase,
 	}, &deactivateRes); err != nil {
 		logrus.WithError(err).Error("MAS admin: failed to deactivate user")
 		return util.JSONResponse{

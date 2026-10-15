@@ -46,10 +46,14 @@ const selectAccountDataSQL = "" +
 const selectAccountDataByTypeSQL = "" +
 	"SELECT content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
 
+const deleteAccountDataSQL = "" +
+	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
+
 type accountDataStatements struct {
 	insertAccountDataStmt       *sql.Stmt
 	selectAccountDataStmt       *sql.Stmt
 	selectAccountDataByTypeStmt *sql.Stmt
+	deleteAccountDataStmt       *sql.Stmt
 }
 
 func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
@@ -62,6 +66,7 @@ func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 		{&s.insertAccountDataStmt, insertAccountDataSQL},
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
+		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
 	}.Prepare(db)
 }
 
@@ -135,4 +140,11 @@ func (s *accountDataStatements) SelectAccountDataByType(
 	}
 	data = json.RawMessage(bytes)
 	return
+}
+
+func (s *accountDataStatements) DeleteAccountData(
+	ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.deleteAccountDataStmt).ExecContext(ctx, localpart, serverName)
+	return err
 }

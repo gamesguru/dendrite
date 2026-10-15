@@ -90,6 +90,17 @@ global:
   # Requires `well_known_client_name` to also be configured.
   well_known_sliding_sync_proxy: ''
 
+  # Server admin contacts and support page, served at
+  # /.well-known/matrix/support (MSC1929). Each contact needs a role
+  # (m.role.admin, m.role.security or a namespaced identifier) and a matrix_id,
+  # an email_address or both. Unset, the endpoint returns 404.
+  support:
+  #  contacts:
+  #    - matrix_id: "@admin:example.com"
+  #      email_address: admin@example.com
+  #      role: m.role.admin
+  #  support_page: https://example.com/support
+
   # MatrixRTC focus servers used for voice and video calls (MSC4143). They are
   # advertised to clients as "org.matrix.msc4143.rtc_foci" in
   # /.well-known/matrix/client. The URL is the lk-jwt-service endpoint, not the

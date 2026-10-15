@@ -379,6 +379,13 @@ func (d *Database) SaveAccountData(
 	})
 }
 
+// RemoveAllAccountData implements storage.AccountData.
+func (d *Database) RemoveAllAccountData(ctx context.Context, localpart string, serverName spec.ServerName) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.AccountDatas.DeleteAccountData(ctx, txn, localpart, serverName)
+	})
+}
+
 // GetAccountData returns account data related to a given localpart
 // If no account data could be found, returns an empty arrays
 // Returns an error if there was an issue with the retrieval.

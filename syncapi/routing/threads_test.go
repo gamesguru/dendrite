@@ -239,3 +239,8 @@ func (u *threadUserAPI) QueryAccessToken(_ context.Context, _ *userapi.QueryAcce
 	res.Device = &u.device
 	return nil
 }
+
+// QueryErasedUsers reports that no user is erased (MSC4025).
+func (*threadRoomserver) QueryErasedUsers(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}

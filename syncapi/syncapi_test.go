@@ -1484,3 +1484,8 @@ func toNATSMsgs(t *testing.T, cfg *config.Zendrite, input ...*rstypes.HeaderedEv
 	}
 	return result
 }
+
+// QueryErasedUsers reports that no user is erased (MSC4025).
+func (*syncRoomserverAPI) QueryErasedUsers(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}

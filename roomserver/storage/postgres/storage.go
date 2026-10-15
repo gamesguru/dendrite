@@ -135,6 +135,9 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreatePartialStateTable(db); err != nil {
 		return err
 	}
+	if err := CreateErasedUsersTable(db); err != nil {
+		return err
+	}
 	// Last, as its migration reads the events tables.
 	if err := CreateAnnotationsTable(db); err != nil {
 		return err
@@ -220,6 +223,10 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 	if err != nil {
 		return err
 	}
+	erasedUsers, err := PrepareErasedUsersTable(db)
+	if err != nil {
+		return err
+	}
 
 	d.Database = shared.Database{
 		DB: db,
@@ -247,6 +254,7 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 		PublishedTable:          published,
 		Purge:                   purge,
 		UserRoomKeyTable:        userRoomKeys,
+		ErasedUsersTable:        erasedUsers,
 		PartialStateTable:       partialState,
 		ClientTransactionsTable: clientTransactions,
 	}

@@ -734,9 +734,42 @@ func (a *UserInternalAPI) PerformAccountDeactivation(ctx context.Context, req *a
 		return err
 	}
 
+	if req.Erase {
+		if err = a.eraseAccount(ctx, req.Localpart, serverName); err != nil {
+			return err
+		}
+	}
+
 	err = a.DB.DeactivateAccount(ctx, req.Localpart, serverName)
 	res.AccountDeactivated = err == nil
 	return err
+}
+
+// eraseAccount handles an erasure request (MSC4025). The roomserver serves
+// the user's events redacted from now on to anyone who was not in the room
+// when they were sent; no redaction events are sent. The user's account data
+// and 3PIDs are deleted.
+func (a *UserInternalAPI) eraseAccount(ctx context.Context, localpart string, serverName spec.ServerName) error {
+	userID, err := spec.NewUserID(fmt.Sprintf("@%s:%s", localpart, serverName), true)
+	if err != nil {
+		return err
+	}
+	if err = a.RSAPI.PerformUserErasure(ctx, *userID, true); err != nil {
+		return fmt.Errorf("a.RSAPI.PerformUserErasure: %w", err)
+	}
+	if err = a.DB.RemoveAllAccountData(ctx, localpart, serverName); err != nil {
+		return fmt.Errorf("a.DB.RemoveAllAccountData: %w", err)
+	}
+	threepids, err := a.DB.GetThreePIDsForLocalpart(ctx, localpart, serverName)
+	if err != nil {
+		return fmt.Errorf("a.DB.GetThreePIDsForLocalpart: %w", err)
+	}
+	for _, threepid := range threepids {
+		if err = a.DB.RemoveThreePIDAssociation(ctx, threepid.Address, threepid.Medium, localpart, serverName); err != nil {
+			return fmt.Errorf("a.DB.RemoveThreePIDAssociation: %w", err)
+		}
+	}
+	return nil
 }
 
 // PerformAccountReactivation re-enables login for a previously deactivated
@@ -753,6 +786,14 @@ func (a *UserInternalAPI) PerformAccountReactivation(ctx context.Context, req *a
 
 	if err := a.DB.ReactivateAccount(ctx, req.Localpart, serverName); err != nil {
 		return err
+	}
+	// A reactivated user is no longer erased, as in Synapse.
+	userID, err := spec.NewUserID(fmt.Sprintf("@%s:%s", req.Localpart, serverName), true)
+	if err != nil {
+		return err
+	}
+	if err = a.RSAPI.PerformUserErasure(ctx, *userID, false); err != nil {
+		return fmt.Errorf("a.RSAPI.PerformUserErasure: %w", err)
 	}
 	res.AccountReactivated = true
 	return nil
