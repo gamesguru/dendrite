@@ -147,8 +147,8 @@ func TestTransientStalenessDoesNotStopAConsumer(t *testing.T) {
 	recovered := make(chan error, 1)
 	go func() { recovered <- AwaitOwnership(ctx, owner) }()
 	select {
-	case <-recovered:
-		t.Fatal("a stale consumer must wait instead of giving up")
+	case err := <-recovered:
+		t.Fatalf("a stale consumer must wait instead of giving up, got %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 

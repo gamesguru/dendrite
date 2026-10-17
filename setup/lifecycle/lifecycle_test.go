@@ -305,7 +305,10 @@ func TestHandOverIsBounded(t *testing.T) {
 		t.Fatalf("handover took %s, want its 200ms timeout", elapsed)
 	}
 	cancel(nil)
-	<-result
+	// The request still in flight keeps the homeserver from stopping in time.
+	if err := await(t, result); !errors.Is(err, ErrShutdownTimeout) {
+		t.Fatalf("stopping with a request in flight returned %v, want %v", err, ErrShutdownTimeout)
+	}
 }
 
 // Only an active homeserver hands over. Ownership loss during a handover
@@ -323,5 +326,7 @@ func TestHandOverOnlyWhileActive(t *testing.T) {
 	await(t, process.Quiescing(p.Context()))
 	cancel(errors.New("lease lost"))
 	await(t, handedOver)
-	<-result
+	if err := await(t, result); err != nil {
+		t.Fatalf("stopping after losing ownership: %v", err)
+	}
 }
