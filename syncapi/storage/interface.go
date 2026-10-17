@@ -178,6 +178,9 @@ type Database interface {
 	// PurgeRoomState completely purges room state from the sync API. This is done when
 	// receiving an output event that completely resets the state.
 	PurgeRoomState(ctx context.Context, roomID string) error
+	// CurrentStateEventIDs returns the event IDs of a room's current state in
+	// the sync API, which is empty if the sync API has no state for the room.
+	CurrentStateEventIDs(ctx context.Context, roomID string) ([]string, error)
 	// PurgeRoom entirely eliminates a room from the sync API, timeline, state and all.
 	PurgeRoom(ctx context.Context, roomID string) error
 	// UpsertAccountData keeps track of new or updated account data, by saving the type

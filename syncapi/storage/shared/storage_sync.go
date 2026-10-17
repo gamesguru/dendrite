@@ -773,6 +773,12 @@ func (d *Database) PurgeRoomState(
 	})
 }
 
+func (d *Database) CurrentStateEventIDs(
+	ctx context.Context, roomID string,
+) ([]string, error) {
+	return d.CurrentRoomState.SelectRoomStateEventIDs(ctx, nil, roomID)
+}
+
 func (d *DatabaseTransaction) MaxStreamPositionForRelations(ctx context.Context) (types.StreamPosition, error) {
 	id, err := d.Relations.SelectMaxRelationID(ctx, d.txn)
 	return types.StreamPosition(id), err

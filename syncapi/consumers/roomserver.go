@@ -230,6 +230,52 @@ func (s *OutputRoomEventConsumer) producePushEvent(msg *nats.Msg) error {
 	return nil
 }
 
+// rewriteAsStateDelta turns an event that rewrites a room's state into the
+// difference from the state the sync API already has for the room, if any.
+// The event's state change is written to the stream, and incremental syncs
+// load every state event it lists: with the full state of a large room, that
+// made each such event cost a sync the whole room state, again and again,
+// although almost none of it had changed.
+func (s *OutputRoomEventConsumer) rewriteAsStateDelta(ctx context.Context, msg *api.OutputNewRoomEvent) error {
+	current, err := s.db.CurrentStateEventIDs(ctx, msg.Event.RoomID().String())
+	if err != nil {
+		return fmt.Errorf("s.db.CurrentStateEventIDs: %w", err)
+	}
+	if len(current) == 0 {
+		// Nothing to compare with, as on a federated join: keep the rewrite.
+		return nil
+	}
+	have := make(map[string]bool, len(current))
+	for _, eventID := range current {
+		have[eventID] = true
+	}
+	next := make(map[string]bool, len(msg.AddsStateEventIDs))
+	adds := make([]string, 0)
+	for _, eventID := range msg.AddsStateEventIDs {
+		next[eventID] = true
+		if !have[eventID] {
+			adds = append(adds, eventID)
+		}
+	}
+	removes := make([]string, 0)
+	for _, eventID := range current {
+		if !next[eventID] {
+			removes = append(removes, eventID)
+		}
+	}
+	log.WithFields(log.Fields{
+		"room_id":    msg.Event.RoomID().String(),
+		"event_id":   msg.Event.EventID(),
+		"rewrites":   len(msg.AddsStateEventIDs),
+		"adds_state": len(adds),
+		"removes":    len(removes),
+	}).Debug("Writing a state rewrite as the difference from the current sync API state")
+	msg.AddsStateEventIDs = adds
+	msg.RemovesStateEventIDs = removes
+	msg.RewritesState = false
+	return nil
+}
+
 func (s *OutputRoomEventConsumer) onRedactEvent(
 	ctx context.Context, msg api.OutputRedactedEvent,
 ) error {
@@ -271,6 +317,11 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	}
 
 	started := time.Now()
+	if msg.RewritesState {
+		if err := s.rewriteAsStateDelta(ctx, &msg); err != nil {
+			return err
+		}
+	}
 	addsStateEvents, missingEventIDs := msg.NeededStateEventIDs()
 
 	// Work out the list of events we need to find out about. Either

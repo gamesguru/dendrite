@@ -28,6 +28,7 @@ type eventMods struct {
 	authEvents     []string
 	redacts        string
 	sticky         *gomatrixserverlib.StickyEventData
+	prevEvents     []string
 }
 
 type eventModifier func(e *eventMods)
@@ -79,6 +80,14 @@ func WithRedacts(eventID string) eventModifier {
 func WithStickyDuration(d time.Duration) eventModifier {
 	return func(e *eventMods) {
 		e.sticky = &gomatrixserverlib.StickyEventData{DurationMillis: d.Milliseconds()}
+	}
+}
+
+// WithPrevEvents sets the event's prev_events instead of the room's last event,
+// to build a fork in the room DAG.
+func WithPrevEvents(eventIDs ...string) eventModifier {
+	return func(e *eventMods) {
+		e.prevEvents = eventIDs
 	}
 }
 

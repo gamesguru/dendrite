@@ -200,6 +200,9 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 	if depth > 1 {
 		builder.PrevEvents = []string{r.events[len(r.events)-1].EventID()}
 	}
+	if len(mod.prevEvents) > 0 {
+		builder.PrevEvents = mod.prevEvents
+	}
 
 	err = builder.AddAuthEvents(r.authEvents)
 	if err != nil {

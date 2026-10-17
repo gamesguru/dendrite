@@ -96,6 +96,9 @@ const deleteRoomStateByEventIDsSQL = "" +
 const deleteRoomStateForRoomSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE room_id = $1"
 
+const selectRoomStateEventIDsSQL = "" +
+	"SELECT event_id FROM syncapi_current_room_state WHERE room_id = $1"
+
 const selectRoomIDsWithMembershipSQL = "" +
 	"SELECT DISTINCT room_id FROM syncapi_current_room_state WHERE type = 'm.room.member' AND state_key = $1 AND membership = $2"
 
@@ -152,6 +155,7 @@ type currentRoomStateStatements struct {
 	deleteRoomStateByEventIDStmt       *sql.Stmt
 	deleteRoomStateByEventIDsStmt      *sql.Stmt
 	deleteRoomStateForRoomStmt         *sql.Stmt
+	selectRoomStateEventIDsStmt        *sql.Stmt
 	selectRoomIDsWithMembershipStmt    *sql.Stmt
 	selectKickedRoomIDsStmt            *sql.Stmt
 	selectRoomIDsWithAnyMembershipStmt *sql.Stmt
@@ -189,6 +193,7 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 		{&s.deleteRoomStateByEventIDStmt, deleteRoomStateByEventIDSQL},
 		{&s.deleteRoomStateByEventIDsStmt, deleteRoomStateByEventIDsSQL},
 		{&s.deleteRoomStateForRoomStmt, deleteRoomStateForRoomSQL},
+		{&s.selectRoomStateEventIDsStmt, selectRoomStateEventIDsSQL},
 		{&s.selectRoomIDsWithMembershipStmt, selectRoomIDsWithMembershipSQL},
 		{&s.selectKickedRoomIDsStmt, selectKickedRoomIDsSQL},
 		{&s.selectRoomIDsWithAnyMembershipStmt, selectRoomIDsWithAnyMembershipSQL},
@@ -386,6 +391,27 @@ func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateForRoomStmt)
 	_, err := stmt.ExecContext(ctx, roomID)
 	return err
+}
+
+// SelectRoomStateEventIDs returns the event IDs of a room's current state.
+func (s *currentRoomStateStatements) SelectRoomStateEventIDs(
+	ctx context.Context, txn *sql.Tx, roomID string,
+) ([]string, error) {
+	stmt := sqlutil.TxStmt(txn, s.selectRoomStateEventIDsStmt)
+	rows, err := stmt.QueryContext(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "selectRoomStateEventIDs: rows.close() failed")
+	var eventIDs []string
+	for rows.Next() {
+		var eventID string
+		if err = rows.Scan(&eventID); err != nil {
+			return nil, err
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	return eventIDs, rows.Err()
 }
 
 func (s *currentRoomStateStatements) UpsertRoomState(

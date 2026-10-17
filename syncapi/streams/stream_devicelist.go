@@ -31,16 +31,26 @@ func (p *DeviceListStreamProvider) IncrementalSync(
 	from, to types.StreamPosition,
 ) types.StreamPosition {
 	var err error
-	to, _, err = internal.DeviceListCatchup(context.Background(), snapshot, p.userAPI, p.rsAPI, req.Device.UserID, req.Response, from, to) //nolint:contextcheck
+	to, _, err = internal.DeviceListCatchup(ctx, snapshot, p.userAPI, p.rsAPI, req.Device.UserID, req.Response, from, to)
 	if err != nil {
-		req.Log.WithError(err).Error("internal.DeviceListCatchup failed")
+		logDeviceListFailure(ctx, req, err)
 		return from
 	}
-	err = internal.DeviceOTKCounts(req.Context, p.userAPI, req.Device.UserID, req.Device.ID, req.Response) //nolint:contextcheck
+	err = internal.DeviceOTKCounts(ctx, p.userAPI, req.Device.UserID, req.Device.ID, req.Response)
 	if err != nil {
-		req.Log.WithError(err).Error("internal.DeviceListCatchup failed")
+		logDeviceListFailure(ctx, req, err)
 		return from
 	}
 
 	return to
+}
+
+// logDeviceListFailure reports a failed device list catch-up, which is routine
+// when the client gave up on the sync and its request context was canceled.
+func logDeviceListFailure(ctx context.Context, req *types.SyncRequest, err error) {
+	if ctx.Err() != nil {
+		req.Log.WithError(err).Debug("internal.DeviceListCatchup abandoned, the client went away")
+		return
+	}
+	req.Log.WithError(err).Error("internal.DeviceListCatchup failed")
 }

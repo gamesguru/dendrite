@@ -380,6 +380,11 @@ func (r *Inputer) processRoomEvent(
 	// subsequent transaction.
 	didStateResolution := false
 	var stateResolutionRoomID string
+	// stateFromGap is set when the state before the event was fetched to
+	// bridge a gap in the room DAG. That state covers the remote server's
+	// branch only, so unlike the state given with a federated join it must
+	// not replace the room's current state and forward extremities.
+	stateFromGap := false
 
 	if missingPrev && input.Kind == api.KindNew && !input.SkipMissingEvents {
 		// Don't do this for KindOld events, otherwise old events that we fetch
@@ -466,6 +471,7 @@ func (r *Inputer) processRoomEvent(
 						missingPrev = false
 						input.HasState = true
 						input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
+						stateFromGap = true
 					}
 				}
 			} else if stateSnapshot != nil {
@@ -476,6 +482,7 @@ func (r *Inputer) processRoomEvent(
 				missingPrev = false
 				input.HasState = true
 				input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
+				stateFromGap = true
 			} else {
 				// We retrieved some state and it would appear that rolling forward the
 				// state did everything we needed it to do, so we can just resolve the
@@ -697,6 +704,8 @@ func (r *Inputer) processRoomEvent(
 				return fmt.Errorf("r.DB.StoreClientTransaction: %w", err)
 			}
 		}
+		// State fetched to bridge a gap is merged like any other state.
+		rewritesState := input.HasState && !stateFromGap
 		localLeftJoin, err := r.updateLatestEvents(
 			ctx,                 // context
 			roomInfo,            // room info for the room being updated
@@ -704,7 +713,7 @@ func (r *Inputer) processRoomEvent(
 			event,               // event
 			input.SendAsServer,  // send as server
 			input.TransactionID, // transaction ID
-			input.HasState,      // rewrites state?
+			rewritesState,       // rewrites state?
 			historyVisibility,   // the history visibility before the event
 		)
 		if err != nil {

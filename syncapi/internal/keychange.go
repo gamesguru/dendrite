@@ -255,7 +255,11 @@ func filterSharedUsers(
 	}
 	sharedUsers, err := db.SharedUsers(ctx, userID, usersWithChangedKeys)
 	if err != nil {
-		util.GetLogger(ctx).WithError(err).Errorf("db.SharedUsers failed: %s", err)
+		// A canceled request rolls back the sync snapshot, so the failure is
+		// routine once the client has gone away.
+		if ctx.Err() == nil {
+			util.GetLogger(ctx).WithError(err).Errorf("db.SharedUsers failed: %s", err)
+		}
 		// default to all users so we do needless queries rather than miss some important device update
 		return sharedUsersMap
 	}

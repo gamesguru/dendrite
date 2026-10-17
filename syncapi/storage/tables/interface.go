@@ -120,6 +120,8 @@ type CurrentRoomState interface {
 	// DeleteRoomStateByEventIDs removes the current state rows for every given event ID.
 	DeleteRoomStateByEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) error
 	DeleteRoomStateForRoom(ctx context.Context, txn *sql.Tx, roomID string) error
+	// SelectRoomStateEventIDs returns the event IDs of a room's current state.
+	SelectRoomStateEventIDs(ctx context.Context, txn *sql.Tx, roomID string) ([]string, error)
 	// SelectCurrentState returns all the current state events for the given room.
 	SelectCurrentState(ctx context.Context, txn *sql.Tx, roomID string, stateFilter *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	// SelectRoomIDsWithMembership returns the list of room IDs which have the given user in the given membership state.
