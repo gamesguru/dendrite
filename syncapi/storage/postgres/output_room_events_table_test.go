@@ -49,14 +49,36 @@ func TestOutputEventTimestampUpgrade(t *testing.T) {
 			} else {
 				require.ErrorContains(t, err, "unsupported Unicode escape sequence")
 			}
+			// PostgreSQL reads the plain row, Go decodes the ones its JSON parser rejects.
+			mixed := map[string]string{
+				"$plain":   `{"content":{"body":"plain"},"origin_server_ts":5678}`,
+				"$missing": `{"content":{"body":"no timestamp"}}`,
+			}
+			want := map[string]int64{"$plain": 5678, "$missing": 0}
+			if !oldIndex {
+				// The old index rejects lone surrogates, so only servers without it have them.
+				mixed["$surrogate"] = `{"content":{"body":"\ud800"},"origin_server_ts":91011}`
+				want["$surrogate"] = 91011
+			}
+			for eventID, mixedJSON := range mixed {
+				_, err = db.ExecContext(ctx, `INSERT INTO syncapi_output_room_events
+					(event_id, room_id, headered_event_json, type, sender, contains_url)
+					VALUES ($1, $2, $3, 'm.room.message', $4, false)`, eventID, room.ID, mixedJSON, alice.ID)
+				require.NoError(t, err)
+			}
 
-			tab, err := NewPostgresEventsTable(db)
+			tab, err := NewPostgresEventsTable(ctx, db)
 			require.NoError(t, err)
 			var count int
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM syncapi_output_room_events WHERE origin_server_ts = 1234 AND headered_event_json = $1`, string(legacyJSON)).Scan(&count))
 			require.Equal(t, 1001, count)
+			for eventID, ts := range want {
+				var got int64
+				require.NoError(t, db.QueryRowContext(ctx, `SELECT origin_server_ts FROM syncapi_output_room_events WHERE event_id = $1`, eventID).Scan(&got))
+				require.Equal(t, ts, got, eventID)
+			}
 			// Startup is repeatable, without rebuilding or repeating the backfill.
-			_, err = NewPostgresEventsTable(db)
+			_, err = NewPostgresEventsTable(ctx, db)
 			require.NoError(t, err)
 			_, err = db.ExecContext(ctx, `DELETE FROM syncapi_output_room_events`)
 			require.NoError(t, err)

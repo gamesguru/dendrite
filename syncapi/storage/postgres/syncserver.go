@@ -39,7 +39,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	events, err := NewPostgresEventsTable(d.db) //nolint:contextcheck
+	events, err := NewPostgresEventsTable(ctx, d.db)
 	if err != nil {
 		return nil, err
 	}

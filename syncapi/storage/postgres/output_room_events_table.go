@@ -232,9 +232,9 @@ type outputRoomEventsStatements struct {
 	selectMaxStreamPositionsForRoomsStmt *sql.Stmt
 }
 
-func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
+func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, error) {
 	s := &outputRoomEventsStatements{}
-	_, err := db.Exec(outputRoomEventsSchema)
+	_, err := db.ExecContext(ctx, outputRoomEventsSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -242,10 +242,10 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 	migrationName := "syncapi: rename dupe index (output_room_events)"
 
 	var cName string
-	err = db.QueryRowContext(context.Background(), "select constraint_name from information_schema.table_constraints where table_name = 'syncapi_output_room_events' AND constraint_name = 'syncapi_event_id_idx'").Scan(&cName)
+	err = db.QueryRowContext(ctx, "select constraint_name from information_schema.table_constraints where table_name = 'syncapi_output_room_events' AND constraint_name = 'syncapi_event_id_idx'").Scan(&cName)
 	if errors.Is(err, sql.ErrNoRows) {
 		// migration was already executed, as the index was renamed
-		if err = sqlutil.InsertMigration(context.Background(), db, migrationName); err != nil {
+		if err = sqlutil.InsertMigration(ctx, db, migrationName); err != nil {
 			return nil, fmt.Errorf("unable to manually insert migration '%s': %w", migrationName, err)
 		}
 	} else if err != nil {
@@ -256,7 +256,9 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 	m.AddMigrations(
 		sqlutil.Migration{
 			Version: "syncapi: store output event timestamps separately",
-			Up:      deltas.UpAddOutputRoomEventTimestamp,
+			Up: func(ctx context.Context, tx *sql.Tx) error {
+				return deltas.UpAddOutputRoomEventTimestamp(ctx, db, tx)
+			},
 		},
 		sqlutil.Migration{
 			Version: "syncapi: add history visibility column (output_room_events)",
@@ -271,7 +273,7 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 			Up:      deltas.UpRestoreOutputRoomEventIDs,
 		},
 	)
-	err = m.Up(context.Background())
+	err = m.Up(ctx)
 	if err != nil {
 		return nil, err
 	}
