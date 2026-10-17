@@ -591,17 +591,7 @@ func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserve
 	// The relationship index is built asynchronously from the output stream.
 	stream := cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent)
 	durable := cfg.Global.JetStream.Durable("MSC2836RoomServerConsumer") + "Pull"
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		info, infoErr := js.ConsumerInfo(stream, durable)
-		if infoErr == nil && info.NumPending == 0 && info.NumAckPending == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("relationships were not indexed: %v %+v", infoErr, info)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	msc2836.WaitConsumed(t, js, stream, durable)
 	return routers.Client
 }
 

@@ -96,6 +96,25 @@ client_api:
 The `id` and `version` use the spec's opaque identifier grammar (letters, digits, `.`, `_`, `~` and `-`), and each URL must use `http` or `https`.
 Zendrite does not record which version a user accepted.
 
+## Password reset by email
+
+Users who forgot their password can reset it with an email address on their account, through `POST /_matrix/client/v3/account/password/email/requestToken` and `POST /_matrix/client/v3/account/password` without an access token.
+This needs `client_api.email_validation_server`: Zendrite sends no email itself, so that identity server sends the validation email.
+
+```yaml
+global:
+  trusted_third_party_id_servers:
+    - vector.im
+client_api:
+  email_validation_server: vector.im
+```
+
+Only this server is trusted to vouch for an address; an `id_server` the client names is ignored, because an identity server it chose could claim any address and take over the account.
+Requests for an address that no account has fail with `M_THREEPID_NOT_FOUND`, as the spec requires, which tells the caller whether an address is registered.
+Both endpoints are rate-limited per client address.
+After the reset, all of the user's devices are logged out unless the request sets `logout_devices` to `false`.
+Phone numbers are not supported, and with MSC3861 the authentication service handles password resets instead.
+
 ## Call guests
 
 Call guests let people without a Matrix account join calls on your homeserver by link, while normal registration stays closed.

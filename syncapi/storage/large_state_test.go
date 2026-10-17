@@ -100,20 +100,23 @@ func (c *statementCounter) measure(t *testing.T, what string, f func()) {
 // and checks the result and that a redelivered write changes nothing.
 func TestWriteEventLargeState(t *testing.T) {
 	n := largeStateEntries(t)
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-	for i := range n {
-		room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Invite},
-			test.WithStateKey(fmt.Sprintf("@member%d:test", i)))
-	}
-	ev := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "large"}, test.WithStateKey(""))
-	state := room.CurrentState()
-	stateIDs := make([]string, len(state))
-	for i, s := range state {
-		stateIDs[i] = s.EventID()
-	}
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Each backend gets its own room: the backends run in parallel, and
+		// WriteEvent sets the history visibility on the events it writes.
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		for i := range n {
+			room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Invite},
+				test.WithStateKey(fmt.Sprintf("@member%d:test", i)))
+		}
+		ev := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "large"}, test.WithStateKey(""))
+		state := room.CurrentState()
+		stateIDs := make([]string, len(state))
+		for i, s := range state {
+			stateIDs[i] = s.EventID()
+		}
+
 		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
 		defer closeDB()
 		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
@@ -180,12 +183,13 @@ func TestWriteEventLargeState(t *testing.T) {
 // keeps the replace semantics of the row-by-row one: a removed event's row
 // goes, and a later event for the same type and state key wins.
 func TestWriteEventReplacesState(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-	first := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "first"}, test.WithStateKey(""))
-	second := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "second"}, test.WithStateKey(""))
-
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		// Each backend gets its own room, as in TestWriteEventLargeState.
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		first := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "first"}, test.WithStateKey(""))
+		second := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "second"}, test.WithStateKey(""))
+
 		db, closeDB := MustCreateDatabase(t, dbType)
 		defer closeDB()
 		MustWriteEvents(t, db, room.Events()[:len(room.Events())-2])

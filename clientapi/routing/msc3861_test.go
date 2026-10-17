@@ -113,6 +113,8 @@ func TestMSC3861_DisabledEndpoints(t *testing.T) {
 		{"register", http.MethodPost, "/_matrix/client/v3/register"},
 		{"register available", http.MethodGet, "/_matrix/client/v3/register/available"},
 		{"password", http.MethodPost, "/_matrix/client/v3/account/password"},
+		{"password email requestToken", http.MethodPost, "/_matrix/client/v3/account/password/email/requestToken"},
+		{"password msisdn requestToken", http.MethodPost, "/_matrix/client/v3/account/password/msisdn/requestToken"},
 		{"deactivate", http.MethodPost, "/_matrix/client/v3/account/deactivate"},
 		{"3pid POST", http.MethodPost, "/_matrix/client/v3/account/3pid"},
 		{"3pid add", http.MethodPost, "/_matrix/client/v3/account/3pid/add"},

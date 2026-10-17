@@ -98,12 +98,23 @@ func (f *consumerFixture) children(t *testing.T) []eventInfo {
 // nothing is left pending for redelivery.
 func (f *consumerFixture) waitIndexed(t *testing.T) {
 	t.Helper()
-	stream := f.cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent)
-	durable := f.cfg.Global.JetStream.Durable(consumerName) + "Pull"
+	waitConsumed(t, f.js, f.cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent), f.cfg.Global.JetStream.Durable(consumerName)+"Pull")
+}
+
+// waitConsumed waits until the durable has acknowledged every message
+// published to the stream so far. The consumer's pending counts alone are
+// not enough: the server updates them after a publish asynchronously, so
+// right after publishing they can read zero before the consumer has seen
+// anything. The ack floor reaching the stream's last sequence cannot.
+func waitConsumed(t *testing.T, js nats.JetStreamContext, stream, durable string) {
+	t.Helper()
+	streamInfo, err := js.StreamInfo(stream)
+	require.NoError(t, err)
+	last := streamInfo.State.LastSeq
 	require.Eventually(t, func() bool {
-		info, err := f.js.ConsumerInfo(stream, durable)
-		return err == nil && info.NumPending == 0 && info.NumAckPending == 0
-	}, 10*time.Second, 50*time.Millisecond, "relationship consumer left messages unacknowledged")
+		info, err := js.ConsumerInfo(stream, durable)
+		return err == nil && info.AckFloor.Stream >= last && info.NumAckPending == 0
+	}, 10*time.Second, 20*time.Millisecond, "relationship consumer did not acknowledge every message up to stream sequence %d", last)
 }
 
 func TestRelationshipConsumerIndexesNewAndOldEvents(t *testing.T) {

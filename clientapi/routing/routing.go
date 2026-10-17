@@ -972,13 +972,42 @@ func Setup(
 
 	if oidcEnabled {
 		v3mux.Handle("/account/password", msc3861ForbiddenHandler("password")).Methods(http.MethodPost, http.MethodOptions)
+		v3mux.Handle("/account/password/{medium:(?:email|msisdn)}/requestToken",
+			msc3861ForbiddenHandler("password_request_token")).Methods(http.MethodPost, http.MethodOptions)
 	} else {
-		v3mux.Handle("/account/password",
-			httputil.MakeAuthAPI("password", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-				if r := rateLimits.Limit(req, device); r != nil {
+		changePassword := httputil.MakeAuthAPI("password", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			if r := rateLimits.Limit(req, device); r != nil {
+				return *r
+			}
+			return Password(req, userAPI, device, cfg)
+		})
+		// Without an access token, a user who forgot their password resets
+		// it by proving control of an email address on the account.
+		resetPassword := httputil.MakeExternalAPI("password_reset", func(req *http.Request) util.JSONResponse {
+			if r := rateLimits.Limit(req, nil); r != nil {
+				return *r
+			}
+			return PasswordReset(req, userAPI, cfg, threePIDClient)
+		})
+		v3mux.Handle("/account/password", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if _, err := auth.ExtractAccessToken(req); err != nil && req.Method == http.MethodPost {
+				resetPassword.ServeHTTP(w, req)
+				return
+			}
+			changePassword.ServeHTTP(w, req)
+		})).Methods(http.MethodPost, http.MethodOptions)
+
+		v3mux.Handle("/account/password/email/requestToken",
+			httputil.MakeExternalAPI("password_request_token", func(req *http.Request) util.JSONResponse {
+				if r := rateLimits.Limit(req, nil); r != nil {
 					return *r
 				}
-				return Password(req, userAPI, device, cfg)
+				return RequestPasswordResetEmailToken(req, userAPI, cfg, threePIDClient)
+			}),
+		).Methods(http.MethodPost, http.MethodOptions)
+		v3mux.Handle("/account/password/msisdn/requestToken",
+			httputil.MakeExternalAPI("password_request_token", func(req *http.Request) util.JSONResponse {
+				return RequestPasswordResetMSISDNToken()
 			}),
 		).Methods(http.MethodPost, http.MethodOptions)
 	}

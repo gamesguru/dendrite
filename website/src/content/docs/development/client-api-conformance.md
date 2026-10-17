@@ -143,6 +143,7 @@ The [v1.11 changes](https://spec.matrix.org/v1.11/changelog/) add authenticated 
 ### Related route-audit findings
 
 - **3PID management:** `clientapi/routing/routing.go` provides listing, legacy association, deletion, and email token requests, but lacks the distinct `/account/3pid/add`, `/bind`, `/unbind`, and MSISDN token routes.
+  Password reset by email (`/account/password/email/requestToken` and `/account/password` without an access token) works when `client_api.email_validation_server` is set; MSISDN password reset returns `M_THREEPID_MEDIUM_NOT_SUPPORTED`.
   MSC3861 intentionally disables local account mutation and delegates account management; that configuration is not evidence for native 3PID support.
 - **Mutual rooms:** No mutual-rooms handler is registered in client or sync routing.
   Treat this as a feature gap, not as proof that an unspecified stable release requires an experimental endpoint.

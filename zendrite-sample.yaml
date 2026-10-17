@@ -253,6 +253,8 @@ client_api:
   # with an OpenID token over federation, so it must be able to reach this homeserver.
   # Email addresses and verification client secrets are sent to this server.
   # Leave empty to require an explicit id_server in email verification requests.
+  # This server also sends the emails for password reset, which is only offered
+  # when it is set: the reset trusts it to vouch for the address.
   email_validation_server: ''
 
   # Lifetime of access tokens issued with a refresh token, for clients that request

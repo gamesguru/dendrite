@@ -80,7 +80,12 @@ func TestPerformFederatedKnock(t *testing.T) {
 		require.NoError(t, err)
 
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
-		fedAPI := &knockFederationAPI{knock: knock.PDU, state: state}
+		// The knock flow sets unsigned fields on the event federation
+		// returns, so each parallel subtest needs its own copy, as a real
+		// federation response would be.
+		ownKnock, err := gomatrixserverlib.MustGetRoomVersion(knock.Version()).NewEventFromTrustedJSON(knock.JSON(), false)
+		require.NoError(t, err)
+		fedAPI := &knockFederationAPI{knock: ownKnock, state: state}
 		rsAPI.SetFederationAPI(fedAPI, nil)
 		bobID, err := spec.NewUserID(bob.ID, true)
 		require.NoError(t, err)
