@@ -178,6 +178,11 @@ column roomserver_reported_events | received_ts | bigint | NO |
 column roomserver_reported_events | reporting_user_nid | bigint | NO |
 column roomserver_reported_events | room_nid | bigint | NO |
 column roomserver_reported_events | score | integer | YES |
+column roomserver_reported_rooms | id | bigint | NO | nextval('roomserver_reported_rooms_id_seq'::regclass)
+column roomserver_reported_rooms | reason | text | NO |
+column roomserver_reported_rooms | received_ts | bigint | NO |
+column roomserver_reported_rooms | room_id | text | NO |
+column roomserver_reported_rooms | user_id | text | NO |
 column roomserver_room_aliases | alias | text | NO |
 column roomserver_room_aliases | creator_id | text | NO |
 column roomserver_room_aliases | room_id | text | NO |
@@ -363,6 +368,7 @@ column userapi_accounts | localpart | text | NO |
 column userapi_accounts | locked | boolean | NO | false
 column userapi_accounts | password_hash | text | YES |
 column userapi_accounts | server_name | text | NO |
+column userapi_accounts | suspended | boolean | NO | false
 column userapi_daily_stats | active_e2ee_rooms | bigint | NO |
 column userapi_daily_stats | active_rooms | bigint | NO |
 column userapi_daily_stats | e2ee_messages | bigint | NO |
@@ -570,6 +576,7 @@ index roomserver_published | roomserver_published_pkey | CREATE UNIQUE INDEX roo
 index roomserver_redactions | roomserver_redactions_pkey | CREATE UNIQUE INDEX roomserver_redactions_pkey ON public.roomserver_redactions USING btree (redaction_event_id)
 index roomserver_redactions | roomserver_redactions_redacts_event_id | CREATE INDEX roomserver_redactions_redacts_event_id ON public.roomserver_redactions USING btree (redacts_event_id)
 index roomserver_reported_events | roomserver_reported_events_pkey | CREATE UNIQUE INDEX roomserver_reported_events_pkey ON public.roomserver_reported_events USING btree (id)
+index roomserver_reported_rooms | roomserver_reported_rooms_pkey | CREATE UNIQUE INDEX roomserver_reported_rooms_pkey ON public.roomserver_reported_rooms USING btree (id)
 index roomserver_room_aliases | roomserver_room_aliases_pkey | CREATE UNIQUE INDEX roomserver_room_aliases_pkey ON public.roomserver_room_aliases USING btree (alias)
 index roomserver_room_aliases | roomserver_room_id_idx | CREATE INDEX roomserver_room_id_idx ON public.roomserver_room_aliases USING btree (room_id)
 index roomserver_rooms | roomserver_room_id_unique | CREATE UNIQUE INDEX roomserver_room_id_unique ON public.roomserver_rooms USING btree (room_id)
@@ -913,6 +920,12 @@ constraint roomserver_reported_events | roomserver_reported_events_pkey | PRIMAR
 constraint roomserver_reported_events | roomserver_reported_events_received_ts_not_null | NOT NULL received_ts
 constraint roomserver_reported_events | roomserver_reported_events_reporting_user_nid_not_null | NOT NULL reporting_user_nid
 constraint roomserver_reported_events | roomserver_reported_events_room_nid_not_null | NOT NULL room_nid
+constraint roomserver_reported_rooms | roomserver_reported_rooms_id_not_null | NOT NULL id
+constraint roomserver_reported_rooms | roomserver_reported_rooms_pkey | PRIMARY KEY (id)
+constraint roomserver_reported_rooms | roomserver_reported_rooms_reason_not_null | NOT NULL reason
+constraint roomserver_reported_rooms | roomserver_reported_rooms_received_ts_not_null | NOT NULL received_ts
+constraint roomserver_reported_rooms | roomserver_reported_rooms_room_id_not_null | NOT NULL room_id
+constraint roomserver_reported_rooms | roomserver_reported_rooms_user_id_not_null | NOT NULL user_id
 constraint roomserver_room_aliases | roomserver_room_aliases_alias_not_null | NOT NULL alias
 constraint roomserver_room_aliases | roomserver_room_aliases_creator_id_not_null | NOT NULL creator_id
 constraint roomserver_room_aliases | roomserver_room_aliases_pkey | PRIMARY KEY (alias)
@@ -1119,6 +1132,7 @@ constraint userapi_accounts | userapi_accounts_created_ts_not_null | NOT NULL cr
 constraint userapi_accounts | userapi_accounts_localpart_not_null | NOT NULL localpart
 constraint userapi_accounts | userapi_accounts_locked_not_null | NOT NULL locked
 constraint userapi_accounts | userapi_accounts_server_name_not_null | NOT NULL server_name
+constraint userapi_accounts | userapi_accounts_suspended_not_null | NOT NULL suspended
 constraint userapi_daily_stats | daily_stats_unique | UNIQUE ("timestamp", server_name)
 constraint userapi_daily_stats | userapi_daily_stats_active_e2ee_rooms_not_null | NOT NULL active_e2ee_rooms
 constraint userapi_daily_stats | userapi_daily_stats_active_rooms_not_null | NOT NULL active_rooms
@@ -1261,6 +1275,7 @@ sequence roomserver_event_nid_seq | bigint | 1
 sequence roomserver_event_state_key_nid_seq | bigint | 1
 sequence roomserver_event_type_nid_seq | bigint | 1
 sequence roomserver_reported_events_id_seq | bigint | 1
+sequence roomserver_reported_rooms_id_seq | bigint | 1
 sequence roomserver_room_nid_seq | bigint | 1
 sequence roomserver_state_block_nid_seq | bigint | 1
 sequence roomserver_state_snapshot_nid_seq | bigint | 1
@@ -1308,6 +1323,7 @@ migration syncapi: set history visibility for existing events
 migration syncapi: store output event timestamps separately
 migration syncapi: threaded receipts
 migration userapi: add account locks
+migration userapi: add account suspensions
 migration userapi: add account type
 migration userapi: add delayed event sticky duration
 migration userapi: add is active

@@ -16,6 +16,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/transactions"
@@ -84,7 +85,7 @@ func SendRedaction(
 		}
 	}
 
-	if resErr = checkRedactionAllowed(req.Context(), rsAPI, roomID, eventID, *senderID); resErr != nil {
+	if resErr = checkRedactionAllowed(req.Context(), rsAPI, roomID, eventID, *senderID, device.Suspended); resErr != nil {
 		return *resErr
 	}
 
@@ -160,7 +161,7 @@ func SendRedaction(
 // the roomserver also accepts redactions between users of the same server, so
 // this check is what stops one local user from redacting another's events.
 func checkRedactionAllowed(
-	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, roomID, eventID string, senderID spec.SenderID,
+	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, roomID, eventID string, senderID spec.SenderID, suspended bool,
 ) *util.JSONResponse {
 	ev := roomserverAPI.GetEvent(ctx, rsAPI, roomID, eventID)
 	if ev == nil {
@@ -174,6 +175,12 @@ func checkRedactionAllowed(
 			Code: 400, //nolint:mnd
 			JSON: spec.NotFound("cannot redact event in another room"),
 		}
+	}
+
+	// Suspended users may only redact their own events (MSC3823).
+	if suspended && ev.SenderID() != senderID {
+		res := auth.UserSuspendedResponse()
+		return &res
 	}
 
 	privileged := isPrivilegedCreator(ctx, rsAPI, roomID, senderID)

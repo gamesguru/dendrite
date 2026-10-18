@@ -446,6 +446,23 @@ func TestRequestEmailTokenWithoutIdentityServer(t *testing.T) {
 	}
 }
 
+// TestRequestTokenErrorCodes covers the requestToken error codes of MSC4178.
+func TestRequestTokenErrorCodes(t *testing.T) {
+	cfg := threePIDConfig()
+	cfg.EmailValidationServer = "id.example"
+	client := fclient.NewClient(fclient.WithTransport(threePIDTransport(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s", req.URL)
+		return nil, errors.New("unexpected request")
+	})))
+	for _, address := range []string{"", "not an address", "alice", "Alice <alice@example.com>", "<alice@example.com>"} {
+		encoded, err := json.Marshal(map[string]any{"email": address, "client_secret": "secret", "send_attempt": 1})
+		require.NoError(t, err)
+		res := RequestEmailToken(threePIDRequest(string(encoded)), &threePIDUserAPI{}, cfg, client)
+		requireThreePIDResponse(t, res, 400, "M_INVALID_PARAM")
+	}
+	requireThreePIDResponse(t, RequestMSISDNToken(), 400, "M_THREEPID_MEDIUM_NOT_SUPPORTED")
+}
+
 func TestRequestEmailTokenIdentityErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, errcode string

@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.12`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.13`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3` to `v1.12` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.13` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.13` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.14` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -16,7 +16,7 @@ Room versions returned by `/capabilities` are a separate namespace and must not 
 
 ## Scope and evidence
 
-This is a source-level audit of the next candidate versions, v1.3 through v1.12, with targeted checks of later features that could otherwise motivate raising the ceiling.
+This is a source-level audit of the next candidate versions, v1.3 through v1.13, with targeted checks of later features that could otherwise motivate raising the ceiling.
 It compares the release requirements with routing, handler behavior, storage, and existing tests in this repository.
 It does not claim an exhaustive behavioral certification through v1.19 or a fresh Sytest/Complement pass.
 A registered route establishes reachability only; authorization, pagination, response shape, and configuration dependence require separate evidence.
@@ -139,14 +139,28 @@ The [v1.12 changes](https://spec.matrix.org/v1.12/changelog/) add account lockin
 
 | Requirement | Implementation evidence | Assessment |
 | --- | --- | --- |
-| Account locking (MSC3939) | `internal/httputil/httpapi.go` refuses locked accounts with 401 `M_USER_LOCKED` and `soft_logout: true` on every authenticated route except `/logout` and `/logout/all`; `clientapi/routing/login.go` and `refresh.go` refuse new tokens. `clientapi/routing/admin_lock.go` serves `GET` and `PUT /v1/admin/lock/{userId}` (MSC4323). `clientapi/account_lock_test.go` and `internal/httputil/locked_test.go` cover them. | Implemented; with MSC3861 the authentication service locks accounts. |
+| Account locking (MSC3939) | `internal/httputil/httpapi.go` refuses locked accounts with 401 `M_USER_LOCKED` and `soft_logout: true` on every authenticated route except `/logout` and `/logout/all`; `clientapi/routing/login.go` and `refresh.go` refuse new tokens. `clientapi/routing/admin_moderation.go` serves `GET` and `PUT /v1/admin/lock/{userId}` (MSC4323). `clientapi/account_lock_test.go` and `internal/httputil/locked_test.go` cover them. | Implemented; with MSC3861 the authentication service locks accounts. |
 | Media `Content-Type` and `Content-Disposition` (MSC2701, MSC2702) | `mediaapi/routing/upload.go` stores uploads without a type as `application/octet-stream`; `download.go` serves that type for untyped media and an `inline` disposition with a file name for thumbnails. `content_disposition_test.go` covers both. | Implemented. |
 | `via` on joins and knocks (MSC4156) | `clientapi/routing/joinroom.go` reads `via`, falling back to the deprecated `server_name`. | Implemented. |
 | Guest access to authenticated media (MSC4189) | `mediaapi/routing/routing.go` serves the `/v1/media` download and thumbnail routes through `MakeHTTPAPI`, which admits guests. | Implemented. |
 | 403 on profile lookups (MSC4170) | The response is allowed, not required. Zendrite does not restrict lookups of its own profiles, and `clientapi/routing/profile.go` passes on a remote server's 403. | Compliant. |
 | Marking rooms as unread (MSC2867) | `m.marked_unread` is room account data, which needs no server support. | Client-only. |
 
-### v1.13 and later candidates
+### v1.13
+
+The [v1.13 changes](https://spec.matrix.org/v1.13/changelog/) add room reports, account suspension, ephemeral data for application services, requestToken error codes, ACLs for EDUs, and the order of claimed one-time keys.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Reporting rooms (MSC4151) | `clientapi/routing/report_event.go` serves `POST /v3/rooms/{roomId}/report` and stores reports in `roomserver_reported_rooms`; `clientapi/room_report_test.go` covers reports, errors and the admin listing. | Implemented. |
+| Account suspension (MSC3823) | `internal/httputil/httpapi.go` refuses suspended accounts on routes registered with `WithDenySuspended`, and `generateSendEvent` and `checkRedactionAllowed` limit their events; `clientapi/account_suspension_test.go` covers allowed and refused actions. | Implemented; optional. |
+| Ephemeral data for application services (MSC2409) | `appservice/consumers/ephemeral.go` delivers typing, receipts and presence to application services with `receive_ephemeral`; `appservice/ephemeral_test.go` covers interest, private receipts, typing timeouts and the unstable field. | Implemented. |
+| requestToken error codes (MSC4178) | `clientapi/routing/threepid.go` returns `M_INVALID_PARAM` for invalid addresses and `M_THREEPID_MEDIUM_NOT_SUPPORTED` without a validation server; the `msisdn/requestToken` routes return `M_THREEPID_MEDIUM_NOT_SUPPORTED`. | Implemented. |
+| ACLs for EDUs (MSC4163) | `internal/transactionrequest.go` drops typing and receipt EDUs from servers that a room's ACL denies. | Implemented. |
+| One-time key order (MSC4225) | `keyserver_one_time_keys` claims select the oldest `ts_added_secs` first. | Implemented; keys uploaded within the same second have no defined order. |
+| Optional report `reason` (MSC2414), CORS methods (MSC4138), reply fallbacks (MSC2781) | `ReportEvent` accepts a missing `reason`; CORS responses list `GET, POST, PUT, DELETE, OPTIONS`; reply fallbacks are a client concern. | Compliant. |
+
+### v1.14 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |

@@ -71,12 +71,12 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool, 
 		},
 	}
 
-	// Administrators can lock accounts (MSC4323), but not suspend them yet.
-	// The capability is omitted for everyone who can do neither.
-	if !oidcEnabled && device.AccountType == userapi.AccountTypeAdmin {
+	// Administrators can suspend accounts, and lock them unless the OIDC
+	// provider does (MSC4323). The capability is omitted for everyone else.
+	if device.AccountType == userapi.AccountTypeAdmin {
 		capabilities["m.account_moderation"] = map[string]bool{
-			"lock":    true,
-			"suspend": false,
+			"lock":    !oidcEnabled,
+			"suspend": true,
 		}
 	}
 

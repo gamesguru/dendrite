@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -36,6 +37,12 @@ import (
 // application service.
 type ApplicationServiceTransaction struct {
 	Events []synctypes.ClientEvent `json:"events"`
+	// Ephemeral carries typing, receipts and presence to application services
+	// that set receive_ephemeral (MSC2409).
+	Ephemeral []json.RawMessage `json:"ephemeral,omitempty"`
+	// UnstableEphemeral is Ephemeral for application services that only set
+	// the unstable de.sorunome.msc2409.push_ephemeral.
+	UnstableEphemeral []json.RawMessage `json:"de.sorunome.msc2409.ephemeral,omitempty"`
 }
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
@@ -49,6 +56,9 @@ type OutputRoomEventConsumer struct {
 
 type appserviceState struct {
 	*config.ApplicationService
+	// mu serializes transactions of one consumer, which typing timeouts
+	// send from their own goroutines.
+	mu      sync.Mutex
 	backoff int
 }
 
@@ -197,21 +207,31 @@ func (s *OutputRoomEventConsumer) sendEvents(
 	if txnID == "" {
 		txnID = fmt.Sprintf("%d_%d", events[0].OriginServerTS(), len(transaction))
 	}
+	return sendTransaction(ctx, s.cfg, s.jetstream, state, transaction, txnID)
+}
 
+// sendTransaction sends a transaction body to the appservice, blocking for
+// the backoff period if necessary.
+func sendTransaction(
+	ctx context.Context, cfg *config.AppServiceAPI, js nats.JetStreamContext,
+	state *appserviceState, transaction []byte, txnID string,
+) error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	// Send the transaction to the appservice.
 	// https://spec.matrix.org/v1.9/application-service-api/#pushing-events
 	path := "_matrix/app/v1/transactions"
-	if s.cfg.LegacyPaths {
+	if cfg.LegacyPaths {
 		path = "transactions"
 	}
 	address := fmt.Sprintf("%s/%s/%s", state.RequestUrl(), path, txnID)
-	if s.cfg.LegacyAuth {
+	if cfg.LegacyAuth {
 		address += "?access_token=" + url.QueryEscape(state.HSToken)
 	}
 	// The consumer barrier only runs before fetch and before acknowledgement,
 	// so a delivery started while ownership was still held would otherwise
 	// reach the appservice after a successor is active.
-	if err := jetstream.Owned(s.jetstream); err != nil {
+	if err := jetstream.Owned(js); err != nil {
 		return fmt.Errorf("%w: appservice delivery refused: %w", ownership.ErrDispatchRefused, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "PUT", address, bytes.NewBuffer(transaction))
@@ -262,22 +282,45 @@ func (s *OutputRoomEventConsumer) appserviceIsInterestedInEvent(ctx context.Cont
 	switch {
 	case appservice.URL == "":
 		return false
-	case s.isInterestedInUser(appservice, user):
-		return true
-	case appservice.IsInterestedInRoomID(event.RoomID().String()):
+	case isInterestedInUser(s.cfg, appservice, user):
 		return true
 	}
 
 	if event.Type() == spec.MRoomMember && event.StateKey() != nil {
-		if s.isInterestedInUser(appservice, *event.StateKey()) {
+		if isInterestedInUser(s.cfg, appservice, *event.StateKey()) {
 			return true
 		}
 	}
 
-	// Check all known room aliases of the room the event came from
-	queryReq := api.GetAliasesForRoomIDRequest{RoomID: event.RoomID().String()}
+	return isInterestedInRoom(ctx, s.cfg, s.rsAPI, appservice, event.RoomID().String())
+}
+
+// isInterestedInUser reports whether userID is a local user in one of the
+// application service's user namespaces. User namespaces never match remote
+// users (MSC3905), so a remote user cannot make an event interesting.
+func isInterestedInUser(cfg *config.AppServiceAPI, appservice *config.ApplicationService, userID string) bool {
+	_, domain, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil || !cfg.Matrix.IsLocalServerName(domain) {
+		return false
+	}
+	return appservice.IsInterestedInUserID(userID)
+}
+
+// isInterestedInRoom reports whether the application service is interested
+// in a room: through its room ID, one of its aliases, or a joined member in
+// the application service's user namespaces.
+func isInterestedInRoom(
+	ctx context.Context, cfg *config.AppServiceAPI, rsAPI api.AppserviceRoomserverAPI,
+	appservice *config.ApplicationService, roomID string,
+) bool {
+	if appservice.IsInterestedInRoomID(roomID) {
+		return true
+	}
+
+	// Check all known room aliases of the room
+	queryReq := api.GetAliasesForRoomIDRequest{RoomID: roomID}
 	var queryRes api.GetAliasesForRoomIDResponse
-	if err := s.rsAPI.GetAliasesForRoomID(ctx, &queryReq, &queryRes); err == nil {
+	if err := rsAPI.GetAliasesForRoomID(ctx, &queryReq, &queryRes); err == nil {
 		for _, alias := range queryRes.Aliases {
 			if appservice.IsInterestedInRoomAlias(alias) {
 				return true
@@ -286,41 +329,33 @@ func (s *OutputRoomEventConsumer) appserviceIsInterestedInEvent(ctx context.Cont
 	} else {
 		log.WithFields(log.Fields{
 			"appservice": appservice.ID,
-			"room_id":    event.RoomID().String(),
+			"room_id":    roomID,
 		}).WithError(err).Errorf("Unable to get aliases for room")
 	}
 
 	// Check if any of the members in the room match the appservice
-	return s.appserviceJoinedAtEvent(ctx, event, appservice)
+	return appserviceJoinedRoom(ctx, cfg, rsAPI, appservice, roomID)
 }
 
-// isInterestedInUser reports whether userID is a local user in one of the
-// application service's user namespaces. User namespaces never match remote
-// users (MSC3905), so a remote user cannot make an event interesting.
-func (s *OutputRoomEventConsumer) isInterestedInUser(appservice *config.ApplicationService, userID string) bool {
-	_, domain, err := gomatrixserverlib.SplitID('@', userID)
-	if err != nil || !s.cfg.Matrix.IsLocalServerName(domain) {
-		return false
-	}
-	return appservice.IsInterestedInUserID(userID)
-}
-
-// appserviceJoinedAtEvent returns a boolean depending on whether a given
-// appservice has membership at the time a given event was created.
-func (s *OutputRoomEventConsumer) appserviceJoinedAtEvent(ctx context.Context, event *types.HeaderedEvent, appservice *config.ApplicationService) bool {
+// appserviceJoinedRoom reports whether a user in the application service's
+// namespaces is joined to the room.
+func appserviceJoinedRoom(
+	ctx context.Context, cfg *config.AppServiceAPI, rsAPI api.AppserviceRoomserverAPI,
+	appservice *config.ApplicationService, roomID string,
+) bool {
 	// TODO: This is only checking the current room state, not the state at
 	// the event in question. Pretty sure this is what Synapse does too, but
 	// until we have a lighter way of checking the state before the event that
 	// doesn't involve state res, then this is probably OK.
 	membershipReq := &api.QueryMembershipsForRoomRequest{
-		RoomID:     event.RoomID().String(),
+		RoomID:     roomID,
 		JoinedOnly: true,
 	}
 	membershipRes := &api.QueryMembershipsForRoomResponse{}
 
 	// XXX: This could potentially race if the state for the event is not known yet
 	// e.g. the event came over federation but we do not have the full state persisted.
-	if err := s.rsAPI.QueryMembershipsForRoom(ctx, membershipReq, membershipRes); err == nil {
+	if err := rsAPI.QueryMembershipsForRoom(ctx, membershipReq, membershipRes); err == nil {
 		for _, ev := range membershipRes.JoinEvents {
 			switch {
 			case ev.StateKey == nil:
@@ -334,7 +369,7 @@ func (s *OutputRoomEventConsumer) appserviceJoinedAtEvent(ctx context.Context, e
 			case err != nil:
 				continue
 			case membership.Membership == spec.Join:
-				if s.isInterestedInUser(appservice, *ev.StateKey) {
+				if isInterestedInUser(cfg, appservice, *ev.StateKey) {
 					return true
 				}
 			}
@@ -342,7 +377,7 @@ func (s *OutputRoomEventConsumer) appserviceJoinedAtEvent(ctx context.Context, e
 	} else {
 		log.WithFields(log.Fields{
 			"appservice": appservice.ID,
-			"room_id":    event.RoomID().String(),
+			"room_id":    roomID,
 		}).WithError(err).Errorf("Unable to get membership for room")
 	}
 	return false

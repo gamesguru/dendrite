@@ -94,7 +94,7 @@ func TestAccountLocking(t *testing.T) {
 		// Only administrators see the capability and may use the endpoints.
 		_, caps := do(http.MethodGet, "/_matrix/client/v3/capabilities", accessTokens[admin].accessToken, nil)
 		require.True(t, caps.Get(`capabilities.m\.account_moderation.lock`).Bool(), caps.Raw)
-		require.False(t, caps.Get(`capabilities.m\.account_moderation.suspend`).Bool(), caps.Raw)
+		require.True(t, caps.Get(`capabilities.m\.account_moderation.suspend`).Bool(), caps.Raw)
 		_, caps = do(http.MethodGet, "/_matrix/client/v3/capabilities", aliceToken, nil)
 		require.False(t, caps.Get(`capabilities.m\.account_moderation`).Exists(), caps.Raw)
 		code, res := do(http.MethodGet, lockPath(bob.ID), aliceToken, nil)

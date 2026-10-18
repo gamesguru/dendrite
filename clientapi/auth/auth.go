@@ -117,6 +117,17 @@ func UserLockedResponse() util.JSONResponse {
 	}
 }
 
+// UserSuspendedResponse refuses an action to a suspended account (MSC3823).
+func UserSuspendedResponse() util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusForbidden,
+		JSON: spec.MatrixError{
+			ErrCode: "M_USER_SUSPENDED",
+			Err:     "You cannot perform this action while suspended.",
+		},
+	}
+}
+
 // GenerateAccessToken creates a new access token. Returns an error if failed to generate
 // random bytes.
 func GenerateAccessToken() (string, error) {

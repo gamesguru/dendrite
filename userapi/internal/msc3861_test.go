@@ -1364,6 +1364,44 @@ func TestQueryAccessTokenMSC3861(t *testing.T) {
 			}
 		})
 
+		t.Run("SuspendedAccountFlagged", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+					"active":   true,
+					"sub":      "opaque-uuid-suspended",
+					"scope":    "openid",
+					"username": "suspendeduser",
+				})
+			}))
+			defer srv.Close()
+
+			userAPI, closeDB := makeTestUserAPI(t, dbType, srv)
+			defer closeDB()
+
+			ctx := context.Background()
+			req := &api.QueryAccessTokenRequest{AccessToken: "suspended-token-" + t.Name()}
+			res := &api.QueryAccessTokenResponse{}
+			if err := userAPI.queryAccessTokenMSC3861(ctx, req, res); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Device == nil || res.Device.Suspended {
+				t.Fatalf("expected an unsuspended device on first login, got %+v", res.Device)
+			}
+
+			serverName := userAPI.Config.Matrix.ServerName
+			if err := userAPI.PerformAccountSuspension(ctx, "suspendeduser", serverName, true); err != nil {
+				t.Fatalf("failed to suspend account: %v", err)
+			}
+			res2 := &api.QueryAccessTokenResponse{}
+			if err := userAPI.queryAccessTokenMSC3861(ctx, req, res2); err != nil {
+				t.Fatalf("unexpected error on second call: %v", err)
+			}
+			if res2.Device == nil || !res2.Device.Suspended {
+				t.Errorf("expected a suspended device, got %+v", res2.Device)
+			}
+		})
+
 		t.Run("DeviceNotRecreatedForSameToken", func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

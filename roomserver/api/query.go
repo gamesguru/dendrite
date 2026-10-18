@@ -364,6 +364,18 @@ type QueryAdminEventReportsResponse struct {
 	ReceivedTS       spec.Timestamp         `json:"received_ts"`
 }
 
+// QueryAdminRoomReportsResponse is a room report (MSC4151) in the shape of
+// Synapse's room reports admin API.
+type QueryAdminRoomReportsResponse struct {
+	ID             int64          `json:"id"`
+	RoomID         string         `json:"room_id"`
+	UserID         string         `json:"user_id"` // the user reporting the room
+	Reason         string         `json:"reason"`
+	CanonicalAlias string         `json:"canonical_alias"`
+	RoomName       string         `json:"name"`
+	ReceivedTS     spec.Timestamp `json:"received_ts"`
+}
+
 type QueryAdminEventReportResponse struct {
 	QueryAdminEventReportsResponse
 	EventJSON json.RawMessage `json:"event_json"`

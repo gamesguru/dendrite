@@ -51,6 +51,8 @@ type AccountsTable interface {
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	// UpdateLocked returns sql.ErrNoRows when no account matches.
 	UpdateLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	// UpdateSuspended returns sql.ErrNoRows when no account matches.
+	UpdateSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
 	// SelectActiveAccountsCreatedBefore returns up to limit accounts of the
 	// given type that are not deactivated and were created before the given

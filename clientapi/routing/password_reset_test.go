@@ -117,7 +117,7 @@ func TestRequestPasswordResetEmailToken(t *testing.T) {
 		assert.NotContains(t, is.hosts, "evil.example")
 		assert.Equal(t, []string{"alice@example.org"}, is.requested)
 
-		res = RequestPasswordResetMSISDNToken()
+		res = RequestMSISDNToken()
 		assert.Equal(t, "M_THREEPID_MEDIUM_NOT_SUPPORTED", responseErrcode(t, res.JSON))
 	})
 }

@@ -59,10 +59,14 @@ const reactivateAccountSQL = "" +
 	"UPDATE userapi_accounts SET is_deactivated = FALSE WHERE localpart = $1 AND server_name = $2"
 
 const selectAccountByLocalpartSQL = "" +
-	"SELECT localpart, server_name, appservice_id, account_type, locked FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+	"SELECT localpart, server_name, appservice_id, account_type, COALESCE(is_deactivated, FALSE), locked, suspended" +
+	" FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
 
 const updateLockedSQL = "" +
 	"UPDATE userapi_accounts SET locked = $1 WHERE localpart = $2 AND server_name = $3"
+
+const updateSuspendedSQL = "" +
+	"UPDATE userapi_accounts SET suspended = $1 WHERE localpart = $2 AND server_name = $3"
 
 const selectIsDeactivatedSQL = "" +
 	"SELECT is_deactivated FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
@@ -88,6 +92,7 @@ type accountsStatements struct {
 	reactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
 	updateLockedStmt              *sql.Stmt
+	updateSuspendedStmt           *sql.Stmt
 	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
@@ -119,6 +124,10 @@ func NewPostgresAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Ac
 			Version: "userapi: add account locks",
 			Up:      tables.AddAccountLocked,
 		},
+		{
+			Version: "userapi: add account suspensions",
+			Up:      tables.AddAccountSuspended,
+		},
 	}...)
 	err = m.Up(context.Background())
 	if err != nil {
@@ -132,6 +141,7 @@ func NewPostgresAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Ac
 		{&s.reactivateAccountStmt, reactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
 		{&s.updateLockedStmt, updateLockedSQL},
+		{&s.updateSuspendedStmt, updateSuspendedSQL},
 		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
@@ -195,18 +205,7 @@ func (s *accountsStatements) DeactivateAccount(
 func (s *accountsStatements) ReactivateAccount(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 ) error {
-	result, err := s.reactivateAccountStmt.ExecContext(ctx, localpart, serverName)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return execOneAccount(s.reactivateAccountStmt.ExecContext(ctx, localpart, serverName))
 }
 
 // UpdateLocked sets whether the account is locked (MSC3939) and reports
@@ -214,7 +213,19 @@ func (s *accountsStatements) ReactivateAccount(
 func (s *accountsStatements) UpdateLocked(
 	ctx context.Context, localpart string, serverName spec.ServerName, locked bool,
 ) error {
-	result, err := s.updateLockedStmt.ExecContext(ctx, locked, localpart, serverName)
+	return execOneAccount(s.updateLockedStmt.ExecContext(ctx, locked, localpart, serverName))
+}
+
+// UpdateSuspended sets whether the account is suspended (MSC3823) and reports
+// sql.ErrNoRows when no account matches.
+func (s *accountsStatements) UpdateSuspended(
+	ctx context.Context, localpart string, serverName spec.ServerName, suspended bool,
+) error {
+	return execOneAccount(s.updateSuspendedStmt.ExecContext(ctx, suspended, localpart, serverName))
+}
+
+// execOneAccount reports sql.ErrNoRows when an update matched no account.
+func execOneAccount(result sql.Result, err error) error {
 	if err != nil {
 		return err
 	}
@@ -242,7 +253,7 @@ func (s *accountsStatements) SelectAccountByLocalpart(
 	var acc api.Account
 
 	stmt := s.selectAccountByLocalpartStmt
-	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType, &acc.Locked)
+	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType, &acc.Deactivated, &acc.Locked, &acc.Suspended)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.WithError(err).Error("Unable to retrieve user from the db")

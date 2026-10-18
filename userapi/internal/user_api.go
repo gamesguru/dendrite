@@ -660,6 +660,7 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 	}
 	device.AccountType = acc.AccountType
 	device.Locked = acc.Locked
+	device.Suspended = acc.Suspended
 	res.Device = device
 	return nil
 }
@@ -673,6 +674,11 @@ func (a *UserInternalAPI) QueryAccountByLocalpart(ctx context.Context, req *api.
 // kept either way, so an unlocked user carries on without logging in again.
 func (a *UserInternalAPI) PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error {
 	return a.DB.SetAccountLocked(ctx, localpart, serverName, locked)
+}
+
+// PerformAccountSuspension suspends or unsuspends a local account (MSC3823).
+func (a *UserInternalAPI) PerformAccountSuspension(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error {
+	return a.DB.SetAccountSuspended(ctx, localpart, serverName, suspended)
 }
 
 // IsAccountDeactivated reports whether the given local account is deactivated.

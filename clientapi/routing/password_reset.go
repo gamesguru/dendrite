@@ -78,9 +78,10 @@ func RequestPasswordResetEmailToken(req *http.Request, userAPI api.ClientUserAPI
 	return util.JSONResponse{Code: http.StatusOK, JSON: reqTokenResponse{SID: sid}}
 }
 
-// RequestPasswordResetMSISDNToken implements
-// POST /account/password/msisdn/requestToken, which Zendrite does not support.
-func RequestPasswordResetMSISDNToken() util.JSONResponse {
+// RequestMSISDNToken implements the msisdn/requestToken endpoints of
+// /register, /account/3pid and /account/password. Zendrite cannot send text
+// messages, so they all fail with M_THREEPID_MEDIUM_NOT_SUPPORTED (MSC4178).
+func RequestMSISDNToken() util.JSONResponse {
 	return util.JSONResponse{
 		Code: http.StatusBadRequest,
 		JSON: spec.MatrixError{ErrCode: "M_THREEPID_MEDIUM_NOT_SUPPORTED", Err: "Phone numbers are not supported on this homeserver"},

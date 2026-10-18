@@ -528,6 +528,33 @@ func GetEventReports(
 	}
 }
 
+// GetRoomReports implements GET /_synapse/admin/v1/room_reports, which lists
+// room reports (MSC4151) like Synapse.
+func GetRoomReports(
+	req *http.Request,
+	rsAPI roomserverAPI.ClientRoomserverAPI,
+	from, limit uint64,
+	backwards bool,
+	userID, roomID string,
+) util.JSONResponse {
+	reports, count, err := rsAPI.QueryAdminRoomReports(req.Context(), from, limit, backwards, userID, roomID)
+	if err != nil {
+		logrus.WithError(err).Error("failed to query room reports")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	resp := map[string]any{
+		"room_reports": reports,
+		"total":        count,
+	}
+	if int64(from+limit) < count {
+		resp["next_token"] = int(from) + len(reports)
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: resp}
+}
+
 func GetEventReport(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI, reportID string) util.JSONResponse {
 	parsedReportID, err := strconv.ParseUint(reportID, 10, 64)
 	if err != nil {

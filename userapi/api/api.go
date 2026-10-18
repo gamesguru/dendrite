@@ -118,6 +118,9 @@ type ClientUserAPI interface {
 	// PerformAccountLock locks or unlocks a local account (MSC3939) and
 	// returns sql.ErrNoRows when the account does not exist.
 	PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	// PerformAccountSuspension suspends or unsuspends a local account
+	// (MSC3823) and returns sql.ErrNoRows when the account does not exist.
+	PerformAccountSuspension(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
 	PerformOpenIDTokenCreation(ctx context.Context, req *PerformOpenIDTokenCreationRequest, res *PerformOpenIDTokenCreationResponse) error
 	QueryNotifications(ctx context.Context, req *QueryNotificationsRequest, res *QueryNotificationsResponse) error
 	InputAccountData(ctx context.Context, req *InputAccountDataRequest, res *InputAccountDataResponse) error
@@ -515,6 +518,9 @@ type Device struct {
 	// Locked is true when the account is locked (MSC3939), so the device may
 	// only log out.
 	Locked bool
+	// Suspended is true when the account is suspended (MSC3823), so the
+	// device may read but not join rooms, send messages or change its profile.
+	Suspended bool
 	// AccessTokenExpiresTS is when the access token expires, as a unix
 	// timestamp in milliseconds, or 0 if it never expires (MSC2918).
 	AccessTokenExpiresTS int64
@@ -542,8 +548,12 @@ type Account struct {
 	ServerName   spec.ServerName
 	AppServiceID string
 	AccountType  AccountType
+	// Deactivated is true when the account is deactivated.
+	Deactivated bool
 	// Locked is true when an administrator locked the account (MSC3939).
 	Locked bool
+	// Suspended is true when an administrator suspended the account (MSC3823).
+	Suspended bool
 	// TODO: Associations (e.g. with application services)
 }
 

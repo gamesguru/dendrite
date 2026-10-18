@@ -230,6 +230,9 @@ type SyncRoomserverAPI interface {
 
 type AppserviceRoomserverAPI interface {
 	QuerySenderIDAPI
+	// QuerySharedUsers returns the users who share a room with the given
+	// user, to deliver presence to application services (MSC2409).
+	QuerySharedUsers(ctx context.Context, req *QuerySharedUsersRequest, res *QuerySharedUsersResponse) error
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
 	// which room to use by querying the first events roomID.
 	QueryEventsByID(
@@ -314,6 +317,9 @@ type ClientRoomserverAPI interface {
 	QueryAdminEventReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (QueryAdminEventReportResponse, error)
 	PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	// InsertReportedRoom stores a room report (MSC4151).
+	InsertReportedRoom(ctx context.Context, roomID, reportingUserID, reason string) (int64, error)
+	QueryAdminRoomReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]QueryAdminRoomReportsResponse, int64, error)
 	// QueryAnnotationExists reports whether the sender already has an
 	// unredacted annotation of the given event type and key on the target
 	// event, which the sender may then not send again (MSC2677). An

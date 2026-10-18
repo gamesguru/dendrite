@@ -114,7 +114,9 @@ State events, and aggregations that arrive with events over federation, are neve
 | [MSC4010](https://github.com/matrix-org/matrix-spec-proposals/pull/4010) | Push rules and account data | 1.10 | Implemented: setting `m.push_rules` or `m.fully_read` through `/account_data` fails with 405 `M_BAD_JSON`, for global and room account data |
 | [MSC4025](https://github.com/matrix-org/matrix-spec-proposals/pull/4025) | Local user erasure requests | 1.10 | Implemented: see [erasure](#erasure) |
 | [MSC3939](https://github.com/matrix-org/matrix-spec-proposals/pull/3939) | Account locking | 1.12 | Implemented: see [account locking](#account-locking) |
-| [MSC4323](https://github.com/matrix-org/matrix-spec-proposals/pull/4323) | User suspension and locking endpoints | 1.18 | Partial: `GET` and `PUT /_matrix/client/v1/admin/lock/{userId}` lock accounts, and `/capabilities` reports `m.account_moderation` with `lock: true` to administrators. Suspension (MSC3823) is not implemented |
+| [MSC3823](https://github.com/matrix-org/matrix-spec-proposals/pull/3823) | Account suspension | 1.13 | Implemented: see [account suspension](#account-suspension) |
+| [MSC4151](https://github.com/matrix-org/matrix-spec-proposals/pull/4151) | Reporting rooms | 1.13 | Implemented: `POST /_matrix/client/v3/rooms/{roomId}/report` stores a report with a `reason`, which may be empty, for rooms this server knows, whether or not the reporter is in them; unknown rooms return 404 `M_NOT_FOUND`. Administrators list reports with `GET /_synapse/admin/v1/room_reports` (see the [admin API](/administration/adminapi/)) |
+| [MSC4323](https://github.com/matrix-org/matrix-spec-proposals/pull/4323) | User suspension and locking endpoints | 1.18 | Implemented: `GET` and `PUT /_matrix/client/v1/admin/lock/{userId}` and `/admin/suspend/{userId}`, and `/capabilities` reports `m.account_moderation` to administrators. With [MSC3861](#msc3861-oidc-delegated-authentication), only suspension is available (`lock: false`) |
 
 ### Erasure
 
@@ -135,6 +137,14 @@ A locked account keeps its sessions, but every authenticated request apart from 
 Unlocking restores the existing sessions without a new login.
 Administrators cannot lock themselves or another administrator.
 With [MSC3861](#msc3861-oidc-delegated-authentication), the endpoints return 403: lock the account in the authentication service instead.
+
+### Account suspension
+
+An administrator suspends or unsuspends an account with `PUT /_matrix/client/v1/admin/suspend/{userId}` and `{"suspended": true}` or `{"suspended": false}`, and reads the state with `GET` on the same path.
+A suspended account can still log in, sync, read history, manage its devices, keys and key backup, leave rooms, redact its own events and deactivate itself.
+It gets 403 `M_USER_SUSPENDED` when it joins, knocks, invites, kicks, bans or unbans, creates or upgrades rooms, sends any event other than a redaction of its own events or its own leave, or changes its profile.
+Administrators cannot suspend themselves or another administrator.
+Suspension also works with [MSC3861](#msc3861-oidc-delegated-authentication), since the authentication service has no equivalent.
 
 ## Profiles
 
@@ -229,7 +239,18 @@ Otherwise, or when no server answers, the local result stands.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC3905](https://github.com/matrix-org/matrix-spec-proposals/pull/3905) | Application services should only be interested in local users | 1.5 | Implemented: `users` namespaces only match users on this server or its virtual hosts, so a remote sender, member or joined user no longer makes an event interesting to an application service |
+| [MSC2409](https://github.com/matrix-org/matrix-spec-proposals/pull/2409) | Typing, receipts and presence for application services | 1.13 | Implemented: see [ephemeral data](#ephemeral-data-for-application-services) |
 | [MSC2659](https://github.com/matrix-org/matrix-spec-proposals/pull/2659) | Application service ping endpoint | 1.7 | Implemented: `POST /_matrix/client/v1/appservice/{appserviceId}/ping`, authenticated with the application service's `as_token`, calls `POST /_matrix/app/v1/ping` with the `hs_token` and the `transaction_id`, and returns `duration_ms`. Failures return `M_URL_NOT_SET`, `M_CONNECTION_FAILED`, `M_CONNECTION_TIMEOUT` (after 30 seconds) or `M_BAD_STATUS` with the status and up to 4 KiB of the body |
+
+### Ephemeral data for application services
+
+An application service whose registration sets `receive_ephemeral: true` gets `m.typing`, `m.receipt` and `m.presence` in the `ephemeral` field of its transactions, in transactions of their own.
+Older bridges that set the unstable `de.sorunome.msc2409.push_ephemeral: true` get the same data in `de.sorunome.msc2409.ephemeral`.
+Typing notifications and receipts are sent for rooms the application service is interested in through its room or alias namespaces or a joined user in its user namespaces, with a `room_id`.
+`m.typing` lists every user typing in the room, and a typing notification that times out sends an update without the user.
+Private read receipts are only sent for users in the user namespaces.
+Presence is sent for users in the user namespaces and for users who share a room with one of them.
+Ephemeral data from before the application service enabled the option, or from while Zendrite was not running, is not sent.
 
 ## Authentication
 
@@ -241,6 +262,7 @@ Otherwise, or when no server answers, the local result stands.
 | [MSC2858](https://github.com/matrix-org/matrix-spec-proposals/pull/2858) | Multiple SSO identity providers | 1.1 | Not applicable: SSO is only available through [MSC3861](#msc3861-oidc-delegated-authentication), where the authentication service offers the upstream providers, so the `m.login.sso` flow lists no `identity_providers` |
 | [MSC2918](https://github.com/matrix-org/matrix-spec-proposals/pull/2918) | Refresh tokens | 1.3 | Implemented: clients sending `refresh_token: true` to `/login` or `/register` get a refresh token and an access token that expires after `client_api.refreshable_access_token_lifetime` (default `5m`, `0s` disables refresh tokens), which `/refresh` renews. An expired access token returns 401 `M_UNKNOWN_TOKEN` with `soft_logout: true`. A used refresh token stays valid until its successor is used, so a lost `/refresh` response can be retried. With [MSC3861](#msc3861-oidc-delegated-authentication), the authentication service issues the tokens |
 | [MSC3882](https://github.com/matrix-org/matrix-spec-proposals/pull/3882) | Sign in a new session from an existing one | 1.7 | Implemented: `POST /_matrix/client/v1/login/get_token` asks for the password every time and returns a single-use `m.login.token` that expires after two minutes. `/login` lists the `m.login.token` flow with `get_login_token: true`, and `/capabilities` reports `m.get_login_token`. Redeeming a token deletes it first, so concurrent logins cannot share one. With [MSC3861](#msc3861-oidc-delegated-authentication), the endpoint returns 403 and the capability is disabled |
+| [MSC4178](https://github.com/matrix-org/matrix-spec-proposals/pull/4178) | Error codes for `requestToken` | 1.13 | Implemented: `/account/3pid/email/requestToken` (and `/register/email/requestToken`) return 400 `M_THREEPID_MEDIUM_NOT_SUPPORTED` without an email validation server and `M_INVALID_PARAM` for an invalid address; the `msisdn/requestToken` endpoints always return `M_THREEPID_MEDIUM_NOT_SUPPORTED` |
 | [MSC3861](https://github.com/matrix-org/matrix-spec-proposals/pull/3861) | Next-gen auth (OIDC) | 1.15 | Opt-in (`msc3861`) |
 
 ## VoIP

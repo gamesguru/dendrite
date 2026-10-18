@@ -39,6 +39,7 @@ type AuthAPIOpts struct {
 	GuestAccessAllowed     bool
 	CallGuestAccessAllowed bool
 	LockedAccessAllowed    bool
+	SuspendedAccessDenied  bool
 	WithAuth               bool
 }
 
@@ -71,6 +72,14 @@ func WithAllowLocked() AuthAPIOption {
 	}
 }
 
+// WithDenySuspended refuses this endpoint to suspended accounts (MSC3823),
+// for actions such as joining rooms or changing the profile.
+func WithDenySuspended() AuthAPIOption {
+	return func(opts *AuthAPIOpts) {
+		opts.SuspendedAccessDenied = true
+	}
+}
+
 // accountAccessForbidden reports why the device's account may not use an
 // endpoint with the given options, or nil when it may.
 func accountAccessForbidden(device *userapi.Device, opts *AuthAPIOpts) *util.JSONResponse {
@@ -79,6 +88,9 @@ func accountAccessForbidden(device *userapi.Device, opts *AuthAPIOpts) *util.JSO
 		return nil
 	case !opts.LockedAccessAllowed && device.Locked:
 		res := auth.UserLockedResponse()
+		return &res
+	case opts.SuspendedAccessDenied && device.Suspended:
+		res := auth.UserSuspendedResponse()
 		return &res
 	case !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest:
 		return &util.JSONResponse{

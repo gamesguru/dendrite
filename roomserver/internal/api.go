@@ -452,6 +452,18 @@ func (r *RoomserverInternalAPI) InsertReportedEvent(
 	return r.DB.InsertReportedEvent(ctx, roomID, eventID, reportingUserID, reason, score)
 }
 
+// InsertReportedRoom stores a room report (MSC4151).
+func (r *RoomserverInternalAPI) InsertReportedRoom(ctx context.Context, roomID, reportingUserID, reason string) (int64, error) {
+	return r.DB.InsertReportedRoom(ctx, roomID, reportingUserID, reason)
+}
+
+// QueryAdminRoomReports lists room reports for the admin API (MSC4151).
+func (r *RoomserverInternalAPI) QueryAdminRoomReports(
+	ctx context.Context, from, limit uint64, backwards bool, userID, roomID string,
+) ([]api.QueryAdminRoomReportsResponse, int64, error) {
+	return r.DB.QueryAdminRoomReports(ctx, from, limit, backwards, userID, roomID)
+}
+
 // MSC3706 Partial State Join methods.
 
 // SetRoomPartialState marks a room as having partial state after a faster join.

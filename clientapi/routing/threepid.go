@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"sync"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -62,6 +63,12 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 			}
 		}
 	}
+	if !validEmailAddress(body.Email) {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("The email address is not valid"),
+		}
+	}
 
 	var resp reqTokenResponse
 	var err error
@@ -101,6 +108,13 @@ func RequestEmailToken(req *http.Request, threePIDAPI api.ClientUserAPI, cfg *co
 		Code: http.StatusOK,
 		JSON: resp,
 	}
+}
+
+// validEmailAddress reports whether address is a bare email address, without
+// a display name or angle brackets (MSC4178).
+func validEmailAddress(address string) bool {
+	parsed, err := mail.ParseAddress(address)
+	return err == nil && parsed.Name == "" && parsed.Address == address
 }
 
 // CheckAndSave3PIDAssociation implements POST /account/3pid.

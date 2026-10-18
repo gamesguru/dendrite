@@ -161,6 +161,14 @@ type ReportedEvents interface {
 	DeleteReportedEvent(ctx context.Context, txn *sql.Tx, reportID uint64) error
 }
 
+// ReportedRooms stores room reports (MSC4151).
+type ReportedRooms interface {
+	InsertReportedRoom(ctx context.Context, txn *sql.Tx, roomID, userID, reason string) (int64, error)
+	// SelectReportedRooms returns a page of reports, filtered by reporting
+	// user and room when they are not empty, and the number of matches.
+	SelectReportedRooms(ctx context.Context, txn *sql.Tx, from, limit uint64, backwards bool, userID, roomID string) ([]api.QueryAdminRoomReportsResponse, int64, error)
+}
+
 type MembershipState int64
 
 const (

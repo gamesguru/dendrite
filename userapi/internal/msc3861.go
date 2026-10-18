@@ -778,12 +778,16 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 	// 8. Refuse tokens for deactivated accounts. PerformAccountCreation with
 	// ConflictUpdate would otherwise silently re-attach the session to the
 	// deactivated account. A missing account is fine; it is provisioned below.
-	deactivated, err := a.DB.IsAccountDeactivated(ctx, localpart, serverName)
+	// Suspension (MSC3823) is local state, which the provider does not know.
+	suspended := false
+	account, err := a.DB.GetAccountByLocalpart(ctx, localpart, serverName)
 	switch {
-	case err == nil && deactivated:
+	case err == nil && account.Deactivated:
 		logrus.WithField("localpart", localpart).Warn("MSC3861: refusing token for deactivated account")
 		return nil
-	case err == nil || errors.Is(err, sql.ErrNoRows):
+	case err == nil:
+		suspended = account.Suspended
+	case errors.Is(err, sql.ErrNoRows):
 	default:
 		logrus.WithError(err).WithField("localpart", localpart).Error("MSC3861: failed to check account deactivation")
 		return err
@@ -832,6 +836,7 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 		}
 		if device != nil {
 			device.AccountType = accountType
+			device.Suspended = suspended
 			res.Device = device
 			return nil
 		}
@@ -854,6 +859,7 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 
 	if deviceRes.Device != nil {
 		deviceRes.Device.AccountType = accountType
+		deviceRes.Device.Suspended = suspended
 		res.Device = deviceRes.Device
 	}
 

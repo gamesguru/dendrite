@@ -54,6 +54,8 @@ type Database struct {
 	PartialStateTable  tables.PartialState
 	// ErasedUsersTable records users erased on deactivation (MSC4025).
 	ErasedUsersTable tables.ErasedUsers
+	// ReportedRoomsTable stores room reports (MSC4151).
+	ReportedRoomsTable tables.ReportedRooms
 	// ClientTransactionsTable maps client transaction IDs to their events.
 	ClientTransactionsTable tables.ClientTransactions
 	GetRoomUpdaterFn        func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
@@ -2313,6 +2315,45 @@ func (d *Database) QueryAdminEventReport(ctx context.Context, reportID uint64) (
 	report.EventJSON = eventJSONs[0].EventJSON
 
 	return report, nil
+}
+
+// InsertReportedRoom stores a room report (MSC4151).
+func (d *Database) InsertReportedRoom(ctx context.Context, roomID, userID, reason string) (reportID int64, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		reportID, err = d.ReportedRoomsTable.InsertReportedRoom(ctx, txn, roomID, userID, reason)
+		return err
+	})
+	return
+}
+
+// QueryAdminRoomReports lists room reports, newest first when backwards, with
+// the current name and canonical alias of each room that is still known.
+func (d *Database) QueryAdminRoomReports(
+	ctx context.Context, from, limit uint64, backwards bool, userID, roomID string,
+) ([]api.QueryAdminRoomReportsResponse, int64, error) {
+	reports, count, err := d.ReportedRoomsTable.SelectReportedRooms(ctx, nil, from, limit, backwards, userID, roomID)
+	if err != nil || len(reports) == 0 {
+		return reports, count, err
+	}
+	roomIDs := make([]string, 0, len(reports))
+	seen := make(map[string]struct{}, len(reports))
+	for _, report := range reports {
+		if _, ok := seen[report.RoomID]; !ok {
+			seen[report.RoomID] = struct{}{}
+			roomIDs = append(roomIDs, report.RoomID)
+		}
+	}
+	stateContent, err := d.GetBulkStateContent(ctx, roomIDs, []gomatrixserverlib.StateKeyTuple{
+		{EventType: spec.MRoomName, StateKey: ""},
+		{EventType: spec.MRoomCanonicalAlias, StateKey: ""},
+	}, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range reports {
+		reports[i].RoomName, reports[i].CanonicalAlias = findRoomNameAndCanonicalAlias(stateContent, reports[i].RoomID)
+	}
+	return reports, count, nil
 }
 
 func (d *Database) AdminDeleteEventReport(ctx context.Context, reportID uint64) error {

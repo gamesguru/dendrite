@@ -646,6 +646,14 @@ func (d *Database) SetAccountLocked(ctx context.Context, localpart string, serve
 	})
 }
 
+// SetAccountSuspended suspends or unsuspends an account (MSC3823) and returns
+// sql.ErrNoRows when the account does not exist.
+func (d *Database) SetAccountSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error {
+	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		return d.Accounts.UpdateSuspended(ctx, localpart, serverName, suspended)
+	})
+}
+
 // CreateOpenIDToken persists a new token that was issued for OpenID Connect.
 func (d *Database) CreateOpenIDToken(
 	ctx context.Context,

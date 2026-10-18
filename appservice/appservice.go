@@ -66,6 +66,12 @@ func NewInternalAPI(
 	if err := consumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start appservice roomserver consumer")
 	}
+	// Typing, receipts and presence for appservices with receive_ephemeral
+	// (MSC2409).
+	ephemeral := consumers.NewEphemeralConsumer(processContext, &cfg.AppServiceAPI, js, rsAPI)
+	if err := ephemeral.Start(); err != nil {
+		logrus.WithError(err).Panicf("failed to start appservice ephemeral consumer")
+	}
 
 	return appserviceQueryAPI
 }

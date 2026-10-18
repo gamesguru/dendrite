@@ -25,6 +25,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/zendrite/clientapi/auth"
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/transactions"
@@ -369,6 +370,19 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 	return "", false
 }
 
+// suspendedMayEvent reports whether a suspended user may send the event
+// (MSC3823): a redaction, which may only target their own events, or leaving
+// a room through its membership state.
+func suspendedMayEvent(content map[string]any, userID string, senderID spec.SenderID, eventType string, stateKey *string) bool {
+	if stateKey == nil {
+		return eventType == spec.MRoomRedaction
+	}
+	if eventType != spec.MRoomMember || (*stateKey != userID && *stateKey != string(senderID)) {
+		return false
+	}
+	return content["membership"] == spec.Leave
+}
+
 func generateSendEvent(
 	ctx context.Context,
 	r map[string]any,
@@ -408,6 +422,11 @@ func generateSendEvent(
 		}
 	}
 
+	if device.Suspended && !suspendedMayEvent(r, device.UserID, *senderID, eventType, stateKey) {
+		res := auth.UserSuspendedResponse()
+		return nil, &res
+	}
+
 	// create the new event and set all the fields we can
 	proto := gomatrixserverlib.ProtoEvent{
 		SenderID: string(*senderID),
@@ -427,7 +446,7 @@ func generateSendEvent(
 				JSON: spec.BadJSON("content.redacts must be an event ID"),
 			}
 		}
-		if res := checkRedactionAllowed(ctx, rsAPI, roomID, redacts, *senderID); res != nil {
+		if res := checkRedactionAllowed(ctx, rsAPI, roomID, redacts, *senderID, device.Suspended); res != nil {
 			return nil, res
 		}
 		proto.Redacts = redacts

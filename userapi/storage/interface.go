@@ -73,6 +73,7 @@ type Account interface {
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	SetAccountLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	SetAccountSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
 	// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
 	// type that are not deactivated and were created before the given time,
 	// oldest first.
