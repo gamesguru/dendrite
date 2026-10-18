@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 
-	"github.com/getsentry/sentry-go"
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
@@ -223,6 +223,10 @@ func (r *RoomserverInternalAPI) SetAppserviceAPI(asAPI asAPI.AppServiceInternalA
 
 func (r *RoomserverInternalAPI) DefaultRoomVersion() gomatrixserverlib.RoomVersion {
 	return r.defaultRoomVersion
+}
+
+func (r *RoomserverInternalAPI) AutoForgetOnLeaveEnabled() bool {
+	return r.Cfg.RoomServer.AutoForgetOnLeave
 }
 
 func (r *RoomserverInternalAPI) IsKnownRoom(ctx context.Context, roomID spec.RoomID) (bool, error) {

@@ -504,8 +504,8 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 // requesting user is currently recognised as a room member. It is
 // outward-facing: the resulting event is signed by this server and
 // federated to every other server in the room.
-func AdminBridgeState(req *http.Request, device *api.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(mux.Vars(req))
+func AdminBridgeState(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
 	}

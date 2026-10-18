@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -23,9 +26,6 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 )
 
@@ -417,7 +417,7 @@ func (r *Admin) repairMemberships(
 			if membershipErr != nil {
 				return membershipErr
 			}
-			if _, _, err = targetUpdater.Update(newMembership, &event); err != nil {
+			if _, _, err = targetUpdater.Update(newMembership, &event, false); err != nil {
 				return fmt.Errorf("targetUpdater.Update: %w", err)
 			}
 		case change.removedEventNID != 0:

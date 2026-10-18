@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"sort"
 
-	"codefloe.com/pat-s/zendrite/internal/eventutil"
-	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -47,6 +47,7 @@ type Database struct {
 	PublishedTable     tables.Published
 	Purge              tables.Purge
 	UserRoomKeyTable   tables.UserRoomKeys
+	PartialStateTable  tables.PartialState
 	GetRoomUpdaterFn   func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
 }
 
@@ -1676,6 +1677,15 @@ func (d *Database) GetLocalServerInRoom(ctx context.Context, roomNID types.RoomN
 // GetServerInRoom returns true if we think a server is in a given room or false otherwise.
 func (d *Database) GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error) {
 	return d.MembershipTable.SelectServerInRoom(ctx, nil, roomNID, serverName)
+}
+
+// IsRoomPartialState returns true if the room has partial state from a faster join.
+func (d *Database) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error) {
+	return d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID)
+}
+
+func (d *Database) AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error) {
+	return d.MembershipTable.SelectAnyLocalMemberNotForgotten(ctx, nil, roomNID)
 }
 
 // GetKnownUsers searches all users that userID knows about.

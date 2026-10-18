@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gorilla/mux"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -157,7 +157,7 @@ func Setup(
 	dendriteAdminRouter := routers.ZendriteAdmin
 
 	if enableMetrics {
-		prometheus.MustRegister(amtRegUsers, sendEventDuration)
+		prometheus.MustRegister(sendEventDuration)
 	}
 
 	rateLimits := httputil.NewRateLimits(&cfg.RateLimiting)
@@ -1344,7 +1344,7 @@ func Setup(
 			if r := rateLimits.Limit(req, device); r != nil {
 				return *r
 			}
-			return GetCapabilities(rsAPI)
+			return GetCapabilities(rsAPI, mscCfg.Enabled("msc3861"))
 		}, httputil.WithAllowGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 
@@ -1521,7 +1521,7 @@ func Setup(
 	// Cross-signing device keys
 
 	postDeviceSigningKeys := httputil.MakeAuthAPI("post_device_signing_keys", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-		return UploadCrossSigningDeviceKeys(req, userAPI, device, userAPI.QueryAccountByPassword, cfg)
+		return UploadCrossSigningDeviceKeys(req, userAPI, device, userAPI.QueryAccountByPassword, cfg, mscCfg)
 	})
 
 	postDeviceSigningSignatures := httputil.MakeAuthAPI("post_device_signing_signatures", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

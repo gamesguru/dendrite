@@ -24,13 +24,12 @@ import (
 	"syscall"
 	"time"
 
-	sentryhttp "github.com/getsentry/sentry-go/http"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
-	"github.com/gorilla/mux"
 	"github.com/kardianos/minwinsvc"
 
 	"github.com/sirupsen/logrus"
@@ -95,11 +94,11 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
 	routers.ZendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-	})
+		w.WriteHeader(http.StatusOK)
+	}).Methods(http.MethodGet)
 	routers.ZendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
-			w.WriteHeader(503)
+			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(struct {
 				Warnings []string `json:"warnings"`
 			}{
@@ -107,33 +106,8 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 			})
 			return
 		}
-		w.WriteHeader(200)
-	})
-}
-
-func createBaseAdminRouter(processContext *process.ProcessContext, upstream *mux.Router) *mux.Router {
-	adminRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.ZendriteAdminPathPrefix).Subrouter().UseEncodedPath()
-	ConfigureAdminEndpoints(processContext, httputil.Routers{ZendriteAdmin: adminRouter})
-	if upstream != nil {
-		adminRouter.PathPrefix("/").Handler(upstream)
-	}
-	adminRouter.NotFoundHandler = httputil.NotFoundCORSHandler
-	adminRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
-	return adminRouter
-}
-
-func createBaseStaticRouter(landingPage *bytes.Buffer, loginFS fs.FS, upstream *mux.Router) *mux.Router {
-	staticRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.PublicStaticPath).Subrouter().UseEncodedPath()
-	staticRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(landingPage.Bytes())
-	})
-	staticRouter.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(loginFS))))
-	if upstream != nil {
-		staticRouter.PathPrefix("/").Handler(upstream)
-	}
-	staticRouter.NotFoundHandler = httputil.NotFoundCORSHandler
-	staticRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
-	return staticRouter
+		w.WriteHeader(http.StatusOK)
+	}).Methods(http.MethodGet)
 }
 
 func normalizeRouters(routers httputil.Routers) httputil.Routers {
@@ -180,7 +154,7 @@ func normalizeRouters(routers httputil.Routers) httputil.Routers {
 }
 
 // SetupAndServeHTTP sets up the HTTP server to serve client & federation APIs
-// and adds a prometheus handler under /_dendrite/metrics.
+// and adds a prometheus handler under /_zendrite/metrics.
 func SetupAndServeHTTP(
 	processContext *process.ProcessContext,
 	cfg *config.Dendrite,
@@ -190,7 +164,7 @@ func SetupAndServeHTTP(
 ) {
 	routers = normalizeRouters(routers)
 
-	externalRouter := mux.NewRouter().SkipClean(true).UseEncodedPath()
+	externalRouter := httputil.NewRouter("")
 
 	externalServ := &http.Server{
 		Addr:         externalHTTPAddr.Address,
@@ -204,10 +178,10 @@ func SetupAndServeHTTP(
 	//Redirect for Landing Page
 	externalRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, httputil.PublicStaticPath, http.StatusFound)
-	})
+	}).Methods(http.MethodGet)
 
 	if cfg.Global.Metrics.Enabled {
-		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth))
+		externalRouter.Handle("/metrics", httputil.WrapHandlerInBasicAuth(promhttp.Handler(), cfg.Global.Metrics.BasicAuth)).Methods(http.MethodGet)
 	}
 
 	// Parse and execute the landing page template
@@ -224,8 +198,11 @@ func SetupAndServeHTTP(
 	if err != nil {
 		logrus.Panicf("unable to read embedded files, this should never happen: %s", err)
 	}
-	baseAdminRouter := createBaseAdminRouter(processContext, routers.ZendriteAdmin)
-	baseStaticRouter := createBaseStaticRouter(landingPage, sub, routers.Static)
+	ConfigureAdminEndpoints(processContext, routers)
+	routers.Static.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(landingPage.Bytes())
+	}).Methods(http.MethodGet)
+	routers.Static.PathPrefix("/client/login/").Handler(http.StripPrefix("/_matrix/static/client/login/", http.FileServer(http.FS(sub))))
 
 	var clientHandler http.Handler
 	clientHandler = routers.Client
@@ -243,7 +220,7 @@ func SetupAndServeHTTP(
 		})
 		federationHandler = sentryHandler.Handle(routers.Federation)
 	}
-	externalRouter.PathPrefix(httputil.ZendriteAdminPathPrefix).Handler(baseAdminRouter)
+	externalRouter.PathPrefix(httputil.ZendriteAdminPathPrefix).Handler(routers.ZendriteAdmin)
 	externalRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(clientHandler)
 	if !cfg.Global.DisableFederation {
 		externalRouter.PathPrefix(httputil.PublicKeyPathPrefix).Handler(routers.Keys)
@@ -252,10 +229,7 @@ func SetupAndServeHTTP(
 	externalRouter.PathPrefix(httputil.SynapseAdminPathPrefix).Handler(routers.SynapseAdmin)
 	externalRouter.PathPrefix(httputil.PublicMediaPathPrefix).Handler(routers.Media)
 	externalRouter.PathPrefix(httputil.PublicWellKnownPrefix).Handler(routers.WellKnown)
-	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(baseStaticRouter)
-
-	externalRouter.NotFoundHandler = httputil.NotFoundCORSHandler
-	externalRouter.MethodNotAllowedHandler = httputil.NotAllowedHandler
+	externalRouter.PathPrefix(httputil.PublicStaticPath).Handler(routers.Static)
 
 	if externalHTTPAddr.Enabled() {
 		go func() {

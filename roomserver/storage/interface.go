@@ -10,9 +10,9 @@ import (
 	"context"
 	"crypto/ed25519"
 
-	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
@@ -132,6 +132,7 @@ type Database interface {
 	// joinOnly is set to true.
 	// Returns an error if there was a problem talking to the database.
 	GetMembershipEventNIDsForRoom(ctx context.Context, roomNID types.RoomNID, joinOnly bool, localOnly bool) ([]types.EventNID, error)
+	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// EventsFromIDs looks up the Events for a list of event IDs. Does not error if event was
 	// not found.
 	// Returns an error if the retrieval went wrong.
@@ -161,6 +162,8 @@ type Database interface {
 	GetLocalServerInRoom(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetServerInRoom returns true if we think a server is in a given room or false otherwise.
 	GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
+	// IsRoomPartialState returns true if the room has partial state from a faster join.
+	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetKnownUsers searches all users that userID knows about.
 	GetKnownUsers(ctx context.Context, userID, searchString string, limit int) ([]string, error)
 	// ForgetRoom sets a flag in the membership table, that the user wishes to forget a specific room
@@ -231,6 +234,7 @@ type RoomDatabase interface {
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
 	GetRoomUpdater(ctx context.Context, roomInfo *types.RoomInfo) (*shared.RoomUpdater, error)
 	GetMembershipEventNIDsForRoom(ctx context.Context, roomNID types.RoomNID, joinOnly bool, localOnly bool) ([]types.EventNID, error)
+	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	StateBlockNIDs(ctx context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)

@@ -14,11 +14,12 @@ import (
 	"fmt"
 	"strings"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
-	"codefloe.com/pat-s/gomatrixserverlib"
 )
 
 const roomsSchema = `
@@ -66,6 +67,12 @@ const bulkSelectRoomIDsSQL = "" +
 const bulkSelectRoomNIDsSQL = "" +
 	"SELECT room_nid FROM roomserver_rooms WHERE room_id IN ($1)"
 
+const selectResyncStateNIDSQL = "" +
+	"SELECT resync_state_nid FROM roomserver_rooms WHERE room_nid = $1"
+
+const updateResyncStateNIDSQL = "" +
+	"UPDATE roomserver_rooms SET resync_state_nid = $2 WHERE room_nid = $1"
+
 const selectRoomNIDForUpdateSQL = "" +
 	"SELECT room_nid FROM roomserver_rooms WHERE room_id = $1"
 
@@ -79,12 +86,21 @@ type roomStatements struct {
 	updateLatestEventNIDsStmt          *sql.Stmt
 	updateStateSnapshotNIDStmt         *sql.Stmt
 	//selectRoomVersionForRoomNIDStmt    *sql.Stmt
-	selectRoomInfoStmt *sql.Stmt
+	selectRoomInfoStmt       *sql.Stmt
+	selectResyncStateNIDStmt *sql.Stmt
+	updateResyncStateNIDStmt *sql.Stmt
 }
 
 func CreateRoomsTable(db *sql.DB) error {
-	_, err := db.Exec(roomsSchema)
-	return err
+	if _, err := db.Exec(roomsSchema); err != nil {
+		return err
+	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{
+		Version: "roomserver: add resync_state_nid to rooms",
+		Up:      deltas.UpResyncStateNID,
+	})
+	return m.Up(context.Background())
 }
 
 func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
@@ -102,6 +118,8 @@ func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
 		//{&s.selectRoomVersionForRoomNIDsStmt, selectRoomVersionForRoomNIDsSQL},
 		{&s.selectRoomInfoStmt, selectRoomInfoSQL},
 		{&s.selectRoomNIDForUpdateStmt, selectRoomNIDForUpdateSQL},
+		{&s.selectResyncStateNIDStmt, selectResyncStateNIDSQL},
+		{&s.updateResyncStateNIDStmt, updateResyncStateNIDSQL},
 	}.Prepare(db)
 }
 
@@ -307,4 +325,24 @@ func (s *roomStatements) BulkSelectRoomNIDs(ctx context.Context, txn *sql.Tx, ro
 		roomNIDs = append(roomNIDs, roomNID)
 	}
 	return roomNIDs, rows.Err()
+}
+
+func (s *roomStatements) SelectResyncStateNID(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (types.StateSnapshotNID, error) {
+	var resyncStateNID int64
+	stmt := sqlutil.TxStmt(txn, s.selectResyncStateNIDStmt)
+	err := stmt.QueryRowContext(ctx, int64(roomNID)).Scan(&resyncStateNID)
+	if err != nil {
+		return 0, err
+	}
+	return types.StateSnapshotNID(resyncStateNID), nil
+}
+
+func (s *roomStatements) UpdateResyncStateNID(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, resyncStateNID types.StateSnapshotNID,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateResyncStateNIDStmt)
+	_, err := stmt.ExecContext(ctx, int64(roomNID), int64(resyncStateNID))
+	return err
 }

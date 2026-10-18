@@ -501,7 +501,7 @@ func (r *Inputer) processRoomEvent(
 
 	switch input.Kind {
 	case api.KindNew:
-		if err = r.updateLatestEvents(
+		if _, err = r.updateLatestEvents(
 			ctx,                 // context
 			roomInfo,            // room info for the room being updated
 			stateAtEvent,        // state at event (below)
