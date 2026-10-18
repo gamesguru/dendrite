@@ -117,6 +117,15 @@ If successfully sent, the API will return the following response:
 
 Shared secret registration — please see the [user creation page](/administration/createusers) for guidance on configuring and using this endpoint.
 
+## GET and PUT `/_matrix/client/v1/admin/lock/{userId}`
+
+From the [Matrix Spec](https://spec.matrix.org/v1.18/client-server-api/#put_matrixclientv1adminlockuserid).
+`PUT` locks (`{"locked": true}`) or unlocks (`{"locked": false}`) a local account, and `GET` returns `{"locked": <bool>}`.
+A locked account keeps its sessions but can only log out until it is unlocked; see [account locking](/mscs/#account-locking).
+The user ID must belong to this server (otherwise 400 `M_INVALID_PARAM`), and the account must exist and not be deactivated (otherwise 404 `M_NOT_FOUND`).
+Administrators cannot lock themselves or another administrator (403 `M_FORBIDDEN`).
+With MSC3861 delegated authentication, both methods return 403; lock the account in the authentication service instead.
+
 ## GET `/_matrix/client/v3/admin/whois/{userId}`
 
 From the [Matrix Spec](https://spec.matrix.org/v1.3/client-server-api/#get_matrixclientv3adminwhoisuserid).

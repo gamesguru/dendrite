@@ -113,6 +113,8 @@ State events, and aggregations that arrive with events over federation, are neve
 | [MSC1929](https://github.com/matrix-org/matrix-spec-proposals/pull/1929) | Homeserver admin contact and support page | 1.10 | Implemented: `/.well-known/matrix/support` serves `global.support` and returns 404 when it is unset |
 | [MSC4010](https://github.com/matrix-org/matrix-spec-proposals/pull/4010) | Push rules and account data | 1.10 | Implemented: setting `m.push_rules` or `m.fully_read` through `/account_data` fails with 405 `M_BAD_JSON`, for global and room account data |
 | [MSC4025](https://github.com/matrix-org/matrix-spec-proposals/pull/4025) | Local user erasure requests | 1.10 | Implemented: see [erasure](#erasure) |
+| [MSC3939](https://github.com/matrix-org/matrix-spec-proposals/pull/3939) | Account locking | 1.12 | Implemented: see [account locking](#account-locking) |
+| [MSC4323](https://github.com/matrix-org/matrix-spec-proposals/pull/4323) | User suspension and locking endpoints | 1.18 | Partial: `GET` and `PUT /_matrix/client/v1/admin/lock/{userId}` lock accounts, and `/capabilities` reports `m.account_moderation` with `lock: true` to administrators. Suspension (MSC3823) is not implemented |
 
 ### Erasure
 
@@ -124,6 +126,15 @@ Erasure also deletes the user's account data and 3PIDs, after their identity ser
 Reactivating the account lifts the erasure, as in Synapse.
 
 Deactivation, with or without `erase`, unbinds the user's 3PIDs from `id_server`, or from every identity server that holds a binding, and reports `id_server_unbind_result`.
+
+### Account locking
+
+An administrator locks or unlocks an account with `PUT /_matrix/client/v1/admin/lock/{userId}` and `{"locked": true}` or `{"locked": false}`, and reads the state with `GET` on the same path (see the [admin API](/administration/adminapi/)).
+A locked account keeps its sessions, but every authenticated request apart from `POST /logout` and `POST /logout/all` fails with 401 `M_USER_LOCKED` and `soft_logout: true`.
+`/login` and `/refresh` refuse locked accounts the same way, after checking the credentials, and `/refresh` leaves the tokens untouched so the client can retry once the account is unlocked.
+Unlocking restores the existing sessions without a new login.
+Administrators cannot lock themselves or another administrator.
+With [MSC3861](#msc3861-oidc-delegated-authentication), the endpoints return 403: lock the account in the authentication service instead.
 
 ## Profiles
 
@@ -151,6 +162,7 @@ Deactivating an account removes its custom fields.
 | MSC | Title | Spec | Status |
 | --- | --- | --- | --- |
 | [MSC2246](https://github.com/matrix-org/matrix-spec-proposals/pull/2246) | Asynchronous media uploads | 1.7 | Implemented: see [asynchronous uploads](#asynchronous-uploads) |
+| [MSC2701](https://github.com/matrix-org/matrix-spec-proposals/pull/2701), [MSC2702](https://github.com/matrix-org/matrix-spec-proposals/pull/2702) | `Content-Type` and `Content-Disposition` in the media repo | 1.12 | Implemented: uploads without a `Content-Type` are stored as `application/octet-stream`, which is also served for older media stored without a type. Downloads are `inline` only for the spec's list of safe types and `attachment` otherwise. Thumbnails are served `inline` with a file name such as `thumbnail.jpg`; an original that answers a thumbnail request itself stays an `attachment` unless its type is safe |
 | [MSC2705](https://github.com/matrix-org/matrix-spec-proposals/pull/2705) | Animated thumbnails | 1.11 | Implemented: without `animated=true`, thumbnails are never animated; an animated GIF, APNG or WebP that would answer the request itself is replaced by a still JPEG rendition. With `animated=true`, an animated image no larger than the requested size is served as it is, and larger ones get a still thumbnail, which the spec allows |
 | [MSC3860](https://github.com/matrix-org/matrix-spec-proposals/pull/3860) | Media download redirects | 1.7 | Implemented: `allow_redirect` is accepted, and Zendrite always serves media itself, which the spec allows. When a remote server answers a federation media request with a `Location` instead of the media, Zendrite fetches it from there, following up to five more redirects, and only from public addresses |
 

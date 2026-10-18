@@ -59,7 +59,10 @@ const reactivateAccountSQL = "" +
 	"UPDATE userapi_accounts SET is_deactivated = FALSE WHERE localpart = $1 AND server_name = $2"
 
 const selectAccountByLocalpartSQL = "" +
-	"SELECT localpart, server_name, appservice_id, account_type FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+	"SELECT localpart, server_name, appservice_id, account_type, locked FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+
+const updateLockedSQL = "" +
+	"UPDATE userapi_accounts SET locked = $1 WHERE localpart = $2 AND server_name = $3"
 
 const selectIsDeactivatedSQL = "" +
 	"SELECT is_deactivated FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
@@ -84,6 +87,7 @@ type accountsStatements struct {
 	deactivateAccountStmt         *sql.Stmt
 	reactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
+	updateLockedStmt              *sql.Stmt
 	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
@@ -111,6 +115,10 @@ func NewPostgresAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Ac
 			Up:      deltas.UpAddAccountType,
 			Down:    deltas.DownAddAccountType,
 		},
+		{
+			Version: "userapi: add account locks",
+			Up:      tables.AddAccountLocked,
+		},
 	}...)
 	err = m.Up(context.Background())
 	if err != nil {
@@ -123,6 +131,7 @@ func NewPostgresAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Ac
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
 		{&s.reactivateAccountStmt, reactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
+		{&s.updateLockedStmt, updateLockedSQL},
 		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
@@ -200,6 +209,25 @@ func (s *accountsStatements) ReactivateAccount(
 	return nil
 }
 
+// UpdateLocked sets whether the account is locked (MSC3939) and reports
+// sql.ErrNoRows when no account matches.
+func (s *accountsStatements) UpdateLocked(
+	ctx context.Context, localpart string, serverName spec.ServerName, locked bool,
+) error {
+	result, err := s.updateLockedStmt.ExecContext(ctx, locked, localpart, serverName)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *accountsStatements) SelectPasswordHash(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 ) (hash string, err error) {
@@ -214,7 +242,7 @@ func (s *accountsStatements) SelectAccountByLocalpart(
 	var acc api.Account
 
 	stmt := s.selectAccountByLocalpartStmt
-	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType)
+	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType, &acc.Locked)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.WithError(err).Error("Unable to retrieve user from the db")

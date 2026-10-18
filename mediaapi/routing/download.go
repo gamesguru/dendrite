@@ -103,6 +103,10 @@ var allowInlineTypes = map[types.ContentType]struct{}{
 	"audio/x-flac":    {},
 }
 
+// defaultContentType is the type of media that was stored without one, as
+// uploads before spec v1.12 and non-compliant remote servers did (MSC2701).
+const defaultContentType types.ContentType = "application/octet-stream"
+
 // Download implements GET /download and GET /thumbnail
 // Files from this server (i.e. origin == cfg.ServerName) are served directly
 // Files from remote servers (i.e. origin != cfg.ServerName) are cached locally.
@@ -431,6 +435,7 @@ func (r *downloadRequest) respondFromStore(
 			responseFile = thumbFile
 			responseMetadata = thumbMetadata.MediaMetadata
 		}
+		w.Header().Set("Content-Disposition", thumbnailDisposition(responseContentType(responseMetadata)))
 	} else {
 		r.Logger.WithFields(log.Fields{
 			"UploadName":    r.MediaMetadata.UploadName,
@@ -450,7 +455,8 @@ func (r *downloadRequest) respondFromStore(
 	}
 	defer responseFile.Close()
 
-	w.Header().Set("Content-Type", string(responseMetadata.ContentType))
+	contentType := responseContentType(responseMetadata)
+	w.Header().Set("Content-Type", string(contentType))
 	w.Header().Set("Content-Length", strconv.FormatInt(int64(responseMetadata.FileSizeBytes), 10))
 	contentSecurityPolicy := "default-src 'none';" +
 		" script-src 'none';" +
@@ -465,7 +471,7 @@ func (r *downloadRequest) respondFromStore(
 		}
 	} else {
 		var written int64
-		written, err = multipartResponse(w, r, string(responseMetadata.ContentType), responseFile)
+		written, err = multipartResponse(w, r, string(contentType), responseFile)
 		if err != nil {
 			return nil, err
 		}
@@ -1181,6 +1187,37 @@ func parseMultipartResponse(ctx context.Context, r *downloadRequest, resp *http.
 		reader:        reader,
 		disposition:   p.Header.Get("Content-Disposition"),
 	}, nil
+}
+
+// responseContentType is the Content-Type to serve media with, which spec
+// v1.12 requires even for media that was stored without one (MSC2701).
+func responseContentType(metadata *types.MediaMetadata) types.ContentType {
+	if metadata.ContentType == "" {
+		return defaultContentType
+	}
+	return metadata.ContentType
+}
+
+// thumbnailDisposition returns the Content-Disposition of a thumbnail, which
+// must be inline and should name a file (MSC2702). An original served as its
+// own thumbnail stays an attachment unless its type is safe to show inline.
+func thumbnailDisposition(contentType types.ContentType) string {
+	filename := "thumbnail"
+	if ext, ok := thumbnailExtensions[contentType]; ok {
+		filename += ext
+	}
+	return fmt.Sprintf(`%s; filename="%s"`, contentDispositionFor(contentType), filename)
+}
+
+// thumbnailExtensions maps the image types thumbnails are served as to the
+// extension of their file name.
+var thumbnailExtensions = map[types.ContentType]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/gif":  ".gif",
+	"image/apng": ".apng",
+	"image/webp": ".webp",
+	"image/avif": ".avif",
 }
 
 // contentDispositionFor returns the Content-Disposition for a given

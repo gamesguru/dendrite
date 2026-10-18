@@ -213,6 +213,7 @@ func Setup(
 					"v1.9",
 					"v1.10",
 					"v1.11",
+					"v1.12",
 				}, UnstableFeatures: unstableFeatures},
 			}
 		}),
@@ -430,6 +431,25 @@ func Setup(
 				return GetLoginToken(req, userInteractiveAuth, userAPI, device)
 			}),
 		).Methods(http.MethodPost, http.MethodOptions)
+	}
+
+	// MSC4323 account locking (MSC3939). With delegated authentication the
+	// OIDC provider locks accounts, and its tokens stop introspecting.
+	if oidcEnabled {
+		v1mux.Handle("/admin/lock/{userID}", msc3861ForbiddenHandler("admin_lock")).Methods(http.MethodGet, http.MethodPut, http.MethodOptions)
+	} else {
+		v1mux.Handle("/admin/lock/{userID}",
+			httputil.MakeAdminAPI("admin_lock", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+				vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+				if err != nil {
+					return util.ErrorResponse(err)
+				}
+				if req.Method == http.MethodPut {
+					return AdminSetLock(req, cfg, device, userAPI, vars["userID"])
+				}
+				return AdminGetLock(req, cfg, userAPI, vars["userID"])
+			}),
+		).Methods(http.MethodGet, http.MethodPut, http.MethodOptions)
 	}
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
@@ -894,13 +914,13 @@ func Setup(
 		v3mux.Handle("/logout",
 			httputil.MakeAuthAPI("logout", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 				return Logout(req, userAPI, device)
-			}, httputil.WithAllowCallGuests()),
+			}, httputil.WithAllowCallGuests(), httputil.WithAllowLocked()),
 		).Methods(http.MethodPost, http.MethodOptions)
 
 		v3mux.Handle("/logout/all",
 			httputil.MakeAuthAPI("logout", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 				return LogoutAll(req, userAPI, device)
-			}, httputil.WithAllowCallGuests()),
+			}, httputil.WithAllowCallGuests(), httputil.WithAllowLocked()),
 		).Methods(http.MethodPost, http.MethodOptions)
 	}
 
@@ -1697,7 +1717,7 @@ func Setup(
 			if r := rateLimits.Limit(req, device); r != nil {
 				return *r
 			}
-			return GetCapabilities(rsAPI, oidcEnabled, &cfg.DelayedEvents)
+			return GetCapabilities(rsAPI, oidcEnabled, &cfg.DelayedEvents, device)
 		}, httputil.WithAllowGuests(), httputil.WithAllowCallGuests()),
 	).Methods(http.MethodGet, http.MethodOptions)
 

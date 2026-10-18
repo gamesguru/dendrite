@@ -88,6 +88,9 @@ func Refresh(req *http.Request, userAPI userapi.ClientUserAPI, cfg *config.Clien
 		util.GetLogger(req.Context()).WithError(err).Error("userAPI.PerformRefreshToken failed")
 		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
 	}
+	if res.Locked {
+		return auth.UserLockedResponse()
+	}
 	if res.Device == nil {
 		return util.JSONResponse{Code: http.StatusUnauthorized, JSON: spec.UnknownToken("Unknown refresh token")}
 	}

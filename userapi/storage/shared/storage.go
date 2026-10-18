@@ -638,6 +638,14 @@ func (d *Database) ReactivateAccount(ctx context.Context, localpart string, serv
 	})
 }
 
+// SetAccountLocked locks or unlocks an account (MSC3939) and returns
+// sql.ErrNoRows when the account does not exist.
+func (d *Database) SetAccountLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error {
+	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		return d.Accounts.UpdateLocked(ctx, localpart, serverName, locked)
+	})
+}
+
 // CreateOpenIDToken persists a new token that was issued for OpenID Connect.
 func (d *Database) CreateOpenIDToken(
 	ctx context.Context,
@@ -995,6 +1003,12 @@ func (d *Database) RefreshDeviceTokens(
 		return err
 	})
 	return dev, err
+}
+
+// GetRefreshTokenOwner returns the user of the device holding the given
+// current or previous refresh token hash, or sql.ErrNoRows.
+func (d *Database) GetRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (string, spec.ServerName, error) {
+	return d.Devices.SelectRefreshTokenOwner(ctx, refreshTokenHash)
 }
 
 // ClearPrevRefreshToken revokes the previous refresh token of the device

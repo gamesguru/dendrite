@@ -109,6 +109,23 @@ func completeAuth(
 		}
 	}
 
+	// A locked account cannot obtain a new access token (MSC3939). The
+	// credentials were already checked, so this reveals nothing to others.
+	var accRes userapi.QueryAccountByLocalpartResponse
+	if err = userAPI.QueryAccountByLocalpart(ctx, &userapi.QueryAccountByLocalpartRequest{
+		Localpart:  localpart,
+		ServerName: serverName,
+	}, &accRes); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryAccountByLocalpart failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if accRes.Account.Locked {
+		return auth.UserLockedResponse()
+	}
+
 	var performRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
 		DeviceDisplayName:    login.InitialDisplayName,

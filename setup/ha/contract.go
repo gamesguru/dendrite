@@ -54,8 +54,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 // sticky events stream (MSC4354), level 8 stores MSC4140 delayed events,
 // level 9 stores the sticky duration of delayed events, level 10 indexes
 // annotations (MSC2677) and reserves media IDs for asynchronous uploads
-// (MSC2246), and level 11 records erased users (MSC4025).
-const releaseLevel = 11
+// (MSC2246), level 11 records erased users (MSC4025), and level 12 locks
+// accounts (MSC3939).
+const releaseLevel = 12
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

@@ -49,6 +49,8 @@ type AccountsTable interface {
 	SelectIsDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	// ReactivateAccount returns sql.ErrNoRows when no account matches.
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	// UpdateLocked returns sql.ErrNoRows when no account matches.
+	UpdateLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
 	// SelectActiveAccountsCreatedBefore returns up to limit accounts of the
 	// given type that are not deactivated and were created before the given
@@ -72,6 +74,7 @@ type DevicesTable interface {
 	UpdateDeviceRefreshToken(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID string, expiresTS int64, refreshTokenHash string) error
 	RefreshDeviceTokens(ctx context.Context, txn *sql.Tx, refreshTokenHash, accessToken string, expiresTS int64, newRefreshTokenHash string) (*api.Device, error)
 	ClearPrevRefreshToken(ctx context.Context, txn *sql.Tx, accessToken string) error
+	SelectRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (localpart string, serverName spec.ServerName, err error)
 }
 
 type KeyBackupTable interface {

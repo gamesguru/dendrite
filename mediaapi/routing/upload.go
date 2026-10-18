@@ -74,11 +74,16 @@ func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db sto
 // all the metadata about the media being uploaded.
 // Returns either an uploadRequest or an error formatted as a util.JSONResponse.
 func parseAndValidateRequest(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device) (*uploadRequest, *util.JSONResponse) {
+	// The Content-Type header is optional since spec v1.12 (MSC2701).
+	contentType := types.ContentType(req.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = defaultContentType
+	}
 	r := &uploadRequest{
 		MediaMetadata: &types.MediaMetadata{
 			Origin:        cfg.Matrix.ServerName,
 			FileSizeBytes: types.FileSizeBytes(req.ContentLength),
-			ContentType:   types.ContentType(req.Header.Get("Content-Type")),
+			ContentType:   contentType,
 			UploadName:    types.Filename(url.PathEscape(req.FormValue("filename"))),
 			UserID:        types.MatrixUserID(dev.UserID),
 		},

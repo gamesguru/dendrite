@@ -115,6 +115,9 @@ type ClientUserAPI interface {
 	PerformPushRulesPut(ctx context.Context, userID string, ruleSets *pushrules.AccountRuleSets) error
 	PerformAccountDeactivation(ctx context.Context, req *PerformAccountDeactivationRequest, res *PerformAccountDeactivationResponse) error
 	PerformAccountReactivation(ctx context.Context, req *PerformAccountReactivationRequest, res *PerformAccountReactivationResponse) error
+	// PerformAccountLock locks or unlocks a local account (MSC3939) and
+	// returns sql.ErrNoRows when the account does not exist.
+	PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
 	PerformOpenIDTokenCreation(ctx context.Context, req *PerformOpenIDTokenCreationRequest, res *PerformOpenIDTokenCreationResponse) error
 	QueryNotifications(ctx context.Context, req *QueryNotificationsRequest, res *QueryNotificationsResponse) error
 	InputAccountData(ctx context.Context, req *InputAccountDataRequest, res *InputAccountDataResponse) error
@@ -435,8 +438,12 @@ type PerformRefreshTokenRequest struct {
 
 // PerformRefreshTokenResponse is the response for PerformRefreshToken.
 type PerformRefreshTokenResponse struct {
-	// Device is nil if the refresh token is unknown or revoked.
+	// Device is nil if the refresh token is unknown or revoked, or if the
+	// account is locked.
 	Device *Device
+	// Locked is true when the account is locked (MSC3939). The tokens are
+	// not rotated then, so the client can retry once it is unlocked.
+	Locked bool
 }
 
 // PerformAccountDeactivationRequest is the request for PerformAccountDeactivation.
@@ -505,6 +512,9 @@ type Device struct {
 	// this is the appservice ID.
 	AppserviceID string
 	AccountType  AccountType
+	// Locked is true when the account is locked (MSC3939), so the device may
+	// only log out.
+	Locked bool
 	// AccessTokenExpiresTS is when the access token expires, as a unix
 	// timestamp in milliseconds, or 0 if it never expires (MSC2918).
 	AccessTokenExpiresTS int64
@@ -532,6 +542,8 @@ type Account struct {
 	ServerName   spec.ServerName
 	AppServiceID string
 	AccountType  AccountType
+	// Locked is true when an administrator locked the account (MSC3939).
+	Locked bool
 	// TODO: Associations (e.g. with application services)
 }
 

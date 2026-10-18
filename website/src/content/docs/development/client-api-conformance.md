@@ -5,10 +5,10 @@ description: Version discovery policy, audited implementation gaps, and experime
 
 ## Advertisement decision
 
-`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.11`.
+`GET /_matrix/client/versions` advertises `r0.0.1`, `r0.1.0`, `r0.2.0`, `r0.3.0`, `r0.4.0`, `r0.5.0`, `r0.6.1`, and `v1.0` to `v1.12`.
 The versions up to `v1.2` are a compatibility baseline, not a new certification of every historical requirement.
-`v1.3` to `v1.11` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
-`v1.12` and later are not advertised while #478 lists open gaps in them.
+`v1.3` to `v1.12` are advertised because the audit of every MSC merged into the specification since v1.1 ([issue #478](https://codefloe.com/pat-s/zendrite/issues/478)) leaves no unresolved requirement in those releases; the sections below record the evidence.
+`v1.13` and later are not advertised while #478 lists open gaps in them.
 
 The [version discovery contract](https://spec.matrix.org/v1.19/client-server-api/#api-versions) distinguishes specification versions from individual experimental features.
 Authenticated media, room summaries, and selected other newer features are implemented, but their presence does not establish support for the other requirements introduced in the same release.
@@ -16,7 +16,7 @@ Room versions returned by `/capabilities` are a separate namespace and must not 
 
 ## Scope and evidence
 
-This is a source-level audit of the next candidate versions, v1.3 through v1.11, with targeted checks of later features that could otherwise motivate raising the ceiling.
+This is a source-level audit of the next candidate versions, v1.3 through v1.12, with targeted checks of later features that could otherwise motivate raising the ceiling.
 It compares the release requirements with routing, handler behavior, storage, and existing tests in this repository.
 It does not claim an exhaustive behavioral certification through v1.19 or a fresh Sytest/Complement pass.
 A registered route establishes reachability only; authorization, pagination, response shape, and configuration dependence require separate evidence.
@@ -133,7 +133,20 @@ The [v1.11 changes](https://spec.matrix.org/v1.11/changelog/) add authenticated 
 | Optional access token on `/account/password` and `/account/deactivate` | Both require an access token, which the spec allows: the server may offer different flows depending on whether a token is given. Password reset by email is not offered. | Compliant. |
 | Application services and `sender_localpart` | `setup/config/config_appservice.go` adds the `sender_localpart` user to the service's exclusive user namespaces, so events concerning it are delivered. | Implemented. |
 
-### v1.12 and later candidates
+### v1.12
+
+The [v1.12 changes](https://spec.matrix.org/v1.12/changelog/) add account locking, media `Content-Type` and `Content-Disposition` rules, `via` on joins and knocks, guest access to authenticated media, and marking rooms as unread.
+
+| Requirement | Implementation evidence | Assessment |
+| --- | --- | --- |
+| Account locking (MSC3939) | `internal/httputil/httpapi.go` refuses locked accounts with 401 `M_USER_LOCKED` and `soft_logout: true` on every authenticated route except `/logout` and `/logout/all`; `clientapi/routing/login.go` and `refresh.go` refuse new tokens. `clientapi/routing/admin_lock.go` serves `GET` and `PUT /v1/admin/lock/{userId}` (MSC4323). `clientapi/account_lock_test.go` and `internal/httputil/locked_test.go` cover them. | Implemented; with MSC3861 the authentication service locks accounts. |
+| Media `Content-Type` and `Content-Disposition` (MSC2701, MSC2702) | `mediaapi/routing/upload.go` stores uploads without a type as `application/octet-stream`; `download.go` serves that type for untyped media and an `inline` disposition with a file name for thumbnails. `content_disposition_test.go` covers both. | Implemented. |
+| `via` on joins and knocks (MSC4156) | `clientapi/routing/joinroom.go` reads `via`, falling back to the deprecated `server_name`. | Implemented. |
+| Guest access to authenticated media (MSC4189) | `mediaapi/routing/routing.go` serves the `/v1/media` download and thumbnail routes through `MakeHTTPAPI`, which admits guests. | Implemented. |
+| 403 on profile lookups (MSC4170) | The response is allowed, not required. Zendrite does not restrict lookups of its own profiles, and `clientapi/routing/profile.go` passes on a remote server's 403. | Compliant. |
+| Marking rooms as unread (MSC2867) | `m.marked_unread` is room account data, which needs no server support. | Client-only. |
+
+### v1.13 and later candidates
 
 | Candidate | Evidence and remaining blockers | Decision |
 | --- | --- | --- |

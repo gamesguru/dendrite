@@ -80,6 +80,9 @@ const refreshDeviceTokensSQL = "" +
 	" WHERE refresh_token_hash = $4 OR prev_refresh_token_hash = $4" +
 	" RETURNING session_id, device_id, localpart, server_name"
 
+const selectRefreshTokenOwnerSQL = "" +
+	"SELECT localpart, server_name FROM userapi_devices WHERE refresh_token_hash = $1 OR prev_refresh_token_hash = $1"
+
 const clearPrevRefreshTokenSQL = "" +
 	"UPDATE userapi_devices SET prev_refresh_token_hash = NULL WHERE access_token = $1"
 
@@ -122,6 +125,7 @@ type devicesStatements struct {
 	updateDeviceRefreshTokenStmt *sql.Stmt
 	refreshDeviceTokensStmt      *sql.Stmt
 	clearPrevRefreshTokenStmt    *sql.Stmt
+	selectRefreshTokenOwnerStmt  *sql.Stmt
 	deleteDeviceStmt             *sql.Stmt
 	deleteDevicesByLocalpartStmt *sql.Stmt
 	deleteDevicesStmt            *sql.Stmt
@@ -164,6 +168,7 @@ func NewPostgresDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Dev
 		{&s.updateDeviceRefreshTokenStmt, updateDeviceRefreshTokenSQL},
 		{&s.refreshDeviceTokensStmt, refreshDeviceTokensSQL},
 		{&s.clearPrevRefreshTokenStmt, clearPrevRefreshTokenSQL},
+		{&s.selectRefreshTokenOwnerStmt, selectRefreshTokenOwnerSQL},
 	}.Prepare(db)
 }
 
@@ -412,6 +417,15 @@ func (s *devicesStatements) RefreshDeviceTokens(
 	dev.AccessTokenExpiresTS = expiresTS
 	dev.PrevRefreshTokenValid = true
 	return &dev, nil
+}
+
+// SelectRefreshTokenOwner returns the user of the device holding the given
+// current or previous refresh token hash, or sql.ErrNoRows.
+func (s *devicesStatements) SelectRefreshTokenOwner(
+	ctx context.Context, refreshTokenHash string,
+) (localpart string, serverName spec.ServerName, err error) {
+	err = s.selectRefreshTokenOwnerStmt.QueryRowContext(ctx, refreshTokenHash).Scan(&localpart, &serverName)
+	return
 }
 
 // ClearPrevRefreshToken revokes the previous refresh token of the device that

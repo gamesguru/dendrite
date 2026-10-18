@@ -20,10 +20,11 @@ import (
 // tokenAPI resolves every access token to a device of the given account type.
 type tokenAPI struct {
 	accountType userapi.AccountType
+	locked      bool
 }
 
 func (a tokenAPI) QueryAccessToken(_ context.Context, _ *userapi.QueryAccessTokenRequest, res *userapi.QueryAccessTokenResponse) error {
-	res.Device = &userapi.Device{UserID: "@someone:test", ID: "DEVICE", AccountType: a.accountType}
+	res.Device = &userapi.Device{UserID: "@someone:test", ID: "DEVICE", AccountType: a.accountType, Locked: a.locked}
 	return nil
 }
 

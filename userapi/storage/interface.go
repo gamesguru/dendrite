@@ -72,6 +72,7 @@ type Account interface {
 	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
 	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	SetAccountLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
 	// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
 	// type that are not deactivated and were created before the given time,
 	// oldest first.
@@ -120,6 +121,9 @@ type Device interface {
 	// ClearPrevRefreshToken revokes the refresh token that was used to obtain
 	// the given access token, once that access token has been used.
 	ClearPrevRefreshToken(ctx context.Context, accessToken string) error
+	// GetRefreshTokenOwner returns the user of the device holding the given
+	// current or previous refresh token hash, or sql.ErrNoRows.
+	GetRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (localpart string, serverName spec.ServerName, err error)
 	RemoveDevices(ctx context.Context, localpart string, serverName spec.ServerName, devices []string) error
 	// RemoveAllDevices deleted all devices for this user. Returns the devices deleted.
 	RemoveAllDevices(ctx context.Context, localpart string, serverName spec.ServerName, exceptDeviceID string) (devices []api.Device, err error)

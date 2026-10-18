@@ -338,7 +338,25 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 // PerformRefreshToken replaces the access and refresh tokens of the device
 // that holds the given refresh token (MSC2918).
 func (a *UserInternalAPI) PerformRefreshToken(ctx context.Context, req *api.PerformRefreshTokenRequest, res *api.PerformRefreshTokenResponse) error {
-	dev, err := a.DB.RefreshDeviceTokens(ctx, hashRefreshToken(req.RefreshToken), req.AccessToken, req.AccessTokenExpiresTS, hashRefreshToken(req.NewRefreshToken))
+	refreshTokenHash := hashRefreshToken(req.RefreshToken)
+	// A locked account cannot obtain new access tokens (MSC3939). Check
+	// before rotating, so the client keeps its current tokens.
+	localpart, domain, err := a.DB.GetRefreshTokenOwner(ctx, refreshTokenHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	acc, err := a.DB.GetAccountByLocalpart(ctx, localpart, domain)
+	if err != nil {
+		return err
+	}
+	if acc.Locked {
+		res.Locked = true
+		return nil
+	}
+	dev, err := a.DB.RefreshDeviceTokens(ctx, refreshTokenHash, req.AccessToken, req.AccessTokenExpiresTS, hashRefreshToken(req.NewRefreshToken))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -641,6 +659,7 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 		return err
 	}
 	device.AccountType = acc.AccountType
+	device.Locked = acc.Locked
 	res.Device = device
 	return nil
 }
@@ -648,6 +667,12 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 func (a *UserInternalAPI) QueryAccountByLocalpart(ctx context.Context, req *api.QueryAccountByLocalpartRequest, res *api.QueryAccountByLocalpartResponse) (err error) {
 	res.Account, err = a.DB.GetAccountByLocalpart(ctx, req.Localpart, req.ServerName)
 	return
+}
+
+// PerformAccountLock locks or unlocks a local account (MSC3939). Sessions are
+// kept either way, so an unlocked user carries on without logging in again.
+func (a *UserInternalAPI) PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error {
+	return a.DB.SetAccountLocked(ctx, localpart, serverName, locked)
 }
 
 // IsAccountDeactivated reports whether the given local account is deactivated.

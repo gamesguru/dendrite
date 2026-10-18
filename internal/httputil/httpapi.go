@@ -38,6 +38,7 @@ type BasicAuth struct {
 type AuthAPIOpts struct {
 	GuestAccessAllowed     bool
 	CallGuestAccessAllowed bool
+	LockedAccessAllowed    bool
 	WithAuth               bool
 }
 
@@ -62,12 +63,23 @@ func WithAllowCallGuests() AuthAPIOption {
 	}
 }
 
+// WithAllowLocked lets locked accounts use this endpoint. The spec only
+// allows logging out while locked (MSC3939).
+func WithAllowLocked() AuthAPIOption {
+	return func(opts *AuthAPIOpts) {
+		opts.LockedAccessAllowed = true
+	}
+}
+
 // accountAccessForbidden reports why the device's account may not use an
 // endpoint with the given options, or nil when it may.
 func accountAccessForbidden(device *userapi.Device, opts *AuthAPIOpts) *util.JSONResponse {
 	switch {
 	case device == nil:
 		return nil
+	case !opts.LockedAccessAllowed && device.Locked:
+		res := auth.UserLockedResponse()
+		return &res
 	case !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest:
 		return &util.JSONResponse{
 			Code: http.StatusForbidden,
@@ -292,8 +304,8 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 			logger := util.GetLogger(ctx)
 			device, jsonErr := auth.VerifyUserFromRequest(req, userAPI)
 			// MakeHTTPAPI has never checked guests, so only call guests
-			// are subject to an opt-in here.
-			if jsonErr == nil && device.AccountType == userapi.AccountTypeCallGuest {
+			// and locked accounts are subject to an opt-in here.
+			if jsonErr == nil && (device.AccountType == userapi.AccountTypeCallGuest || device.Locked) {
 				jsonErr = accountAccessForbidden(device, &opts)
 			}
 			if jsonErr != nil {
