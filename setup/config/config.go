@@ -73,6 +73,10 @@ type Dendrite struct {
 	Derived Derived `yaml:"-"`
 }
 
+// Zendrite is the config type name used by the Zendrite command-line tools.
+// Keep Dendrite as the underlying type for existing internal callers.
+type Zendrite = Dendrite
+
 // TODO: Kill Derived
 type Derived struct {
 	Registration struct {

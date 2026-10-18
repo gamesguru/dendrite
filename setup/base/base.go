@@ -25,7 +25,7 @@ import (
 	"time"
 
 	sentryhttp "github.com/getsentry/sentry-go/http"
-	"github.com/matrix-org/gomatrixserverlib/fclient"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -94,10 +94,10 @@ func CreateFederationClient(cfg *config.Dendrite, dnsCache *fclient.DNSCache) fc
 }
 
 func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers httputil.Routers) {
-	routers.DendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
+	routers.ZendriteAdmin.HandleFunc("/monitor/up", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
-	routers.DendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
+	routers.ZendriteAdmin.HandleFunc("/monitor/health", func(w http.ResponseWriter, r *http.Request) {
 		if isDegraded, reasons := processContext.IsDegraded(); isDegraded {
 			w.WriteHeader(503)
 			_ = json.NewEncoder(w).Encode(struct {
@@ -112,8 +112,8 @@ func ConfigureAdminEndpoints(processContext *process.ProcessContext, routers htt
 }
 
 func createBaseAdminRouter(processContext *process.ProcessContext, upstream *mux.Router) *mux.Router {
-	adminRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.DendriteAdminPathPrefix).Subrouter().UseEncodedPath()
-	ConfigureAdminEndpoints(processContext, httputil.Routers{DendriteAdmin: adminRouter})
+	adminRouter := mux.NewRouter().SkipClean(true).PathPrefix(httputil.ZendriteAdminPathPrefix).Subrouter().UseEncodedPath()
+	ConfigureAdminEndpoints(processContext, httputil.Routers{ZendriteAdmin: adminRouter})
 	if upstream != nil {
 		adminRouter.PathPrefix("/").Handler(upstream)
 	}
@@ -168,9 +168,9 @@ func normalizeRouters(routers httputil.Routers) httputil.Routers {
 		defaults := getDefaults()
 		routers.Static = defaults.Static
 	}
-	if routers.DendriteAdmin == nil {
+	if routers.ZendriteAdmin == nil {
 		defaults := getDefaults()
-		routers.DendriteAdmin = defaults.DendriteAdmin
+		routers.ZendriteAdmin = defaults.ZendriteAdmin
 	}
 	if routers.SynapseAdmin == nil {
 		defaults := getDefaults()
@@ -224,7 +224,7 @@ func SetupAndServeHTTP(
 	if err != nil {
 		logrus.Panicf("unable to read embedded files, this should never happen: %s", err)
 	}
-	baseAdminRouter := createBaseAdminRouter(processContext, routers.DendriteAdmin)
+	baseAdminRouter := createBaseAdminRouter(processContext, routers.ZendriteAdmin)
 	baseStaticRouter := createBaseStaticRouter(landingPage, sub, routers.Static)
 
 	var clientHandler http.Handler
@@ -243,7 +243,7 @@ func SetupAndServeHTTP(
 		})
 		federationHandler = sentryHandler.Handle(routers.Federation)
 	}
-	externalRouter.PathPrefix(httputil.DendriteAdminPathPrefix).Handler(baseAdminRouter)
+	externalRouter.PathPrefix(httputil.ZendriteAdminPathPrefix).Handler(baseAdminRouter)
 	externalRouter.PathPrefix(httputil.PublicClientPathPrefix).Handler(clientHandler)
 	if !cfg.Global.DisableFederation {
 		externalRouter.PathPrefix(httputil.PublicKeyPathPrefix).Handler(routers.Keys)
@@ -305,7 +305,7 @@ func SetupAndServeHTTP(
 		}()
 	}
 
-	minwinsvc.SetOnExit(processContext.ShutdownDendrite)
+	minwinsvc.SetOnExit(processContext.ShutdownZendrite)
 	<-processContext.WaitForShutdown()
 
 	logrus.Infof("Stopping HTTP listeners")
@@ -324,7 +324,7 @@ func WaitForShutdown(processCtx *process.ProcessContext) {
 
 	logrus.Warnf("Shutdown signal received")
 
-	processCtx.ShutdownDendrite()
+	processCtx.ShutdownZendrite()
 	processCtx.WaitForComponentsToFinish()
 
 	logrus.Warnf("Dendrite is exiting now")

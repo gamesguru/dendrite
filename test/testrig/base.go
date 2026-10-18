@@ -53,7 +53,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 			ConnMaxLifetimeSeconds: 60,
 		}
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForShutdown()
 			ctx.WaitForComponentsToFinish()
 			closeDb()
@@ -82,7 +82,7 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Dendrite, *process.
 		cfg.RelayAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "relayapi.db"))
 
 		return &cfg, ctx, func() {
-			ctx.ShutdownDendrite()
+			ctx.ShutdownZendrite()
 			ctx.WaitForShutdown()
 			ctx.WaitForComponentsToFinish()
 			t.Cleanup(func() {}) // removes t.TempDir, where all database files are created

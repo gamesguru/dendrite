@@ -35,7 +35,7 @@ func startBaseServer(
 
 	go basepkg.SetupAndServeHTTP(processCtx, cfg, routers, address, nil, nil)
 	t.Cleanup(func() {
-		processCtx.ShutdownDendrite()
+		processCtx.ShutdownZendrite()
 		processCtx.WaitForComponentsToFinish()
 	})
 }

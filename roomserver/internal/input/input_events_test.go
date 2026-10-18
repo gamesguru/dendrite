@@ -12,8 +12,8 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/test/testrig"
-	"github.com/matrix-org/gomatrixserverlib"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/test"
 )

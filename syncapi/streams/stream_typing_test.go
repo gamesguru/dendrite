@@ -7,7 +7,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
-	"github.com/matrix-org/gomatrixserverlib/spec"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 func TestTypingStreamProviderCompleteSyncReturnsCurrentTypingOnly(t *testing.T) {
