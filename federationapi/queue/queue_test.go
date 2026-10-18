@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -975,4 +976,50 @@ func TestSendEDUOnRelaySuccessRemovedFromDB(t *testing.T) {
 
 	assumedOffline, _ := db.IsServerAssumedOffline(context.Background(), destination)
 	assert.Equal(t, true, assumedOffline)
+}
+
+// blockingFederationClient holds every transaction until its context ends, as
+// an in-flight request does when this process shuts down.
+type blockingFederationClient struct {
+	fclient.FederationClient
+	started chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingFederationClient) SendTransaction(ctx context.Context, t gomatrixserverlib.Transaction) (fclient.RespSend, error) {
+	f.once.Do(func() { close(f.started) })
+	<-ctx.Done()
+	return fclient.RespSend{}, ctx.Err()
+}
+
+// A transaction cut short by this process shutting down, as when an HA owner
+// loses its lease, says nothing about the destination. Charging it would
+// persist a backoff of minutes that the successor inherits.
+func TestShutdownDoesNotChargeDestination(t *testing.T) {
+	t.Parallel()
+	destination := spec.ServerName("remotehost")
+	db := test.NewInMemoryFederationDatabase()
+	pc := process.NewProcessContext()
+	fc := &blockingFederationClient{started: make(chan struct{})}
+	stats := statistics.NewStatistics(db, 16, 17, false)
+	queues := NewOutgoingQueues(db, pc, false, "localhost", fc, &stats, []*fclient.SigningIdentity{
+		{KeyID: "ed21019:auto", PrivateKey: test.PrivateKeyA, ServerName: "localhost"},
+	})
+
+	assert.NoError(t, queues.SendEvent(mustCreatePDU(t), "localhost", []spec.ServerName{destination}))
+	select {
+	case <-fc.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the transaction was never sent")
+	}
+	pc.ShutdownZendrite()
+	pc.WaitForComponentsToFinish()
+
+	_, _, persisted, err := db.GetServerRetryState(context.Background(), destination)
+	assert.NoError(t, err)
+	assert.False(t, persisted, "shutting down persisted retry state for the destination")
+	assert.Nil(t, stats.ForServer(destination).BackoffInfo(), "shutting down backed off from the destination")
+	pending, err := db.GetPendingPDUs(context.Background(), destination, 100)
+	assert.NoError(t, err)
+	assert.Len(t, pending, 1, "the undelivered event must stay queued for the successor")
 }

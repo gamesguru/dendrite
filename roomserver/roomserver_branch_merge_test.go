@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver"
@@ -16,8 +18,6 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/test/testrig"
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 // disconnectedJoinScenario holds what buildDisconnectedJoinScenario built,

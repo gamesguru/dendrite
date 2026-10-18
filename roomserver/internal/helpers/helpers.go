@@ -10,6 +10,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/auth"
@@ -35,6 +36,21 @@ func UpdateToInviteMembership(
 	if err != nil {
 		return nil, err
 	}
+	// Retire a knock this invite answers before announcing the invite: the
+	// sync API shows the most recent entry for a room, which must be the
+	// invite.
+	for _, eventID := range retired {
+		updates = append(updates, api.OutputEvent{
+			Type: api.OutputTypeRetireInviteEvent,
+			RetireInviteEvent: &api.OutputRetireInviteEvent{
+				EventID:          eventID,
+				RoomID:           add.RoomID().String(),
+				Membership:       spec.Join,
+				RetiredByEventID: add.EventID(),
+				TargetSenderID:   spec.SenderID(*add.StateKey()),
+			},
+		})
+	}
 	if needsSending {
 		// We notify the consumers using a special event even though we will
 		// notify them about the change in current state as part of the normal
@@ -46,18 +62,6 @@ func UpdateToInviteMembership(
 			NewInviteEvent: &api.OutputNewInviteEvent{
 				Event:       &types.HeaderedEvent{PDU: add.PDU},
 				RoomVersion: roomVersion,
-			},
-		})
-	}
-	for _, eventID := range retired {
-		updates = append(updates, api.OutputEvent{
-			Type: api.OutputTypeRetireInviteEvent,
-			RetireInviteEvent: &api.OutputRetireInviteEvent{
-				EventID:          eventID,
-				RoomID:           add.RoomID().String(),
-				Membership:       spec.Join,
-				RetiredByEventID: add.EventID(),
-				TargetSenderID:   spec.SenderID(*add.StateKey()),
 			},
 		})
 	}
@@ -97,9 +101,31 @@ func IsServerCurrentlyInRoom(ctx context.Context, db storage.Database, querier a
 	return auth.IsAnyUserOnServerWithMembership(ctx, querier, serverName, gmslEvents, spec.Join), nil
 }
 
+// IsInvitePending reports whether the user has an outstanding invite to the
+// room, returning the inviter, the invite event ID and the invite event.
 func IsInvitePending(
 	ctx context.Context, db storage.Database,
 	roomID string, senderID spec.SenderID,
+) (bool, spec.SenderID, string, gomatrixserverlib.PDU, error) {
+	return isMembershipPending(ctx, db, roomID, senderID, spec.Invite)
+}
+
+// IsKnockPending reports whether the user has an outstanding knock on the
+// room, returning the knock event ID and the knock event.
+func IsKnockPending(
+	ctx context.Context, db storage.Database,
+	roomID string, senderID spec.SenderID,
+) (bool, string, gomatrixserverlib.PDU, error) {
+	pending, _, eventID, event, err := isMembershipPending(ctx, db, roomID, senderID, spec.Knock)
+	return pending, eventID, event, err
+}
+
+// isMembershipPending looks up the active entry in the invites table, which
+// records both invites and knocks, and reports it if it has the wanted
+// membership.
+func isMembershipPending(
+	ctx context.Context, db storage.Database,
+	roomID string, senderID spec.SenderID, membership string,
 ) (bool, spec.SenderID, string, gomatrixserverlib.PDU, error) {
 	// Look up the room NID for the supplied room ID.
 	info, err := db.RoomInfo(ctx, roomID)
@@ -127,7 +153,7 @@ func IsInvitePending(
 	if err != nil {
 		return false, "", "", nil, fmt.Errorf("r.DB.GetInvitesForUser: %w", err)
 	}
-	if len(senderUserNIDs) == 0 {
+	if len(senderUserNIDs) == 0 || gjson.GetBytes(eventJSON, "content.membership").Str != membership {
 		return false, "", "", nil, nil
 	}
 	userNIDToEventID := make(map[types.EventStateKeyNID]string)
@@ -265,6 +291,16 @@ func LoadStateEvents(
 func CheckServerAllowedToSeeEvent(
 	ctx context.Context, db storage.Database, info *types.RoomInfo, roomID string, eventID string, serverName spec.ServerName, isServerInRoom bool, querier api.QuerySenderIDAPI,
 ) (bool, error) {
+	allowed, _, err := CheckServerEventAccess(ctx, db, info, roomID, eventID, serverName, isServerInRoom, querier)
+	return allowed, err
+}
+
+// CheckServerEventAccess is CheckServerAllowedToSeeEvent that also reports
+// whether the server had a member in the room at the event, as described by
+// auth.ServerEventAccess.
+func CheckServerEventAccess(
+	ctx context.Context, db storage.Database, info *types.RoomInfo, roomID string, eventID string, serverName spec.ServerName, isServerInRoom bool, querier api.QuerySenderIDAPI,
+) (allowed, member bool, err error) {
 	stateAtEvent, err := db.GetHistoryVisibilityState(ctx, info, eventID, string(serverName))
 	switch {
 	case err == nil:
@@ -274,19 +310,60 @@ func CheckServerAllowedToSeeEvent(
 		// the old and slow method
 		stateAtEvent, err = slowGetHistoryVisibilityState(ctx, db, info, roomID, eventID, serverName, querier)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 	default:
 		var missingStateErr types.MissingStateError
 		if errors.As(err, &missingStateErr) {
 			// If there's no state then we assume it's open visibility, as Synapse does:
 			// https://github.com/matrix-org/synapse/blob/aec87a0f9369a3015b2a53469f88d1de274e8b71/synapse/visibility.py#L654-L655
-			return true, nil
+			return true, false, nil
 		}
 		// Something else went wrong
-		return false, err
+		return false, false, err
 	}
-	return auth.IsServerAllowed(ctx, querier, serverName, isServerInRoom, stateAtEvent), nil
+	allowed, member = auth.ServerEventAccess(ctx, querier, serverName, isServerInRoom, stateAtEvent)
+	return allowed, member, nil
+}
+
+// ErasedSenderEvents returns the IDs of the events, among those in
+// candidates, whose sender is an erased local user (MSC4025).
+func ErasedSenderEvents(
+	ctx context.Context, db storage.Database, querier api.QuerySenderIDAPI,
+	events []gomatrixserverlib.PDU, candidates map[string]struct{},
+) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+	if len(candidates) == 0 {
+		return result, nil
+	}
+	senders := make(map[string][]string) // user ID -> event IDs
+	for _, ev := range events {
+		if _, ok := candidates[ev.EventID()]; !ok {
+			continue
+		}
+		userID, err := querier.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
+		if err != nil || userID == nil {
+			continue
+		}
+		senders[userID.String()] = append(senders[userID.String()], ev.EventID())
+	}
+	if len(senders) == 0 {
+		return result, nil
+	}
+	userIDs := make([]string, 0, len(senders))
+	for userID := range senders {
+		userIDs = append(userIDs, userID)
+	}
+	erased, err := db.ErasedUsers(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	for userID := range erased {
+		for _, eventID := range senders[userID] {
+			result[eventID] = struct{}{}
+		}
+	}
+	return result, nil
 }
 
 func slowGetHistoryVisibilityState(
@@ -355,7 +432,7 @@ func ScanEventTree(
 ) ([]types.EventNID, map[string]struct{}, error) {
 	var resultNIDs []types.EventNID
 	var err error
-	var allowed bool
+	var allowed, member bool
 	var events []types.Event
 	var next []string
 	var pre string
@@ -374,6 +451,10 @@ func ScanEventTree(
 	var checkedServerInRoom bool
 	var isServerInRoom bool
 	redactEventIDs := make(map[string]struct{})
+	// Events the server may see without having had a member in the room,
+	// and those of them that are returned, whose erased senders are redacted.
+	memberlessEventIDs := make(map[string]struct{})
+	var memberlessEvents []gomatrixserverlib.PDU
 
 	// Loop through the event IDs to retrieve the requested events and go
 	// through the whole tree (up to the provided limit) using the events'
@@ -410,6 +491,9 @@ BFSLoop:
 			if !initialIgnoreList[ev.EventID()] {
 				// Update the list of events to retrieve.
 				resultNIDs = append(resultNIDs, ev.EventNID)
+				if _, ok := memberlessEventIDs[ev.EventID()]; ok {
+					memberlessEvents = append(memberlessEvents, ev.PDU)
+				}
 			}
 			// Loop through the event's parents.
 			for _, pre = range ev.PrevEventIDs() {
@@ -417,14 +501,14 @@ BFSLoop:
 				// hasn't been seen before.
 				if !visited[pre] {
 					visited[pre] = true
-					allowed, err = CheckServerAllowedToSeeEvent(ctx, db, info, ev.RoomID().String(), pre, serverName, isServerInRoom, querier)
+					allowed, member, err = CheckServerEventAccess(ctx, db, info, ev.RoomID().String(), pre, serverName, isServerInRoom, querier)
 					if err != nil {
 						util.GetLogger(ctx).WithField("server", serverName).WithField("event_id", pre).WithError(err).Error(
 							"Error checking if allowed to see event",
 						)
 						// drop the error, as we will often error at the DB level if we don't have the prev_event itself. Let's
 						// just return what we have.
-						return resultNIDs, redactEventIDs, nil
+						break BFSLoop
 					}
 
 					// If the event hasn't been seen before and the HS
@@ -434,6 +518,8 @@ BFSLoop:
 					if !allowed {
 						util.GetLogger(ctx).WithField("server", serverName).WithField("event_id", pre).Info("Not allowed to see event")
 						redactEventIDs[pre] = struct{}{}
+					} else if !member {
+						memberlessEventIDs[pre] = struct{}{}
 					}
 				}
 			}
@@ -442,7 +528,14 @@ BFSLoop:
 		front = next
 	}
 
-	return resultNIDs, redactEventIDs, err
+	erased, err := ErasedSenderEvents(ctx, db, querier, memberlessEvents, memberlessEventIDs)
+	if err != nil {
+		return resultNIDs, redactEventIDs, err
+	}
+	for eventID := range erased {
+		redactEventIDs[eventID] = struct{}{}
+	}
+	return resultNIDs, redactEventIDs, nil
 }
 
 func QueryLatestEventsAndState(

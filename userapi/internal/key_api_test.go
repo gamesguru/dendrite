@@ -2,8 +2,11 @@ package internal_test
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -158,5 +161,58 @@ func Test_QueryDeviceMessages(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestFallbackKeyUploadAndClaim(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateDatabase(t, dbType)
+		defer closeDB()
+		ctx := t.Context()
+		cfg := &config.UserAPI{}
+		cfg.Matrix = &config.Global{ServerName: "localhost"}
+		a := &internal.UserInternalAPI{KeyDatabase: db, Config: cfg}
+		userID, deviceID := "@alice:localhost", "DEVICE"
+		upload := func(keys map[string]json.RawMessage) []string {
+			t.Helper()
+			res := api.PerformUploadKeysResponse{}
+			req := api.PerformUploadKeysRequest{UserID: userID, DeviceID: deviceID}
+			if keys != nil {
+				req.FallbackKeys = []api.FallbackKeys{{UserID: userID, DeviceID: deviceID, KeyJSON: keys}}
+			}
+			require.NoError(t, a.PerformUploadKeys(ctx, &req, &res))
+			require.Nil(t, res.Error)
+			require.Empty(t, res.KeyErrors)
+			return res.FallbackKeysUnusedAlgorithms
+		}
+		claim := func(algorithm, keyID string) {
+			t.Helper()
+			res := api.PerformClaimKeysResponse{}
+			a.PerformClaimKeys(ctx, &api.PerformClaimKeysRequest{OneTimeKeys: map[string]map[string]string{userID: {deviceID: algorithm}}}, &res)
+			require.Nil(t, res.Error)
+			require.Contains(t, res.OneTimeKeys[userID][deviceID], algorithm+":"+keyID)
+		}
+		first := map[string]json.RawMessage{"signed_curve25519:first": json.RawMessage(`{"key":"first","fallback":true}`)}
+		require.Equal(t, []string{"signed_curve25519"}, upload(first))
+		require.Equal(t, []string{"signed_curve25519"}, upload(nil))
+		// One-time keys must be claimed before the reusable fallback key.
+		var oneTimeRes api.PerformUploadKeysResponse
+		require.NoError(t, a.PerformUploadKeys(ctx, &api.PerformUploadKeysRequest{UserID: userID, DeviceID: deviceID, OneTimeKeys: []api.OneTimeKeys{{UserID: userID, DeviceID: deviceID, KeyJSON: map[string]json.RawMessage{"signed_curve25519:one_time": json.RawMessage(`{"key":"one-time"}`)}}}}, &oneTimeRes))
+		require.Nil(t, oneTimeRes.Error)
+		require.Empty(t, oneTimeRes.KeyErrors)
+		claim("signed_curve25519", "one_time")
+		require.Equal(t, []string{"signed_curve25519"}, upload(nil))
+		claim("signed_curve25519", "first")
+		require.Empty(t, upload(nil))
+		claim("signed_curve25519", "first")
+		// Retrying the same upload must not mark a used key as unused again.
+		require.Empty(t, upload(first))
+		require.Equal(t, []string{"signed_curve25519"}, upload(map[string]json.RawMessage{"signed_curve25519:second": json.RawMessage(`{"key":"second","fallback":true}`)}))
+		// Replacing one algorithm preserves the fallback key for other algorithms.
+		require.ElementsMatch(t, []string{"curve25519", "signed_curve25519"}, upload(map[string]json.RawMessage{"curve25519:unsigned": json.RawMessage(`"unsigned"`)}))
+		claim("signed_curve25519", "second")
+		require.Equal(t, []string{"curve25519"}, upload(nil))
+		claim("curve25519", "unsigned")
+		require.Empty(t, upload(nil))
 	})
 }

@@ -8,9 +8,13 @@ package producers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -39,7 +43,7 @@ type SyncAPIProducer struct {
 
 func (p *SyncAPIProducer) SendReceipt(
 	ctx context.Context,
-	userID, roomID, eventID, receiptType string, timestamp spec.Timestamp,
+	userID, roomID, eventID, receiptType, threadID string, timestamp spec.Timestamp,
 ) error {
 	m := &nats.Msg{
 		Subject: p.TopicReceiptEvent,
@@ -49,15 +53,24 @@ func (p *SyncAPIProducer) SendReceipt(
 	m.Header.Set(jetstream.RoomID, roomID)
 	m.Header.Set(jetstream.EventID, eventID)
 	m.Header.Set("type", receiptType)
+	m.Header.Set("thread_id", threadID)
 	m.Header.Set("timestamp", fmt.Sprintf("%d", timestamp))
 
 	log.WithFields(log.Fields{}).Tracef("Producing to topic '%s'", p.TopicReceiptEvent)
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
+// SendToDevice queues a to-device message from a remote sender for each of
+// the target's devices. Every device is attempted; the error reports the
+// devices that could not be queued.
+//
+// A sender retries a refused transaction with the same message ID, so the
+// publication for each device carries a message ID derived from it. The
+// stream then stores a message queued by an earlier attempt only once, within
+// its deduplication window.
 func (p *SyncAPIProducer) SendToDevice(
-	ctx context.Context, sender, userID, deviceID, eventType string,
+	ctx context.Context, sender, userID, deviceID, eventType, messageID string,
 	message json.RawMessage,
 ) error {
 	devices := []string{}
@@ -91,7 +104,8 @@ func (p *SyncAPIProducer) SendToDevice(
 		"num_devices": len(devices),
 		"type":        eventType,
 	}).Tracef("Producing to topic '%s'", p.TopicSendToDeviceEvent)
-	for i, device := range devices {
+	var errs []error
+	for _, device := range devices {
 		ote := &types.OutputSendToDeviceEvent{
 			UserID:   userID,
 			DeviceID: device,
@@ -111,17 +125,24 @@ func (p *SyncAPIProducer) SendToDevice(
 		m.Data = eventJSON
 		m.Header.Set("sender", sender)
 		m.Header.Set(jetstream.UserID, userID)
+		if messageID != "" {
+			m.Header.Set(nats.MsgIdHdr, toDeviceMsgID(sender, messageID, userID, device))
+		}
 
-		if _, err = p.JetStream.PublishMsg(m, nats.Context(ctx)); err != nil {
-			if i < len(devices)-1 {
-				log.WithError(err).Warn("sendToDevice failed to PublishMsg, trying further devices")
-				continue
-			}
-			log.WithError(err).Error("sendToDevice failed to PublishMsg for all devices")
-			return err
+		if _, err = jetstream.Publish(ctx, p.JetStream, m); err != nil {
+			log.WithError(err).WithField("device_id", device).Warn("sendToDevice failed to PublishMsg, trying further devices")
+			errs = append(errs, fmt.Errorf("device %s: %w", device, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// toDeviceMsgID identifies one device's copy of a remote to-device message.
+// The specification makes message_id unique per sending device, and a
+// sender's server reuses it when it retries.
+func toDeviceMsgID(sender, messageID, userID, deviceID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{sender, messageID, userID, deviceID}, "\x00")))
+	return "fed-to-device-" + hex.EncodeToString(sum[:])
 }
 
 func (p *SyncAPIProducer) SendTyping(
@@ -135,7 +156,7 @@ func (p *SyncAPIProducer) SendTyping(
 	m.Header.Set(jetstream.RoomID, roomID)
 	m.Header.Set("typing", strconv.FormatBool(typing))
 	m.Header.Set("timeout_ms", strconv.Itoa(int(timeoutMS)))
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
@@ -152,7 +173,7 @@ func (p *SyncAPIProducer) SendPresence(
 
 	m.Header.Set("last_active_ts", strconv.Itoa(int(lastActiveTS)))
 	log.Tracef("Sending presence to syncAPI: %+v", m.Header)
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
@@ -163,7 +184,7 @@ func (p *SyncAPIProducer) SendDeviceListUpdate(
 	m.Header.Set("origin", string(origin))
 	m.Data = deviceListUpdate
 	log.Debugf("Sending device list update: %+v", m.Header)
-	_, err = p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err = jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
@@ -175,6 +196,6 @@ func (p *SyncAPIProducer) SendSigningKeyUpdate(
 	m.Data = data
 
 	log.Debugf("Sending signing key update")
-	_, err = p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err = jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }

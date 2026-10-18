@@ -7,8 +7,11 @@
 package syncapi
 
 import (
-	"context"
+	"os"
+	"path/filepath"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
+	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -42,6 +45,8 @@ func AddPublicRoutes(
 	rsAPI api.SyncRoomserverAPI,
 	caches caching.LazyLoadCache,
 	enableMetrics bool,
+	fedClient fclient.FederationClient,
+	keyRing gomatrixserverlib.JSONVerifier,
 ) {
 	js, natsClient := natsInstance.Prepare(processContext, &zendriteCfg.Global.JetStream)
 
@@ -57,19 +62,42 @@ func AddPublicRoutes(
 		// Non-fatal - we can continue without background population
 	}
 
-	eduCache := caching.NewTypingCache()
+	eduCache := caching.NewTypingCache(processContext.Context())
+	processContext.Defer(eduCache.Close)
 	notifier := notifier.NewNotifier(rsAPI)
-	streams := streams.NewSyncStreamProviders(syncDB, userAPI, rsAPI, eduCache, caches, notifier)
-	notifier.SetCurrentPosition(streams.Latest(context.Background()))
-	if err = notifier.Load(context.Background(), syncDB); err != nil {
+	streams := streams.NewSyncStreamProviders(processContext.Context(), syncDB, userAPI, rsAPI, eduCache, caches, notifier)
+	notifier.SetCurrentPosition(streams.Latest(processContext.Context()))
+	if err = notifier.Load(processContext.Context(), syncDB); err != nil {
 		logrus.WithError(err).Panicf("failed to load notifier ")
 	}
 
-	var fts *fulltext.Search
+	// index stays a nil interface when search is disabled.
+	var index fulltext.Indexer
 	if zendriteCfg.SyncAPI.Fulltext.Enabled {
-		fts, err = fulltext.New(processContext, zendriteCfg.SyncAPI.Fulltext)
-		if err != nil {
-			logrus.WithError(err).Panicf("failed to create full text")
+		searchConfig := zendriteCfg.SyncAPI.Fulltext
+		if searchConfig.RebuildOnStartup && !searchConfig.InMemory {
+			// A new directory avoids stale documents and never deletes an operator's index.
+			if err = os.MkdirAll(string(searchConfig.IndexPath), 0o700); err != nil {
+				logrus.WithError(err).Panic("failed to create search recovery directory")
+			}
+			var directory string
+			directory, err = os.MkdirTemp(string(searchConfig.IndexPath), "recovery-")
+			if err != nil {
+				logrus.WithError(err).Panic("failed to allocate search recovery index")
+			}
+			processContext.Defer(func() { _ = os.RemoveAll(directory) })
+			searchConfig.IndexPath = config.Path(filepath.Join(directory, "index"))
+		}
+		fts, ftsErr := fulltext.New(processContext, searchConfig)
+		if ftsErr != nil {
+			logrus.WithError(ftsErr).Panicf("failed to create full text")
+		}
+		index = fts
+		if searchConfig.RebuildOnStartup {
+			// Consumers write to the index during the rebuild; searches wait for it.
+			recovering := fulltext.NewRecovering(fts)
+			index = recovering
+			processContext.Go(func() { consumers.RebuildSearch(processContext.Context(), syncDB, recovering) })
 		}
 	}
 
@@ -83,7 +111,7 @@ func AddPublicRoutes(
 		userAPI,
 	)
 
-	requestPool := sync.NewRequestPool(syncDB, &zendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
+	requestPool := sync.NewRequestPoolWithContext(processContext.Context(), syncDB, &zendriteCfg.SyncAPI, userAPI, rsAPI, streams, notifier, federationPresenceProducer, presenceConsumer, enableMetrics)
 
 	if err = presenceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start presence consumer")
@@ -105,9 +133,13 @@ func AddPublicRoutes(
 		}
 	}
 
+	pushProducer := &producers.PushEventProducer{
+		JetStream: js, Topic: zendriteCfg.Global.JetStream.Prefixed(jetstream.OutputPushEvent),
+	}
+
 	roomConsumer := consumers.NewOutputRoomEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.PDUStreamProvider,
-		streams.InviteStreamProvider, rsAPI, fts, asProducer,
+		streams.InviteStreamProvider, streams.StickyEventsStreamProvider, rsAPI, index, asProducer, pushProducer,
 	)
 	// Wire up the metadata worker for continuous updates (Phase 12 optimization)
 	roomConsumer.SetMetadataQueuer(metadataWorker)
@@ -117,7 +149,7 @@ func AddPublicRoutes(
 
 	clientConsumer := consumers.NewOutputClientDataConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, natsClient, syncDB, notifier,
-		streams.AccountDataStreamProvider, fts,
+		streams.AccountDataStreamProvider, index,
 	)
 	if err = clientConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start client data consumer")
@@ -151,11 +183,14 @@ func AddPublicRoutes(
 		logrus.WithError(err).Panicf("failed to start receipts consumer")
 	}
 
-	rateLimits := httputil.NewRateLimits(&zendriteCfg.ClientAPI.RateLimiting)
+	rateLimits := httputil.NewRateLimits(&zendriteCfg.ClientAPI.RateLimiting, processContext.Context())
 
 	routing.Setup(
 		routers.Client, requestPool, syncDB, userAPI,
-		rsAPI, &zendriteCfg.SyncAPI, caches, fts,
-		rateLimits,
+		rsAPI, &zendriteCfg.SyncAPI, caches, index,
+		rateLimits, fedClient,
 	)
+	if keyRing != nil {
+		routing.SetupFederation(routers.Federation, &zendriteCfg.SyncAPI, syncDB, rsAPI, keyRing)
+	}
 }

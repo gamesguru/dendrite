@@ -16,6 +16,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type SharedSecretRegistrationRequest struct {
@@ -44,11 +45,15 @@ type SharedSecretRegistration struct {
 	nonces       *ttlcache.Cache[string, bool]
 }
 
-func NewSharedSecretRegistration(sharedSecret string) *SharedSecretRegistration {
+func NewSharedSecretRegistration(sharedSecret string, contexts ...context.Context) *SharedSecretRegistration {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	cache := ttlcache.New[string, bool](
 		ttlcache.WithTTL[string, bool](5 * time.Minute), //nolint:mnd
 	)
-	go cache.Start() // starts automatic cleanup
+	process.Repeat(ctx, time.Minute, time.Minute, cache.DeleteExpired)
 	return &SharedSecretRegistration{
 		sharedSecret: sharedSecret,
 		nonces:       cache,

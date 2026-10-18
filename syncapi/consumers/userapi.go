@@ -82,7 +82,7 @@ func (s *OutputNotificationDataConsumer) onMessage(ctx context.Context, msgs []*
 		return true
 	}
 
-	streamPos, err := s.db.UpsertRoomUnreadNotificationCounts(ctx, userID, data.RoomID, data.UnreadNotificationCount, data.UnreadHighlightCount)
+	streamPos, err := s.db.UpsertRoomUnreadNotificationCounts(ctx, userID, &data)
 	if err != nil {
 		sentry.CaptureException(err)
 		log.WithFields(log.Fields{

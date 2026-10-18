@@ -21,6 +21,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
 
@@ -40,7 +41,8 @@ type timestampToRUUsage struct {
 	usage     syscall.Rusage
 }
 
-func StartPhoneHomeCollector(startTime time.Time, cfg *config.Zendrite, statsDB storage.Statistics) {
+// StartPhoneHomeCollector schedules reporting within the application lifetime.
+func StartPhoneHomeCollector(ctx context.Context, startTime time.Time, cfg *config.Zendrite, statsDB storage.Statistics) {
 	p := phoneHomeStats{
 		startTime:  startTime,
 		serverName: cfg.Global.ServerName,
@@ -53,17 +55,10 @@ func StartPhoneHomeCollector(startTime time.Time, cfg *config.Zendrite, statsDB 
 		},
 	}
 
-	// start initial run after 5min
-	time.AfterFunc(time.Minute*5, p.collect)
-
-	// run every 3 hours
-	ticker := time.NewTicker(time.Hour * 3)
-	for range ticker.C {
-		p.collect()
-	}
+	process.Repeat(ctx, time.Minute*5, time.Hour*3, func() { p.collect(ctx) }) //nolint:mnd // Existing reporting schedule.
 }
 
-func (p *phoneHomeStats) collect() {
+func (p *phoneHomeStats) collect(parent context.Context) {
 	p.stats = make(map[string]any)
 	// general information
 	p.stats["homeserver"] = p.serverName
@@ -77,7 +72,7 @@ func (p *phoneHomeStats) collect() {
 	p.stats["num_go_routine"] = runtime.NumGoroutine()
 	p.stats["uptime_seconds"] = math.Floor(time.Since(p.startTime).Seconds())
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*1)
+	ctx, cancel := context.WithTimeout(parent, time.Minute*1)
 	defer cancel()
 
 	// cpu and memory usage information

@@ -279,7 +279,7 @@ func (r *Inviter) PerformInvite(
 	r.Inputer.InputRoomEvents(context.Background(), inputReq, inputRes) //nolint:contextcheck
 	if err := inputRes.Err(); err != nil {
 		util.GetLogger(ctx).WithField("event_id", inviteEvent.EventID()).Error("r.InputRoomEvents failed")
-		return api.ErrNotAllowed{Err: err}
+		return api.ErrNotAllowed{Err: errors.New(api.InputRejectionReason(err))}
 	}
 
 	return nil

@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -49,6 +50,15 @@ const upsertMembershipSQL = "" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
 	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6"
 
+// upsertMembershipsSQL is upsertMembershipSQL for many rows in one round trip.
+// The rows must not share a (room_id, user_id, membership).
+const upsertMembershipsSQL = "" +
+	"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos)" +
+	" SELECT room_id, user_id, membership, event_id, $5, $6" +
+	" FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS rows(room_id, user_id, membership, event_id)" +
+	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
+	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = EXCLUDED.topological_pos"
+
 const selectMembershipCountSQL = "" +
 	"SELECT COUNT(*) FROM (" +
 	" SELECT DISTINCT ON (room_id, user_id) room_id, user_id, membership FROM syncapi_memberships WHERE room_id = $1 AND stream_pos <= $2 ORDER BY room_id, user_id, stream_pos DESC" +
@@ -70,6 +80,7 @@ const selectMembersSQL = `
 
 type membershipsStatements struct {
 	upsertMembershipStmt        *sql.Stmt
+	upsertMembershipsStmt       *sql.Stmt
 	selectMembershipCountStmt   *sql.Stmt
 	selectMembershipForUserStmt *sql.Stmt
 	purgeMembershipsStmt        *sql.Stmt
@@ -84,6 +95,7 @@ func NewPostgresMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 	}
 	return s, sqlutil.StatementList{
 		{&s.upsertMembershipStmt, upsertMembershipSQL},
+		{&s.upsertMembershipsStmt, upsertMembershipsSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCountSQL},
 		{&s.selectMembershipForUserStmt, selectMembershipBeforeSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
@@ -110,6 +122,36 @@ func (s *membershipsStatements) UpsertMembership(
 		topologicalPos,
 	)
 	return err
+}
+
+func (s *membershipsStatements) UpsertMemberships(
+	ctx context.Context, txn *sql.Tx, events []*rstypes.HeaderedEvent,
+	streamPos, topologicalPos types.StreamPosition,
+) error {
+	type row struct{ roomID, userID, membership, eventID string }
+	rows := make([]row, 0, len(events))
+	for _, event := range events {
+		membership, err := event.Membership()
+		if err != nil {
+			return fmt.Errorf("event.Membership: %w", err)
+		}
+		rows = append(rows, row{event.RoomID().String(), *event.StateKeyResolved, membership, event.EventID()})
+	}
+	rows = sqlutil.LastByKey(rows, func(r row) [3]string { return [3]string{r.roomID, r.userID, r.membership} })
+	stmt := sqlutil.TxStmt(txn, s.upsertMembershipsStmt)
+	for chunk := range slices.Chunk(rows, upsertChunkSize) {
+		roomIDs := make([]string, len(chunk))
+		userIDs := make([]string, len(chunk))
+		memberships := make([]string, len(chunk))
+		eventIDs := make([]string, len(chunk))
+		for i, r := range chunk {
+			roomIDs[i], userIDs[i], memberships[i], eventIDs[i] = r.roomID, r.userID, r.membership, r.eventID
+		}
+		if _, err := stmt.ExecContext(ctx, roomIDs, userIDs, memberships, eventIDs, streamPos, topologicalPos); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *membershipsStatements) SelectMembershipCount(

@@ -26,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -36,6 +37,7 @@ import (
 
 // RequestPool manages HTTP long-poll connections for /sync.
 type RequestPool struct {
+	ctx      context.Context
 	db       storage.Database
 	cfg      *config.SyncAPI
 	userAPI  userapi.SyncUserAPI
@@ -68,12 +70,25 @@ func NewRequestPool(
 	streams *streams.Streams, notifier *notifier.Notifier,
 	producer PresencePublisher, consumer PresenceConsumer, enableMetrics bool,
 ) *RequestPool {
+	return NewRequestPoolWithContext(context.Background(), db, cfg, userAPI, rsAPI, streams, notifier, producer, consumer, enableMetrics)
+}
+
+// NewRequestPoolWithContext binds sync maintenance to the application lifetime.
+func NewRequestPoolWithContext(
+	ctx context.Context,
+	db storage.Database, cfg *config.SyncAPI,
+	userAPI userapi.SyncUserAPI,
+	rsAPI roomserverAPI.SyncRoomserverAPI,
+	streams *streams.Streams, notifier *notifier.Notifier,
+	producer PresencePublisher, consumer PresenceConsumer, enableMetrics bool,
+) *RequestPool {
 	if enableMetrics {
 		prometheus.MustRegister(
 			activeSyncRequests, waitingSyncRequests,
 		)
 	}
 	rp := &RequestPool{
+		ctx:           ctx,
 		db:            db,
 		cfg:           cfg,
 		userAPI:       userAPI,
@@ -86,8 +101,8 @@ func NewRequestPool(
 		consumer:      consumer,
 		v4Connections: &sync.Map{},
 	}
-	go rp.cleanLastSeen()
-	go rp.cleanPresence(db, time.Minute*5) //nolint:mnd
+	process.Go(ctx, rp.cleanLastSeen)
+	process.Go(ctx, func() { rp.cleanPresence(db, time.Minute*5) }) //nolint:mnd // Existing presence cleanup interval.
 	return rp
 }
 
@@ -97,7 +112,9 @@ func (rp *RequestPool) cleanLastSeen() {
 			rp.lastseen.Delete(key)
 			return true
 		})
-		time.Sleep(time.Minute)
+		if !process.Sleep(rp.ctx, time.Minute) {
+			return
+		}
 	}
 }
 
@@ -117,7 +134,9 @@ func (rp *RequestPool) cleanPresence(db storage.Presence, cleanupTime time.Durat
 			}
 			return true
 		})
-		time.Sleep(cleanupTime)
+		if !process.Sleep(rp.ctx, cleanupTime) {
+			return
+		}
 	}
 }
 
@@ -193,14 +212,17 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 
 		if checkAgain {
 			// after a timeout, check presence again to make sure it gets set as offline sooner or later
-			time.AfterFunc(presenceTimeout, func() {
+			process.Go(rp.ctx, func() {
+				if !process.Sleep(rp.ctx, presenceTimeout) {
+					return
+				}
 				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false)
 			})
 		}
 	}
 
 	// ensure we also send the current status_msg to federated servers and not nil
-	dbPresence, err := db.GetPresences(context.Background(), []string{userID})
+	dbPresence, err := db.GetPresences(rp.ctx, []string{userID})
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return
 	}
@@ -227,7 +249,7 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// now synchronously update our view of the world. It's critical we do this before calculating
 	// the /sync response else we may not return presence: online immediately.
 	rp.consumer.EmitPresence(
-		context.Background(), userID, presenceToSet, newPresence.ClientFields.StatusMsg,
+		rp.ctx, userID, presenceToSet, newPresence.ClientFields.StatusMsg,
 		spec.AsTimestamp(time.Now()), true,
 	)
 }
@@ -287,7 +309,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 	// Extract values from request
 	syncReq, err := newSyncRequest(req, *device, rp.db)
 	if err != nil {
-		if errors.Is(err, types.ErrMalformedSyncToken) {
+		if errors.Is(err, types.ErrMalformedSyncToken) || errors.Is(err, errInvalidParam) {
 			return util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.InvalidParam(err.Error()),
@@ -297,6 +319,11 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			Code: http.StatusBadRequest,
 			JSON: spec.Unknown(err.Error()),
 		}
+	}
+	if syncReq.UseStateAfter() {
+		// MSC4222: rename the state section of every room, including those
+		// only other streams added, once the response is complete.
+		defer syncReq.Response.MoveStateToStateAfter(syncReq.StateAfter)
 	}
 
 	activeSyncRequests.Inc()
@@ -353,6 +380,12 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			case <-timer.C: // Timeout reached
 				return giveup()
 
+			// A planned handover answers now, as if the timeout had been
+			// reached, so the client's next sync reaches the successor
+			// instead of being cut when this owner stops.
+			case <-process.Quiescing(syncReq.Context):
+				return giveup()
+
 			case <-userStreamListener.GetNotifyChannel(syncReq.Since):
 				currentPos.ApplyUpdates(userStreamListener.GetSyncPosition())
 				syncReq.Log.WithField("currentPos", currentPos).Debugln("Responding to sync after wake-up")
@@ -361,11 +394,29 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			syncReq.Log.WithField("currentPos", currentPos).Debugln("Responding to sync immediately")
 		}
 
+		// Each stream provider gets its own snapshot, so once the client goes
+		// away every remaining provider would fail to acquire one in exactly
+		// the same way. Remember that we have given up so that we report the
+		// cancellation once rather than once per provider.
+		gaveUp := false
 		withTransaction := func(from types.StreamPosition, f func(snapshot storage.DatabaseTransaction) types.StreamPosition) types.StreamPosition {
+			if gaveUp {
+				return from
+			}
+			if ctxErr := syncReq.Context.Err(); ctxErr != nil {
+				gaveUp = true
+				syncReq.Log.WithError(ctxErr).Debugln("Abandoning sync request, the client went away")
+				return from
+			}
 			var succeeded bool
 			snapshot, err := rp.db.NewDatabaseSnapshot(req.Context())
 			if err != nil {
-				logrus.WithError(err).Error("Failed to acquire database snapshot for sync request")
+				if sqlutil.ErrIsCanceled(err) {
+					gaveUp = true
+					syncReq.Log.WithError(err).Debugln("Abandoning sync request, the client went away")
+					return from
+				}
+				syncReq.Log.WithError(err).Error("Failed to acquire database snapshot for sync request")
 				return from
 			}
 			defer func() {
@@ -449,6 +500,15 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 					syncReq.Since.PresencePosition,
 					func(txn storage.DatabaseTransaction) types.StreamPosition {
 						return rp.streams.PresenceStreamProvider.CompleteSync(
+							syncReq.Context, txn, syncReq,
+						)
+					},
+				),
+				// After the PDU stream, whose timelines it reads.
+				StickyPosition: withTransaction(
+					syncReq.Since.StickyPosition,
+					func(txn storage.DatabaseTransaction) types.StreamPosition {
+						return rp.streams.StickyEventsStreamProvider.CompleteSync(
 							syncReq.Context, txn, syncReq,
 						)
 					},
@@ -538,6 +598,16 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 						)
 					},
 				),
+				// After the PDU stream, whose timelines it reads.
+				StickyPosition: withTransaction(
+					syncReq.Since.StickyPosition,
+					func(txn storage.DatabaseTransaction) types.StreamPosition {
+						return rp.streams.StickyEventsStreamProvider.IncrementalSync(
+							syncReq.Context, txn, syncReq,
+							syncReq.Since.StickyPosition, rp.Notifier.CurrentPosition().StickyPosition,
+						)
+					},
+				),
 			}
 			// it's possible for there to be no updates for this user even though since < current pos,
 			// e.g busy servers with a quiet user. In this scenario, we don't want to return a no-op
@@ -549,10 +619,22 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			// - It's an inefficient use of bandwidth.
 			// - Some sytests which test 'waking up' sync rely on some sync requests to block, which
 			//   they weren't always doing, resulting in flakey tests.
-			if !syncReq.Response.HasUpdates() {
-				syncReq.Since = currentPos
+			if !syncReq.Response.HasUpdates() && syncReq.Context.Err() == nil {
+				// Carry on from what this pass covered, not from currentPos. A
+				// stream that could not be read, e.g. because the database was
+				// unavailable during a failover, reports the position it
+				// started from; moving its token on to currentPos would tell
+				// the client it has seen events it was never sent.
+				covered := syncReq.Response.NextBatch
+				stalled := covered == syncReq.Since
+				syncReq.Since = covered
 				// do not loop again if the ?timeout= is 0 as that means "return immediately"
 				if syncReq.Timeout > 0 {
+					// A pass that read nothing although there is something to
+					// read failed; wait before asking the database again.
+					if stalled && !waitBeforeRetry(syncReq.Context, min(failedPassRetryDelay, syncReq.Timeout-time.Since(startTime))) {
+						return giveupAfterFailure(syncReq)
+					}
 					syncReq.Timeout -= time.Since(startTime)
 					if syncReq.Timeout < 0 {
 						syncReq.Timeout = 0
@@ -638,6 +720,34 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 // shouldReturnImmediately returns whether the /sync request is an initial sync,
 // or timeout=0, or full_state=true, in any of the cases the request should
 // return immediately.
+// FailedPassRetryDelay is how long a long-polling sync waits before trying a
+// pass again that could not read anything, such as while the database fails
+// over, instead of spinning on it for the rest of its timeout.
+const failedPassRetryDelay = 250 * time.Millisecond
+
+// waitBeforeRetry waits for d, or less if the client goes away first, in
+// which case it reports false.
+func waitBeforeRetry(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// giveupAfterFailure answers a sync whose client went away while it waited
+// to retry a failed pass. The since token is unchanged, so nothing is skipped.
+func giveupAfterFailure(syncReq *types.SyncRequest) util.JSONResponse {
+	syncReq.Response.NextBatch = syncReq.Since
+	return util.JSONResponse{Code: http.StatusOK, JSON: syncReq.Response}
+}
+
 func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, currentPos types.StreamingToken) bool {
 	if currentPos.IsAfter(syncReq.Since) || syncReq.Timeout == 0 || syncReq.WantFullState {
 		return true

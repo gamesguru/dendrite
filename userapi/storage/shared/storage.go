@@ -25,6 +25,8 @@ import (
 
 	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -39,6 +41,8 @@ type Database struct {
 	RegistrationTokens    tables.RegistrationTokensTable
 	Accounts              tables.AccountsTable
 	Profiles              tables.ProfileTable
+	ProfileFields         tables.ProfileFieldsTable
+	DelayedEvents         tables.DelayedEventsTable
 	AccountDatas          tables.AccountDataTable
 	ThreePIDs             tables.ThreePIDTable
 	ExternalIDs           tables.ExternalIDsTable
@@ -136,35 +140,115 @@ func (d *Database) GetProfileByLocalpart(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
 ) (*authtypes.Profile, error) {
-	return d.Profiles.SelectProfileByLocalpart(ctx, localpart, serverName)
+	profile, err := d.Profiles.SelectProfileByLocalpart(ctx, localpart, serverName)
+	if err != nil {
+		return nil, err
+	}
+	profile.Fields, err = d.ProfileFields.SelectProfileFields(ctx, nil, localpart, serverName)
+	if err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
+// SetProfileField sets a custom profile field (MSC4133) of the given
+// localpart. It fails with api.ErrProfileTooLarge when the profile would
+// exceed authtypes.MaxProfileSize.
+func (d *Database) SetProfileField(
+	ctx context.Context,
+	localpart string, serverName spec.ServerName,
+	fieldName string, value json.RawMessage,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.checkProfileSize(ctx, txn, localpart, serverName, func(p *authtypes.Profile) {
+			if p.Fields == nil {
+				p.Fields = map[string]json.RawMessage{}
+			}
+			p.Fields[fieldName] = value
+		}); err != nil {
+			return err
+		}
+		return d.ProfileFields.UpsertProfileField(ctx, txn, localpart, serverName, fieldName, value)
+	})
+}
+
+// DeleteProfileField removes a custom profile field (MSC4133) of the given
+// localpart. Removing a field that is not set is not an error.
+func (d *Database) DeleteProfileField(
+	ctx context.Context,
+	localpart string, serverName spec.ServerName,
+	fieldName string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.ProfileFields.DeleteProfileField(ctx, txn, localpart, serverName, fieldName)
+	})
 }
 
 // SetAvatarURL updates the avatar URL of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query.
+// localpart. It fails with api.ErrProfileTooLarge when the profile would
+// exceed authtypes.MaxProfileSize.
 func (d *Database) SetAvatarURL(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
 	avatarURL string,
 ) (profile *authtypes.Profile, changed bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err = d.checkProfileSize(ctx, txn, localpart, serverName, func(p *authtypes.Profile) {
+			p.AvatarURL = avatarURL
+		}); err != nil {
+			return err
+		}
 		profile, changed, err = d.Profiles.SetAvatarURL(ctx, txn, localpart, serverName, avatarURL)
 		return err
 	})
 	return
 }
 
-// SetDisplayName updates the display name of the profile associated with the given
-// localpart. Returns an error if something went wrong with the SQL query.
+// SetDisplayName updates the display name of the profile associated with the
+// given localpart. It fails with api.ErrProfileTooLarge when the profile
+// would exceed authtypes.MaxProfileSize.
 func (d *Database) SetDisplayName(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
 	displayName string,
 ) (profile *authtypes.Profile, changed bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err = d.checkProfileSize(ctx, txn, localpart, serverName, func(p *authtypes.Profile) {
+			p.DisplayName = displayName
+		}); err != nil {
+			return err
+		}
 		profile, changed, err = d.Profiles.SetDisplayName(ctx, txn, localpart, serverName, displayName)
 		return err
 	})
 	return
+}
+
+// checkProfileSize locks the profile until txn ends and fails with
+// api.ErrProfileTooLarge if applying change would make it larger than
+// authtypes.MaxProfileSize. Holding the lock until the write keeps
+// concurrent changes from together exceeding the limit.
+func (d *Database) checkProfileSize(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	change func(*authtypes.Profile),
+) error {
+	profile, err := d.Profiles.SelectProfileForUpdate(ctx, txn, localpart, serverName)
+	if err != nil {
+		return err
+	}
+	if profile.Fields, err = d.ProfileFields.SelectProfileFields(ctx, txn, localpart, serverName); err != nil {
+		return err
+	}
+	change(profile)
+	size, err := profile.Size()
+	if err != nil {
+		return err
+	}
+	if size > authtypes.MaxProfileSize {
+		return api.ErrProfileTooLarge
+	}
+	return nil
 }
 
 // SetPassword sets the account password to the given hash.
@@ -277,6 +361,7 @@ func (d *Database) QueryPushRules(
 		return nil, err
 	}
 
+	pushrules.UpgradeDefaultRules(&pushRules.Global, localpart, serverName)
 	return &pushRules, nil
 }
 
@@ -294,6 +379,13 @@ func (d *Database) SaveAccountData(
 	})
 }
 
+// RemoveAllAccountData implements storage.AccountData.
+func (d *Database) RemoveAllAccountData(ctx context.Context, localpart string, serverName spec.ServerName) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.AccountDatas.DeleteAccountData(ctx, txn, localpart, serverName)
+	})
+}
+
 // GetAccountData returns account data related to a given localpart
 // If no account data could be found, returns an empty arrays
 // Returns an error if there was an issue with the retrieval.
@@ -302,7 +394,14 @@ func (d *Database) GetAccountData(ctx context.Context, localpart string, serverN
 	rooms map[string]map[string]json.RawMessage,
 	err error,
 ) {
-	return d.AccountDatas.SelectAccountData(ctx, localpart, serverName)
+	global, rooms, err = d.AccountDatas.SelectAccountData(ctx, localpart, serverName)
+	if err != nil {
+		return
+	}
+	if data, ok := global["m.push_rules"]; ok {
+		global["m.push_rules"], err = upgradeMentionAccountData(data, localpart, serverName)
+	}
+	return
 }
 
 // GetAccountDataByType returns account data matching a given
@@ -313,9 +412,42 @@ func (d *Database) GetAccountDataByType(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string,
 ) (data json.RawMessage, err error) {
-	return d.AccountDatas.SelectAccountDataByType(
-		ctx, localpart, serverName, roomID, dataType,
-	)
+	data, err = d.AccountDatas.SelectAccountDataByType(ctx, localpart, serverName, roomID, dataType)
+	if err != nil {
+		return nil, err
+	}
+	if roomID == "" && dataType == "m.push_rules" {
+		return upgradeMentionAccountData(data, localpart, serverName)
+	}
+	return data, nil
+}
+
+// upgradeMentionAccountData upgrades existing global rules without creating account
+// data on reads or changing empty payloads and unrelated top-level fields.
+func upgradeMentionAccountData(data json.RawMessage, localpart string, serverName spec.ServerName) (json.RawMessage, error) {
+	if len(data) == 0 {
+		return data, nil
+	}
+	var accountData map[string]json.RawMessage
+	if err := json.Unmarshal(data, &accountData); err != nil {
+		return nil, err
+	}
+	var global *pushrules.RuleSet
+	if raw, ok := accountData["global"]; ok {
+		if err := json.Unmarshal(raw, &global); err != nil {
+			return nil, err
+		}
+	}
+	if global == nil {
+		return data, nil
+	}
+	pushrules.UpgradeDefaultRules(global, localpart, serverName)
+	raw, err := json.Marshal(global)
+	if err != nil {
+		return nil, err
+	}
+	accountData["global"] = raw
+	return json.Marshal(accountData)
 }
 
 // GetNewNumericLocalpart generates and returns a new unused numeric localpart.
@@ -336,26 +468,34 @@ var Err3PIDInUse = errors.New("this third-party identifier is already in use")
 
 // SaveThreePIDAssociation saves the association between a third party identifier
 // and a local Matrix user (identified by the user's ID's local part).
-// If the third-party identifier is already part of an association, returns Err3PIDInUse.
+// If the third-party identifier belongs to another account, returns Err3PIDInUse.
 // Returns an error if there was a problem talking to the database.
 func (d *Database) SaveThreePIDAssociation(
 	ctx context.Context, threepid string,
 	localpart string, serverName spec.ServerName,
 	medium string,
 ) (err error) {
+	threepid = authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		user, _, err := d.ThreePIDs.SelectLocalpartForThreePID(
+		user, domain, err := d.ThreePIDs.SelectLocalpartForThreePID(
 			ctx, txn, threepid, medium,
 		)
 		if err != nil {
 			return err
 		}
 
+		if user == localpart && domain == serverName {
+			return nil
+		}
 		if len(user) > 0 {
 			return Err3PIDInUse
 		}
 
-		return d.ThreePIDs.InsertThreePID(ctx, txn, threepid, medium, localpart, serverName)
+		err = d.ThreePIDs.InsertThreePID(ctx, txn, threepid, medium, localpart, serverName)
+		if sqlutil.IsUniqueConstraintViolationErr(err) {
+			return Err3PIDInUse
+		}
+		return err
 	})
 }
 
@@ -364,10 +504,19 @@ func (d *Database) SaveThreePIDAssociation(
 // If no association exists involving this third-party identifier, returns nothing.
 // If there was a problem talking to the database, returns an error.
 func (d *Database) RemoveThreePIDAssociation(
-	ctx context.Context, threepid string, medium string,
+	ctx context.Context, threepid string, medium string, localpart string, serverName spec.ServerName,
 ) (err error) {
+	canonical := authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.ThreePIDs.DeleteThreePID(ctx, txn, threepid, medium)
+		if err := d.ThreePIDs.DeleteThreePID(ctx, txn, canonical, medium, localpart, serverName); err != nil {
+			return err
+		}
+		if canonical == threepid {
+			return nil
+		}
+		// An address stored before case folding, which the migration could not
+		// fold because its folded form was taken, is removed as given.
+		return d.ThreePIDs.DeleteThreePID(ctx, txn, threepid, medium, localpart, serverName)
 	})
 }
 
@@ -379,6 +528,7 @@ func (d *Database) RemoveThreePIDAssociation(
 func (d *Database) GetLocalpartForThreePID(
 	ctx context.Context, threepid string, medium string,
 ) (localpart string, serverName spec.ServerName, err error) {
+	threepid = authtypes.CanonicalThreePIDAddress(medium, threepid)
 	return d.ThreePIDs.SelectLocalpartForThreePID(ctx, nil, threepid, medium)
 }
 
@@ -455,9 +605,52 @@ func (d *Database) SearchProfiles(ctx context.Context, searchString string, limi
 }
 
 // DeactivateAccount deactivates the user's account, removing all ability for the user to login again.
+// It also clears the account's custom profile fields.
 func (d *Database) DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error) {
 	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		if err := d.ProfileFields.DeleteProfileFields(ctx, nil, localpart, serverName); err != nil {
+			return err
+		}
+		// MSC4140: a deactivated account's delayed events must not be sent,
+		// and their content need not be kept.
+		if err := d.DelayedEvents.DeleteDelayedEventsForUser(ctx, nil, localpart, serverName); err != nil {
+			return err
+		}
 		return d.Accounts.DeactivateAccount(ctx, localpart, serverName)
+	})
+}
+
+// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
+// type that are not deactivated and were created before the given time,
+// oldest first.
+func (d *Database) GetActiveAccountsCreatedBefore(
+	ctx context.Context, accountType api.AccountType, before time.Time, limit int,
+) ([]api.Account, error) {
+	return d.Accounts.SelectActiveAccountsCreatedBefore(ctx, accountType, spec.AsTimestamp(before), limit)
+}
+
+// ReactivateAccount re-enables login for a previously deactivated account.
+// It is a no-op for accounts that are not deactivated and returns
+// sql.ErrNoRows when the account does not exist.
+func (d *Database) ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error) {
+	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		return d.Accounts.ReactivateAccount(ctx, localpart, serverName)
+	})
+}
+
+// SetAccountLocked locks or unlocks an account (MSC3939) and returns
+// sql.ErrNoRows when the account does not exist.
+func (d *Database) SetAccountLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error {
+	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		return d.Accounts.UpdateLocked(ctx, localpart, serverName, locked)
+	})
+}
+
+// SetAccountSuspended suspends or unsuspends an account (MSC3823) and returns
+// sql.ErrNoRows when the account does not exist.
+func (d *Database) SetAccountSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error {
+	return d.Writer.Do(nil, nil, func(txn *sql.Tx) error {
+		return d.Accounts.UpdateSuspended(ctx, localpart, serverName, suspended)
 	})
 }
 
@@ -605,27 +798,56 @@ func (d *Database) UpsertBackupKeys(
 		if err != nil {
 			return err
 		}
+		etag = oldETag
 		if changed {
-			// update the etag
-			var newETag string
-			if oldETag == "" {
-				newETag = "1"
-			} else {
-				oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
-				if err != nil {
-					return fmt.Errorf("failed to parse old etag: %w", err)
-				}
-				newETag = strconv.FormatInt(oldETagInt+1, 10)
-			}
-			etag = newETag
-			return d.KeyBackupVersions.UpdateKeyBackupETag(ctx, txn, userID, version, newETag)
-		} else {
-			etag = oldETag
+			etag, err = d.bumpKeyBackupETag(ctx, txn, userID, version, oldETag)
 		}
-
-		return nil
+		return err
 	})
 	return
+}
+
+func (d *Database) DeleteBackupKeys(
+	ctx context.Context, version, userID, filterRoomID, filterSessionID string,
+) (count int64, etag string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		versionResult, _, _, oldETag, deleted, err := d.KeyBackupVersions.SelectKeyBackup(ctx, txn, userID, version)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			return sql.ErrNoRows
+		}
+		removed, err := d.KeyBackups.DeleteKeys(ctx, txn, userID, versionResult, filterRoomID, filterSessionID)
+		if err != nil {
+			return fmt.Errorf("d.KeyBackups.DeleteKeys: %w", err)
+		}
+		etag = oldETag
+		if removed > 0 {
+			if etag, err = d.bumpKeyBackupETag(ctx, txn, userID, versionResult, oldETag); err != nil {
+				return err
+			}
+		}
+		count, err = d.KeyBackups.CountKeys(ctx, txn, userID, versionResult)
+		return err
+	})
+	return
+}
+
+// bumpKeyBackupETag stores and returns the next etag of a backup version,
+// whose keys have changed.
+func (d *Database) bumpKeyBackupETag(
+	ctx context.Context, txn *sql.Tx, userID, version, oldETag string,
+) (string, error) {
+	newETag := "1"
+	if oldETag != "" {
+		oldETagInt, err := strconv.ParseInt(oldETag, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse old etag: %w", err)
+		}
+		newETag = strconv.FormatInt(oldETagInt+1, 10)
+	}
+	return newETag, d.KeyBackupVersions.UpdateKeyBackupETag(ctx, txn, userID, version, newETag)
 }
 
 // GetDeviceByAccessToken returns the device matching the given access token.
@@ -767,6 +989,44 @@ func (d *Database) UpdateDeviceAccessToken(
 	})
 }
 
+// SetDeviceRefreshToken makes the device's access token expire at expiresTS
+// and stores the hash of its refresh token.
+func (d *Database) SetDeviceRefreshToken(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+	deviceID string, expiresTS int64, refreshTokenHash string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Devices.UpdateDeviceRefreshToken(ctx, txn, localpart, serverName, deviceID, expiresTS, refreshTokenHash)
+	})
+}
+
+// RefreshDeviceTokens replaces the access and refresh tokens of the device
+// holding the given refresh token hash.
+func (d *Database) RefreshDeviceTokens(
+	ctx context.Context, refreshTokenHash, accessToken string,
+	expiresTS int64, newRefreshTokenHash string,
+) (dev *api.Device, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		dev, err = d.Devices.RefreshDeviceTokens(ctx, txn, refreshTokenHash, accessToken, expiresTS, newRefreshTokenHash)
+		return err
+	})
+	return dev, err
+}
+
+// GetRefreshTokenOwner returns the user of the device holding the given
+// current or previous refresh token hash, or sql.ErrNoRows.
+func (d *Database) GetRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (string, spec.ServerName, error) {
+	return d.Devices.SelectRefreshTokenOwner(ctx, refreshTokenHash)
+}
+
+// ClearPrevRefreshToken revokes the previous refresh token of the device
+// holding the given access token.
+func (d *Database) ClearPrevRefreshToken(ctx context.Context, accessToken string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Devices.ClearPrevRefreshToken(ctx, txn, accessToken)
+	})
+}
+
 // RemoveDevices revokes one or more devices by deleting the entry in the database
 // matching with the given device IDs and user ID localpart.
 // If the devices don't exist, it will not return an error
@@ -844,10 +1104,15 @@ func generateLoginToken() (string, error) {
 }
 
 // RemoveLoginToken removes the named token (and may clean up other expired tokens).
-func (d *Database) RemoveLoginToken(ctx context.Context, token string) error {
-	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+// It reports whether the token existed and had not expired.
+func (d *Database) RemoveLoginToken(ctx context.Context, token string) (consumed bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if consumed, err = d.LoginTokens.ConsumeLoginToken(ctx, txn, token); err != nil {
+			return err
+		}
 		return d.LoginTokens.DeleteLoginToken(ctx, txn, token)
 	})
+	return
 }
 
 // GetLoginTokenDataByToken returns the data associated with the given token.
@@ -890,9 +1155,38 @@ func (d *Database) GetRoomNotificationCounts(ctx context.Context, localpart stri
 	return d.Notifications.SelectRoomCounts(ctx, nil, localpart, serverName, roomID)
 }
 
+// GetRoomThreadNotificationCounts counts a user's unread notifications in a
+// room by thread. A notification whose event has no recorded thread counts
+// towards the main timeline.
+func (d *Database) GetRoomThreadNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (map[string]eventutil.ThreadNotificationCounts, error) {
+	// The literal 'main' is eventutil.MainThread.
+	rows, err := d.DB.QueryContext(ctx, `SELECT COALESCE(e.thread_id, 'main'), COUNT(*), SUM(CASE WHEN n.highlight THEN 1 ELSE 0 END)
+	FROM userapi_notifications n
+	LEFT JOIN userapi_notification_events e ON e.room_id = n.room_id AND e.event_id = n.event_id
+	WHERE n.localpart = $1 AND n.server_name = $2 AND n.room_id = $3 AND NOT n.read
+	GROUP BY COALESCE(e.thread_id, 'main')`, localpart, serverName, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "GetRoomThreadNotificationCounts: rows.close() failed")
+	counts := make(map[string]eventutil.ThreadNotificationCounts)
+	for rows.Next() {
+		var threadID string
+		var thread eventutil.ThreadNotificationCounts
+		if err = rows.Scan(&threadID, &thread.UnreadNotificationCount, &thread.UnreadHighlightCount); err != nil {
+			return nil, err
+		}
+		counts[threadID] = thread
+	}
+	return counts, rows.Err()
+}
+
 func (d *Database) DeleteOldNotifications(ctx context.Context) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.Notifications.Clean(ctx, txn)
+		if err := d.Notifications.Clean(ctx, txn); err != nil {
+			return err
+		}
+		return cleanNotificationReceipts(ctx, txn)
 	})
 }
 

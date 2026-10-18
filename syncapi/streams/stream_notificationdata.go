@@ -50,6 +50,9 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 		return from
 	}
 
+	// With per-thread counts, the room's counts cover only the main timeline.
+	byThread := req.Filter.Room.Timeline.UnreadThreadNotifications
+
 	// We're merely decorating existing rooms.
 	for roomID, jr := range req.Response.Rooms.Join {
 		counts := countsByRoom[roomID]
@@ -59,6 +62,20 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 		jr.UnreadNotifications = &types.UnreadNotifications{
 			HighlightCount:    counts.UnreadHighlightCount,
 			NotificationCount: counts.UnreadNotificationCount,
+		}
+		if byThread {
+			main, threads := counts.SplitByThread()
+			jr.UnreadNotifications = &types.UnreadNotifications{
+				HighlightCount:    main.UnreadHighlightCount,
+				NotificationCount: main.UnreadNotificationCount,
+			}
+			jr.UnreadThreadNotifications = make(map[string]*types.UnreadNotifications, len(threads))
+			for threadID, thread := range threads {
+				jr.UnreadThreadNotifications[threadID] = &types.UnreadNotifications{
+					HighlightCount:    thread.UnreadHighlightCount,
+					NotificationCount: thread.UnreadNotificationCount,
+				}
+			}
 		}
 		req.Response.Rooms.Join[roomID] = jr
 	}

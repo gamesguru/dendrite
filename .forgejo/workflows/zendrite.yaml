@@ -33,6 +33,7 @@ jobs:
               - '.pre-commit-config.yaml'
               - '.forgejo/workflows/**'
               - 'Dockerfile'
+              - 'build/scripts/**'
 
   # Run golangci-lint
   lint:
@@ -114,9 +115,32 @@ jobs:
           # pgx forwards PGOPTIONS to every connection; caps per-session memory to avoid OOMs under parallel test load.
           PGOPTIONS: '-c work_mem=2MB -c maintenance_work_mem=32MB'
 
+  # End-to-end test of MSC3861 delegated authentication against a real MAS
+  # instance: compatibility login must provision the user and device on
+  # Zendrite through the /_synapse/mas endpoints, and a Zendrite whoami must
+  # validate the MAS-issued token. This is the flow that broke when MAS
+  # moved off the legacy Synapse admin API.
+  mas-integration:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    timeout-minutes: 20
+    name: MAS integration
+    runs-on: docker
+    steps:
+      - name: Install runner dependencies
+        run: apk add --no-cache bash git nodejs python3 jq openssl
+      - uses: actions/checkout@v7
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Run MAS integration test
+        run: bash build/scripts/mas-integration-test.sh
+
   tests-done:
     name: Tests passed
-    needs: [lint, test]
+    needs: [lint, test, mas-integration]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
     steps:

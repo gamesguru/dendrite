@@ -538,7 +538,7 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		// Start the syncAPI to have `/joined_members` available
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		// start the consumer
 		appservice.NewInternalAPI(processCtx, cfg, natsInstance, usrAPI, rsAPI)
@@ -556,8 +556,12 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		select {
-		// Generous timeout for slow CI environments with race detector
-		case <-time.After(time.Millisecond * 5000): // wait for the AS to process the events
+		// The invite, the join sent in reply, and the join reaching the
+		// appservice each pass through the roomserver and JetStream. With
+		// SQLite, the race detector and other test binaries running in
+		// parallel on CI that has taken longer than 5 s, so allow 30 s; a
+		// passing run returns as soon as the join arrives.
+		case <-time.After(30 * time.Second):
 			t.Errorf("Timed out waiting for join event")
 		case <-evChan:
 		}

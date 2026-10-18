@@ -17,7 +17,6 @@ type MSCs struct {
 	// 'msc2836': Threading - https://github.com/matrix-org/matrix-doc/pull/2836
 	// 'msc3814': Dehydrated devices v2 - https://github.com/matrix-org/matrix-spec-proposals/pull/3814
 	// 'msc3861': OIDC delegated authentication - https://github.com/matrix-org/matrix-spec-proposals/pull/3861
-	// 'msc4115': Membership metadata on events - https://github.com/matrix-org/matrix-spec-proposals/pull/4115
 	MSCs []string `yaml:"mscs"`
 
 	Database DatabaseOptions `yaml:"database,omitempty"`

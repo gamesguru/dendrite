@@ -62,7 +62,7 @@ func (p *ReceiptStreamProvider) IncrementalSync(
 	}
 
 	// Group receipts by room, so we can create one ClientEvent for every room
-	receiptsByRoom := make(map[string][]types.OutputReceiptEvent)
+	receiptsByRoom := make(map[[2]string][]types.OutputReceiptEvent)
 	for _, receipt := range receipts {
 		// skip ignored user events
 		if _, ok := req.IgnoredUsers.List[receipt.UserID]; ok {
@@ -72,10 +72,12 @@ func (p *ReceiptStreamProvider) IncrementalSync(
 		if receipt.Type == "m.read.private" && req.Device.UserID != receipt.UserID {
 			continue
 		}
-		receiptsByRoom[receipt.RoomID] = append(receiptsByRoom[receipt.RoomID], receipt)
+		key := [2]string{receipt.RoomID, receipt.ThreadID}
+		receiptsByRoom[key] = append(receiptsByRoom[key], receipt)
 	}
 
-	for roomID, receipts := range receiptsByRoom {
+	for key, receipts := range receiptsByRoom {
+		roomID := key[0]
 		// For a complete sync, make sure we're only including this room if
 		// that room was present in the joined rooms.
 		if from == 0 && !req.IsRoomPresent(roomID) {
@@ -104,7 +106,7 @@ func (p *ReceiptStreamProvider) IncrementalSync(
 				typeContent = make(map[string]ReceiptTS)
 				eventContent[receipt.Type] = typeContent
 			}
-			typeContent[receipt.UserID] = ReceiptTS{TS: receipt.Timestamp}
+			typeContent[receipt.UserID] = ReceiptTS{TS: receipt.Timestamp, ThreadID: receipt.ThreadID}
 		}
 		ev.Content, err = json.Marshal(content)
 		if err != nil {
@@ -124,5 +126,6 @@ type ReceiptMRead struct {
 }
 
 type ReceiptTS struct {
-	TS spec.Timestamp `json:"ts"`
+	ThreadID string         `json:"thread_id,omitempty"`
+	TS       spec.Timestamp `json:"ts"`
 }

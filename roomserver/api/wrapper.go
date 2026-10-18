@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -42,6 +43,38 @@ func SendEvents(
 		}
 	}
 	return SendInputRoomEvents(ctx, rsAPI, virtualHost, ires, async)
+}
+
+// SendEventForTransaction synchronously sends a local client's new event
+// together with the client's transaction ID. It returns the ID of the event
+// the transaction produced: the event's own ID, or that of the event stored
+// for an earlier attempt of the same transaction, in which case this event
+// was discarded.
+func SendEventForTransaction(
+	ctx context.Context, rsAPI InputRoomEventsAPI,
+	event *types.HeaderedEvent,
+	virtualHost, origin spec.ServerName,
+	sendAsServer spec.ServerName, txnID *TransactionID,
+) (string, error) {
+	request := InputRoomEventsRequest{
+		InputRoomEvents: []InputRoomEvent{{
+			Kind:          KindNew,
+			Event:         event,
+			Origin:        origin,
+			SendAsServer:  string(sendAsServer),
+			TransactionID: txnID,
+		}},
+		VirtualHost: virtualHost,
+	}
+	var response InputRoomEventsResponse
+	rsAPI.InputRoomEvents(ctx, &request, &response)
+	if err := response.Err(); err != nil {
+		return "", err
+	}
+	if original, ok := response.DuplicateOf[event.EventID()]; ok {
+		return original, nil
+	}
+	return event.EventID(), nil
 }
 
 // SendStateAsOutliers writes state events to the roomserver as outliers.
@@ -201,16 +234,24 @@ func IsServerBannedFromRoom(ctx context.Context, rsAPI FederationRoomserverAPI, 
 	return res.Banned
 }
 
+// PublicRoom preserves the distinction between an absent room type and a string,
+// including an explicitly empty string, in directory results.
+type PublicRoom struct {
+	fclient.PublicRoom
+	RoomType *string `json:"room_type,omitempty"`
+}
+
 // PopulatePublicRooms extracts PublicRoom information for all the provided room IDs. The IDs are not checked to see if they are visible in the
 // published room directory.
 // Due to lots of switches.
-func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]fclient.PublicRoom, error) {
+func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkStateContentAPI) ([]PublicRoom, error) {
 	avatarTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.avatar", StateKey: ""}
 	nameTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.name", StateKey: ""}
 	canonicalTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCanonicalAlias, StateKey: ""}
 	topicTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.topic", StateKey: ""}
 	guestTuple := gomatrixserverlib.StateKeyTuple{EventType: "m.room.guest_access", StateKey: ""}
 	visibilityTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomHistoryVisibility, StateKey: ""}
+	createTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCreate, StateKey: ""}
 	joinRuleTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomJoinRules, StateKey: ""}
 
 	var stateRes QueryBulkStateContentResponse
@@ -218,7 +259,7 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 		RoomIDs:        roomIDs,
 		AllowWildcards: true,
 		StateTuples: []gomatrixserverlib.StateKeyTuple{
-			nameTuple, canonicalTuple, topicTuple, guestTuple, visibilityTuple, joinRuleTuple, avatarTuple,
+			nameTuple, canonicalTuple, topicTuple, guestTuple, visibilityTuple, joinRuleTuple, avatarTuple, createTuple,
 			{EventType: spec.MRoomMember, StateKey: "*"},
 		},
 	}, &stateRes)
@@ -226,12 +267,9 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 		util.GetLogger(ctx).WithError(err).Error("QueryBulkStateContent failed")
 		return nil, err
 	}
-	chunk := make([]fclient.PublicRoom, len(roomIDs))
-	i := 0
+	chunk := make([]PublicRoom, 0, len(stateRes.Rooms))
 	for roomID, data := range stateRes.Rooms {
-		pub := fclient.PublicRoom{
-			RoomID: roomID,
-		}
+		pub := PublicRoom{PublicRoom: fclient.PublicRoom{RoomID: roomID}}
 		joinCount := 0
 		var guestAccess string
 		for tuple, contentVal := range data {
@@ -240,6 +278,17 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 				continue
 			}
 			switch tuple {
+			case createTuple:
+				var content struct {
+					Type *string `json:"type"`
+				}
+				if err := json.Unmarshal([]byte(contentVal), &content); err != nil {
+					return nil, fmt.Errorf("parse create content for %s: %w", roomID, err)
+				}
+				pub.RoomType = content.Type
+				if content.Type != nil {
+					pub.PublicRoom.RoomType = *content.Type
+				}
 			case avatarTuple:
 				pub.AvatarURL = contentVal
 			case nameTuple:
@@ -263,10 +312,45 @@ func PopulatePublicRooms(ctx context.Context, roomIDs []string, rsAPI QueryBulkS
 			pub.GuestCanJoin = true
 		}
 		pub.JoinedMembersCount = joinCount
-		chunk[i] = pub
-		i++
+		chunk = append(chunk, pub)
 	}
 	return chunk, nil
+}
+
+// MatchesRoomType reports whether a room of the given type passes a
+// room_types filter (MSC3827). A nil filter matches every room, and a nil
+// entry matches rooms without a type.
+func MatchesRoomType(roomType *string, types []*string) bool {
+	if types == nil {
+		return true
+	}
+	for _, wanted := range types {
+		if wanted == nil && roomType == nil || wanted != nil && roomType != nil && *wanted == *roomType {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterPublicRooms keeps the rooms whose type passes roomTypes and whose
+// name, topic or canonical alias contains searchTerm, ignoring case.
+func FilterPublicRooms(rooms []PublicRoom, searchTerm string, roomTypes []*string) []PublicRoom {
+	if searchTerm == "" && roomTypes == nil {
+		return rooms
+	}
+	normalizedTerm := strings.ToLower(searchTerm)
+	result := make([]PublicRoom, 0)
+	for _, room := range rooms {
+		if !MatchesRoomType(room.RoomType, roomTypes) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(room.Name), normalizedTerm) ||
+			strings.Contains(strings.ToLower(room.Topic), normalizedTerm) ||
+			strings.Contains(strings.ToLower(room.CanonicalAlias), normalizedTerm) {
+			result = append(result, room)
+		}
+	}
+	return result
 }
 
 func GenerateCreateContent(ctx context.Context, roomVer gomatrixserverlib.RoomVersion, senderID string, createContentJSON json.RawMessage, additionalCreators []string) (map[string]any, error) {

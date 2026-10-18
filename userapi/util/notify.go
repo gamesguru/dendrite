@@ -9,6 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/pushgateway"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/userapi/storage"
 	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 )
@@ -16,8 +17,7 @@ import (
 // NotifyUserCountsAsync sends notifications to a local user's
 // notification destinations. UserDatabase lookups run synchronously, but
 // a single goroutine is started when talking to the Push
-// gateways. There is no way to know when the background goroutine has
-// finished.
+// gateways. The application owner joins this background work during shutdown.
 func NotifyUserCountsAsync(ctx context.Context, pgClient pushgateway.Client, localpart string, serverName spec.ServerName, db storage.UserDatabase) error {
 	pusherDevices, err := GetPushDevices(ctx, localpart, serverName, nil, db)
 	if err != nil {
@@ -41,9 +41,9 @@ func NotifyUserCountsAsync(ctx context.Context, pgClient pushgateway.Client, loc
 
 	// TODO: think about bounding this to one per user, and what
 	// ordering guarantees we must provide.
-	go func() { //nolint:contextcheck
+	process.Go(process.Lifetime(ctx), func() {
 		// This background processing cannot be tied to a request.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) //nolint:mnd
+		ctx, cancel := context.WithTimeout(process.Lifetime(ctx), 30*time.Second) //nolint:mnd
 		defer cancel()
 
 		// TODO: we could batch all devices with the same URL, but
@@ -72,7 +72,7 @@ func NotifyUserCountsAsync(ctx context.Context, pgClient pushgateway.Client, loc
 				return
 			}
 		}
-	}()
+	})
 
 	return nil
 }

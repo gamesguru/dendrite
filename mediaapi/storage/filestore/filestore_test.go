@@ -181,3 +181,58 @@ func TestLocalFileStore_Thumbnail(t *testing.T) {
 		t.Fatalf("expected thumbnail content %q, got %q", thumbContent, string(gotContent))
 	}
 }
+
+func TestThumbnailPublication(t *testing.T) {
+	for _, crossDevice := range []bool{false, true} {
+		name := "same filesystem"
+		if crossDevice {
+			name = "separate filesystem"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := t.TempDir()
+			if crossDevice {
+				var err error
+				source, err = os.MkdirTemp("/dev/shm", "zendrite-thumbnail-test-") //nolint:usetesting // Exercise a different filesystem from t.TempDir.
+				if err != nil {
+					t.Skipf("shared-memory filesystem unavailable: %v", err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(source) })
+			}
+			store, err := NewLocalFileStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			hash := types.Base64Hash("thumbnail-publication")
+			size := types.ThumbnailSize{Width: 32, Height: 32, ResizeMethod: types.Crop}
+			path, err := store.thumbnailPath(hash, size)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, content := range []string{"first", "replacement"} {
+				if err = os.WriteFile(filepath.Join(source, "content"), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err = store.StoreThumbnail(t.Context(), hash, size, types.Path(source), types.FileSizeBytes(len(content))); err != nil {
+					t.Fatal(err)
+				}
+				got, readErr := os.ReadFile(path)
+				if readErr != nil || string(got) != content {
+					t.Fatalf("published %q, err %v", got, readErr)
+				}
+			}
+			// An incomplete copy must preserve the existing thumbnail and clean its staging file.
+			err = store.StoreThumbnail(t.Context(), hash, size, types.Path(source), 100)
+			if err == nil {
+				t.Fatal("expected a size mismatch")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != "replacement" {
+				t.Fatalf("lost existing thumbnail: %q, %v", got, err)
+			}
+			leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".thumbnail-*"))
+			if err != nil || len(leftovers) != 0 {
+				t.Fatalf("staging files remain: %v, %v", leftovers, err)
+			}
+		})
+	}
+}

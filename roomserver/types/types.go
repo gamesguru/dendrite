@@ -285,6 +285,17 @@ type RejectedError string
 
 func (e RejectedError) Error() string { return string(e) }
 
+// DuplicateTransactionError is returned when an input event retries a client
+// transaction that already produced another event. EventID names that event,
+// which is what the client should be told about instead.
+type DuplicateTransactionError struct {
+	EventID string
+}
+
+func (e DuplicateTransactionError) Error() string {
+	return fmt.Sprintf("client transaction already produced event %s", e.EventID)
+}
+
 // RoomInfo contains metadata about a room.
 type RoomInfo struct {
 	mu               sync.RWMutex

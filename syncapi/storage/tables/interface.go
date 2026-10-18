@@ -51,6 +51,7 @@ type Peeks interface {
 }
 
 type Events interface {
+	SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error)
 	SelectStateInRange(ctx context.Context, txn *sql.Tx, r types.Range, stateFilter *synctypes.StateFilter, roomIDs []string) (map[string]map[string]bool, map[string]types.StreamEvent, error)
 	SelectMaxEventID(ctx context.Context, txn *sql.Tx) (id int64, err error)
 	InsertEvent(
@@ -105,10 +106,22 @@ type Topology interface {
 
 type CurrentRoomState interface {
 	SelectStateEvent(ctx context.Context, txn *sql.Tx, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	// SelectStateEvents returns the current state events of a room for the
+	// given type and state key pairs, keyed by the stored type and state key.
+	// Pairs with no current state are absent from the result.
+	SelectStateEvents(ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	SelectEventsWithEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StreamEvent, error)
 	UpsertRoomState(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, membership *string, addedAt types.StreamPosition) error
+	// UpsertRoomStates writes many state events in as few statements as the
+	// backend allows. When two upserts share a type and state key, the later
+	// one wins, as it would with repeated UpsertRoomState calls.
+	UpsertRoomStates(ctx context.Context, txn *sql.Tx, upserts []StateUpsert, addedAt types.StreamPosition) error
 	DeleteRoomStateByEventID(ctx context.Context, txn *sql.Tx, eventID string) error
+	// DeleteRoomStateByEventIDs removes the current state rows for every given event ID.
+	DeleteRoomStateByEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) error
 	DeleteRoomStateForRoom(ctx context.Context, txn *sql.Tx, roomID string) error
+	// SelectRoomStateEventIDs returns the event IDs of a room's current state.
+	SelectRoomStateEventIDs(ctx context.Context, txn *sql.Tx, roomID string) ([]string, error)
 	// SelectCurrentState returns all the current state events for the given room.
 	SelectCurrentState(ctx context.Context, txn *sql.Tx, roomID string, stateFilter *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	// SelectRoomIDsWithMembership returns the list of room IDs which have the given user in the given membership state.
@@ -190,19 +203,30 @@ type Filter interface {
 }
 
 type Receipts interface {
-	UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
 	SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error)
 	SelectMaxReceiptID(ctx context.Context, txn *sql.Tx) (id int64, err error)
 	PurgeReceipts(ctx context.Context, txn *sql.Tx, roomID string) error
 	// Per-connection receipt tracking for sliding sync (MSC4186)
 	SelectLatestUserReceiptsForConnection(ctx context.Context, txn *sql.Tx, connectionKey int64, roomIDs []string, userID string) ([]types.OutputReceiptEvent, error)
-	UpsertConnectionReceipt(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error
+	UpsertConnectionReceipt(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error
 	DeleteConnectionReceipts(ctx context.Context, txn *sql.Tx, connectionKey int64) error
 	DeleteConnectionReceiptsForRoom(ctx context.Context, txn *sql.Tx, connectionKey int64, roomID string) error
 }
 
+// StateUpsert is one current state row written by CurrentRoomState.UpsertRoomStates.
+type StateUpsert struct {
+	Event *rstypes.HeaderedEvent
+	// Membership is the content.membership of an m.room.member event, nil otherwise.
+	Membership *string
+}
+
 type Memberships interface {
 	UpsertMembership(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, streamPos, topologicalPos types.StreamPosition) error
+	// UpsertMemberships records many m.room.member events in as few statements
+	// as the backend allows, with the same last-wins semantics as repeated
+	// UpsertMembership calls.
+	UpsertMemberships(ctx context.Context, txn *sql.Tx, events []*rstypes.HeaderedEvent, streamPos, topologicalPos types.StreamPosition) error
 	SelectMembershipCount(ctx context.Context, txn *sql.Tx, roomID, membership string, pos types.StreamPosition) (count int, err error)
 	SelectMembershipForUser(ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error)
 	PurgeMemberships(ctx context.Context, txn *sql.Tx, roomID string) error
@@ -214,7 +238,7 @@ type Memberships interface {
 }
 
 type NotificationData interface {
-	UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID, roomID string, notificationCount, highlightCount int) (types.StreamPosition, error)
+	UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID string, data *eventutil.NotificationData) (types.StreamPosition, error)
 	SelectUserUnreadCountsForRooms(ctx context.Context, txn *sql.Tx, userID string, roomIDs []string) (map[string]*eventutil.NotificationData, error)
 	SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error)
 	PurgeNotificationData(ctx context.Context, txn *sql.Tx, roomID string) error
@@ -233,6 +257,15 @@ type Presence interface {
 }
 
 type Relations interface {
+	SelectThreadRelations(ctx context.Context, txn *sql.Tx, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error)
+	// SelectRelationTypesForEvents returns, for each of the given parent events, the set of
+	// relTypes that have at least one child with a relation ID no greater than watermark.
+	// Events without such children are absent from the result.
+	// SelectRelationsInTopologicalRange returns a page of a parent's children, and with a
+	// maxDepth above 1 their own children, in topology order. Backwards pages cover the
+	// positions after to up to and including from, and forward pages the reverse.
+	SelectRelationsInTopologicalRange(ctx context.Context, txn *sql.Tx, roomID, eventID, relType, eventType string, maxDepth int, from, to types.TopologyToken, backwards bool, limit int) ([]types.TopologicalRelation, error)
+	SelectRelationTypesForEvents(ctx context.Context, txn *sql.Tx, roomID string, eventIDs, relTypes []string, watermark types.StreamPosition) (map[string]map[string]bool, error)
 	// Inserts a relation which refers from the child event ID to the event ID in the given room.
 	// If the relation already exists then this function will do nothing and return no error.
 	InsertRelation(ctx context.Context, txn *sql.Tx, roomID, eventID, childEventID, childEventType, relType string) (err error)
@@ -264,4 +297,29 @@ type UnPartialStatedRooms interface {
 	SelectMaxUnPartialStatedRoomID(ctx context.Context, txn *sql.Tx) (id int64, err error)
 	// PurgeUnPartialStatedRooms deletes all un-partial-stated records for a room.
 	PurgeUnPartialStatedRooms(ctx context.Context, txn *sql.Tx, roomID string) error
+}
+
+// StickyEvents tracks MSC4354 sticky events in their own stream, so that sync
+// can deliver unexpired sticky events beyond the timeline. Rows outlive their
+// expiry until they are cleaned up, so every read takes the current time.
+type StickyEvents interface {
+	// InsertStickyEvent adds an event to the sticky events stream and returns
+	// its position. An event already in the stream keeps its position.
+	InsertStickyEvent(ctx context.Context, txn *sql.Tx, roomID, eventID, sender string, expiresAt spec.Timestamp) (types.StreamPosition, error)
+	// SelectStickyEventsInRooms returns the sticky events in the given rooms
+	// that are unexpired at now, with positions after from and up to and
+	// including to, in stream order. A limit of zero or less returns them all.
+	SelectStickyEventsInRooms(ctx context.Context, txn *sql.Tx, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int) ([]types.StickyEvent, error)
+	// SelectStickyEventsByID returns those of the given events that are
+	// unexpired sticky events at now.
+	SelectStickyEventsByID(ctx context.Context, txn *sql.Tx, eventIDs []string, now spec.Timestamp) ([]types.StickyEvent, error)
+	// SelectMaxStickyEventID returns the latest position handed out in the
+	// sticky events stream, which deleting rows does not move back.
+	SelectMaxStickyEventID(ctx context.Context, txn *sql.Tx) (int64, error)
+	// DeleteStickyEvent removes an event from the stream, as when it is redacted.
+	DeleteStickyEvent(ctx context.Context, txn *sql.Tx, eventID string) error
+	// DeleteExpiredStickyEvents removes the events that have expired by now.
+	DeleteExpiredStickyEvents(ctx context.Context, txn *sql.Tx, now spec.Timestamp) error
+	// PurgeStickyEvents removes all sticky events of a room.
+	PurgeStickyEvents(ctx context.Context, txn *sql.Tx, roomID string) error
 }

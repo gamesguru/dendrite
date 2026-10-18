@@ -1,0 +1,120 @@
+package config
+
+import (
+	"fmt"
+	"math"
+	"strings"
+	"time"
+	"unicode"
+
+	"k8s.io/apimachinery/pkg/util/validation"
+)
+
+// HA configures opt-in Kubernetes Lease election for one homeserver.
+// Election does not authorize application effects without an ownership gate.
+type HA struct {
+	// Compatibility is the deployment identity, computed from the loaded
+	// configuration. Candidates must agree on it exactly.
+	Compatibility string `yaml:"-"`
+	// Version is this build's version string, recorded for operators.
+	Version        string `yaml:"-"`
+	Enabled        bool   `yaml:"enabled"`
+	Backend        string `yaml:"backend"`
+	LeaseName      string `yaml:"lease_name"`
+	LeaseNamespace string `yaml:"lease_namespace"`
+	// CandidateID identifies the deployment candidate; each process appends a UUID.
+	CandidateID   string        `yaml:"candidate_id"`
+	LeaseDuration time.Duration `yaml:"lease_duration"`
+	RenewDeadline time.Duration `yaml:"renew_deadline"`
+	RetryPeriod   time.Duration `yaml:"retry_period"`
+	// OwnershipTimeout bounds resource-enforced ownership establishment.
+	// Exceeding it leaves the candidate unready; it never activates anyway.
+	OwnershipTimeout time.Duration `yaml:"ownership_timeout"`
+	// StatusAddress serves liveness, readiness, status, and metrics for every
+	// candidate, including standbys that never bind the Matrix listeners.
+	StatusAddress string `yaml:"status_address"`
+	// HandoverGrace is how long an owner asked to stop keeps admitting new
+	// requests after it has told routers to stop sending them, so requests
+	// dispatched before a router's next health check still succeed.
+	HandoverGrace time.Duration `yaml:"handover_grace"`
+	// HandoverTimeout bounds a planned handover: the grace period plus the
+	// wait for in-flight requests. Zero stops the owner immediately instead.
+	HandoverTimeout time.Duration `yaml:"handover_timeout"`
+}
+
+// Defaults keeps HA disabled and supplies the reference election timings.
+func (c *HA) Defaults() {
+	c.Backend = "kubernetes"
+	const (
+		referenceLeaseDuration = 30 * time.Second
+		referenceRenewDeadline = 20 * time.Second
+		referenceRetryPeriod   = 5 * time.Second
+		// ADR 0003 budgets 45 seconds for ownership establishment in the
+		// reference deployment, which must outlast one expiring Lease.
+		referenceOwnershipTimeout = 45 * time.Second
+	)
+	c.LeaseDuration = referenceLeaseDuration
+	c.RenewDeadline = referenceRenewDeadline
+	c.RetryPeriod = referenceRetryPeriod
+	c.OwnershipTimeout = referenceOwnershipTimeout
+	c.StatusAddress = ":8009"
+	const (
+		// Two of the reference router's 500 ms health checks, each with its
+		// 500 ms timeout.
+		referenceHandoverGrace = 2 * time.Second
+		// Leaves the 30 second application shutdown budget and the Lease
+		// release inside a 60 second termination grace period.
+		referenceHandoverTimeout = 15 * time.Second
+	)
+	c.HandoverGrace = referenceHandoverGrace
+	c.HandoverTimeout = referenceHandoverTimeout
+}
+
+// Verify rejects ambiguous identities and unsafe election timings when enabled.
+func (c *HA) Verify(errs *ConfigErrors) {
+	if !c.Enabled {
+		return
+	}
+	if c.Backend != "kubernetes" {
+		errs.Add("global.ha.backend must be kubernetes")
+	}
+	for _, field := range []struct{ name, value string }{
+		{"lease_name", c.LeaseName},
+		{"lease_namespace", c.LeaseNamespace},
+	} {
+		name, value := field.name, field.value
+		var problems []string
+		if name == "lease_namespace" {
+			problems = validation.IsDNS1123Label(value)
+		} else {
+			problems = validation.IsDNS1123Subdomain(value)
+		}
+		if len(problems) != 0 {
+			errs.Add(fmt.Sprintf("global.ha.%s: %s", name, strings.Join(problems, "; ")))
+		}
+	}
+	if c.CandidateID == "" || strings.TrimSpace(c.CandidateID) != c.CandidateID || strings.ContainsFunc(c.CandidateID, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+		errs.Add("global.ha.candidate_id must be a nonempty candidate identity without surrounding whitespace or control separators (use the pod UID)")
+	}
+	// The API stores LeaseDurationSeconds as int32; do not truncate or overflow it.
+	if c.LeaseDuration%time.Second != 0 || c.LeaseDuration/time.Second > math.MaxInt32 {
+		errs.Add("global.ha.lease_duration must be whole seconds and fit in a positive signed 32-bit LeaseDurationSeconds value")
+	}
+	// Probes must reach a standby, which never binds the Matrix listeners.
+	if c.StatusAddress == "" {
+		errs.Add("global.ha.status_address must be set so probes can reach a standby candidate")
+	}
+	// A successor must be able to outwait an expiring Lease while it proves
+	// that no backend of the retired activation remains connected.
+	if c.OwnershipTimeout < c.LeaseDuration {
+		errs.Add("global.ha.ownership_timeout must be at least global.ha.lease_duration")
+	}
+	if c.HandoverGrace < 0 || c.HandoverTimeout < 0 || (c.HandoverTimeout > 0 && c.HandoverGrace >= c.HandoverTimeout) {
+		errs.Add("global.ha.handover_grace must be shorter than global.ha.handover_timeout, and neither may be negative")
+	}
+	// Match client-go's jitter constraint without importing its election runtime here.
+	const jitterFactor = 1.2
+	if c.RetryPeriod <= 0 || c.RenewDeadline <= 0 || c.LeaseDuration < time.Second || c.LeaseDuration <= c.RenewDeadline || float64(c.RenewDeadline) <= jitterFactor*float64(c.RetryPeriod) {
+		errs.Add("global.ha durations require lease_duration >= 1s, lease_duration > renew_deadline > 1.2 * retry_period > 0")
+	}
+}

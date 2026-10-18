@@ -39,9 +39,9 @@ CREATE INDEX IF NOT EXISTS syncapi_receipts_room_id ON syncapi_receipts(room_id)
 
 const upsertReceipt = "" +
 	"INSERT INTO syncapi_receipts" +
-	" (room_id, receipt_type, user_id, event_id, receipt_ts)" +
-	" VALUES ($1, $2, $3, $4, $5)" +
-	" ON CONFLICT (room_id, receipt_type, user_id)" +
+	" (room_id, receipt_type, user_id, event_id, thread_id, receipt_ts)" +
+	" VALUES ($1, $2, $3, $4, $5, $6)" +
+	" ON CONFLICT (room_id, receipt_type, user_id, thread_id)" +
 	" DO UPDATE SET id = CASE" +
 	"   WHEN syncapi_receipts.event_id != EXCLUDED.event_id THEN nextval('syncapi_receipt_id')" +
 	"   ELSE syncapi_receipts.id" +
@@ -49,7 +49,7 @@ const upsertReceipt = "" +
 	" RETURNING id"
 
 const selectRoomReceipts = "" +
-	"SELECT id, room_id, receipt_type, user_id, event_id, receipt_ts" +
+	"SELECT id, room_id, receipt_type, user_id, event_id, thread_id, receipt_ts" +
 	" FROM syncapi_receipts" +
 	" WHERE room_id = ANY($1) AND id > $2"
 
@@ -61,23 +61,23 @@ const purgeReceiptsSQL = "" +
 
 // New queries for per-connection receipt tracking (MSC4186 sliding sync).
 const selectLatestUserReceiptsSQL = "" +
-	"SELECT DISTINCT ON (room_id, receipt_type, user_id) " +
-	"id, room_id, receipt_type, user_id, event_id, receipt_ts " +
+	"SELECT DISTINCT ON (room_id, receipt_type, user_id, thread_id) " +
+	"id, room_id, receipt_type, user_id, event_id, thread_id, receipt_ts " +
 	"FROM syncapi_receipts " +
 	"WHERE room_id = ANY($1) " +
-	"ORDER BY room_id, receipt_type, user_id, id DESC"
+	"ORDER BY room_id, receipt_type, user_id, thread_id, id DESC"
 
 const selectConnectionReceiptsSQL = "" +
-	"SELECT room_id, receipt_type, user_id, last_delivered_event_id, last_delivered_ts " +
+	"SELECT room_id, receipt_type, user_id, last_delivered_event_id, thread_id, last_delivered_ts " +
 	"FROM syncapi_sliding_sync_connection_receipts " +
 	"WHERE connection_key = $1"
 
 const upsertConnectionReceiptSQL = "" +
 	"INSERT INTO syncapi_sliding_sync_connection_receipts " +
-	"(connection_key, room_id, receipt_type, user_id, last_delivered_event_id, last_delivered_ts) " +
-	"VALUES ($1, $2, $3, $4, $5, $6) " +
-	"ON CONFLICT (connection_key, room_id, receipt_type, user_id) " +
-	"DO UPDATE SET last_delivered_event_id = $5, last_delivered_ts = $6"
+	"(connection_key, room_id, receipt_type, user_id, last_delivered_event_id, thread_id, last_delivered_ts) " +
+	"VALUES ($1, $2, $3, $4, $5, $6, $7) " +
+	"ON CONFLICT (connection_key, room_id, receipt_type, user_id, thread_id) " +
+	"DO UPDATE SET last_delivered_event_id = $5, last_delivered_ts = $7"
 
 const deleteConnectionReceiptsSQL = "" +
 	"DELETE FROM syncapi_sliding_sync_connection_receipts WHERE connection_key = $1"
@@ -118,6 +118,7 @@ func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 			Version: "syncapi: add connection receipts table for sliding sync",
 			Up:      deltas.UpAddConnectionReceipts,
 		},
+		sqlutil.Migration{Version: "syncapi: threaded receipts", Up: deltas.UpThreadedReceipts},
 	)
 	err = m.Up(context.Background())
 	if err != nil {
@@ -139,9 +140,9 @@ func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 	}.Prepare(db)
 }
 
-func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
+func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
-	err = stmt.QueryRowContext(ctx, roomId, receiptType, userId, eventId, timestamp).Scan(&pos)
+	err = stmt.QueryRowContext(ctx, roomId, receiptType, userId, eventId, threadID, timestamp).Scan(&pos)
 	return
 }
 
@@ -157,7 +158,7 @@ func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sq
 	for rows.Next() {
 		r := types.OutputReceiptEvent{}
 		var id types.StreamPosition
-		err = rows.Scan(&id, &r.RoomID, &r.Type, &r.UserID, &r.EventID, &r.Timestamp)
+		err = rows.Scan(&id, &r.RoomID, &r.Type, &r.UserID, &r.EventID, &r.ThreadID, &r.Timestamp)
 		if err != nil {
 			return 0, res, fmt.Errorf("unable to scan row to api.Receipts: %w", err)
 		}
@@ -226,15 +227,15 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 	}
 	defer internal.CloseAndLogIfError(ctx, latestRows, "SelectLatestUserReceiptsForConnection: latestRows.close() failed")
 
-	latestReceipts := make(map[string]types.OutputReceiptEvent) // key: room_id|receipt_type|user_id
+	latestReceipts := make(map[[4]string]types.OutputReceiptEvent) // key: room, receipt type, user, thread
 	for latestRows.Next() {
 		var r types.OutputReceiptEvent
 		var id types.StreamPosition
-		err = latestRows.Scan(&id, &r.RoomID, &r.Type, &r.UserID, &r.EventID, &r.Timestamp)
+		err = latestRows.Scan(&id, &r.RoomID, &r.Type, &r.UserID, &r.EventID, &r.ThreadID, &r.Timestamp)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan latest receipt: %w", err)
 		}
-		key := fmt.Sprintf("%s|%s|%s", r.RoomID, r.Type, r.UserID)
+		key := [4]string{r.RoomID, r.Type, r.UserID, r.ThreadID}
 		latestReceipts[key] = r
 	}
 	if err = latestRows.Err(); err != nil {
@@ -249,15 +250,15 @@ func (s *receiptStatements) SelectLatestUserReceiptsForConnection(
 	}
 	defer internal.CloseAndLogIfError(ctx, deliveredRows, "SelectLatestUserReceiptsForConnection: deliveredRows.close() failed")
 
-	lastDelivered := make(map[string]string) // key: room_id|receipt_type|user_id -> event_id
+	lastDelivered := make(map[[4]string]string) // key: room, receipt type, user, thread -> event_id
 	for deliveredRows.Next() {
-		var roomID, receiptType, userID, eventID string
+		var roomID, receiptType, userID, eventID, threadID string
 		var ts spec.Timestamp
-		err = deliveredRows.Scan(&roomID, &receiptType, &userID, &eventID, &ts)
+		err = deliveredRows.Scan(&roomID, &receiptType, &userID, &eventID, &threadID, &ts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan connection receipt: %w", err)
 		}
-		key := fmt.Sprintf("%s|%s|%s", roomID, receiptType, userID)
+		key := [4]string{roomID, receiptType, userID, threadID}
 		lastDelivered[key] = eventID
 	}
 	if err = deliveredRows.Err(); err != nil {
@@ -282,12 +283,12 @@ func (s *receiptStatements) UpsertConnectionReceipt(
 	ctx context.Context,
 	txn *sql.Tx,
 	connectionKey int64,
-	roomID, receiptType, userID, eventID string,
+	roomID, receiptType, userID, eventID, threadID string,
 	timestamp spec.Timestamp,
 ) error {
 	upsertConnectionReceipt := sqlutil.TxStmt(txn, s.upsertConnectionReceipt)
 	_, err := upsertConnectionReceipt.ExecContext(
-		ctx, connectionKey, roomID, receiptType, userID, eventID, timestamp,
+		ctx, connectionKey, roomID, receiptType, userID, eventID, threadID, timestamp,
 	)
 	return err
 }

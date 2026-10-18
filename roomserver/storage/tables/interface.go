@@ -162,6 +162,14 @@ type ReportedEvents interface {
 	DeleteReportedEvent(ctx context.Context, txn *sql.Tx, reportID uint64) error
 }
 
+// ReportedRooms stores room reports (MSC4151).
+type ReportedRooms interface {
+	InsertReportedRoom(ctx context.Context, txn *sql.Tx, roomID, userID, reason string) (int64, error)
+	// SelectReportedRooms returns a page of reports, filtered by reporting
+	// user and room when they are not empty, and the number of matches.
+	SelectReportedRooms(ctx context.Context, txn *sql.Tx, from, limit uint64, backwards bool, userID, roomID string) ([]api.QueryAdminRoomReportsResponse, int64, error)
+}
+
 type MembershipState int64
 
 const (
@@ -190,8 +198,42 @@ type Membership interface {
 	// membership state (join, invite, knock, leave, ban) counts as long as
 	// the user has not forgotten it.
 	SelectAnyLocalMemberNotForgotten(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
+	// SelectAnyLocalMembership reports whether the given room has any local
+	// membership row, in any state and whether forgotten or not.
+	SelectAnyLocalMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
 	DeleteMembership(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetUserNID types.EventStateKeyNID) error
 	SelectJoinedUsers(ctx context.Context, txn *sql.Tx, targetUserNIDs []types.EventStateKeyNID) ([]types.EventStateKeyNID, error)
+}
+
+// ClientTransactions records which event a client's transaction ID produced,
+// so that a retry of the same transaction does not store a second event even
+// when it reaches another process after an HA takeover.
+type ClientTransactions interface {
+	InsertClientTransaction(ctx context.Context, txn *sql.Tx, roomID, senderID string, sessionID int64, transactionID, eventID string, insertedTS int64) error
+	SelectClientTransactionEventID(ctx context.Context, txn *sql.Tx, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	DeleteClientTransactionsBefore(ctx context.Context, txn *sql.Tx, insertedTS int64) (int64, error)
+}
+
+// Annotations indexes the m.annotation relations (MSC2677) of accepted,
+// unredacted events, so that a user can be stopped from sending the same
+// annotation twice.
+type Annotations interface {
+	// InsertAnnotation records an annotation unless a validated redaction of
+	// it is already known.
+	InsertAnnotation(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, annotationEventID, targetEventID, senderID, eventType, key string) error
+	// SelectAnnotationExists reports whether a matching annotation other than
+	// excludeEventID is recorded.
+	SelectAnnotationExists(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, targetEventID, senderID, eventType, key, excludeEventID string) (bool, error)
+	DeleteAnnotation(ctx context.Context, txn *sql.Tx, annotationEventID string) error
+}
+
+// ErasedUsers records local users who asked for erasure when deactivating
+// their account (MSC4025).
+type ErasedUsers interface {
+	InsertErasedUser(ctx context.Context, txn *sql.Tx, userID string, erasedTS int64) error
+	DeleteErasedUser(ctx context.Context, txn *sql.Tx, userID string) error
+	// SelectErasedUsers returns the subset of userIDs that is erased.
+	SelectErasedUsers(ctx context.Context, txn *sql.Tx, userIDs []string) (map[string]struct{}, error)
 }
 
 type Published interface {
@@ -287,6 +329,8 @@ func ExtractContentValue(ev *types.HeaderedEvent) string {
 		key = "history_visibility"
 	case spec.MRoomJoinRules:
 		key = "join_rule"
+	case spec.MRoomEncryption:
+		key = "algorithm"
 	case spec.MRoomMember:
 		key = "membership"
 	case spec.MRoomName:

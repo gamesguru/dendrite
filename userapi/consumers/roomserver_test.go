@@ -332,3 +332,36 @@ func BenchmarkLocalRoomMembers(b *testing.B) {
 		assert.Equal(b, expectedLocalMember, members[0])
 	}
 }
+
+type notificationRoomserver struct {
+	rsapi.UserRoomserverAPI
+	events []*types.HeaderedEvent
+}
+
+func (r *notificationRoomserver) QueryLatestEventsAndState(_ context.Context, _ *rsapi.QueryLatestEventsAndStateRequest, res *rsapi.QueryLatestEventsAndStateResponse) error {
+	res.StateEvents = r.events
+	return nil
+}
+
+func TestNotificationPermissions(t *testing.T) {
+	create := mustCreateEvent(t, `{"room_id":"!room:example.com","sender":"@creator:example.com","type":"m.room.create","state_key":"","content":{"creator":"@creator:example.com"}}`)
+	power := mustCreateEvent(t, `{"room_id":"!room:example.com","type":"m.room.power_levels","state_key":"","content":{"users":{"@allowed:example.com":60,"@denied:example.com":59},"notifications":{"room":60}}}`)
+	for _, tc := range []struct {
+		name, sender  string
+		events        []*types.HeaderedEvent
+		want, wantErr bool
+	}{
+		{"allowed", "@allowed:example.com", []*types.HeaderedEvent{create, power}, true, false},
+		{"denied", "@denied:example.com", []*types.HeaderedEvent{create, power}, false, false},
+		{"creator without power event", "@creator:example.com", []*types.HeaderedEvent{create}, true, false},
+		{"member without power event", "@member:example.com", []*types.HeaderedEvent{create}, false, false},
+		{"missing create", "@member:example.com", nil, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ec := ruleSetEvalContext{ctx: t.Context(), rsAPI: &notificationRoomserver{events: tc.events}, roomID: "!room:example.com"}
+			got, err := ec.HasPowerLevel(spec.SenderID(tc.sender), "room")
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantErr, err != nil)
+		})
+	}
+}

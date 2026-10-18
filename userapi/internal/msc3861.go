@@ -28,6 +28,7 @@ import (
 
 	zinternal "codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -104,7 +105,7 @@ const (
 	deviceScopePrefix                = "urn:matrix:device:"
 	legacyDeviceScopePrefix          = "urn:matrix:org.matrix.msc2967.client:device:"
 	// DeviceID used when the token scope carries no device ID.
-	defaultOIDCDeviceID = "OIDC"
+	defaultOIDCDeviceID = api.MSC3861FallbackDeviceID
 	// The RFC 7591 client authentication methods we support for introspection.
 	clientAuthMethodBasic = "client_secret_basic"
 	clientAuthMethodPost  = "client_secret_post"
@@ -116,9 +117,13 @@ func getIntrospectionCache() *ttlcache.Cache[string, *cachedIntrospection] {
 			ttlcache.WithTTL[string, *cachedIntrospection](introspectionCacheTTL),
 			ttlcache.WithCapacity[string, *cachedIntrospection](introspectionCacheMaxSize),
 		)
-		go introspectionCache.Start()
 	})
 	return introspectionCache
+}
+
+// StartIntrospectionCacheCleanup expires cached tokens within the application lifetime.
+func StartIntrospectionCacheCleanup(ctx context.Context) {
+	process.Repeat(ctx, introspectionCacheTTL, introspectionCacheTTL, getIntrospectionCache().DeleteExpired)
 }
 
 // hashToken produces a SHA-256 hex hash of a token for use as a cache key.
@@ -577,46 +582,29 @@ func (a *UserInternalAPI) localpartTaken(ctx context.Context, localpart string, 
 // unseen OIDC subject and persists the external ID mapping. It returns an
 // empty localpart (and no error) when no safe localpart can be assigned, in
 // which case the caller must refuse the login without linking any account.
+//
+// Two modes apply. When MAS provisioning is enabled (an admin token is
+// configured) the username claim is the localpart MAS already provisioned
+// through /_synapse/mas/provision_user, so it is taken verbatim and the
+// existing account is linked. For any other provider the localpart is derived
+// from the claims and an existing account that merely shares the derived name
+// is never linked: the identity falls back to the subject claim or is refused.
 func (a *UserInternalAPI) provisionMSC3861Localpart(ctx context.Context, introspection *IntrospectionResponse, issuer, sub string, serverName spec.ServerName) (string, error) {
-	localpart := deriveLocalpart(introspection, string(serverName))
-	if localpart == "" {
-		logrus.WithField("sub", sub).Warn("MSC3861: introspection response has no email, no username, no sub, and no existing external ID mapping")
-		return "", nil
-	}
-
-	// Validate before persisting the mapping: a stored localpart that fails
-	// validation would lock the user out of every future login.
-	if err := zinternal.ValidateUsername(localpart, serverName); err != nil {
-		logrus.WithError(err).WithField("localpart", localpart).Warn("MSC3861: derived localpart is not valid")
-		return "", nil
-	}
-
-	// Never attach an OIDC identity to a pre-existing account that merely
-	// happens to share the derived localpart (e.g. a password-registered
-	// account); fall back to the subject claim instead.
-	taken, err := a.localpartTaken(ctx, localpart, serverName)
-	if err != nil {
-		return "", err
-	}
-	if taken {
-		localpart = sanitizeLocalpart(introspection.Sub)
+	var localpart string
+	if a.Config.MSCs.MSC3861.AdminToken != "" && introspection.Username != "" {
+		localpart = introspection.Username
+		// The sanitiser is deliberately skipped: it would turn a valid MAS
+		// localpart such as "bob_" into "bob" and bind the token to a
+		// different account. A username MAS could not have provisioned
+		// is refused instead.
 		if err := zinternal.ValidateUsername(localpart, serverName); err != nil {
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"localpart": localpart,
-				"sub":       sub,
-			}).Warn("MSC3861: subject-derived localpart is not valid")
+			logrus.WithError(err).WithField("localpart", localpart).Warn("MSC3861: MAS username is not a valid localpart")
 			return "", nil
 		}
-		taken, err = a.localpartTaken(ctx, localpart, serverName)
-		if err != nil {
+	} else {
+		var err error
+		if localpart, err = a.deriveUnclaimedLocalpart(ctx, introspection, sub, serverName); err != nil || localpart == "" {
 			return "", err
-		}
-		if taken {
-			logrus.WithFields(logrus.Fields{
-				"localpart": localpart,
-				"sub":       sub,
-			}).Warn("MSC3861: derived and subject localparts both collide with existing accounts, refusing to link")
-			return "", nil
 		}
 	}
 
@@ -642,6 +630,57 @@ func (a *UserInternalAPI) provisionMSC3861Localpart(ctx context.Context, introsp
 		"localpart": localpart,
 		"sub":       sub,
 	}).Info("MSC3861: created external ID mapping")
+	return localpart, nil
+}
+
+// deriveUnclaimedLocalpart derives a localpart from the introspection claims
+// for a generic OIDC provider. It never returns the localpart of an existing
+// account: a collision with the derived name falls back to the subject claim,
+// and a second collision yields an empty localpart so the login is refused.
+func (a *UserInternalAPI) deriveUnclaimedLocalpart(ctx context.Context, introspection *IntrospectionResponse, sub string, serverName spec.ServerName) (string, error) {
+	localpart := deriveLocalpart(introspection, string(serverName))
+	if localpart == "" {
+		logrus.WithField("sub", sub).Warn("MSC3861: introspection response has no email, no username, no sub, and no existing external ID mapping")
+		return "", nil
+	}
+
+	// Validate before persisting the mapping: a stored localpart that fails
+	// validation would lock the user out of every future login.
+	if err := zinternal.ValidateUsername(localpart, serverName); err != nil {
+		logrus.WithError(err).WithField("localpart", localpart).Warn("MSC3861: derived localpart is not valid")
+		return "", nil
+	}
+
+	// Never attach an OIDC identity to a pre-existing account that merely
+	// happens to share the derived localpart (e.g. a password-registered
+	// account); fall back to the subject claim instead.
+	taken, err := a.localpartTaken(ctx, localpart, serverName)
+	if err != nil {
+		return "", err
+	}
+	if !taken {
+		return localpart, nil
+	}
+
+	localpart = sanitizeLocalpart(introspection.Sub)
+	if err := zinternal.ValidateUsername(localpart, serverName); err != nil {
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"localpart": localpart,
+			"sub":       sub,
+		}).Warn("MSC3861: subject-derived localpart is not valid")
+		return "", nil
+	}
+	taken, err = a.localpartTaken(ctx, localpart, serverName)
+	if err != nil {
+		return "", err
+	}
+	if taken {
+		logrus.WithFields(logrus.Fields{
+			"localpart": localpart,
+			"sub":       sub,
+		}).Warn("MSC3861: derived and subject localparts both collide with existing accounts, refusing to link")
+		return "", nil
+	}
 	return localpart, nil
 }
 
@@ -739,12 +778,16 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 	// 8. Refuse tokens for deactivated accounts. PerformAccountCreation with
 	// ConflictUpdate would otherwise silently re-attach the session to the
 	// deactivated account. A missing account is fine; it is provisioned below.
-	deactivated, err := a.DB.IsAccountDeactivated(ctx, localpart, serverName)
+	// Suspension (MSC3823) is local state, which the provider does not know.
+	suspended := false
+	account, err := a.DB.GetAccountByLocalpart(ctx, localpart, serverName)
 	switch {
-	case err == nil && deactivated:
+	case err == nil && account.Deactivated:
 		logrus.WithField("localpart", localpart).Warn("MSC3861: refusing token for deactivated account")
 		return nil
-	case err == nil || errors.Is(err, sql.ErrNoRows):
+	case err == nil:
+		suspended = account.Suspended
+	case errors.Is(err, sql.ErrNoRows):
 	default:
 		logrus.WithError(err).WithField("localpart", localpart).Error("MSC3861: failed to check account deactivation")
 		return err
@@ -793,6 +836,7 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 		}
 		if device != nil {
 			device.AccountType = accountType
+			device.Suspended = suspended
 			res.Device = device
 			return nil
 		}
@@ -815,6 +859,7 @@ func (a *UserInternalAPI) queryAccessTokenMSC3861(ctx context.Context, req *api.
 
 	if deviceRes.Device != nil {
 		deviceRes.Device.AccountType = accountType
+		deviceRes.Device.Suspended = suspended
 		res.Device = deviceRes.Device
 	}
 

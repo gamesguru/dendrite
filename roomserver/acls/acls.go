@@ -96,11 +96,14 @@ type serverACL struct {
 	deniedRegexes  []**regexp.Regexp
 }
 
+// compileACLRegex turns an ACL glob into a regular expression that matches
+// whole server names, case-insensitively (MSC4436). "*" matches any number of
+// characters and "?" exactly one.
 func compileACLRegex(orig string) (*regexp.Regexp, error) {
 	escaped := regexp.QuoteMeta(orig)
 	escaped = strings.ReplaceAll(escaped, "\\?", ".")
 	escaped = strings.ReplaceAll(escaped, "\\*", ".*")
-	return regexp.Compile(escaped)
+	return regexp.Compile("(?i)^" + escaped + "$")
 }
 
 // cachedCompileACLRegex is a wrapper around compileACLRegex with added caching.

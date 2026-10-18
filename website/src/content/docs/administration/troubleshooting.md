@@ -65,3 +65,32 @@ Follow the [Optimisation](/administration/optimisation) instructions to correct 
 
 If you are experiencing problems with VoIP or video calls, you should check that Zendrite is able to successfully connect your TURN server using [Matrix VoIP Tester](https://test.voip.librepush.net/).
 This can highlight any issues that the server may encounter so that you can begin the troubleshooting process.
+
+## 7. Delayed events with healthy probes
+
+Zendrite processes the events of each component in order, one message at a time.
+A single slow message, such as a state update for a room with tens of thousands of members, therefore delays every later event, including those of unrelated rooms.
+Health probes and reads of existing history keep working throughout, so a delay of this kind does not show up as an unhealthy server.
+
+The following Prometheus metrics expose it, labelled by the durable consumer name such as `ZendriteSyncAPIRoomServerConsumerPull`:
+
+| Metric | Meaning |
+| --- | --- |
+| `zendrite_jetstream_consumer_processing_started_timestamp_seconds` | Unix time the consumer started its current message, or `0` while idle. |
+| `zendrite_jetstream_consumer_processing_message_timestamp_seconds` | Unix publication time of the message being processed, or `0` while idle. |
+| `zendrite_jetstream_consumer_processing_seconds` | Histogram of the time spent on each message. |
+| `zendrite_jetstream_consumer_message_age_seconds` | Histogram of the time each message waited between publication and the start of its processing. |
+| `zendrite_jetstream_consumer_pending_messages` | Messages queued behind the last one delivered. |
+| `zendrite_jetstream_consumer_last_ack_timestamp_seconds` | Unix time of the last acknowledged message. |
+
+The two histograms only record a message once it is finished, so use the timestamp gauges to see a message that is still being processed.
+For example, this alert fires when a consumer has spent more than a minute on one message:
+
+```yaml
+- alert: ZendriteConsumerBusy
+  expr: |
+    zendrite_jetstream_consumer_processing_started_timestamp_seconds > 0
+    and time() - zendrite_jetstream_consumer_processing_started_timestamp_seconds > 60
+```
+
+The sync API also logs `Wrote a large sync API state update` at the `info` level, with the time spent preparing and writing, for each room event that adds or removes at least 1000 state events.

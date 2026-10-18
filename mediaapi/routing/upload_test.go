@@ -43,8 +43,11 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 	testdataPath := filepath.Join(wd, "./testdata")
 
 	cfg := &config.MediaAPI{
-		MaxFileSizeBytes:  maxSize,
-		BasePath:          config.Path(testdataPath),
+		MaxFileSizeBytes: maxSize,
+		Storage: config.MediaStorage{
+			Type:  "local",
+			Local: config.LocalStorage{BasePath: config.Path(testdataPath)},
+		},
 		AbsBasePath:       config.Path(testdataPath),
 		DynamicThumbnails: false,
 	}
@@ -134,8 +137,11 @@ func Test_uploadRequest_doUpload(t *testing.T) {
 				ctx:       context.Background(),
 				reqReader: strings.NewReader("test test test"),
 				cfg: &config.MediaAPI{
-					MaxFileSizeBytes:  config.FileSizeBytes(0),
-					BasePath:          config.Path(testdataPath),
+					MaxFileSizeBytes: config.FileSizeBytes(0),
+					Storage: config.MediaStorage{
+						Type:  "local",
+						Local: config.LocalStorage{BasePath: config.Path(testdataPath)},
+					},
 					AbsBasePath:       config.Path(testdataPath),
 					DynamicThumbnails: false,
 				},

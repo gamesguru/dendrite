@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -167,12 +169,15 @@ func Test_Devices(t *testing.T) {
 	alice := test.NewUser(t)
 	localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
 	assert.NoError(t, err)
-	deviceID := util.RandomString(8)
-	accessToken := util.RandomString(16)
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := mustCreateUserDatabase(t, dbType)
 		defer close()
+
+		// Declared per subtest: the database subtests run in parallel and
+		// must not share mutable variables.
+		deviceID := util.RandomString(8)
+		accessToken := util.RandomString(16)
 
 		deviceWithID, err := db.CreateDevice(ctx, localpart, domain, &deviceID, accessToken, nil, "", "")
 		assert.NoError(t, err, "unable to create deviceWithoutID")
@@ -346,8 +351,14 @@ func Test_LoginToken(t *testing.T) {
 		assert.Equal(t, wantLoginToken, gotLoginToken, "unexpected login token")
 
 		// remove the login token again
-		err = db.RemoveLoginToken(ctx, gotMetadata.Token)
+		consumed, err := db.RemoveLoginToken(ctx, gotMetadata.Token)
 		assert.NoError(t, err, "unable to remove login token")
+		assert.True(t, consumed, "first removal did not consume the token")
+
+		// a second removal finds nothing to consume
+		consumed, err = db.RemoveLoginToken(ctx, gotMetadata.Token)
+		assert.NoError(t, err, "unable to remove login token")
+		assert.False(t, consumed, "second removal consumed the token again")
 
 		// check if the token was actually deleted
 		_, err = db.GetLoginTokenDataByToken(ctx, gotMetadata.Token)
@@ -385,7 +396,7 @@ func Test_Profile(t *testing.T) {
 		defer close()
 
 		// create account, which also creates a profile
-		_, err = db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
+		_, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeAdmin)
 		assert.NoError(t, err, "failed to create account")
 
 		gotProfile, err := db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
@@ -421,6 +432,169 @@ func Test_Profile(t *testing.T) {
 		assert.NoError(t, err, "unable to search profiles")
 		assert.Equal(t, 1, len(searchRes))
 		assert.Equal(t, *wantProfile, searchRes[0])
+	})
+}
+
+func Test_ProfileFields(t *testing.T) {
+	alice := test.NewUser(t)
+	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+	assert.NoError(t, err)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+
+		_, err := db.CreateAccount(ctx, aliceLocalpart, aliceDomain, "testing", "", api.AccountTypeUser)
+		assert.NoError(t, err, "failed to create account")
+
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz", json.RawMessage(`"Europe/Berlin"`)))
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "org.example.job", json.RawMessage(`{"title":"Engineer"}`)))
+		// Setting a field again replaces its value.
+		assert.NoError(t, db.SetProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz", json.RawMessage(`"Europe/London"`)))
+		profile, err := db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]json.RawMessage{
+			"m.tz":            json.RawMessage(`"Europe/London"`),
+			"org.example.job": json.RawMessage(`{"title":"Engineer"}`),
+		}, profile.Fields)
+
+		// Deleting a field that is not set is not an error.
+		assert.NoError(t, db.DeleteProfileField(ctx, aliceLocalpart, aliceDomain, "org.example.unset"))
+		assert.NoError(t, db.DeleteProfileField(ctx, aliceLocalpart, aliceDomain, "m.tz"))
+		profile, err = db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]json.RawMessage{"org.example.job": json.RawMessage(`{"title":"Engineer"}`)}, profile.Fields)
+
+		// Deactivation clears the custom fields.
+		assert.NoError(t, db.DeactivateAccount(ctx, aliceLocalpart, aliceDomain))
+		profile, err = db.GetProfileByLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Nil(t, profile.Fields)
+	})
+}
+
+func Test_DelayedEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		localpart, domain := "delayer", spec.ServerName("localhost")
+		_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+		assert.NoError(t, err, "failed to create account")
+
+		newEvent := func(delayID string, sendTS spec.Timestamp) *api.DelayedEvent {
+			return &api.DelayedEvent{
+				DelayID: delayID, Localpart: localpart, ServerName: domain,
+				RoomID: "!room:localhost", Type: "m.room.message", Content: json.RawMessage(`{}`),
+				DelayMS: 1000, DelayedSince: sendTS - 1000, SendTS: sendTS,
+			}
+		}
+
+		// The limit counts pending events, and reports when the next is due.
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("first", 5000), 2))
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("second", 3000), 2))
+		err = db.AddDelayedEvent(ctx, newEvent("third", 4000), 2)
+		var limitErr *api.DelayedEventLimitError
+		if assert.ErrorAs(t, err, &limitErr) {
+			assert.Equal(t, spec.Timestamp(3000), limitErr.NextSendTS)
+		}
+		event, err := db.GetDelayedEvent(ctx, "third")
+		assert.NoError(t, err)
+		assert.Nil(t, event, "an event over the limit is not stored")
+
+		// A claimed event still counts; a finalized one does not.
+		claimed, err := db.ClaimDelayedEvent(ctx, "second")
+		assert.NoError(t, err)
+		assert.NotNil(t, claimed)
+		assert.Error(t, db.AddDelayedEvent(ctx, newEvent("third", 4000), 2))
+		assert.NoError(t, db.FinalizeDelayedEvent(ctx, "second", "$event", nil, 3100))
+		assert.NoError(t, db.AddDelayedEvent(ctx, newEvent("third", 4000), 2))
+		canceled, err := db.CancelDelayedEvent(ctx, "third", 3200)
+		assert.NoError(t, err)
+		assert.True(t, canceled)
+		canceled, err = db.CancelDelayedEvent(ctx, "third", 3300)
+		assert.NoError(t, err)
+		assert.False(t, canceled, "a finalized event cannot be canceled again")
+
+		finalized, err := db.GetDelayedEventsForUser(ctx, localpart, domain, true)
+		assert.NoError(t, err)
+		assert.Len(t, finalized, 2)
+		assert.NoError(t, db.PurgeDelayedEvents(ctx, 3150))
+		finalized, err = db.GetDelayedEventsForUser(ctx, localpart, domain, true)
+		assert.NoError(t, err)
+		if assert.Len(t, finalized, 1) {
+			assert.Equal(t, "third", finalized[0].DelayID)
+		}
+
+		// Deactivation forgets every delayed event of the account.
+		assert.NoError(t, db.DeactivateAccount(ctx, localpart, domain))
+		for _, delayID := range []string{"first", "third"} {
+			event, err = db.GetDelayedEvent(ctx, delayID)
+			assert.NoError(t, err)
+			assert.Nil(t, event)
+		}
+		_, ok, err := db.NextDelayedEventSendTS(ctx)
+		assert.NoError(t, err)
+		assert.False(t, ok)
+	})
+}
+
+func Test_ProfileSizeLimit(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+
+		t.Run("boundary", func(t *testing.T) {
+			localpart, domain := "sizelimit", spec.ServerName("localhost")
+			_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+			assert.NoError(t, err, "failed to create account")
+
+			// A string field that brings the profile to exactly the limit fits.
+			empty := &authtypes.Profile{Fields: map[string]json.RawMessage{"org.example.big": json.RawMessage(`""`)}}
+			base, err := empty.Size()
+			assert.NoError(t, err)
+			fill := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize-base) + `"`)
+			assert.NoError(t, db.SetProfileField(ctx, localpart, domain, "org.example.big", fill))
+			profile, err := db.GetProfileByLocalpart(ctx, localpart, domain)
+			assert.NoError(t, err)
+			size, err := profile.Size()
+			assert.NoError(t, err)
+			assert.Equal(t, authtypes.MaxProfileSize, size)
+
+			// One more byte, in a field or the display name, does not.
+			over := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize-base+1) + `"`)
+			assert.ErrorIs(t, db.SetProfileField(ctx, localpart, domain, "org.example.big", over), api.ErrProfileTooLarge)
+			_, _, err = db.SetDisplayName(ctx, localpart, domain, "x")
+			assert.ErrorIs(t, err, api.ErrProfileTooLarge)
+			_, _, err = db.SetAvatarURL(ctx, localpart, domain, "mxc://x")
+			assert.ErrorIs(t, err, api.ErrProfileTooLarge)
+		})
+
+		t.Run("concurrent writes", func(t *testing.T) {
+			localpart, domain := "concurrent", spec.ServerName("localhost")
+			_, err := db.CreateAccount(ctx, localpart, domain, "testing", "", api.AccountTypeUser)
+			assert.NoError(t, err, "failed to create account")
+
+			// Each write fits on its own, but together they exceed the limit.
+			value := json.RawMessage(`"` + strings.Repeat("a", authtypes.MaxProfileSize/8) + `"`)
+			var wg sync.WaitGroup
+			for i := range 16 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := db.SetProfileField(ctx, localpart, domain, fmt.Sprintf("org.example.f%d", i), value)
+					if err != nil && !errors.Is(err, api.ErrProfileTooLarge) {
+						t.Errorf("SetProfileField: %v", err)
+					}
+				}()
+			}
+			wg.Wait()
+			profile, err := db.GetProfileByLocalpart(ctx, localpart, domain)
+			assert.NoError(t, err)
+			size, err := profile.Size()
+			assert.NoError(t, err)
+			assert.LessOrEqual(t, size, authtypes.MaxProfileSize)
+			assert.Equal(t, 7, len(profile.Fields))
+		})
 	})
 }
 
@@ -487,6 +661,10 @@ func Test_ThreePID(t *testing.T) {
 		err = db.SaveThreePIDAssociation(ctx, threePID, aliceLocalpart, aliceDomain, medium)
 		assert.NoError(t, err, "unable to save threepid association")
 
+		// Repeating an association for its owner is idempotent.
+		err = db.SaveThreePIDAssociation(ctx, threePID, aliceLocalpart, aliceDomain, medium)
+		assert.NoError(t, err)
+
 		// get the stored threepid
 		gotLocalpart, gotDomain, err := db.GetLocalpartForThreePID(ctx, threePID, medium)
 		assert.NoError(t, err, "unable to get localpart for threepid")
@@ -502,13 +680,62 @@ func Test_ThreePID(t *testing.T) {
 		}, threepids[0])
 
 		// remove threepid association
-		err = db.RemoveThreePIDAssociation(ctx, threePID, medium)
+		for _, owner := range []struct {
+			localpart string
+			domain    spec.ServerName
+		}{{"someone_else", aliceDomain}, {aliceLocalpart, "another.example"}} {
+			err = db.RemoveThreePIDAssociation(ctx, threePID, medium, owner.localpart, owner.domain)
+			assert.NoError(t, err)
+			retained, retainedDomain, queryErr := db.GetLocalpartForThreePID(ctx, threePID, medium)
+			assert.NoError(t, queryErr)
+			assert.Equal(t, aliceLocalpart, retained)
+			assert.Equal(t, aliceDomain, retainedDomain)
+		}
+		err = db.SaveThreePIDAssociation(ctx, threePID, "someone_else", aliceDomain, medium)
+		assert.ErrorIs(t, err, storage.Err3PIDInUse)
+		err = db.RemoveThreePIDAssociation(ctx, threePID, medium, aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unexpected error")
 
 		// verify it was deleted
 		threepids, err = db.GetThreePIDsForLocalpart(ctx, aliceLocalpart, aliceDomain)
 		assert.NoError(t, err, "unable to get threepids for localpart")
 		assert.Equal(t, 0, len(threepids))
+	})
+}
+
+// Test_ThreePIDCaseFolding covers MSC2265: email addresses match whatever
+// their case, while other media are compared as given.
+func Test_ThreePIDCaseFolding(t *testing.T) {
+	alice := test.NewUser(t)
+	aliceLocalpart, aliceDomain, err := gomatrixserverlib.SplitID('@', alice.ID)
+	assert.NoError(t, err)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateUserDatabase(t, dbType)
+		defer closeDB()
+
+		assert.NoError(t, db.SaveThreePIDAssociation(ctx, "Strauß@Example.com", aliceLocalpart, aliceDomain, "email"))
+		threepids, err := db.GetThreePIDsForLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, []authtypes.ThreePID{{Address: "strauss@example.com", Medium: "email"}}, threepids)
+
+		for _, address := range []string{"strauss@example.com", "STRAUSS@EXAMPLE.COM", "Strauß@example.com"} {
+			gotLocalpart, _, err := db.GetLocalpartForThreePID(ctx, address, "email")
+			assert.NoError(t, err)
+			assert.Equal(t, aliceLocalpart, gotLocalpart, address)
+		}
+		err = db.SaveThreePIDAssociation(ctx, "STRAUSS@example.com", "someone_else", aliceDomain, "email")
+		assert.ErrorIs(t, err, storage.Err3PIDInUse)
+
+		assert.NoError(t, db.SaveThreePIDAssociation(ctx, "Bob", aliceLocalpart, aliceDomain, "msisdn"))
+		gotLocalpart, _, err := db.GetLocalpartForThreePID(ctx, "bob", "msisdn")
+		assert.NoError(t, err)
+		assert.Empty(t, gotLocalpart, "only email addresses are case-folded")
+
+		assert.NoError(t, db.RemoveThreePIDAssociation(ctx, "STRAUSS@EXAMPLE.COM", "email", aliceLocalpart, aliceDomain))
+		threepids, err = db.GetThreePIDsForLocalpart(ctx, aliceLocalpart, aliceDomain)
+		assert.NoError(t, err)
+		assert.Equal(t, []authtypes.ThreePID{{Address: "Bob", Medium: "msisdn"}}, threepids)
 	})
 }
 
@@ -853,5 +1080,120 @@ func TestFallbackKeys(t *testing.T) {
 		case claimed[0].KeyJSON["curve25519:KEY1"] == nil:
 			t.Fatalf("Claimed key JSON for curve25519:KEY1 not found")
 		}
+	})
+}
+
+func TestPushRulesMentionUpgrade(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		rules := pushrules.DefaultAccountRuleSets("alice", "localhost")
+		var legacy []*pushrules.Rule
+		for _, rule := range rules.Global.Override {
+			if rule.RuleID != pushrules.MRuleIsUserMention && rule.RuleID != pushrules.MRuleIsRoomMention {
+				legacy = append(legacy, rule)
+			}
+		}
+		rules.Global.Override = legacy
+		data, err := json.Marshal(rules)
+		assert.NoError(t, err)
+		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", data))
+		upgraded, err := db.QueryPushRules(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.Len(t, upgraded.Global.Override, len(legacy)+2)
+		expected, err := json.Marshal(upgraded)
+		assert.NoError(t, err)
+		byType, err := db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+		assert.NoError(t, err)
+		assert.JSONEq(t, string(expected), string(byType))
+		global, _, err := db.GetAccountData(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.JSONEq(t, string(expected), string(global["m.push_rules"]))
+		// Persist a preference on the new default and ensure subsequent reads keep it.
+		for _, rule := range upgraded.Global.Override {
+			if rule.RuleID == pushrules.MRuleIsUserMention {
+				rule.Enabled = false
+			}
+		}
+		data, err = json.Marshal(upgraded)
+		assert.NoError(t, err)
+		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", data))
+		again, err := db.QueryPushRules(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		assert.Equal(t, upgraded, again)
+	})
+}
+
+func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateUserDatabase(t, dbType)
+		defer close()
+		data, err := db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+		assert.NoError(t, err)
+		assert.Empty(t, data)
+		global, _, err := db.GetAccountData(ctx, "alice", "localhost")
+		assert.NoError(t, err)
+		_, exists := global["m.push_rules"]
+		assert.False(t, exists, "reading absent push rules must not create account data")
+
+		for _, payload := range []string{`{}`, `null`, `{"global":null}`, `{"custom":true}`} {
+			assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(payload)))
+			data, err = db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+			assert.NoError(t, err)
+			assert.Equal(t, payload, string(data))
+			global, _, err = db.GetAccountData(ctx, "alice", "localhost")
+			assert.NoError(t, err)
+			assert.Equal(t, payload, string(global["m.push_rules"]))
+		}
+	})
+}
+
+func Test_GetActiveAccountsCreatedBefore(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateUserDatabase(t, dbType)
+		defer closeDB()
+
+		for _, acc := range []struct {
+			localpart   string
+			accountType api.AccountType
+		}{
+			{"guest1", api.AccountTypeCallGuest},
+			{"guest2", api.AccountTypeCallGuest},
+			{"gone", api.AccountTypeCallGuest},
+			{"normal", api.AccountTypeUser},
+			{"admin", api.AccountTypeAdmin},
+		} {
+			_, err := db.CreateAccount(ctx, acc.localpart, "localhost", "password", "", acc.accountType)
+			assert.NoError(t, err)
+		}
+		_, err := db.CreateAccount(ctx, "", "localhost", "", "", api.AccountTypeGuest)
+		assert.NoError(t, err)
+		assert.NoError(t, db.DeactivateAccount(ctx, "gone", "localhost"))
+
+		localparts := func(accounts []api.Account) []string {
+			out := make([]string, 0, len(accounts))
+			for _, acc := range accounts {
+				assert.Equal(t, api.AccountTypeCallGuest, acc.AccountType)
+				assert.Equal(t, "@"+acc.Localpart+":localhost", acc.UserID)
+				out = append(out, acc.Localpart)
+			}
+			return out
+		}
+
+		// Every account was created before an hour from now, but only the
+		// active call guests are returned.
+		later := time.Now().Add(time.Hour)
+		accounts, err := db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, later, 10)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"guest1", "guest2"}, localparts(accounts))
+
+		accounts, err = db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, later, 1)
+		assert.NoError(t, err)
+		assert.Len(t, accounts, 1)
+
+		// No account is older than an hour.
+		accounts, err = db.GetActiveAccountsCreatedBefore(ctx, api.AccountTypeCallGuest, time.Now().Add(-time.Hour), 10)
+		assert.NoError(t, err)
+		assert.Empty(t, accounts)
 	})
 }

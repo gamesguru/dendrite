@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/mediaapi/routing"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
@@ -31,18 +32,32 @@ func AddPublicRoutes(
 	client *fclient.Client,
 	fedClient fclient.FederationClient,
 	keyRing gomatrixserverlib.JSONVerifier,
+	owner ownership.Owner,
+	contexts ...context.Context,
 ) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	mediaDB, err := storage.NewMediaAPIDatasource(cm, &cfg.MediaAPI.Database)
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to connect to media db")
 	}
 
-	fileStore, err := filestore.NewFileStore(context.Background(), &cfg.MediaAPI)
+	fileStore, err := filestore.NewFileStore(ctx, &cfg.MediaAPI)
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to create media file store")
 	}
+	// In HA a retired owner must not replace or delete media, which no media
+	// backend can reject on its own.
+	if owner != nil {
+		fileStore = filestore.Guarded(fileStore, owner)
+	}
+
+	// Every replica may sweep: the delete only matches expired rows.
+	go routing.SweepExpiredPendingMedia(ctx, mediaDB)
 
 	routing.Setup(
-		routers, cfg, mediaDB, fileStore, userAPI, client, fedClient, keyRing,
+		routers, cfg, mediaDB, fileStore, userAPI, client, fedClient, keyRing, ctx,
 	)
 }

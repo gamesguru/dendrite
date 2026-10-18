@@ -28,7 +28,7 @@ import (
 )
 
 const outputRoomEventsSchema = `
--- This sequence is shared between all the tables generated from kafka logs.
+-- This sequence is shared between all the tables populated from JetStream streams.
 CREATE SEQUENCE IF NOT EXISTS syncapi_stream_id;
 
 -- Stores output room events received from the roomserver.
@@ -80,8 +80,8 @@ CREATE INDEX IF NOT EXISTS syncapi_output_room_events_recent_events_idx ON synca
 
 const insertEventSQL = "" +
 	"INSERT INTO syncapi_output_room_events (" +
-	"room_id, event_id, headered_event_json, type, sender, contains_url, add_state_ids, remove_state_ids, session_id, transaction_id, exclude_from_sync, history_visibility" +
-	") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) " +
+	"room_id, event_id, headered_event_json, type, sender, contains_url, add_state_ids, remove_state_ids, session_id, transaction_id, exclude_from_sync, history_visibility, origin_server_ts" +
+	") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
 	"ON CONFLICT ON CONSTRAINT syncapi_output_room_event_id_idx DO UPDATE SET exclude_from_sync = (excluded.exclude_from_sync AND $11) " +
 	"RETURNING id"
 
@@ -134,7 +134,7 @@ const selectMaxEventIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_output_room_events"
 
 const updateEventJSONSQL = "" +
-	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2"
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
 
 // In order for us to apply the state updates correctly, rows need to be ordered in the order they were received (id).
 const selectStateInRangeFilteredSQL = "" +
@@ -198,7 +198,21 @@ const selectMaxStreamPositionsForRoomsSQL = "" +
 	"SELECT room_id, MAX(id) AS max_stream_pos FROM syncapi_output_room_events " +
 	"WHERE room_id = ANY($1) AND type = ANY($2) GROUP BY room_id"
 
+const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND origin_server_ts >= $2
+AND ($3 = 0 OR origin_server_ts > $2 OR (origin_server_ts = $2 AND id > $3))
+ORDER BY origin_server_ts ASC, id ASC LIMIT $4`
+
+const selectTimestampBackwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND origin_server_ts <= $2
+AND ($3 = 0 OR origin_server_ts < $2 OR (origin_server_ts = $2 AND id < $3))
+ORDER BY origin_server_ts DESC, id DESC LIMIT $4`
+
 type outputRoomEventsStatements struct {
+	selectTimestampForwardStmt           *sql.Stmt
+	selectTimestampBackwardStmt          *sql.Stmt
 	insertEventStmt                      *sql.Stmt
 	selectEventsStmt                     *sql.Stmt
 	selectEventsWitFilterStmt            *sql.Stmt
@@ -218,9 +232,9 @@ type outputRoomEventsStatements struct {
 	selectMaxStreamPositionsForRoomsStmt *sql.Stmt
 }
 
-func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
+func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, error) {
 	s := &outputRoomEventsStatements{}
-	_, err := db.Exec(outputRoomEventsSchema)
+	_, err := db.ExecContext(ctx, outputRoomEventsSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -228,10 +242,10 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 	migrationName := "syncapi: rename dupe index (output_room_events)"
 
 	var cName string
-	err = db.QueryRowContext(context.Background(), "select constraint_name from information_schema.table_constraints where table_name = 'syncapi_output_room_events' AND constraint_name = 'syncapi_event_id_idx'").Scan(&cName)
+	err = db.QueryRowContext(ctx, "select constraint_name from information_schema.table_constraints where table_name = 'syncapi_output_room_events' AND constraint_name = 'syncapi_event_id_idx'").Scan(&cName)
 	if errors.Is(err, sql.ErrNoRows) {
 		// migration was already executed, as the index was renamed
-		if err = sqlutil.InsertMigration(context.Background(), db, migrationName); err != nil {
+		if err = sqlutil.InsertMigration(ctx, db, migrationName); err != nil {
 			return nil, fmt.Errorf("unable to manually insert migration '%s': %w", migrationName, err)
 		}
 	} else if err != nil {
@@ -241,6 +255,12 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 	m := sqlutil.NewMigrator(db)
 	m.AddMigrations(
 		sqlutil.Migration{
+			Version: "syncapi: store output event timestamps separately",
+			Up: func(ctx context.Context, tx *sql.Tx) error {
+				return deltas.UpAddOutputRoomEventTimestamp(ctx, db, tx)
+			},
+		},
+		sqlutil.Migration{
 			Version: "syncapi: add history visibility column (output_room_events)",
 			Up:      deltas.UpAddHistoryVisibilityColumnOutputRoomEvents,
 		},
@@ -248,13 +268,19 @@ func NewPostgresEventsTable(db *sql.DB) (tables.Events, error) {
 			Version: migrationName,
 			Up:      deltas.UpRenameOutputRoomEventsIndex,
 		},
+		sqlutil.Migration{
+			Version: "syncapi: restore event IDs of redacted output events",
+			Up:      deltas.UpRestoreOutputRoomEventIDs,
+		},
 	)
-	err = m.Up(context.Background())
+	err = m.Up(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	return s, sqlutil.StatementList{
+		{&s.selectTimestampForwardStmt, selectTimestampForwardSQL},
+		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectEventsStmt, selectEventsSQL},
 		{&s.selectEventsWitFilterStmt, selectEventsWithFilterSQL},
@@ -281,7 +307,7 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 		return err
 	}
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
-	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
+	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID(), event.OriginServerTS())
 	return err
 }
 
@@ -426,6 +452,7 @@ func (s *outputRoomEventsStatements) InsertEvent(
 		txnID,
 		excludeFromSync,
 		historyVisibility,
+		event.OriginServerTS(),
 	).Scan(&streamPos)
 	return
 }
@@ -814,4 +841,20 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 		result[roomID] = maxPos
 	}
 	return result, rows.Err()
+}
+
+// SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
+// A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
+// Backfilled events are eligible even when excluded from incremental sync.
+func (s *outputRoomEventsStatements) SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
+	stmt := s.selectTimestampForwardStmt
+	if backwards {
+		stmt = s.selectTimestampBackwardStmt
+	}
+	rows, err := sqlutil.TxStmt(txn, stmt).QueryContext(ctx, roomID, timestamp, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectEventsByTimestamp: close rows")
+	return rowsToStreamEvents(rows)
 }

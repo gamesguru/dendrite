@@ -812,3 +812,62 @@ func TestDetermineMembershipAtEvent_DifferentMembershipStates(t *testing.T) {
 		})
 	}
 }
+
+// TestToClientEventRedacts checks MSC2174: redactions are served with the
+// redacted event ID both at the top level and in content, in every room version.
+func TestToClientEventRedacts(t *testing.T) {
+	const target = "$target:localhost"
+	tests := []struct {
+		name        string
+		roomVersion gomatrixserverlib.RoomVersion
+		event       string
+		wantContent string
+	}{
+		{
+			name:        "v10 adds content.redacts",
+			roomVersion: gomatrixserverlib.RoomVersionV10,
+			event:       `{"type":"m.room.redaction","redacts":"` + target + `","content":{"reason":"spam"}}`,
+			wantContent: `{"reason":"spam","redacts":"` + target + `"}`,
+		},
+		{
+			name:        "v10 redacted redaction adds content.redacts",
+			roomVersion: gomatrixserverlib.RoomVersionV10,
+			event:       `{"type":"m.room.redaction","redacts":"` + target + `","content":{}}`,
+			wantContent: `{"redacts":"` + target + `"}`,
+		},
+		{
+			name:        "v11 adds top-level redacts",
+			roomVersion: gomatrixserverlib.RoomVersionV11,
+			event:       `{"type":"m.room.redaction","content":{"redacts":"` + target + `"}}`,
+			wantContent: `{"redacts":"` + target + `"}`,
+		},
+		{
+			name:        "v11 ignores top-level redacts",
+			roomVersion: gomatrixserverlib.RoomVersionV11,
+			event:       `{"type":"m.room.redaction","redacts":"$other:localhost","content":{"redacts":"` + target + `"}}`,
+			wantContent: `{"redacts":"` + target + `"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			eventJSON := []byte(tc.event[:len(tc.event)-1] +
+				`,"event_id":"$redaction:localhost","room_id":"!room:localhost","sender":"@test:localhost","origin_server_ts":1}`)
+			ev, err := gomatrixserverlib.MustGetRoomVersion(tc.roomVersion).NewEventFromTrustedJSON(eventJSON, false)
+			if err != nil {
+				t.Fatalf("failed to create event: %s", err)
+			}
+			ce, err := ToClientEvent(ev, FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return queryUserIDForSender(senderID)
+			})
+			if err != nil {
+				t.Fatalf("failed to create ClientEvent: %s", err)
+			}
+			if ce.Redacts != target {
+				t.Errorf("ClientEvent.Redacts: wanted %s, got %s", target, ce.Redacts)
+			}
+			if !bytes.Equal(ce.Content, []byte(tc.wantContent)) {
+				t.Errorf("ClientEvent.Content: wanted %s, got %s", tc.wantContent, ce.Content)
+			}
+		})
+	}
+}

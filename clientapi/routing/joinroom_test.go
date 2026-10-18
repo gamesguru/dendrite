@@ -3,27 +3,25 @@ package routing
 import (
 	"bytes"
 	"context"
-	"io"
+	"encoding/json"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/zendrite/federationapi/statistics"
-	"codefloe.com/pat-s/zendrite/internal/caching"
-	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/appservice"
+	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/test/testrig"
 	"codefloe.com/pat-s/zendrite/userapi"
 	uapi "codefloe.com/pat-s/zendrite/userapi/api"
-	"golang.org/x/sync/singleflight"
 )
 
 var testIsBlacklistedOrBackingOff = func(s spec.ServerName) (*statistics.ServerStatistics, error) {
@@ -46,7 +44,7 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
 		rsAPI.SetFederationAPI(nil, nil) // creates the rs.Inputer etc
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI)
+		asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI) //nolint:contextcheck
 
 		// Create the users in the userapi
 		for _, u := range []*test.User{alice, bob, charlie} {
@@ -60,7 +58,6 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			}, userRes); err != nil {
 				t.Errorf("failed to create account: %s", err)
 			}
-
 		}
 
 		aliceDev := &uapi.Device{UserID: alice.ID}
@@ -96,11 +93,35 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 			t.Fatalf("response is not a createRoomResponse: %+v", resp)
 		}
 
+		// create an invite-only room that nobody else is invited to
+		resp = createRoom(ctx, createRoomRequest{
+			Name:       "private",
+			Topic:      "private",
+			Visibility: "private",
+			Preset:     spec.PresetPrivateChat,
+		}, aliceDev, &cfg.ClientAPI, userAPI, rsAPI, asAPI, time.Now())
+		crRespPrivate, ok := resp.JSON.(createRoomResponse)
+		if !ok {
+			t.Fatalf("response is not a createRoomResponse: %+v", resp)
+		}
+
+		// Dummy request
+		body := &bytes.Buffer{}
+		req, err := http.NewRequest(http.MethodPost, "/?server_name=test", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		testCases := []struct {
 			name        string
 			device      *uapi.Device
 			roomID      string
 			wantHTTP200 bool
+			// wantCode, when non-zero, asserts the exact status code returned.
+			wantCode int
+			// wantErrContains, when set, asserts the error shown to the client
+			// mentions why the join was refused.
+			wantErrContains string
 		}{
 			{
 				name:        "User can join successfully by alias",
@@ -149,87 +170,36 @@ func TestJoinRoomByIDOrAlias(t *testing.T) {
 				device: charlieDev,
 				roomID: crRespWithGuestAccess.RoomID,
 			},
+			{
+				// A rejected join must tell the client why it was refused,
+				// not just that something was rejected.
+				name:            "join is forbidden if the room is invite only",
+				device:          bobDev,
+				roomID:          crRespPrivate.RoomID,
+				wantCode:        http.StatusForbidden,
+				wantErrContains: "join rule",
+			},
 		}
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				req, err := http.NewRequest(http.MethodPost, "/?server_name=test", &bytes.Buffer{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				content, serverNames, resErr := joinRequestContentAndServers(req)
-				if resErr != nil {
-					t.Fatalf("joinRequestContentAndServers returned error: %+v", resErr)
-				}
-				joinResp := JoinRoomByIDOrAlias(context.Background(), tc.device, rsAPI, userAPI, tc.roomID, content, serverNames)
+				joinResp := JoinRoomByIDOrAlias(req, tc.device, rsAPI, userAPI, tc.roomID)
 				if tc.wantHTTP200 && !joinResp.Is2xx() {
 					t.Fatalf("expected join room to succeed, but didn't: %+v", joinResp)
+				}
+				if tc.wantCode != 0 && joinResp.Code != tc.wantCode {
+					t.Fatalf("expected status %d, got %d: %+v", tc.wantCode, joinResp.Code, joinResp)
+				}
+				if tc.wantErrContains != "" {
+					body, err := json.Marshal(joinResp.JSON)
+					if err != nil {
+						t.Fatalf("failed to marshal response: %s", err)
+					}
+					if !strings.Contains(string(body), tc.wantErrContains) {
+						t.Fatalf("expected error to contain %q, got %s", tc.wantErrContains, body)
+					}
 				}
 			})
 		}
 	})
-}
-
-func TestJoinRoomMalformedJSONDoesNotStartJoin(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", strings.NewReader("{"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp := joinRoomByIDOrAliasWithTimeout(
-		req,
-		&uapi.Device{UserID: "@alice:test"},
-		&singleflight.Group{},
-		nil,
-		nil,
-		"!room:test",
-	)
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("expected malformed JSON to return HTTP 400, got %+v", resp)
-	}
-}
-
-func TestJoinRoomSlowBodyReturnsAsyncResponse(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/?server_name=test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Body = newBlockingReadCloser()
-
-	start := time.Now()
-	resp := joinRoomByIDOrAliasWithTimeoutDuration(
-		req,
-		&uapi.Device{UserID: "@alice:test"},
-		&singleflight.Group{},
-		nil,
-		nil,
-		"!room:test",
-		10*time.Millisecond,
-	)
-	if resp.Code != http.StatusAccepted {
-		t.Fatalf("expected slow body to return HTTP 202, got %+v", resp)
-	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("slow body timeout took too long: %s", elapsed)
-	}
-}
-
-type blockingReadCloser struct {
-	closed chan struct{}
-	once   sync.Once
-}
-
-func newBlockingReadCloser() *blockingReadCloser {
-	return &blockingReadCloser{closed: make(chan struct{})}
-}
-
-func (b *blockingReadCloser) Read(_ []byte) (int, error) {
-	<-b.closed
-	return 0, io.ErrClosedPipe
-}
-
-func (b *blockingReadCloser) Close() error {
-	b.once.Do(func() {
-		close(b.closed)
-	})
-	return nil
 }

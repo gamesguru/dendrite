@@ -39,7 +39,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	events, err := NewPostgresEventsTable(d.db) //nolint:contextcheck
+	events, err := NewPostgresEventsTable(ctx, d.db)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	notificationData, err := NewPostgresNotificationDataTable(d.db)
+	notificationData, err := NewPostgresNotificationDataTable(ctx, d.db)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +100,10 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 		return nil, err
 	}
 	unPartialStatedRooms, err := NewPostgresUnPartialStatedRoomsTable(d.db)
+	if err != nil {
+		return nil, err
+	}
+	stickyEvents, err := NewPostgresStickyEventsTable(d.db)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +152,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 		SlidingSync:             slidingSync,
 		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
 		UnPartialStatedRooms:    unPartialStatedRooms,
+		StickyEvents:            stickyEvents,
 	}
 	return &d, nil
 }

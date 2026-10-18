@@ -22,7 +22,8 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// RoomSummaryResponse represents the response for MSC3266 room summary API.
+// RoomSummaryResponse is the response body of the stable room summary API
+// (GET /_matrix/client/v1/room_summary/{roomIdOrAlias}, Matrix v1.15).
 type RoomSummaryResponse struct {
 	RoomID           string   `json:"room_id"`
 	RoomType         string   `json:"room_type,omitempty"`
@@ -35,24 +36,82 @@ type RoomSummaryResponse struct {
 	WorldReadable    bool     `json:"world_readable"`
 	JoinRule         string   `json:"join_rule,omitempty"`
 	AllowedRoomIDs   []string `json:"allowed_room_ids,omitempty"`
-	Encryption       string   `json:"im.nheko.summary.encryption,omitempty"` // Unstable prefix
+	Encryption       string   `json:"encryption,omitempty"`
 	Membership       string   `json:"membership,omitempty"`
-	RoomVersion      string   `json:"im.nheko.summary.room_version,omitempty"` // Unstable prefix
+	RoomVersion      string   `json:"room_version,omitempty"`
 }
 
-// GetRoomSummary implements MSC3266 room summary API
-// GET /_matrix/client/unstable/im.nheko.summary/summary/{roomIdOrAlias}
+// unstableRoomSummaryResponse is the response body of the experimental MSC3266
+// endpoints. It carries the stable fields plus the im.nheko.summary.* names
+// that pre-v1.15 clients expect.
+type unstableRoomSummaryResponse struct {
+	RoomSummaryResponse
+	UnstableEncryption  string `json:"im.nheko.summary.encryption,omitempty"`
+	UnstableRoomVersion string `json:"im.nheko.summary.room_version,omitempty"`
+}
+
+// GetRoomSummary implements the stable room summary API.
+// GET /_matrix/client/v1/room_summary/{roomIdOrAlias}
 // Supports both authenticated and unauthenticated requests.
-// Unauthenticated requests can only access public/world-readable rooms.
+// Unauthenticated requests can only access public, knockable or world-readable rooms.
 func GetRoomSummary(
 	req *http.Request,
 	device *userapi.Device, // May be nil for unauthenticated requests
+	roomIDOrAlias string,
+	roomserverAPI rsAPI.ClientRoomserverAPI,
+	fsAPI api.FederationInternalAPI, // May be nil when federation is unavailable
+	serverName spec.ServerName,
+	cache caching.RoomSummaryCache,
+) util.JSONResponse {
+	summary, errResp := getRoomSummary(req, device, roomIDOrAlias, roomserverAPI, fsAPI, serverName, cache)
+	if errResp != nil {
+		return *errResp
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: summary,
+	}
+}
+
+// GetRoomSummaryUnstable implements the experimental MSC3266 room summary API.
+// GET /_matrix/client/unstable/im.nheko.summary/summary/{roomIdOrAlias}
+// GET /_matrix/client/unstable/im.nheko.summary/rooms/{roomIdOrAlias}/summary
+// It behaves exactly like GetRoomSummary but additionally returns the
+// im.nheko.summary.* field names for clients that predate Matrix v1.15.
+func GetRoomSummaryUnstable(
+	req *http.Request,
+	device *userapi.Device,
 	roomIDOrAlias string,
 	roomserverAPI rsAPI.ClientRoomserverAPI,
 	fsAPI api.FederationInternalAPI,
 	serverName spec.ServerName,
 	cache caching.RoomSummaryCache,
 ) util.JSONResponse {
+	summary, errResp := getRoomSummary(req, device, roomIDOrAlias, roomserverAPI, fsAPI, serverName, cache)
+	if errResp != nil {
+		return *errResp
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: unstableRoomSummaryResponse{
+			RoomSummaryResponse: summary,
+			UnstableEncryption:  summary.Encryption,
+			UnstableRoomVersion: summary.RoomVersion,
+		},
+	}
+}
+
+// getRoomSummary resolves the room, checks access and builds the summary.
+// It returns either a summary or a JSON error response.
+func getRoomSummary(
+	req *http.Request,
+	device *userapi.Device,
+	roomIDOrAlias string,
+	roomserverAPI rsAPI.ClientRoomserverAPI,
+	fsAPI api.FederationInternalAPI,
+	serverName spec.ServerName,
+	cache caching.RoomSummaryCache,
+) (RoomSummaryResponse, *util.JSONResponse) {
 	ctx := req.Context()
 	authenticated := device != nil
 
@@ -62,7 +121,7 @@ func GetRoomSummary(
 	// Parse and validate room ID or alias
 	roomID, jsonErr := parseRoomIDOrAlias(ctx, roomIDOrAlias, roomserverAPI)
 	if jsonErr != nil {
-		return *jsonErr
+		return RoomSummaryResponse{}, jsonErr
 	}
 
 	// Try to fetch room state locally first
@@ -85,7 +144,7 @@ func GetRoomSummary(
 	}, stateRes)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("QueryBulkStateContent failed")
-		return util.JSONResponse{
+		return RoomSummaryResponse{}, &util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
@@ -96,51 +155,46 @@ func GetRoomSummary(
 
 	// If room doesn't exist locally, try federation
 	if !roomExistsLocally {
-		// Attempt to fetch via federation
-		fedResponse := fetchRoomSummaryViaFederation(ctx, fsAPI, serverName, roomID, vias)
-		if fedResponse != nil {
-			return *fedResponse
+		if summary := fetchRoomSummaryViaFederation(ctx, fsAPI, serverName, roomID, vias); summary != nil {
+			return *summary, nil
 		}
 
 		// Federation failed, return 404
-		return util.JSONResponse{
+		return RoomSummaryResponse{}, &util.JSONResponse{
 			Code: http.StatusNotFound,
 			JSON: spec.NotFound("Room not found"),
 		}
 	}
 
 	// Room exists locally - check access control
-	var userID *spec.UserID
 	var membership string
 
 	if device != nil {
 		// Authenticated request - get user ID and check full access
-		parsedUserID, err := spec.NewUserID(device.UserID, true)
+		userID, err := spec.NewUserID(device.UserID, true)
 		if err != nil {
 			util.GetLogger(ctx).WithError(err).Error("UserID is invalid")
-			return util.JSONResponse{
+			return RoomSummaryResponse{}, &util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.InvalidParam("Device UserID is invalid"),
 			}
 		}
-		userID = parsedUserID
 
-		// Check access control (world-readable, public, or user membership)
+		// Check access control (world-readable, public, knockable, or user membership)
 		canAccess, userMembership := checkRoomAccess(ctx, roomserverAPI, roomID, *userID, roomState)
 		if !canAccess {
 			// Return 404 instead of 403 to not leak room existence
-			return util.JSONResponse{
+			return RoomSummaryResponse{}, &util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound("Room not found"),
 			}
 		}
 		membership = userMembership
 	} else {
-		// Unauthenticated request - only allow public/world-readable rooms
-		canAccess := checkUnauthenticatedAccess(roomState)
-		if !canAccess {
+		// Unauthenticated request - only allow public/knockable/world-readable rooms
+		if !checkUnauthenticatedAccess(roomState) {
 			// Return 404 instead of 403 to not leak room existence
-			return util.JSONResponse{
+			return RoomSummaryResponse{}, &util.JSONResponse{
 				Code: http.StatusNotFound,
 				JSON: spec.NotFound("Room not found"),
 			}
@@ -152,16 +206,9 @@ func GetRoomSummary(
 	// Check cache for room summary (without user-specific membership)
 	if cache != nil {
 		if cachedResponse, ok := cache.GetRoomSummary(roomID, authenticated); ok {
-			// Cache hit - convert to routing response type
 			response := fromCacheResponse(cachedResponse)
-			// Add user's membership if authenticated
-			if authenticated && membership != "" {
-				response.Membership = membership
-			}
-			return util.JSONResponse{
-				Code: http.StatusOK,
-				JSON: response,
-			}
+			response.Membership = membership
+			return response, nil
 		}
 	}
 
@@ -170,6 +217,7 @@ func GetRoomSummary(
 
 	// Build response (without membership for caching)
 	response := buildRoomSummaryResponse(roomID, roomState, "", roomVersion)
+	response.AllowedRoomIDs = getAllowedRoomIDs(ctx, roomserverAPI, roomID, response.JoinRule)
 
 	// Store in cache (without user-specific membership)
 	if cache != nil {
@@ -177,33 +225,31 @@ func GetRoomSummary(
 	}
 
 	// Add user's membership to response if authenticated
-	if authenticated && membership != "" {
-		response.Membership = membership
-	}
+	response.Membership = membership
 
-	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: response,
-	}
+	return response, nil
 }
 
 // fetchRoomSummaryViaFederation attempts to fetch room summary via federation
-// Returns nil if federation fails or room is not accessible.
+// Returns nil if federation is unavailable, fails, or the room is not accessible.
 func fetchRoomSummaryViaFederation(
 	ctx context.Context,
 	fsAPI api.FederationInternalAPI,
 	serverName spec.ServerName,
 	roomID string,
 	vias []string,
-) *util.JSONResponse {
+) *RoomSummaryResponse {
+	if fsAPI == nil {
+		return nil
+	}
+
 	// Extract server name from room ID if no via parameters provided
 	if len(vias) == 0 {
 		_, domain, err := gomatrixserverlib.SplitID('!', roomID)
-		if err == nil {
-			vias = []string{string(domain)}
-		} else {
+		if err != nil {
 			return nil
 		}
+		vias = []string{string(domain)}
 	}
 
 	// Try each via server in sequence
@@ -228,11 +274,7 @@ func fetchRoomSummaryViaFederation(
 
 		// Convert federation hierarchy response to room summary
 		summary := convertHierarchyToSummary(res.Room)
-
-		return &util.JSONResponse{
-			Code: http.StatusOK,
-			JSON: summary,
-		}
+		return &summary
 	}
 
 	// All federation attempts failed
@@ -262,8 +304,8 @@ func convertHierarchyToSummary(room fclient.RoomHierarchyRoom) RoomSummaryRespon
 		summary.AllowedRoomIDs = room.AllowedRoomIDs
 	}
 
-	// Note: Federation doesn't return membership, encryption, or room_version yet
-	// These will be added in Phase 3 of the implementation
+	// Note: the federation hierarchy response does not carry membership,
+	// encryption, or room_version, so those stay empty for remote rooms.
 
 	return summary
 }
@@ -320,68 +362,52 @@ func checkRoomAccess(
 	// Get user's membership state (we'll need this regardless)
 	membership := getUserMembership(ctx, roomserverAPI, roomID, userID)
 
-	// Check if room is world-readable
-	histVisKey := gomatrixserverlib.StateKeyTuple{
-		EventType: spec.MRoomHistoryVisibility,
-		StateKey:  "",
-	}
-	if visibility, ok := roomState[histVisKey]; ok && visibility == "world_readable" {
-		// World-readable rooms can be accessed by anyone
+	// World-readable, public and knockable rooms can be previewed by anyone
+	if isPubliclyPreviewable(roomState) {
 		return true, membership
 	}
 
-	// Check if room is public (join_rule: "public")
-	// QueryBulkStateContent returns the extracted join_rule value directly (e.g., "public")
-	joinRuleKey := gomatrixserverlib.StateKeyTuple{
-		EventType: spec.MRoomJoinRules,
-		StateKey:  "",
-	}
-	if joinRuleContent, ok := roomState[joinRuleKey]; ok {
-		if joinRuleContent == "public" {
-			// Public rooms can be previewed by anyone
-			return true, membership
-		}
-	}
-
-	// Allow access if user is/was a member (join, invite, leave, ban)
-	// This matches Synapse behavior - you can see summary of rooms you've been in
-	if membership == "join" || membership == "invite" || membership == "leave" || membership == "ban" {
+	// Allow access if the user is or was a member of the room (join, invite, knock, leave, ban).
+	// This matches Synapse behavior: you can see the summary of rooms you have been in.
+	switch membership {
+	case spec.Join, spec.Invite, spec.Knock, spec.Leave, spec.Ban:
 		return true, membership
 	}
 
-	// No access - not world-readable, not public, and user never joined
+	// No access - not previewable and the user was never in the room
 	return false, ""
 }
 
-// checkUnauthenticatedAccess determines if an unauthenticated user can access the room summary
-// Only allows access to public or world-readable rooms.
+// checkUnauthenticatedAccess determines if an unauthenticated user can access the room summary.
+// Only allows access to world-readable rooms and rooms with a public, knock or
+// knock_restricted join rule, as permitted by the specification.
 func checkUnauthenticatedAccess(
 	roomState map[gomatrixserverlib.StateKeyTuple]string,
 ) bool {
-	// Check if room is world-readable
+	return isPubliclyPreviewable(roomState)
+}
+
+// isPubliclyPreviewable reports whether the room may be summarized without being a member:
+// it is world-readable or has a public, knock or knock_restricted join rule.
+func isPubliclyPreviewable(roomState map[gomatrixserverlib.StateKeyTuple]string) bool {
 	histVisKey := gomatrixserverlib.StateKeyTuple{
 		EventType: spec.MRoomHistoryVisibility,
 		StateKey:  "",
 	}
-	if visibility, ok := roomState[histVisKey]; ok && visibility == "world_readable" {
-		// World-readable rooms can be accessed by anyone
+	if visibility, ok := roomState[histVisKey]; ok && visibility == string(gomatrixserverlib.HistoryVisibilityWorldReadable) {
 		return true
 	}
 
-	// Check if room is public (join_rule: "public")
 	// QueryBulkStateContent returns the extracted join_rule value directly (e.g., "public")
 	joinRuleKey := gomatrixserverlib.StateKeyTuple{
 		EventType: spec.MRoomJoinRules,
 		StateKey:  "",
 	}
-	if joinRuleContent, ok := roomState[joinRuleKey]; ok {
-		if joinRuleContent == "public" {
-			// Public rooms can be previewed by anyone
-			return true
-		}
+	switch roomState[joinRuleKey] {
+	case spec.Public, spec.Knock, spec.KnockRestricted:
+		return true
 	}
 
-	// Unauthenticated users cannot access private rooms
 	return false
 }
 
@@ -409,6 +435,52 @@ func getRoomVersion(ctx context.Context, roomserverAPI rsAPI.ClientRoomserverAPI
 	}
 
 	return string(roomVersion)
+}
+
+// getAllowedRoomIDs returns the room IDs listed in the join rules of a
+// restricted or knock_restricted room, or nil for any other join rule.
+// QueryBulkStateContent only yields the join_rule value, so the full event is
+// fetched here.
+func getAllowedRoomIDs(ctx context.Context, roomserverAPI rsAPI.ClientRoomserverAPI, roomID string, joinRule string) []string {
+	if joinRule != spec.Restricted && joinRule != spec.KnockRestricted {
+		return nil
+	}
+
+	joinRuleTuple := gomatrixserverlib.StateKeyTuple{
+		EventType: spec.MRoomJoinRules,
+		StateKey:  "",
+	}
+	var res rsAPI.QueryCurrentStateResponse
+	err := roomserverAPI.QueryCurrentState(ctx, &rsAPI.QueryCurrentStateRequest{
+		RoomID:      roomID,
+		StateTuples: []gomatrixserverlib.StateKeyTuple{joinRuleTuple},
+	}, &res)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("QueryCurrentState failed")
+		return nil
+	}
+	joinRuleEv := res.StateEvents[joinRuleTuple]
+	if joinRuleEv == nil {
+		return nil
+	}
+
+	var content gomatrixserverlib.JoinRuleContent
+	if err := json.Unmarshal(joinRuleEv.Content(), &content); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("failed to parse join rules content")
+		return nil
+	}
+
+	allowedRoomIDs := make([]string, 0, len(content.Allow))
+	for _, allow := range content.Allow {
+		if allow.Type != spec.MRoomMembership || allow.RoomID == "" {
+			continue
+		}
+		allowedRoomIDs = append(allowedRoomIDs, allow.RoomID)
+	}
+	if len(allowedRoomIDs) == 0 {
+		return nil
+	}
+	return allowedRoomIDs
 }
 
 // buildRoomSummaryResponse constructs the response from room state.
@@ -443,15 +515,13 @@ func buildRoomSummaryResponse(
 
 		case spec.MRoomJoinRules:
 			// ExtractContentValue returns just the join_rule value (e.g., "public", "invite", "restricted")
-			// Note: For restricted rooms, we don't have access to the allowed_room_ids here
-			// as that would require the full event content, not just the extracted value
 			response.JoinRule = content
 
 		case spec.MRoomGuestAccess:
 			response.GuestCanJoin = content == "can_join"
 
 		case spec.MRoomHistoryVisibility:
-			response.WorldReadable = content == "world_readable"
+			response.WorldReadable = content == string(gomatrixserverlib.HistoryVisibilityWorldReadable)
 
 		case spec.MRoomCreate:
 			// Parse create event for room type
@@ -463,17 +533,12 @@ func buildRoomSummaryResponse(
 			}
 
 		case spec.MRoomEncryption:
-			// Parse encryption event for algorithm
-			var encryptionContent struct {
-				Algorithm string `json:"algorithm"`
-			}
-			if err := json.Unmarshal([]byte(content), &encryptionContent); err == nil {
-				response.Encryption = encryptionContent.Algorithm
-			}
+			// ExtractContentValue returns just the algorithm value (e.g., "m.megolm.v1.aes-sha2")
+			response.Encryption = content
 
 		case spec.MRoomMember:
 			// Count joined members
-			if content == "join" {
+			if content == spec.Join {
 				response.NumJoinedMembers++
 			}
 		}

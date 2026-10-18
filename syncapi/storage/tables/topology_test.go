@@ -100,3 +100,49 @@ func TestTopologyTable(t *testing.T) {
 		}
 	})
 }
+
+// TestTopologyTablePagesPastForkedDepth checks backward pagination through a
+// fork, where two events share a depth. A page that ends at one of them must
+// continue with the other, not skip to the next depth.
+func TestTopologyTablePagesPastForkedDepth(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	// Both events reference the same prev_events, so they share a depth.
+	local := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "local"})
+	remote := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "remote"})
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		tab, db, close := newTopologyTable(t, dbType)
+		defer close()
+		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
+			for i, ev := range room.Events() {
+				if _, err := tab.InsertEventInTopology(ctx, txn, ev, types.StreamPosition(i)); err != nil {
+					return err
+				}
+			}
+			// The remote event arrives much later, with a higher stream position.
+			if _, err := tab.InsertEventInTopology(ctx, txn, local, 10); err != nil {
+				return err
+			}
+			if _, err := tab.InsertEventInTopology(ctx, txn, remote, 20); err != nil {
+				return err
+			}
+			top := types.StreamPosition(local.Depth() + 1)
+			eventIDs, _, end, err := tab.SelectEventIDsInRange(ctx, txn, room.ID, 0, top, top, 1, false)
+			if err != nil {
+				return err
+			}
+			assert.Equal(t, []string{remote.EventID()}, eventIDs)
+			end.Decrement()
+			eventIDs, _, _, err = tab.SelectEventIDsInRange(ctx, txn, room.ID, 0, end.Depth, end.PDUPosition, 1, false)
+			if err != nil {
+				return err
+			}
+			assert.Equal(t, []string{local.EventID()}, eventIDs, "the next page must continue at the same depth")
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+	})
+}

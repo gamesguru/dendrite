@@ -27,7 +27,7 @@ import (
 
 var (
 	cacheMu          sync.Mutex
-	publicRoomsCache []fclient.PublicRoom
+	publicRoomsCache []roomserverAPI.PublicRoom
 )
 
 type PublicRoomReq struct {
@@ -40,8 +40,40 @@ type PublicRoomReq struct {
 }
 
 type filter struct {
-	SearchTerms string   `json:"generic_search_term,omitempty"`
-	RoomTypes   []string `json:"room_types,omitempty"` // TODO: Implement filter on this
+	SearchTerms string    `json:"generic_search_term,omitempty"`
+	RoomTypes   []*string `json:"room_types,omitzero"`
+}
+
+type publicRoomsResponse struct {
+	Chunk                  []roomserverAPI.PublicRoom `json:"chunk"`
+	NextBatch              string                     `json:"next_batch,omitempty"`
+	PrevBatch              string                     `json:"prev_batch,omitempty"`
+	TotalRoomCountEstimate int                        `json:"total_room_count_estimate,omitempty"`
+}
+
+// remotePublicRooms uses the signed transport because GetPublicRoomsFiltered
+// cannot represent room-type filters.
+func remotePublicRooms(ctx context.Context, request PublicRoomReq, federation fclient.FederationClient, cfg *config.ClientAPI) (*publicRoomsResponse, error) {
+	destination := spec.ServerName(request.Server)
+	request.Server = ""
+	fedReq := fclient.NewFederationRequest(http.MethodPost, cfg.Matrix.ServerName, destination, "/_matrix/federation/v1/publicRooms")
+	if err := fedReq.SetContent(request); err != nil {
+		return nil, err
+	}
+	if err := fedReq.Sign(cfg.Matrix.ServerName, cfg.Matrix.KeyID, cfg.Matrix.PrivateKey); err != nil {
+		return nil, err
+	}
+	httpReq, err := fedReq.HTTPRequest()
+	if err != nil {
+		return nil, err
+	}
+	var response publicRoomsResponse
+	if err := federation.DoRequestAndParseResponse(ctx, httpReq, &response); err != nil {
+		return nil, err
+	}
+	// Servers that predate MSC3827 ignore the room type filter.
+	response.Chunk = roomserverAPI.FilterPublicRooms(response.Chunk, "", request.Filter.RoomTypes)
+	return &response, nil
 }
 
 // GetPostPublicRooms implements GET and POST /publicRooms.
@@ -65,12 +97,7 @@ func GetPostPublicRooms(
 
 	serverName := spec.ServerName(request.Server)
 	if serverName != "" && !cfg.Matrix.IsLocalServerName(serverName) {
-		res, err := federation.GetPublicRoomsFiltered(
-			req.Context(), cfg.Matrix.ServerName, serverName,
-			int(request.Limit), request.Since,
-			request.Filter.SearchTerms, false,
-			"",
-		)
+		res, err := remotePublicRooms(req.Context(), request, federation, cfg)
 		if err != nil {
 			util.GetLogger(req.Context()).WithError(err).Error("failed to get public rooms")
 			return util.JSONResponse{
@@ -84,6 +111,8 @@ func GetPostPublicRooms(
 		}
 	}
 
+	// Local pagination tokens carry a T prefix; remote tokens remain opaque.
+	request.Since = strings.TrimPrefix(request.Since, "T")
 	response, err := publicRooms(req.Context(), request, rsAPI, extRoomsProvider)
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Errorf("failed to work out public rooms")
@@ -100,9 +129,9 @@ func GetPostPublicRooms(
 
 func publicRooms(
 	ctx context.Context, request PublicRoomReq, rsAPI roomserverAPI.ClientRoomserverAPI, extRoomsProvider api.ExtraPublicRoomsProvider,
-) (*fclient.RespPublicRooms, error) {
-	response := fclient.RespPublicRooms{
-		Chunk: []fclient.PublicRoom{},
+) (*publicRoomsResponse, error) {
+	response := publicRoomsResponse{
+		Chunk: []roomserverAPI.PublicRoom{},
 	}
 	var limit int64
 	var offset int64
@@ -119,16 +148,15 @@ func publicRooms(
 	}
 	err = nil
 
-	var rooms []fclient.PublicRoom
+	var rooms []roomserverAPI.PublicRoom
 	if request.Since == "" {
 		rooms = refreshPublicRoomCache(ctx, rsAPI, extRoomsProvider, request)
 	} else {
 		rooms = getPublicRoomsFromCache()
 	}
 
+	rooms = roomserverAPI.FilterPublicRooms(rooms, request.Filter.SearchTerms, request.Filter.RoomTypes)
 	response.TotalRoomCountEstimate = len(rooms)
-
-	rooms = filterRooms(rooms, request.Filter.SearchTerms)
 
 	chunk, prev, next := sliceInto(rooms, offset, limit)
 	if prev >= 0 {
@@ -141,25 +169,6 @@ func publicRooms(
 		response.Chunk = chunk
 	}
 	return &response, err
-}
-
-func filterRooms(rooms []fclient.PublicRoom, searchTerm string) []fclient.PublicRoom {
-	if searchTerm == "" {
-		return rooms
-	}
-
-	normalizedTerm := strings.ToLower(searchTerm)
-
-	result := make([]fclient.PublicRoom, 0)
-	for _, room := range rooms {
-		if strings.Contains(strings.ToLower(room.Name), normalizedTerm) ||
-			strings.Contains(strings.ToLower(room.Topic), normalizedTerm) ||
-			strings.Contains(strings.ToLower(room.CanonicalAlias), normalizedTerm) {
-			result = append(result, room)
-		}
-	}
-
-	return result
 }
 
 // fillPublicRoomsReq fills the Limit, Since and Filter attributes of a GET or POST request
@@ -194,10 +203,6 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 		request.Server = httpReq.FormValue("server")
 	}
 
-	// strip the 'T' which is only required because when sytest does pagination tests it stops
-	// iterating when !prev_batch which then fails if prev_batch==0, so add arbitrary text to
-	// make it truthy not falsey.
-	request.Since = strings.TrimPrefix(request.Since, "T")
 	return nil
 }
 
@@ -211,7 +216,7 @@ func fillPublicRoomsReq(httpReq *http.Request, request *PublicRoomReq) *util.JSO
 //	 limit=3&since=6  => G     (prev='3', next='')
 //
 //	A value of '-1' for prev/next indicates no position.
-func sliceInto(slice []fclient.PublicRoom, since int64, limit int64) (subset []fclient.PublicRoom, prev, next int) {
+func sliceInto(slice []roomserverAPI.PublicRoom, since int64, limit int64) (subset []roomserverAPI.PublicRoom, prev, next int) {
 	prev = -1
 	next = -1
 
@@ -230,6 +235,9 @@ func sliceInto(slice []fclient.PublicRoom, since int64, limit int64) (subset []f
 	if nextIndex > len(slice) {
 		nextIndex = len(slice)
 	}
+	if since > int64(len(slice)) {
+		since = int64(len(slice))
+	}
 
 	subset = slice[since:nextIndex]
 	return
@@ -238,12 +246,18 @@ func sliceInto(slice []fclient.PublicRoom, since int64, limit int64) (subset []f
 func refreshPublicRoomCache(
 	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, extRoomsProvider api.ExtraPublicRoomsProvider,
 	request PublicRoomReq,
-) []fclient.PublicRoom {
+) []roomserverAPI.PublicRoom {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	var extraRooms []fclient.PublicRoom
+	var extraRooms []roomserverAPI.PublicRoom
 	if extRoomsProvider != nil {
-		extraRooms = extRoomsProvider.Rooms()
+		for _, room := range extRoomsProvider.Rooms() {
+			pub := roomserverAPI.PublicRoom{PublicRoom: room}
+			if room.RoomType != "" {
+				pub.RoomType = &room.RoomType
+			}
+			extraRooms = append(extraRooms, pub)
+		}
 	}
 
 	// TODO: this is only here to make Sytest happy, for now.
@@ -266,7 +280,7 @@ func refreshPublicRoomCache(
 		util.GetLogger(ctx).WithError(err).Error("PopulatePublicRooms failed")
 		return publicRoomsCache
 	}
-	publicRoomsCache = []fclient.PublicRoom{}
+	publicRoomsCache = []roomserverAPI.PublicRoom{}
 	publicRoomsCache = append(publicRoomsCache, pubRooms...)
 	publicRoomsCache = append(publicRoomsCache, extraRooms...)
 	publicRoomsCache = dedupeAndShuffle(publicRoomsCache)
@@ -278,16 +292,16 @@ func refreshPublicRoomCache(
 	return publicRoomsCache
 }
 
-func getPublicRoomsFromCache() []fclient.PublicRoom {
+func getPublicRoomsFromCache() []roomserverAPI.PublicRoom {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	return publicRoomsCache
 }
 
-func dedupeAndShuffle(in []fclient.PublicRoom) []fclient.PublicRoom {
+func dedupeAndShuffle(in []roomserverAPI.PublicRoom) []roomserverAPI.PublicRoom {
 	// de-duplicate rooms with the same room ID. We can join the room via any of these aliases as we know these servers
 	// are alive and well, so we arbitrarily pick one (purposefully shuffling them to spread the load a bit)
-	var publicRooms []fclient.PublicRoom
+	var publicRooms []roomserverAPI.PublicRoom
 	haveRoomIDs := make(map[string]bool)
 	rand.Shuffle(len(in), func(i, j int) {
 		in[i], in[j] = in[j], in[i]

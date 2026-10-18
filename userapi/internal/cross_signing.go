@@ -458,13 +458,22 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 	ctx context.Context, req *api.QueryKeysRequest, res *api.QueryKeysResponse,
 ) {
 	for targetUserID := range req.UserToDevices {
+		if ctx.Err() != nil {
+			return
+		}
 		keys, err := a.KeyDatabase.CrossSigningKeysForUser(ctx, targetUserID)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			logrus.WithError(err).Errorf("Failed to get cross-signing keys for user %q", targetUserID)
 			continue
 		}
 
 		for keyType, key := range keys {
+			if ctx.Err() != nil {
+				return
+			}
 			var keyID gomatrixserverlib.KeyID
 			for id := range key.Keys {
 				keyID = id
@@ -473,6 +482,9 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 
 			sigMap, err := a.KeyDatabase.CrossSigningSigsForTarget(ctx, req.UserID, targetUserID, keyID)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
 				logrus.WithError(err).Errorf("Failed to get cross-signing signatures for user %q key %q", targetUserID, keyID)
 				continue
 			}

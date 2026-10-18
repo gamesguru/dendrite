@@ -354,11 +354,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if len(streamEvents) == 0 && !topologyHadEvents {
 		// The topology query itself found no events: we are at a backward extremity or the
 		// beginning of the room. Check for backfill opportunities.
-		if events, err = r.handleEmptyEventsSlice(); err != nil { //nolint:contextcheck
+		if events, err = r.handleEmptyEventsSlice(); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
 	} else if len(streamEvents) > 0 {
-		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil { //nolint:contextcheck
+		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
 	}
@@ -425,9 +425,17 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	start = *r.from
 
-	return synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(filteredEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	clientEvents = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(filteredEvents), synctypes.FormatAll, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
-	}), start, end, nil
+	})
+	bundler, err := internal.NewRelationBundler(ctx, r.snapshot, rsAPI, r.deviceUserID)
+	if err != nil {
+		return []synctypes.ClientEvent{}, *r.from, *r.to, err
+	}
+	if err = bundler.Bundle(ctx, filteredEvents, clientEvents, synctypes.FormatAll); err != nil {
+		return []synctypes.ClientEvent{}, *r.from, *r.to, err
+	}
+	return clientEvents, start, end, nil
 }
 
 func (r *messagesReq) getStartEnd(events []*rstypes.HeaderedEvent) (start, end types.TopologyToken, err error) {
@@ -655,20 +663,32 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 // Returns an error if there was an issue with retrieving the list of servers in
 // the room or sending the request.
 func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]string, limit int) ([]*rstypes.HeaderedEvent, error) {
+	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit)
+}
+
+// backfillEvents asks the roomserver to backfill events over federation and
+// stores them as backfilled events, which keeps them out of sync responses.
+func backfillEvents(
+	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
+	serverName, virtualHost spec.ServerName,
+	roomID string, backwardsExtremities map[string][]string, limit int,
+) ([]*rstypes.HeaderedEvent, error) {
+	// Finish the backfill even if the client goes away, so the events are stored.
+	ctx = context.WithoutCancel(ctx)
 	var res api.PerformBackfillResponse
-	err := r.rsAPI.PerformBackfill(context.Background(), &api.PerformBackfillRequest{
+	err := rsAPI.PerformBackfill(ctx, &api.PerformBackfillRequest{
 		RoomID:               roomID,
 		BackwardsExtremities: backwardsExtremities,
 		Limit:                limit,
-		ServerName:           r.cfg.Matrix.ServerName,
-		VirtualHost:          r.device.UserDomain(),
+		ServerName:           serverName,
+		VirtualHost:          virtualHost,
 	}, &res)
 	if err != nil {
 		return nil, fmt.Errorf("PerformBackfill failed: %w", err)
 	}
-	util.GetLogger(r.ctx).WithField("new_events", len(res.Events)).Info("Storing new events from backfill")
+	util.GetLogger(ctx).WithField("new_events", len(res.Events)).Info("Storing new events from backfill")
 
-	// TODO: we should only be inserting events into the database from the roomserver's kafka output stream.
+	// TODO: we should only be inserting events into the database from the roomserver's JetStream output stream.
 	// Currently, this can race with live events for the room and cause problems. It's also just a bit unclear
 	// when you have multiple entry points to write events.
 
@@ -686,8 +706,8 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 	events := res.Events
 	for i := range events {
 		events[i].Visibility = res.HistoryVisibility
-		_, err = r.db.WriteEvent(
-			context.Background(),
+		_, err = db.WriteEvent(
+			ctx,
 			events[i],
 			[]*rstypes.HeaderedEvent{},
 			[]string{},

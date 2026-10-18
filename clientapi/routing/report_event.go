@@ -84,3 +84,32 @@ func ReportEvent(
 		JSON: struct{}{},
 	}
 }
+
+type reportRoomRequest struct {
+	Reason *string `json:"reason"`
+}
+
+// ReportRoom implements POST /rooms/{roomId}/report (MSC4151). The reporter
+// need not be in the room, but the room must be known to this server.
+func ReportRoom(
+	req *http.Request,
+	device *userAPI.Device,
+	roomID string,
+	rsAPI api.ClientRoomserverAPI,
+) util.JSONResponse {
+	var report reportRoomRequest
+	if resErr := httputil.UnmarshalJSONRequest(req, &report); resErr != nil {
+		return *resErr
+	}
+	if report.Reason == nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Missing reason")}
+	}
+	if _, err := rsAPI.QueryRoomVersionForRoom(req.Context(), roomID); err != nil {
+		return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("The room was not found.")}
+	}
+	if _, err := rsAPI.InsertReportedRoom(req.Context(), roomID, device.UserID, *report.Reason); err != nil {
+		util.GetLogger(req.Context()).WithError(err).Error("rsAPI.InsertReportedRoom failed")
+		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+}

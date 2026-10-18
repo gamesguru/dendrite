@@ -78,7 +78,15 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteProfilesTable: %w", err)
 	}
-	threePIDTable, err := NewSQLiteThreePIDTable(db)
+	profileFieldsTable, err := NewSQLiteProfileFieldsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteProfileFieldsTable: %w", err)
+	}
+	delayedEventsTable, err := NewSQLiteDelayedEventsTable(db) //nolint:contextcheck
+	if err != nil {
+		return nil, fmt.Errorf("NewSQLiteDelayedEventsTable: %w", err)
+	}
+	threePIDTable, err := NewSQLiteThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteThreePIDTable: %w", err)
 	}
@@ -90,11 +98,11 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresPusherTable: %w", err)
 	}
-	notificationsTable, err := NewSQLiteNotificationTable(db)
+	notificationsTable, err := NewSQLiteNotificationTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewSQLiteStatsTable(db, serverName) //nolint:contextcheck
+	statsTable, err := NewSQLiteStatsTable(db, serverName, ctx) //nolint:contextcheck // The optional context is propagated to the maintenance task.
 	if err != nil {
 		return nil, fmt.Errorf("NewSQLiteStatsTable: %w", err)
 	}
@@ -123,6 +131,8 @@ func NewUserDatabase(ctx context.Context, conMan *sqlutil.Connections, dbPropert
 		LoginTokens:           loginTokenTable,
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
+		ProfileFields:         profileFieldsTable,
+		DelayedEvents:         delayedEventsTable,
 		ThreePIDs:             threePIDTable,
 		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,

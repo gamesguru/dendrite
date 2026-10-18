@@ -129,7 +129,20 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateReportedEventsTable(db); err != nil {
 		return err
 	}
+	if err := CreateClientTransactionsTable(db); err != nil {
+		return err
+	}
 	if err := CreatePartialStateTable(db); err != nil {
+		return err
+	}
+	if err := CreateErasedUsersTable(db); err != nil {
+		return err
+	}
+	if err := CreateReportedRoomsTable(db); err != nil {
+		return err
+	}
+	// Last, as its migration reads the events tables.
+	if err := CreateAnnotationsTable(db); err != nil {
 		return err
 	}
 
@@ -205,6 +218,22 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 	if err != nil {
 		return err
 	}
+	clientTransactions, err := PrepareClientTransactionsTable(db)
+	if err != nil {
+		return err
+	}
+	annotations, err := PrepareAnnotationsTable(db)
+	if err != nil {
+		return err
+	}
+	erasedUsers, err := PrepareErasedUsersTable(db)
+	if err != nil {
+		return err
+	}
+	reportedRooms, err := PrepareReportedRoomsTable(db)
+	if err != nil {
+		return err
+	}
 
 	d.Database = shared.Database{
 		DB: db,
@@ -219,19 +248,23 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 			PrevEventsTable:     prevEvents,
 			RedactionsTable:     redactions,
 			ReportedEventsTable: reportedEvents,
+			AnnotationsTable:    annotations,
 		},
-		Cache:              cache,
-		Writer:             writer,
-		RoomsTable:         rooms,
-		StateBlockTable:    stateBlock,
-		StateSnapshotTable: stateSnapshot,
-		RoomAliasesTable:   roomAliases,
-		InvitesTable:       invites,
-		MembershipTable:    membership,
-		PublishedTable:     published,
-		Purge:              purge,
-		UserRoomKeyTable:   userRoomKeys,
-		PartialStateTable:  partialState,
+		Cache:                   cache,
+		Writer:                  writer,
+		RoomsTable:              rooms,
+		StateBlockTable:         stateBlock,
+		StateSnapshotTable:      stateSnapshot,
+		RoomAliasesTable:        roomAliases,
+		InvitesTable:            invites,
+		MembershipTable:         membership,
+		PublishedTable:          published,
+		Purge:                   purge,
+		UserRoomKeyTable:        userRoomKeys,
+		ErasedUsersTable:        erasedUsers,
+		ReportedRoomsTable:      reportedRooms,
+		PartialStateTable:       partialState,
+		ClientTransactionsTable: clientTransactions,
 	}
 	return nil
 }

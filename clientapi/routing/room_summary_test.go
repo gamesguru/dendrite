@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -18,6 +19,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -43,6 +45,7 @@ type mockRoomData struct {
 	roomType        string
 	encryption      string
 	memberCount     int
+	allowedRoomIDs  []string          // for restricted join rules
 	userMemberships map[string]string // userID -> membership
 }
 
@@ -114,11 +117,7 @@ func (r *roomSummaryTestRoomserverAPI) QueryBulkStateContent(
 				}
 			case spec.MRoomEncryption:
 				if room.encryption != "" {
-					content, merr := json.Marshal(map[string]string{"algorithm": room.encryption})
-					if merr != nil {
-						continue
-					}
-					roomState[tuple] = string(content)
+					roomState[tuple] = room.encryption
 				}
 			case spec.MRoomMember:
 				// Handle wildcard for member count
@@ -137,6 +136,40 @@ func (r *roomSummaryTestRoomserverAPI) QueryBulkStateContent(
 		res.Rooms[roomID] = roomState
 	}
 
+	return nil
+}
+
+func (r *roomSummaryTestRoomserverAPI) QueryCurrentState(
+	ctx context.Context,
+	req *rsapi.QueryCurrentStateRequest,
+	res *rsapi.QueryCurrentStateResponse,
+) error {
+	res.StateEvents = make(map[gomatrixserverlib.StateKeyTuple]*types.HeaderedEvent)
+	room, ok := r.rooms[req.RoomID]
+	if !ok {
+		return nil
+	}
+	for _, tuple := range req.StateTuples {
+		if tuple.EventType != spec.MRoomJoinRules || room.joinRule == "" {
+			continue
+		}
+		allow := make([]map[string]string, 0, len(room.allowedRoomIDs))
+		for _, id := range room.allowedRoomIDs {
+			allow = append(allow, map[string]string{"type": "m.room_membership", "room_id": id})
+		}
+		content, err := json.Marshal(map[string]any{"join_rule": room.joinRule, "allow": allow})
+		if err != nil {
+			return err
+		}
+		ev, err := gomatrixserverlib.MustGetRoomVersion(room.roomVersion).NewEventFromTrustedJSON(
+			[]byte(fmt.Sprintf(`{"type":"m.room.join_rules","state_key":"","room_id":%q,"sender":"@creator:test","content":%s,"origin_server_ts":1,"depth":1,"auth_events":[],"prev_events":[]}`, room.roomID, content)),
+			false,
+		)
+		if err != nil {
+			return err
+		}
+		res.StateEvents[tuple] = &types.HeaderedEvent{PDU: ev}
+	}
 	return nil
 }
 
@@ -192,6 +225,7 @@ func TestGetRoomSummary(t *testing.T) {
 		userID         string // empty for unauthenticated
 		expectedCode   int
 		expectedFields map[string]any
+		absentFields   []string
 	}{
 		{
 			name:   "public room - unauthenticated",
@@ -317,9 +351,10 @@ func TestGetRoomSummary(t *testing.T) {
 			userID:       "@alice:test",
 			expectedCode: http.StatusOK,
 			expectedFields: map[string]any{
-				"room_id":                     "!encrypted:test",
-				"im.nheko.summary.encryption": "m.megolm.v1.aes-sha2",
+				"room_id":    "!encrypted:test",
+				"encryption": "m.megolm.v1.aes-sha2",
 			},
+			absentFields: []string{"im.nheko.summary.encryption", "im.nheko.summary.room_version"},
 		},
 		{
 			name:   "space - returns room_type",
@@ -354,9 +389,113 @@ func TestGetRoomSummary(t *testing.T) {
 			userID:       "",
 			expectedCode: http.StatusOK,
 			expectedFields: map[string]any{
-				"room_id":                       "!versioned:test",
-				"im.nheko.summary.room_version": "10",
+				"room_id":      "!versioned:test",
+				"room_version": "10",
 			},
+			absentFields: []string{"im.nheko.summary.room_version", "membership"},
+		},
+		{
+			name:   "knock room - unauthenticated",
+			roomID: "!knock:test",
+			room: &mockRoomData{
+				roomID:      "!knock:test",
+				roomVersion: gomatrixserverlib.RoomVersionV10,
+				name:        "Knock Room",
+				joinRule:    "knock",
+				historyVis:  "shared",
+				memberCount: 2,
+			},
+			userID:       "",
+			expectedCode: http.StatusOK,
+			expectedFields: map[string]any{
+				"room_id":   "!knock:test",
+				"join_rule": "knock",
+			},
+		},
+		{
+			name:   "knock_restricted room - authenticated non-member",
+			roomID: "!knockrestricted:test",
+			room: &mockRoomData{
+				roomID:          "!knockrestricted:test",
+				roomVersion:     gomatrixserverlib.RoomVersionV10,
+				name:            "Knock Restricted Room",
+				joinRule:        "knock_restricted",
+				historyVis:      "shared",
+				memberCount:     2,
+				allowedRoomIDs:  []string{"!space:test"},
+				userMemberships: map[string]string{},
+			},
+			userID:       "@charlie:test",
+			expectedCode: http.StatusOK,
+			expectedFields: map[string]any{
+				"room_id":   "!knockrestricted:test",
+				"join_rule": "knock_restricted",
+			},
+			absentFields: []string{"membership"},
+		},
+		{
+			name:   "restricted room - non-member should return 404",
+			roomID: "!restricted:test",
+			room: &mockRoomData{
+				roomID:          "!restricted:test",
+				roomVersion:     gomatrixserverlib.RoomVersionV10,
+				name:            "Restricted Room",
+				joinRule:        "restricted",
+				historyVis:      "shared",
+				memberCount:     2,
+				allowedRoomIDs:  []string{"!space:test"},
+				userMemberships: map[string]string{},
+			},
+			userID:       "@charlie:test",
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:   "restricted room - member gets allowed_room_ids",
+			roomID: "!restricted:test",
+			room: &mockRoomData{
+				roomID:          "!restricted:test",
+				roomVersion:     gomatrixserverlib.RoomVersionV10,
+				name:            "Restricted Room",
+				joinRule:        "restricted",
+				historyVis:      "shared",
+				memberCount:     2,
+				allowedRoomIDs:  []string{"!space:test", "!other:test"},
+				userMemberships: map[string]string{"@alice:test": "join"},
+			},
+			userID:       "@alice:test",
+			expectedCode: http.StatusOK,
+			expectedFields: map[string]any{
+				"room_id":          "!restricted:test",
+				"join_rule":        "restricted",
+				"allowed_room_ids": []any{"!space:test", "!other:test"},
+				"membership":       "join",
+			},
+		},
+		{
+			name:   "private room - knocked user sees summary",
+			roomID: "!private:test",
+			room: &mockRoomData{
+				roomID:          "!private:test",
+				roomVersion:     gomatrixserverlib.RoomVersionV10,
+				name:            "Private Room",
+				joinRule:        "invite",
+				historyVis:      "shared",
+				memberCount:     2,
+				userMemberships: map[string]string{"@dave:test": "knock"},
+			},
+			userID:       "@dave:test",
+			expectedCode: http.StatusOK,
+			expectedFields: map[string]any{
+				"room_id":    "!private:test",
+				"membership": "knock",
+			},
+		},
+		{
+			name:         "remote room without federation - returns 404",
+			roomID:       "!remote:elsewhere",
+			room:         nil,
+			userID:       "",
+			expectedCode: http.StatusNotFound,
 		},
 		{
 			name:         "nonexistent room - returns 404",
@@ -424,12 +563,62 @@ func TestGetRoomSummary(t *testing.T) {
 						t.Errorf("expected field %q not found in response", key)
 						continue
 					}
-					if actualValue != expectedValue {
+					if !reflect.DeepEqual(actualValue, expectedValue) {
 						t.Errorf("field %q: expected %v, got %v", key, expectedValue, actualValue)
+					}
+				}
+				for _, key := range tc.absentFields {
+					if _, ok := respMap[key]; ok {
+						t.Errorf("field %q should be absent from response: %s", key, jsonBytes)
 					}
 				}
 			}
 		})
+	}
+}
+
+// TestGetRoomSummaryUnstable verifies the legacy MSC3266 endpoints keep the
+// im.nheko.summary.* field names alongside the stable ones.
+func TestGetRoomSummaryUnstable(t *testing.T) {
+	rsAPI := newRoomSummaryTestRoomserverAPI(t)
+	rsAPI.addRoom(&mockRoomData{
+		roomID:          "!encrypted:test",
+		roomVersion:     gomatrixserverlib.RoomVersionV10,
+		name:            "Encrypted Room",
+		joinRule:        "invite",
+		historyVis:      "shared",
+		encryption:      "m.megolm.v1.aes-sha2",
+		memberCount:     3,
+		userMemberships: map[string]string{"@alice:test": "join"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_matrix/client/unstable/im.nheko.summary/summary/!encrypted:test", nil)
+	resp := GetRoomSummaryUnstable(req, &api.Device{UserID: "@alice:test"}, "!encrypted:test", rsAPI, nil, "test", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.Code)
+	}
+
+	jsonBytes, err := json.Marshal(resp.JSON)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+	var respMap map[string]any
+	if err := json.Unmarshal(jsonBytes, &respMap); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	expected := map[string]any{
+		"room_id":                       "!encrypted:test",
+		"encryption":                    "m.megolm.v1.aes-sha2",
+		"im.nheko.summary.encryption":   "m.megolm.v1.aes-sha2",
+		"room_version":                  "10",
+		"im.nheko.summary.room_version": "10",
+		"membership":                    "join",
+	}
+	for key, want := range expected {
+		if got, ok := respMap[key]; !ok || got != want {
+			t.Errorf("field %q: expected %v, got %v (present=%v)", key, want, got, ok)
+		}
 	}
 }
 

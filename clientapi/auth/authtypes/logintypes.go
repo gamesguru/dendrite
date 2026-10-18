@@ -14,6 +14,9 @@ const (
 	LoginTypeToken              = "m.login.token"
 	LoginTypeSSO                = "m.login.sso"
 	LoginTypeRegistrationToken  = "m.login.registration_token"
+	// LoginTypeTerms asks a new user to accept the registration terms
+	// (MSC1692). It is only valid on /register.
+	LoginTypeTerms = "m.login.terms"
 	// LoginTypeOAuth is the m.oauth UIA type used with the OAuth 2.0 API,
 	// currently only valid on /keys/device_signing/upload.
 	LoginTypeOAuth = "m.oauth"

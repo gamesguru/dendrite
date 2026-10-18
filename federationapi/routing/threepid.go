@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
@@ -20,6 +22,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -190,9 +193,20 @@ func ExchangeThirdPartyInvite(
 		}
 	}
 
+	// MSC4311: the invited server expects the room state, including the
+	// create event, alongside the invite.
+	inviteState, err := gomatrixserverlib.GenerateStrippedState(httpReq.Context(), *validRoomID, rsAPI.StateQuerier())
+	if err != nil {
+		util.GetLogger(httpReq.Context()).WithError(err).Error("failed to generate invite room state")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
 	// Ask the requesting server to sign the newly created event so we know it
 	// acknowledged it
-	inviteReq, err := fclient.NewInviteV2Request(event, nil)
+	inviteReq, err := fclient.NewInviteV2Request(event, inviteState)
 	if err != nil {
 		util.GetLogger(httpReq.Context()).WithError(err).Error("failed to make invite v2 request")
 		return util.JSONResponse{
@@ -381,25 +395,32 @@ func buildMembershipEvent(
 // sendToRemoteServer uses federation to send an invite provided by an identity
 // server to a remote server in case the current server isn't in the room the
 // invite is for.
-// Returns an error if it couldn't get the server names to reach or if all of
-// them responded with an error.
+// Returns an error if it couldn't get the server names to reach, if none of
+// them is remote, or if all of them responded with an error.
 func sendToRemoteServer(
 	ctx context.Context, inv invite,
 	federation fclient.FederationClient, cfg *config.FederationAPI,
 	proto gomatrixserverlib.ProtoEvent,
 ) (err error) {
-	remoteServers := make([]spec.ServerName, 2)
-	_, remoteServers[0], err = gomatrixserverlib.SplitID('@', inv.Sender)
+	_, senderServer, err := gomatrixserverlib.SplitID('@', inv.Sender)
 	if err != nil {
 		return
 	}
-	// Fallback to the room's server if the sender's domain is the same as
-	// the current server's
 	roomID, err := spec.NewRoomID(inv.RoomID)
 	if err != nil {
 		return
 	}
-	remoteServers[1] = roomID.Domain()
+	// Fall back to the room's server, which room version 12 IDs do not name,
+	// if the sender's server is this one.
+	var remoteServers []spec.ServerName
+	for _, server := range []spec.ServerName{senderServer, eventutil.RoomIDDomain(*roomID)} {
+		if server != "" && !cfg.Matrix.IsLocalServerName(server) && !slices.Contains(remoteServers, server) {
+			remoteServers = append(remoteServers, server)
+		}
+	}
+	if len(remoteServers) == 0 {
+		return fmt.Errorf("no remote server known to be in room %s to send the 3PID invite to", inv.RoomID)
+	}
 
 	for _, server := range remoteServers {
 		err = federation.ExchangeThirdPartyInvite(ctx, cfg.Matrix.ServerName, server, proto)

@@ -601,6 +601,42 @@ func (r *Queryer) QueryServerAllowedToSeeEvent(
 	)
 }
 
+// QueryServerEventVisibility implements api.FederationRoomserverAPI.
+func (r *Queryer) QueryServerEventVisibility(
+	ctx context.Context,
+	serverName spec.ServerName,
+	event gomatrixserverlib.PDU,
+) (allowed, redact bool, err error) {
+	info, err := r.DB.RoomInfo(ctx, event.RoomID().String())
+	if err != nil {
+		return false, false, err
+	}
+	if info == nil || info.IsStub() {
+		return false, false, nil
+	}
+	isInRoom, err := r.DB.GetServerInRoom(ctx, info.RoomNID, serverName)
+	if err != nil {
+		return false, false, fmt.Errorf("r.DB.GetServerInRoom: %w", err)
+	}
+	allowed, member, err := helpers.CheckServerEventAccess(
+		ctx, r.DB, info, event.RoomID().String(), event.EventID(), serverName, isInRoom, r,
+	)
+	if err != nil || !allowed || member {
+		return allowed, false, err
+	}
+	erased, err := helpers.ErasedSenderEvents(ctx, r.DB, r, []gomatrixserverlib.PDU{event}, map[string]struct{}{event.EventID(): {}})
+	if err != nil {
+		return false, false, err
+	}
+	_, redact = erased[event.EventID()]
+	return true, redact, nil
+}
+
+// QueryErasedUsers implements api.SyncRoomserverAPI.
+func (r *Queryer) QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	return r.DB.ErasedUsers(ctx, userIDs)
+}
+
 // QueryMissingEvents implements api.RoomserverInternalAPI.
 func (r *Queryer) QueryMissingEvents(
 	ctx context.Context,
@@ -664,7 +700,13 @@ func missingEventsResponse(
 	for _, event := range loadedEvents {
 		if !eventsToFilter[event.EventID()] {
 			if _, ok := redactEventIDs[event.EventID()]; ok {
-				event.Redact()
+				// Loaded events can be shared through the event cache, so
+				// redact a copy. A copy that cannot be made is left out.
+				redacted, err := types.RedactedCopy(event)
+				if err != nil {
+					continue
+				}
+				event = redacted
 			}
 			events = append(events, &types.HeaderedEvent{PDU: event})
 		}
@@ -1095,7 +1137,9 @@ func (r *Queryer) QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.Ro
 		return "", err
 	}
 
-	return verImpl.CheckRestrictedJoin(ctx, r.Cfg.Global.ServerName, &api.JoinRoomQuerier{Roomserver: r}, roomID, senderID)
+	querier := &api.JoinRoomQuerier{Roomserver: r, TargetRoomID: roomID.String()}
+	authorisedVia, err := verImpl.CheckRestrictedJoin(ctx, r.Cfg.Global.ServerName, querier, roomID, senderID)
+	return authorisedVia, querier.RestrictedJoinError(err)
 }
 
 func (r *Queryer) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
@@ -1160,6 +1204,22 @@ func (r *Queryer) EmptyRooms(ctx context.Context) ([]string, error) {
 // QueryAdminEventReports returns event reports given a filter.
 func (r *Queryer) QueryAdminEventReports(ctx context.Context, from uint64, limit uint64, backwards bool, userID, roomID string) ([]api.QueryAdminEventReportsResponse, int64, error) {
 	return r.DB.QueryAdminEventReports(ctx, from, limit, backwards, userID, roomID)
+}
+
+// QueryAnnotationExists implements api.ClientRoomserverAPI.
+func (r *Queryer) QueryAnnotationExists(
+	ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key string, transactionID *api.TransactionID,
+) (bool, error) {
+	// The annotation this transaction produced, if it was already sent.
+	var transactionEventID string
+	if transactionID != nil {
+		var err error
+		transactionEventID, err = r.DB.ClientTransactionEventID(ctx, roomID, string(senderID), transactionID.SessionID, transactionID.TransactionID)
+		if err != nil {
+			return false, fmt.Errorf("r.DB.ClientTransactionEventID: %w", err)
+		}
+	}
+	return r.DB.AnnotationExists(ctx, roomID, targetEventID, senderID, eventType, key, transactionEventID)
 }
 
 // QueryAdminEventReport returns a single event report.

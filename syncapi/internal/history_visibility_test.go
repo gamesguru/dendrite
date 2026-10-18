@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -19,6 +20,19 @@ type mockHisVisRoomserverAPI struct {
 	rsapi.RoomserverInternalAPI
 	events []*types.HeaderedEvent
 	roomID string
+	// membershipAt overrides the membership event at the given event IDs.
+	membershipAt map[string]*types.HeaderedEvent
+	erased       map[string]struct{}
+}
+
+func (s *mockHisVisRoomserverAPI) QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	for _, userID := range userIDs {
+		if _, ok := s.erased[userID]; ok {
+			result[userID] = struct{}{}
+		}
+	}
+	return result, nil
 }
 
 func (s *mockHisVisRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, roomID spec.RoomID, eventIDs []string, senderID spec.SenderID) (map[string]*types.HeaderedEvent, error) {
@@ -26,6 +40,10 @@ func (s *mockHisVisRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, ro
 		membershipMap := map[string]*types.HeaderedEvent{}
 
 		for _, queriedEventID := range eventIDs {
+			if ev, ok := s.membershipAt[queriedEventID]; ok {
+				membershipMap[queriedEventID] = ev
+				continue
+			}
 			for _, event := range s.events {
 				if event.EventID() == queriedEventID {
 					membershipMap[queriedEventID] = event
@@ -212,4 +230,53 @@ func Test_ApplyHistoryVisbility_Boundaries(t *testing.T) {
 		},
 		filteredEventIDs,
 	)
+}
+
+// Joined users see unexpired MSC4354 sticky events whatever the history
+// visibility, except in sync timelines, which deliver sticky events in a
+// section of their own.
+func Test_ApplyHistoryVisibility_StickyEvents(t *testing.T) {
+	ctx := context.Background()
+	roomID := "!roomid:domain"
+	creator := spec.NewUserIDOrPanic("@creator:domain", false)
+	other := spec.NewUserIDOrPanic("@other:domain", false)
+	roomVerImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	now := time.Now().UnixMilli()
+
+	message := func(id string, extra string) *types.HeaderedEvent {
+		pdu, err := roomVerImpl.NewEventFromTrustedJSONWithEventID(id, []byte(fmt.Sprintf(`{
+			"type": "m.room.message", "room_id": %q, "sender": %q,
+			"origin_server_ts": %d, "content": {"body": "x"}%s
+		}`, roomID, creator.String(), now, extra)), false)
+		if err != nil {
+			t.Fatalf("failed to prepare event %s: %s", id, err)
+		}
+		ev := &types.HeaderedEvent{PDU: pdu}
+		ev.Visibility = gomatrixserverlib.HistoryVisibilityJoined
+		return ev
+	}
+	events := []*types.HeaderedEvent{
+		message("$sticky", `, "msc4354_sticky": {"duration_ms": 60000}`),
+		message("$expired", `, "msc4354_sticky": {"duration_ms": 0}`),
+		message("$regular", ""),
+	}
+	rsAPI := &mockHisVisRoomserverAPI{events: events, roomID: roomID}
+
+	filter := func(membership, endpoint string) []string {
+		syncDB := &mockDB{roomID: roomID, currentMembership: map[string]string{other.String(): membership}}
+		filtered, err := ApplyHistoryVisibilityFilter(ctx, syncDB, rsAPI, events, nil, other, endpoint)
+		if err != nil {
+			t.Fatalf("ApplyHistoryVisibilityFilter returned an error: %s", err)
+		}
+		ids := []string{}
+		for _, ev := range filtered {
+			ids = append(ids, ev.EventID())
+		}
+		return ids
+	}
+
+	// Other joined after these events, so history visibility hides them.
+	assert.DeepEqual(t, []string{"$sticky"}, filter(spec.Join, "messages"))
+	assert.DeepEqual(t, []string{}, filter(spec.Join, SyncEndpoint))
+	assert.DeepEqual(t, []string{}, filter(spec.Leave, "messages"))
 }

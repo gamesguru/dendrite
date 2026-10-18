@@ -40,6 +40,10 @@ const insertProfileSQL = "" +
 const selectProfileByLocalpartSQL = "" +
 	"SELECT localpart, server_name, display_name, avatar_url FROM userapi_profiles WHERE localpart = $1 AND server_name = $2"
 
+// SQLite serializes writers, so a plain select inside the write transaction
+// is enough.
+const selectProfileForUpdateSQL = selectProfileByLocalpartSQL
+
 const setAvatarURLSQL = "" +
 	"UPDATE userapi_profiles SET avatar_url = $1 WHERE localpart = $2 AND server_name = $3" +
 	" RETURNING display_name"
@@ -56,6 +60,7 @@ type profilesStatements struct {
 	serverNoticesLocalpart       string
 	insertProfileStmt            *sql.Stmt
 	selectProfileByLocalpartStmt *sql.Stmt
+	selectProfileForUpdateStmt   *sql.Stmt
 	setAvatarURLStmt             *sql.Stmt
 	setDisplayNameStmt           *sql.Stmt
 	selectProfilesBySearchStmt   *sql.Stmt
@@ -73,6 +78,7 @@ func NewSQLiteProfilesTable(db *sql.DB, serverNoticesLocalpart string) (tables.P
 	return s, sqlutil.StatementList{
 		{&s.insertProfileStmt, insertProfileSQL},
 		{&s.selectProfileByLocalpartStmt, selectProfileByLocalpartSQL},
+		{&s.selectProfileForUpdateStmt, selectProfileForUpdateSQL},
 		{&s.setAvatarURLStmt, setAvatarURLSQL},
 		{&s.setDisplayNameStmt, setDisplayNameSQL},
 		{&s.selectProfilesBySearchStmt, selectProfilesBySearchSQL},
@@ -94,6 +100,21 @@ func (s *profilesStatements) SelectProfileByLocalpart(
 ) (*authtypes.Profile, error) {
 	var profile authtypes.Profile
 	err := s.selectProfileByLocalpartStmt.QueryRowContext(ctx, localpart, serverName).Scan(
+		&profile.Localpart, &profile.ServerName, &profile.DisplayName, &profile.AvatarURL,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+
+// SelectProfileForUpdate reads a profile and locks it until txn ends.
+func (s *profilesStatements) SelectProfileForUpdate(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+) (*authtypes.Profile, error) {
+	var profile authtypes.Profile
+	err := sqlutil.TxStmt(txn, s.selectProfileForUpdateStmt).QueryRowContext(ctx, localpart, serverName).Scan(
 		&profile.Localpart, &profile.ServerName, &profile.DisplayName, &profile.AvatarURL,
 	)
 	if err != nil {

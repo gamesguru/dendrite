@@ -104,7 +104,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	notificationData, err := NewSqliteNotificationDataTable(d.db, &d.streamID)
+	notificationData, err := NewSqliteNotificationDataTable(ctx, d.db, &d.streamID)
 	if err != nil {
 		return err
 	}
@@ -125,6 +125,10 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 		return err
 	}
 	unPartialStatedRooms, err := NewSqliteUnPartialStatedRoomsTable(d.db, &d.streamID)
+	if err != nil {
+		return err
+	}
+	stickyEvents, err := NewSqliteStickyEventsTable(d.db, &d.streamID)
 	if err != nil {
 		return err
 	}
@@ -173,6 +177,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 		SlidingSync:             slidingSync,
 		SlidingSyncRoomMetadata: slidingSyncRoomMetadata,
 		UnPartialStatedRooms:    unPartialStatedRooms,
+		StickyEvents:            stickyEvents,
 	}
 	return nil
 }

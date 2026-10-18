@@ -86,6 +86,27 @@ global:
 well_known_server_name: "example.com:443"
 ```
 
+### Support contacts
+
+Zendrite also serves `/.well-known/matrix/support` ([MSC1929](https://spec.matrix.org/v1.10/client-server-api/#getwell-knownmatrixsupport)) when `global.support` is set.
+Clients show these contacts and the support page to users who need help with the homeserver.
+Each contact needs a `role`, either `m.role.admin`, `m.role.security` or a namespaced identifier, and a `matrix_id`, an `email_address` or both.
+
+```yaml
+global:
+  support:
+    contacts:
+      - matrix_id: "@admin:example.com"
+        email_address: admin@example.com
+        role: m.role.admin
+      - email_address: security@example.com
+        role: m.role.security
+    support_page: https://example.com/support
+```
+
+Like the other `.well-known` files, it must be reachable on `example.com`, so a separate web server has to forward `/.well-known/matrix/support` to Zendrite or serve the document itself.
+Without `global.support`, the endpoint returns 404.
+
 ## DNS SRV delegation
 
 This method is not recommended, as the behavior of SRV records in Matrix is rather unintuitive: SRV records will only change the IP address and port that other servers connect to, they won't affect the domain name.

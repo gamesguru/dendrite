@@ -37,6 +37,9 @@ type flow struct {
 	// OAuthAwarePreferred indicates the m.login.sso flow is preferred over
 	// other flows, as defined for OAuth 2.0 aware clients (spec v1.18).
 	OAuthAwarePreferred bool `json:"oauth_aware_preferred,omitempty"`
+	// GetLoginToken indicates that logged-in clients can create tokens for
+	// the m.login.token flow with POST /login/get_token (spec v1.7).
+	GetLoginToken bool `json:"get_login_token,omitempty"`
 }
 
 // Login implements GET and POST /login.
@@ -46,7 +49,10 @@ func Login(
 ) util.JSONResponse {
 	switch req.Method {
 	case http.MethodGet:
-		loginFlows := []flow{{Type: authtypes.LoginTypePassword}}
+		loginFlows := []flow{
+			{Type: authtypes.LoginTypePassword},
+			{Type: authtypes.LoginTypeToken, GetLoginToken: true},
+		}
 		if len(cfg.Derived.ApplicationServices) > 0 {
 			loginFlows = append(loginFlows, flow{Type: authtypes.LoginTypeApplicationService})
 		}
@@ -63,7 +69,7 @@ func Login(
 			return *authErr
 		}
 		// make a device/access token
-		authErr2 := completeAuth(req.Context(), cfg.Matrix, userAPI, login, req.RemoteAddr, req.UserAgent())
+		authErr2 := completeAuth(req.Context(), cfg, userAPI, login, req.RemoteAddr, req.UserAgent())
 		cleanup(req.Context(), &authErr2)
 		return authErr2
 	}
@@ -74,7 +80,7 @@ func Login(
 }
 
 func completeAuth(
-	ctx context.Context, cfg *config.Global, userAPI userapi.ClientUserAPI, login *auth.Login,
+	ctx context.Context, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI, login *auth.Login,
 	ipAddr, userAgent string,
 ) util.JSONResponse {
 	token, err := auth.GenerateAccessToken()
@@ -85,8 +91,16 @@ func completeAuth(
 			JSON: spec.InternalServerError{},
 		}
 	}
+	refresh, err := newRefreshableTokens(refreshableLifetime(cfg, login.RefreshToken))
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Error("failed to generate refresh token")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
 
-	localpart, serverName, err := userutil.ParseUsernameParam(login.Username(), cfg)
+	localpart, serverName, err := userutil.ParseUsernameParam(login.Username(), cfg.Matrix)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("auth.ParseUsernameParam failed")
 		return util.JSONResponse{
@@ -95,15 +109,34 @@ func completeAuth(
 		}
 	}
 
+	// A locked account cannot obtain a new access token (MSC3939). The
+	// credentials were already checked, so this reveals nothing to others.
+	var accRes userapi.QueryAccountByLocalpartResponse
+	if err = userAPI.QueryAccountByLocalpart(ctx, &userapi.QueryAccountByLocalpartRequest{
+		Localpart:  localpart,
+		ServerName: serverName,
+	}, &accRes); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryAccountByLocalpart failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if accRes.Account.Locked {
+		return auth.UserLockedResponse()
+	}
+
 	var performRes userapi.PerformDeviceCreationResponse
 	err = userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
-		DeviceDisplayName: login.InitialDisplayName,
-		DeviceID:          login.DeviceID,
-		AccessToken:       token,
-		Localpart:         localpart,
-		ServerName:        serverName,
-		IPAddr:            ipAddr,
-		UserAgent:         userAgent,
+		DeviceDisplayName:    login.InitialDisplayName,
+		DeviceID:             login.DeviceID,
+		AccessToken:          token,
+		Localpart:            localpart,
+		ServerName:           serverName,
+		IPAddr:               ipAddr,
+		UserAgent:            userAgent,
+		RefreshToken:         refresh.refreshToken,
+		AccessTokenExpiresTS: refresh.expiresTS,
 	}, &performRes)
 	if err != nil {
 		return util.JSONResponse{
@@ -115,9 +148,11 @@ func completeAuth(
 	return util.JSONResponse{
 		Code: http.StatusOK,
 		JSON: loginResponse{
-			UserID:      performRes.Device.UserID,
-			AccessToken: performRes.Device.AccessToken,
-			DeviceID:    performRes.Device.ID,
+			UserID:       performRes.Device.UserID,
+			AccessToken:  performRes.Device.AccessToken,
+			DeviceID:     performRes.Device.ID,
+			RefreshToken: refresh.refreshToken,
+			ExpiresInMs:  refresh.expiresInMs,
 		},
 	}
 }

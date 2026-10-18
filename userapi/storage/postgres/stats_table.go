@@ -16,6 +16,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/userapi/types"
@@ -146,13 +147,13 @@ SELECT COUNT(*) FROM userapi_accounts WHERE account_type = ANY($1)
 `
 
 // $1 = All non guest AccountType IDs
-// $2 = Guest AccountType.
+// $2 = Guest and call guest AccountTypes.
 const countRegisteredUserByTypeStmt = `
 SELECT user_type, COUNT(*) AS count FROM (
 	SELECT
     CASE
     	WHEN account_type = ANY($1) AND appservice_id IS NULL THEN 'native'
-        WHEN account_type = $2 AND appservice_id IS NULL THEN 'guest'
+        WHEN account_type = ANY($2) AND appservice_id IS NULL THEN 'guest'
         WHEN account_type = ANY($1) AND appservice_id IS NOT NULL THEN 'bridged'
 	END AS user_type
     FROM userapi_accounts
@@ -195,7 +196,7 @@ type statsStatements struct {
 	selectDailyMessagesStmt       *sql.Stmt
 }
 
-func NewPostgresStatsTable(db *sql.DB, serverName spec.ServerName) (tables.StatsTable, error) {
+func NewPostgresStatsTable(db *sql.DB, serverName spec.ServerName, contexts ...context.Context) (tables.StatsTable, error) {
 	s := &statsStatements{
 		serverName: serverName,
 		lastUpdate: time.Now(),
@@ -209,7 +210,9 @@ func NewPostgresStatsTable(db *sql.DB, serverName spec.ServerName) (tables.Stats
 	if err != nil {
 		return nil, err
 	}
-	go s.startTimers()
+	if len(contexts) > 0 {
+		s.startTimers(contexts[0])
+	}
 	return s, sqlutil.StatementList{
 		{&s.countUsersLastSeenAfterStmt, countUsersLastSeenAfterSQL},
 		{&s.countR30UsersStmt, countR30UsersSQL},
@@ -223,16 +226,14 @@ func NewPostgresStatsTable(db *sql.DB, serverName spec.ServerName) (tables.Stats
 	}.Prepare(db)
 }
 
-func (s *statsStatements) startTimers() {
-	var updateStatsFunc func()
-	updateStatsFunc = func() {
+func (s *statsStatements) startTimers(ctx context.Context) {
+	updateStatsFunc := func() {
 		logrus.Infof("Executing UpdateUserDailyVisits")
-		if err := s.UpdateUserDailyVisits(context.Background(), nil, time.Now(), s.lastUpdate); err != nil {
+		if err := s.UpdateUserDailyVisits(ctx, nil, time.Now(), s.lastUpdate); err != nil {
 			logrus.WithError(err).Error("failed to update daily user visits")
 		}
-		time.AfterFunc(time.Hour*3, updateStatsFunc)
 	}
-	time.AfterFunc(time.Minute*5, updateStatsFunc)
+	process.Repeat(ctx, time.Minute*5, time.Hour*3, updateStatsFunc) //nolint:mnd // Preserve the existing statistics schedule.
 }
 
 func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int64, err error) {
@@ -243,6 +244,7 @@ func (s *statsStatements) allUsers(ctx context.Context, txn *sql.Tx) (result int
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),
+			int64(api.AccountTypeCallGuest),
 		},
 	).Scan(&result)
 	return
@@ -255,6 +257,7 @@ func (s *statsStatements) nonBridgedUsers(ctx context.Context, txn *sql.Tx) (res
 			int64(api.AccountTypeUser),
 			int64(api.AccountTypeGuest),
 			int64(api.AccountTypeAdmin),
+			int64(api.AccountTypeCallGuest),
 		},
 	).Scan(&result)
 	return
@@ -270,7 +273,7 @@ func (s *statsStatements) registeredUserByType(ctx context.Context, txn *sql.Tx)
 			int64(api.AccountTypeAdmin),
 			int64(api.AccountTypeAppService),
 		},
-		api.AccountTypeGuest,
+		[]int64{int64(api.AccountTypeGuest), int64(api.AccountTypeCallGuest)},
 		spec.AsTimestamp(registeredAfter),
 	)
 	if err != nil {

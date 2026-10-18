@@ -15,7 +15,6 @@
 *.so
 
 # Folders
-/kafka
 /bin
 /pkg
 /_obj
@@ -80,8 +79,15 @@ build
 go.work*
 
 # helm chart
-helm/dendrite/charts/
+helm/zendrite/charts/
+vendor/
+.zendrite-dev/
+zendrite
+!cmd/zendrite
+!.forgejo/**/zendrite.yaml
+CLAUDE.md
+AGENTS.md
 
-# new ignores
-coverage.out
-/dendrite
+# Local documentation
+/docs/
+/.hachaos

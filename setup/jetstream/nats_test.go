@@ -21,7 +21,7 @@ func TestNATSConnectOptions(t *testing.T) {
 	t.Run("disables TLS validation when configured", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.JetStream{DisableTLSValidation: true}
-		opts, err := natsConnectOptions(nil, cfg, nil)
+		opts, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -41,13 +41,30 @@ func TestNATSConnectOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("detects a silent broker within about 30 seconds", func(t *testing.T) {
+		t.Parallel()
+		opts, err := natsConnectOptions(nil, &config.JetStream{}, nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var nopts natsclient.Options
+		for _, opt := range opts {
+			if err := opt(&nopts); err != nil {
+				t.Fatalf("applying option: %v", err)
+			}
+		}
+		if detect := nopts.PingInterval * time.Duration(nopts.MaxPingsOut+1); detect > 30*time.Second {
+			t.Fatalf("a silent broker is detected after %s (ping %s, %d outstanding)", detect, nopts.PingInterval, nopts.MaxPingsOut)
+		}
+	})
+
 	t.Run("missing credentials file returns a clear error", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.JetStream{
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path("/does/not/exist.creds"),
 		}
-		_, err := natsConnectOptions(nil, cfg, nil)
+		_, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err == nil {
 			t.Fatal("expected an error for missing credentials file")
 		}
@@ -68,7 +85,7 @@ func TestNATSConnectOptions(t *testing.T) {
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path(path),
 		}
-		_, err := natsConnectOptions(nil, cfg, nil)
+		_, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err == nil {
 			t.Fatal("expected an error for invalid credentials file")
 		}
@@ -90,7 +107,7 @@ func TestNATSConnectOptions(t *testing.T) {
 			Addresses:   []string{"localhost:4222"},
 			Credentials: config.Path(path),
 		}
-		opts, err := natsConnectOptions(nil, cfg, nil)
+		opts, err := natsConnectOptions(nil, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -262,5 +279,28 @@ NKEYs are sensitive and should be treated as secrets.
 `, jwt, seed)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("writing creds file: %v", err)
+	}
+}
+
+func TestMaxPayloadBelowEmbedded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		limit int64
+		want  bool
+	}{
+		{"nats default", 1024 * 1024, true},
+		{"just below embedded", embeddedMaxPayload - 1, true},
+		{"embedded", embeddedMaxPayload, false},
+		{"larger", 16 * 1024 * 1024, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := maxPayloadBelowEmbedded(tc.limit); got != tc.want {
+				t.Fatalf("maxPayloadBelowEmbedded(%d) = %v, want %v", tc.limit, got, tc.want)
+			}
+		})
 	}
 }

@@ -58,8 +58,14 @@ func PeekRoomByIDOrAlias(
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.Unknown(e.Error())}
 		case errors.As(err, &e1):
 			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(e1.Error())}
-		case errors.As(err, &e2):
+		case errors.As(err, &e2) && e2.Code >= 400 && json.Valid([]byte(e2.Message)):
+			// this ensures we proxy responses over federation to the client
 			return util.JSONResponse{Code: e2.Code, JSON: json.RawMessage(e2.Message)}
+		case errors.As(err, &e2):
+			// The peek failed without a remote answer to pass through, e.g.
+			// because the response could not be decoded or its state stored.
+			logrus.WithError(err).WithField("roomID", roomIDOrAlias).Warn("Peek failed over federation")
+			return util.JSONResponse{Code: http.StatusBadGateway, JSON: spec.Unknown("Unable to peek into the room through any server")}
 		case err == nil:
 		default:
 			logrus.WithError(err).WithField("roomID", roomIDOrAlias).Errorf("Failed to peek room")

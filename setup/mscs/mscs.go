@@ -11,6 +11,7 @@ import (
 	"context"
 
 	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -18,25 +19,37 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/mscs/msc2836"
 	"codefloe.com/pat-s/zendrite/setup/mscs/msc3814"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 // Enable MSCs - returns an error on unknown MSCs.
-func Enable(cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, caches *caching.Caches) error {
+func Enable(
+	processCtx *process.ProcessContext, cfg *config.Zendrite, cm *sqlutil.Connections, natsInstance *jetstream.NATSInstance,
+	routers httputil.Routers, monolith *setup.Monolith, caches *caching.Caches,
+) error {
+	js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+	if !cfg.MSCs.Enabled("msc2836") {
+		msc2836.RemoveConsumer(cfg, js)
+	}
 	for _, msc := range cfg.MSCs.MSCs {
 		util.GetLogger(context.Background()).WithField("msc", msc).Info("Enabling MSC")
-		if err := EnableMSC(cfg, cm, routers, monolith, msc, caches); err != nil {
+		if err := EnableMSC(processCtx, cfg, cm, js, routers, monolith, msc, caches); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func EnableMSC(cfg *config.Zendrite, cm *sqlutil.Connections, routers httputil.Routers, monolith *setup.Monolith, msc string, caches *caching.Caches) error {
+func EnableMSC(
+	processCtx *process.ProcessContext, cfg *config.Zendrite, cm *sqlutil.Connections, js nats.JetStreamContext,
+	routers httputil.Routers, monolith *setup.Monolith, msc string, caches *caching.Caches,
+) error {
 	switch msc {
 	case "msc2836":
-		return msc2836.Enable(cfg, cm, routers, monolith.RoomserverAPI, monolith.FederationAPI, monolith.UserAPI, monolith.KeyRing)
+		return msc2836.Enable(processCtx, cfg, cm, js, routers, monolith.RoomserverAPI, monolith.FederationAPI, monolith.UserAPI, monolith.KeyRing)
 	case "msc3814":
 		return msc3814.Enable(cfg, cm, routers, monolith.UserAPI)
 	case "msc2444": // enabled inside federationapi

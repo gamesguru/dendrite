@@ -386,7 +386,7 @@ func TestExtractLazySenders(t *testing.T) {
 			// Need to create a dummy RequestPool to call extractLazySenders
 			// Since it's a method on RequestPool but doesn't use any fields,
 			// we can just use a nil-safe approach or test the logic directly
-			rp := &RequestPool{}
+			rp := &RequestPool{ctx: t.Context()}
 			result := rp.extractLazySenders(tt.config, tt.timeline)
 			assert.Equal(t, tt.wantSenders, result)
 		})

@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
 	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
@@ -42,6 +43,7 @@ type OutputRoomEventConsumer struct {
 	queues        *queue.OutgoingQueues
 	topic         string
 	topicPresence string
+	sticky        *stickyTracker
 }
 
 // NewOutputRoomEventConsumer creates a new OutputRoomEventConsumer. Call Start() to begin consuming from room servers.
@@ -65,6 +67,7 @@ func NewOutputRoomEventConsumer(
 		durable:       cfg.Matrix.JetStream.Durable("FederationAPIRoomServerConsumer"),
 		topic:         cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
 		topicPresence: cfg.Matrix.JetStream.Prefixed(jetstream.RequestPresence),
+		sticky:        newStickyTracker(),
 	}
 }
 
@@ -102,7 +105,23 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	switch output.Type {
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
-		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil { //nolint:contextcheck
+		// A database that is only unreachable, as during a PostgreSQL
+		// failover, is waited out rather than reaching the panic below.
+		err := sqlutil.RetryTransient(s.ctx, "federation API update for "+ev.EventID(), func() error { //nolint:contextcheck
+			return s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState)
+		})
+		if err != nil {
+			// The process context is canceled at shutdown while this consumer
+			// can still be part way through a message. Nothing was written, so
+			// there is no inconsistent database for the panic below to guard
+			// against: NAK instead and let redelivery pick the event up.
+			if interrupted(err) || s.ctx.Err() != nil {
+				log.WithFields(log.Fields{
+					"event_id": ev.EventID(),
+					"room_id":  ev.RoomID().String(),
+				}).Warn("Interrupted before the room event was written; leaving it for redelivery")
+				return false
+			}
 			// A room purge evacuates the room (producing leave events) and then
 			// deletes the room's state, all before the OutputTypePurgeRoom message
 			// reaches us. Those leave events can therefore arrive here after the
@@ -127,16 +146,25 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 
 	case api.OutputTypeNewInboundPeek:
-		if err := s.processInboundPeek(*output.NewInboundPeek); err != nil {
+		err := sqlutil.RetryTransient(s.ctx, "federation API inbound peek", func() error { //nolint:contextcheck
+			return s.processInboundPeek(*output.NewInboundPeek)
+		})
+		if err != nil {
+			if interrupted(err) || s.ctx.Err() != nil {
+				log.WithField("peek", output.NewInboundPeek).Warn("Interrupted before the inbound peek was tracked; leaving it for redelivery")
+				return false
+			}
 			log.WithFields(log.Fields{
 				"event":      output.NewInboundPeek,
 				log.ErrorKey: err,
 			}).Panicf("roomserver output log: remote peek event failure")
-			return false
 		}
 
 	case api.OutputTypePurgeRoom:
 		log.WithField("room_id", output.PurgeRoom.RoomID).Info("Purging room from federation API")
+		if s.sticky != nil {
+			s.sticky.forget(output.PurgeRoom.RoomID)
+		}
 		if err := s.db.PurgeRoom(ctx, output.PurgeRoom.RoomID); err != nil {
 			log.WithField("room_id", output.PurgeRoom.RoomID).WithError(err).Error("Failed to purge room from federation API")
 		} else {
@@ -150,6 +178,13 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// interrupted reports whether err is this process being torn down rather than
+// a genuine failure. Consumers keep running until their worker is stopped, so
+// an in-flight message can fail this way with nothing having been written.
+func interrupted(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // processInboundPeek starts tracking a new federated inbound peek (replacing the existing one if any)
@@ -223,12 +258,20 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 		}
 	}
 
+	s.trackStickyEvent(ore)
+
 	if oldJoinedHosts == nil {
 		// This means that there is nothing to update as this is a duplicate
 		// message.
 		// This can happen if zendrite crashed between reading the message and
 		// persisting the stream position.
 		return nil
+	}
+
+	// Servers that have just joined learn of the sticky events we sent before
+	// (MSC4354). After a state rewrite, the hosts are not newly joined.
+	if !rewritesState {
+		s.pushStickyEvents(ore.Event.RoomID().String(), oldJoinedHosts, addsJoinedHosts)
 	}
 
 	if ore.SendAsServer == api.DoNotSendToOtherServers {
@@ -275,6 +318,15 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	// partial join. SendEvent deduplicates and drops our own server name.
 	joinedHostsAtEvent = append(joinedHostsAtEvent, partialStateServers...)
 
+	// A kick or ban ending a remote user's invite or knock must also reach
+	// their server, which is not in the room and would otherwise never learn
+	// that the invite was rescinded or the knock rejected.
+	if isLocalEvent {
+		if target, ok := s.pendingMembershipTarget(ore); ok {
+			joinedHostsAtEvent = append(joinedHostsAtEvent, target)
+		}
+	}
+
 	// TODO: do housekeeping to evict unrenewed peeking hosts
 
 	// TODO: implement query to let the fedapi check whether a given peek is live or not
@@ -283,6 +335,52 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	return s.queues.SendEvent(
 		ore.Event, spec.ServerName(ore.SendAsServer), joinedHostsAtEvent,
 	)
+}
+
+// pendingMembershipTarget returns the server of the user a membership event
+// kicks or bans out of a knock, or whose invite the inviter rescinds, if that
+// server is remote.
+func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomEvent) (spec.ServerName, bool) {
+	ev := ore.Event
+	if ev.Type() != spec.MRoomMember || ev.StateKey() == nil || *ev.StateKey() == string(ev.SenderID()) {
+		return "", false
+	}
+	if membership, err := ev.Membership(); err != nil || (membership != spec.Leave && membership != spec.Ban) {
+		return "", false
+	}
+	target, err := s.rsAPI.QueryUserIDForSender(s.ctx, ev.RoomID(), spec.SenderID(*ev.StateKey()))
+	if err != nil || target == nil || s.cfg.Matrix.IsLocalServerName(target.Domain()) {
+		return "", false
+	}
+
+	// Only invites and knocks: a user who joined has a server in the room.
+	if len(ore.RemovesStateEventIDs) == 0 {
+		return "", false
+	}
+	eventsRes := &api.QueryEventsByIDResponse{}
+	if err = s.rsAPI.QueryEventsByID(s.ctx, &api.QueryEventsByIDRequest{
+		RoomID:   ev.RoomID().String(),
+		EventIDs: ore.RemovesStateEventIDs,
+	}, eventsRes); err != nil {
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to load the membership replaced by a kick or ban")
+		return "", false
+	}
+	for _, removed := range eventsRes.Events {
+		if removed.Type() != spec.MRoomMember || !removed.StateKeyEquals(*ev.StateKey()) {
+			continue
+		}
+		membership, mErr := removed.Membership()
+		switch {
+		case mErr != nil:
+		case membership == spec.Knock:
+			return target.Domain(), true
+		case membership == spec.Invite && removed.SenderID() == ev.SenderID():
+			// As in Synapse, only the inviter rescinds an invite over
+			// federation; other kicks stay within the room.
+			return target.Domain(), true
+		}
+	}
+	return "", false
 }
 
 func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []types.JoinedHost) {

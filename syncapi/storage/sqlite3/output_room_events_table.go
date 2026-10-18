@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -44,6 +45,8 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events (
   exclude_from_sync BOOL NOT NULL DEFAULT FALSE,
   history_visibility SMALLINT NOT NULL DEFAULT 2 -- The history visibility before this event (1 - world_readable; 2 - shared; 3 - invited; 4 - joined)
 );
+
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_timestamp_idx ON syncapi_output_room_events (room_id, (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT)), id);
 
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_type_idx ON syncapi_output_room_events (type);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_sender_idx ON syncapi_output_room_events (sender);
@@ -110,7 +113,21 @@ const selectSearchSQL = "SELECT id, event_id, headered_event_json FROM syncapi_o
 const purgeEventsSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE room_id = $1"
 
+const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) >= $2
+AND ($3 = 0 OR CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) > $2 OR (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) = $2 AND id > $3))
+ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) ASC, id ASC LIMIT $4`
+
+const selectTimestampBackwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events
+WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) <= $2
+AND ($3 = 0 OR CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) < $2 OR (CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) = $2 AND id < $3))
+ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) DESC, id DESC LIMIT $4`
+
 type outputRoomEventsStatements struct {
+	selectTimestampForwardStmt   *sql.Stmt
+	selectTimestampBackwardStmt  *sql.Stmt
 	db                           *sql.DB
 	streamIDStatements           *StreamIDStatements
 	insertEventStmt              *sql.Stmt
@@ -140,6 +157,10 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 			Version: "syncapi: add history visibility column (output_room_events)",
 			Up:      deltas.UpAddHistoryVisibilityColumnOutputRoomEvents,
 		},
+		sqlutil.Migration{
+			Version: "syncapi: restore event IDs of redacted output events",
+			Up:      deltas.UpRestoreOutputRoomEventIDs,
+		},
 	)
 	err = m.Up(context.Background())
 	if err != nil {
@@ -147,6 +168,8 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 	}
 
 	return s, sqlutil.StatementList{
+		{&s.selectTimestampForwardStmt, selectTimestampForwardSQL},
+		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
 		{&s.updateEventJSONStmt, updateEventJSONSQL},
@@ -417,9 +440,47 @@ func (s *outputRoomEventsStatements) SelectRecentEvents(
 	return result, nil
 }
 
-// selectEvents returns the events for the given event IDs. If an event is
+// SelectEvents binds at most selectEventsChunkSize event IDs per query.
+// SQLite refuses a statement with more than 32766 variables, which the state
+// of a room with tens of thousands of members exceeds.
+const selectEventsChunkSize = 999
+
+// SelectEvents returns the events for the given event IDs. If an event is
 // missing from the database, it will be omitted.
 func (s *outputRoomEventsStatements) SelectEvents(
+	ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool,
+) ([]types.StreamEvent, error) {
+	if filter == nil {
+		// No filter returns every requested event, as on PostgreSQL. A
+		// default limit here made Events silently drop all but 20.
+		filter = &synctypes.RoomEventFilter{}
+	}
+	if len(eventIDs) <= selectEventsChunkSize {
+		return s.selectEvents(ctx, txn, eventIDs, filter, preserveOrder)
+	}
+	// Each chunk applies the filter and limit, then the combined result is cut
+	// back to the limit in the stream order a single query would have used.
+	var streamEvents []types.StreamEvent
+	for chunk := range slices.Chunk(eventIDs, selectEventsChunkSize) {
+		events, err := s.selectEvents(ctx, txn, chunk, filter, false)
+		if err != nil {
+			return nil, err
+		}
+		streamEvents = append(streamEvents, events...)
+	}
+	sort.SliceStable(streamEvents, func(i, j int) bool {
+		return streamEvents[i].StreamPosition < streamEvents[j].StreamPosition
+	})
+	if filter.Limit > 0 && len(streamEvents) > filter.Limit {
+		streamEvents = streamEvents[:filter.Limit]
+	}
+	if preserveOrder {
+		return inRequestOrder(streamEvents, eventIDs), nil
+	}
+	return streamEvents, nil
+}
+
+func (s *outputRoomEventsStatements) selectEvents(
 	ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool,
 ) ([]types.StreamEvent, error) {
 	iEventIDs := make([]any, len(eventIDs))
@@ -428,9 +489,6 @@ func (s *outputRoomEventsStatements) SelectEvents(
 	}
 	selectSQL := strings.Replace(selectEventsSQL, "($1)", sqlutil.QueryVariadic(len(eventIDs)), 1)
 
-	if filter == nil {
-		filter = &synctypes.RoomEventFilter{Limit: 20} //nolint:mnd
-	}
 	stmt, params, err := prepareWithFilters(
 		s.db, txn, selectSQL, iEventIDs,
 		filter.Senders, filter.NotSenders,
@@ -452,20 +510,25 @@ func (s *outputRoomEventsStatements) SelectEvents(
 		return nil, err
 	}
 	if preserveOrder {
-		var returnEvents []types.StreamEvent
-		eventMap := make(map[string]types.StreamEvent)
-		for _, ev := range streamEvents {
-			eventMap[ev.EventID()] = ev
-		}
-		for _, eventID := range eventIDs {
-			ev, ok := eventMap[eventID]
-			if ok {
-				returnEvents = append(returnEvents, ev)
-			}
-		}
-		return returnEvents, nil
+		return inRequestOrder(streamEvents, eventIDs), nil
 	}
 	return streamEvents, nil
+}
+
+// inRequestOrder returns the events in the order their IDs were requested.
+func inRequestOrder(streamEvents []types.StreamEvent, eventIDs []string) []types.StreamEvent {
+	var returnEvents []types.StreamEvent
+	eventMap := make(map[string]types.StreamEvent)
+	for _, ev := range streamEvents {
+		eventMap[ev.EventID()] = ev
+	}
+	for _, eventID := range eventIDs {
+		ev, ok := eventMap[eventID]
+		if ok {
+			returnEvents = append(returnEvents, ev)
+		}
+	}
+	return returnEvents
 }
 
 func (s *outputRoomEventsStatements) DeleteEventsForRoom(
@@ -744,4 +807,20 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 		result[roomID] = maxPos
 	}
 	return result, rows.Err()
+}
+
+// SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
+// A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
+// Backfilled events are eligible even when excluded from incremental sync.
+func (s *outputRoomEventsStatements) SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
+	stmt := s.selectTimestampForwardStmt
+	if backwards {
+		stmt = s.selectTimestampBackwardStmt
+	}
+	rows, err := sqlutil.TxStmt(txn, stmt).QueryContext(ctx, roomID, timestamp, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectEventsByTimestamp: close rows")
+	return rowsToStreamEvents(rows)
 }

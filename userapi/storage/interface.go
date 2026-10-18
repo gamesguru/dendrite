@@ -9,7 +9,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
@@ -17,8 +17,10 @@ import (
 
 	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
 	"codefloe.com/pat-s/zendrite/userapi/api"
+	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
 	"codefloe.com/pat-s/zendrite/userapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/userapi/types"
 )
@@ -37,6 +39,24 @@ type Profile interface {
 	SearchProfiles(ctx context.Context, searchString string, limit int) ([]authtypes.Profile, error)
 	SetAvatarURL(ctx context.Context, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error)
 	SetDisplayName(ctx context.Context, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
+	SetProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error
+	DeleteProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string) error
+}
+
+// DelayedEvents stores MSC4140 delayed events.
+type DelayedEvents interface {
+	AddDelayedEvent(ctx context.Context, event *api.DelayedEvent, maxScheduled int) error
+	RestartDelayedEvent(ctx context.Context, delayID string, now spec.Timestamp) (bool, error)
+	CancelDelayedEvent(ctx context.Context, delayID string, now spec.Timestamp) (bool, error)
+	ClaimDelayedEvent(ctx context.Context, delayID string) (*api.DelayedEvent, error)
+	ClaimDueDelayedEvents(ctx context.Context, now spec.Timestamp, reclaim bool) ([]api.DelayedEvent, error)
+	UnclaimDelayedEvent(ctx context.Context, delayID string) error
+	FinalizeDelayedEvent(ctx context.Context, delayID, eventID string, sendErr json.RawMessage, now spec.Timestamp) error
+	CancelDelayedStateEvents(ctx context.Context, roomID, eventType, stateKey, exceptLocalpart string, exceptServerName spec.ServerName, now spec.Timestamp) error
+	PurgeDelayedEvents(ctx context.Context, before spec.Timestamp) error
+	GetDelayedEvent(ctx context.Context, delayID string) (*api.DelayedEvent, error)
+	GetDelayedEventsForUser(ctx context.Context, localpart string, serverName spec.ServerName, finalized bool) ([]api.DelayedEvent, error)
+	NextDelayedEventSendTS(ctx context.Context) (spec.Timestamp, bool, error)
 }
 
 type Account interface {
@@ -51,6 +71,13 @@ type Account interface {
 	GetAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
 	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	DeactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	SetAccountLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	SetAccountSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
+	// GetActiveAccountsCreatedBefore returns up to limit accounts of the given
+	// type that are not deactivated and were created before the given time,
+	// oldest first.
+	GetActiveAccountsCreatedBefore(ctx context.Context, accountType api.AccountType, before time.Time, limit int) ([]api.Account, error)
 	SetPassword(ctx context.Context, localpart string, serverName spec.ServerName, plaintextPassword string) error
 }
 
@@ -62,6 +89,9 @@ type AccountData interface {
 	// If no account data could be found, returns nil
 	// Returns an error if there was an issue with the retrieval
 	GetAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) (data json.RawMessage, err error)
+	// RemoveAllAccountData deletes all global and room account data of a
+	// user, such as when the user is erased (MSC4025).
+	RemoveAllAccountData(ctx context.Context, localpart string, serverName spec.ServerName) error
 	QueryPushRules(ctx context.Context, localpart string, serverName spec.ServerName) (*pushrules.AccountRuleSets, error)
 }
 
@@ -83,6 +113,18 @@ type Device interface {
 	// access token rotation, where the device is unchanged but the token is not.
 	UpdateDeviceAccessToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, accessToken string) error
 	UpdateDeviceLastSeen(ctx context.Context, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
+	// SetDeviceRefreshToken makes the device's access token expire at expiresTS
+	// and stores the hash of its refresh token (MSC2918).
+	SetDeviceRefreshToken(ctx context.Context, localpart string, serverName spec.ServerName, deviceID string, expiresTS int64, refreshTokenHash string) error
+	// RefreshDeviceTokens replaces the access and refresh tokens of the device
+	// holding the refresh token. Returns sql.ErrNoRows for an unknown or revoked token.
+	RefreshDeviceTokens(ctx context.Context, refreshTokenHash, accessToken string, expiresTS int64, newRefreshTokenHash string) (*api.Device, error)
+	// ClearPrevRefreshToken revokes the refresh token that was used to obtain
+	// the given access token, once that access token has been used.
+	ClearPrevRefreshToken(ctx context.Context, accessToken string) error
+	// GetRefreshTokenOwner returns the user of the device holding the given
+	// current or previous refresh token hash, or sql.ErrNoRows.
+	GetRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (localpart string, serverName spec.ServerName, err error)
 	RemoveDevices(ctx context.Context, localpart string, serverName spec.ServerName, devices []string) error
 	// RemoveAllDevices deleted all devices for this user. Returns the devices deleted.
 	RemoveAllDevices(ctx context.Context, localpart string, serverName spec.ServerName, exceptDeviceID string) (devices []api.Device, err error)
@@ -96,6 +138,11 @@ type KeyBackup interface {
 	UpsertBackupKeys(ctx context.Context, version, userID string, uploads []api.InternalKeyBackupSession) (count int64, etag string, err error)
 	GetBackupKeys(ctx context.Context, version, userID, filterRoomID, filterSessionID string) (result map[string]map[string]api.KeyBackupSession, err error)
 	CountBackupKeys(ctx context.Context, version, userID string) (count int64, err error)
+	// DeleteBackupKeys deletes the keys of a backup version, only those of
+	// filterRoomID if it is set, and only the session filterSessionID of that
+	// room if that is set too. It returns sql.ErrNoRows if the version does
+	// not exist or was deleted.
+	DeleteBackupKeys(ctx context.Context, version, userID, filterRoomID, filterSessionID string) (count int64, etag string, err error)
 }
 
 type LoginToken interface {
@@ -104,7 +151,9 @@ type LoginToken interface {
 	CreateLoginToken(ctx context.Context, data *api.LoginTokenData) (*api.LoginTokenMetadata, error)
 
 	// RemoveLoginToken removes the named token (and may clean up other expired tokens).
-	RemoveLoginToken(ctx context.Context, token string) error
+	// It reports whether the token existed and had not expired, which is true for
+	// only one of several concurrent callers.
+	RemoveLoginToken(ctx context.Context, token string) (bool, error)
 
 	// GetLoginTokenDataByToken returns the data associated with the given token.
 	// May return sql.ErrNoRows.
@@ -125,7 +174,7 @@ type Pusher interface {
 
 type ThreePID interface {
 	SaveThreePIDAssociation(ctx context.Context, threepid, localpart string, serverName spec.ServerName, medium string) (err error)
-	RemoveThreePIDAssociation(ctx context.Context, threepid string, medium string) (err error)
+	RemoveThreePIDAssociation(ctx context.Context, threepid string, medium string, localpart string, serverName spec.ServerName) (err error)
 	GetLocalpartForThreePID(ctx context.Context, threepid string, medium string) (localpart string, serverName spec.ServerName, err error)
 	GetThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 }
@@ -138,10 +187,14 @@ type ExternalID interface {
 type Notification interface {
 	InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
+	StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64) (users []string, err error)
+	SetNotificationsReadForReceipt(ctx context.Context, localpart string, serverName spec.ServerName, roomID, eventID, threadID string) (affected bool, err error)
 	SetNotificationsRead(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64, read bool) (affected bool, err error)
 	GetNotifications(ctx context.Context, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error)
 	GetNotificationCount(ctx context.Context, localpart string, serverName spec.ServerName, filter tables.NotificationFilter) (int64, error)
 	GetRoomNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (total int64, highlight int64, _ error)
+	// GetRoomThreadNotificationCounts counts a user's unread notifications in a room by thread.
+	GetRoomThreadNotificationCounts(ctx context.Context, localpart string, serverName spec.ServerName, roomID string) (map[string]eventutil.ThreadNotificationCounts, error)
 	DeleteOldNotifications(ctx context.Context) error
 }
 
@@ -155,6 +208,7 @@ type UserDatabase interface {
 	Account
 	AccountData
 	DehydratedDevice
+	DelayedEvents
 	Device
 	ExternalID
 	KeyBackup
@@ -257,4 +311,4 @@ type Statistics interface {
 
 // Err3PIDInUse is the error returned when trying to save an association involving
 // a third-party identifier which is already associated to a local user.
-var Err3PIDInUse = errors.New("this third-party identifier is already in use")
+var Err3PIDInUse = shared.Err3PIDInUse

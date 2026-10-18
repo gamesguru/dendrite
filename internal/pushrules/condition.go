@@ -1,5 +1,7 @@
 package pushrules
 
+import "encoding/json"
+
 // A Condition dictates extra conditions for a matching rules. See
 // ConditionKind.
 type Condition struct {
@@ -16,6 +18,10 @@ type Condition struct {
 	// for EventMatchCondition.
 	Pattern *string `json:"pattern,omitempty"`
 
+	// Value is a non-compound JSON value for property conditions.
+	// RawMessage distinguishes a missing value from an explicit null.
+	Value json.RawMessage `json:"value,omitempty"`
+
 	// Is indicates the condition that must be fulfilled. Required for
 	// RoomMemberCountCondition.
 	Is string `json:"is,omitempty"`
@@ -29,6 +35,9 @@ type ConditionKind string
 
 const (
 	UnknownCondition ConditionKind = ""
+
+	EventPropertyIsCondition       ConditionKind = "event_property_is"
+	EventPropertyContainsCondition ConditionKind = "event_property_contains"
 
 	// EventMatchCondition indicates the condition looks for a key
 	// path and matches a pattern. How paths that don't reference a

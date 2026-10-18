@@ -49,6 +49,7 @@ const deleteQueueEDUsSQL = "" +
 const selectQueueEDUSQL = "" +
 	"SELECT json_nid FROM federationsender_queue_edus" +
 	" WHERE server_name = $1" +
+	" ORDER BY json_nid" +
 	" LIMIT $2"
 
 const selectQueueEDUReferenceJSONCountSQL = "" +

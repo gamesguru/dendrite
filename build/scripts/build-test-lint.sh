@@ -1,16 +1,18 @@
 #! /bin/bash
 
-# Builds, tests and lints dendrite, and should be run before pushing commits
+# Builds, tests and lints Zendrite, and should be run before pushing commits
 
 set -eu
+
+cd "$(dirname "$0")/../.."
 
 # Check that all the packages can build.
 # When `go build` is given multiple packages it won't output anything, and just
 # checks that everything builds.
 echo "Checking that it builds..."
-go build ./cmd/...
+go build -tags goolm ./cmd/...
 
-./build/scripts/find-lint.sh
+prek run golangci-lint --all-files
 
 echo "Testing..."
-go test --race -v ./...
+go test -tags goolm -race -v ./...

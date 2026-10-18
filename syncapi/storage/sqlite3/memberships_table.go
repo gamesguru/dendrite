@@ -115,6 +115,20 @@ func (s *membershipsStatements) UpsertMembership(
 	return err
 }
 
+// UpsertMemberships loops over UpsertMembership: SQLite runs in-process, so a
+// statement per row costs no network round trip.
+func (s *membershipsStatements) UpsertMemberships(
+	ctx context.Context, txn *sql.Tx, events []*rstypes.HeaderedEvent,
+	streamPos, topologicalPos types.StreamPosition,
+) error {
+	for _, event := range events {
+		if err := s.UpsertMembership(ctx, txn, event, streamPos, topologicalPos); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *membershipsStatements) SelectMembershipCount(
 	ctx context.Context, txn *sql.Tx, roomID, membership string, pos types.StreamPosition,
 ) (count int, err error) {

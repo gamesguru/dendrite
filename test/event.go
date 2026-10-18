@@ -26,6 +26,9 @@ type eventMods struct {
 	keyID          gomatrixserverlib.KeyID
 	privKey        ed25519.PrivateKey
 	authEvents     []string
+	redacts        string
+	sticky         *gomatrixserverlib.StickyEventData
+	prevEvents     []string
 }
 
 type eventModifier func(e *eventMods)
@@ -63,6 +66,28 @@ func WithKeyID(keyID gomatrixserverlib.KeyID) eventModifier {
 func WithPrivateKey(pkey ed25519.PrivateKey) eventModifier {
 	return func(e *eventMods) {
 		e.privKey = pkey
+	}
+}
+
+// WithRedacts sets the top-level redacts field of a redaction event.
+func WithRedacts(eventID string) eventModifier {
+	return func(e *eventMods) {
+		e.redacts = eventID
+	}
+}
+
+// WithStickyDuration makes the event an MSC4354 sticky event for d.
+func WithStickyDuration(d time.Duration) eventModifier {
+	return func(e *eventMods) {
+		e.sticky = &gomatrixserverlib.StickyEventData{DurationMillis: d.Milliseconds()}
+	}
+}
+
+// WithPrevEvents sets the event's prev_events instead of the room's last event,
+// to build a fork in the room DAG.
+func WithPrevEvents(eventIDs ...string) eventModifier {
+	return func(e *eventMods) {
+		e.prevEvents = eventIDs
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/consumers"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/roomserver/version"
@@ -115,20 +116,10 @@ func (r *FederationInternalAPI) PerformJoin(
 	}
 
 	// If we reach here then we didn't complete a join for some reason.
-	var httpErr gomatrix.HTTPError
-	if ok := errors.As(lastErr, &httpErr); ok {
-		httpErr.Message = string(httpErr.Contents)
-		response.LastError = &httpErr
-	} else {
-		response.LastError = &gomatrix.HTTPError{
-			Code:         0,
-			WrappedError: nil,
-			Message:      "Unknown HTTP error",
-		}
-		if lastErr != nil {
-			response.LastError.Message = lastErr.Error()
-		}
+	if lastErr == nil {
+		lastErr = errors.New("unknown HTTP error")
 	}
+	response.LastError = federationHTTPError(lastErr)
 
 	logrus.Errorf(
 		"failed to join user %q to room %q through %d server(s): last error %s",
@@ -213,10 +204,15 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 			"result":          "error",
 			"reachable":       joinErr.Reachable,
 		}).Debug("Federation PerformJoin failed")
-		if !joinErr.Reachable {
-			r.statistics.ForServer(joinErr.ServerName).Failure() //nolint:contextcheck
+		// A well-formed refusal, such as a 403 from make_join because the
+		// server cannot authorize a restricted join, means the server is
+		// reachable. Only transport failures and 5xx answers count towards
+		// backoff, which would otherwise hold back everything else we send it.
+		stats := r.statistics.ForServer(joinErr.ServerName) //nolint:contextcheck
+		if joinErr.Reachable {
+			stats.Success(statistics.SendDirect) //nolint:contextcheck
 		} else {
-			r.statistics.ForServer(joinErr.ServerName).Success(statistics.SendDirect) //nolint:contextcheck
+			failBlacklistableError(joinErr.Err, stats) //nolint:contextcheck
 		}
 		return joinErr.Err
 	}
@@ -342,11 +338,12 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	}
 	request.ServerNames = uniqueList
 
-	// See if there's an existing outbound peek for this room ID with
-	// one of the specified servers.
+	// See if there's a live outbound peek for this room ID with one of the
+	// specified servers. An expired one is renewed through its server below.
 	if peeks, err := r.db.GetOutboundPeeks(ctx, request.RoomID); err == nil {
+		now := spec.AsTimestamp(time.Now())
 		for _, peek := range peeks {
-			if _, ok := seenSet[peek.ServerName]; ok {
+			if _, ok := seenSet[peek.ServerName]; ok && !outboundPeekExpired(peek, now) {
 				return nil
 			}
 		}
@@ -375,17 +372,10 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	}
 
 	// If we reach here then we didn't complete a peek for some reason.
-	var httpErr gomatrix.HTTPError
-	if ok := errors.As(lastErr, &httpErr); ok {
-		httpErr.Message = string(httpErr.Contents)
-		response.LastError = &httpErr
-	} else {
-		response.LastError = &gomatrix.HTTPError{
-			Code:         0,
-			WrappedError: nil,
-			Message:      lastErr.Error(),
-		}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no servers to peek into room %q via", request.RoomID)
 	}
+	response.LastError = federationHTTPError(lastErr)
 
 	logrus.Errorf(
 		"failed to peek room %q through %d server(s): last error %s",
@@ -393,6 +383,11 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	)
 
 	return lastErr
+}
+
+// outboundPeekExpired reports whether the peek must be renewed at now.
+func outboundPeekExpired(peek federationTypes.OutboundPeek, now spec.Timestamp) bool {
+	return int64(now) > peek.RenewedTimestamp+peek.RenewalInterval
 }
 
 func (r *FederationInternalAPI) performOutboundPeekUsingServer(
@@ -420,8 +415,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	}
 	renewing := false
 	if outboundPeek != nil {
-		nowMilli := time.Now().UnixNano() / int64(time.Millisecond)
-		if nowMilli > outboundPeek.RenewedTimestamp+outboundPeek.RenewalInterval {
+		if outboundPeekExpired(*outboundPeek, spec.AsTimestamp(time.Now())) {
 			logrus.Infof("stale outbound peek to %s for %s already exists; renewing", serverName, roomID)
 			renewing = true
 		} else {
@@ -473,21 +467,13 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 		return fmt.Errorf("sanityCheckAuthChain: %w", err)
 	}
 
-	// If we've got this far, the remote server is peeking.
-	if renewing {
-		if err = r.db.RenewOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval); err != nil {
-			return err
-		}
-	} else {
-		if err = r.db.AddOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval); err != nil {
-			return err
-		}
-	}
-
-	// logrus.Warnf("got respPeek %#v", respPeek)
 	// Send the newly returned state to the roomserver to update our local view.
+	// Waiting for it is bounded: a lost reply must fail this peek, so that the
+	// next one tries again, rather than hold it forever.
+	inputCtx, cancel := context.WithTimeout(ctx, outboundPeekInputTimeout)
+	defer cancel()
 	if err = roomserverAPI.SendEventWithState(
-		ctx, r.rsAPI, r.cfg.Matrix.ServerName,
+		inputCtx, r.rsAPI, r.cfg.Matrix.ServerName,
 		roomserverAPI.KindNew,
 		// use the authorized state from CheckStateResponse
 		&fclient.RespState{
@@ -502,7 +488,33 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 		return fmt.Errorf("r.producer.SendEventWithState: %w", err)
 	}
 
-	return nil
+	// Record the peek only once its state is stored. A peek recorded earlier
+	// would make every later peek skip the remote while the room has no
+	// state here, which leaves the room unreadable until the peek expires.
+	if renewing {
+		return r.db.RenewOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval)
+	}
+	return r.db.AddOutboundPeek(ctx, serverName, roomID, peekID, respPeek.RenewalInterval)
+}
+
+// outboundPeekInputTimeout bounds how long a peek waits for the roomserver to
+// store the peeked room's state. Tests shorten it.
+var outboundPeekInputTimeout = time.Minute
+
+// leaveContent returns the content for a leave event built from a make_leave
+// template, with the given reason added when it is not empty.
+func leaveContent(template []byte, reason string) (map[string]any, error) {
+	content := map[string]any{}
+	if len(template) > 0 {
+		if err := json.Unmarshal(template, &content); err != nil {
+			return nil, err
+		}
+	}
+	content["membership"] = spec.Leave
+	if reason != "" {
+		content["reason"] = reason
+	}
+	return content, nil
 }
 
 // PerformLeaveRequest implements api.FederationInternalAPI.
@@ -569,9 +581,11 @@ func (r *FederationInternalAPI) PerformLeave(
 		respMakeLeave.LeaveEvent.Redacts = ""
 		leaveEB := verImpl.NewEventBuilderFromProtoEvent(&respMakeLeave.LeaveEvent)
 
-		if respMakeLeave.LeaveEvent.Content == nil {
-			content := map[string]any{
-				"membership": "leave",
+		if respMakeLeave.LeaveEvent.Content == nil || request.Reason != "" {
+			content, contentErr := leaveContent(respMakeLeave.LeaveEvent.Content, request.Reason)
+			if contentErr != nil {
+				logrus.WithError(contentErr).Warnf("respMakeLeave.LeaveEvent has invalid content")
+				continue
 			}
 			if err = leaveEB.SetContent(content); err != nil {
 				logrus.WithError(err).Warnf("respMakeLeave.LeaveEvent.SetContent failed")

@@ -36,8 +36,11 @@ type BasicAuth struct {
 }
 
 type AuthAPIOpts struct {
-	GuestAccessAllowed bool
-	WithAuth           bool
+	GuestAccessAllowed     bool
+	CallGuestAccessAllowed bool
+	LockedAccessAllowed    bool
+	SuspendedAccessDenied  bool
+	WithAuth               bool
 }
 
 // AuthAPIOption is an option to MakeAuthAPI to add additional checks (e.g. guest access) to verify
@@ -49,6 +52,58 @@ func WithAllowGuests() AuthAPIOption {
 	return func(opts *AuthAPIOpts) {
 		opts.GuestAccessAllowed = true
 	}
+}
+
+// WithAllowCallGuests lets restricted call guests use this endpoint. Call
+// guests are denied every endpoint that does not opt in, so only add this to
+// endpoints a call needs and that act on the caller's own data or on rooms
+// the caller has joined.
+func WithAllowCallGuests() AuthAPIOption {
+	return func(opts *AuthAPIOpts) {
+		opts.CallGuestAccessAllowed = true
+	}
+}
+
+// WithAllowLocked lets locked accounts use this endpoint. The spec only
+// allows logging out while locked (MSC3939).
+func WithAllowLocked() AuthAPIOption {
+	return func(opts *AuthAPIOpts) {
+		opts.LockedAccessAllowed = true
+	}
+}
+
+// WithDenySuspended refuses this endpoint to suspended accounts (MSC3823),
+// for actions such as joining rooms or changing the profile.
+func WithDenySuspended() AuthAPIOption {
+	return func(opts *AuthAPIOpts) {
+		opts.SuspendedAccessDenied = true
+	}
+}
+
+// accountAccessForbidden reports why the device's account may not use an
+// endpoint with the given options, or nil when it may.
+func accountAccessForbidden(device *userapi.Device, opts *AuthAPIOpts) *util.JSONResponse {
+	switch {
+	case device == nil:
+		return nil
+	case !opts.LockedAccessAllowed && device.Locked:
+		res := auth.UserLockedResponse()
+		return &res
+	case opts.SuspendedAccessDenied && device.Suspended:
+		res := auth.UserSuspendedResponse()
+		return &res
+	case !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest:
+		return &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.GuestAccessForbidden("Guest access not allowed"),
+		}
+	case !opts.CallGuestAccessAllowed && device.AccountType == userapi.AccountTypeCallGuest:
+		return &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden("Call guest accounts may not use this endpoint"),
+		}
+	}
+	return nil
 }
 
 // WithAuth is an option to MakeHTTPAPI to add authentication.
@@ -101,11 +156,8 @@ func MakeAuthAPI(
 			opt(&opts)
 		}
 
-		if !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest {
-			return util.JSONResponse{
-				Code: http.StatusForbidden,
-				JSON: spec.GuestAccessForbidden("Guest access not allowed"),
-			}
+		if resErr := accountAccessForbidden(device, &opts); resErr != nil {
+			return *resErr
 		}
 
 		jsonRes := f(req, device)
@@ -153,9 +205,9 @@ func MakeOptionalAuthAPI(
 		if err == nil && device != nil {
 			// add the user ID to the logger
 			logger = logger.WithField("user_id", device.UserID)
+			hub := sentry.GetHubFromContext(req.Context())
 			req = req.WithContext(util.ContextWithLogger(req.Context(), logger))
 			// add the user to Sentry, if enabled
-			hub := sentry.GetHubFromContext(req.Context())
 			if hub != nil {
 				hub = hub.Clone()
 				hub.Scope().SetUser(sentry.User{
@@ -172,11 +224,8 @@ func MakeOptionalAuthAPI(
 			opt(&opts)
 		}
 
-		if device != nil && !opts.GuestAccessAllowed && device.AccountType == userapi.AccountTypeGuest {
-			return util.JSONResponse{
-				Code: http.StatusForbidden,
-				JSON: spec.GuestAccessForbidden("Guest access not allowed"),
-			}
+		if resErr := accountAccessForbidden(device, &opts); resErr != nil {
+			return *resErr
 		}
 
 		// Call handler with device (may be nil for unauthenticated requests)
@@ -264,8 +313,13 @@ func MakeHTTPAPI(metricsName string, userAPI userapi.QueryAcccessTokenAPI, enabl
 		}
 
 		if opts.WithAuth {
-			logger := util.GetLogger(req.Context())
-			_, jsonErr := auth.VerifyUserFromRequest(req, userAPI)
+			logger := util.GetLogger(ctx)
+			device, jsonErr := auth.VerifyUserFromRequest(req, userAPI)
+			// MakeHTTPAPI has never checked guests, so only call guests
+			// and locked accounts are subject to an opt-in here.
+			if jsonErr == nil && (device.AccountType == userapi.AccountTypeCallGuest || device.Locked) {
+				jsonErr = accountAccessForbidden(device, &opts)
+			}
 			if jsonErr != nil {
 				w.WriteHeader(jsonErr.Code)
 				if err := json.NewEncoder(w).Encode(jsonErr.JSON); err != nil {

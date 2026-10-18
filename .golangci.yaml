@@ -42,10 +42,14 @@ linters:
     errorlint:
       errorf-multi: true
     forbidigo:
+      analyze-types: true
       forbid:
         - pattern: context\.WithCancel$
         - pattern: ^print.*$
         - pattern: ^log.Fatal().*$
+        - pattern: ^spec\.RoomID\.Domain$
+          pkg: ^codefloe\.com/pat-s/gomatrixserverlib/spec$
+          msg: panics on the domainless room IDs of room version 12 and later, use eventutil.RoomIDDomain
     godot:
       scope: toplevel
       exclude:

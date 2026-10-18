@@ -71,7 +71,7 @@ jobs:
           ls -la
 
       - name: Upload artifacts
-        uses: forgejo/upload-artifact@v4
+        uses: forgejo/upload-artifact@v5
         with:
           name: binaries
           path: dist/*
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     # renovate: datasource=docker depName=thegeeklab/git-sv
-    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.1
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.5
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq git nodejs
@@ -92,7 +92,7 @@ jobs:
           fetch-tags: true
 
       - name: Download binaries
-        uses: forgejo/download-artifact@v4
+        uses: forgejo/download-artifact@v7
         with:
           name: binaries
           path: dist
@@ -154,7 +154,7 @@ jobs:
     name: Bump Helm chart appVersion
     runs-on: ubuntu-latest
     # renovate: datasource=docker depName=thegeeklab/git-sv
-    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.1
+    container: cr.codefloe.com/docker.io/thegeeklab/git-sv:3.0.5
     needs: release
     steps:
       - name: Install dependencies
@@ -168,12 +168,14 @@ jobs:
 
           # Setup SSH with deploy key
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
           # Clone
-          REPO_URL="git@10.10.2.1:devxy/helm-zendrite.git"
+          REPO_URL="git@codefloe.com:devxy/helm-zendrite.git"
           git clone "$REPO_URL" helm-zendrite
           cd helm-zendrite
 

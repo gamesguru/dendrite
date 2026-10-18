@@ -7,13 +7,18 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 	"gotest.tools/v3/assert"
 
+	"codefloe.com/pat-s/zendrite/internal/transactions"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -35,9 +40,14 @@ type sendEventTestRoomserverAPI struct {
 	senderMapping map[string]ed25519.PrivateKey
 
 	savedInputRoomEvents []rsapi.InputRoomEvent
+	onVersion            func()
+	onInput              func()
 }
 
 func (s *sendEventTestRoomserverAPI) QueryRoomVersionForRoom(ctx context.Context, roomID string) (gomatrixserverlib.RoomVersion, error) {
+	if s.onVersion != nil {
+		s.onVersion()
+	}
 	if roomID == s.roomIDStr {
 		return s.roomVersion, nil
 	} else {
@@ -144,6 +154,9 @@ func (s *sendEventTestRoomserverAPI) SigningIdentityFor(ctx context.Context, roo
 }
 
 func (s *sendEventTestRoomserverAPI) InputRoomEvents(ctx context.Context, req *rsapi.InputRoomEventsRequest, res *rsapi.InputRoomEventsResponse) {
+	if s.onInput != nil {
+		s.onInput()
+	}
 	s.savedInputRoomEvents = req.InputRoomEvents
 }
 
@@ -189,7 +202,7 @@ func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 
 		cfg := &config.ClientAPI{}
 
-		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil)
+		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil, nil)
 
 		if resp.Code != http.StatusOK {
 			t.Fatalf("non-200 HTTP code returned: %v\nfull response: %v", resp.Code, resp)
@@ -235,7 +248,7 @@ func Test_SendEvent_PseudoIDStateKeys(t *testing.T) {
 
 		cfg := &config.ClientAPI{}
 
-		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil)
+		resp := SendEvent(req, device, roomIDStr, eventType, nil, &senderUserID, cfg, rsAPI, nil, nil)
 
 		if resp.Code != http.StatusOK {
 			t.Fatalf("non-200 HTTP code returned: %v\nfull response: %v", resp.Code, resp)
@@ -272,4 +285,52 @@ func createEvents(eventsJSON []string, roomVer gomatrixserverlib.RoomVersion) ([
 	}
 
 	return events, nil
+}
+
+func TestSendEventConcurrentTransactionRetries(t *testing.T) {
+	const callers = 16
+	roomID, userID, txnID := "!retry:domain", "@retry:domain", "same-transaction"
+	version := gomatrixserverlib.RoomVersionV10
+	state, err := createEvents([]string{
+		fmt.Sprintf(`{"type":"m.room.create","state_key":"","room_id":"%s","sender":"%s","content":{"creator":"%s","room_version":"10"}}`, roomID, userID, userID),
+		fmt.Sprintf(`{"type":"m.room.member","state_key":"%s","room_id":"%s","sender":"%s","content":{"membership":"join"}}`, userID, roomID, userID),
+	}, version)
+	assert.NilError(t, err)
+	var arrived atomic.Int32
+	var inputs atomic.Int32
+	allArrived := make(chan struct{})
+	rs := &sendEventTestRoomserverAPI{t: t, roomIDStr: roomID, roomVersion: version, roomState: state}
+	rs.onVersion = func() {
+		if arrived.Add(1) == callers {
+			close(allArrived)
+		}
+	}
+	rs.onInput = func() {
+		inputs.Add(1)
+		select {
+		case <-allArrived:
+		case <-time.After(5 * time.Second):
+			t.Error("concurrent callers did not arrive")
+		}
+	}
+	cache := transactions.New(t.Context())
+	device := &uapi.Device{UserID: userID, AccessToken: "test-token"}
+	responses := make(chan util.JSONResponse, callers)
+	var group sync.WaitGroup
+	for range callers {
+		group.Go(func() {
+			req, reqErr := http.NewRequestWithContext(t.Context(), "PUT", "https://domain/_matrix/client/v3/rooms/room/send/m.room.message/"+txnID, strings.NewReader(`{"msgtype":"m.text","body":"once"}`))
+			if reqErr != nil {
+				t.Error(reqErr)
+				return
+			}
+			responses <- SendEvent(req, device, roomID, "m.room.message", &txnID, nil, &config.ClientAPI{}, rs, cache, nil)
+		})
+	}
+	group.Wait()
+	close(responses)
+	for response := range responses {
+		assert.Equal(t, response.Code, http.StatusOK)
+	}
+	assert.Equal(t, inputs.Load(), int32(1), "concurrent retries must only submit one event")
 }

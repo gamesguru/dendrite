@@ -114,7 +114,7 @@ func CreateRoom(
 	if resErr = createRequest.Validate(); resErr != nil {
 		return *resErr
 	}
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,

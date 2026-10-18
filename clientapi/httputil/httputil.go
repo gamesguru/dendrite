@@ -15,6 +15,8 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 // UnmarshalJSONRequest into the given interface pointer. Returns an error JSON response if
@@ -74,6 +76,8 @@ func MatrixErrorResponse(err error) *util.JSONResponse {
 	switch matrixErr.ErrCode {
 	case spec.ErrorForbidden, spec.ErrorUnableToAuthoriseJoin:
 		httpCode = http.StatusForbidden
+	case roomserverAPI.ErrorUnableToAuthoriseJoin, roomserverAPI.ErrorUnableToGrantJoin:
+		httpCode = http.StatusBadRequest
 	case spec.ErrorNotFound, spec.ErrorUnrecognized:
 		httpCode = http.StatusNotFound
 	default:

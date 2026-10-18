@@ -623,6 +623,115 @@ func TestSetAvatarURL(t *testing.T) {
 	})
 }
 
+func TestProfileFields(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.ClientAPI.RateLimiting.Enabled = false
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		routers := httputil.NewRouters()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+		asPI := appservice.NewInternalAPI(processCtx, cfg, natsInstance, userAPI, rsAPI)
+
+		AddPublicRoutes(processCtx, routers, cfg, natsInstance, base.CreateFederationClient(cfg, nil), rsAPI, asPI, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+
+		accessTokens := map[*test.User]userDevice{
+			alice: {},
+			bob:   {},
+		}
+		createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+
+		do := func(method, path, body string, user *test.User) *httptest.ResponseRecorder {
+			t.Helper()
+			req := httptest.NewRequest(method, path, strings.NewReader(body))
+			if user != nil {
+				req.Header.Set("Authorization", "Bearer "+accessTokens[user].accessToken)
+			}
+			rec := httptest.NewRecorder()
+			routers.Client.ServeHTTP(rec, req)
+			return rec
+		}
+		profilePath := "/_matrix/client/v3/profile/" + alice.ID
+
+		rec := do(http.MethodGet, "/_matrix/client/v3/capabilities", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		for _, capability := range []string{`m\.profile_fields`, `uk\.tcpip\.msc4133\.profile_fields`, `m\.set_displayname`, `m\.set_avatar_url`} {
+			assert.True(t, gjson.GetBytes(rec.Body.Bytes(), "capabilities."+capability+".enabled").Bool(), capability)
+		}
+
+		// Custom fields hold any JSON value, at the stable and unstable path.
+		rec = do(http.MethodPut, profilePath+"/org.example.job", `{"org.example.job":{"title":"Engineer"}}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodPut, "/_matrix/client/unstable/uk.tcpip.msc4133/profile/"+alice.ID+"/m.tz", `{"m.tz":"Europe/Berlin"}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+		rec = do(http.MethodGet, profilePath+"/org.example.job", "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"org.example.job":{"title":"Engineer"}}`, rec.Body.String())
+		rec = do(http.MethodGet, "/_matrix/client/unstable/uk.tcpip.msc4133/profile/"+alice.ID+"/m.tz", "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"m.tz":"Europe/Berlin"}`, rec.Body.String())
+
+		// The whole profile includes the custom fields.
+		rec = do(http.MethodGet, profilePath, "", nil)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, fmt.Sprintf(`{"displayname":%q,"m.tz":"Europe/Berlin","org.example.job":{"title":"Engineer"}}`, alice.Localpart), rec.Body.String())
+
+		// The display name is still set through the generic endpoint.
+		rec = do(http.MethodPut, profilePath+"/displayname", `{"displayname":"Alice"}`, alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath+"/displayname", "", nil)
+		assert.JSONEq(t, `{"displayname":"Alice"}`, rec.Body.String())
+
+		// Invalid requests.
+		for _, tc := range []struct {
+			name, key, body string
+			user            *test.User
+			wantCode        int
+			wantErrCode     string
+		}{
+			{"other user", "m.tz", `{"m.tz":"Europe/Berlin"}`, bob, http.StatusForbidden, "M_FORBIDDEN"},
+			{"unauthenticated", "m.tz", `{"m.tz":"Europe/Berlin"}`, nil, http.StatusUnauthorized, "M_MISSING_TOKEN"},
+			{"missing key in body", "m.tz", `{"m.other":"x"}`, alice, http.StatusBadRequest, "M_MISSING_PARAM"},
+			{"not an object", "m.tz", `"Europe/Berlin"`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"time zone not a string", "m.tz", `{"m.tz":1}`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"display name not a string", "displayname", `{"displayname":{}}`, alice, http.StatusBadRequest, "M_BAD_JSON"},
+			{"key without namespace", "nonamespace", `{"nonamespace":1}`, alice, http.StatusBadRequest, "M_INVALID_PARAM"},
+			{"key outside the grammar", "org.example-x", `{"org.example-x":1}`, alice, http.StatusBadRequest, "M_INVALID_PARAM"},
+			{"key too large", "org." + strings.Repeat("a", 252), `{}`, alice, http.StatusBadRequest, "M_KEY_TOO_LARGE"},
+			{"profile too large", "org.example.big", `{"org.example.big":"` + strings.Repeat("a", 64*1024) + `"}`, alice, http.StatusBadRequest, "M_PROFILE_TOO_LARGE"},
+			{"name makes profile too large", "displayname", `{"displayname":"` + strings.Repeat("a", 64*1024) + `"}`, alice, http.StatusBadRequest, "M_PROFILE_TOO_LARGE"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := do(http.MethodPut, profilePath+"/"+tc.key, tc.body, tc.user)
+				assert.Equal(t, tc.wantCode, rec.Code, rec.Body.String())
+				assert.Equal(t, tc.wantErrCode, gjson.GetBytes(rec.Body.Bytes(), "errcode").Str)
+			})
+		}
+
+		// Deleting a custom field removes it, and deleting the display name clears it.
+		rec = do(http.MethodDelete, profilePath+"/org.example.job", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath+"/org.example.job", "", nil)
+		assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+		assert.Equal(t, "M_NOT_FOUND", gjson.GetBytes(rec.Body.Bytes(), "errcode").Str)
+		rec = do(http.MethodDelete, profilePath+"/displayname", "", alice)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = do(http.MethodGet, profilePath, "", nil)
+		assert.JSONEq(t, `{"m.tz":"Europe/Berlin"}`, rec.Body.String())
+		rec = do(http.MethodDelete, profilePath+"/m.tz", "", bob)
+		assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	})
+}
+
 func TestTyping(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -938,6 +1047,9 @@ func TestCapabilities(t *testing.T) {
 			"m.change_password": map[string]bool{
 				"enabled": true,
 			},
+			"m.get_login_token": map[string]bool{
+				"enabled": true,
+			},
 			"m.room_versions": map[string]any{
 				"default":   defaultRoomVersion,
 				"available": versionsMap,
@@ -1120,27 +1232,52 @@ func Test3PID(t *testing.T) {
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 
 		identityServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.Contains(r.URL.String(), "getValidated3pid"):
+			// The homeserver registers with the v2 API and authenticates every
+			// other request with the token it got.
+			switch r.URL.Path {
+			case "/_matrix/identity/v2/account/register":
+				_, _ = w.Write([]byte(`{"token":"server-token"}`))
+				return
+			case "/_matrix/identity/v2/3pid/unbind":
+				// Signed with the server's key rather than a token.
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer server-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"errcode":"M_UNAUTHORIZED","error":"no token"}`))
+				return
+			}
+			switch r.URL.Path {
+			case "/_matrix/identity/v2/3pid/getValidated3pid":
 				resp := threepid.GetValidatedResponse{}
 				switch r.URL.Query().Get("client_secret") {
 				case "fail":
-					resp.ErrCode = string(spec.ErrorSessionNotValidated)
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"errcode":"M_SESSION_NOT_VALIDATED","error":"not validated"}`))
+					return
 				case "fail2":
-					resp.ErrCode = "some other error"
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"errcode":"M_UNKNOWN","error":"some other error"}`))
+					return
 				case "fail3":
 					_, _ = w.Write([]byte("{invalidJson"))
 					return
 				case "success":
 					resp.Medium = "email"
+					resp.Address = "alice@example.com"
 				case "success2":
 					resp.Medium = "email"
 					resp.Address = "somerandom@address.com"
 				}
 				_ = json.NewEncoder(w).Encode(resp)
-			case strings.Contains(r.URL.String(), "requestToken"):
+			case "/_matrix/identity/v2/3pid/bind":
+				_, _ = w.Write([]byte(`{"medium":"email","address":"somerandom@address.com"}`))
+			case "/_matrix/identity/v2/validate/email/requestToken":
 				resp := threepid.SID{SID: "randomSID"}
 				_ = json.NewEncoder(w).Encode(resp)
+			default:
+				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
 		defer identityServer.Close()
@@ -1153,6 +1290,7 @@ func Test3PID(t *testing.T) {
 			wantOK           bool
 			setTrustedServer bool
 			wantLen3PIDs     int
+			wantErrCode      string
 		}{
 			{
 				name:    "can get associated threepid info",
@@ -1160,40 +1298,45 @@ func Test3PID(t *testing.T) {
 				wantOK:  true,
 			},
 			{
-				name:    "can not set threepid info with invalid JSON",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("")),
+				name:        "can not set threepid info with invalid JSON",
+				wantErrCode: "M_BAD_JSON",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("")),
 			},
 			{
-				name:    "can not set threepid info with untrusted server",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader("{}")),
+				name:        "can not set threepid info with untrusted server",
+				wantErrCode: "M_SERVER_NOT_TRUSTED",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(`{"three_pid_creds":{"sid":"randomSID","id_server":"untrusted.example","client_secret":"secret"}}`)),
 			},
 			{
 				name:             "can check threepid info with trusted server, but unverified",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail"}}`, identityServerBase))),
+				wantErrCode:      "M_THREEPID_AUTH_FAILED",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can check threepid info with trusted server, but fails for some other reason",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail2"}}`, identityServerBase))),
+				wantErrCode:      "M_UNKNOWN",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail2"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can check threepid info with trusted server, but fails because of invalid json",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"fail3"}}`, identityServerBase))),
+				wantErrCode:      "M_UNKNOWN",
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"fail3"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           false,
 			},
 			{
 				name:             "can save threepid info with trusted server",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"success"}}`, identityServerBase))),
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"success"}}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           true,
 			},
 			{
 				name:             "can save threepid info with trusted server using bind=true",
-				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"id_server":"%s","client_secret":"success2"},"bind":true}`, identityServerBase))),
+				request:          httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid", strings.NewReader(fmt.Sprintf(`{"three_pid_creds":{"sid":"randomSID","id_server":"%s","client_secret":"success2"},"bind":true}`, identityServerBase))),
 				setTrustedServer: true,
 				wantOK:           true,
 			},
@@ -1215,12 +1358,14 @@ func Test3PID(t *testing.T) {
 				wantLen3PIDs: 1,
 			},
 			{
-				name:    "can not request emailToken with invalid request body",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader("")),
+				name:        "can not request emailToken with invalid request body",
+				wantErrCode: "M_BAD_JSON",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader("")),
 			},
 			{
-				name:    "can not request emailToken for in use address",
-				request: httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader(fmt.Sprintf(`{"client_secret":"somesecret","email":"","send_attempt":1,"id_server":"%s"}`, identityServerBase))),
+				name:        "can not request emailToken for in use address",
+				wantErrCode: "M_THREEPID_IN_USE",
+				request:     httptest.NewRequest(http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken", strings.NewReader(fmt.Sprintf(`{"client_secret":"somesecret","email":"alice@example.com","send_attempt":1,"id_server":"%s"}`, identityServerBase))),
 			},
 			{
 				name:    "can request emailToken",
@@ -1246,7 +1391,14 @@ func Test3PID(t *testing.T) {
 				if !tc.wantOK && rec.Code == http.StatusOK {
 					t.Fatalf("expected request to fail, but didn't: %s", rec.Body.String())
 				}
-				if tc.wantLen3PIDs > 0 {
+				if tc.wantErrCode != "" {
+					var response spec.MatrixError
+					if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+						t.Fatal(err)
+					}
+					assert.Equal(t, tc.wantErrCode, string(response.ErrCode))
+				}
+				if tc.request.Method == http.MethodGet {
 					var resp routing.ThreePIDsResponse
 					if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 						t.Fatal(err)
@@ -1775,6 +1927,12 @@ func (d dummyStore) IsEncrypted(_ context.Context, _ id.RoomID) (bool, error) {
 
 func (d dummyStore) GetEncryptionEvent(_ context.Context, _ id.RoomID) (*event.EncryptionEventContent, error) {
 	return &event.EncryptionEventContent{}, nil
+}
+
+func (d dummyStore) GetHistoryVisibility(_ context.Context, _ id.RoomID) (*event.HistoryVisibilityEventContent, error) {
+	return &event.HistoryVisibilityEventContent{
+		HistoryVisibility: event.HistoryVisibilityShared,
+	}, nil
 }
 
 func (d dummyStore) FindSharedRooms(_ context.Context, _ id.UserID) ([]id.RoomID, error) {
@@ -2362,7 +2520,7 @@ func TestCreateRoomNameTopicDefaultRoomVersionV11(t *testing.T) {
 	rsAPI.SetFederationAPI(nil, nil)
 	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
-	AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caching.DisableMetrics)
+	AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, caches, caching.DisableMetrics)
 
 	accessTokens := map[*test.User]userDevice{
 		alice: {},
@@ -2510,5 +2668,195 @@ func TestReportEvent(t *testing.T) {
 				t.Fatalf("expected report to be successful, got HTTP %d instead: %s", w.Code, w.Body.String())
 			}
 		})
+	})
+}
+
+func TestRoomSummary(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	publicRoom := test.NewRoom(t, alice)
+	privateRoom := test.NewRoom(t, alice, test.RoomPreset(test.PresetPrivateChat))
+	privateRoom.CreateAndInsert(t, alice, spec.MRoomEncryption, map[string]string{
+		"algorithm": "m.megolm.v1.aes-sha2",
+	}, test.WithStateKey(""))
+	const alias = "#summary-alias:test"
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		routers := httputil.NewRouters()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		defer close()
+		natsInstance := jetstream.NATSInstance{}
+		jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
+
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+		// The federation sender is nil here, so remote lookups are not possible.
+		AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, rsAPI, nil, nil, nil, userAPI, nil, nil, nil, caching.DisableMetrics)
+
+		accessTokens := map[*test.User]userDevice{
+			alice: {},
+			bob:   {},
+		}
+		createAccessTokens(t, accessTokens, userAPI, processCtx.Context(), routers)
+
+		ctx := processCtx.Context()
+		for _, room := range []*test.Room{publicRoom, privateRoom} {
+			if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
+				t.Fatalf("failed to send events: %v", err)
+			}
+		}
+		publicRoomID, err := spec.NewRoomID(publicRoom.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists, err := rsAPI.SetRoomAlias(ctx, spec.SenderID(alice.ID), *publicRoomID, alias); err != nil || exists {
+			t.Fatalf("failed to set room alias: exists=%v err=%v", exists, err)
+		}
+
+		testCases := []struct {
+			name         string
+			path         string
+			user         *test.User
+			wantCode     int
+			wantFields   map[string]any
+			absentFields []string
+		}{
+			{
+				name:     "stable endpoint: public room by ID, unauthenticated",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(publicRoom.ID),
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id":            publicRoom.ID,
+					"join_rule":          "public",
+					"world_readable":     false,
+					"guest_can_join":     false,
+					"num_joined_members": float64(1),
+					"room_version":       string(publicRoom.Version),
+				},
+				absentFields: []string{"membership", "im.nheko.summary.room_version", "im.nheko.summary.encryption"},
+			},
+			{
+				name:     "stable endpoint: public room by alias, authenticated member",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(alias),
+				user:     alice,
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id":    publicRoom.ID,
+					"membership": "join",
+				},
+			},
+			{
+				name:     "stable endpoint: public room by alias, authenticated non-member",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(alias),
+				user:     bob,
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id": publicRoom.ID,
+				},
+				absentFields: []string{"membership"},
+			},
+			{
+				name:     "stable endpoint: private room, unauthenticated",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(privateRoom.ID),
+				wantCode: http.StatusNotFound,
+			},
+			{
+				name:     "stable endpoint: private room, authenticated non-member",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(privateRoom.ID),
+				user:     bob,
+				wantCode: http.StatusNotFound,
+			},
+			{
+				name:     "stable endpoint: private room, authenticated member with stable encryption field",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape(privateRoom.ID),
+				user:     alice,
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id":    privateRoom.ID,
+					"join_rule":  "invite",
+					"membership": "join",
+					"encryption": "m.megolm.v1.aes-sha2",
+				},
+				absentFields: []string{"im.nheko.summary.encryption"},
+			},
+			{
+				name:     "stable endpoint: unknown alias",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape("#does-not-exist:test"),
+				wantCode: http.StatusNotFound,
+			},
+			{
+				name:     "stable endpoint: unknown remote room without federation",
+				path:     "/_matrix/client/v1/room_summary/" + url.PathEscape("!unknown:elsewhere"),
+				wantCode: http.StatusNotFound,
+			},
+			{
+				name:     "stable endpoint: invalid identifier",
+				path:     "/_matrix/client/v1/room_summary/not-a-room",
+				wantCode: http.StatusBadRequest,
+			},
+			{
+				name:     "unstable endpoint keeps legacy field names",
+				path:     "/_matrix/client/unstable/im.nheko.summary/summary/" + url.PathEscape(privateRoom.ID),
+				user:     alice,
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id":                       privateRoom.ID,
+					"encryption":                    "m.megolm.v1.aes-sha2",
+					"im.nheko.summary.encryption":   "m.megolm.v1.aes-sha2",
+					"room_version":                  string(privateRoom.Version),
+					"im.nheko.summary.room_version": string(privateRoom.Version),
+				},
+			},
+			{
+				name:     "legacy unstable endpoint keeps legacy field names",
+				path:     "/_matrix/client/unstable/im.nheko.summary/rooms/" + url.PathEscape(publicRoom.ID) + "/summary",
+				wantCode: http.StatusOK,
+				wantFields: map[string]any{
+					"room_id":                       publicRoom.ID,
+					"im.nheko.summary.room_version": string(publicRoom.Version),
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+				if tc.user != nil {
+					req.Header.Set("Authorization", "Bearer "+accessTokens[tc.user].accessToken)
+				}
+				rec := httptest.NewRecorder()
+				routers.Client.ServeHTTP(rec, req)
+				if rec.Code != tc.wantCode {
+					t.Fatalf("expected HTTP %d, got %d: %s", tc.wantCode, rec.Code, rec.Body.String())
+				}
+				if tc.wantCode != http.StatusOK {
+					return
+				}
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				for key, want := range tc.wantFields {
+					got, ok := body[key]
+					if !ok {
+						t.Errorf("expected field %q in response: %s", key, rec.Body.String())
+						continue
+					}
+					if got != want {
+						t.Errorf("field %q: expected %v, got %v", key, want, got)
+					}
+				}
+				for _, key := range tc.absentFields {
+					if _, ok := body[key]; ok {
+						t.Errorf("field %q should be absent from response: %s", key, rec.Body.String())
+					}
+				}
+			})
+		}
 	})
 }

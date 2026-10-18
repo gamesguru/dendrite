@@ -28,6 +28,10 @@ The following items are at risk of not being accepted:
 See the [Installation](/installation/planning) section for information on how to build an instance of Zendrite.
 You will likely need this in order to test your changes.
 
+Local development uses the built-in NATS server with JetStream, which Zendrite starts automatically when `global.jetstream.addresses` is empty.
+Set `global.jetstream.storage_path` to a persistent, writable directory as described in [JetStream configuration](/installation/manual/configuration/#jetstream-configuration).
+No separate messaging service needs to be installed for this setup.
+
 ## Pre-commit hooks
 
 This project uses [pre-commit](https://pre-commit.com/) to run checks before each commit.
@@ -93,8 +97,11 @@ Linting is configured in `.golangci.yaml` and runs via [golangci-lint](https://g
 It runs automatically as a pre-commit hook, but you can also run it manually:
 
 ```bash
-golangci-lint run
+prek run golangci-lint --all-files
 ```
+
+This command and `just lint`, which invokes the same hook, require `prek` on `PATH`.
+The hook uses the version pinned in `.pre-commit-config.yaml` and the `test` and `goolm` build tags configured in `.golangci.yaml`.
 
 If you are receiving linter warnings that you are certain are spurious and want to silence them, you can annotate the relevant lines or methods with a `// nolint:` comment.
 Please avoid doing this if you can.
@@ -104,7 +111,7 @@ Please avoid doing this if you can.
 We also have unit tests which we run via:
 
 ```bash
-go test -race ./...
+go test -tags goolm -race ./...
 ```
 
 This runs both SQLite and PostgreSQL tests.
@@ -123,6 +130,19 @@ In general, we like submissions that come with tests.
 Anything that proves that the code is functioning as intended is great, and to ensure that we will find out quickly in the future if any regressions happen.
 
 We use the standard [Go testing package](https://gobyexample.com/testing) for this, alongside some helper functions in our own `test` package.
+
+## Changing shared state
+
+HA deployments run an old and a new build against the same database and streams during a [rolling upgrade](/administration/high-availability/#rolling-upgrades), so a change to that shared state needs a new HA upgrade level.
+`TestContractSurface` in `setup/ha` creates every table in a fresh PostgreSQL database and compares the schema, the recorded migrations and the JetStream stream definitions with `setup/ha/testdata/surface.txt`.
+When it fails, raise `Level` in `setup/ha/contract.go` and decide the other two fields:
+
+- Keep `UpgradeFrom` and `RollbackTo` at the previous level when the change is backward compatible, such as a new table, a nullable column, or a new optional message field.
+- Raise `RollbackTo` when an older build cannot work with what this one writes, such as a dropped column it reads or a message it cannot decode.
+- Raise `UpgradeFrom` when this build cannot take over from an older one, such as a changed stream or a migration that needs the old build stopped first; that makes the upgrade offline.
+
+Then record the level with `go test ./setup/ha -run TestContractSurface -update`, which adds it to `setup/ha/testdata/levels.json`, the published upgrade matrix.
+The test cannot see message formats, so a change to a JetStream message that an older build cannot decode needs the same treatment without a failing test.
 
 ## Continuous integration
 

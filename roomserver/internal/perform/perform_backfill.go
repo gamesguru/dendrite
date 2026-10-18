@@ -90,7 +90,13 @@ func (r *Backfiller) PerformBackfill(
 
 	for _, event := range loadedEvents {
 		if _, ok := redactEventIDs[event.EventID()]; ok {
-			event.Redact()
+			// Loaded events can be shared through the event cache, so
+			// redact a copy. A copy that cannot be made is left out.
+			redacted, redactErr := types.RedactedCopy(event)
+			if redactErr != nil {
+				continue
+			}
+			event = redacted
 		}
 		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event})
 	}

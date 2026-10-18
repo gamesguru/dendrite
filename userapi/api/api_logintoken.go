@@ -56,7 +56,11 @@ type PerformLoginTokenDeletionRequest struct {
 	Token string
 }
 
-type PerformLoginTokenDeletionResponse struct{}
+type PerformLoginTokenDeletionResponse struct {
+	// Consumed is true if this call removed the token before it expired.
+	// Only one of several concurrent deletions of a token sees true.
+	Consumed bool
+}
 
 type QueryLoginTokenRequest struct {
 	Token string

@@ -242,6 +242,9 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	res.SelfSigningKeys = make(map[string]fclient.CrossSigningKey)
 	res.UserSigningKeys = make(map[string]fclient.CrossSigningKey)
 	res.Failures = make(map[string]any)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// make a map from domain to device keys
 	domainToDeviceKeys := make(map[string]map[string][]string)
@@ -326,6 +329,9 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	// Now that we've done the potentially expensive work of asking the federation,
 	// try filling the cross-signing keys from the database that we know about.
 	a.crossSigningKeysFromDatabase(ctx, req, res)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Finally, append signatures that we know about
 	// TODO: This is horrible because we need to round-trip the signature from
@@ -750,18 +756,7 @@ func (a *UserInternalAPI) uploadOneTimeAndFallbackKeys(ctx context.Context, req 
 			Err: "user ID  missing",
 		}
 	}
-	if req.DeviceID != "" && len(req.OneTimeKeys) == 0 {
-		counts, err := a.KeyDatabase.OneTimeKeysCount(ctx, req.UserID, req.DeviceID)
-		if err != nil {
-			res.Error = &api.KeyError{
-				Err: fmt.Sprintf("a.KeyDatabase.OneTimeKeysCount: %s", err),
-			}
-		}
-		if counts != nil {
-			res.OneTimeKeyCounts = append(res.OneTimeKeyCounts, *counts)
-		}
-		return
-	}
+
 	for _, key := range req.OneTimeKeys {
 		// grab existing keys based on (user/device/algorithm/key ID)
 		keyIDsWithAlgorithms := make([]string, len(key.KeyJSON))
@@ -798,20 +793,7 @@ func (a *UserInternalAPI) uploadOneTimeAndFallbackKeys(ctx context.Context, req 
 		res.OneTimeKeyCounts = append(res.OneTimeKeyCounts, *counts)
 	}
 	if len(req.FallbackKeys) > 0 {
-		if err := a.KeyDatabase.DeleteFallbackKeys(ctx, req.UserID, req.DeviceID); err != nil {
-			res.KeyError(req.UserID, req.DeviceID, &api.KeyError{
-				Err: fmt.Sprintf("%s device %s : failed to clear fallback keys: %s", req.UserID, req.DeviceID, err.Error()),
-			})
-			return
-		}
 		for _, key := range req.FallbackKeys {
-			// grab existing keys based on (user/device/algorithm/key ID)
-			keyIDsWithAlgorithms := make([]string, len(key.KeyJSON))
-			i := 0
-			for keyIDWithAlgo := range key.KeyJSON {
-				keyIDsWithAlgorithms[i] = keyIDWithAlgo
-				i++
-			}
 			unused, err := a.KeyDatabase.StoreFallbackKeys(ctx, key)
 			if err != nil {
 				res.KeyError(req.UserID, req.DeviceID, &api.KeyError{

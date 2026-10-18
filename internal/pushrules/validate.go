@@ -1,6 +1,7 @@
 package pushrules
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 )
@@ -81,6 +82,14 @@ func validateCondition(cond *Condition) []error {
 	var errs []error
 
 	switch cond.Kind {
+	case EventPropertyIsCondition, EventPropertyContainsCondition:
+		var value any
+		if cond.Key == "" {
+			errs = append(errs, fmt.Errorf("missing condition key"))
+		}
+		if len(cond.Value) == 0 || json.Unmarshal(cond.Value, &value) != nil || !scalarValue(value) {
+			errs = append(errs, fmt.Errorf("invalid condition value"))
+		}
 	case EventMatchCondition, ContainsDisplayNameCondition, RoomMemberCountCondition, SenderNotificationPermissionCondition:
 		// Do nothing.
 

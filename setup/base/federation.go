@@ -9,13 +9,10 @@ import (
 
 // noOpHTTPTransport is used to disable federation.
 var noOpHTTPTransport = &http.Transport{
-	Dial: func(_, _ string) (net.Conn, error) {
-		return nil, fmt.Errorf("federation prohibited by configuration")
-	},
 	DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 		return nil, fmt.Errorf("federation prohibited by configuration")
 	},
-	DialTLS: func(_, _ string) (net.Conn, error) {
+	DialTLSContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 		return nil, fmt.Errorf("federation prohibited by configuration")
 	},
 }

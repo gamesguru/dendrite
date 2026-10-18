@@ -10,15 +10,16 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// ParseTSParam takes a req (typically from an application service) and parses a Time object
-// from the req if it exists in the query parameters. If it doesn't exist, the
-// current time is returned.
-func ParseTSParam(req *http.Request) (time.Time, error) {
-	// Use the ts parameter's value for event time if present
+// ParseTSParam parses the event time from the ts query parameter. Only
+// application services may set it (MSC3316); for other requests, or if it is
+// absent, the current time is returned.
+func ParseTSParam(req *http.Request, device *userapi.Device) (time.Time, error) {
 	tsStr := req.URL.Query().Get("ts")
-	if tsStr == "" {
+	if tsStr == "" || device == nil || device.AppserviceID == "" {
 		return time.Now(), nil
 	}
 

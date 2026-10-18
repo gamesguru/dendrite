@@ -152,6 +152,12 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		HistoryVisibility: historyVisibilityShared,
 	}
 
+	// As in Synapse, only private chats let every member invite; public
+	// rooms leave it to moderators. power_level_content_override still wins.
+	if createRequest.StatePreset == spec.PresetPublicChat {
+		powerLevelContent.Invite = 50
+	}
+
 	if createRequest.PowerLevelContentOverride != nil {
 		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults
 		err = json.Unmarshal(createRequest.PowerLevelContentOverride, &powerLevelContent)
@@ -160,6 +166,15 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 			return "", &util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.BadJSON("malformed power_level_content_override"),
+			}
+		}
+		// Creators of rooms with privileged creators (MSC4289) outrank every
+		// power level and must not appear in the users map. Clients written
+		// for earlier room versions, such as Element Call, still put the
+		// creator there, so drop creators, as Synapse does on room upgrades.
+		if verImpl.PrivilegedCreators() {
+			for _, creator := range gomatrixserverlib.CreatorsFromCreateEvent(createEvent) {
+				delete(powerLevelContent.Users, creator)
 			}
 		}
 	}

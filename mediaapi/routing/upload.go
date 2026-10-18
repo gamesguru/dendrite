@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,11 +23,13 @@ import (
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -71,11 +74,16 @@ func Upload(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device, db sto
 // all the metadata about the media being uploaded.
 // Returns either an uploadRequest or an error formatted as a util.JSONResponse.
 func parseAndValidateRequest(req *http.Request, cfg *config.MediaAPI, dev *userapi.Device) (*uploadRequest, *util.JSONResponse) {
+	// The Content-Type header is optional since spec v1.12 (MSC2701).
+	contentType := types.ContentType(req.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = defaultContentType
+	}
 	r := &uploadRequest{
 		MediaMetadata: &types.MediaMetadata{
 			Origin:        cfg.Matrix.ServerName,
 			FileSizeBytes: types.FileSizeBytes(req.ContentLength),
-			ContentType:   types.ContentType(req.Header.Get("Content-Type")),
+			ContentType:   contentType,
 			UploadName:    types.Filename(url.PathEscape(req.FormValue("filename"))),
 			UserID:        types.MatrixUserID(dev.UserID),
 		},
@@ -130,36 +138,11 @@ func (r *uploadRequest) doUpload(
 		"ContentType":   r.MediaMetadata.ContentType,
 	}).Info("Uploading file")
 
-	// The file data is hashed and the hash is used as the MediaID. The hash is useful as a
-	// method of deduplicating files to save storage, as well as a way to conduct
-	// integrity checks on the file data in the repository.
-	// Data is truncated to maxFileSizeBytes. Content-Length was reported as 0 < Content-Length <= maxFileSizeBytes so this is OK.
-	if cfg.MaxFileSizeBytes > 0 {
-		if cfg.MaxFileSizeBytes+1 <= 0 {
-			r.Logger.WithFields(log.Fields{
-				"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
-			}).Warnf("Configured MaxFileSizeBytes overflows int64, defaulting to %d bytes", config.DefaultMaxFileSizeBytes)
-			cfg.MaxFileSizeBytes = config.DefaultMaxFileSizeBytes
-		}
-		reqReader = io.LimitReader(reqReader, int64(cfg.MaxFileSizeBytes)+1)
-	}
-
-	hash, bytesWritten, tmpDir, cleanup, err := fileStore.WriteTemp(ctx, reqReader)
-	if err != nil {
-		r.Logger.WithError(err).WithFields(log.Fields{
-			"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
-		}).Warn("Error while transferring file")
-		return &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.Unknown("Failed to upload"),
-		}
+	hash, bytesWritten, tmpDir, cleanup, resErr := r.receiveFile(ctx, reqReader, cfg, fileStore)
+	if resErr != nil {
+		return resErr
 	}
 	defer cleanup()
-
-	// Check if temp file size exceeds max file size configuration
-	if cfg.MaxFileSizeBytes > 0 && bytesWritten > types.FileSizeBytes(cfg.MaxFileSizeBytes) {
-		return requestEntityTooLargeJSONResponse(cfg.MaxFileSizeBytes)
-	}
 
 	// Look up the media by the file hash. If we already have the file but under a
 	// different media ID then we won't upload the file again - instead we'll just
@@ -220,8 +203,52 @@ func (r *uploadRequest) doUpload(
 
 	return r.storeFileAndMetadata(
 		ctx, tmpDir, fileStore, db, cfg.ThumbnailSizes,
-		activeThumbnailGeneration, cfg.MaxThumbnailGenerators,
+		activeThumbnailGeneration, cfg.MaxThumbnailGenerators, false,
 	)
+}
+
+// receiveFile writes the request body, up to the configured maximum file
+// size, to a temporary file and hashes it. The caller must call cleanup.
+func (r *uploadRequest) receiveFile(
+	ctx context.Context,
+	reqReader io.Reader,
+	cfg *config.MediaAPI,
+	fileStore filestore.FileStore,
+) (hash types.Base64Hash, bytesWritten types.FileSizeBytes, tmpDir types.Path, cleanup func(), resErr *util.JSONResponse) {
+	// The file data is hashed and the hash is used as the MediaID. The hash is useful as a
+	// method of deduplicating files to save storage, as well as a way to conduct
+	// integrity checks on the file data in the repository.
+	// Data is truncated to maxFileSizeBytes. Content-Length was reported as 0 < Content-Length <= maxFileSizeBytes so this is OK.
+	if cfg.MaxFileSizeBytes > 0 {
+		if cfg.MaxFileSizeBytes+1 <= 0 {
+			r.Logger.WithFields(log.Fields{
+				"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
+			}).Warnf("Configured MaxFileSizeBytes overflows int64, defaulting to %d bytes", config.DefaultMaxFileSizeBytes)
+			cfg.MaxFileSizeBytes = config.DefaultMaxFileSizeBytes
+		}
+		reqReader = io.LimitReader(reqReader, int64(cfg.MaxFileSizeBytes)+1)
+	}
+
+	hash, bytesWritten, tmpDir, cleanup, err := fileStore.WriteTemp(ctx, reqReader)
+	if err != nil {
+		if response := unavailableIfUnowned(err); response != nil {
+			return "", 0, "", nil, response
+		}
+		r.Logger.WithError(err).WithFields(log.Fields{
+			"MaxFileSizeBytes": cfg.MaxFileSizeBytes,
+		}).Warn("Error while transferring file")
+		return "", 0, "", nil, &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.Unknown("Failed to upload"),
+		}
+	}
+
+	// Check if temp file size exceeds max file size configuration
+	if cfg.MaxFileSizeBytes > 0 && bytesWritten > types.FileSizeBytes(cfg.MaxFileSizeBytes) {
+		cleanup()
+		return "", 0, "", nil, requestEntityTooLargeJSONResponse(cfg.MaxFileSizeBytes)
+	}
+	return hash, bytesWritten, tmpDir, cleanup, nil
 }
 
 func requestEntityTooLargeJSONResponse(maxFileSizeBytes config.FileSizeBytes) *util.JSONResponse {
@@ -263,6 +290,8 @@ func (r *uploadRequest) Validate(maxFileSizeBytes config.FileSizeBytes) *util.JS
 // the metadata in the database. The order of operations is important as it
 // avoids metadata entering the database before the file is ready, and if we
 // fail to store the file, it never gets added to the database.
+// If pending is set, the metadata completes the media ID reserved with POST
+// /create instead of inserting a new one.
 // Returns a util.JSONResponse error and cleans up directories in case of error.
 func (r *uploadRequest) storeFileAndMetadata(
 	ctx context.Context,
@@ -272,9 +301,13 @@ func (r *uploadRequest) storeFileAndMetadata(
 	thumbnailSizes []config.ThumbnailSize,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
 	maxThumbnailGenerators int,
+	pending bool,
 ) *util.JSONResponse {
 	duplicate, err := fileStore.Store(ctx, tmpDir, r.MediaMetadata.Base64Hash, r.MediaMetadata.FileSizeBytes)
 	if err != nil {
+		if response := unavailableIfUnowned(err); response != nil {
+			return response
+		}
 		r.Logger.WithError(err).Error("Failed to store file.")
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -285,7 +318,11 @@ func (r *uploadRequest) storeFileAndMetadata(
 		r.Logger.Info("File was stored previously - discarding duplicate")
 	}
 
-	if err = db.StoreMediaMetadata(ctx, r.MediaMetadata); err != nil {
+	if pending {
+		if resErr := r.completePendingMedia(ctx, fileStore, db, duplicate); resErr != nil {
+			return resErr
+		}
+	} else if err = db.StoreMediaMetadata(ctx, r.MediaMetadata); err != nil {
 		r.Logger.WithError(err).Warn("Failed to store metadata")
 		// If the file is a duplicate (has the same hash as an existing file) then
 		// there is valid metadata in the database for that file. As such we only
@@ -301,8 +338,8 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 	}
 
-	go func() { //nolint:contextcheck
-		localPath, cleanup, err := fileStore.LocalPath(context.Background(), r.MediaMetadata.Base64Hash)
+	process.Go(process.Lifetime(ctx), func() {
+		localPath, cleanup, err := fileStore.LocalPath(process.Lifetime(ctx), r.MediaMetadata.Base64Hash)
 		if err != nil {
 			r.Logger.WithError(err).Error("unable to get local path for thumbnail generation")
 			return
@@ -330,7 +367,7 @@ func (r *uploadRequest) storeFileAndMetadata(
 		}
 
 		busy, err := thumbnailer.GenerateThumbnails(
-			context.Background(), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
+			process.Lifetime(ctx), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
 			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
 		)
 		if err != nil {
@@ -339,7 +376,66 @@ func (r *uploadRequest) storeFileAndMetadata(
 		if busy {
 			r.Logger.Warn("Maximum number of active thumbnail generators reached. Skipping pre-generation.")
 		}
-	}()
-
+	})
 	return nil
+}
+
+// completePendingMedia stores the metadata of the stored file on the media ID
+// reserved with POST /create. If another upload completed it first or it
+// expired meanwhile, the stored file is removed unless other media uses it.
+func (r *uploadRequest) completePendingMedia(
+	ctx context.Context,
+	fileStore filestore.FileStore,
+	db storage.Database,
+	duplicate bool,
+) *util.JSONResponse {
+	updated, err := db.CompletePendingMedia(ctx, r.MediaMetadata)
+	if err == nil && updated {
+		return nil
+	}
+	if err != nil {
+		r.Logger.WithError(err).Warn("Failed to store metadata")
+	}
+	if !duplicate {
+		if other, lookupErr := db.GetMediaMetadataByHash(ctx, r.MediaMetadata.Base64Hash, r.MediaMetadata.Origin); lookupErr == nil && other == nil {
+			if delErr := fileStore.Delete(ctx, r.MediaMetadata.Base64Hash); delErr != nil {
+				r.Logger.WithError(delErr).Warn("Failed to delete stored file after metadata failure")
+			}
+		}
+	}
+	if err != nil {
+		return &util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.Unknown("Failed to upload"),
+		}
+	}
+	// The media ID changed state while we received the file, so report why.
+	existing, err := db.GetMediaMetadata(ctx, r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to look up created media")
+		return &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if resErr := pendingUploadError(existing, string(r.MediaMetadata.UserID)); resErr != nil {
+		return resErr
+	}
+	// Still pending but not updated: it expired just now.
+	return &util.JSONResponse{
+		Code: http.StatusNotFound,
+		JSON: spec.NotFound("Media ID has expired"),
+	}
+}
+
+// unavailableIfUnowned turns a media refusal caused by lost ownership into a
+// retryable 503 rather than telling the client its upload was malformed.
+func unavailableIfUnowned(err error) *util.JSONResponse {
+	if !errors.Is(err, ownership.ErrDispatchRefused) {
+		return nil
+	}
+	return &util.JSONResponse{
+		Code: http.StatusServiceUnavailable,
+		JSON: spec.Unknown("Homeserver is not currently accepting media uploads"),
+	}
 }

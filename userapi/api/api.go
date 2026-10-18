@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -89,12 +90,15 @@ type ClientUserAPI interface {
 	ProfileAPI
 	KeyBackupAPI
 	DehydratedDeviceAPI
+	DelayedEventsAPI
 	QueryNumericLocalpart(ctx context.Context, req *QueryNumericLocalpartRequest, res *QueryNumericLocalpartResponse) error
 	QueryDevices(ctx context.Context, req *QueryDevicesRequest, res *QueryDevicesResponse) error
 	QueryAccountData(ctx context.Context, req *QueryAccountDataRequest, res *QueryAccountDataResponse) error
 	QueryPushers(ctx context.Context, req *QueryPushersRequest, res *QueryPushersResponse) error
 	QueryPushRules(ctx context.Context, userID string) (*pushrules.AccountRuleSets, error)
 	QueryAccountAvailability(ctx context.Context, req *QueryAccountAvailabilityRequest, res *QueryAccountAvailabilityResponse) error
+	QueryAccountByLocalpart(ctx context.Context, req *QueryAccountByLocalpartRequest, res *QueryAccountByLocalpartResponse) (err error)
+	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
 	PerformAdminCreateRegistrationToken(ctx context.Context, registrationToken *clientapi.RegistrationToken) (bool, error)
 	PerformAdminListRegistrationTokens(ctx context.Context, returnAll bool, valid bool) ([]clientapi.RegistrationToken, error)
 	PerformAdminGetRegistrationToken(ctx context.Context, tokenString string) (*clientapi.RegistrationToken, error)
@@ -102,6 +106,7 @@ type ClientUserAPI interface {
 	PerformAdminUpdateRegistrationToken(ctx context.Context, tokenString string, newAttributes map[string]any) (*clientapi.RegistrationToken, error)
 	PerformAccountCreation(ctx context.Context, req *PerformAccountCreationRequest, res *PerformAccountCreationResponse) error
 	PerformDeviceCreation(ctx context.Context, req *PerformDeviceCreationRequest, res *PerformDeviceCreationResponse) error
+	PerformRefreshToken(ctx context.Context, req *PerformRefreshTokenRequest, res *PerformRefreshTokenResponse) error
 	PerformDeviceUpdate(ctx context.Context, req *PerformDeviceUpdateRequest, res *PerformDeviceUpdateResponse) error
 	PerformDeviceDeletion(ctx context.Context, req *PerformDeviceDeletionRequest, res *PerformDeviceDeletionResponse) error
 	PerformPasswordUpdate(ctx context.Context, req *PerformPasswordUpdateRequest, res *PerformPasswordUpdateResponse) error
@@ -109,6 +114,13 @@ type ClientUserAPI interface {
 	PerformPusherSet(ctx context.Context, req *PerformPusherSetRequest, res *struct{}) error
 	PerformPushRulesPut(ctx context.Context, userID string, ruleSets *pushrules.AccountRuleSets) error
 	PerformAccountDeactivation(ctx context.Context, req *PerformAccountDeactivationRequest, res *PerformAccountDeactivationResponse) error
+	PerformAccountReactivation(ctx context.Context, req *PerformAccountReactivationRequest, res *PerformAccountReactivationResponse) error
+	// PerformAccountLock locks or unlocks a local account (MSC3939) and
+	// returns sql.ErrNoRows when the account does not exist.
+	PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	// PerformAccountSuspension suspends or unsuspends a local account
+	// (MSC3823) and returns sql.ErrNoRows when the account does not exist.
+	PerformAccountSuspension(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
 	PerformOpenIDTokenCreation(ctx context.Context, req *PerformOpenIDTokenCreationRequest, res *PerformOpenIDTokenCreationResponse) error
 	QueryNotifications(ctx context.Context, req *QueryNotificationsRequest, res *QueryNotificationsResponse) error
 	InputAccountData(ctx context.Context, req *InputAccountDataRequest, res *InputAccountDataResponse) error
@@ -121,6 +133,7 @@ type ClientUserAPI interface {
 
 type KeyBackupAPI interface {
 	DeleteKeyBackup(ctx context.Context, userID, version string) (bool, error)
+	DeleteBackupKeys(ctx context.Context, req *DeleteBackupKeysRequest) (*PerformKeyBackupResponse, error)
 	PerformKeyBackup(ctx context.Context, req *PerformKeyBackupRequest) (string, error)
 	QueryKeyBackup(ctx context.Context, req *QueryKeyBackupRequest) (*QueryKeyBackupResponse, error)
 	UpdateBackupKeyAuthData(ctx context.Context, req *PerformKeyBackupRequest) (*PerformKeyBackupResponse, error)
@@ -128,9 +141,19 @@ type KeyBackupAPI interface {
 
 type ProfileAPI interface {
 	QueryProfile(ctx context.Context, userID string) (*authtypes.Profile, error)
+	// SetAvatarURL, SetDisplayName and SetProfileField fail with
+	// ErrProfileTooLarge when the profile would exceed authtypes.MaxProfileSize.
 	SetAvatarURL(ctx context.Context, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error)
 	SetDisplayName(ctx context.Context, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
+	// SetProfileField sets a custom profile field (MSC4133).
+	SetProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error
+	// DeleteProfileField removes a custom profile field (MSC4133).
+	DeleteProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string) error
 }
+
+// ErrProfileTooLarge is returned when a change would make a profile larger
+// than authtypes.MaxProfileSize.
+var ErrProfileTooLarge = errors.New("profile exceeds the maximum size")
 
 // custom api functions required by pinecone / p2p demos.
 type QuerySearchProfilesAPI interface {
@@ -198,6 +221,15 @@ type PerformKeyBackupResponse struct {
 
 	KeyCount int64  // only set if Keys were given in the request
 	KeyETag  string // only set if Keys were given in the request
+}
+
+// DeleteBackupKeysRequest deletes keys from a backup version: all of them,
+// those of RoomID if it is set, or the session SessionID of RoomID.
+type DeleteBackupKeysRequest struct {
+	UserID    string
+	Version   string
+	RoomID    string
+	SessionID string
 }
 
 type QueryKeyBackupRequest struct {
@@ -279,8 +311,8 @@ type QueryAccessTokenResponse struct {
 	Device *Device
 	Err    string // e.g ErrorForbidden
 	// SoftLogout is true when the token was rejected because it expired and the
-	// client may refresh it, rather than the session being destroyed. Only set
-	// when MSC3861 delegated authentication is in use.
+	// client may refresh it, rather than the session being destroyed, with
+	// MSC3861 delegated authentication or a native refresh token (MSC2918).
 	SoftLogout bool
 }
 
@@ -386,6 +418,11 @@ type PerformDeviceCreationRequest struct {
 	// FromRegistration determines if this request comes from registering a new account
 	// and is in most cases false.
 	FromRegistration bool
+
+	// RefreshToken, if set, is issued with the access token, which then
+	// expires at AccessTokenExpiresTS (MSC2918).
+	RefreshToken         string
+	AccessTokenExpiresTS int64
 }
 
 // PerformDeviceCreationResponse is the response for PerformDeviceCreation.
@@ -394,15 +431,48 @@ type PerformDeviceCreationResponse struct {
 	Device        *Device
 }
 
+// PerformRefreshTokenRequest exchanges a refresh token for new tokens (MSC2918).
+type PerformRefreshTokenRequest struct {
+	RefreshToken         string
+	AccessToken          string // the new access token
+	NewRefreshToken      string
+	AccessTokenExpiresTS int64
+}
+
+// PerformRefreshTokenResponse is the response for PerformRefreshToken.
+type PerformRefreshTokenResponse struct {
+	// Device is nil if the refresh token is unknown or revoked, or if the
+	// account is locked.
+	Device *Device
+	// Locked is true when the account is locked (MSC3939). The tokens are
+	// not rotated then, so the client can retry once it is unlocked.
+	Locked bool
+}
+
 // PerformAccountDeactivationRequest is the request for PerformAccountDeactivation.
 type PerformAccountDeactivationRequest struct {
 	Localpart  string
 	ServerName spec.ServerName // optional: if blank, default server name used
+	// Erase asks for the user's events to be served redacted to anyone who
+	// was not in the room when they were sent, and deletes the user's
+	// account data and 3PIDs (MSC4025).
+	Erase bool
 }
 
 // PerformAccountDeactivationResponse is the response for PerformAccountDeactivation.
 type PerformAccountDeactivationResponse struct {
 	AccountDeactivated bool
+}
+
+// PerformAccountReactivationRequest is the request for PerformAccountReactivation.
+type PerformAccountReactivationRequest struct {
+	Localpart  string
+	ServerName spec.ServerName // optional: if blank, default server name used
+}
+
+// PerformAccountReactivationResponse is the response for PerformAccountReactivation.
+type PerformAccountReactivationResponse struct {
+	AccountReactivated bool
 }
 
 // PerformOpenIDTokenCreationRequest is the request for PerformOpenIDTokenCreation.
@@ -445,6 +515,18 @@ type Device struct {
 	// this is the appservice ID.
 	AppserviceID string
 	AccountType  AccountType
+	// Locked is true when the account is locked (MSC3939), so the device may
+	// only log out.
+	Locked bool
+	// Suspended is true when the account is suspended (MSC3823), so the
+	// device may read but not join rooms, send messages or change its profile.
+	Suspended bool
+	// AccessTokenExpiresTS is when the access token expires, as a unix
+	// timestamp in milliseconds, or 0 if it never expires (MSC2918).
+	AccessTokenExpiresTS int64
+	// PrevRefreshTokenValid is true while the refresh token used to obtain
+	// the access token stays valid, until the access token is first used.
+	PrevRefreshTokenValid bool
 }
 
 func (d *Device) UserDomain() spec.ServerName {
@@ -466,6 +548,12 @@ type Account struct {
 	ServerName   spec.ServerName
 	AppServiceID string
 	AccountType  AccountType
+	// Deactivated is true when the account is deactivated.
+	Deactivated bool
+	// Locked is true when an administrator locked the account (MSC3939).
+	Locked bool
+	// Suspended is true when an administrator suspended the account (MSC3823).
+	Suspended bool
 	// TODO: Associations (e.g. with application services)
 }
 
@@ -511,6 +599,11 @@ type Conflict int
 // AccountType is an enum representing the kind of account.
 type AccountType int
 
+// MSC3861FallbackDeviceID is the device ID bound to OIDC access tokens whose
+// scope carries no device. MAS never lists it, so device reconciliation must
+// leave it alone.
+const MSC3861FallbackDeviceID = "OIDC"
+
 const (
 	// ConflictUpdate will update matching records returning no error.
 	ConflictUpdate Conflict = 1
@@ -525,6 +618,11 @@ const (
 	AccountTypeAdmin AccountType = 3
 	// AccountTypeAppService indicates this is an appservice account.
 	AccountTypeAppService AccountType = 4
+	// AccountTypeCallGuest indicates this is a restricted call guest account:
+	// a password account from open sign-up while client_api.call_guests is
+	// enabled, which may only use the endpoints a call needs and is
+	// deactivated after client_api.call_guests.lifetime.
+	AccountTypeCallGuest AccountType = 5
 )
 
 type QueryPushersRequest struct {
@@ -579,7 +677,7 @@ type QueryNotificationsRequest struct {
 }
 
 type QueryNotificationsResponse struct {
-	NextToken     string          `json:"next_token"`
+	NextToken     string          `json:"next_token,omitempty"`
 	Notifications []*Notification `json:"notifications"` // Required.
 }
 
@@ -638,7 +736,10 @@ type QueryThreePIDsForLocalpartResponse struct {
 	ThreePIDs []authtypes.ThreePID
 }
 
-type PerformForgetThreePIDRequest QueryLocalpartForThreePIDRequest
+type PerformForgetThreePIDRequest struct {
+	ThreePID, Medium, Localpart string
+	ServerName                  spec.ServerName
+}
 
 type PerformSaveThreePIDAssociationRequest struct {
 	ThreePID   string
@@ -706,7 +807,7 @@ const (
 	TypeCrossSigningUpdate
 )
 
-// DeviceMessage represents the message produced into Kafka by the key server.
+// DeviceMessage represents the message published to JetStream by the user API.
 type DeviceMessage struct {
 	Type                         DeviceMessageType `json:"Type,omitempty"`
 	*DeviceKeys                  `json:"DeviceKeys,omitempty"`
@@ -716,7 +817,7 @@ type DeviceMessage struct {
 	DeviceChangeID int64
 }
 
-// OutputCrossSigningKeyUpdate is an entry in the signing key update output kafka log.
+// OutputCrossSigningKeyUpdate is an entry in the signing key update output JetStream stream.
 type OutputCrossSigningKeyUpdate struct {
 	CrossSigningKeyUpdate `json:"signing_keys"`
 }

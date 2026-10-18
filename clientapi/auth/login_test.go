@@ -180,6 +180,15 @@ func TestBadLoginFromJSONReader(t *testing.T) {
 			WantErrCode: spec.ErrorForbidden,
 		},
 		{
+			Name: "consumedToken",
+			Body: `{
+				"type": "m.login.token",
+				"token": "consumedtoken",
+				"device_id": "adevice"
+            }`,
+			WantErrCode: spec.ErrorForbidden,
+		},
+		{
 			Name: "badType",
 			Body: `{
 				"type": "m.login.invalid",
@@ -287,6 +296,7 @@ func (ua *fakeUserInternalAPI) QueryAccountByPassword(ctx context.Context, req *
 
 func (ua *fakeUserInternalAPI) PerformLoginTokenDeletion(ctx context.Context, req *uapi.PerformLoginTokenDeletionRequest, res *uapi.PerformLoginTokenDeletionResponse) error {
 	ua.DeletedTokens = append(ua.DeletedTokens, req.Token)
+	res.Consumed = req.Token != "consumedtoken"
 	return nil
 }
 

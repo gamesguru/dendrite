@@ -9,6 +9,7 @@ package config
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,9 +18,13 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 )
 
 type Global struct {
+	// HA controls opt-in leader election.
+	HA HA `yaml:"ha"`
+
 	// Signing identity contains the server name, private key and key ID of
 	// the deployment.
 	fclient.SigningIdentity `yaml:",inline"`
@@ -62,6 +67,10 @@ type Global struct {
 	// Advertised in .well-known/matrix/client as org.matrix.msc4143.rtc_foci
 	RTCFoci []RTCFocus `yaml:"rtc_foci,omitempty"`
 
+	// Server admin contacts and support page served at
+	// /.well-known/matrix/support (MSC1929). Unset, the endpoint returns 404.
+	Support Support `yaml:"support,omitempty"`
+
 	// Disables federation. Zendrite will not be able to make any outbound HTTP requests
 	// to other servers and the federation API will not be exposed.
 	DisableFederation bool `yaml:"disable_federation"`
@@ -89,6 +98,9 @@ type Global struct {
 
 	// Sentry configuration
 	Sentry Sentry `yaml:"sentry"`
+
+	// Continuous profiling configuration.
+	Pyroscope Pyroscope `yaml:"pyroscope"`
 
 	// DNS caching options for all outbound HTTP requests
 	DNSCache DNSCacheOptions `yaml:"dns_cache"`
@@ -118,10 +130,12 @@ func (c *Global) Defaults(opts DefaultOpts) {
 	if opts.SingleDatabase {
 		c.DatabaseOptions.Defaults(90) //nolint:mnd
 	}
+	c.HA.Defaults()
 	c.JetStream.Defaults(opts)
 	c.Metrics.Defaults(opts)
 	c.DNSCache.Defaults()
 	c.Sentry.Defaults()
+	c.Pyroscope.Defaults()
 	c.ServerNotices.Defaults(opts)
 	c.ReportStats.Defaults()
 	c.Cache.Defaults()
@@ -144,14 +158,20 @@ func (c *Global) Verify(configErrs *ConfigErrors) {
 		if focus.Type == "" {
 			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].type is required", i))
 		}
-		if focus.Type == "livekit" && (focus.LiveKit == nil || focus.LiveKit.ServiceURL == "") {
-			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].livekit.service_url is required for type \"livekit\"", i))
+		if focus.Type == "livekit" && focus.serviceURL() == "" {
+			configErrs.Add(fmt.Sprintf("global.rtc_foci[%d].livekit_service_url is required for type \"livekit\"", i))
+		}
+		if focus.LiveKit != nil {
+			logrus.Warnf("global.rtc_foci[%d].livekit.service_url is deprecated, use livekit_service_url instead", i)
 		}
 	}
 
+	c.Support.Verify(configErrs)
+	c.HA.Verify(configErrs)
 	c.JetStream.Verify(configErrs)
 	c.Metrics.Verify(configErrs)
 	c.Sentry.Verify(configErrs)
+	c.Pyroscope.Verify(configErrs)
 	c.DNSCache.Verify(configErrs)
 	c.ServerNotices.Verify(configErrs)
 	c.ReportStats.Verify(configErrs)
@@ -451,17 +471,54 @@ type PresenceOptions struct {
 }
 
 // RTCFocus represents a MatrixRTC focus server configuration (MSC4143).
+// The wire format clients actually parse is flat (e.g. "livekit_service_url"
+// directly on the focus object, per element-hq/lk-jwt-service's documented
+// well-known shape); LiveKitServiceURL mirrors that directly in the config.
+//
+// The JSON tags describe that same flat shape, so a focus can also be decoded
+// from its own output. MarshalJSON exists only to fold the deprecated nested
+// field into it.
 type RTCFocus struct {
 	// Type of focus server (e.g., "livekit")
 	Type string `json:"type" yaml:"type"`
-	// LiveKit focus configuration
-	LiveKit *LiveKitFocus `json:"livekit,omitempty" yaml:"livekit,omitempty"`
+	// LiveKitServiceURL is the lk-jwt-service URL for a "livekit" focus.
+	LiveKitServiceURL string `json:"livekit_service_url,omitempty" yaml:"livekit_service_url,omitempty"`
+	// LiveKit focus configuration. It is never part of the wire format;
+	// MarshalJSON resolves it into LiveKitServiceURL instead.
+	//
+	// Deprecated: use livekit_service_url instead. Kept for backwards
+	// compatibility with configs predating that flat field.
+	LiveKit *LiveKitFocus `json:"-" yaml:"livekit,omitempty"`
+}
+
+// serviceURL resolves the effective lk-jwt-service URL, preferring the flat
+// field over the deprecated nested one.
+func (f RTCFocus) serviceURL() string {
+	if f.LiveKitServiceURL != "" {
+		return f.LiveKitServiceURL
+	}
+	if f.LiveKit != nil {
+		return f.LiveKit.ServiceURL
+	}
+	return ""
+}
+
+// MarshalJSON emits the flat wire shape, resolving the deprecated nested
+// livekit.service_url field into livekit_service_url.
+func (f RTCFocus) MarshalJSON() ([]byte, error) {
+	// A distinct type avoids recursing back into this method while keeping
+	// the field tags above as the single definition of the wire shape.
+	type rtcFocus RTCFocus
+	return json.Marshal(rtcFocus{
+		Type:              f.Type,
+		LiveKitServiceURL: f.serviceURL(),
+	})
 }
 
 // LiveKitFocus represents LiveKit-specific focus configuration.
 type LiveKitFocus struct {
 	// ServiceURL is the lk-jwt-service URL (not LiveKit SFU URL)
-	ServiceURL string `json:"service_url" yaml:"service_url"`
+	ServiceURL string `yaml:"service_url"`
 }
 
 type DataUnit int64

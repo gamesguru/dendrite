@@ -30,8 +30,9 @@ func (t *LoginTypeToken) Name() string {
 	return authtypes.LoginTypeToken
 }
 
-// LoginFromJSON implements Type. The cleanup function deletes the token from
-// the database on success.
+// LoginFromJSON implements Type. The token is deleted before the login
+// proceeds, so that it can only be used for a single login, even when several
+// requests present it at once.
 func (t *LoginTypeToken) LoginFromJSON(ctx context.Context, reqBytes []byte) (*Login, LoginCleanupFunc, *util.JSONResponse) {
 	var r loginTokenRequest
 	if err := httputil.UnmarshalJSON(reqBytes, &r); err != nil {
@@ -53,22 +54,26 @@ func (t *LoginTypeToken) LoginFromJSON(ctx context.Context, reqBytes []byte) (*L
 		}
 	}
 
+	var delRes uapi.PerformLoginTokenDeletionResponse
+	if err := t.UserAPI.PerformLoginTokenDeletion(ctx, &uapi.PerformLoginTokenDeletionRequest{Token: r.Token}, &delRes); err != nil {
+		util.GetLogger(ctx).WithError(err).Error("UserAPI.PerformLoginTokenDeletion failed")
+		return nil, nil, &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if !delRes.Consumed {
+		// Another login used the token first.
+		return nil, nil, &util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden("invalid login token"),
+		}
+	}
+
 	r.Identifier.Type = "m.id.user"
 	r.Identifier.User = res.Data.UserID
 
-	cleanup := func(ctx context.Context, authRes *util.JSONResponse) {
-		if authRes == nil {
-			util.GetLogger(ctx).Error("No JSONResponse provided to LoginTokenType cleanup function")
-			return
-		}
-		if authRes.Code == http.StatusOK {
-			var res uapi.PerformLoginTokenDeletionResponse
-			if err := t.UserAPI.PerformLoginTokenDeletion(ctx, &uapi.PerformLoginTokenDeletionRequest{Token: r.Token}, &res); err != nil {
-				util.GetLogger(ctx).WithError(err).Error("UserAPI.PerformLoginTokenDeletion failed")
-			}
-		}
-	}
-	return &r.Login, cleanup, nil
+	return &r.Login, func(context.Context, *util.JSONResponse) {}, nil
 }
 
 // loginTokenRequest struct to hold the possible parameters from an HTTP request.

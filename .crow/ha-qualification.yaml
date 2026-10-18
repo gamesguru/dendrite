@@ -1,0 +1,128 @@
+# HA qualification (issue #352): fault scenarios against a real PostgreSQL
+# primary and synchronous standby, a three-node JetStream cluster, an S3
+# server, a kube-apiserver and a federating peer. See
+# build/scripts/ha-qualification.sh.
+#
+# Pull requests and pushes that touch HA code run the bounded ci tier. Manual
+# runs and the ha-qualification cron run the heavier tiers: set HACHAOS_TIER to
+# full or reference. Those runs also publish their evidence to the generic
+# package registry, which needs the ha_evidence_token secret.
+when:
+  - event: pull_request
+    path:
+      - 'setup/ha/**'
+      - 'setup/jetstream/**'
+      - 'setup/lifecycle/**'
+      - 'setup/base/**'
+      - 'internal/ownership/**'
+      - 'internal/sqlutil/**'
+      - 'test/hachaos/**'
+      - 'build/scripts/ha-qualification.sh'
+      - '.crow/ha-qualification.yaml'
+      - 'go.mod'
+      - 'go.sum'
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+    path:
+      - 'setup/ha/**'
+      - 'setup/jetstream/**'
+      - 'setup/lifecycle/**'
+      - 'setup/base/**'
+      - 'internal/ownership/**'
+      - 'internal/sqlutil/**'
+      - 'test/hachaos/**'
+      - 'build/scripts/ha-qualification.sh'
+      - '.crow/ha-qualification.yaml'
+      - 'go.mod'
+      - 'go.sum'
+  - event: manual
+  - event: cron
+    cron: ha-qualification
+
+# Build once in the shared workspace, then run each group in its own
+# container. Parallel groups only read the tools and write separate artifacts.
+labels:
+  platform: linux/amd64
+
+steps:
+  build:
+    image: docker.io/library/golang:1.27-trixie
+    environment:
+      HACHAOS_PHASE: build
+    commands:
+      - bash build/scripts/ha-qualification.sh
+
+  crash:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: crash
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/crash
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  partition:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: partition
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/partition
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  dependency:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: dependency
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/dependency
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  lifecycle:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: lifecycle
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/lifecycle
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  broker:
+    image: docker.io/library/golang:1.27-trixie
+    depends_on: [build]
+    environment:
+      HACHAOS_PHASE: run
+      HACHAOS_TIER: ${HACHAOS_TIER:-ci}
+      HACHAOS_GROUP: broker
+      HACHAOS_ARTIFACTS: .hachaos/artifacts/broker
+    commands:
+      - bash build/scripts/ha-qualification.sh TestQualification
+
+  publish-evidence:
+    image: docker.io/library/alpine:3.24
+    depends_on: [crash, partition, dependency, lifecycle, broker]
+    when:
+      - event: [manual, cron]
+        status: [success, failure]
+    environment:
+      TOKEN:
+        from_secret: ha_evidence_token
+    commands:
+      - apk add --no-cache curl >/dev/null
+      - |
+        status=0
+        for group in crash partition dependency lifecycle broker; do
+          tar -czf "evidence-$$group.tar.gz" -C .hachaos/artifacts "$$group" || { status=1; continue; }
+          curl --fail -sS -H "Authorization: token $TOKEN" --upload-file "evidence-$$group.tar.gz" \
+            "https://codefloe.com/api/packages/pat-s/generic/zendrite-ha-evidence/${CI_PIPELINE_NUMBER}/$$group.tar.gz" || status=1
+        done
+        exit "$$status"

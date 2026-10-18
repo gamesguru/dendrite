@@ -3,9 +3,12 @@ package roomserver_test
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/federationapi"
@@ -269,7 +273,7 @@ func TestPurgeRoom(t *testing.T) {
 		rsAPI.SetFederationAPI(fsAPI, nil)
 
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, fsAPI.IsBlacklistedOrBackingOff)
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics) //nolint:contextcheck
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		// Create the room
 		if err = api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
@@ -591,6 +595,28 @@ func TestRedaction(t *testing.T) {
 					Content:     map[string]any{"redacts": redactedEvent.EventID()},
 					RoomVersion: gomatrixserverlib.RoomVersionV12,
 				})
+				room.InsertEvent(t, builderEv)
+			},
+		},
+		{
+			// MSC2174: from room version 11 the redacted event ID lives only
+			// in content.redacts, as other servers send it.
+			name:         "v11 redaction with only content.redacts",
+			wantRedacted: true,
+			roomVersion:  gomatrixserverlib.RoomVersionV11,
+			additionalEvents: func(t *testing.T, room *test.Room) {
+				redactedEvent := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "hello world"})
+
+				builderEv := mustCreateEvent(t, fledglingEvent{
+					Type:        spec.MRoomRedaction,
+					SenderID:    alice.ID,
+					RoomID:      room.ID,
+					Depth:       redactedEvent.Depth() + 1,
+					PrevEvents:  []any{redactedEvent.EventID()},
+					Content:     map[string]any{"redacts": redactedEvent.EventID()},
+					RoomVersion: gomatrixserverlib.RoomVersionV11,
+				})
+				require.Empty(t, gjson.GetBytes(builderEv.JSON(), "redacts").Str)
 				room.InsertEvent(t, builderEv)
 			},
 		},
@@ -2065,5 +2091,181 @@ func TestAutoForgetOnLeaveEnabled_ReflectsConfig(t *testing.T) {
 
 		cfg.RoomServer.AutoForgetOnLeave = false
 		assert.False(t, rsAPI.AutoForgetOnLeaveEnabled())
+	})
+}
+
+// outputRecorder wraps the roomserver's JetStream context to record which new
+// room events reach the output stream, and can fail a publication after the
+// stream has stored it, the way a request fails when the database connection
+// is lost between publishing an event's output and committing it.
+type outputRecorder struct {
+	nats.JetStreamContext
+	mu        sync.Mutex
+	failAfter bool
+	published []string
+}
+
+func (o *outputRecorder) PublishMsg(msg *nats.Msg, opts ...nats.PubOpt) (*nats.PubAck, error) {
+	ack, err := o.JetStreamContext.PublishMsg(msg, opts...)
+	if err != nil {
+		return ack, err
+	}
+	var output api.OutputEvent
+	if err = json.Unmarshal(msg.Data, &output); err != nil {
+		return nil, err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if output.NewRoomEvent != nil {
+		o.published = append(o.published, output.NewRoomEvent.Event.EventID())
+	}
+	if o.failAfter {
+		o.failAfter = false
+		return nil, errors.New("conn closed after the output was published")
+	}
+	return ack, nil
+}
+
+// publishedEvents returns the new room events that reached the output stream,
+// once each, in the order they first did.
+func (o *outputRecorder) publishedEvents() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var ids []string
+	for _, id := range o.published {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// A client transaction whose event was stored but whose output events could
+// not be published, for example because the broker was failing over, must
+// not be lost: the client's retry must be answered with an event that reaches
+// the output stream, so that clients and servers receive it.
+func TestTransactionNotRecordedWhenOutputFails(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		natsInstance := jetstream.NATSInstance{}
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false))
+
+		txn := &api.TransactionID{SessionID: 1, TransactionID: "txn-1"}
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+		producer := internalAPI.OutputProducer
+		output := &outputRecorder{JetStreamContext: producer.JetStream}
+		producer.JetStream = output
+		topic := producer.Topic
+		// No stream binds this subject, so publishing the output fails.
+		producer.Topic = "nowhere"
+		first := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		_, err := api.SendEventForTransaction(ctx, rsAPI, first, "test", "test", "test", txn)
+		producer.Topic = topic
+		require.Error(t, err, "the output events could not be published")
+		require.Empty(t, output.publishedEvents())
+
+		retry := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		eventID, err := api.SendEventForTransaction(ctx, rsAPI, retry, "test", "test", "test", txn)
+		require.NoError(t, err)
+		require.Equal(t, []string{eventID}, output.publishedEvents(), "the retry was answered with an event that was never published")
+	})
+}
+
+// A client transaction whose output events were published but whose database
+// transaction then failed to commit, as when the PostgreSQL primary dies in
+// between, must not produce a second event on retry: clients and servers have
+// already received the first one (#433).
+func TestTransactionDeduplicatedWhenCommitFailsAfterOutput(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
+		defer close()
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		natsInstance := jetstream.NATSInstance{}
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false))
+
+		txn := &api.TransactionID{SessionID: 1, TransactionID: "txn-1"}
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+		producer := internalAPI.OutputProducer
+		output := &outputRecorder{JetStreamContext: producer.JetStream}
+		producer.JetStream = output
+
+		// The output is published, then the request fails, so the database
+		// transaction that marks the event as sent is rolled back.
+		output.failAfter = true
+		first := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		_, err := api.SendEventForTransaction(ctx, rsAPI, first, "test", "test", "test", txn)
+		require.Error(t, err, "the request failed after publishing")
+		require.Equal(t, []string{first.EventID()}, output.publishedEvents())
+
+		retry := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		eventID, err := api.SendEventForTransaction(ctx, rsAPI, retry, "test", "test", "test", txn)
+		require.NoError(t, err)
+		require.Equal(t, first.EventID(), eventID, "the retry was answered with a second event")
+		require.Equal(t, []string{first.EventID()}, output.publishedEvents(), "the transaction produced more than one event")
+
+		// The roomserver now has the first event in the room as well, so the
+		// next event refers to it rather than leaving it a dangling branch.
+		roomInfo, err := internalAPI.DB.RoomInfo(ctx, room.ID)
+		require.NoError(t, err)
+		latest, _, _, err := internalAPI.DB.LatestEventIDs(ctx, roomInfo.RoomNID)
+		require.NoError(t, err)
+		require.Equal(t, []string{first.EventID()}, latest)
+	})
+}
+
+// The startup sweep must not purge a room whose membership events are stored
+// but not yet applied, as happens between a room's create event and its
+// creator's join being processed: the sweep would delete a room its creator
+// is about to enter. An outlier is stored without applying its membership,
+// which holds a room in exactly that state.
+func TestAutoPurgeSweepSkipsRoomsInCreation(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cfg.RoomServer.AutoPurgeMode = config.AutoPurgeNever
+
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		natsInstance := &jetstream.NATSInstance{}
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
+		rsAPI.SetFederationAPI(nil, nil)
+		// The create event is applied; the creator's join is stored but its
+		// membership not applied, as between the two being processed.
+		events := room.Events()
+		require.Equal(t, spec.MRoomCreate, events[0].Type())
+		require.Equal(t, spec.MRoomMember, events[1].Type())
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, events[:1], "test", "test", "test", nil, false))
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindOutlier, events[1:2], "test", "test", "test", nil, false))
+
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+		for _, mode := range []config.AutoPurgeMode{config.AutoPurgeOnEmpty, config.AutoPurgeOnAllForgotten} {
+			cfg.RoomServer.AutoPurgeMode = mode
+			scheduled, err := internalAPI.RunEmptyRoomsSweep(ctx)
+			require.NoError(t, err)
+			assert.Zero(t, scheduled, "mode %s scheduled a purge of a room still being created", mode)
+		}
 	})
 }

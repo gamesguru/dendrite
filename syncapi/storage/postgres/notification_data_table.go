@@ -13,13 +13,19 @@ import (
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
-func NewPostgresNotificationDataTable(db *sql.DB) (tables.NotificationData, error) {
+func NewPostgresNotificationDataTable(ctx context.Context, db *sql.DB) (tables.NotificationData, error) {
 	_, err := db.Exec(notificationDataSchema)
 	if err != nil {
+		return nil, err
+	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{Version: "syncapi: notification thread counts", Up: deltas.UpNotificationThreadCounts})
+	if err = m.Up(ctx); err != nil {
 		return nil, err
 	}
 	r := &notificationDataStatements{}
@@ -49,13 +55,13 @@ CREATE TABLE IF NOT EXISTS syncapi_notification_data (
 );`
 
 const upsertRoomUnreadNotificationCountsSQL = `INSERT INTO syncapi_notification_data
-  (user_id, room_id, notification_count, highlight_count)
-  VALUES ($1, $2, $3, $4)
+  (user_id, room_id, notification_count, highlight_count, thread_counts)
+  VALUES ($1, $2, $3, $4, $5)
   ON CONFLICT (user_id, room_id)
-  DO UPDATE SET id = nextval('syncapi_notification_data_id_seq'), notification_count = $3, highlight_count = $4
+  DO UPDATE SET id = nextval('syncapi_notification_data_id_seq'), notification_count = $3, highlight_count = $4, thread_counts = $5
   RETURNING id`
 
-const selectUserUnreadNotificationsForRooms = `SELECT room_id, notification_count, highlight_count
+const selectUserUnreadNotificationsForRooms = `SELECT room_id, notification_count, highlight_count, thread_counts
 	FROM syncapi_notification_data
 	WHERE user_id = $1 AND
 	      room_id = ANY($2)`
@@ -65,8 +71,12 @@ const selectMaxNotificationIDSQL = `SELECT CASE COUNT(*) WHEN 0 THEN 0 ELSE MAX(
 const purgeNotificationDataSQL = "" +
 	"DELETE FROM syncapi_notification_data WHERE room_id = $1"
 
-func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID, roomID string, notificationCount, highlightCount int) (pos types.StreamPosition, err error) {
-	err = sqlutil.TxStmt(txn, r.upsertRoomUnreadCounts).QueryRowContext(ctx, userID, roomID, notificationCount, highlightCount).Scan(&pos)
+func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
+	threads, err := tables.MarshalThreadCounts(data)
+	if err != nil {
+		return 0, err
+	}
+	err = sqlutil.TxStmt(txn, r.upsertRoomUnreadCounts).QueryRowContext(ctx, userID, data.RoomID, data.UnreadNotificationCount, data.UnreadHighlightCount, threads).Scan(&pos)
 	return
 }
 
@@ -83,15 +93,14 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 	roomCounts := map[string]*eventutil.NotificationData{}
 	var roomID string
 	var notificationCount, highlightCount int
+	var threads sql.NullString
 	for rows.Next() {
-		if err = rows.Scan(&roomID, &notificationCount, &highlightCount); err != nil {
+		if err = rows.Scan(&roomID, &notificationCount, &highlightCount, &threads); err != nil {
 			return nil, err
 		}
-
-		roomCounts[roomID] = &eventutil.NotificationData{
-			RoomID:                  roomID,
-			UnreadNotificationCount: notificationCount,
-			UnreadHighlightCount:    highlightCount,
+		roomCounts[roomID], err = tables.UnmarshalNotificationData(roomID, notificationCount, highlightCount, threads)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return roomCounts, rows.Err()

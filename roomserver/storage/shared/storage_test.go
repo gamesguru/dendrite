@@ -75,19 +75,20 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 
 	evDb := shared.EventDatabase{EventStateKeysTable: stateKeyTable, Cache: cache, Writer: writer}
 
-	return &shared.Database{
-			DB:               db,
-			EventDatabase:    evDb,
-			MembershipTable:  membershipTable,
-			UserRoomKeyTable: userRoomKeys,
-			RoomsTable:       roomsTable,
-			Writer:           writer,
-			Cache:            cache,
-		}, func() {
-			clearDB()
-			err = db.Close()
-			assert.NoError(t, err)
-		}
+	database := &shared.Database{
+		DB:               db,
+		EventDatabase:    evDb,
+		MembershipTable:  membershipTable,
+		UserRoomKeyTable: userRoomKeys,
+		RoomsTable:       roomsTable,
+		Writer:           writer,
+		Cache:            cache,
+	}
+	return database, func() {
+		clearDB()
+		err = db.Close()
+		assert.NoError(t, err)
+	}
 }
 
 func Test_GetLeftUsers(t *testing.T) {

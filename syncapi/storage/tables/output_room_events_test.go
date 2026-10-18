@@ -32,7 +32,7 @@ func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, 
 	var tab tables.Events
 	switch dbType {
 	case test.DBTypePostgres:
-		tab, err = postgres.NewPostgresEventsTable(db)
+		tab, err = postgres.NewPostgresEventsTable(context.Background(), db)
 	case test.DBTypeSQLite:
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {

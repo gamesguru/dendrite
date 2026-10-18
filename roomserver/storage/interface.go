@@ -9,20 +9,27 @@ package storage
 import (
 	"context"
 	"crypto/ed25519"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"codefloe.com/pat-s/zendrite/roomserver/api"
 
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/shared"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 type Database interface {
 	UserRoomKeys
 	ReportedEvents
+	// SetUserErased marks a local user as erased (MSC4025), or clears the
+	// mark when the account is reactivated.
+	SetUserErased(ctx context.Context, userID string, erased bool) error
+	// ErasedUsers returns the subset of userIDs that is erased.
+	ErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error)
 	// Do we support processing input events for more than one room at a time?
 	SupportsConcurrentRoomInputs() bool
 	AssignRoomNID(ctx context.Context, roomID spec.RoomID, roomVersion gomatrixserverlib.RoomVersion) (roomNID types.RoomNID, err error)
@@ -132,7 +139,6 @@ type Database interface {
 	// joinOnly is set to true.
 	// Returns an error if there was a problem talking to the database.
 	GetMembershipEventNIDsForRoom(ctx context.Context, roomNID types.RoomNID, joinOnly bool, localOnly bool) ([]types.EventNID, error)
-	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// EventsFromIDs looks up the Events for a list of event IDs. Does not error if event was
 	// not found.
 	// Returns an error if the retrieval went wrong.
@@ -160,23 +166,22 @@ type Database interface {
 	JoinedUsersSetInRooms(ctx context.Context, roomIDs, userIDs []string, localOnly bool) (map[string]int, error)
 	// GetLocalServerInRoom returns true if we think we're in a given room or false otherwise.
 	GetLocalServerInRoom(ctx context.Context, roomNID types.RoomNID) (bool, error)
+	// AnyLocalMemberNotForgotten reports whether the given room has at least one
+	// local membership row with forgotten = false. Used by auto-purge in
+	// on_all_forgotten mode.
+	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetServerInRoom returns true if we think a server is in a given room or false otherwise.
 	GetServerInRoom(ctx context.Context, roomNID types.RoomNID, serverName spec.ServerName) (bool, error)
-	// IsRoomPartialState returns true if the room has partial state from a faster join.
-	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetKnownUsers searches all users that userID knows about.
 	GetKnownUsers(ctx context.Context, userID, searchString string, limit int) ([]string, error)
-	// ForgetRoom sets a flag in the membership table, that the user wishes to forget a specific room
-	ForgetRoom(ctx context.Context, userID, roomID string, forget bool) error
+	// ForgetRoom sets a flag in the membership table, that the user wishes to forget a specific room.
+	// senderID is the room-specific sender ID of the user (equal to the user ID except in pseudo-ID rooms).
+	ForgetRoom(ctx context.Context, senderID, roomID string, forget bool) error
 
 	GetHistoryVisibilityState(ctx context.Context, roomInfo *types.RoomInfo, eventID string, domain string) ([]gomatrixserverlib.PDU, error)
 	GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error)
 	PurgeRoom(ctx context.Context, roomID string) error
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
-	// InvalidateRoomCache drops any cached room NID/version for roomID. Callers
-	// should use this to self-heal when they discover the cache disagrees with
-	// the database (e.g. a stale NID left behind by PurgeRoom).
-	InvalidateRoomCache(roomID string, roomNID types.RoomNID)
 
 	// GetMembershipForHistoryVisibility queries the membership events for the given eventIDs.
 	// Returns a map from (input) eventID -> membership event. If no membership event is found, returns an empty event, resulting in
@@ -197,11 +202,45 @@ type Database interface {
 
 	// EmptyRooms returns all rooms that the local server has left.
 	EmptyRooms(ctx context.Context) ([]string, error)
+	// PurgeableRooms returns the room IDs eligible for auto-purge under the
+	// given mode. Returns nil for AutoPurgeNever.
+	PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode) ([]string, error)
 	// GetBulkStateACLs returns all server ACLs for the given rooms.
 	GetBulkStateACLs(ctx context.Context, roomIDs []string) ([]tables.StrippedEvent, error)
 	QueryAdminEventReports(ctx context.Context, from uint64, limit uint64, backwards bool, userID string, roomID string) ([]api.QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (api.QueryAdminEventReportResponse, error)
 	AdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	InsertReportedRoom(ctx context.Context, roomID, userID, reason string) (int64, error)
+	QueryAdminRoomReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]api.QueryAdminRoomReportsResponse, int64, error)
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
+	// AnnotationExists reports whether the sender has an unredacted annotation
+	// of the given event type and key on the target event (MSC2677), other
+	// than the event excludeEventID, which may be empty.
+	AnnotationExists(ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key, excludeEventID string) (bool, error)
+
+	// Partial state methods for MSC3706 faster joins
+	// IsRoomPartialState returns true if the room has partial state from a faster join
+	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
+	// GetPartialStateServers returns the list of servers known to be in a partial state room
+	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
+	// GetPartialStateJoinServer returns the server we joined through for a partial state room
+	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// SetRoomPartialState marks a room as having partial state after a faster join
+	// deviceListStreamID is the current device list stream position at join time (for device list replay)
+	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
+	// Returns the device list stream ID that was stored at join time for device list replay
+	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
+	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
+	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
+	// GetAllPartialStateRooms returns all rooms that currently have partial state
+	GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error)
+	// RoomIDFromNID returns the room ID for a given room NID
+	RoomIDFromNID(ctx context.Context, roomNID types.RoomNID) (string, error)
 }
 
 type UserRoomKeys interface {
@@ -245,10 +284,23 @@ type RoomDatabase interface {
 	GetOrCreateEventTypeNID(ctx context.Context, eventType string) (eventTypeNID types.EventTypeNID, err error)
 	GetOrCreateEventStateKeyNID(ctx context.Context, eventStateKey *string) (types.EventStateKeyNID, error)
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*types.HeaderedEvent, error)
-	// InvalidateRoomCache drops any cached room NID/version for roomID. Callers
-	// should use this to self-heal when they discover the cache disagrees with
-	// the database (e.g. a stale NID left behind by PurgeRoom).
-	InvalidateRoomCache(roomID string, roomNID types.RoomNID)
+	// IsRoomPartialState returns true if the room has partial state from a faster join (MSC3706)
+	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
+	// GetPartialStateJoinServer returns the server we joined through for a partial state room
+	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// ClientTransactionEventID returns the event a client transaction produced,
+	// or "" if the transaction is unknown.
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	// StoreClientTransaction records the event a client transaction produced.
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	// EventSentToOutput reports whether the event's output events were
+	// published and the room updated with it.
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
+	// ExpireClientTransactions forgets transactions recorded before the given time.
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	// StoreAnnotation records the event if it is an annotation (MSC2677) that
+	// has not been redacted.
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
 }
 
 type EventDatabase interface {

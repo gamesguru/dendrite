@@ -92,15 +92,16 @@ func MustMakeInternalAPI(t *testing.T, opts apiTestOpts, dbType test.DBType, pub
 
 	syncProducer := producers.NewSyncAPI(accountDB, publisher, "client_data", "notification_data")
 	keyChangeProducer := &producers.KeyChange{DB: keyDB, JetStream: publisher, Topic: "keychange"}
-	return &internal.UserInternalAPI{
-			DB:                accountDB,
-			KeyDatabase:       keyDB,
-			Config:            &cfg.UserAPI,
-			SyncProducer:      syncProducer,
-			KeyChangeProducer: keyChangeProducer,
-		}, accountDB, func() {
-			close()
-		}
+	userAPI := &internal.UserInternalAPI{
+		DB:                accountDB,
+		KeyDatabase:       keyDB,
+		Config:            &cfg.UserAPI,
+		SyncProducer:      syncProducer,
+		KeyChangeProducer: keyChangeProducer,
+	}
+	return userAPI, accountDB, func() {
+		close()
+	}
 }
 
 func TestQueryProfile(t *testing.T) {

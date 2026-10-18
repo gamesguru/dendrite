@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS federationsender_outbound_peeks (
 `
 
 const insertOutboundPeekSQL = "" +
-	"INSERT INTO federationsender_outbound_peeks (room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval) VALUES ($1, $2, $3, $4, $5, $6)"
+	"INSERT INTO federationsender_outbound_peeks (room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval) VALUES ($1, $2, $3, $4, $5, $6)" +
+	// A repeated peek, or a redelivered one, renews the existing peek.
+	" ON CONFLICT (room_id, server_name, peek_id) DO UPDATE SET renewed_ts = $5, renewal_interval = $6"
 
 const selectOutboundPeekSQL = "" +
 	"SELECT room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval FROM federationsender_outbound_peeks WHERE room_id = $1 and server_name = $2 and peek_id = $3"

@@ -56,6 +56,15 @@ const selectKeysByRoomIDAndSessionIDSQL = "" +
 	"SELECT room_id, session_id, first_message_index, forwarded_count, is_verified, session_data FROM userapi_key_backups " +
 	"WHERE user_id = $1 AND version = $2 AND room_id = $3 AND session_id = $4"
 
+const deleteKeysSQL = "" +
+	"DELETE FROM userapi_key_backups WHERE user_id = $1 AND version = $2"
+
+const deleteKeysByRoomIDSQL = "" +
+	"DELETE FROM userapi_key_backups WHERE user_id = $1 AND version = $2 AND room_id = $3"
+
+const deleteKeysByRoomIDAndSessionIDSQL = "" +
+	"DELETE FROM userapi_key_backups WHERE user_id = $1 AND version = $2 AND room_id = $3 AND session_id = $4"
+
 type keyBackupStatements struct {
 	insertBackupKeyStmt                *sql.Stmt
 	updateBackupKeyStmt                *sql.Stmt
@@ -63,6 +72,9 @@ type keyBackupStatements struct {
 	selectKeysStmt                     *sql.Stmt
 	selectKeysByRoomIDStmt             *sql.Stmt
 	selectKeysByRoomIDAndSessionIDStmt *sql.Stmt
+	deleteKeysStmt                     *sql.Stmt
+	deleteKeysByRoomIDStmt             *sql.Stmt
+	deleteKeysByRoomIDAndSessionIDStmt *sql.Stmt
 }
 
 func NewSQLiteKeyBackupTable(db *sql.DB) (tables.KeyBackupTable, error) {
@@ -78,6 +90,9 @@ func NewSQLiteKeyBackupTable(db *sql.DB) (tables.KeyBackupTable, error) {
 		{&s.selectKeysStmt, selectBackupKeysSQL},
 		{&s.selectKeysByRoomIDStmt, selectKeysByRoomIDSQL},
 		{&s.selectKeysByRoomIDAndSessionIDStmt, selectKeysByRoomIDAndSessionIDSQL},
+		{&s.deleteKeysStmt, deleteKeysSQL},
+		{&s.deleteKeysByRoomIDStmt, deleteKeysByRoomIDSQL},
+		{&s.deleteKeysByRoomIDAndSessionIDStmt, deleteKeysByRoomIDAndSessionIDSQL},
 	}.Prepare(db)
 }
 
@@ -146,6 +161,33 @@ func (s *keyBackupStatements) SelectKeysByRoomIDAndSessionID(
 		return nil, err
 	}
 	return unpackKeys(ctx, rows)
+}
+
+// DeleteKeys deletes the keys of a backup version, only those of roomID if it
+// is set, and only the session sessionID of that room if that is set too. It
+// returns the number of keys deleted.
+func (s *keyBackupStatements) DeleteKeys(
+	ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string,
+) (int64, error) {
+	var stmt *sql.Stmt
+	args := []any{userID, version}
+	switch {
+	case sessionID != "":
+		stmt = s.deleteKeysByRoomIDAndSessionIDStmt
+		args = append(args, roomID, sessionID)
+	case roomID != "":
+		stmt = s.deleteKeysByRoomIDStmt
+		args = append(args, roomID)
+	default:
+		stmt = s.deleteKeysStmt
+	}
+	stmt = txn.Stmt(stmt)
+	defer stmt.Close()
+	result, err := stmt.ExecContext(ctx, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func unpackKeys(ctx context.Context, rows *sql.Rows) (map[string]map[string]api.KeyBackupSession, error) {

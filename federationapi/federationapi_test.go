@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/federationapi"
@@ -302,6 +304,71 @@ func testFederationAPIJoinThenKeyUpdate(t *testing.T, dbType test.DBType) {
 	}
 }
 
+// A promoted HA candidate finds a backlog on the streams the federation API
+// consumes. None of it may reach the roomserver before the federation API is
+// started, because the roomserver is only usable once SetFederationAPI wired it.
+func TestUnstartedInternalAPIDefersConsumers(t *testing.T) {
+	cfg, processCtx, close := testrig.CreateConfig(t, test.DBTypeSQLite)
+	defer close()
+	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+	natsInstance := jetstream.NATSInstance{}
+	jsctx, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
+
+	var started, calledEarly, called atomic.Bool
+	rsAPI := &fedRoomserverAPI{
+		queryRoomsForUser: func(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error) {
+			if !started.Load() {
+				calledEarly.Store(true)
+			}
+			called.Store(true)
+			return nil, nil
+		},
+	}
+	// The durable consumer outlives the previous owner, so the backlog is
+	// retained for it by the stream's interest retention.
+	keyChangeTopic := cfg.Global.JetStream.Prefixed(jetstream.OutputKeyChangeEvent)
+	if _, err := jsctx.AddConsumer(keyChangeTopic, &nats.ConsumerConfig{
+		Durable:       cfg.Global.JetStream.Prefixed("FederationAPIKeyChangeConsumer") + "Pull",
+		DeliverPolicy: nats.DeliverAllPolicy,
+		AckPolicy:     nats.AckExplicitPolicy,
+		FilterSubject: keyChangeTopic,
+	}); err != nil {
+		t.Fatalf("failed to create the key change consumer: %s", err)
+	}
+
+	_, start := federationapi.NewUnstartedInternalAPI(processCtx, cfg, cm, &natsInstance, &fedClient{t: t}, rsAPI, caches, nil, false)
+
+	// The key change consumer only forwards changes for local users.
+	userID := "@alice:" + string(cfg.Global.ServerName)
+	b, err := json.Marshal(userapi.DeviceMessage{
+		Type: userapi.TypeDeviceKeyUpdate,
+		DeviceKeys: &userapi.DeviceKeys{
+			UserID:   userID,
+			DeviceID: "DEVICE",
+			KeyJSON:  []byte(`{}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal device message: %s", err)
+	}
+	msg := &nats.Msg{
+		Subject: keyChangeTopic,
+		Header:  nats.Header{},
+		Data:    b,
+	}
+	msg.Header.Set(jetstream.UserID, userID)
+	testrig.MustPublishMsgs(t, jsctx, msg)
+
+	time.Sleep(500 * time.Millisecond)
+	started.Store(true)
+	start()
+
+	assert.Eventually(t, called.Load, 5*time.Second, 50*time.Millisecond, "the key change backlog was not consumed after start")
+	assert.False(t, calledEarly.Load(), "the key change backlog reached the roomserver before start")
+}
+
 // Tests that event IDs with '/' in them (escaped as %2F) are correctly passed to the right handler and don't 404.
 // Relevant for v3 rooms and a cause of flakey sytests as the IDs are randomly generated.
 func TestRoomsV3URLEscapeDoNot404(t *testing.T) {
@@ -500,6 +567,21 @@ func TestNotaryServer(t *testing.T) {
 				resp := routing.NotaryKeys(req, &cfg.FederationAPI, fedAPI, tc.pubKeyRequest)
 				// assert that we received the expected response
 				tc.validateFunc(t, resp)
+			})
+		}
+
+		// MSC3938 made the key ID optional in the GET form of the query.
+		routers := httputil.NewRouters()
+		federationapi.AddPublicRoutes(processCtx, routers, cfg, &natsInstance, nil, nil, &test.NopJSONVerifier{}, nil, fedAPI, caching.DisableMetrics)
+		for _, path := range []string{"/_matrix/key/v2/query/servera", "/_matrix/key/v2/query/servera/ed25519:someID"} {
+			t.Run("GET "+path, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Host = string(cfg.Global.ServerName)
+				rec := httptest.NewRecorder()
+				routers.Keys.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Equal(t, "servera", gjson.GetBytes(rec.Body.Bytes(), "server_keys.0.server_name").Str)
+				assert.True(t, gjson.GetBytes(rec.Body.Bytes(), "server_keys.0.verify_keys.ed25519:someID").Exists())
 			})
 		}
 	})

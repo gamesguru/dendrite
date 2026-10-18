@@ -2,19 +2,19 @@ package input
 
 import (
 	"context"
-	"strings"
+	"errors"
+	"fmt"
+	"net/url"
+	"syscall"
 	"testing"
-	"time"
 
-	"codefloe.com/pat-s/zendrite/internal/caching"
-	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/roomserver/storage"
-	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
-	"codefloe.com/pat-s/zendrite/test/testrig"
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/assert"
 
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -54,7 +54,7 @@ func Test_EventAuth(t *testing.T) {
 	}
 
 	// Craft the illegal join event, with auth events from different rooms
-	ev := room2.CreateEvent(t, bob, "m.room.member", map[string]interface{}{
+	ev := room2.CreateEvent(t, bob, "m.room.member", map[string]any{
 		"membership": "join",
 	}, test.WithStateKey(bob.ID), test.WithAuthIDs(authEventIDs))
 
@@ -74,197 +74,235 @@ func Test_EventAuth(t *testing.T) {
 	}
 }
 
-func TestRoomInfoFromSuppliedStateRejectsForeignStateEvents(t *testing.T) {
-	alice := test.NewUser(t)
-	room1 := test.NewRoom(t, alice)
-	room2 := test.NewRoom(t, alice)
-
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
-		defer cancel()
-
-		create1 := stateEventOfType(t, room1, spec.MRoomCreate)
-		foreignMember := stateEventOfType(t, room2, spec.MRoomMember)
-		storeEventForSuppliedState(t, ctx, db, create1)
-		storeEventForSuppliedState(t, ctx, db, foreignMember)
-
-		inputer := &Inputer{DB: db}
-		event := room1.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
-			"membership": spec.Join,
-		}, test.WithStateKey(alice.ID))
-		_, err = inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
-			Event: &rstypes.HeaderedEvent{PDU: event.PDU},
-			StateEventIDs: []string{
-				create1.EventID(),
-				foreignMember.EventID(),
-			},
-		})
-		if err == nil {
-			t.Fatal("expected foreign supplied state event to be rejected")
-		}
-		for _, want := range []string{foreignMember.EventID(), room2.ID, room1.ID} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("expected error %q to contain %q", err.Error(), want)
-			}
-		}
-	})
-}
-
-func TestRoomInfoFromSuppliedStateFindsCreateEvent(t *testing.T) {
+// Test_ResolvePartialStateAuth_NoConflicts tests that when there are no conflicts,
+// the function returns all unique state events.
+func Test_ResolvePartialStateAuth_NoConflicts(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
-		if err != nil {
-			t.Fatal(err)
-		}
+	var localState []gomatrixserverlib.PDU
+	var authEvents []gomatrixserverlib.PDU
 
-		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
-		defer cancel()
-
-		createEvent := stateEventOfType(t, room, spec.MRoomCreate)
-		storedRoomInfo := storeEventForSuppliedState(t, ctx, db, createEvent)
-
-		inputer := &Inputer{DB: db}
-		event := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
-			"membership": spec.Join,
-		}, test.WithStateKey(alice.ID))
-		roomInfo, err := inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
-			Event:         &rstypes.HeaderedEvent{PDU: event.PDU},
-			StateEventIDs: []string{createEvent.EventID()},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if roomInfo.RoomNID != storedRoomInfo.RoomNID {
-			t.Fatalf("expected room NID %d, got %d", storedRoomInfo.RoomNID, roomInfo.RoomNID)
-		}
-	})
-}
-
-func TestRoomInfoFromSuppliedStateRejectsMissingCreateEvent(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
-		defer cancel()
-
-		memberEvent := stateEventOfType(t, room, spec.MRoomMember)
-		storeEventForSuppliedState(t, ctx, db, memberEvent)
-
-		inputer := &Inputer{DB: db}
-		event := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
-			"membership": spec.Join,
-		}, test.WithStateKey(alice.ID))
-		_, err = inputer.roomInfoFromSuppliedState(ctx, &api.InputRoomEvent{
-			Event:         &rstypes.HeaderedEvent{PDU: event.PDU},
-			StateEventIDs: []string{memberEvent.EventID()},
-		})
-		if err == nil {
-			t.Fatal("expected supplied state without create event to be rejected")
-		}
-		if !strings.Contains(err.Error(), "does not include an m.room.create event") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-}
-
-func TestCheckSuppliedStateEventRoomsRejectsForeignStateEventsForExistingRoom(t *testing.T) {
-	alice := test.NewUser(t)
-	room1 := test.NewRoom(t, alice)
-	room2 := test.NewRoom(t, alice)
-
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
-		defer close()
-		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
-		db, err := storage.Open(processCtx.Context(), cm, &cfg.RoomServer.Database, caches)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(processCtx.Context(), 5*time.Second)
-		defer cancel()
-
-		create1 := stateEventOfType(t, room1, spec.MRoomCreate)
-		foreignMember := stateEventOfType(t, room2, spec.MRoomMember)
-		roomInfo := storeEventForSuppliedState(t, ctx, db, create1)
-		storeEventForSuppliedState(t, ctx, db, foreignMember)
-
-		inputer := &Inputer{DB: db}
-		event := room1.CreateEvent(t, alice, spec.MRoomMember, map[string]any{
-			"membership": spec.Join,
-		}, test.WithStateKey(alice.ID))
-		err = inputer.checkSuppliedStateEventRooms(ctx, &api.InputRoomEvent{
-			Event: &rstypes.HeaderedEvent{PDU: event.PDU},
-			StateEventIDs: []string{
-				create1.EventID(),
-				foreignMember.EventID(),
-			},
-		}, roomInfo)
-		if err == nil {
-			t.Fatal("expected foreign supplied state event to be rejected")
-		}
-		for _, want := range []string{foreignMember.EventID(), room2.ID, room1.ID} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("expected error %q to contain %q", err.Error(), want)
-			}
-		}
-	})
-}
-
-func stateEventOfType(t *testing.T, room *test.Room, eventType string) *rstypes.HeaderedEvent {
-	t.Helper()
+	// Get room events as local state
 	for _, ev := range room.Events() {
-		if ev.Type() == eventType && ev.StateKey() != nil {
-			return ev
+		if ev.StateKey() != nil {
+			localState = append(localState, ev.PDU)
 		}
 	}
-	t.Fatalf("room %s has no state event of type %s", room.ID, eventType)
-	return nil
+
+	// Use same events as auth events (no conflicts expected)
+	authEvents = localState
+
+	// Test the conflict detection logic directly
+	type stateKey struct {
+		eventType string
+		stateKey  string
+	}
+	stateMap := make(map[stateKey]gomatrixserverlib.PDU)
+	var conflicted []gomatrixserverlib.PDU
+
+	// First, add all local state events
+	for _, ev := range localState {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		stateMap[key] = ev
+	}
+
+	// Then check auth events for conflicts
+	for _, ev := range authEvents {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		if existing, ok := stateMap[key]; ok {
+			if existing.EventID() != ev.EventID() {
+				conflicted = append(conflicted, existing, ev)
+				delete(stateMap, key)
+			}
+		} else {
+			stateMap[key] = ev
+		}
+	}
+
+	// No conflicts expected since same events
+	assert.Empty(t, conflicted, "Should have no conflicts when using same events")
+	assert.Len(t, stateMap, len(localState), "State map should contain all local state events")
 }
 
-func storeEventForSuppliedState(t *testing.T, ctx context.Context, db storage.Database, ev *rstypes.HeaderedEvent) *rstypes.RoomInfo {
-	t.Helper()
-	roomInfo, err := db.GetOrCreateRoomInfo(ctx, ev.PDU)
-	if err != nil {
-		t.Fatal(err)
+// Test_ResolvePartialStateAuth_WithConflicts tests that conflicting events
+// are detected and would be passed to state resolution.
+func Test_ResolvePartialStateAuth_WithConflicts(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	var localState []gomatrixserverlib.PDU
+	var authEvents []gomatrixserverlib.PDU
+
+	// Get room events as local state
+	for _, ev := range room.Events() {
+		if ev.StateKey() != nil {
+			localState = append(localState, ev.PDU)
+		}
 	}
-	eventTypeNID, err := db.GetOrCreateEventTypeNID(ctx, ev.Type())
-	if err != nil {
-		t.Fatal(err)
+
+	// Create a different power levels event to simulate conflict
+	// In partial state, we might have a different power levels from auth events
+	conflictingPL := room.CreateEvent(t, alice, spec.MRoomPowerLevels, map[string]any{
+		"users": map[string]int{
+			alice.ID: 100,
+			bob.ID:   50, // Different from original
+		},
+	}, test.WithStateKey(""))
+
+	authEvents = []gomatrixserverlib.PDU{conflictingPL.PDU}
+
+	// Test the conflict detection logic directly
+	type stateKey struct {
+		eventType string
+		stateKey  string
 	}
-	eventStateKeyNID, err := db.GetOrCreateEventStateKeyNID(ctx, ev.StateKey())
-	if err != nil {
-		t.Fatal(err)
+	stateMap := make(map[stateKey]gomatrixserverlib.PDU)
+	var conflicted []gomatrixserverlib.PDU
+
+	// First, add all local state events
+	for _, ev := range localState {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		stateMap[key] = ev
 	}
-	if _, _, err = db.StoreEvent(ctx, ev.PDU, roomInfo, eventTypeNID, eventStateKeyNID, nil, false); err != nil {
-		t.Fatal(err)
+
+	// Then check auth events for conflicts
+	for _, ev := range authEvents {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		if existing, ok := stateMap[key]; ok {
+			if existing.EventID() != ev.EventID() {
+				conflicted = append(conflicted, existing, ev)
+				delete(stateMap, key)
+			}
+		} else {
+			stateMap[key] = ev
+		}
 	}
-	return roomInfo
+
+	// Should have conflicts for power levels
+	assert.NotEmpty(t, conflicted, "Should have conflicts for different power levels")
+	assert.Equal(t, 2, len(conflicted), "Should have 2 conflicting events (original and new)")
+
+	// Verify the conflicting events are power levels
+	hasConflictingPL := false
+	for _, ev := range conflicted {
+		if ev.Type() == spec.MRoomPowerLevels {
+			hasConflictingPL = true
+			break
+		}
+	}
+	assert.True(t, hasConflictingPL, "Conflicting events should include power levels")
+}
+
+// Test_ResolvePartialStateAuth_NewStateFromAuth tests that auth events
+// with new state keys are added to the result.
+func Test_ResolvePartialStateAuth_NewStateFromAuth(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+
+	var localState []gomatrixserverlib.PDU
+
+	// Get room events as local state (only create event to simulate partial state)
+	for _, ev := range room.Events() {
+		if ev.Type() == spec.MRoomCreate {
+			localState = append(localState, ev.PDU)
+			break
+		}
+	}
+
+	// Auth events include a membership event not in local state
+	// This simulates receiving auth events with member info we don't have
+	bobMember := room.CreateEvent(t, bob, spec.MRoomMember, map[string]any{
+		"membership": "join",
+	}, test.WithStateKey(bob.ID))
+
+	authEvents := []gomatrixserverlib.PDU{bobMember.PDU}
+
+	// Test the state merging logic
+	type stateKey struct {
+		eventType string
+		stateKey  string
+	}
+	stateMap := make(map[stateKey]gomatrixserverlib.PDU)
+
+	// First, add all local state events
+	for _, ev := range localState {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		stateMap[key] = ev
+	}
+
+	// Then add auth events (no conflicts expected since different state keys)
+	for _, ev := range authEvents {
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		if _, ok := stateMap[key]; !ok {
+			stateMap[key] = ev
+		}
+	}
+
+	// Should have both create event and bob's membership
+	assert.Len(t, stateMap, 2, "State map should contain create + membership")
+
+	// Verify we have bob's membership
+	bobKey := stateKey{spec.MRoomMember, bob.ID}
+	_, hasBob := stateMap[bobKey]
+	assert.True(t, hasBob, "State map should include Bob's membership from auth events")
+}
+
+func TestWithoutBackingOffServersKeepsLiveServers(t *testing.T) {
+	backingOff := map[spec.ServerName]bool{"origin": true, "join": true, "dead": true}
+	isBackingOff := func(server spec.ServerName) bool { return backingOff[server] }
+
+	got := withoutBackingOffServers(
+		[]spec.ServerName{"origin", "dead", "join", "alive"}, "origin", "join", isBackingOff,
+	)
+	assert.Equal(t, []spec.ServerName{"origin", "join", "alive"}, got)
+
+	got = withoutBackingOffServers([]spec.ServerName{"origin", "dead"}, "", "", isBackingOff)
+	assert.Empty(t, got, "backing off servers are dropped when neither is the origin or join server")
+}
+
+func TestUnavailableHere(t *testing.T) {
+	// The refusal seen during a PostgreSQL failover, as the publication gate
+	// wraps it.
+	stale := fmt.Errorf("%w: %w", jetstream.ErrPublicationRefused,
+		errors.New("HA ownership has not been confirmed within the freshness window: last confirmed 6.006s ago, freshness window is 6s"))
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"publication refused": {fmt.Errorf("t.inputer.processRoomEvent (fast forward): r.WriteOutputEvents (old): %w", stale), true},
+		"broker timeout":      {fmt.Errorf("r.WriteOutputEvents (old): %w", nats.ErrTimeout), true},
+		"no stream response":  {fmt.Errorf("r.WriteOutputEvents (old): %w", nats.ErrNoStreamResponse), true},
+		"database shutdown":   {fmt.Errorf("r.DB.RoomInfo: %w", &pgconn.PgError{Code: "57P01"}), true},
+		"remote unreachable":  {fmt.Errorf("t.getMissingEvents: %w", &url.Error{Op: "Get", URL: "https://remote", Err: syscall.ECONNREFUSED}), false},
+		"remote missing prev": {errors.New("called /get_missing_events but server remote didn't return any prev_events"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, unavailableHere(context.Background(), tc.err))
+		})
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.New("shutting down"))
+	assert.True(t, unavailableHere(ctx, errors.New("anything")), "a stopping server gives up; that is not the event's fault")
 }

@@ -7,29 +7,29 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/getsentry/sentry-go"
+	"github.com/kardianos/minwinsvc"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"codefloe.com/pat-s/zendrite/appservice"
-	"codefloe.com/pat-s/zendrite/federationapi"
 	"codefloe.com/pat-s/zendrite/internal"
-	"codefloe.com/pat-s/zendrite/internal/caching"
-	"codefloe.com/pat-s/zendrite/internal/httputil"
-	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/roomserver"
 	"codefloe.com/pat-s/zendrite/setup"
 	basepkg "codefloe.com/pat-s/zendrite/setup/base"
 	"codefloe.com/pat-s/zendrite/setup/config"
-	"codefloe.com/pat-s/zendrite/setup/jetstream"
-	"codefloe.com/pat-s/zendrite/setup/mscs"
+	"codefloe.com/pat-s/zendrite/setup/ha"
+	"codefloe.com/pat-s/zendrite/setup/lifecycle"
 	"codefloe.com/pat-s/zendrite/setup/process"
-	"codefloe.com/pat-s/zendrite/userapi"
+	"codefloe.com/pat-s/zendrite/setup/profiling"
 )
+
+const shutdownTimeout = 30 * time.Second
 
 var (
 	unixSocket = flag.String("unix-socket", "",
@@ -75,7 +75,6 @@ func main() {
 		}
 		logrus.Fatalf("Failed to start due to configuration errors")
 	}
-	processCtx := process.NewProcessContext()
 
 	internal.SetupStdLogging()
 	internal.SetupHookLogging(cfg.Logging)
@@ -88,28 +87,26 @@ func main() {
 		logrus.Warn("Open registration is enabled")
 	}
 
-	// create DNS cache
-	var dnsCache *fclient.DNSCache
-	if cfg.Global.DNSCache.Enabled {
-		dnsCache = fclient.NewDNSCache(
-			cfg.Global.DNSCache.CacheSize,
-			cfg.Global.DNSCache.CacheLifetime,
-			cfg.FederationAPI.AllowNetworkCIDRs,
-			cfg.FederationAPI.DenyNetworkCIDRs,
-		)
-		logrus.Infof(
-			"DNS cache enabled (size %d, lifetime %s)",
-			cfg.Global.DNSCache.CacheSize,
-			cfg.Global.DNSCache.CacheLifetime,
-		)
-	}
-
 	// setup tracing
 	closer, err := cfg.SetupTracing()
 	if err != nil {
 		logrus.WithError(err).Panicf("failed to start tracing")
 	}
 	defer closer.Close()
+
+	profiler, err := profiling.Start(cfg.Global.Pyroscope)
+	if err != nil {
+		logrus.WithError(err).Panic("Failed to start continuous profiling")
+	}
+	if profiler != nil {
+		logrus.Info("Pyroscope continuous profiling enabled")
+		defer func() {
+			profiler.Flush(true)
+			if err := profiler.Stop(); err != nil {
+				logrus.WithError(err).Warn("Failed to stop continuous profiling")
+			}
+		}()
+	}
 
 	// setup sentry
 	if cfg.Global.Sentry.Enabled {
@@ -125,62 +122,7 @@ func main() {
 		if err != nil {
 			logrus.WithError(err).Panic("failed to start Sentry")
 		}
-		go func() {
-			processCtx.ComponentStarted()
-			<-processCtx.WaitForShutdown()
-			if !sentry.Flush(time.Second * 5) { //nolint:mnd
-				logrus.Warnf("failed to flush all Sentry events!")
-			}
-			processCtx.ComponentFinished()
-		}()
-	}
-
-	federationClient := basepkg.CreateFederationClient(cfg, dnsCache)
-	httpClient := basepkg.CreateClient(cfg, dnsCache)
-
-	// prepare required dependencies
-	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-	routers := httputil.NewRouters()
-
-	caches := caching.NewRistrettoCache(cfg.Global.Cache.EstimatedMaxSize, cfg.Global.Cache.MaxAge, caching.EnableMetrics)
-	natsInstance := jetstream.NATSInstance{}
-	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.EnableMetrics)
-	fsAPI := federationapi.NewInternalAPI(
-		processCtx, cfg, cm, &natsInstance, federationClient, rsAPI, caches, nil, false,
-	)
-
-	keyRing := fsAPI.KeyRing()
-
-	// The underlying roomserver implementation needs to be able to call the fedsender.
-	// This is different to rsAPI which can be the http client which doesn't need this
-	// dependency. Other components also need updating after their dependencies are up.
-	rsAPI.SetFederationAPI(fsAPI, keyRing)
-
-	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, federationClient, caching.EnableMetrics, fsAPI.IsBlacklistedOrBackingOff)
-	asAPI := appservice.NewInternalAPI(processCtx, cfg, &natsInstance, userAPI, rsAPI)
-
-	rsAPI.SetAppserviceAPI(asAPI)
-	rsAPI.SetUserAPI(userAPI)
-
-	monolith := setup.Monolith{
-		Config:    cfg,
-		Client:    httpClient,
-		FedClient: federationClient,
-		KeyRing:   keyRing,
-
-		AppserviceAPI: asAPI,
-		// always use the concrete impl here even in -http mode because adding public routes
-		// must be done on the concrete impl not an HTTP client else fedapi will call itself
-		FederationAPI: fsAPI,
-		RoomserverAPI: rsAPI,
-		UserAPI:       userAPI,
-	}
-	monolith.AddAllPublicRoutes(processCtx, cfg, routers, cm, &natsInstance, caches, caching.EnableMetrics)
-
-	if len(cfg.MSCs.MSCs) > 0 {
-		if err := mscs.Enable(cfg, cm, routers, &monolith, caches); err != nil {
-			logrus.WithError(err).Fatalf("Failed to enable MSCs")
-		}
+		defer sentry.Flush(time.Second * 5) //nolint:mnd // Existing telemetry flush budget.
 	}
 
 	upCounter := prometheus.NewCounter(prometheus.CounterOpts{
@@ -193,17 +135,31 @@ func main() {
 	upCounter.Add(1)
 	prometheus.MustRegister(upCounter)
 
-	// Expose the matrix APIs directly rather than putting them under a /api path.
-	go func() {
-		basepkg.SetupAndServeHTTP(processCtx, cfg, routers, httpAddr, nil, nil)
-	}()
-	// Handle HTTPS if certificate and key are provided
-	if *unixSocket == "" && *certFile != "" && *keyFile != "" {
-		go func() {
-			basepkg.SetupAndServeHTTP(processCtx, cfg, routers, httpsAddr, certFile, keyFile)
-		}()
+	// The gate reads the deployment identity, so it is computed first.
+	if err := ha.SetCompatibility(cfg, internal.VersionString()); err != nil {
+		logrus.WithError(err).Fatal("HA compatibility validation failed")
 	}
-
-	// We want to block forever to let the HTTP and HTTPS handler serve the APIs
-	basepkg.WaitForShutdown(processCtx)
+	// Standalone authorizes activation immediately; HA requires election and
+	// resource-enforced ownership. The interface is left nil when HA is
+	// disabled so a typed nil pointer cannot pose as an installed gate.
+	var gate ha.OwnershipGate
+	var ownershipGate *ha.PostgresGate
+	if cfg.Global.HA.Enabled {
+		ownershipGate = ha.NewPostgresGate(string(cfg.Global.DatabaseOptions.ConnectionString), cfg.Global.HA)
+		gate = ownershipGate
+	}
+	var server *lifecycle.Homeserver
+	server = lifecycle.New(func(application *process.ProcessContext) error {
+		return startHomeserver(application, cfg, httpAddr, httpsAddr, server.Ready, ownershipGate)
+	}, shutdownTimeout)
+	stopping, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	minwinsvc.SetOnExit(func() { stop(); server.Stop() })
+	// An owner asked to stop hands over first, so a router can hold new
+	// requests for the successor while the ones in flight finish here.
+	ownership := ha.PlannedHandover(stopping, cfg.Global.HA, server)
+	if err := ha.Run(ownership, cfg.Global.HA, &cfg.Global.Metrics, server, gate, shutdownTimeout); err != nil {
+		logrus.WithError(err).Error("Homeserver stopped")
+		os.Exit(1) //nolint:gocritic // A stuck application must exit immediately; deferred profiling shutdown may also block.
+	}
 }

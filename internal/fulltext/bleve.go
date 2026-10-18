@@ -84,14 +84,7 @@ func New(processCtx *process.ProcessContext, cfg config.Fulltext) (fts *Search, 
 		return nil, err
 	}
 	if processCtx != nil {
-		// Register the component before starting the goroutine to avoid
-		// a race between ComponentStarted() and WaitForComponentsToFinish().
-		processCtx.ComponentStarted()
-		go func() {
-			<-processCtx.WaitForShutdown()
-			_ = fts.Close()
-			processCtx.ComponentFinished()
-		}()
+		processCtx.Defer(func() { _ = fts.Close() })
 	}
 	return fts, nil
 }
@@ -114,8 +107,13 @@ func (f *Search) Index(elements ...IndexElement) error {
 	return f.FulltextIndex.Batch(batch)
 }
 
-// Delete deletes an indexed element by the eventID.
+// Delete deletes an indexed element by the eventID. An empty eventID names no
+// document, so there is nothing to delete; Bleve would reject it, and a caller
+// that retries on error would then retry forever.
 func (f *Search) Delete(eventID string) error {
+	if eventID == "" {
+		return nil
+	}
 	return f.FulltextIndex.Delete(eventID)
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
@@ -41,7 +42,7 @@ func TestLoadConfigRelative(t *testing.T) {
 }
 
 func TestGlobalKeyPerspectivesAreWiredToFederationAPI(t *testing.T) {
-	var cfg Dendrite
+	var cfg Zendrite
 	cfg.Defaults(DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -71,7 +72,7 @@ global:
 }
 
 func TestFederationAPIKeyPerspectivesEmptyOverridesGlobal(t *testing.T) {
-	var cfg Dendrite
+	var cfg Zendrite
 	cfg.Defaults(DefaultOpts{
 		Generate:       false,
 		SingleDatabase: true,
@@ -151,7 +152,7 @@ federation_api:
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var cfg Dendrite
+			var cfg Zendrite
 			cfg.Defaults(DefaultOpts{
 				Generate:       false,
 				SingleDatabase: true,
@@ -183,16 +184,6 @@ global:
   trusted_third_party_id_servers:
   - matrix.org
   - vector.im
-  kafka:
-    addresses:
-    - localhost:2181
-    topic_prefix: Zendrite
-    use_naffka: true
-    naffka_database:
-      connection_string: file:naffka.db
-      max_open_conns: 100
-      max_idle_conns: 2
-      conn_max_lifetime: -1
   metrics:
     enabled: false
     basic_auth:
@@ -543,4 +534,137 @@ func TestAutoPurgeMode_BackwardsCompat(t *testing.T) {
 			t.Fatalf("expected error for unknown mode, got nil")
 		}
 	})
+}
+
+func TestRefreshableAccessTokenLifetime(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.RefreshableAccessTokenLifetime != 5*time.Minute {
+		t.Fatalf("default lifetime is %s, want 5m", c.RefreshableAccessTokenLifetime)
+	}
+	if err := yaml.Unmarshal([]byte("refreshable_access_token_lifetime: 0s"), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.RefreshableAccessTokenLifetime != 0 {
+		t.Fatalf("0s parsed as %s", c.RefreshableAccessTokenLifetime)
+	}
+	errs := ConfigErrors{}
+	c.RefreshableAccessTokenLifetime = -time.Second
+	c.Verify(&errs)
+	if len(errs) == 0 {
+		t.Fatal("negative lifetime was accepted")
+	}
+}
+
+func TestDelayedEventsConfig(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.DelayedEvents.Enabled() {
+		t.Fatal("delayed events are enabled by default")
+	}
+	if c.DelayedEvents.MaxPerUser != 100 {
+		t.Fatalf("default max_delayed_events_per_user is %d, want 100", c.DelayedEvents.MaxPerUser)
+	}
+	input := "delayed_events:\n  max_event_delay_duration: 24h\n  max_delayed_events_per_user: 10\n" +
+		"  management_rate_limiting:\n    enabled: true\n    threshold: 5\n    cooloff_ms: 1000\n"
+	if err := yaml.Unmarshal([]byte(input), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.DelayedEvents.MaxDelay != 24*time.Hour || c.DelayedEvents.MaxPerUser != 10 || !c.DelayedEvents.Enabled() {
+		t.Fatalf("parsed %+v", c.DelayedEvents)
+	}
+	if c.DelayedEvents.ManagementRateLimiting.Threshold != 5 || c.DelayedEvents.ManagementRateLimiting.CooloffMS != 1000 {
+		t.Fatalf("parsed management rate limiting %+v", c.DelayedEvents.ManagementRateLimiting)
+	}
+	errs := ConfigErrors{}
+	c.Verify(&errs)
+	if len(errs) != 0 {
+		t.Fatalf("valid configuration rejected: %v", errs)
+	}
+	c.DelayedEvents.MaxDelay = -time.Second
+	c.DelayedEvents.MaxPerUser = -1
+	c.Verify(&errs)
+	if len(errs) != 2 {
+		t.Fatalf("got errors %v, want one each for the negative delay and limit", errs)
+	}
+	c.DelayedEvents.MaxPerUser = 0
+	c.DelayedEvents.MaxDelay = time.Hour
+	if c.DelayedEvents.Enabled() {
+		t.Fatal("a limit of zero scheduled events does not disable delayed events")
+	}
+}
+
+func TestCallGuestsConfig(t *testing.T) {
+	var c ClientAPI
+	c.Defaults(DefaultOpts{})
+	if c.CallGuests.Enabled() {
+		t.Fatal("call guests are enabled by default")
+	}
+	if c.CallGuests.Lifetime != 24*time.Hour {
+		t.Fatalf("default call guest lifetime is %s, want 24h", c.CallGuests.Lifetime)
+	}
+	if err := yaml.Unmarshal([]byte("call_guests:\n  enabled: true\n  lifetime: 2h\n"), &c); err != nil {
+		t.Fatal(err)
+	}
+	if !c.CallGuests.Enabled() || c.CallGuests.Lifetime != 2*time.Hour {
+		t.Fatalf("parsed %+v", c.CallGuests)
+	}
+
+	// Call guests with closed registration and no CAPTCHA or token pass,
+	// including the open-registration anti-spam rule.
+	errs := ConfigErrors{}
+	c.Verify(&errs)
+	if len(errs) != 0 {
+		t.Fatalf("valid configuration rejected: %v", errs)
+	}
+
+	errs = ConfigErrors{}
+	c.RegistrationDisabled = false
+	c.OpenRegistrationWithoutVerificationEnabled = true
+	c.Verify(&errs)
+	if len(errs) != 1 {
+		t.Fatalf("got errors %v, want one for call guests with open registration", errs)
+	}
+
+	errs = ConfigErrors{}
+	c.RegistrationDisabled = true
+	c.CallGuests.Lifetime = 0
+	c.Verify(&errs)
+	if len(errs) != 1 {
+		t.Fatalf("got errors %v, want one for the zero lifetime", errs)
+	}
+}
+
+func TestCallGuestsRegistrationFlows(t *testing.T) {
+	flows := func(c *Zendrite) [][]string {
+		t.Helper()
+		if err := c.Derive(); err != nil {
+			t.Fatal(err)
+		}
+		var out [][]string
+		for _, f := range c.Derived.Registration.Flows {
+			var stages []string
+			for _, s := range f.Stages {
+				stages = append(stages, string(s))
+			}
+			out = append(out, stages)
+		}
+		return out
+	}
+	c := &Zendrite{}
+	c.Defaults(DefaultOpts{})
+	c.ClientAPI.CallGuests.Enable = true
+
+	if got, want := flows(c), [][]string{{"m.login.dummy"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
+	c.ClientAPI.RegistrationRequiresToken = true
+	if got, want := flows(c), [][]string{{"m.login.registration_token"}, {"m.login.dummy"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
+	// A CAPTCHA applies to call guests too, so no dummy flow bypasses it.
+	c.ClientAPI.RecaptchaEnabled = true
+	if got, want := flows(c), [][]string{{"m.login.recaptcha"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flows %v, want %v", got, want)
+	}
 }

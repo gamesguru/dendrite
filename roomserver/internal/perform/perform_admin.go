@@ -16,6 +16,8 @@ import (
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
+
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -26,7 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
-	"github.com/sirupsen/logrus"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 type Admin struct {
@@ -39,6 +41,8 @@ type Admin struct {
 	// rather than per-server-domain (see PerformAdminBridgeState) - pseudo-ID
 	// rooms sign events with a per-room identity, not the server's own.
 	RSAPI api.RoomserverInternalAPI
+	// PurgeTracker coalesces auto-purges and lets rejoins wait for them.
+	PurgeTracker *PurgeTracker
 }
 
 // PerformAdminEvacuateRoom will remove all local users from the given room.
@@ -219,6 +223,36 @@ func (r *Admin) PerformAdminPurgeRoom(
 			},
 		},
 	})
+}
+
+// AutoPurgeRoom asynchronously purges roomID via PerformAdminPurgeRoom,
+// tracking it in the PurgeTracker so that concurrent rejoin attempts can
+// wait for the purge to complete. Coalesces concurrent calls for the same
+// roomID. The flag check is the caller's responsibility — see
+// ScheduleAutoPurgeIfEmpty and the startup sweep.
+//
+// Purging outlives the caller request but remains bound to the application lifetime.
+func (r *Admin) AutoPurgeRoom(ctx context.Context, roomID, reason string) {
+	_, owner := r.PurgeTracker.BeginPurge(roomID)
+	if !owner {
+		return
+	}
+	if !process.Go(process.Lifetime(ctx), func() {
+		defer r.PurgeTracker.FinishPurge(roomID)
+		// Detach from the caller's context: the caller may be a short-lived
+		// handler (e.g. NATS message dispatch) whose ctx is canceled as soon
+		// as the handler returns. The purge itself is an autonomous, in-flight
+		// operation that remains bound to the application lifetime.
+		ctx := process.Lifetime(ctx)
+		fields := logrus.Fields{"room_id": roomID, "reason": reason}
+		if err := r.PerformAdminPurgeRoom(ctx, roomID); err != nil {
+			logrus.WithError(err).WithFields(fields).Warn("Auto-purge of empty room failed")
+			return
+		}
+		logrus.WithFields(fields).Info("Auto-purged empty room")
+	}) {
+		r.PurgeTracker.FinishPurge(roomID)
+	}
 }
 
 func (r *Admin) PerformAdminDownloadState(
@@ -777,4 +811,14 @@ func (r *Admin) PerformAdminDeleteEventReport(ctx context.Context, reportID uint
 
 func (r *Admin) AdminQueryEmptyRooms(ctx context.Context) ([]string, error) {
 	return r.DB.EmptyRooms(ctx)
+}
+
+// PerformUserErasure marks a local user as erased, so that their events are
+// served redacted to anyone who was not in the room when they were sent
+// (MSC4025), or clears the mark when the account is reactivated.
+func (r *Admin) PerformUserErasure(ctx context.Context, userID spec.UserID, erased bool) error {
+	if !r.Cfg.Matrix.IsLocalServerName(userID.Domain()) {
+		return fmt.Errorf("user %q is not local", userID.String())
+	}
+	return r.DB.SetUserErased(ctx, userID.String(), erased)
 }

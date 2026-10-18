@@ -64,6 +64,8 @@ type Login struct {
 	// Thus a pointer is needed to differentiate between the two
 	InitialDisplayName *string `json:"initial_device_display_name"`
 	DeviceID           *string `json:"device_id"`
+	// RefreshToken is true if the client supports refresh tokens (MSC2918).
+	RefreshToken bool `json:"refresh_token"`
 }
 
 // Username returns the user localpart/user_id in this request, if it exists.
