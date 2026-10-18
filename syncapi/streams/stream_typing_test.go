@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/element-hq/dendrite/internal/caching"
-	"github.com/element-hq/dendrite/syncapi/types"
+	"codefloe.com/pat-s/zendrite/internal/caching"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
 

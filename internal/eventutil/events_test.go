@@ -16,7 +16,7 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/fclient"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 
-	"github.com/element-hq/dendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 )
 
 // A room that doesn't exist locally has RoomExists=false and an empty

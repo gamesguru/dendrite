@@ -1,7 +1,7 @@
 package caching
 
 import (
-	"github.com/element-hq/dendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 type RoomServerCaches interface {
