@@ -159,7 +159,26 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 	}
 
 	if createRequest.PowerLevelContentOverride != nil {
-		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults
+		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults.
+		// encoding/json reuses non-nil maps, so explicitly empty maps would otherwise
+		// retain the defaults (for example, the default tombstone level of 150).
+		var overrideFields map[string]json.RawMessage
+		if err = json.Unmarshal(createRequest.PowerLevelContentOverride, &overrideFields); err != nil {
+			util.GetLogger(ctx).WithError(err).Error("json.Unmarshal for power_level_content_override failed")
+			return "", &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON("malformed power_level_content_override"),
+			}
+		}
+		if _, ok := overrideFields["users"]; ok {
+			powerLevelContent.Users = nil
+		}
+		if _, ok := overrideFields["events"]; ok {
+			powerLevelContent.Events = nil
+		}
+		if _, ok := overrideFields["notifications"]; ok {
+			powerLevelContent.Notifications = nil
+		}
 		err = json.Unmarshal(createRequest.PowerLevelContentOverride, &powerLevelContent)
 		if err != nil {
 			util.GetLogger(ctx).WithError(err).Error("json.Unmarshal for power_level_content_override failed")
