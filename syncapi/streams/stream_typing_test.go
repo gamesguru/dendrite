@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 )
 
 func TestTypingStreamProviderCompleteSyncReturnsCurrentTypingOnly(t *testing.T) {
