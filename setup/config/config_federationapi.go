@@ -57,7 +57,7 @@ type FederationAPI struct {
 }
 
 func (c *FederationAPI) UnmarshalYAML(unmarshal func(any) error) error {
-	var keys map[interface{}]interface{}
+	var keys map[string]any
 	if err := unmarshal(&keys); err != nil {
 		return err
 	}

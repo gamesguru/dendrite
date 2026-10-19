@@ -563,12 +563,13 @@ func membershipStateForEvent(event types.Event) (tables.MembershipState, error) 
 // that join, i.e. it can still show the requester as merely invited, not
 // joined. Preferring remote there would silently regress the requester's
 // own membership and make the corrective event fail its own auth check
-// before it can apply anything. An earlier version of this fix that only
-// filled gaps missing from remote survived the "eventauth: sender ... not
-// in room" scenario, because
-// remote wasn't missing that tuple - it just had a stale (pre-join) value
-// for it. Local is always at least as fresh as remote for anything den has
-// already legitimately processed, so local should win on conflicts; remote
+// before it can apply anything.
+//
+// An earlier version of this fix only filled gaps missing from remote, so
+// the failure ("eventauth: sender not in room") survived it.
+// Remote wasn't missing that tuple; it had a stale (pre-join) value for it.
+// Local is always at least as fresh as remote for anything den has already
+// legitimately processed, so local should win on conflicts; remote
 // is only needed to fill in tuples (like other users' memberships den never
 // received) that local doesn't have at all.
 func (r *Admin) fetchStateToInstall(

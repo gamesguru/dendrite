@@ -291,7 +291,7 @@ func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gom
 	persistEvents(ctx, r.DB, r.Querier, newEvents)
 }
 
-// backfillRequester implements gomatrixserverlib.BackfillRequester
+// backfillRequester implements gomatrixserverlib.BackfillRequester.
 type backfillRequester struct {
 	db                storage.Database
 	fsAPI             federationAPI.RoomserverFederationAPI
