@@ -56,8 +56,16 @@ func (d *KeyDatabase) FetchKeys(
 		return results, err
 	}
 	for req, res := range fromDB {
-		results[req] = res
 		d.cache.StoreServerKey(req, res)
+		// Like Synapse (MSC4499), judge a live key against the timestamp of
+		// the event being verified. If its validity window ended before then,
+		// withhold it so the key ring asks the origin again: the window may
+		// have been extended since we cached it. Expired keys are final.
+		if res.ExpiredTS == gomatrixserverlib.PublicKeyNotExpired &&
+			!res.WasValidAt(requests[req], gomatrixserverlib.StrictValiditySignatureCheck) {
+			continue
+		}
+		results[req] = res
 	}
 	return results, nil
 }
