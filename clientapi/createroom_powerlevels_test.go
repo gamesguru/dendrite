@@ -73,9 +73,7 @@ func TestCreateRoomInvitePowerLevel(t *testing.T) {
 }
 
 // Room versions with privileged creators (MSC4289) forbid creators in the
-// power levels' users map. Clients written for earlier versions, such as
-// Element Call, still put the creator there, so createRoom drops creators
-// from power_level_content_override, as Synapse does for room upgrades.
+// power levels' users map.
 func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
@@ -98,8 +96,8 @@ func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 	tests := map[string]struct {
 		body      map[string]any
 		wantUsers map[string]int64
+		wantCode  int
 	}{
-		// The request Element Call sends when it creates a call room.
 		"v12, creator in users": {
 			body: map[string]any{
 				"room_version": "12",
@@ -110,7 +108,7 @@ func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 					"users":  map[string]any{alice.ID: 100, bob.ID: 50},
 				},
 			},
-			wantUsers: map[string]int64{bob.ID: 50},
+			wantCode: http.StatusBadRequest,
 		},
 		"v12, additional creator in users": {
 			body: map[string]any{
@@ -120,7 +118,7 @@ func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 					"users": map[string]any{alice.ID: 100, charlie.ID: 100, bob.ID: 50},
 				},
 			},
-			wantUsers: map[string]int64{bob.ID: 50},
+			wantCode: http.StatusBadRequest,
 		},
 		"v10, creator in users is kept": {
 			body: map[string]any{
@@ -130,6 +128,7 @@ func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 				},
 			},
 			wantUsers: map[string]int64{alice.ID: 100, bob.ID: 50},
+			wantCode:  http.StatusOK,
 		},
 	}
 	for name, tc := range tests {
@@ -138,7 +137,14 @@ func TestCreateRoomOverrideWithCreatorsInUsers(t *testing.T) {
 			routers.Client.ServeHTTP(rec, test.NewRequest(t, http.MethodPost, "/_matrix/client/v3/createRoom",
 				test.WithJSONBody(t, tc.body),
 				test.WithQueryParams(map[string]string{"access_token": accessTokens[alice].accessToken})))
-			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			wantCode := tc.wantCode
+			if wantCode == 0 {
+				wantCode = http.StatusOK
+			}
+			require.Equal(t, wantCode, rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				return
+			}
 			roomID, err := spec.NewRoomID(gjson.GetBytes(rec.Body.Bytes(), "room_id").Str)
 			require.NoError(t, err)
 			ev, err := rsAPI.CurrentStateEvent(context.Background(), *roomID, spec.MRoomPowerLevels, "")

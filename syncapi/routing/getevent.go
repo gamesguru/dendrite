@@ -76,6 +76,30 @@ func GetEvent(
 		}
 	}
 
+	// The roomserver accepts a redaction before the sync consumer has
+	// necessarily applied it to its event copy. Prefer the roomserver's
+	// redacted event in that short window so /event does not expose the old
+	// content after the redaction request has completed.
+	if !events[0].Redacted() {
+		var roomEvents api.QueryEventsByIDResponse
+		if err = rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+			RoomID:   rawRoomID,
+			EventIDs: []string{eventID},
+		}, &roomEvents); err != nil {
+			logger.WithError(err).Error("GetEvent: rsAPI.QueryEventsByID failed")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+		for _, roomEvent := range roomEvents.Events {
+			if roomEvent.EventID() == eventID && roomEvent.Redacted() {
+				events[0].HeaderedEvent = roomEvent
+				break
+			}
+		}
+	}
+
 	// If the request is coming from an appservice, get the user from the request
 	rawUserID := device.UserID
 	if asUserID := req.FormValue("user_id"); device.AppserviceID != "" && asUserID != "" {

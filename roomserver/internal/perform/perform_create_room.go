@@ -187,13 +187,16 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 				JSON: spec.BadJSON("malformed power_level_content_override"),
 			}
 		}
-		// Creators of rooms with privileged creators (MSC4289) outrank every
-		// power level and must not appear in the users map. Clients written
-		// for earlier room versions, such as Element Call, still put the
-		// creator there, so drop creators, as Synapse does on room upgrades.
+		// Creators of rooms with privileged creators (MSC4289) must not be
+		// included in the power levels users map.
 		if verImpl.PrivilegedCreators() {
 			for _, creator := range gomatrixserverlib.CreatorsFromCreateEvent(createEvent) {
-				delete(powerLevelContent.Users, creator)
+				if _, ok := powerLevelContent.Users[creator]; ok {
+					return "", &util.JSONResponse{
+						Code: http.StatusBadRequest,
+						JSON: spec.BadJSON("power_level_content_override.users must not contain room creators"),
+					}
+				}
 			}
 		}
 	}
