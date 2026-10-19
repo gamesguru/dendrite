@@ -351,7 +351,7 @@ column syncapi_sticky_events | expires_at | bigint | NO |
 column syncapi_sticky_events | id | bigint | NO | nextval('syncapi_sticky_event_id'::regclass)
 column syncapi_sticky_events | room_id | text | NO |
 column syncapi_sticky_events | sender | text | NO |
-column syncapi_unpartialstated_rooms | created_at | bigint | NO | (EXTRACT(epoch FROM now()) * (1000)::numeric)
+column syncapi_unpartialstated_rooms | created_at | bigint | NO | <epoch milliseconds>
 column syncapi_unpartialstated_rooms | id | bigint | NO | nextval('syncapi_unpartialstated_rooms_id'::regclass)
 column syncapi_unpartialstated_rooms | room_id | text | NO |
 column syncapi_unpartialstated_rooms | user_id | text | NO |
