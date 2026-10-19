@@ -164,6 +164,14 @@ func sharedSurface(t *testing.T) string {
 			for i, v := range values {
 				fields[i] = fmt.Sprint(v)
 			}
+			if kind == "column" && len(fields) == 5 && fields[0] == "syncapi_unpartialstated_rooms" && fields[1] == "created_at" {
+				// PostgreSQL 14 changed extract(epoch ...) from a float result to numeric.
+				// The catalog prints equivalent forms differently across supported majors.
+				switch fields[4] {
+				case "(EXTRACT(epoch FROM now()) * (1000)::numeric)", "(date_part('epoch'::text, now()) * (1000)::double precision)":
+					fields[4] = "<epoch milliseconds>"
+				}
+			}
 			// No trailing whitespace, which the pre-commit hooks would strip.
 			fmt.Fprintf(&out, "%s\n", strings.TrimRight(kind+" "+strings.Join(fields, " | "), " "))
 		}

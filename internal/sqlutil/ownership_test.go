@@ -106,11 +106,17 @@ func TestGuardedPoolDiscardsRecentlyTerminatedBackend(t *testing.T) {
 	admin, err := pgx.Connect(t.Context(), dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	var supportsTerminateTimeout bool
+	require.NoError(t, admin.QueryRow(t.Context(), "SELECT current_setting('server_version_num')::integer >= 170000").Scan(&supportsTerminateTimeout))
+	terminateQuery := "SELECT pg_terminate_backend($1::integer)"
+	if supportsTerminateTimeout {
+		terminateQuery = "SELECT pg_terminate_backend($1::integer, 1000::bigint)"
+	}
 	for range 5 {
 		var pid int
 		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT pg_backend_pid()").Scan(&pid))
 		var terminated bool
-		require.NoError(t, admin.QueryRow(t.Context(), "SELECT pg_terminate_backend($1, 1000)", pid).Scan(&terminated))
+		require.NoError(t, admin.QueryRow(t.Context(), terminateQuery, pid).Scan(&terminated))
 		require.True(t, terminated)
 		// Reuse within pgx's default one-second ping interval, as rapid requests do
 		// when the former primary resumes and Patroni terminates its sessions.
