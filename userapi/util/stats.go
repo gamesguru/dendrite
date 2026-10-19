@@ -25,7 +25,8 @@ func getMemoryStats(p *phoneHomeStats) error {
 	newData := timestampToRUUsage{timestamp: time.Now().Unix(), usage: newUsage}
 	p.prevData = newData
 
-	usedCPUTime := (newUsage.Utime.Sec + newUsage.Stime.Sec) - (oldUsage.usage.Utime.Sec + oldUsage.usage.Stime.Sec)
+	// Rusage time fields are int32 on 32-bit platforms, so widen before mixing with the int64 timestamps.
+	usedCPUTime := (int64(newUsage.Utime.Sec) + int64(newUsage.Stime.Sec)) - (int64(oldUsage.usage.Utime.Sec) + int64(oldUsage.usage.Stime.Sec))
 
 	if usedCPUTime == 0 || newData.timestamp == oldUsage.timestamp {
 		p.stats["cpu_average"] = 0
