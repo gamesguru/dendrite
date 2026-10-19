@@ -16,3 +16,4 @@ helm
 node_modules
 vendor
 federationapi/jetstream*/
+.cache
