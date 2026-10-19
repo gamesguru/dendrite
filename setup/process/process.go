@@ -14,14 +14,17 @@ type contextKey struct{}
 
 // ProcessContext owns application workers and their dependencies.
 type ProcessContext struct {
-	workerMu    sync.Mutex
-	cleanup     []func()
-	cleanupOnce sync.Once
-	mu          sync.RWMutex
-	wg          sync.WaitGroup      // used to wait for components to shutdown
-	ctx         context.Context     // canceled when Stop is called
-	shutdown    context.CancelFunc  // shut down Zendrite
-	degraded    map[string]struct{} // reasons why the process is degraded
+	workerMu sync.Mutex
+	// admissionClosed is set under workerMu once cancellation has been
+	// observed, so no worker is admitted after the final wait begins.
+	admissionClosed bool
+	cleanup         []func()
+	cleanupOnce     sync.Once
+	mu              sync.RWMutex
+	wg              sync.WaitGroup      // used to wait for components to shutdown
+	ctx             context.Context     // canceled when Stop is called
+	shutdown        context.CancelFunc  // shut down Zendrite
+	degraded        map[string]struct{} // reasons why the process is degraded
 	// quiescing is closed when a planned handover begins, before shutdown.
 	quiescing   chan struct{}
 	quiesceOnce sync.Once
@@ -71,9 +74,11 @@ func (b *ProcessContext) WaitForShutdown() <-chan struct{} {
 }
 
 func (b *ProcessContext) WaitForComponentsToFinish() {
-	//lint:ignore SA2001 This lock/unlock pair waits for a worker admitted before shutdown.
+	// Taking the lock waits for a worker admitted just before parent
+	// cancellation to finish registering with the wait group.
 	b.workerMu.Lock()
-	b.workerMu.Unlock() //nolint:staticcheck // Synchronize with a worker admitted just before parent cancellation.
+	b.admissionClosed = true
+	b.workerMu.Unlock()
 	b.wg.Wait()
 	b.cleanupOnce.Do(func() {
 		b.workerMu.Lock()
@@ -112,7 +117,7 @@ func (b *ProcessContext) IsDegraded() (bool, []string) {
 func (b *ProcessContext) Go(f func()) bool {
 	b.workerMu.Lock()
 	defer b.workerMu.Unlock()
-	if b.ctx.Err() != nil {
+	if b.admissionClosed || b.ctx.Err() != nil {
 		return false
 	}
 	b.wg.Add(1)
@@ -171,7 +176,7 @@ func Repeat(ctx context.Context, initial, interval time.Duration, f func()) {
 // Do registers synchronous application work, refusing admission after cancellation.
 func (b *ProcessContext) Do(f func()) bool {
 	b.workerMu.Lock()
-	if b.ctx.Err() != nil {
+	if b.admissionClosed || b.ctx.Err() != nil {
 		b.workerMu.Unlock()
 		return false
 	}
