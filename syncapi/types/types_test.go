@@ -319,8 +319,8 @@ func TestResponseMoveStateToStateAfter(t *testing.T) {
 
 			for roomID, want := range map[string]string{
 				"!joined:test": `{` + tt.want + `:{"events":[{"content":{},"type":"m.room.topic"}]},` +
-					`"unread_notifications":{"highlight_count":0,"notification_count":0}}`,
-				"!typing:test": `{` + tt.want + `:{"events":[]}}`,
+					`"ephemeral":{"events":[]},"unread_notifications":{"highlight_count":0,"notification_count":0}}`,
+				"!typing:test": `{` + tt.want + `:{"events":[]},"ephemeral":{"events":[]}}`,
 			} {
 				got, err := json.Marshal(res.Rooms.Join[roomID])
 				if err != nil {

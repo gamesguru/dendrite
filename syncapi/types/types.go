@@ -450,7 +450,7 @@ type UnreadNotifications struct {
 }
 
 type ClientEvents struct {
-	Events []synctypes.ClientEvent `json:"events,omitempty"`
+	Events []synctypes.ClientEvent `json:"events"`
 }
 
 // StateAfter is the state_after section of a room (MSC4222): the state
@@ -531,12 +531,12 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	if jr.State != nil && len(jr.State.Events) == 0 {
 		a.State = nil
 	}
-	if jr.Ephemeral != nil && len(jr.Ephemeral.Events) == 0 {
-		a.Ephemeral = nil
-	}
 	if jr.Ephemeral != nil {
 		// Remove the room_id from EDUs, as this seems to cause Element Web
 		// to trigger notifications - https://github.com/vector-im/element-web/issues/17263
+		if jr.Ephemeral.Events == nil {
+			jr.Ephemeral.Events = []synctypes.ClientEvent{}
+		}
 		for i := range jr.Ephemeral.Events {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}
@@ -557,8 +557,9 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
+		emptyEphemeral := a.Ephemeral == nil || len(a.Ephemeral.Events) == 0
 		if a.State == nil && a.StateAfter.isEmpty() && a.UnstableStateAfter.isEmpty() &&
-			a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
+			emptyEphemeral && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
 			a.UnreadNotifications = nil
 			a.UnreadThreadNotifications = nil
 		}
