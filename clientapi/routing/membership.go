@@ -638,7 +638,7 @@ func SendForget(
 	if membershipRes.IsInRoom {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.Forbidden(fmt.Sprintf("User %s is still in room %s", device.UserID, roomID)),
+			JSON: spec.Unknown(fmt.Sprintf("User %s is still in room %s", device.UserID, roomID)),
 		}
 	}
 
