@@ -94,7 +94,7 @@ func GetEvent(
 		}
 		for _, roomEvent := range roomEvents.Events {
 			if roomEvent.EventID() == eventID && roomEvent.Redacted() {
-				events[0].HeaderedEvent = roomEvent
+				events[0] = roomEvent
 				break
 			}
 		}
