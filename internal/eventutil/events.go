@@ -10,19 +10,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
+	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+)
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+const (
+	maxAuthEventIDs = 10
+	maxPrevEventIDs = 20
 )
 
 // ErrRoomNoExists is returned when trying to lookup the state of a room that
-// doesn't exist
+// doesn't exist.
 var errRoomNoExists = fmt.Errorf("room does not exist")
 
 type ErrRoomNoExists struct{}
@@ -39,8 +45,8 @@ func (e ErrRoomNoExists) Unwrap() error {
 // API client provided. If also fills roomserver query API response (if provided)
 // in case the function calling FillBuilder needs to use it.
 // Returns ErrRoomNoExists if the state of the room could not be retrieved because
-// the room doesn't exist
-// Returns an error if something else went wrong
+// the room doesn't exist.
+// Returns an error if something else went wrong.
 func QueryAndBuildEvent(
 	ctx context.Context,
 	proto *gomatrixserverlib.ProtoEvent,
@@ -90,7 +96,7 @@ func BuildEvent(
 	if verImpl.DomainlessRoomIDs() && builder.RoomID != "" && proto.Type == spec.MRoomCreate && proto.StateKey != nil && *proto.StateKey == "" {
 		return nil, gomatrixserverlib.EventValidationError{
 			Message: "cannot resend m.room.create event",
-			Code:    400,
+			Code:    http.StatusBadRequest,
 		}
 	}
 
@@ -128,7 +134,7 @@ func queryRequiredEventsForBuilder(
 	return &eventsNeeded, rsAPI.QueryLatestEventsAndState(ctx, &queryReq, queryRes)
 }
 
-// addPrevEventsToEvent fills out the prev_events and auth_events fields in builder
+// addPrevEventsToEvent fills out the prev_events and auth_events fields in builder.
 func addPrevEventsToEvent(
 	builder *gomatrixserverlib.ProtoEvent,
 	eventsNeeded *gomatrixserverlib.StateNeeded,
@@ -182,11 +188,11 @@ func truncateAuthAndPrevEvents(auth, prev []string) (
 	truncAuth, truncPrev []string,
 ) {
 	truncAuth, truncPrev = auth, prev
-	if len(truncAuth) > 10 {
-		truncAuth = truncAuth[:10]
+	if len(truncAuth) > maxAuthEventIDs {
+		truncAuth = truncAuth[:maxAuthEventIDs]
 	}
-	if len(truncPrev) > 20 {
-		truncPrev = truncPrev[:20]
+	if len(truncPrev) > maxPrevEventIDs {
+		truncPrev = truncPrev[:maxPrevEventIDs]
 	}
 	return
 }

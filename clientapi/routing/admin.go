@@ -123,7 +123,7 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 		}
 	}
 	return util.JSONResponse{
-		Code: 200, //nolint:mnd
+		Code: http.StatusOK,
 		JSON: map[string]any{
 			"token":        token,
 			"uses_allowed": internal.PtrOrNil(usesAllowed),
@@ -501,7 +501,7 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 // room's graph, but not currently part of current state. Unlike
 // AdminDownloadState this does not override state; it's a real event that
 // goes through ordinary state resolution, and it only works if the
-// requesting user is currently recognised as a room member. It is
+// requesting user is currently recognized as a room member. It is
 // outward-facing: the resulting event is signed by this server and
 // federated to every other server in the room.
 func AdminBridgeState(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
@@ -536,7 +536,7 @@ func AdminBridgeState(req *http.Request, device *userapi.Device, rsAPI roomserve
 	if err = rsAPI.PerformAdminBridgeState(req.Context(), roomID, device.UserID, body.EventIDs); err != nil {
 		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
 			return util.JSONResponse{
-				Code: 200,
+				Code: http.StatusOK,
 				JSON: spec.NotFound(err.Error()),
 			}
 		}
@@ -548,7 +548,7 @@ func AdminBridgeState(req *http.Request, device *userapi.Device, rsAPI roomserve
 		return util.ErrorResponse(err)
 	}
 	return util.JSONResponse{
-		Code: 200,
+		Code: http.StatusOK,
 		JSON: struct{}{},
 	}
 }

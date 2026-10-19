@@ -13,6 +13,8 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
+const typingWaitInterval = 50 * time.Millisecond
+
 type TypingStreamProvider struct {
 	DefaultStreamProvider
 	EDUCache *caching.EDUCache
@@ -57,7 +59,7 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 		return to
 	}
 
-	wait := 50 * time.Millisecond
+	wait := typingWaitInterval
 	if req.Timeout > 0 && req.Timeout < wait {
 		wait = req.Timeout
 	}

@@ -1,5 +1,6 @@
 // Copyright 2024 New Vector Ltd.
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+// Please see LICENSE files in the repository root for full details.
 
 package roomserver_test
 
@@ -10,6 +11,7 @@ import (
 
 	"codefloe.com/pat-s/gomatrixserverlib"
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver"
@@ -45,9 +47,8 @@ type disconnectedJoinScenario struct {
 //
 // Must be called from inside a test.WithAllDatabases callback (t is that
 // callback's *testing.T, already scoped to one database type).
-func buildDisconnectedJoinScenario(t *testing.T, dbType test.DBType, alice, dave *test.User) disconnectedJoinScenario {
+func buildDisconnectedJoinScenario(ctx context.Context, t *testing.T, dbType test.DBType, alice, dave *test.User) disconnectedJoinScenario {
 	t.Helper()
-	ctx := context.Background()
 
 	cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 	t.Cleanup(closeDB)
@@ -162,7 +163,7 @@ func buildDisconnectedJoinScenario(t *testing.T, dbType test.DBType, alice, dave
 // against roomInfo's CURRENT state snapshot regardless of the event's own
 // prev_events - dave isn't currently a member, so this soft-fails no matter
 // what his message's ancestry says. An otherwise identical message from
-// alice (a CURRENTLY recognised member) is not soft-failed, and correctly
+// alice (a CURRENTLY recognized member) is not soft-failed, and correctly
 // folds dave back into current state via ordinary multi-branch state
 // resolution.
 func TestDisconnectedJoinerSendsMessage(t *testing.T) {
@@ -171,7 +172,7 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		s := buildDisconnectedJoinScenario(t, dbType, alice, dave)
+		s := buildDisconnectedJoinScenario(ctx, t, dbType, alice, dave)
 		rsAPI, room, daveJoinEv, tip := s.rsAPI, s.room, s.daveJoinEv, s.tip
 
 		daveMsg := mustCreateEvent(t, fledglingEvent{
@@ -207,7 +208,7 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 			t.Fatalf("dave's own message unexpectedly fixed current state - soft-fail theory is wrong, investigate")
 		}
 
-		// Now: alice (a CURRENTLY recognised member) sends a message whose
+		// Now: alice (a CURRENTLY recognized member) sends a message whose
 		// prev_events span the same disconnected branch. Her sender identity
 		// is valid against CURRENT state, so CheckForSoftFail should pass
 		// regardless of her prev_events - and if it does, her event's own
@@ -247,7 +248,7 @@ func TestDisconnectedJoinerSendsMessage(t *testing.T) {
 		}
 
 		if ev := api.GetStateEvent(ctx, rsAPI, room.ID, gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: dave.ID}); ev == nil {
-			t.Fatalf("dave still isn't in current state after a CURRENTLY-recognised member's bridging message")
+			t.Fatalf("dave still isn't in current state after a CURRENTLY recognized member's bridging message")
 		}
 	})
 }
@@ -262,7 +263,7 @@ func TestPerformAdminBridgeState(t *testing.T) {
 	ctx := context.Background()
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		s := buildDisconnectedJoinScenario(t, dbType, alice, dave)
+		s := buildDisconnectedJoinScenario(ctx, t, dbType, alice, dave)
 		rsAPI, room, daveJoinEv := s.rsAPI, s.room, s.daveJoinEv
 
 		// Sanity check before calling the admin function.

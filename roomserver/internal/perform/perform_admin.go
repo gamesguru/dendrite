@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -170,11 +171,13 @@ func (r *Admin) PerformAdminEvacuateUser(
 	}
 
 	inviteRoomIDs, err := r.DB.GetRoomsByMembership(ctx, *fullUserID, spec.Invite)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
-	allRooms := append(roomIDs, inviteRoomIDs...)
+	allRooms := make([]string, 0, len(roomIDs)+len(inviteRoomIDs))
+	allRooms = append(allRooms, roomIDs...)
+	allRooms = append(allRooms, inviteRoomIDs...)
 	affected = make([]string, 0, len(allRooms))
 	for _, roomID := range allRooms {
 		leaveReq := &api.PerformLeaveRequest{
@@ -560,9 +563,9 @@ func membershipStateForEvent(event types.Event) (tables.MembershipState, error) 
 // that join, i.e. it can still show the requester as merely invited, not
 // joined. Preferring remote there would silently regress the requester's
 // own membership and make the corrective event fail its own auth check
-// before it can apply anything - confirmed in production: this exact
-// scenario ("eventauth: sender ... not in room") survived an earlier
-// version of this fix that only filled gaps missing from remote, because
+// before it can apply anything. An earlier version of this fix that only
+// filled gaps missing from remote survived the "eventauth: sender ... not
+// in room" scenario, because
 // remote wasn't missing that tuple - it just had a stale (pre-join) value
 // for it. Local is always at least as fresh as remote for anything den has
 // already legitimately processed, so local should win on conflicts; remote
@@ -594,7 +597,7 @@ func (r *Admin) fetchStateToInstall(
 		var state gomatrixserverlib.StateResponse
 		state, err = r.Inputer.FSAPI.LookupState(ctx, r.Inputer.ServerName, serverName, roomID, fwdExtremity, roomInfo.RoomVersion)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %s", fwdExtremity, err)
+			return nil, nil, nil, fmt.Errorf("r.Inputer.FSAPI.LookupState (%q): %w", fwdExtremity, err)
 		}
 		for _, authEvent := range state.GetAuthEvents().UntrustedEvents(roomInfo.RoomVersion) {
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -655,13 +658,13 @@ func (r *Admin) fetchStateToInstall(
 // neither side has a competing value for a given state key (see
 // roomState.LoadCombinedStateAfterEvents / calculateStateAfterManyEvents).
 //
-// This only works for a userID den currently recognises as a room member:
-// helpers.CheckForSoftFail authorises the event against den's CURRENT state
+// This only works for a userID den currently recognizes as a room member:
+// helpers.CheckForSoftFail authorizes the event against den's CURRENT state
 // snapshot, independent of the event's own prev_events, so an event from a
-// user den doesn't currently recognise will always soft-fail regardless of
+// user den doesn't currently recognize will always soft-fail regardless of
 // ancestry - confirmed locally via TestDisconnectedJoinerSendsMessage,
 // where an event from the disconnected user soft-fails but an otherwise
-// identical event from a currently-recognised member is accepted and
+// identical event from a currently-recognized member is accepted and
 // correctly restores the disconnected user to current state.
 //
 // This is genuinely ordinary, not a fabricated DAG edge: every ID in
@@ -743,7 +746,7 @@ func (r *Admin) PerformAdminBridgeState(
 
 	// Custom, non-message type (matching PerformAdminDownloadState's
 	// org.matrix.dendrite.state_download below) - ordinary clients don't
-	// recognise it and won't render it in the timeline. Nothing about the
+	// recognize it and won't render it in the timeline. Nothing about the
 	// bridging mechanism requires a message specifically; only that this be
 	// an ordinary, non-state KindNew event (see the function doc comment).
 	proto := &gomatrixserverlib.ProtoEvent{

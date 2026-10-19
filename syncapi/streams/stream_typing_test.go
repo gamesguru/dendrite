@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codefloe.com/pat-s/gomatrixserverlib/spec"
+
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
