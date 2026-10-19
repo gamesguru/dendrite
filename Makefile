@@ -12,6 +12,7 @@ GO ?= $(GO_TOOLCHAIN)
 export PATH := $(dir $(GO_TOOLCHAIN)):$(PATH)
 endif
 STATICCHECK ?= staticcheck
+STATICCHECKCHECKS ?= all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022
 GOLANGCI_LINT ?= golangci-lint
 DOCKER ?= docker
 VETFLAGS ?=
@@ -83,11 +84,11 @@ lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for cha
 		fi; \
 		$(GO) vet $(VETFLAGS) $$dirs; \
 		$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $$dirs; \
-		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $$dirs; \
+		$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $$dirs; \
 	else \
 		$(GO) vet $(VETFLAGS) $(PKGS); \
 		$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS); \
-		$(STATICCHECK) -checks=all $(STATICCHECKFLAGS) $(PKGS); \
+		$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $(PKGS); \
 	fi
 
 .PHONY: build

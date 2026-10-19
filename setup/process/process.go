@@ -71,6 +71,7 @@ func (b *ProcessContext) WaitForShutdown() <-chan struct{} {
 }
 
 func (b *ProcessContext) WaitForComponentsToFinish() {
+	//lint:ignore SA2001 This lock/unlock pair waits for a worker admitted before shutdown.
 	b.workerMu.Lock()
 	b.workerMu.Unlock() //nolint:staticcheck // Synchronize with a worker admitted just before parent cancellation.
 	b.wg.Wait()

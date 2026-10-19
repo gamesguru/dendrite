@@ -784,6 +784,7 @@ func (d *Database) ValidateConnectionPosition(ctx context.Context, connectionPos
 func (d *Database) GetConnectionStreams(ctx context.Context, connectionKey int64) (map[string]map[string]*types.SlidingSyncStreamState, error) {
 	var streams map[string]map[string]*types.SlidingSyncStreamState
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		//lint:ignore SA1019 This deliberately returns the latest position across all streams.
 		tableStreams, err := d.SlidingSync.SelectAllLatestConnectionStreams(ctx, txn, connectionKey) //nolint:staticcheck // SA1019: intentional use of deprecated function
 		if err != nil {
 			return err
