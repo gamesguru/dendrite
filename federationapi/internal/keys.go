@@ -51,7 +51,7 @@ func (s *FederationInternalAPI) FetchKeys(
 	// Then consult our local database and see if we have the requested
 	// keys. These might come from a cache, depending on the database
 	// implementation used.
-	if err := s.handleDatabaseKeys(ctx, now, requests, results); err != nil { //nolint:contextcheck
+	if err := s.handleDatabaseKeys(ctx, now, origRequests, requests, results); err != nil { //nolint:contextcheck
 		return nil, err
 	}
 
@@ -148,6 +148,7 @@ func (s *FederationInternalAPI) handleLocalKeys(
 func (s *FederationInternalAPI) handleDatabaseKeys(
 	ctx context.Context,
 	now spec.Timestamp,
+	origRequests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
 	requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
 	results map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult,
 ) error {
@@ -165,12 +166,15 @@ func (s *FederationInternalAPI) handleDatabaseKeys(
 		// verify a past event.
 		results[req] = res
 
-		// If the key is valid right now then we can also remove it
-		// from the request list as we don't need to fetch it again
-		// in that case. If the key isn't valid right now, then by
-		// leaving it in the 'requests' map, we'll try to update the
-		// key using the fetchers in handleFetcherKeys.
-		if res.WasValidAt(now, gomatrixserverlib.StrictValiditySignatureCheck) {
+		// Like Synapse, judge the key against the timestamp of the event
+		// being verified (MSC4499), not the current time: a cached key
+		// whose validity window ended before the event is refetched in
+		// case the origin has since extended it.
+		ts := origRequests[req]
+		if ts == 0 {
+			ts = now
+		}
+		if res.WasValidAt(ts, gomatrixserverlib.StrictValiditySignatureCheck) {
 			delete(requests, req)
 		}
 	}
