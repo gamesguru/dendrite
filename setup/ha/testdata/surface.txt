@@ -705,568 +705,116 @@ index zendrite_ha_compatibility | zendrite_ha_compatibility_pkey | CREATE UNIQUE
 index zendrite_ha_ownership | zendrite_ha_ownership_pkey | CREATE UNIQUE INDEX zendrite_ha_ownership_pkey ON public.zendrite_ha_ownership USING btree (id)
 index zendrite_ha_ownership_history | zendrite_ha_ownership_history_pkey | CREATE UNIQUE INDEX zendrite_ha_ownership_history_pkey ON public.zendrite_ha_ownership_history USING btree (generation)
 constraint db_migrations | db_migrations_pkey | PRIMARY KEY (version)
-constraint db_migrations | db_migrations_time_not_null | NOT NULL "time"
-constraint db_migrations | db_migrations_version_not_null | NOT NULL version
-constraint db_migrations | db_migrations_zendrite_version_not_null | NOT NULL zendrite_version
 constraint federationsender_assumed_offline | federationsender_assumed_offline_pkey | PRIMARY KEY (server_name)
-constraint federationsender_assumed_offline | federationsender_assumed_offline_server_name_not_null | NOT NULL server_name
 constraint federationsender_blacklist | federationsender_blacklist_server_name_key | UNIQUE (server_name)
-constraint federationsender_blacklist | federationsender_blacklist_server_name_not_null | NOT NULL server_name
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_creation_ts_not_null | NOT NULL creation_ts
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_peek_id_not_null | NOT NULL peek_id
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_renewal_interval_not_null | NOT NULL renewal_interval
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_renewed_ts_not_null | NOT NULL renewed_ts
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_not_null | NOT NULL room_id
 constraint federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
-constraint federationsender_inbound_peeks | federationsender_inbound_peeks_server_name_not_null | NOT NULL server_name
-constraint federationsender_joined_hosts | federationsender_joined_hosts_event_id_not_null | NOT NULL event_id
-constraint federationsender_joined_hosts | federationsender_joined_hosts_room_id_not_null | NOT NULL room_id
-constraint federationsender_joined_hosts | federationsender_joined_hosts_server_name_not_null | NOT NULL server_name
-constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_notary_id_not_null | NOT NULL notary_id
 constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_pkey1 | PRIMARY KEY (notary_id)
-constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_response_json_not_null | NOT NULL response_json
-constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_server_name_not_null | NOT NULL server_name
-constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_valid_until_not_null | NOT NULL valid_until
 constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_meta_server_name_key_id_key | UNIQUE (server_name, key_id)
-constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metada_server_name_not_null | NOT NULL server_name
-constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metadata_key_id_not_null | NOT NULL key_id
-constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_metadata_notary_id_not_null | NOT NULL notary_id
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_creation_ts_not_null | NOT NULL creation_ts
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_peek_id_not_null | NOT NULL peek_id
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_renewal_interval_not_null | NOT NULL renewal_interval
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_renewed_ts_not_null | NOT NULL renewed_ts
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_not_null | NOT NULL room_id
 constraint federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
-constraint federationsender_outbound_peeks | federationsender_outbound_peeks_server_name_not_null | NOT NULL server_name
-constraint federationsender_queue_edus | federationsender_queue_edus_edu_type_not_null | NOT NULL edu_type
-constraint federationsender_queue_edus | federationsender_queue_edus_expires_at_not_null | NOT NULL expires_at
-constraint federationsender_queue_edus | federationsender_queue_edus_json_nid_not_null | NOT NULL json_nid
-constraint federationsender_queue_edus | federationsender_queue_edus_server_name_not_null | NOT NULL server_name
-constraint federationsender_queue_json | federationsender_queue_json_json_body_not_null | NOT NULL json_body
-constraint federationsender_queue_json | federationsender_queue_json_json_nid_not_null | NOT NULL json_nid
-constraint federationsender_queue_pdus | federationsender_queue_pdus_json_nid_not_null | NOT NULL json_nid
-constraint federationsender_queue_pdus | federationsender_queue_pdus_server_name_not_null | NOT NULL server_name
-constraint federationsender_queue_pdus | federationsender_queue_pdus_transaction_id_not_null | NOT NULL transaction_id
 constraint federationsender_relay_servers | federationsender_relay_server_server_name_relay_server_name_key | UNIQUE (server_name, relay_server_name)
-constraint federationsender_relay_servers | federationsender_relay_servers_relay_server_name_not_null | NOT NULL relay_server_name
-constraint federationsender_relay_servers | federationsender_relay_servers_server_name_not_null | NOT NULL server_name
-constraint federationsender_retry_state | federationsender_retry_state_failure_count_not_null | NOT NULL failure_count
 constraint federationsender_retry_state | federationsender_retry_state_pkey | PRIMARY KEY (server_name)
-constraint federationsender_retry_state | federationsender_retry_state_retry_until_not_null | NOT NULL retry_until
-constraint federationsender_retry_state | federationsender_retry_state_server_name_not_null | NOT NULL server_name
-constraint keydb_server_keys | keydb_server_keys_expired_ts_not_null | NOT NULL expired_ts
-constraint keydb_server_keys | keydb_server_keys_server_key_id_not_null | NOT NULL server_key_id
-constraint keydb_server_keys | keydb_server_keys_server_key_not_null | NOT NULL server_key
-constraint keydb_server_keys | keydb_server_keys_server_name_and_key_id_not_null | NOT NULL server_name_and_key_id
-constraint keydb_server_keys | keydb_server_keys_server_name_not_null | NOT NULL server_name
 constraint keydb_server_keys | keydb_server_keys_unique | UNIQUE (server_name, server_key_id)
-constraint keydb_server_keys | keydb_server_keys_valid_until_ts_not_null | NOT NULL valid_until_ts
-constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_key_data_not_null | NOT NULL key_data
-constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_key_type_not_null | NOT NULL key_type
 constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_pkey | PRIMARY KEY (user_id, key_type)
-constraint keyserver_cross_signing_keys | keyserver_cross_signing_keys_user_id_not_null | NOT NULL user_id
-constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_origin_key_id_not_null | NOT NULL origin_key_id
-constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_origin_user_id_not_null | NOT NULL origin_user_id
 constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_pkey | PRIMARY KEY (origin_user_id, origin_key_id, target_user_id, target_key_id)
-constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_signature_not_null | NOT NULL signature
-constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_target_key_id_not_null | NOT NULL target_key_id
-constraint keyserver_cross_signing_sigs | keyserver_cross_signing_sigs_target_user_id_not_null | NOT NULL target_user_id
-constraint keyserver_device_keys | keyserver_device_keys_device_id_not_null | NOT NULL device_id
-constraint keyserver_device_keys | keyserver_device_keys_key_json_not_null | NOT NULL key_json
-constraint keyserver_device_keys | keyserver_device_keys_stream_id_not_null | NOT NULL stream_id
-constraint keyserver_device_keys | keyserver_device_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
 constraint keyserver_device_keys | keyserver_device_keys_unique | UNIQUE (user_id, device_id)
-constraint keyserver_device_keys | keyserver_device_keys_user_id_not_null | NOT NULL user_id
-constraint keyserver_fallback_keys | keyserver_fallback_keys_algorithm_not_null | NOT NULL algorithm
-constraint keyserver_fallback_keys | keyserver_fallback_keys_device_id_not_null | NOT NULL device_id
-constraint keyserver_fallback_keys | keyserver_fallback_keys_key_id_not_null | NOT NULL key_id
-constraint keyserver_fallback_keys | keyserver_fallback_keys_key_json_not_null | NOT NULL key_json
-constraint keyserver_fallback_keys | keyserver_fallback_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
 constraint keyserver_fallback_keys | keyserver_fallback_keys_unique | UNIQUE (user_id, device_id, algorithm)
-constraint keyserver_fallback_keys | keyserver_fallback_keys_used_not_null | NOT NULL used
-constraint keyserver_fallback_keys | keyserver_fallback_keys_user_id_not_null | NOT NULL user_id
-constraint keyserver_key_changes | keyserver_key_changes_change_id_not_null | NOT NULL change_id
 constraint keyserver_key_changes | keyserver_key_changes_pkey | PRIMARY KEY (change_id)
 constraint keyserver_key_changes | keyserver_key_changes_unique_per_user | UNIQUE (user_id)
-constraint keyserver_key_changes | keyserver_key_changes_user_id_not_null | NOT NULL user_id
-constraint keyserver_one_time_keys | keyserver_one_time_keys_algorithm_not_null | NOT NULL algorithm
-constraint keyserver_one_time_keys | keyserver_one_time_keys_device_id_not_null | NOT NULL device_id
-constraint keyserver_one_time_keys | keyserver_one_time_keys_key_id_not_null | NOT NULL key_id
-constraint keyserver_one_time_keys | keyserver_one_time_keys_key_json_not_null | NOT NULL key_json
-constraint keyserver_one_time_keys | keyserver_one_time_keys_ts_added_secs_not_null | NOT NULL ts_added_secs
 constraint keyserver_one_time_keys | keyserver_one_time_keys_unique | UNIQUE (user_id, device_id, key_id, algorithm)
-constraint keyserver_one_time_keys | keyserver_one_time_keys_user_id_not_null | NOT NULL user_id
-constraint keyserver_stale_device_lists | keyserver_stale_device_lists_domain_not_null | NOT NULL domain
-constraint keyserver_stale_device_lists | keyserver_stale_device_lists_is_stale_not_null | NOT NULL is_stale
 constraint keyserver_stale_device_lists | keyserver_stale_device_lists_pkey | PRIMARY KEY (user_id)
-constraint keyserver_stale_device_lists | keyserver_stale_device_lists_ts_added_secs_not_null | NOT NULL ts_added_secs
-constraint keyserver_stale_device_lists | keyserver_stale_device_lists_user_id_not_null | NOT NULL user_id
-constraint mediaapi_media_repository | mediaapi_media_repository_base64hash_not_null | NOT NULL base64hash
-constraint mediaapi_media_repository | mediaapi_media_repository_content_type_not_null | NOT NULL content_type
-constraint mediaapi_media_repository | mediaapi_media_repository_creation_ts_not_null | NOT NULL creation_ts
-constraint mediaapi_media_repository | mediaapi_media_repository_file_size_bytes_not_null | NOT NULL file_size_bytes
-constraint mediaapi_media_repository | mediaapi_media_repository_media_id_not_null | NOT NULL media_id
-constraint mediaapi_media_repository | mediaapi_media_repository_media_origin_not_null | NOT NULL media_origin
-constraint mediaapi_media_repository | mediaapi_media_repository_unused_expires_ts_not_null | NOT NULL unused_expires_ts
-constraint mediaapi_media_repository | mediaapi_media_repository_upload_name_not_null | NOT NULL upload_name
-constraint mediaapi_media_repository | mediaapi_media_repository_user_id_not_null | NOT NULL user_id
-constraint mediaapi_thumbnail | mediaapi_thumbnail_content_type_not_null | NOT NULL content_type
-constraint mediaapi_thumbnail | mediaapi_thumbnail_creation_ts_not_null | NOT NULL creation_ts
-constraint mediaapi_thumbnail | mediaapi_thumbnail_file_size_bytes_not_null | NOT NULL file_size_bytes
-constraint mediaapi_thumbnail | mediaapi_thumbnail_height_not_null | NOT NULL height
-constraint mediaapi_thumbnail | mediaapi_thumbnail_media_id_not_null | NOT NULL media_id
-constraint mediaapi_thumbnail | mediaapi_thumbnail_media_origin_not_null | NOT NULL media_origin
-constraint mediaapi_thumbnail | mediaapi_thumbnail_resize_method_not_null | NOT NULL resize_method
-constraint mediaapi_thumbnail | mediaapi_thumbnail_width_not_null | NOT NULL width
-constraint msc2836_edges | msc2836_edges_child_event_id_not_null | NOT NULL child_event_id
-constraint msc2836_edges | msc2836_edges_parent_event_id_not_null | NOT NULL parent_event_id
-constraint msc2836_edges | msc2836_edges_parent_room_id_not_null | NOT NULL parent_room_id
-constraint msc2836_edges | msc2836_edges_parent_servers_not_null | NOT NULL parent_servers
-constraint msc2836_edges | msc2836_edges_rel_type_not_null | NOT NULL rel_type
 constraint msc2836_edges | msc2836_edges_uniq | UNIQUE (parent_event_id, child_event_id, rel_type)
-constraint msc2836_nodes | msc2836_nodes_event_id_not_null | NOT NULL event_id
-constraint msc2836_nodes | msc2836_nodes_explored_not_null | NOT NULL explored
-constraint msc2836_nodes | msc2836_nodes_origin_server_ts_not_null | NOT NULL origin_server_ts
 constraint msc2836_nodes | msc2836_nodes_pkey | PRIMARY KEY (event_id)
-constraint msc2836_nodes | msc2836_nodes_room_id_not_null | NOT NULL room_id
-constraint msc2836_nodes | msc2836_nodes_unsigned_children_count_not_null | NOT NULL unsigned_children_count
-constraint msc2836_nodes | msc2836_nodes_unsigned_children_hash_not_null | NOT NULL unsigned_children_hash
-constraint relayapi_queue | relayapi_queue_json_nid_not_null | NOT NULL json_nid
-constraint relayapi_queue | relayapi_queue_server_name_not_null | NOT NULL server_name
-constraint relayapi_queue | relayapi_queue_transaction_id_not_null | NOT NULL transaction_id
-constraint relayapi_queue_json | relayapi_queue_json_json_body_not_null | NOT NULL json_body
-constraint relayapi_queue_json | relayapi_queue_json_json_nid_not_null | NOT NULL json_nid
-constraint roomserver_annotations | roomserver_annotations_annotation_event_id_not_null | NOT NULL annotation_event_id
-constraint roomserver_annotations | roomserver_annotations_annotation_key_not_null | NOT NULL annotation_key
-constraint roomserver_annotations | roomserver_annotations_event_type_not_null | NOT NULL event_type
 constraint roomserver_annotations | roomserver_annotations_pkey | PRIMARY KEY (annotation_event_id)
-constraint roomserver_annotations | roomserver_annotations_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_annotations | roomserver_annotations_sender_id_not_null | NOT NULL sender_id
-constraint roomserver_annotations | roomserver_annotations_target_event_id_not_null | NOT NULL target_event_id
-constraint roomserver_client_transactions | roomserver_client_transactions_event_id_not_null | NOT NULL event_id
-constraint roomserver_client_transactions | roomserver_client_transactions_inserted_ts_not_null | NOT NULL inserted_ts
 constraint roomserver_client_transactions | roomserver_client_transactions_pkey | PRIMARY KEY (room_id, sender_id, session_id, transaction_id)
-constraint roomserver_client_transactions | roomserver_client_transactions_room_id_not_null | NOT NULL room_id
-constraint roomserver_client_transactions | roomserver_client_transactions_sender_id_not_null | NOT NULL sender_id
-constraint roomserver_client_transactions | roomserver_client_transactions_session_id_not_null | NOT NULL session_id
-constraint roomserver_client_transactions | roomserver_client_transactions_transaction_id_not_null | NOT NULL transaction_id
-constraint roomserver_erased_users | roomserver_erased_users_erased_ts_not_null | NOT NULL erased_ts
 constraint roomserver_erased_users | roomserver_erased_users_pkey | PRIMARY KEY (user_id)
-constraint roomserver_erased_users | roomserver_erased_users_user_id_not_null | NOT NULL user_id
-constraint roomserver_event_json | roomserver_event_json_event_json_not_null | NOT NULL event_json
-constraint roomserver_event_json | roomserver_event_json_event_nid_not_null | NOT NULL event_nid
 constraint roomserver_event_json | roomserver_event_json_pkey | PRIMARY KEY (event_nid)
 constraint roomserver_event_state_keys | roomserver_event_state_key_unique | UNIQUE (event_state_key)
-constraint roomserver_event_state_keys | roomserver_event_state_keys_event_state_key_nid_not_null | NOT NULL event_state_key_nid
-constraint roomserver_event_state_keys | roomserver_event_state_keys_event_state_key_not_null | NOT NULL event_state_key
 constraint roomserver_event_state_keys | roomserver_event_state_keys_pkey | PRIMARY KEY (event_state_key_nid)
 constraint roomserver_event_types | roomserver_event_type_unique | UNIQUE (event_type)
-constraint roomserver_event_types | roomserver_event_types_event_type_nid_not_null | NOT NULL event_type_nid
-constraint roomserver_event_types | roomserver_event_types_event_type_not_null | NOT NULL event_type
 constraint roomserver_event_types | roomserver_event_types_pkey | PRIMARY KEY (event_type_nid)
 constraint roomserver_events | roomserver_event_id_unique | UNIQUE (event_id)
-constraint roomserver_events | roomserver_events_auth_event_nids_not_null | NOT NULL auth_event_nids
-constraint roomserver_events | roomserver_events_depth_not_null | NOT NULL depth
-constraint roomserver_events | roomserver_events_event_id_not_null | NOT NULL event_id
-constraint roomserver_events | roomserver_events_event_nid_not_null | NOT NULL event_nid
-constraint roomserver_events | roomserver_events_event_state_key_nid_not_null | NOT NULL event_state_key_nid
-constraint roomserver_events | roomserver_events_event_type_nid_not_null | NOT NULL event_type_nid
-constraint roomserver_events | roomserver_events_is_rejected_not_null | NOT NULL is_rejected
 constraint roomserver_events | roomserver_events_pkey | PRIMARY KEY (event_nid)
-constraint roomserver_events | roomserver_events_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_events | roomserver_events_sent_to_output_not_null | NOT NULL sent_to_output
-constraint roomserver_events | roomserver_events_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
-constraint roomserver_invites | roomserver_invites_invite_event_id_not_null | NOT NULL invite_event_id
-constraint roomserver_invites | roomserver_invites_invite_event_json_not_null | NOT NULL invite_event_json
 constraint roomserver_invites | roomserver_invites_pkey | PRIMARY KEY (invite_event_id)
-constraint roomserver_invites | roomserver_invites_retired_not_null | NOT NULL retired
-constraint roomserver_invites | roomserver_invites_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_invites | roomserver_invites_sender_nid_not_null | NOT NULL sender_nid
-constraint roomserver_invites | roomserver_invites_target_nid_not_null | NOT NULL target_nid
-constraint roomserver_membership | roomserver_membership_event_nid_not_null | NOT NULL event_nid
-constraint roomserver_membership | roomserver_membership_forgotten_not_null | NOT NULL forgotten
-constraint roomserver_membership | roomserver_membership_membership_nid_not_null | NOT NULL membership_nid
-constraint roomserver_membership | roomserver_membership_room_nid_not_null | NOT NULL room_nid
 constraint roomserver_membership | roomserver_membership_room_nid_target_nid_key | UNIQUE (room_nid, target_nid)
-constraint roomserver_membership | roomserver_membership_sender_nid_not_null | NOT NULL sender_nid
-constraint roomserver_membership | roomserver_membership_target_local_not_null | NOT NULL target_local
-constraint roomserver_membership | roomserver_membership_target_nid_not_null | NOT NULL target_nid
-constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_created_at_not_null | NOT NULL created_at
-constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_device_lists_stream_id_not_null | NOT NULL device_lists_stream_id
-constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_join_event_nid_not_null | NOT NULL join_event_nid
-constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_joined_via_not_null | NOT NULL joined_via
 constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_pkey | PRIMARY KEY (room_nid)
-constraint roomserver_partial_state_rooms | roomserver_partial_state_rooms_room_nid_not_null | NOT NULL room_nid
 constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_pkey | PRIMARY KEY (room_nid, server_name)
 constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_room_nid_fkey | FOREIGN KEY (room_nid) REFERENCES roomserver_partial_state_rooms(room_nid) ON DELETE CASCADE
-constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_partial_state_rooms_servers | roomserver_partial_state_rooms_servers_server_name_not_null | NOT NULL server_name
 constraint roomserver_previous_events | roomserver_previous_event_id_unique | UNIQUE (previous_event_id)
-constraint roomserver_previous_events | roomserver_previous_events_event_nids_not_null | NOT NULL event_nids
-constraint roomserver_previous_events | roomserver_previous_events_previous_event_id_not_null | NOT NULL previous_event_id
-constraint roomserver_published | roomserver_published_appservice_id_not_null | NOT NULL appservice_id
-constraint roomserver_published | roomserver_published_network_id_not_null | NOT NULL network_id
 constraint roomserver_published | roomserver_published_pkey | PRIMARY KEY (room_id, appservice_id, network_id)
-constraint roomserver_published | roomserver_published_published_not_null | NOT NULL published
-constraint roomserver_published | roomserver_published_room_id_not_null | NOT NULL room_id
 constraint roomserver_redactions | roomserver_redactions_pkey | PRIMARY KEY (redaction_event_id)
-constraint roomserver_redactions | roomserver_redactions_redaction_event_id_not_null | NOT NULL redaction_event_id
-constraint roomserver_redactions | roomserver_redactions_redacts_event_id_not_null | NOT NULL redacts_event_id
-constraint roomserver_redactions | roomserver_redactions_validated_not_null | NOT NULL validated
-constraint roomserver_reported_events | roomserver_reported_events_event_nid_not_null | NOT NULL event_nid
-constraint roomserver_reported_events | roomserver_reported_events_event_sender_nid_not_null | NOT NULL event_sender_nid
-constraint roomserver_reported_events | roomserver_reported_events_id_not_null | NOT NULL id
 constraint roomserver_reported_events | roomserver_reported_events_pkey | PRIMARY KEY (id)
-constraint roomserver_reported_events | roomserver_reported_events_received_ts_not_null | NOT NULL received_ts
-constraint roomserver_reported_events | roomserver_reported_events_reporting_user_nid_not_null | NOT NULL reporting_user_nid
-constraint roomserver_reported_events | roomserver_reported_events_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_reported_rooms | roomserver_reported_rooms_id_not_null | NOT NULL id
 constraint roomserver_reported_rooms | roomserver_reported_rooms_pkey | PRIMARY KEY (id)
-constraint roomserver_reported_rooms | roomserver_reported_rooms_reason_not_null | NOT NULL reason
-constraint roomserver_reported_rooms | roomserver_reported_rooms_received_ts_not_null | NOT NULL received_ts
-constraint roomserver_reported_rooms | roomserver_reported_rooms_room_id_not_null | NOT NULL room_id
-constraint roomserver_reported_rooms | roomserver_reported_rooms_user_id_not_null | NOT NULL user_id
-constraint roomserver_room_aliases | roomserver_room_aliases_alias_not_null | NOT NULL alias
-constraint roomserver_room_aliases | roomserver_room_aliases_creator_id_not_null | NOT NULL creator_id
 constraint roomserver_room_aliases | roomserver_room_aliases_pkey | PRIMARY KEY (alias)
-constraint roomserver_room_aliases | roomserver_room_aliases_room_id_not_null | NOT NULL room_id
 constraint roomserver_rooms | roomserver_room_id_unique | UNIQUE (room_id)
-constraint roomserver_rooms | roomserver_rooms_last_event_sent_nid_not_null | NOT NULL last_event_sent_nid
-constraint roomserver_rooms | roomserver_rooms_latest_event_nids_not_null | NOT NULL latest_event_nids
 constraint roomserver_rooms | roomserver_rooms_pkey | PRIMARY KEY (room_nid)
-constraint roomserver_rooms | roomserver_rooms_resync_state_nid_not_null | NOT NULL resync_state_nid
-constraint roomserver_rooms | roomserver_rooms_room_id_not_null | NOT NULL room_id
-constraint roomserver_rooms | roomserver_rooms_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_rooms | roomserver_rooms_room_version_not_null | NOT NULL room_version
-constraint roomserver_rooms | roomserver_rooms_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
-constraint roomserver_state_block | roomserver_state_block_event_nids_not_null | NOT NULL event_nids
 constraint roomserver_state_block | roomserver_state_block_pkey | PRIMARY KEY (state_block_nid)
 constraint roomserver_state_block | roomserver_state_block_state_block_hash_key | UNIQUE (state_block_hash)
-constraint roomserver_state_block | roomserver_state_block_state_block_nid_not_null | NOT NULL state_block_nid
 constraint roomserver_state_snapshots | roomserver_state_snapshots_pkey | PRIMARY KEY (state_snapshot_nid)
-constraint roomserver_state_snapshots | roomserver_state_snapshots_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_state_snapshots | roomserver_state_snapshots_state_block_nids_not_null | NOT NULL state_block_nids
 constraint roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | UNIQUE (state_snapshot_hash)
-constraint roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_nid_not_null | NOT NULL state_snapshot_nid
 constraint roomserver_user_room_keys | roomserver_user_room_keys_pk | PRIMARY KEY (user_nid, room_nid)
-constraint roomserver_user_room_keys | roomserver_user_room_keys_pseudo_id_pub_key_not_null | NOT NULL pseudo_id_pub_key
-constraint roomserver_user_room_keys | roomserver_user_room_keys_room_nid_not_null | NOT NULL room_nid
-constraint roomserver_user_room_keys | roomserver_user_room_keys_user_nid_not_null | NOT NULL user_nid
-constraint syncapi_account_data_type | syncapi_account_data_type_id_not_null | NOT NULL id
 constraint syncapi_account_data_type | syncapi_account_data_type_pkey | PRIMARY KEY (id)
-constraint syncapi_account_data_type | syncapi_account_data_type_room_id_not_null | NOT NULL room_id
-constraint syncapi_account_data_type | syncapi_account_data_type_type_not_null | NOT NULL type
-constraint syncapi_account_data_type | syncapi_account_data_type_user_id_not_null | NOT NULL user_id
 constraint syncapi_account_data_type | syncapi_account_data_unique | UNIQUE (user_id, room_id, type)
-constraint syncapi_backward_extremities | syncapi_backward_extremities_event_id_not_null | NOT NULL event_id
 constraint syncapi_backward_extremities | syncapi_backward_extremities_pkey | PRIMARY KEY (room_id, event_id, prev_event_id)
-constraint syncapi_backward_extremities | syncapi_backward_extremities_prev_event_id_not_null | NOT NULL prev_event_id
-constraint syncapi_backward_extremities | syncapi_backward_extremities_room_id_not_null | NOT NULL room_id
-constraint syncapi_current_room_state | syncapi_current_room_state_contains_url_not_null | NOT NULL contains_url
-constraint syncapi_current_room_state | syncapi_current_room_state_event_id_not_null | NOT NULL event_id
-constraint syncapi_current_room_state | syncapi_current_room_state_headered_event_json_not_null | NOT NULL headered_event_json
-constraint syncapi_current_room_state | syncapi_current_room_state_history_visibility_not_null | NOT NULL history_visibility
-constraint syncapi_current_room_state | syncapi_current_room_state_room_id_not_null | NOT NULL room_id
-constraint syncapi_current_room_state | syncapi_current_room_state_sender_not_null | NOT NULL sender
-constraint syncapi_current_room_state | syncapi_current_room_state_state_key_not_null | NOT NULL state_key
-constraint syncapi_current_room_state | syncapi_current_room_state_type_not_null | NOT NULL type
 constraint syncapi_current_room_state | syncapi_room_state_unique | UNIQUE (room_id, type, state_key)
-constraint syncapi_filter | syncapi_filter_filter_not_null | NOT NULL filter
 constraint syncapi_filter | syncapi_filter_id_key | UNIQUE (id)
-constraint syncapi_filter | syncapi_filter_id_not_null | NOT NULL id
-constraint syncapi_filter | syncapi_filter_localpart_not_null | NOT NULL localpart
 constraint syncapi_filter | syncapi_filter_pkey | PRIMARY KEY (id, localpart)
-constraint syncapi_ignores | syncapi_ignores_ignores_json_not_null | NOT NULL ignores_json
 constraint syncapi_ignores | syncapi_ignores_pkey | PRIMARY KEY (user_id)
-constraint syncapi_ignores | syncapi_ignores_user_id_not_null | NOT NULL user_id
-constraint syncapi_invite_events | syncapi_invite_events_deleted_not_null | NOT NULL deleted
-constraint syncapi_invite_events | syncapi_invite_events_event_id_not_null | NOT NULL event_id
-constraint syncapi_invite_events | syncapi_invite_events_headered_event_json_not_null | NOT NULL headered_event_json
-constraint syncapi_invite_events | syncapi_invite_events_id_not_null | NOT NULL id
 constraint syncapi_invite_events | syncapi_invite_events_pkey | PRIMARY KEY (id)
-constraint syncapi_invite_events | syncapi_invite_events_room_id_not_null | NOT NULL room_id
-constraint syncapi_invite_events | syncapi_invite_events_target_user_id_not_null | NOT NULL target_user_id
-constraint syncapi_memberships | syncapi_memberships_event_id_not_null | NOT NULL event_id
-constraint syncapi_memberships | syncapi_memberships_membership_not_null | NOT NULL membership
-constraint syncapi_memberships | syncapi_memberships_room_id_not_null | NOT NULL room_id
-constraint syncapi_memberships | syncapi_memberships_stream_pos_not_null | NOT NULL stream_pos
-constraint syncapi_memberships | syncapi_memberships_topological_pos_not_null | NOT NULL topological_pos
 constraint syncapi_memberships | syncapi_memberships_unique | UNIQUE (room_id, user_id, membership)
-constraint syncapi_memberships | syncapi_memberships_user_id_not_null | NOT NULL user_id
-constraint syncapi_notification_data | syncapi_notification_data_highlight_count_not_null | NOT NULL highlight_count
-constraint syncapi_notification_data | syncapi_notification_data_id_not_null | NOT NULL id
-constraint syncapi_notification_data | syncapi_notification_data_notification_count_not_null | NOT NULL notification_count
 constraint syncapi_notification_data | syncapi_notification_data_pkey | PRIMARY KEY (id)
-constraint syncapi_notification_data | syncapi_notification_data_room_id_not_null | NOT NULL room_id
 constraint syncapi_notification_data | syncapi_notification_data_unique | UNIQUE (user_id, room_id)
-constraint syncapi_notification_data | syncapi_notification_data_user_id_not_null | NOT NULL user_id
 constraint syncapi_output_room_events | syncapi_output_room_event_id_idx | UNIQUE (event_id)
-constraint syncapi_output_room_events | syncapi_output_room_events_contains_url_not_null | NOT NULL contains_url
-constraint syncapi_output_room_events | syncapi_output_room_events_event_id_not_null | NOT NULL event_id
-constraint syncapi_output_room_events | syncapi_output_room_events_headered_event_json_not_null | NOT NULL headered_event_json
-constraint syncapi_output_room_events | syncapi_output_room_events_history_visibility_not_null | NOT NULL history_visibility
-constraint syncapi_output_room_events | syncapi_output_room_events_id_not_null | NOT NULL id
-constraint syncapi_output_room_events | syncapi_output_room_events_origin_server_ts_not_null | NOT NULL origin_server_ts
 constraint syncapi_output_room_events | syncapi_output_room_events_pkey | PRIMARY KEY (id)
-constraint syncapi_output_room_events | syncapi_output_room_events_room_id_not_null | NOT NULL room_id
-constraint syncapi_output_room_events | syncapi_output_room_events_sender_not_null | NOT NULL sender
-constraint syncapi_output_room_events | syncapi_output_room_events_type_not_null | NOT NULL type
-constraint syncapi_output_room_events_topology | syncapi_output_room_events_topolo_topological_position_not_null | NOT NULL topological_position
-constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_event_id_not_null | NOT NULL event_id
 constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_pkey | PRIMARY KEY (event_id)
-constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_room_id_not_null | NOT NULL room_id
-constraint syncapi_output_room_events_topology | syncapi_output_room_events_topology_stream_position_not_null | NOT NULL stream_position
-constraint syncapi_peeks | syncapi_peeks_creation_ts_not_null | NOT NULL creation_ts
-constraint syncapi_peeks | syncapi_peeks_deleted_not_null | NOT NULL deleted
-constraint syncapi_peeks | syncapi_peeks_device_id_not_null | NOT NULL device_id
-constraint syncapi_peeks | syncapi_peeks_room_id_not_null | NOT NULL room_id
 constraint syncapi_peeks | syncapi_peeks_room_id_user_id_device_id_key | UNIQUE (room_id, user_id, device_id)
-constraint syncapi_peeks | syncapi_peeks_user_id_not_null | NOT NULL user_id
 constraint syncapi_presence | presence_presences_unique | UNIQUE (user_id)
-constraint syncapi_presence | syncapi_presence_id_not_null | NOT NULL id
-constraint syncapi_presence | syncapi_presence_last_active_ts_not_null | NOT NULL last_active_ts
 constraint syncapi_presence | syncapi_presence_pkey | PRIMARY KEY (id)
-constraint syncapi_presence | syncapi_presence_presence_not_null | NOT NULL presence
-constraint syncapi_presence | syncapi_presence_user_id_not_null | NOT NULL user_id
-constraint syncapi_receipts | syncapi_receipts_event_id_not_null | NOT NULL event_id
-constraint syncapi_receipts | syncapi_receipts_id_not_null | NOT NULL id
 constraint syncapi_receipts | syncapi_receipts_pkey | PRIMARY KEY (id)
-constraint syncapi_receipts | syncapi_receipts_receipt_ts_not_null | NOT NULL receipt_ts
-constraint syncapi_receipts | syncapi_receipts_receipt_type_not_null | NOT NULL receipt_type
-constraint syncapi_receipts | syncapi_receipts_room_id_not_null | NOT NULL room_id
-constraint syncapi_receipts | syncapi_receipts_thread_id_not_null | NOT NULL thread_id
 constraint syncapi_receipts | syncapi_receipts_unique | UNIQUE (room_id, receipt_type, user_id, thread_id)
-constraint syncapi_receipts | syncapi_receipts_user_id_not_null | NOT NULL user_id
-constraint syncapi_relations | syncapi_relations_child_event_id_not_null | NOT NULL child_event_id
-constraint syncapi_relations | syncapi_relations_child_event_type_not_null | NOT NULL child_event_type
-constraint syncapi_relations | syncapi_relations_event_id_not_null | NOT NULL event_id
-constraint syncapi_relations | syncapi_relations_id_not_null | NOT NULL id
 constraint syncapi_relations | syncapi_relations_pkey | PRIMARY KEY (id)
-constraint syncapi_relations | syncapi_relations_rel_type_not_null | NOT NULL rel_type
-constraint syncapi_relations | syncapi_relations_room_id_not_null | NOT NULL room_id
 constraint syncapi_relations | syncapi_relations_unique | UNIQUE (room_id, event_id, child_event_id, rel_type)
-constraint syncapi_send_to_device | syncapi_send_to_device_content_not_null | NOT NULL content
-constraint syncapi_send_to_device | syncapi_send_to_device_device_id_not_null | NOT NULL device_id
-constraint syncapi_send_to_device | syncapi_send_to_device_id_not_null | NOT NULL id
 constraint syncapi_send_to_device | syncapi_send_to_device_pkey | PRIMARY KEY (id)
-constraint syncapi_send_to_device | syncapi_send_to_device_user_id_not_null | NOT NULL user_id
 constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
-constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_connection_key_not_null | NOT NULL connection_key
-constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_list_name_not_null | NOT NULL list_name
 constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_pkey | PRIMARY KEY (connection_key, list_name)
-constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_room_ids_not_null | NOT NULL room_ids
-constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_po_connection_position_not_null | NOT NULL connection_position
-constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positio_connection_key_not_null | NOT NULL connection_key
 constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
-constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_created_ts_not_null | NOT NULL created_ts
 constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_pkey | PRIMARY KEY (connection_position)
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connectio_last_delivered_event_id_not_null | NOT NULL last_delivered_event_id
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_rece_last_delivered_ts_not_null | NOT NULL last_delivered_ts
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipt_connection_key_not_null | NOT NULL connection_key
 constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
 constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_pkey | PRIMARY KEY (connection_key, room_id, receipt_type, user_id, thread_id)
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_receipt_type_not_null | NOT NULL receipt_type
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_room_id_not_null | NOT NULL room_id
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_thread_id_not_null | NOT NULL thread_id
-constraint syncapi_sliding_sync_connection_receipts | syncapi_sliding_sync_connection_receipts_user_id_not_null | NOT NULL user_id
-constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_requ_required_state_id_not_null | NOT NULL required_state_id
-constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_require_connection_key_not_null | NOT NULL connection_key
-constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_require_required_state_not_null | NOT NULL required_state
 constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_st_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
 constraint syncapi_sliding_sync_connection_required_state | syncapi_sliding_sync_connection_required_state_pkey | PRIMARY KEY (required_state_id)
-constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_ro_connection_position_not_null | NOT NULL connection_position
 constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_c_connection_position_fkey | FOREIGN KEY (connection_position) REFERENCES syncapi_sliding_sync_connection_positions(connection_position) ON DELETE CASCADE
-constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_co_timeline_limit_not_null | NOT NULL timeline_limit
 constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_con_required_state_id_fkey | FOREIGN KEY (required_state_id) REFERENCES syncapi_sliding_sync_connection_required_state(required_state_id) ON DELETE CASCADE
 constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_configs_pkey | PRIMARY KEY (connection_position, room_id)
-constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_configs_room_id_not_null | NOT NULL room_id
-constraint syncapi_sliding_sync_connection_room_configs | syncapi_sliding_sync_connection_room_required_state_id_not_null | NOT NULL required_state_id
-constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_st_connection_position_not_null | NOT NULL connection_position
 constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_stream_connection_position_fkey | FOREIGN KEY (connection_position) REFERENCES syncapi_sliding_sync_connection_positions(connection_position) ON DELETE CASCADE
-constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_last_token_not_null | NOT NULL last_token
 constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_pkey | PRIMARY KEY (connection_position, room_id, stream)
-constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_room_id_not_null | NOT NULL room_id
-constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_room_status_not_null | NOT NULL room_status
-constraint syncapi_sliding_sync_connection_streams | syncapi_sliding_sync_connection_streams_stream_not_null | NOT NULL stream
-constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_conn_id_not_null | NOT NULL conn_id
-constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_connection_key_not_null | NOT NULL connection_key
-constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_created_ts_not_null | NOT NULL created_ts
-constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_device_id_not_null | NOT NULL device_id
 constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_pkey | PRIMARY KEY (connection_key)
 constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_id_device_id_conn_id_key | UNIQUE (user_id, device_id, conn_id)
-constraint syncapi_sliding_sync_connections | syncapi_sliding_sync_connections_user_id_not_null | NOT NULL user_id
-constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_room_event_stream_ordering_not_null | NOT NULL event_stream_ordering
-constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_is_encrypted_not_null | NOT NULL is_encrypted
 constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_pkey | PRIMARY KEY (room_id)
-constraint syncapi_sliding_sync_joined_rooms | syncapi_sliding_sync_joined_rooms_room_id_not_null | NOT NULL room_id
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership__event_stream_ordering_not_null | NOT NULL event_stream_ordering
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_sn_membership_event_id_not_null | NOT NULL membership_event_id
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapsh_has_known_state_not_null | NOT NULL has_known_state
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_forgotten_not_null | NOT NULL forgotten
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_is_encrypted_not_null | NOT NULL is_encrypted
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_membership_not_null | NOT NULL membership
 constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_pkey | PRIMARY KEY (room_id, user_id)
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_room_id_not_null | NOT NULL room_id
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_sender_not_null | NOT NULL sender
-constraint syncapi_sliding_sync_membership_snapshots | syncapi_sliding_sync_membership_snapshots_user_id_not_null | NOT NULL user_id
 constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_pkey | PRIMARY KEY (room_id)
-constraint syncapi_sliding_sync_rooms_to_recalculate | syncapi_sliding_sync_rooms_to_recalculate_room_id_not_null | NOT NULL room_id
-constraint syncapi_sticky_events | syncapi_sticky_events_event_id_not_null | NOT NULL event_id
 constraint syncapi_sticky_events | syncapi_sticky_events_event_id_unique | UNIQUE (event_id)
-constraint syncapi_sticky_events | syncapi_sticky_events_expires_at_not_null | NOT NULL expires_at
-constraint syncapi_sticky_events | syncapi_sticky_events_id_not_null | NOT NULL id
 constraint syncapi_sticky_events | syncapi_sticky_events_pkey | PRIMARY KEY (id)
-constraint syncapi_sticky_events | syncapi_sticky_events_room_id_not_null | NOT NULL room_id
-constraint syncapi_sticky_events | syncapi_sticky_events_sender_not_null | NOT NULL sender
-constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_created_at_not_null | NOT NULL created_at
-constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_id_not_null | NOT NULL id
 constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_pkey | PRIMARY KEY (id)
-constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_room_id_not_null | NOT NULL room_id
-constraint syncapi_unpartialstated_rooms | syncapi_unpartialstated_rooms_user_id_not_null | NOT NULL user_id
-constraint userapi_account_datas | userapi_account_datas_content_not_null | NOT NULL content
-constraint userapi_account_datas | userapi_account_datas_localpart_not_null | NOT NULL localpart
-constraint userapi_account_datas | userapi_account_datas_server_name_not_null | NOT NULL server_name
-constraint userapi_account_datas | userapi_account_datas_type_not_null | NOT NULL type
-constraint userapi_accounts | userapi_accounts_account_type_not_null | NOT NULL account_type
-constraint userapi_accounts | userapi_accounts_created_ts_not_null | NOT NULL created_ts
-constraint userapi_accounts | userapi_accounts_localpart_not_null | NOT NULL localpart
-constraint userapi_accounts | userapi_accounts_locked_not_null | NOT NULL locked
-constraint userapi_accounts | userapi_accounts_server_name_not_null | NOT NULL server_name
-constraint userapi_accounts | userapi_accounts_suspended_not_null | NOT NULL suspended
 constraint userapi_daily_stats | daily_stats_unique | UNIQUE ("timestamp", server_name)
-constraint userapi_daily_stats | userapi_daily_stats_active_e2ee_rooms_not_null | NOT NULL active_e2ee_rooms
-constraint userapi_daily_stats | userapi_daily_stats_active_rooms_not_null | NOT NULL active_rooms
-constraint userapi_daily_stats | userapi_daily_stats_e2ee_messages_not_null | NOT NULL e2ee_messages
-constraint userapi_daily_stats | userapi_daily_stats_messages_not_null | NOT NULL messages
-constraint userapi_daily_stats | userapi_daily_stats_sent_e2ee_messages_not_null | NOT NULL sent_e2ee_messages
-constraint userapi_daily_stats | userapi_daily_stats_sent_messages_not_null | NOT NULL sent_messages
-constraint userapi_daily_stats | userapi_daily_stats_server_name_not_null | NOT NULL server_name
-constraint userapi_daily_stats | userapi_daily_stats_timestamp_not_null | NOT NULL "timestamp"
-constraint userapi_daily_visits | userapi_daily_visits_device_id_not_null | NOT NULL device_id
-constraint userapi_daily_visits | userapi_daily_visits_localpart_not_null | NOT NULL localpart
-constraint userapi_daily_visits | userapi_daily_visits_timestamp_not_null | NOT NULL "timestamp"
-constraint userapi_dehydrated_devices | userapi_dehydrated_devices_created_ts_not_null | NOT NULL created_ts
-constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_data_not_null | NOT NULL device_data
-constraint userapi_dehydrated_devices | userapi_dehydrated_devices_device_id_not_null | NOT NULL device_id
 constraint userapi_dehydrated_devices | userapi_dehydrated_devices_pkey | PRIMARY KEY (user_id)
-constraint userapi_dehydrated_devices | userapi_dehydrated_devices_user_id_not_null | NOT NULL user_id
-constraint userapi_delayed_events | userapi_delayed_events_content_not_null | NOT NULL content
-constraint userapi_delayed_events | userapi_delayed_events_delay_id_not_null | NOT NULL delay_id
-constraint userapi_delayed_events | userapi_delayed_events_delay_ms_not_null | NOT NULL delay_ms
-constraint userapi_delayed_events | userapi_delayed_events_delayed_since_ts_not_null | NOT NULL delayed_since_ts
-constraint userapi_delayed_events | userapi_delayed_events_device_id_not_null | NOT NULL device_id
-constraint userapi_delayed_events | userapi_delayed_events_event_type_not_null | NOT NULL event_type
-constraint userapi_delayed_events | userapi_delayed_events_localpart_not_null | NOT NULL localpart
-constraint userapi_delayed_events | userapi_delayed_events_origin_server_ts_not_null | NOT NULL origin_server_ts
 constraint userapi_delayed_events | userapi_delayed_events_pkey | PRIMARY KEY (delay_id)
-constraint userapi_delayed_events | userapi_delayed_events_room_id_not_null | NOT NULL room_id
-constraint userapi_delayed_events | userapi_delayed_events_send_ts_not_null | NOT NULL send_ts
-constraint userapi_delayed_events | userapi_delayed_events_server_name_not_null | NOT NULL server_name
-constraint userapi_delayed_events | userapi_delayed_events_status_not_null | NOT NULL status
-constraint userapi_devices | userapi_devices_access_token_expires_ts_not_null | NOT NULL access_token_expires_ts
-constraint userapi_devices | userapi_devices_access_token_not_null | NOT NULL access_token
-constraint userapi_devices | userapi_devices_created_ts_not_null | NOT NULL created_ts
-constraint userapi_devices | userapi_devices_device_id_not_null | NOT NULL device_id
-constraint userapi_devices | userapi_devices_last_seen_ts_not_null | NOT NULL last_seen_ts
-constraint userapi_devices | userapi_devices_localpart_not_null | NOT NULL localpart
 constraint userapi_devices | userapi_devices_pkey | PRIMARY KEY (access_token)
-constraint userapi_devices | userapi_devices_server_name_not_null | NOT NULL server_name
-constraint userapi_devices | userapi_devices_session_id_not_null | NOT NULL session_id
-constraint userapi_external_ids | userapi_external_ids_external_id_not_null | NOT NULL external_id
-constraint userapi_external_ids | userapi_external_ids_localpart_not_null | NOT NULL localpart
 constraint userapi_external_ids | userapi_external_ids_pkey | PRIMARY KEY (provider_id, external_id)
-constraint userapi_external_ids | userapi_external_ids_provider_id_not_null | NOT NULL provider_id
-constraint userapi_external_ids | userapi_external_ids_server_name_not_null | NOT NULL server_name
-constraint userapi_key_backup_versions | userapi_key_backup_versions_algorithm_not_null | NOT NULL algorithm
-constraint userapi_key_backup_versions | userapi_key_backup_versions_auth_data_not_null | NOT NULL auth_data
-constraint userapi_key_backup_versions | userapi_key_backup_versions_deleted_not_null | NOT NULL deleted
-constraint userapi_key_backup_versions | userapi_key_backup_versions_etag_not_null | NOT NULL etag
-constraint userapi_key_backup_versions | userapi_key_backup_versions_user_id_not_null | NOT NULL user_id
-constraint userapi_key_backups | userapi_key_backups_first_message_index_not_null | NOT NULL first_message_index
-constraint userapi_key_backups | userapi_key_backups_forwarded_count_not_null | NOT NULL forwarded_count
-constraint userapi_key_backups | userapi_key_backups_is_verified_not_null | NOT NULL is_verified
-constraint userapi_key_backups | userapi_key_backups_room_id_not_null | NOT NULL room_id
-constraint userapi_key_backups | userapi_key_backups_session_data_not_null | NOT NULL session_data
-constraint userapi_key_backups | userapi_key_backups_session_id_not_null | NOT NULL session_id
-constraint userapi_key_backups | userapi_key_backups_user_id_not_null | NOT NULL user_id
-constraint userapi_key_backups | userapi_key_backups_version_not_null | NOT NULL version
 constraint userapi_login_tokens | userapi_login_tokens_pkey | PRIMARY KEY (token)
-constraint userapi_login_tokens | userapi_login_tokens_token_expires_at_not_null | NOT NULL token_expires_at
-constraint userapi_login_tokens | userapi_login_tokens_token_not_null | NOT NULL token
-constraint userapi_login_tokens | userapi_login_tokens_user_id_not_null | NOT NULL user_id
-constraint userapi_notification_events | userapi_notification_events_event_id_not_null | NOT NULL event_id
-constraint userapi_notification_events | userapi_notification_events_notification_id_not_null | NOT NULL notification_id
 constraint userapi_notification_events | userapi_notification_events_pkey | PRIMARY KEY (room_id, event_id)
-constraint userapi_notification_events | userapi_notification_events_room_id_not_null | NOT NULL room_id
-constraint userapi_notification_events | userapi_notification_events_stream_pos_not_null | NOT NULL stream_pos
-constraint userapi_notification_events | userapi_notification_events_thread_id_not_null | NOT NULL thread_id
 constraint userapi_notification_receipt_locks | userapi_notification_receipt_locks_pkey | PRIMARY KEY (room_id)
-constraint userapi_notification_receipt_locks | userapi_notification_receipt_locks_room_id_not_null | NOT NULL room_id
-constraint userapi_notifications | userapi_notifications_event_id_not_null | NOT NULL event_id
-constraint userapi_notifications | userapi_notifications_highlight_not_null | NOT NULL highlight
-constraint userapi_notifications | userapi_notifications_id_not_null | NOT NULL id
-constraint userapi_notifications | userapi_notifications_localpart_not_null | NOT NULL localpart
-constraint userapi_notifications | userapi_notifications_notification_json_not_null | NOT NULL notification_json
 constraint userapi_notifications | userapi_notifications_pkey | PRIMARY KEY (id)
-constraint userapi_notifications | userapi_notifications_read_not_null | NOT NULL read
-constraint userapi_notifications | userapi_notifications_room_id_not_null | NOT NULL room_id
-constraint userapi_notifications | userapi_notifications_server_name_not_null | NOT NULL server_name
-constraint userapi_notifications | userapi_notifications_stream_pos_not_null | NOT NULL stream_pos
-constraint userapi_notifications | userapi_notifications_ts_ms_not_null | NOT NULL ts_ms
-constraint userapi_openid_tokens | userapi_openid_tokens_localpart_not_null | NOT NULL localpart
 constraint userapi_openid_tokens | userapi_openid_tokens_pkey | PRIMARY KEY (token)
-constraint userapi_openid_tokens | userapi_openid_tokens_server_name_not_null | NOT NULL server_name
-constraint userapi_openid_tokens | userapi_openid_tokens_token_expires_at_ms_not_null | NOT NULL token_expires_at_ms
-constraint userapi_openid_tokens | userapi_openid_tokens_token_not_null | NOT NULL token
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_created_ts_not_null | NOT NULL created_ts
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_event_id_not_null | NOT NULL event_id
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_localpart_not_null | NOT NULL localpart
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | PRIMARY KEY (room_id, event_id, localpart, server_name, thread_id)
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_room_id_not_null | NOT NULL room_id
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_server_name_not_null | NOT NULL server_name
-constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_thread_id_not_null | NOT NULL thread_id
-constraint userapi_profile_fields | userapi_profile_fields_field_name_not_null | NOT NULL field_name
-constraint userapi_profile_fields | userapi_profile_fields_field_value_not_null | NOT NULL field_value
-constraint userapi_profile_fields | userapi_profile_fields_localpart_not_null | NOT NULL localpart
 constraint userapi_profile_fields | userapi_profile_fields_pkey | PRIMARY KEY (localpart, server_name, field_name)
-constraint userapi_profile_fields | userapi_profile_fields_server_name_not_null | NOT NULL server_name
-constraint userapi_profiles | userapi_profiles_localpart_not_null | NOT NULL localpart
-constraint userapi_profiles | userapi_profiles_server_name_not_null | NOT NULL server_name
-constraint userapi_pushers | userapi_pushers_app_display_name_not_null | NOT NULL app_display_name
-constraint userapi_pushers | userapi_pushers_app_id_not_null | NOT NULL app_id
-constraint userapi_pushers | userapi_pushers_data_not_null | NOT NULL data
-constraint userapi_pushers | userapi_pushers_device_display_name_not_null | NOT NULL device_display_name
-constraint userapi_pushers | userapi_pushers_id_not_null | NOT NULL id
-constraint userapi_pushers | userapi_pushers_kind_not_null | NOT NULL kind
-constraint userapi_pushers | userapi_pushers_lang_not_null | NOT NULL lang
-constraint userapi_pushers | userapi_pushers_localpart_not_null | NOT NULL localpart
 constraint userapi_pushers | userapi_pushers_pkey | PRIMARY KEY (id)
-constraint userapi_pushers | userapi_pushers_pushkey_not_null | NOT NULL pushkey
-constraint userapi_pushers | userapi_pushers_pushkey_ts_ms_not_null | NOT NULL pushkey_ts_ms
-constraint userapi_pushers | userapi_pushers_server_name_not_null | NOT NULL server_name
 constraint userapi_registration_tokens | userapi_registration_tokens_pkey | PRIMARY KEY (token)
-constraint userapi_registration_tokens | userapi_registration_tokens_token_not_null | NOT NULL token
-constraint userapi_threepids | userapi_threepids_localpart_not_null | NOT NULL localpart
-constraint userapi_threepids | userapi_threepids_medium_not_null | NOT NULL medium
 constraint userapi_threepids | userapi_threepids_pkey | PRIMARY KEY (threepid, medium)
-constraint userapi_threepids | userapi_threepids_server_name_not_null | NOT NULL server_name
-constraint userapi_threepids | userapi_threepids_threepid_not_null | NOT NULL threepid
-constraint zendrite_ha_compatibility | zendrite_ha_compatibility_fingerprint_not_null | NOT NULL fingerprint
 constraint zendrite_ha_compatibility | zendrite_ha_compatibility_id_check | CHECK ((id = 1))
-constraint zendrite_ha_compatibility | zendrite_ha_compatibility_id_not_null | NOT NULL id
 constraint zendrite_ha_compatibility | zendrite_ha_compatibility_pkey | PRIMARY KEY (id)
-constraint zendrite_ha_ownership | zendrite_ha_ownership_acquired_at_not_null | NOT NULL acquired_at
-constraint zendrite_ha_ownership | zendrite_ha_ownership_generation_not_null | NOT NULL generation
 constraint zendrite_ha_ownership | zendrite_ha_ownership_id_check | CHECK ((id = 1))
-constraint zendrite_ha_ownership | zendrite_ha_ownership_id_not_null | NOT NULL id
-constraint zendrite_ha_ownership | zendrite_ha_ownership_owner_not_null | NOT NULL owner
 constraint zendrite_ha_ownership | zendrite_ha_ownership_pkey | PRIMARY KEY (id)
-constraint zendrite_ha_ownership | zendrite_ha_ownership_scope_not_null | NOT NULL scope
-constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_acquired_at_not_null | NOT NULL acquired_at
-constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_generation_not_null | NOT NULL generation
-constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_owner_not_null | NOT NULL owner
 constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_pkey | PRIMARY KEY (generation)
-constraint zendrite_ha_ownership_history | zendrite_ha_ownership_history_scope_not_null | NOT NULL scope
 sequence federationsender_notary_server_keys_json_pkey | bigint | 1
 sequence federationsender_queue_json_json_nid_seq | bigint | 1
 sequence keyserver_key_changes_seq | bigint | 1

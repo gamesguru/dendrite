@@ -181,8 +181,10 @@ func sharedSurface(t *testing.T) string {
 		FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name, column_name`)
 	describe("index", `SELECT tablename, indexname, indexdef FROM pg_indexes
 		WHERE schemaname = current_schema() ORDER BY tablename, indexname`)
+	// PostgreSQL 18 lists NOT NULL in pg_constraint, older majors do not. The column
+	// rows above already record nullability, so leave these out to stay portable.
 	describe("constraint", `SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint
-		WHERE connamespace = current_schema()::regnamespace ORDER BY 1, 2`)
+		WHERE connamespace = current_schema()::regnamespace AND contype <> 'n' ORDER BY 1, 2`)
 	describe("sequence", `SELECT sequence_name, data_type, increment FROM information_schema.sequences
 		WHERE sequence_schema = current_schema() ORDER BY sequence_name`)
 	describe("migration", `SELECT version FROM db_migrations ORDER BY version`)
