@@ -7,6 +7,8 @@ package routing
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -80,19 +82,6 @@ func OnIncomingMessagesRequest(
 		}
 	}
 
-	// NewDatabaseTransaction is used here instead of NewDatabaseSnapshot as we
-	// expect to be able to write to the database in response to a /messages
-	// request that requires backfilling from the roomserver or federation.
-	snapshot, err := db.NewDatabaseTransaction(req.Context())
-	if err != nil {
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}
-	}
-	var succeeded bool
-	defer sqlutil.EndTransactionWithCheck(snapshot, &succeeded, &err)
-
 	// check if the user has already forgotten about this room
 	membershipResp, err := getMembershipForUser(req.Context(), roomID, device.UserID, rsAPI)
 	if err != nil {
@@ -114,6 +103,27 @@ func OnIncomingMessagesRequest(
 			JSON: spec.Forbidden("user already forgot about this room"),
 		}
 	}
+
+	// The roomserver reports a join before the sync API has stored it, so a
+	// first page requested right after joining would look empty. Wait for it
+	// before the request transaction below is opened, so no connection is held
+	// while we poll.
+	if req.URL.Query().Get("from") == "" && membershipResp.Membership == spec.Join {
+		waitForMembershipInTopology(req.Context(), db, membershipResp.EventID)
+	}
+
+	// NewDatabaseTransaction is used here instead of NewDatabaseSnapshot as we
+	// expect to be able to write to the database in response to a /messages
+	// request that requires backfilling from the roomserver or federation.
+	snapshot, err := db.NewDatabaseTransaction(req.Context())
+	if err != nil {
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	var succeeded bool
+	defer sqlutil.EndTransactionWithCheck(snapshot, &succeeded, &err)
 
 	filter, err := parseRoomEventFilter(req)
 	if err != nil {
@@ -142,11 +152,6 @@ func OnIncomingMessagesRequest(
 	backwardOrdering := (dir == "b")
 
 	emptyFromSupplied := fromQuery == ""
-	if emptyFromSupplied && membershipResp.Membership == spec.Join {
-		// The roomserver reports the join before the sync API has stored it,
-		// so a first page requested right after joining would look empty.
-		waitForMembershipInTopology(req.Context(), db, membershipResp.EventID)
-	}
 	if emptyFromSupplied {
 		// If "from" isn't provided, it defaults to either the earliest stream
 		// position (if we're going forward) or to the latest one (if we're
@@ -756,7 +761,7 @@ func waitForMembershipInTopology(ctx context.Context, db storage.Database, event
 		}
 		_, err = snapshot.EventPositionInTopology(ctx, eventID)
 		_ = snapshot.Rollback()
-		if err == nil {
+		if !errors.Is(err, sql.ErrNoRows) {
 			return
 		}
 		select {
