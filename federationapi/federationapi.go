@@ -128,6 +128,7 @@ func NewUnstartedInternalAPI(
 	}
 
 	stats := statistics.NewStatistics(federationDB, cfg.FederationMaxRetries+1, cfg.P2PFederationRetriesUntilAssumedOffline+1, cfg.EnableRelays)
+	stats.MinBackoffExponent = cfg.FederationMinRetryExponent
 
 	processContext.Defer(stats.Close)
 	js, nats := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)

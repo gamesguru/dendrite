@@ -347,6 +347,10 @@ federation_api:
   # Default 11 gives roughly 2 weeks of retries before blacklisting.
   send_max_retries: 11
 
+  # The first backoff after a failed send lasts 2^x seconds and doubles with each
+  # further failure. Default 8 is ~4 minutes. Only lower this for testing.
+  send_min_retry_exponent: 8
+
   # Disable the validation of TLS certificates of remote federated homeservers. Do not
   # enable this option in production as it presents a security risk!
   disable_tls_validation: false

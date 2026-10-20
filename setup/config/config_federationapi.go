@@ -20,6 +20,11 @@ type FederationAPI struct {
 	// before the server is blacklisted.
 	FederationMaxRetries uint32 `yaml:"send_max_retries"`
 
+	// The first backoff after a failed send lasts 2**x seconds, doubling with each
+	// further failure. The default 8 gives ~4 minutes. Lower it only for tests,
+	// which restart servers and expect delivery to resume quickly.
+	FederationMinRetryExponent uint32 `yaml:"send_min_retry_exponent"`
+
 	// P2P Feature: Whether relaying to specific nodes should be enabled.
 	// Defaults to false.
 	// Note: Enabling relays introduces a huge startup delay, if you are not using
@@ -74,6 +79,7 @@ func (c *FederationAPI) UnmarshalYAML(unmarshal func(any) error) error {
 
 func (c *FederationAPI) Defaults(opts DefaultOpts) {
 	c.FederationMaxRetries = 11
+	c.FederationMinRetryExponent = 8
 	c.P2PFederationRetriesUntilAssumedOffline = 1
 	c.DisableTLSValidation = false
 	c.DisableHTTPKeepalives = false
