@@ -386,9 +386,11 @@ func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, reda
 		return err
 	}
 
+	// Redaction clears the event ID from the PDU. Keep the original ID for
+	// both the row lookup and the serialized event header.
 	newEvent := &rstypes.HeaderedEvent{PDU: eventToRedact}
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		if err = d.OutputEvents.UpdateEventJSON(ctx, txn, newEvent); err != nil {
+		if err = d.OutputEvents.UpdateEventJSON(ctx, txn, redactedEventID, newEvent); err != nil {
 			return err
 		}
 		// Redaction strips the sticky key, so the event stops being sticky.

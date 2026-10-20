@@ -85,7 +85,7 @@ func TestOutputEventTimestampUpgrade(t *testing.T) {
 
 			_, err = tab.InsertEvent(ctx, nil, event, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 			require.NoError(t, err)
-			require.NoError(t, tab.UpdateEventJSON(ctx, nil, event))
+			require.NoError(t, tab.UpdateEventJSON(ctx, nil, event.EventID(), event))
 			for _, backwards := range []bool{false, true} {
 				events, err := tab.SelectEventsByTimestamp(ctx, nil, room.ID, 1234, 0, backwards, 10)
 				require.NoError(t, err)

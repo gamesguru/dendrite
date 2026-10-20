@@ -94,7 +94,11 @@ func GetEvent(
 		}
 		for _, roomEvent := range roomEvents.Events {
 			if roomEvent.EventID() == eventID && roomEvent.Redacted() {
-				events[0] = roomEvent
+				// Keep the sync copy's history visibility, which the
+				// roomserver's event does not carry.
+				copied := *events[0]
+				copied.PDU = roomEvent.PDU
+				events[0] = &copied
 				break
 			}
 		}

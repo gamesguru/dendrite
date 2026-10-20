@@ -70,7 +70,7 @@ type Events interface {
 	// Used for incremental sync to filter rooms that haven't changed
 	SelectRoomsWithEventsSince(ctx context.Context, txn *sql.Tx, roomIDs []string, since types.StreamPosition) ([]string, error)
 	SelectEvents(ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool) ([]types.StreamEvent, error)
-	UpdateEventJSON(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) error
+	UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) error
 	// DeleteEventsForRoom removes all event information for a room. This should only be done when removing the room entirely.
 	DeleteEventsForRoom(ctx context.Context, txn *sql.Tx, roomID string) (err error)
 

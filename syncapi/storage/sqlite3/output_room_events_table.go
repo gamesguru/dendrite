@@ -8,6 +8,7 @@
 package sqlite3
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -182,14 +183,26 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 	}.Prepare(db)
 }
 
-func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) error {
+func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) error {
 	headeredJSON, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
+	headeredJSON, err = restoreEventID(headeredJSON, eventID)
+	if err != nil {
+		return err
+	}
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
-	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, event.EventID())
+	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, eventID)
 	return err
+}
+
+func restoreEventID(eventJSON []byte, eventID string) ([]byte, error) {
+	encodedID, err := json.Marshal(eventID)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.Replace(eventJSON, []byte(`"_event_id":""`), append([]byte(`"_event_id":`), encodedID...), 1), nil
 }
 
 // selectStateInRange returns the state events between the two given PDU stream positions, exclusive of oldPos, inclusive of newPos.
