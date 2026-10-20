@@ -25,6 +25,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -327,6 +328,18 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 		}
 	}
 
+	// A remote user's own leave arrived over federation from their server,
+	// which already has it, so don't echo it back as Synapse doesn't.
+	if origin, ok := s.remoteSelfLeaveServer(ore.Event); ok {
+		filtered := joinedHostsAtEvent[:0]
+		for _, server := range joinedHostsAtEvent {
+			if server != origin {
+				filtered = append(filtered, server)
+			}
+		}
+		joinedHostsAtEvent = filtered
+	}
+
 	// TODO: do housekeeping to evict unrenewed peeking hosts
 
 	// TODO: implement query to let the fedapi check whether a given peek is live or not
@@ -335,6 +348,22 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	return s.queues.SendEvent(
 		ore.Event, spec.ServerName(ore.SendAsServer), joinedHostsAtEvent,
 	)
+}
+
+// remoteSelfLeaveServer returns the server of a remote user who left a room
+// themselves, as opposed to being kicked or banned.
+func (s *OutputRoomEventConsumer) remoteSelfLeaveServer(ev *rstypes.HeaderedEvent) (spec.ServerName, bool) {
+	if ev.Type() != spec.MRoomMember || ev.StateKey() == nil || *ev.StateKey() != string(ev.SenderID()) {
+		return "", false
+	}
+	if membership, err := ev.Membership(); err != nil || membership != spec.Leave {
+		return "", false
+	}
+	user, err := s.rsAPI.QueryUserIDForSender(s.ctx, ev.RoomID(), ev.SenderID())
+	if err != nil || user == nil || s.cfg.Matrix.IsLocalServerName(user.Domain()) {
+		return "", false
+	}
+	return user.Domain(), true
 }
 
 // pendingMembershipTarget returns the server of the user a membership event
