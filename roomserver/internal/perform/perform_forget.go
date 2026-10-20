@@ -9,7 +9,7 @@ package perform
 import (
 	"context"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"

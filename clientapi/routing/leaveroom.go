@@ -7,10 +7,12 @@
 package routing
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
@@ -32,10 +34,27 @@ func LeaveRoomByID(
 		}
 	}
 
-	// Prepare to ask the roomserver to perform the room join.
+	// The body, including the reason for leaving, is optional.
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if req.Body != nil {
+		raw, readErr := io.ReadAll(req.Body)
+		if readErr != nil {
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			if resErr := httputil.UnmarshalJSON(raw, &body); resErr != nil {
+				return *resErr
+			}
+		}
+	}
+
+	// Prepare to ask the roomserver to perform the room leave.
 	leaveReq := roomserverAPI.PerformLeaveRequest{
 		RoomID: roomID,
 		Leaver: *userID,
+		Reason: body.Reason,
 	}
 	leaveRes := roomserverAPI.PerformLeaveResponse{}
 

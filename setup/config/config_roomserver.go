@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/goccy/go-yaml"
 	log "github.com/sirupsen/logrus"
 )

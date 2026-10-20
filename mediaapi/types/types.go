@@ -7,12 +7,17 @@
 package types
 
 import (
+	"errors"
 	"sync"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
+
+// ErrTooManyPendingUploads is returned when a user already holds the maximum
+// number of created but not yet uploaded media IDs.
+var ErrTooManyPendingUploads = errors.New("too many pending media uploads")
 
 // FileSizeBytes is a file size in bytes.
 type FileSizeBytes int64
@@ -48,6 +53,14 @@ type MediaMetadata struct {
 	UploadName        Filename
 	Base64Hash        Base64Hash
 	UserID            MatrixUserID
+	// UnusedExpiresAt is set while the media ID was created with POST /create
+	// but its content has not been uploaded yet; it is zero once uploaded.
+	UnusedExpiresAt spec.Timestamp
+}
+
+// IsPending reports whether the media ID was created but not yet uploaded.
+func (m *MediaMetadata) IsPending() bool {
+	return m.UnusedExpiresAt > 0
 }
 
 // RemoteRequestResult is used for broadcasting the result of a request for a remote file to routines waiting on the condition.

@@ -5,9 +5,9 @@ import (
 	"crypto/ed25519"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
@@ -50,6 +50,7 @@ type RoomserverInternalAPI struct {
 	*perform.Upgrader
 	*perform.Admin
 	*perform.Creator
+	Knocker                *perform.Knocker
 	ProcessContext         *process.ProcessContext
 	DB                     storage.Database
 	Cfg                    *config.Zendrite
@@ -176,6 +177,13 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		FSAPI:      r.fsAPI,
 		Inputer:    r.Inputer,
 	}
+	r.Knocker = &perform.Knocker{
+		Cfg:     &r.Cfg.RoomServer,
+		DB:      r.DB,
+		FSAPI:   r.fsAPI,
+		RSAPI:   r,
+		Inputer: r.Inputer,
+	}
 	r.Leaver = &perform.Leaver{
 		Cfg:     &r.Cfg.RoomServer,
 		DB:      r.DB,
@@ -211,6 +219,7 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 		Inputer:      r.Inputer,
 		Queryer:      r.Queryer,
 		Leaver:       r.Leaver,
+		RSAPI:        r,
 		PurgeTracker: r.PurgeTracker,
 	}
 	r.Creator = &perform.Creator{
@@ -227,11 +236,11 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 	// at startup (e.g. left over from a previous run, or from a crash
 	// mid-purge during the previous shutdown).
 	if r.Cfg.RoomServer.AutoPurgeEnabled() {
-		go func() {
+		r.ProcessContext.Go(func() {
 			if _, err := r.RunEmptyRoomsSweep(r.ProcessContext.Context()); err != nil {
 				logrus.WithError(err).Warn("startup empty-rooms sweep failed")
 			}
-		}()
+		})
 	}
 }
 
@@ -311,6 +320,16 @@ func (r *RoomserverInternalAPI) HandleInvite(
 	return r.OutputProducer.ProduceRoomEvents(inviteEvent.RoomID().String(), outputEvents)
 }
 
+func (r *RoomserverInternalAPI) RetractPendingMembership(
+	ctx context.Context, event *types.HeaderedEvent,
+) (bool, error) {
+	outputEvents, applied, err := r.Leaver.RetractPendingMembership(ctx, event)
+	if err != nil || !applied {
+		return applied, err
+	}
+	return true, r.OutputProducer.ProduceRoomEvents(event.RoomID().String(), outputEvents)
+}
+
 func (r *RoomserverInternalAPI) PerformCreateRoom(
 	ctx context.Context, userID spec.UserID, roomID spec.RoomID, createRequest *api.PerformCreateRoomRequest,
 ) (string, *util.JSONResponse) {
@@ -338,6 +357,22 @@ func (r *RoomserverInternalAPI) PerformLeave(
 		return nil
 	}
 	return r.OutputProducer.ProduceRoomEvents(req.RoomID, outputEvents)
+}
+
+func (r *RoomserverInternalAPI) PerformKnock(
+	ctx context.Context,
+	req *api.PerformKnockRequest,
+) (string, error) {
+	roomID, outputEvents, err := r.Knocker.PerformKnock(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if len(outputEvents) > 0 {
+		if err = r.OutputProducer.ProduceRoomEvents(roomID, outputEvents); err != nil {
+			return "", err
+		}
+	}
+	return roomID, nil
 }
 
 func (r *RoomserverInternalAPI) PerformForget(
@@ -416,6 +451,18 @@ func (r *RoomserverInternalAPI) InsertReportedEvent(
 	score int64,
 ) (int64, error) {
 	return r.DB.InsertReportedEvent(ctx, roomID, eventID, reportingUserID, reason, score)
+}
+
+// InsertReportedRoom stores a room report (MSC4151).
+func (r *RoomserverInternalAPI) InsertReportedRoom(ctx context.Context, roomID, reportingUserID, reason string) (int64, error) {
+	return r.DB.InsertReportedRoom(ctx, roomID, reportingUserID, reason)
+}
+
+// QueryAdminRoomReports lists room reports for the admin API (MSC4151).
+func (r *RoomserverInternalAPI) QueryAdminRoomReports(
+	ctx context.Context, from, limit uint64, backwards bool, userID, roomID string,
+) ([]api.QueryAdminRoomReportsResponse, int64, error) {
+	return r.DB.QueryAdminRoomReports(ctx, from, limit, backwards, userID, roomID)
 }
 
 // MSC3706 Partial State Join methods.
@@ -500,7 +547,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 	}
 
 	// Query local joined members to notify downstream components
-	ctx := context.Background()
+	ctx := r.ProcessContext.Context()
 	membershipsReq := &api.QueryMembershipsForRoomRequest{
 		RoomID:     roomID,
 		JoinedOnly: true,

@@ -17,6 +17,9 @@ import (
 const (
 	usageExitCode  = 2
 	requestTimeout = 30 * time.Second
+	// A homeserver's sync API gets this long to store the message after it
+	// was sent, or to catch up after a restart.
+	messageTimeout = 60 * time.Second
 	username       = "migration-test"
 	password       = "migration-test-password"
 	message        = "created by Dendrite HEAD"
@@ -94,6 +97,11 @@ func (c *client) seed() error {
 	if err != nil {
 		return fmt.Errorf("send migration message: %w", err)
 	}
+	// Sending returns once the roomserver accepts the event, before the sync
+	// API stores it. Stopping Dendrite earlier could lose the message.
+	if err = c.waitForMessage(room.RoomID); err != nil {
+		return fmt.Errorf("read messages before migration: %w", err)
+	}
 
 	fmt.Printf("seeded user %q and room %q\n", username, room.RoomID)
 	return nil
@@ -129,29 +137,40 @@ func (c *client) verify() error {
 		return fmt.Errorf("look up room after migration: %w", err)
 	}
 
-	var messages struct {
-		Chunk []struct {
-			Type    string `json:"type"`
-			Content struct {
-				Body string `json:"body"`
-			} `json:"content"`
-		} `json:"chunk"`
-	}
-	path := fmt.Sprintf(
-		"/_matrix/client/v3/rooms/%s/messages?dir=b&limit=100",
-		url.PathEscape(directory.RoomID),
-	)
-	err = c.request(http.MethodGet, path, nil, &messages)
-	if err != nil {
+	// The sync API may still be catching up when the client API starts.
+	if err = c.waitForMessage(directory.RoomID); err != nil {
 		return fmt.Errorf("read messages after migration: %w", err)
 	}
-	for _, event := range messages.Chunk {
-		if event.Type == "m.room.message" && event.Content.Body == message {
-			fmt.Printf("verified user, room, and message in %q\n", directory.RoomID)
-			return nil
+	fmt.Printf("verified user, room, and message in %q\n", directory.RoomID)
+	return nil
+}
+
+// waitForMessage polls the room's history until it holds the seeded message.
+func (c *client) waitForMessage(roomID string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/messages?dir=b&limit=100", url.PathEscape(roomID))
+	deadline := time.Now().Add(messageTimeout)
+	for {
+		var messages struct {
+			Chunk []struct {
+				Type    string `json:"type"`
+				Content struct {
+					Body string `json:"body"`
+				} `json:"content"`
+			} `json:"chunk"`
 		}
+		if err := c.request(http.MethodGet, path, nil, &messages); err != nil {
+			return err
+		}
+		for _, event := range messages.Chunk {
+			if event.Type == "m.room.message" && event.Content.Body == message {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("migration message was not found")
+		}
+		time.Sleep(time.Second)
 	}
-	return errors.New("migration message was not found")
 }
 
 func (c *client) request(method, path string, requestBody, responseBody any) error {

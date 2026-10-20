@@ -10,8 +10,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
@@ -125,5 +125,8 @@ func (t *OutputSendToDeviceConsumer) onMessage(ctx context.Context, msgs []*nats
 		return false
 	}
 
+	// The message is queued; the destination queue owns delivery from here.
+	// Refusing it would queue it again under a new message ID on every
+	// redelivery, which the remote server cannot deduplicate.
 	return true
 }

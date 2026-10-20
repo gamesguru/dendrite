@@ -10,7 +10,7 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/federationapi/storage/shared"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3/deltas"

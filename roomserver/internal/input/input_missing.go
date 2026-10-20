@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -31,6 +31,12 @@ type parsedRespState struct {
 	OutliersStored bool
 	StateEventIDs  []string
 }
+
+// errNoValidMissingEvents indicates that a /get_missing_events response had
+// events, but none could be decoded and verified. This is a bad remote
+// response, rather than a state-resolution failure for the room, so it should
+// not put the room on the missing-state cooldown.
+var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid events")
 
 func (p *parsedRespState) Events() []gomatrixserverlib.PDU {
 	eventsByID := make(map[string]gomatrixserverlib.PDU, len(p.AuthEvents)+len(p.StateEvents))
@@ -702,6 +708,9 @@ func (t *missingStateReq) getMissingEvents(ctx context.Context, e gomatrixserver
 		missingEvents = append(missingEvents, t.cacheAndReturn(ev))
 	}
 	logger.Debugf("get_missing_events returned %d events (%d passed signature checks)", len(missingResp.Events), len(missingEvents))
+	if len(missingResp.Events) > 0 && len(missingEvents) == 0 {
+		return nil, false, false, errNoValidMissingEvents
+	}
 
 	// topologically sort and sanity check that we are making forward progress
 	newEvents = gomatrixserverlib.ReverseTopologicalOrdering(
@@ -742,7 +751,7 @@ Event:
 
 	// If our backward extremity was not a known event to us then we obviously didn't
 	// close the gap.
-	if state, err := t.db.StateAtEventIDs(ctx, []string{earliestNewEvent.EventID()}); err != nil || len(state) == 0 && state[0].BeforeStateSnapshotNID == 0 {
+	if state, err := t.db.StateAtEventIDs(ctx, []string{earliestNewEvent.EventID()}); err != nil || len(state) == 0 || state[0].BeforeStateSnapshotNID == 0 {
 		return newEvents, false, false, nil
 	}
 

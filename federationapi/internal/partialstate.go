@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -94,11 +94,11 @@ func (w *PartialStateWorker) Start() error {
 
 	// Start worker goroutines
 	for i := 0; i < partialStateWorkerCount; i++ {
-		go w.worker(i)
+		w.process.Go(func() { w.worker(i) })
 	}
 
 	// Start retry goroutine
-	go w.retryLoop()
+	w.process.Go(w.retryLoop)
 
 	// Queue all rooms with partial state for processing
 	roomNIDs, err := w.rsAPI.GetAllPartialStateRooms(w.process.Context())
@@ -117,13 +117,7 @@ func (w *PartialStateWorker) Start() error {
 			step = (time.Second * 60) / time.Duration(max) //nolint:mnd
 		}
 
-		for _, roomNID := range roomNIDs {
-			roomNID := roomNID
-			time.AfterFunc(offset, func() {
-				w.QueueRoom(roomNID)
-			})
-			offset += step
-		}
+		process.Stagger(w.process.Context(), roomNIDs, offset, step, w.QueueRoom)
 	}
 
 	return nil
@@ -148,11 +142,19 @@ func (w *PartialStateWorker) QueueRoom(roomNID types.RoomNID) {
 
 // worker processes rooms from the channel.
 func (w *PartialStateWorker) worker(workerID int) {
-	for roomNID := range w.workerCh {
+	for {
+		var roomNID types.RoomNID
 		select {
 		case <-w.process.Context().Done():
 			return
-		default:
+		case room, ok := <-w.workerCh:
+			if !ok {
+				return
+			}
+			roomNID = room
+		}
+		if w.process.Context().Err() != nil {
+			return
 		}
 
 		if err := w.processRoom(roomNID); err != nil {

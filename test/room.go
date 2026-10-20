@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
@@ -41,6 +41,7 @@ type Room struct {
 	preset        Preset
 	guestCanJoin  bool
 	noPowerLevels bool
+	roomType      string
 	visibility    gomatrixserverlib.HistoryVisibility
 	creator       *User
 
@@ -125,6 +126,9 @@ func (r *Room) insertCreateEvents(t *testing.T) {
 	if !verImpl.PrivilegedCreators() {
 		createContent["creator"] = r.creator.ID
 	}
+	if r.roomType != "" {
+		createContent["type"] = r.roomType
+	}
 	createEv := r.CreateAndInsert(t, r.creator, spec.MRoomCreate, createContent, WithStateKey(""))
 	// For domainless room IDs (v12+), derive the room ID from the create event.
 	if verImpl.DomainlessRoomIDs() {
@@ -185,6 +189,9 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 		StateKey: mod.stateKey,
 		Depth:    int64(depth),
 		Unsigned: unsigned,
+		Redacts:  mod.redacts,
+
+		UnstableSticky: mod.sticky,
 	})
 	err = builder.SetContent(content)
 	if err != nil {
@@ -192,6 +199,9 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 	}
 	if depth > 1 {
 		builder.PrevEvents = []string{r.events[len(r.events)-1].EventID()}
+	}
+	if len(mod.prevEvents) > 0 {
+		builder.PrevEvents = mod.prevEvents
 	}
 
 	err = builder.AddAuthEvents(r.authEvents)
@@ -298,6 +308,13 @@ func RoomHistoryVisibility(vis gomatrixserverlib.HistoryVisibility) RoomModifier
 func RoomVersion(ver gomatrixserverlib.RoomVersion) RoomModifier {
 	return func(t *testing.T, r *Room) {
 		r.Version = ver
+	}
+}
+
+// RoomType sets the room's type in its create event, such as m.space.
+func RoomType(roomType string) RoomModifier {
+	return func(t *testing.T, r *Room) {
+		r.roomType = roomType
 	}
 }
 

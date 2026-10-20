@@ -21,18 +21,21 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/filestore"
 	"codefloe.com/pat-s/zendrite/mediaapi/thumbnailer"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 const mediaIDCharacters = "A-Za-z0-9_=-"
@@ -53,11 +56,17 @@ type downloadRequest struct {
 	MediaMetadata      *types.MediaMetadata
 	IsThumbnailRequest bool
 	ThumbnailSize      types.ThumbnailSize
-	Logger             *log.Entry
-	DownloadFilename   string
-	multipartResponse  bool // whether we need to return a multipart/mixed response (for requests coming in over federation)
-	fedClient          fclient.FederationClient
-	origin             spec.ServerName
+	// Animated is the animated parameter of a thumbnail request (MSC2705).
+	Animated          bool
+	Logger            *log.Entry
+	DownloadFilename  string
+	multipartResponse bool // whether we need to return a multipart/mixed response (for requests coming in over federation)
+	fedClient         fclient.FederationClient
+	origin            spec.ServerName
+	// pendingTimeout is how long to wait for media created with POST /create
+	// to be uploaded (timeout_ms).
+	pendingTimeout time.Duration
+	pendingUploads *PendingUploads
 }
 
 // Taken from: https://github.com/matrix-org/synapse/blob/c3627d0f99ed5a23479305dc2bd0e71ca25ce2b1/synapse/media/_base.py#L53C1-L84
@@ -94,6 +103,10 @@ var allowInlineTypes = map[types.ContentType]struct{}{
 	"audio/x-flac":    {},
 }
 
+// defaultContentType is the type of media that was stored without one, as
+// uploads before spec v1.12 and non-compliant remote servers did (MSC2701).
+const defaultContentType types.ContentType = "application/octet-stream"
+
 // Download implements GET /download and GET /thumbnail
 // Files from this server (i.e. origin == cfg.ServerName) are served directly
 // Files from remote servers (i.e. origin != cfg.ServerName) are cached locally.
@@ -112,6 +125,7 @@ func Download(
 	fedClient fclient.FederationClient,
 	activeRemoteRequests *types.ActiveRemoteRequests,
 	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	pendingUploads *PendingUploads,
 	isThumbnailRequest bool,
 	customFilename string,
 	federationRequest bool,
@@ -134,6 +148,8 @@ func Download(
 		multipartResponse: federationRequest,
 		origin:            cfg.Matrix.ServerName,
 		fedClient:         fedClient,
+		pendingTimeout:    pendingTimeout(req, cfg),
+		pendingUploads:    pendingUploads,
 	}
 
 	if dReq.IsThumbnailRequest {
@@ -150,6 +166,7 @@ func Download(
 			Height:       height,
 			ResizeMethod: strings.ToLower(req.FormValue("method")),
 		}
+		dReq.Animated = req.FormValue("animated") == "true"
 		dReq.Logger.WithFields(log.Fields{
 			"RequestedWidth":        dReq.ThumbnailSize.Width,
 			"RequestedHeight":       dReq.ThumbnailSize.Height,
@@ -168,6 +185,19 @@ func Download(
 		client, activeRemoteRequests, activeThumbnailGeneration,
 	)
 	if err != nil {
+		if errors.Is(err, errNotYetUploaded) {
+			// The content may still arrive, so this must not be cached.
+			w.Header().Set("Cache-Control", "no-store")
+			dReq.jsonErrorResponse(w, util.JSONResponse{
+				Code: http.StatusGatewayTimeout,
+				JSON: spec.MatrixError{ErrCode: "M_NOT_YET_UPLOADED", Err: "Content has not yet been uploaded"},
+			})
+			return
+		}
+		if errors.Is(err, errThumbnailBusy) {
+			dReq.jsonErrorResponse(w, httputil.LimitExceededResponse("Too many thumbnails are being generated", time.Second))
+			return
+		}
 		// If the file is not found, don't send the details to the client, be more generic.
 		if errors.Is(err, filestore.ErrNotFound) {
 			dReq.Logger.WithError(err).Error("failed to open file")
@@ -208,6 +238,9 @@ func (r *downloadRequest) jsonErrorResponse(w http.ResponseWriter, res util.JSON
 		}
 	}
 
+	for name, value := range res.Headers {
+		w.Header().Set(name, value)
+	}
 	// Set status code and write the body
 	w.WriteHeader(res.Code)
 	r.Logger.WithField("code", res.Code).Tracef("Responding (%d bytes)", len(resBytes))
@@ -270,6 +303,18 @@ func (r *downloadRequest) doDownload(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("db.GetMediaMetadata: %w", err)
+	}
+	if mediaMetadata != nil && mediaMetadata.IsPending() {
+		// The media ID was created with POST /create but its content hasn't
+		// been uploaded yet, so wait for it up to timeout_ms.
+		mediaMetadata, err = r.waitForPendingUpload(ctx, db, mediaMetadata)
+		if err != nil {
+			return nil, err
+		}
+		if mediaMetadata == nil {
+			// The media ID expired, so treat it as unknown.
+			return nil, nil
+		}
 	}
 	if mediaMetadata == nil {
 		if r.MediaMetadata.Origin == cfg.Matrix.ServerName {
@@ -346,12 +391,32 @@ func (r *downloadRequest) respondFromStore(
 	var responseFile io.ReadCloser
 	var responseMetadata *types.MediaMetadata
 	if r.IsThumbnailRequest {
-		thumbFile, thumbMetadata, resErr := r.getThumbnailFile(
-			ctx, r.MediaMetadata.Base64Hash, activeThumbnailGeneration, maxThumbnailGenerators,
-			db, dynamicThumbnails, thumbnailSizes, fileStore,
-		)
+		var thumbFile io.ReadCloser
+		var thumbMetadata *types.ThumbnailMetadata
+		// An animated image that fits the requested size answers a request
+		// for an animated thumbnail itself (MSC2705).
+		servesOriginal, resErr := r.animatedOriginalFits(ctx, fileStore)
 		if resErr != nil {
 			return nil, resErr
+		}
+		if !servesOriginal {
+			thumbFile, thumbMetadata, resErr = r.getThumbnailFile(
+				ctx, r.MediaMetadata.Base64Hash, activeThumbnailGeneration, maxThumbnailGenerators,
+				db, dynamicThumbnails, thumbnailSizes, fileStore,
+			)
+			if resErr != nil {
+				return nil, resErr
+			}
+		}
+		if thumbFile == nil && !servesOriginal && !r.Animated {
+			// An animated original must not answer a thumbnail request that
+			// did not ask for animation, so serve a still rendition (MSC2705).
+			thumbFile, thumbMetadata, resErr = r.getStaticThumbnailFile(
+				ctx, activeThumbnailGeneration, maxThumbnailGenerators, db, fileStore,
+			)
+			if resErr != nil {
+				return nil, resErr
+			}
 		}
 		if thumbFile == nil {
 			r.Logger.WithFields(log.Fields{
@@ -370,6 +435,7 @@ func (r *downloadRequest) respondFromStore(
 			responseFile = thumbFile
 			responseMetadata = thumbMetadata.MediaMetadata
 		}
+		w.Header().Set("Content-Disposition", thumbnailDisposition(responseContentType(responseMetadata)))
 	} else {
 		r.Logger.WithFields(log.Fields{
 			"UploadName":    r.MediaMetadata.UploadName,
@@ -389,7 +455,8 @@ func (r *downloadRequest) respondFromStore(
 	}
 	defer responseFile.Close()
 
-	w.Header().Set("Content-Type", string(responseMetadata.ContentType))
+	contentType := responseContentType(responseMetadata)
+	w.Header().Set("Content-Type", string(contentType))
 	w.Header().Set("Content-Length", strconv.FormatInt(int64(responseMetadata.FileSizeBytes), 10))
 	contentSecurityPolicy := "default-src 'none';" +
 		" script-src 'none';" +
@@ -404,7 +471,7 @@ func (r *downloadRequest) respondFromStore(
 		}
 	} else {
 		var written int64
-		written, err = multipartResponse(w, r, string(responseMetadata.ContentType), responseFile)
+		written, err = multipartResponse(w, r, string(contentType), responseFile)
 		if err != nil {
 			return nil, err
 		}
@@ -607,6 +674,82 @@ func (r *downloadRequest) getThumbnailFile(
 	return thumbFile, thumbnail, nil
 }
 
+// animatedOriginalFits reports whether the request asks for an animated
+// thumbnail of an animated image no larger than the requested size.
+func (r *downloadRequest) animatedOriginalFits(ctx context.Context, fileStore filestore.FileStore) (bool, error) {
+	if !r.Animated {
+		return false, nil
+	}
+	animated, width, height, err := r.animatedOriginal(ctx, fileStore)
+	if err != nil {
+		return false, err
+	}
+	return animated && width <= r.ThumbnailSize.Width && height <= r.ThumbnailSize.Height, nil
+}
+
+// animatedOriginal reports whether the original file is an animated image,
+// and its size if so.
+func (r *downloadRequest) animatedOriginal(ctx context.Context, fileStore filestore.FileStore) (animated bool, width, height int, err error) {
+	if !thumbnailer.MayAnimate(string(r.MediaMetadata.ContentType)) {
+		return false, 0, 0, nil
+	}
+	file, _, err := fileStore.Open(ctx, r.MediaMetadata.Base64Hash)
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("fileStore.Open: %w", err)
+	}
+	defer file.Close()
+	animated, width, height = thumbnailer.AnimatedImage(file)
+	return animated, width, height, nil
+}
+
+// errThumbnailBusy reports that a still thumbnail of an animated image could
+// not be generated because too many thumbnails are being generated.
+var errThumbnailBusy = errors.New("too many thumbnails are being generated")
+
+// getStaticThumbnailFile returns a still rendition of the original file at its
+// own size if the original is animated, or nil if it is not.
+func (r *downloadRequest) getStaticThumbnailFile(
+	ctx context.Context,
+	activeThumbnailGeneration *types.ActiveThumbnailGeneration,
+	maxThumbnailGenerators int,
+	db storage.Database,
+	fileStore filestore.FileStore,
+) (io.ReadCloser, *types.ThumbnailMetadata, error) {
+	animated, _, _, err := r.animatedOriginal(ctx, fileStore)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !animated {
+		return nil, nil, nil
+	}
+	size, busy, err := thumbnailer.GenerateStaticThumbnail(
+		ctx, r.MediaMetadata.Base64Hash, r.MediaMetadata,
+		activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("thumbnailer.GenerateStaticThumbnail: %w", err)
+	}
+	if busy {
+		return nil, nil, errThumbnailBusy
+	}
+	thumbnail, err := db.GetThumbnail(ctx, r.MediaMetadata.MediaID, r.MediaMetadata.Origin, size.Width, size.Height, size.ResizeMethod)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db.GetThumbnail: %w", err)
+	}
+	if thumbnail == nil {
+		return nil, nil, errors.New("static thumbnail was not stored")
+	}
+	thumbFile, thumbSize, err := fileStore.OpenThumbnail(ctx, r.MediaMetadata.Base64Hash, size)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fileStore.OpenThumbnail: %w", err)
+	}
+	if thumbSize != thumbnail.MediaMetadata.FileSizeBytes {
+		thumbFile.Close()
+		return nil, nil, errors.New("thumbnail file sizes in store and in database differ")
+	}
+	return thumbFile, thumbnail, nil
+}
+
 func (r *downloadRequest) generateThumbnail(
 	ctx context.Context,
 	mediaHash types.Base64Hash,
@@ -790,9 +933,9 @@ func (r *downloadRequest) fetchRemoteFileAndStoreMetadata(
 		return errors.New("failed to store file metadata in DB")
 	}
 
-	go func() { //nolint:contextcheck
+	process.Go(process.Lifetime(ctx), func() {
 		busy, err := thumbnailer.GenerateThumbnails(
-			context.Background(), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
+			process.Lifetime(ctx), r.MediaMetadata.Base64Hash, thumbnailSizes, r.MediaMetadata,
 			activeThumbnailGeneration, maxThumbnailGenerators, fileStore, db, r.Logger,
 		)
 		if err != nil {
@@ -801,8 +944,7 @@ func (r *downloadRequest) fetchRemoteFileAndStoreMetadata(
 		if busy {
 			r.Logger.Warn("Maximum number of active thumbnail generators reached. Skipping pre-generation.")
 		}
-	}()
-
+	})
 	r.Logger.WithFields(log.Fields{
 		"UploadName":    r.MediaMetadata.UploadName,
 		"Base64Hash":    r.MediaMetadata.Base64Hash,
@@ -866,11 +1008,24 @@ func (r *downloadRequest) fetchRemoteFile(
 	isAuthed := true
 	resp, err := r.fedClient.DownloadMedia(ctx, r.origin, r.MediaMetadata.Origin, string(r.MediaMetadata.MediaID))
 	if err != nil || (resp != nil && resp.StatusCode != http.StatusOK) {
+		// The remote created the media ID but hasn't received its content yet.
+		// Don't treat that as missing, so a later request tries again.
+		notYetUploaded := resp != nil && resp.StatusCode == http.StatusGatewayTimeout
+		if resp != nil {
+			resp.Body.Close()
+		}
 		isAuthed = false
 		// try again on the unauthed endpoint
 		// create request for remote file
 		resp, err = client.CreateMediaDownloadRequest(ctx, r.MediaMetadata.Origin, string(r.MediaMetadata.MediaID))
 		if err != nil || (resp != nil && resp.StatusCode != http.StatusOK) {
+			if resp != nil {
+				resp.Body.Close()
+				notYetUploaded = notYetUploaded || resp.StatusCode == http.StatusGatewayTimeout
+			}
+			if notYetUploaded {
+				return false, fmt.Errorf("file with media ID %q on %s: %w", r.MediaMetadata.MediaID, r.MediaMetadata.Origin, errNotYetUploaded)
+			}
 			if resp != nil && resp.StatusCode == http.StatusNotFound {
 				return false, fmt.Errorf("file with media ID %q does not exist on %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
 			}
@@ -886,8 +1041,17 @@ func (r *downloadRequest) fetchRemoteFile(
 	var contentLength int64
 	var reader io.Reader
 	var parseErr error
+	dispositionHeader := resp.Header.Get("Content-Disposition")
 	if isAuthed {
-		contentLength, reader, parseErr = parseMultipartResponse(r, resp, maxFileSizeBytes)
+		var part *mediaPart
+		part, parseErr = parseMultipartResponse(ctx, r, resp, maxFileSizeBytes)
+		if part != nil {
+			defer part.Close()
+			contentLength, reader = part.contentLength, part.reader
+			if part.disposition != "" {
+				dispositionHeader = part.disposition
+			}
+		}
 	} else {
 		// The reader returned here will be limited either by the Content-Length
 		// and/or the configured maximum media size.
@@ -905,7 +1069,6 @@ func (r *downloadRequest) fetchRemoteFile(
 
 	r.MediaMetadata.FileSizeBytes = types.FileSizeBytes(contentLength)
 
-	dispositionHeader := resp.Header.Get("Content-Disposition")
 	if _, params, e := mime.ParseMediaType(dispositionHeader); e == nil {
 		if params["filename"] != "" {
 			r.MediaMetadata.UploadName = types.Filename(params["filename"])
@@ -958,48 +1121,103 @@ func (r *downloadRequest) fetchRemoteFile(
 	return duplicate, nil
 }
 
-func parseMultipartResponse(r *downloadRequest, resp *http.Response, maxFileSizeBytes config.FileSizeBytes) (int64, io.Reader, error) {
+// mediaPart is the media of a multipart federation media response.
+type mediaPart struct {
+	contentLength int64
+	reader        io.Reader
+	// disposition is the Content-Disposition of the media, if any.
+	disposition string
+	// body is the response body of a followed redirect, closed by Close.
+	body io.Closer
+}
+
+// Close releases the response body of a followed redirect.
+func (p *mediaPart) Close() {
+	if p.body != nil {
+		p.body.Close()
+	}
+}
+
+func parseMultipartResponse(ctx context.Context, r *downloadRequest, resp *http.Response, maxFileSizeBytes config.FileSizeBytes) (*mediaPart, error) {
 	_, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if params["boundary"] == "" {
-		return 0, nil, fmt.Errorf("no boundary header found on media %s from %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
+		return nil, fmt.Errorf("no boundary header found on media %s from %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
 	}
 	mr := multipart.NewReader(resp.Body, params["boundary"])
 
 	// Get the first, JSON, part
 	p, err := mr.NextPart()
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer p.Close()
 
 	if p.Header.Get("Content-Type") != "application/json" {
-		return 0, nil, fmt.Errorf("first part of the response must be application/json")
+		return nil, fmt.Errorf("first part of the response must be application/json")
 	}
 	// Try to parse media meta information
 	meta := mediaMeta{}
 	if err = json.NewDecoder(p).Decode(&meta); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer p.Close()
 
 	// Get the actual media content
 	p, err = mr.NextPart()
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
-	redirect := p.Header.Get("Location")
-	if redirect != "" {
-		return 0, nil, fmt.Errorf("location header is not yet supported")
+	// The remote may point at the media instead of including it (MSC3860).
+	if location := p.Header.Get("Location"); location != "" {
+		return r.fetchMediaRedirect(ctx, location, maxFileSizeBytes)
 	}
 
 	contentLength, reader, err := r.GetContentLengthAndReader(p.Header.Get("Content-Length"), p, maxFileSizeBytes)
 	// For multipart requests, we need to get the Content-Type of the second part, which is the actual media
 	r.MediaMetadata.ContentType = types.ContentType(p.Header.Get("Content-Type"))
-	return contentLength, reader, err
+	if err != nil {
+		return nil, err
+	}
+	return &mediaPart{
+		contentLength: contentLength,
+		reader:        reader,
+		disposition:   p.Header.Get("Content-Disposition"),
+	}, nil
+}
+
+// responseContentType is the Content-Type to serve media with, which spec
+// v1.12 requires even for media that was stored without one (MSC2701).
+func responseContentType(metadata *types.MediaMetadata) types.ContentType {
+	if metadata.ContentType == "" {
+		return defaultContentType
+	}
+	return metadata.ContentType
+}
+
+// thumbnailDisposition returns the Content-Disposition of a thumbnail, which
+// must be inline and should name a file (MSC2702). An original served as its
+// own thumbnail stays an attachment unless its type is safe to show inline.
+func thumbnailDisposition(contentType types.ContentType) string {
+	filename := "thumbnail"
+	if ext, ok := thumbnailExtensions[contentType]; ok {
+		filename += ext
+	}
+	return fmt.Sprintf(`%s; filename="%s"`, contentDispositionFor(contentType), filename)
+}
+
+// thumbnailExtensions maps the image types thumbnails are served as to the
+// extension of their file name.
+var thumbnailExtensions = map[types.ContentType]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/gif":  ".gif",
+	"image/apng": ".apng",
+	"image/webp": ".webp",
+	"image/avif": ".avif",
 }
 
 // contentDispositionFor returns the Content-Disposition for a given

@@ -66,6 +66,9 @@ global:
 
 You do not need to configure the `storage_path` when using a standalone NATS Server instance.
 In the case that you are connecting to a multi-node NATS cluster, you can configure more than one address in the `addresses` field.
+Set `max_payload: 8MB` in the NATS server configuration to match the embedded server.
+Room events carry their state delta, so joins to large rooms can exceed the 1 MiB NATS default, and those events then fail to publish.
+Zendrite logs a warning at startup when the server advertises a smaller limit.
 
 ### Authenticating to NATS
 

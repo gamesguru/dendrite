@@ -41,10 +41,16 @@ const purgePreviousEvents2SQL = "" +
 const purgePublishedSQL = "" +
 	"DELETE FROM roomserver_published WHERE room_id = $1"
 
+const purgeClientTransactionsSQL = "" +
+	"DELETE FROM roomserver_client_transactions WHERE room_id = $1"
+
 const purgeRedactionsSQL = "" +
 	"DELETE FROM roomserver_redactions WHERE redaction_event_id = ANY(" +
 	"	SELECT event_id FROM roomserver_events WHERE room_nid = $1" +
 	")"
+
+const purgeAnnotationsSQL = "" +
+	"DELETE FROM roomserver_annotations WHERE room_nid = $1"
 
 const purgeRoomAliasesSQL = "" +
 	"DELETE FROM roomserver_room_aliases WHERE room_id = $1"
@@ -68,7 +74,9 @@ type purgeStatements struct {
 	purgePreviousEventsStmt       *sql.Stmt
 	purgePreviousEvents2Stmt      *sql.Stmt
 	purgePublishedStmt            *sql.Stmt
+	purgeClientTransactionsStmt   *sql.Stmt
 	purgeRedactionStmt            *sql.Stmt
+	purgeAnnotationsStmt          *sql.Stmt
 	purgeRoomAliasesStmt          *sql.Stmt
 	purgeRoomStmt                 *sql.Stmt
 	purgeStateBlockEntriesStmt    *sql.Stmt
@@ -84,9 +92,11 @@ func PreparePurgeStatements(db *sql.DB) (*purgeStatements, error) {
 		{&s.purgeInvitesStmt, purgeInvitesSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
 		{&s.purgePublishedStmt, purgePublishedSQL},
+		{&s.purgeClientTransactionsStmt, purgeClientTransactionsSQL},
 		{&s.purgePreviousEventsStmt, purgePreviousEventsSQL},
 		{&s.purgePreviousEvents2Stmt, purgePreviousEvents2SQL},
 		{&s.purgeRedactionStmt, purgeRedactionsSQL},
+		{&s.purgeAnnotationsStmt, purgeAnnotationsSQL},
 		{&s.purgeRoomAliasesStmt, purgeRoomAliasesSQL},
 		{&s.purgeRoomStmt, purgeRoomSQL},
 		{&s.purgeStateBlockEntriesStmt, purgeStateBlockEntriesSQL},
@@ -101,6 +111,7 @@ func (s *purgeStatements) PurgeRoom(
 	purgeByRoomID := []*sql.Stmt{
 		s.purgeRoomAliasesStmt,
 		s.purgePublishedStmt,
+		s.purgeClientTransactionsStmt,
 	}
 	for _, stmt := range purgeByRoomID {
 		execStmt := sqlutil.TxStmt(txn, stmt)
@@ -120,6 +131,7 @@ func (s *purgeStatements) PurgeRoom(
 		s.purgePreviousEventsStmt,  // Slow purge the remaining events
 		s.purgeEventJSONStmt,
 		s.purgeRedactionStmt,
+		s.purgeAnnotationsStmt,
 		s.purgeEventsStmt,
 		s.purgeRoomStmt,
 	}

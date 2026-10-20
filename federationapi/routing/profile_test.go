@@ -10,14 +10,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -37,7 +38,10 @@ type fakeUserAPI struct {
 }
 
 func (u *fakeUserAPI) QueryProfile(ctx context.Context, userID string) (*authtypes.Profile, error) {
-	return &authtypes.Profile{}, nil
+	return &authtypes.Profile{
+		DisplayName: "User",
+		Fields:      map[string]json.RawMessage{"m.tz": json.RawMessage(`"Europe/Berlin"`)},
+	}, nil
 }
 
 func TestHandleQueryProfile(t *testing.T) {
@@ -65,27 +69,46 @@ func TestHandleQueryProfile(t *testing.T) {
 			t.Fatal("unexpected public key type")
 		}
 		serverName := spec.ServerName(hex.EncodeToString(pk))
-		req := fclient.NewFederationRequest("GET", serverName, testOrigin, "/_matrix/federation/v1/query/profile?user_id="+url.QueryEscape("@user:"+string(testOrigin)))
-		type queryContent struct{}
-		content := queryContent{}
-		err := req.SetContent(content)
-		if err != nil {
-			t.Fatalf("Error: %s", err.Error())
-		}
-		err = req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
-		if err != nil {
-			t.Fatalf("Error: %s", err.Error())
-		}
-		httpReq, err := req.HTTPRequest()
-		if err != nil {
-			t.Fatalf("Error: %s", err.Error())
-		}
-		w := httptest.NewRecorder()
-		routers.Federation.ServeHTTP(w, httpReq)
 
-		res := w.Result()
-		data, _ := io.ReadAll(res.Body)
-		t.Log(string(data))
-		assert.Equal(t, 200, res.StatusCode)
+		for _, tc := range []struct {
+			field    string
+			wantCode int
+			wantBody string
+		}{
+			{"", 200, `{"displayname":"User","m.tz":"Europe/Berlin"}`},
+			{"displayname", 200, `{"displayname":"User"}`},
+			{"avatar_url", 200, `{}`},
+			{"m.tz", 200, `{"m.tz":"Europe/Berlin"}`},
+			{"org.example.unset", 404, `{"errcode":"M_NOT_FOUND","error":"The requested profile key does not exist."}`},
+		} {
+			t.Run("field="+tc.field, func(t *testing.T) {
+				path := "/_matrix/federation/v1/query/profile?user_id=" + url.QueryEscape("@user:"+string(testOrigin))
+				if tc.field != "" {
+					path += "&field=" + url.QueryEscape(tc.field)
+				}
+				req := fclient.NewFederationRequest("GET", serverName, testOrigin, path)
+				type queryContent struct{}
+				content := queryContent{}
+				err := req.SetContent(content)
+				if err != nil {
+					t.Fatalf("Error: %s", err.Error())
+				}
+				err = req.Sign(serverName, gomatrixserverlib.KeyID(keyID), sk)
+				if err != nil {
+					t.Fatalf("Error: %s", err.Error())
+				}
+				httpReq, err := req.HTTPRequest()
+				if err != nil {
+					t.Fatalf("Error: %s", err.Error())
+				}
+				w := httptest.NewRecorder()
+				routers.Federation.ServeHTTP(w, httpReq)
+
+				res := w.Result()
+				data, _ := io.ReadAll(res.Body)
+				assert.Equal(t, tc.wantCode, res.StatusCode)
+				assert.JSONEq(t, tc.wantBody, string(data))
+			})
+		}
 	})
 }

@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -190,9 +190,9 @@ var unconfirmedCrossSigningWarning sync.Once
 // cross-signing key replacement may be completed, consuming the signal that
 // completes it.
 //
-// When an admin token is configured the MAS admin routes are registered, so the
-// OIDC provider is able to call
-// POST /_synapse/admin/v1/users/{userId}/_allow_cross_signing_replacement_without_uia
+// When an admin token is configured the MAS provisioning routes are registered,
+// so the OIDC provider is able to call
+// POST /_synapse/mas/allow_cross_signing_reset
 // once the user confirmed the reset in the account management web UI. In that
 // configuration the provider confirmation is the only thing that completes the
 // stage: resubmitting a session this server issued is not sufficient, since any

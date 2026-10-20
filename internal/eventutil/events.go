@@ -10,16 +10,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+)
+
+const (
+	maxAuthEventIDs = 10
+	maxPrevEventIDs = 20
 )
 
 // ErrRoomNoExists is returned when trying to lookup the state of a room that
@@ -40,7 +45,7 @@ func (e ErrRoomNoExists) Unwrap() error {
 // API client provided. If also fills roomserver query API response (if provided)
 // in case the function calling FillBuilder needs to use it.
 // Returns ErrRoomNoExists if the state of the room could not be retrieved because
-// the room doesn't exist
+// the room doesn't exist.
 // Returns an error if something else went wrong.
 func QueryAndBuildEvent(
 	ctx context.Context,
@@ -61,18 +66,22 @@ func QueryAndBuildEvent(
 }
 
 // BuildEvent builds a Matrix event from the builder and QueryLatestEventsAndStateResponse
-// provided. Returns ErrRoomNoExists if queryRes indicates the room is not known
-// locally; without this check, an empty RoomVersion would surface as a confusing
-// unsupported-room-version error from gomatrixserverlib.GetRoomVersion.
+// provided.
 func BuildEvent(
 	ctx context.Context,
 	proto *gomatrixserverlib.ProtoEvent,
 	identity *fclient.SigningIdentity, evTime time.Time,
 	eventsNeeded *gomatrixserverlib.StateNeeded, queryRes *api.QueryLatestEventsAndStateResponse,
 ) (*types.HeaderedEvent, error) {
+	// Check that the room actually exists before looking at its room version:
+	// a room that doesn't exist locally has an empty RoomVersion, which would
+	// otherwise surface as a confusing "unsupported room version ''" error
+	// instead of the ErrRoomNoExists that callers (e.g. join handling) rely on
+	// to fall back to a federated join.
 	if !queryRes.RoomExists {
 		return nil, ErrRoomNoExists{}
 	}
+
 	verImpl, err := gomatrixserverlib.GetRoomVersion(queryRes.RoomVersion)
 	if err != nil {
 		return nil, err
@@ -87,7 +96,7 @@ func BuildEvent(
 	if verImpl.DomainlessRoomIDs() && builder.RoomID != "" && proto.Type == spec.MRoomCreate && proto.StateKey != nil && *proto.StateKey == "" {
 		return nil, gomatrixserverlib.EventValidationError{
 			Message: "cannot resend m.room.create event",
-			Code:    400, //nolint:mnd
+			Code:    http.StatusBadRequest,
 		}
 	}
 
@@ -135,9 +144,7 @@ func addPrevEventsToEvent(
 		return ErrRoomNoExists{}
 	}
 
-	// Clamp the depth to prevent overflow beyond the canonical JSON integer limit.
-	// This handles rooms where events have depth = MAX_SAFE_INTEGER (2^53-1).
-	builder.Depth = depth.Clamp(queryRes.Depth)
+	builder.Depth = queryRes.Depth
 
 	authEvents, _ := gomatrixserverlib.NewAuthEvents(nil)
 
@@ -181,11 +188,11 @@ func truncateAuthAndPrevEvents(auth, prev []string) (
 	truncAuth, truncPrev []string,
 ) {
 	truncAuth, truncPrev = auth, prev
-	if len(truncAuth) > 10 { //nolint:mnd
-		truncAuth = truncAuth[:10]
+	if len(truncAuth) > maxAuthEventIDs {
+		truncAuth = truncAuth[:maxAuthEventIDs]
 	}
-	if len(truncPrev) > 20 { //nolint:mnd
-		truncPrev = truncPrev[:20]
+	if len(truncPrev) > maxPrevEventIDs {
+		truncPrev = truncPrev[:maxPrevEventIDs]
 	}
 	return
 }

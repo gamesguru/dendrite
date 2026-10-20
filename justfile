@@ -5,7 +5,6 @@ default:
     @just --list
 
 install-dev-deps:
-		# @hash golangci-lint > /dev/null 2>&1 || go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 		@hash gofumpt > /dev/null 2>&1 || go install mvdan.cc/gofumpt@latest
 		@hash gci > /dev/null 2>&1 || go install github.com/daixiang0/gci@latest
 		@hash mockery > /dev/null 2>&1 || go install github.com/vektra/mockery/v3@latest
@@ -19,7 +18,7 @@ fmt: install-dev-deps
 
 # Run golangci-lint
 lint:
-    golangci-lint run
+    prek run golangci-lint --all-files
 
 # Run unit tests
 test:
@@ -47,6 +46,10 @@ build-bin name:
 
 # Run both lint and tests
 check: lint test
+
+# Run the MAS delegated-auth end-to-end integration test (requires Docker)
+mas-integration:
+    bash build/scripts/mas-integration-test.sh
 
 # Clean build artifacts
 clean:

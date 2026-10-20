@@ -8,14 +8,15 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/blevesearch/bleve/v2/search"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -25,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -115,6 +117,14 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 		nextBatch,
 		orderByTime,
 	)
+	if errors.Is(err, fulltext.ErrRecovering) {
+		// Partial results would look complete to the client; ask it to retry instead.
+		return util.JSONResponse{
+			Code:    http.StatusServiceUnavailable,
+			Headers: map[string]string{"Retry-After": "5"},
+			JSON:    spec.Unknown("Search is unavailable while the search index is rebuilt"),
+		}
+	}
 	if err != nil {
 		logrus.WithError(err).Error("failed to search fulltext")
 		return util.JSONResponse{
@@ -176,6 +186,19 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 		})
 	}
 
+	searcher, err := spec.NewUserID(device.UserID, true)
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	bundler, err := internal.NewRelationBundler(ctx, snapshot, rsAPI, *searcher)
+	if err != nil {
+		logrus.WithError(err).Error("failed to prepare relation bundles")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
 	stateForRooms := make(map[string][]synctypes.ClientEvent)
 	for _, event := range evs {
 		eventsBefore, eventsAfter, err := contextEvents(ctx, snapshot, event, roomFilter, searchReq)
@@ -229,18 +252,35 @@ func Search(req *http.Request, device *api.Device, syncDB storage.Database, fts 
 			util.GetLogger(req.Context()).WithError(err).WithField("senderID", event.SenderID()).Error("Failed converting to ClientEvent")
 			continue
 		}
+		if err = bundler.BundleEvent(ctx, event, clientEvent, synctypes.FormatAll); err != nil {
+			logrus.WithError(err).Error("failed to bundle relations")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+
+		before := synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
+			return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
+		})
+		after := synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
+			return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
+		})
+		// Only matching events carry bundles, so drop any that arrived over federation.
+		if err = internal.StripRelations(before); err == nil {
+			err = internal.StripRelations(after)
+		}
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
 
 		results = append(results, Result{
 			Context: SearchContextResponse{
-				Start: startToken.String(),
-				End:   endToken.String(),
-				EventsAfter: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsAfter), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
-					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
-				}),
-				EventsBefore: synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(eventsBefore), synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:contextcheck
-					return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
-				}),
-				ProfileInfo: profileInfos,
+				Start:        startToken.String(),
+				End:          endToken.String(),
+				EventsAfter:  after,
+				EventsBefore: before,
+				ProfileInfo:  profileInfos,
 			},
 			Rank:   eventScore[event.EventID()].Score,
 			Result: *clientEvent,

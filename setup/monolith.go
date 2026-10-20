@@ -7,8 +7,8 @@
 package setup
 
 import (
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 
 	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
 	"codefloe.com/pat-s/zendrite/clientapi"
@@ -17,6 +17,7 @@ import (
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/internal/transactions"
 	"codefloe.com/pat-s/zendrite/mediaapi"
@@ -44,6 +45,10 @@ type Monolith struct {
 	UserAPI       userapi.UserInternalAPI
 	RelayAPI      relayAPI.RelayInternalAPI
 
+	// Owner is set only in HA, where components that perform effects the
+	// database cannot reject consult it before acting. It is nil in standalone.
+	Owner ownership.Owner
+
 	// Optional
 	ExtPublicRoomsProvider   api.ExtraPublicRoomsProvider
 	ExtUserDirectoryProvider userapi.QuerySearchProfilesAPI
@@ -64,15 +69,15 @@ func (m *Monolith) AddAllPublicRoutes(
 		userDirectoryProvider = m.UserAPI
 	}
 	clientapi.AddPublicRoutes(
-		processCtx, routers, cfg, natsInstance, m.FedClient, m.RoomserverAPI, m.AppserviceAPI, transactions.New(),
+		processCtx, routers, cfg, natsInstance, m.FedClient, m.RoomserverAPI, m.AppserviceAPI, transactions.New(processCtx.Context()),
 		m.FederationAPI, m.UserAPI, userDirectoryProvider,
 		m.ExtPublicRoomsProvider, caches, enableMetrics,
 	)
 	federationapi.AddPublicRoutes(
 		processCtx, routers, cfg, natsInstance, m.UserAPI, m.FedClient, m.KeyRing, m.RoomserverAPI, m.FederationAPI, enableMetrics,
 	)
-	mediaapi.AddPublicRoutes(routers, cm, cfg, m.UserAPI, m.Client, m.FedClient, m.KeyRing)
-	syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, m.UserAPI, m.RoomserverAPI, caches, enableMetrics)
+	mediaapi.AddPublicRoutes(routers, cm, cfg, m.UserAPI, m.Client, m.FedClient, m.KeyRing, m.Owner, processCtx.Context())
+	syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, m.UserAPI, m.RoomserverAPI, caches, enableMetrics, m.FedClient, m.KeyRing)
 
 	if m.RelayAPI != nil {
 		relayapi.AddPublicRoutes(routers, cfg, m.KeyRing, m.RelayAPI)

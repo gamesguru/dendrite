@@ -10,8 +10,8 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -45,6 +45,7 @@ const deleteQueuePDUSQL = "" +
 const selectQueuePDUsSQL = "" +
 	"SELECT json_nid FROM federationsender_queue_pdus" +
 	" WHERE server_name = $1" +
+	" ORDER BY json_nid" +
 	" LIMIT $2"
 
 const selectQueuePDUReferenceJSONCountSQL = "" +

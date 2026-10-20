@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -206,9 +207,11 @@ func InviteV1(
 		}
 	}
 	var strippedState []gomatrixserverlib.InviteStrippedState
-	if jsonErr := json.Unmarshal(event.Unsigned(), &strippedState); jsonErr != nil {
-		// just warn, they may not have added any.
-		util.GetLogger(httpReq.Context()).Warnf("failed to extract stripped state from invite event")
+	if inviteRoomState := gjson.GetBytes(event.Unsigned(), "invite_room_state"); inviteRoomState.IsArray() {
+		if jsonErr := json.Unmarshal([]byte(inviteRoomState.Raw), &strippedState); jsonErr != nil {
+			// just warn, they may not have added any.
+			util.GetLogger(httpReq.Context()).Warnf("failed to extract stripped state from invite event")
+		}
 	}
 
 	if event.StateKey() == nil {
@@ -293,9 +296,7 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 		switch matrixErr.ErrCode {
 		case spec.ErrorForbidden:
 			code = http.StatusForbidden
-		case spec.ErrorUnsupportedRoomVersion:
-			fallthrough // http.StatusBadRequest
-		case spec.ErrorBadJSON:
+		case spec.ErrorUnsupportedRoomVersion, spec.ErrorBadJSON, spec.ErrorMissingParam:
 			code = http.StatusBadRequest
 		}
 

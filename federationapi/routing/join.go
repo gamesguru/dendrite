@@ -13,9 +13,9 @@ import (
 	"sort"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -91,7 +91,8 @@ func MakeJoin(
 	}
 
 	roomQuerier := api.JoinRoomQuerier{
-		Roomserver: rsAPI,
+		TargetRoomID: roomID.String(),
+		Roomserver:   rsAPI,
 	}
 
 	senderIDPtr, err := rsAPI.QuerySenderIDForUser(httpReq.Context(), roomID, userID)
@@ -127,6 +128,7 @@ func MakeJoin(
 		BuildEventTemplate: createJoinTemplate,
 	}
 	response, internalErr := gomatrixserverlib.HandleMakeJoin(input)
+	internalErr = roomQuerier.RestrictedJoinError(internalErr)
 	if internalErr != nil {
 		var internalServerErr spec.InternalServerError
 		var matrixErr spec.MatrixError
@@ -146,7 +148,7 @@ func MakeJoin(
 				code = http.StatusForbidden
 			case spec.ErrorNotFound:
 				code = http.StatusNotFound
-			case spec.ErrorUnableToAuthoriseJoin, spec.ErrorBadJSON:
+			case api.ErrorUnableToAuthoriseJoin, api.ErrorUnableToGrantJoin, spec.ErrorBadJSON:
 				code = http.StatusBadRequest
 			}
 

@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"math"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -198,8 +199,8 @@ func (d *DatabaseTransaction) SelectLatestUserReceiptsForConnection(ctx context.
 	return d.Receipts.SelectLatestUserReceiptsForConnection(ctx, d.txn, connectionKey, roomIDs, userID)
 }
 
-func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error {
-	return d.Receipts.UpsertConnectionReceipt(ctx, d.txn, connectionKey, roomID, receiptType, userID, eventID, timestamp)
+func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error {
+	return d.Receipts.UpsertConnectionReceipt(ctx, d.txn, connectionKey, roomID, receiptType, userID, eventID, threadID, timestamp)
 }
 
 func (d *DatabaseTransaction) DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error {
@@ -242,6 +243,12 @@ func (d *DatabaseTransaction) GetStateEvent(
 	ctx context.Context, roomID, evType, stateKey string,
 ) (*rstypes.HeaderedEvent, error) {
 	return d.CurrentRoomState.SelectStateEvent(ctx, d.txn, roomID, evType, stateKey)
+}
+
+func (d *DatabaseTransaction) GetStateEvents(
+	ctx context.Context, roomID string, keys []gomatrixserverlib.StateKeyTuple,
+) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error) {
+	return d.CurrentRoomState.SelectStateEvents(ctx, d.txn, roomID, keys)
 }
 
 func (d *DatabaseTransaction) GetStateEventsForRoom(
@@ -401,7 +408,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 		}
 		return nil, nil, err
 	}
-	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
@@ -422,7 +429,7 @@ func (d *DatabaseTransaction) GetStateDeltas(
 			}
 			return nil, nil, err
 		}
-		stateFiltered, err = d.fetchStateEvents(ctx, d.txn, stateNeededFiltered, eventMapFiltered)
+		stateFiltered, err = d.fetchStateEvents(ctx, d.txn, stateNeededFiltered, eventMapFiltered, rsAPI)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil, nil
@@ -521,6 +528,27 @@ func (d *DatabaseTransaction) GetStateDeltas(
 	return deltas, joinedRoomIDs, nil
 }
 
+// RoomStateDelta returns the state changes of one room within the range: the
+// state events added in it that are still part of the room state at its end.
+// The state filter applies as for GetStateDeltas.
+func (d *DatabaseTransaction) RoomStateDelta(
+	ctx context.Context, device *userapi.Device, roomID string,
+	r types.Range, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	if isStatefilterEmpty(stateFilter) {
+		stateFilter = nil
+	}
+	stateNeeded, eventMap, err := d.OutputEvents.SelectStateInRange(ctx, d.txn, r, stateFilter, []string{roomID})
+	if err != nil {
+		return nil, err
+	}
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, state[roomID], rsAPI), nil
+}
+
 // GetStateDeltasForFullStateSync is a variant of getStateDeltas used for /sync
 // requests with full_state=true.
 // Fetches full state for all joined rooms and uses selectStateInRange to get
@@ -583,7 +611,7 @@ func (d *DatabaseTransaction) GetStateDeltasForFullStateSync(
 		}
 		return nil, nil, err
 	}
-	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap)
+	state, err := d.fetchStateEvents(ctx, d.txn, stateNeeded, eventMap, rsAPI)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, nil
@@ -724,6 +752,9 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 		if err := d.Receipts.PurgeReceipts(ctx, txn, roomID); err != nil {
 			return fmt.Errorf("failed to purge receipts: %w", err)
 		}
+		if err := d.StickyEvents.PurgeStickyEvents(ctx, txn, roomID); err != nil {
+			return fmt.Errorf("failed to purge sticky events: %w", err)
+		}
 		return nil
 	})
 }
@@ -742,9 +773,37 @@ func (d *Database) PurgeRoomState(
 	})
 }
 
+func (d *Database) CurrentStateEventIDs(
+	ctx context.Context, roomID string,
+) ([]string, error) {
+	return d.CurrentRoomState.SelectRoomStateEventIDs(ctx, nil, roomID)
+}
+
 func (d *DatabaseTransaction) MaxStreamPositionForRelations(ctx context.Context) (types.StreamPosition, error) {
 	id, err := d.Relations.SelectMaxRelationID(ctx, d.txn)
 	return types.StreamPosition(id), err
+}
+
+func (d *DatabaseTransaction) MaxStreamPositionForStickyEvents(ctx context.Context) (types.StreamPosition, error) {
+	id, err := d.StickyEvents.SelectMaxStickyEventID(ctx, d.txn)
+	return types.StreamPosition(id), err
+}
+
+// StickyEventsInRooms returns the MSC4354 sticky events in the given rooms
+// that are unexpired at now, with stream positions after from and up to and
+// including to, in stream order. A limit of zero or less returns them all.
+func (d *DatabaseTransaction) StickyEventsInRooms(
+	ctx context.Context, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int,
+) ([]types.StickyEvent, error) {
+	return d.StickyEvents.SelectStickyEventsInRooms(ctx, d.txn, roomIDs, from, to, now, limit)
+}
+
+// StickyEventsByID returns those of the given events that are unexpired
+// MSC4354 sticky events at now.
+func (d *DatabaseTransaction) StickyEventsByID(
+	ctx context.Context, eventIDs []string, now spec.Timestamp,
+) ([]types.StickyEvent, error) {
+	return d.StickyEvents.SelectStickyEventsByID(ctx, d.txn, eventIDs, now)
 }
 
 func isStatefilterEmpty(filter *synctypes.StateFilter) bool {
@@ -853,4 +912,24 @@ func (d *DatabaseTransaction) UnPartialStatedRoomsInRange(
 ) ([]string, error) {
 	roomIDs, _, err := d.UnPartialStatedRooms.SelectUnPartialStatedRoomsInRange(ctx, d.txn, userID, r)
 	return roomIDs, err
+}
+
+// ThreadRelations returns a bounded batch of thread replies in topology order.
+func (d *DatabaseTransaction) ThreadRelations(ctx context.Context, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error) {
+	return d.Relations.SelectThreadRelations(ctx, d.txn, roomID, watermark, before, limit)
+}
+
+// RelationsInTopologicalRange returns a page of a parent's children in topology order.
+func (d *DatabaseTransaction) RelationsInTopologicalRange(ctx context.Context, roomID, eventID, relType, eventType string, maxDepth int, from, to types.TopologyToken, backwards bool, limit int) ([]types.TopologicalRelation, error) {
+	return d.Relations.SelectRelationsInTopologicalRange(ctx, d.txn, roomID, eventID, relType, eventType, maxDepth, from, to, backwards, limit)
+}
+
+// RelationTypesFor reports which of relTypes have children for each parent event, up to the relation watermark.
+func (d *DatabaseTransaction) RelationTypesFor(ctx context.Context, roomID string, eventIDs, relTypes []string, watermark types.StreamPosition) (map[string]map[string]bool, error) {
+	return d.Relations.SelectRelationTypesForEvents(ctx, d.txn, roomID, eventIDs, relTypes, watermark)
+}
+
+// EventsByTimestamp returns candidates in timestamp order using an exclusive cursor after the first batch.
+func (d *DatabaseTransaction) EventsByTimestamp(ctx context.Context, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
+	return d.OutputEvents.SelectEventsByTimestamp(ctx, d.txn, roomID, timestamp, afterID, backwards, limit)
 }

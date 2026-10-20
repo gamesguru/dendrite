@@ -8,7 +8,9 @@ package internal
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +18,8 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -171,7 +173,8 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 func postRegisterJoinRooms(cfg *config.UserAPI, acc *api.Account, rsAPI rsapi.UserRoomserverAPI) {
 	// POST register behavior: check if the user is a normal user.
 	// If the user is a normal user, add user to room specified in the configuration "auto_join_rooms".
-	if acc.AccountType != api.AccountTypeAppService && acc.AppServiceID == "" {
+	// Call guests only join the rooms of the calls they are given links to.
+	if acc.AccountType != api.AccountTypeAppService && acc.AccountType != api.AccountTypeCallGuest && acc.AppServiceID == "" {
 		for room := range cfg.AutoJoinRooms {
 			userID := userutil.MakeUserID(acc.Localpart, cfg.Matrix.ServerName)
 			err := addUserToRoom(context.Background(), rsAPI, cfg.AutoJoinRooms[room], acc.Localpart, userID)
@@ -317,6 +320,12 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 	if err != nil {
 		return err
 	}
+	if req.RefreshToken != "" {
+		if err = a.DB.SetDeviceRefreshToken(ctx, req.Localpart, serverName, dev.ID, req.AccessTokenExpiresTS, hashRefreshToken(req.RefreshToken)); err != nil {
+			return err
+		}
+		dev.AccessTokenExpiresTS = req.AccessTokenExpiresTS
+	}
 	res.DeviceCreated = true
 	res.Device = dev
 	if req.NoDeviceListUpdate || isExisting {
@@ -324,6 +333,42 @@ func (a *UserInternalAPI) PerformDeviceCreation(ctx context.Context, req *api.Pe
 	}
 	// create empty device keys and upload them to trigger device list changes
 	return a.deviceListUpdate(dev.UserID, []string{dev.ID}, req.FromRegistration) //nolint:contextcheck
+}
+
+// PerformRefreshToken replaces the access and refresh tokens of the device
+// that holds the given refresh token (MSC2918).
+func (a *UserInternalAPI) PerformRefreshToken(ctx context.Context, req *api.PerformRefreshTokenRequest, res *api.PerformRefreshTokenResponse) error {
+	refreshTokenHash := hashRefreshToken(req.RefreshToken)
+	// A locked account cannot obtain new access tokens (MSC3939). Check
+	// before rotating, so the client keeps its current tokens.
+	localpart, domain, err := a.DB.GetRefreshTokenOwner(ctx, refreshTokenHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	acc, err := a.DB.GetAccountByLocalpart(ctx, localpart, domain)
+	if err != nil {
+		return err
+	}
+	if acc.Locked {
+		res.Locked = true
+		return nil
+	}
+	dev, err := a.DB.RefreshDeviceTokens(ctx, refreshTokenHash, req.AccessToken, req.AccessTokenExpiresTS, hashRefreshToken(req.NewRefreshToken))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	res.Device = dev
+	return err
+}
+
+// hashRefreshToken returns the form of a refresh token that is stored, so a
+// database leak does not reveal usable refresh tokens.
+func hashRefreshToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.PerformDeviceDeletionRequest, res *api.PerformDeviceDeletionResponse) error {
@@ -589,6 +634,19 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 		}
 		return err
 	}
+	if device.AccessTokenExpiresTS != 0 && time.Now().UnixMilli() >= device.AccessTokenExpiresTS {
+		// The client must use its refresh token to get a new access token.
+		res.SoftLogout = true
+		return nil
+	}
+	if device.PrevRefreshTokenValid {
+		// The client received its new tokens, so the refresh token it used
+		// to obtain them can no longer be repeated.
+		if err = a.DB.ClearPrevRefreshToken(ctx, req.AccessToken); err != nil {
+			return err
+		}
+		device.PrevRefreshTokenValid = false
+	}
 	localPart, domain, err := gomatrixserverlib.SplitID('@', device.UserID)
 	if err != nil {
 		return err
@@ -601,6 +659,8 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 		return err
 	}
 	device.AccountType = acc.AccountType
+	device.Locked = acc.Locked
+	device.Suspended = acc.Suspended
 	res.Device = device
 	return nil
 }
@@ -608,6 +668,17 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 func (a *UserInternalAPI) QueryAccountByLocalpart(ctx context.Context, req *api.QueryAccountByLocalpartRequest, res *api.QueryAccountByLocalpartResponse) (err error) {
 	res.Account, err = a.DB.GetAccountByLocalpart(ctx, req.Localpart, req.ServerName)
 	return
+}
+
+// PerformAccountLock locks or unlocks a local account (MSC3939). Sessions are
+// kept either way, so an unlocked user carries on without logging in again.
+func (a *UserInternalAPI) PerformAccountLock(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error {
+	return a.DB.SetAccountLocked(ctx, localpart, serverName, locked)
+}
+
+// PerformAccountSuspension suspends or unsuspends a local account (MSC3823).
+func (a *UserInternalAPI) PerformAccountSuspension(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error {
+	return a.DB.SetAccountSuspended(ctx, localpart, serverName, suspended)
 }
 
 // IsAccountDeactivated reports whether the given local account is deactivated.
@@ -694,9 +765,69 @@ func (a *UserInternalAPI) PerformAccountDeactivation(ctx context.Context, req *a
 		return err
 	}
 
+	if req.Erase {
+		if err = a.eraseAccount(ctx, req.Localpart, serverName); err != nil {
+			return err
+		}
+	}
+
 	err = a.DB.DeactivateAccount(ctx, req.Localpart, serverName)
 	res.AccountDeactivated = err == nil
 	return err
+}
+
+// eraseAccount handles an erasure request (MSC4025). The roomserver serves
+// the user's events redacted from now on to anyone who was not in the room
+// when they were sent; no redaction events are sent. The user's account data
+// and 3PIDs are deleted.
+func (a *UserInternalAPI) eraseAccount(ctx context.Context, localpart string, serverName spec.ServerName) error {
+	userID, err := spec.NewUserID(fmt.Sprintf("@%s:%s", localpart, serverName), true)
+	if err != nil {
+		return err
+	}
+	if err = a.RSAPI.PerformUserErasure(ctx, *userID, true); err != nil {
+		return fmt.Errorf("a.RSAPI.PerformUserErasure: %w", err)
+	}
+	if err = a.DB.RemoveAllAccountData(ctx, localpart, serverName); err != nil {
+		return fmt.Errorf("a.DB.RemoveAllAccountData: %w", err)
+	}
+	threepids, err := a.DB.GetThreePIDsForLocalpart(ctx, localpart, serverName)
+	if err != nil {
+		return fmt.Errorf("a.DB.GetThreePIDsForLocalpart: %w", err)
+	}
+	for _, threepid := range threepids {
+		if err = a.DB.RemoveThreePIDAssociation(ctx, threepid.Address, threepid.Medium, localpart, serverName); err != nil {
+			return fmt.Errorf("a.DB.RemoveThreePIDAssociation: %w", err)
+		}
+	}
+	return nil
+}
+
+// PerformAccountReactivation re-enables login for a previously deactivated
+// account. It fails with sql.ErrNoRows when the account does not exist so
+// callers can distinguish "unknown user" from a failed update.
+func (a *UserInternalAPI) PerformAccountReactivation(ctx context.Context, req *api.PerformAccountReactivationRequest, res *api.PerformAccountReactivationResponse) error {
+	serverName := req.ServerName
+	if serverName == "" {
+		serverName = a.Config.Matrix.ServerName
+	}
+	if !a.Config.Matrix.IsLocalServerName(serverName) {
+		return fmt.Errorf("server name %q not locally configured", serverName)
+	}
+
+	if err := a.DB.ReactivateAccount(ctx, req.Localpart, serverName); err != nil {
+		return err
+	}
+	// A reactivated user is no longer erased, as in Synapse.
+	userID, err := spec.NewUserID(fmt.Sprintf("@%s:%s", req.Localpart, serverName), true)
+	if err != nil {
+		return err
+	}
+	if err = a.RSAPI.PerformUserErasure(ctx, *userID, false); err != nil {
+		return fmt.Errorf("a.RSAPI.PerformUserErasure: %w", err)
+	}
+	res.AccountReactivated = true
+	return nil
 }
 
 // PerformOpenIDTokenCreation creates a new token that a relying party uses to authenticate a user.
@@ -789,6 +920,21 @@ func (a *UserInternalAPI) uploadBackupKeys(ctx context.Context, req *api.Perform
 	return res, nil
 }
 
+func (a *UserInternalAPI) DeleteBackupKeys(ctx context.Context, req *api.DeleteBackupKeysRequest) (*api.PerformKeyBackupResponse, error) {
+	res := &api.PerformKeyBackupResponse{Version: req.Version}
+	count, etag, err := a.DB.DeleteBackupKeys(ctx, req.Version, req.UserID, req.RoomID, req.SessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+			return res, nil
+		}
+		return res, fmt.Errorf("failed to delete keys: %w", err)
+	}
+	res.Exists = true
+	res.KeyCount = count
+	res.KeyETag = etag
+	return res, nil
+}
+
 func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyBackupRequest) (*api.QueryKeyBackupResponse, error) {
 	res := &api.QueryKeyBackupResponse{}
 	version, algorithm, authData, etag, deleted, err := a.DB.GetKeyBackup(ctx, req.UserID, req.Version)
@@ -824,7 +970,7 @@ func (a *UserInternalAPI) QueryKeyBackup(ctx context.Context, req *api.QueryKeyB
 }
 
 func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.QueryNotificationsRequest, res *api.QueryNotificationsResponse) error {
-	if req.Limit == 0 || req.Limit > 1000 {
+	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 1000
 	}
 
@@ -849,8 +995,9 @@ func (a *UserInternalAPI) QueryNotifications(ctx context.Context, req *api.Query
 		notifs = []*api.Notification{}
 	}
 	res.Notifications = notifs
+	res.NextToken = ""
 	if lastID >= 0 {
-		res.NextToken = strconv.FormatInt(lastID+1, 10)
+		res.NextToken = strconv.FormatInt(lastID, 10)
 	}
 	return nil
 }
@@ -965,6 +1112,14 @@ func (a *UserInternalAPI) SetDisplayName(ctx context.Context, localpart string, 
 	return a.DB.SetDisplayName(ctx, localpart, serverName, displayName)
 }
 
+func (a *UserInternalAPI) SetProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error {
+	return a.DB.SetProfileField(ctx, localpart, serverName, fieldName, value)
+}
+
+func (a *UserInternalAPI) DeleteProfileField(ctx context.Context, localpart string, serverName spec.ServerName, fieldName string) error {
+	return a.DB.DeleteProfileField(ctx, localpart, serverName, fieldName)
+}
+
 func (a *UserInternalAPI) QueryLocalpartForThreePID(ctx context.Context, req *api.QueryLocalpartForThreePIDRequest, res *api.QueryLocalpartForThreePIDResponse) error {
 	localpart, domain, err := a.DB.GetLocalpartForThreePID(ctx, req.ThreePID, req.Medium)
 	if err != nil {
@@ -985,7 +1140,7 @@ func (a *UserInternalAPI) QueryThreePIDsForLocalpart(ctx context.Context, req *a
 }
 
 func (a *UserInternalAPI) PerformForgetThreePID(ctx context.Context, req *api.PerformForgetThreePIDRequest, res *struct{}) error {
-	return a.DB.RemoveThreePIDAssociation(ctx, req.ThreePID, req.Medium)
+	return a.DB.RemoveThreePIDAssociation(ctx, req.ThreePID, req.Medium, req.Localpart, req.ServerName)
 }
 
 func (a *UserInternalAPI) PerformSaveThreePIDAssociation(ctx context.Context, req *api.PerformSaveThreePIDAssociationRequest, res *struct{}) error {

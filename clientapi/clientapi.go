@@ -7,7 +7,7 @@
 package clientapi
 
 import (
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 
 	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
 	"codefloe.com/pat-s/zendrite/clientapi/api"
@@ -53,11 +53,14 @@ func AddPublicRoutes(
 		ServerName:             cfg.Global.ServerName,
 	}
 
-	routing.Setup(
+	delayedEvents := routing.Setup(
 		routers,
 		cfg, rsAPI, asAPI,
 		userAPI, userDirectoryProvider, federation,
 		syncProducer, transactionsCache, fsAPI,
-		extRoomsProvider, caches, natsClient, enableMetrics,
+		extRoomsProvider, caches, natsClient, enableMetrics, processContext.Context(),
 	)
+	// MSC4140: send the delayed events that become due, including those
+	// scheduled before this process started.
+	delayedEvents.Start(processContext.Context())
 }

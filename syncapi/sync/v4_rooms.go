@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -50,7 +50,8 @@ func (rp *RequestPool) GetRoomsForUser(ctx context.Context, userID string, membe
 	// IMPORTANT: Invites are stored in a separate table (syncapi_invite_events)
 	// RoomIDsWithMembership only queries syncapi_current_room_state
 	// We need to query both tables for invites (v3 sync uses InviteStreamProvider for this)
-	if membership == "invite" || membership == spec.Invite {
+	// Knocks share the invites table and are told apart by the event's membership.
+	if membership == spec.Invite || membership == spec.Knock {
 		// Query the invites table using InviteEventsInRange
 		// Use range from 0 to max to get all current invites
 		maxID, maxIDErr := snapshot.MaxStreamPositionForInvites(ctx)
@@ -68,7 +69,10 @@ func (rp *RequestPool) GetRoomsForUser(ctx context.Context, userID string, membe
 				logrus.WithError(err).Warn("Failed to query invite events")
 			} else {
 				// Extract room IDs from active invites (not retired)
-				for roomID := range invites {
+				for roomID, event := range invites {
+					if eventMembership, _ := event.Membership(); eventMembership != membership {
+						continue
+					}
 					// Only include if not in retired map
 					if _, isRetired := retired[roomID]; !isRetired {
 						roomIDs = append(roomIDs, roomID)

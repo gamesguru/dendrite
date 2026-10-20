@@ -9,8 +9,8 @@ package storage
 import (
 	"context"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -24,6 +24,8 @@ import (
 )
 
 type DatabaseTransaction interface {
+	// EventsByTimestamp returns candidates in timestamp order, including backfilled events.
+	EventsByTimestamp(ctx context.Context, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error)
 	sqlutil.Transaction
 	SharedUsers
 
@@ -35,10 +37,21 @@ type DatabaseTransaction interface {
 	MaxStreamPositionForNotificationData(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForPresence(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForRelations(ctx context.Context) (types.StreamPosition, error)
+	MaxStreamPositionForStickyEvents(ctx context.Context) (types.StreamPosition, error)
+	// StickyEventsInRooms returns the MSC4354 sticky events in the given rooms
+	// that are unexpired at now, with stream positions after from and up to
+	// and including to, in stream order. A limit of zero or less returns them all.
+	StickyEventsInRooms(ctx context.Context, roomIDs []string, from, to types.StreamPosition, now spec.Timestamp, limit int) ([]types.StickyEvent, error)
+	// StickyEventsByID returns those of the given events that are unexpired
+	// MSC4354 sticky events at now.
+	StickyEventsByID(ctx context.Context, eventIDs []string, now spec.Timestamp) ([]types.StickyEvent, error)
 
 	CurrentState(ctx context.Context, roomID string, stateFilterPart *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	GetStateDeltasForFullStateSync(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
 	GetStateDeltas(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
+	// RoomStateDelta returns the state events of one room added within the
+	// range that are still part of its state at the end of the range.
+	RoomStateDelta(ctx context.Context, device *userapi.Device, roomID string, r types.Range, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	RoomIDsWithMembership(ctx context.Context, userID string, membership string) ([]string, error)
 	// KickedRoomIDs returns rooms where the user was kicked (leave membership where sender != user).
 	// Per MSC4186/Synapse behavior, kicked rooms should be included in the sliding sync room list.
@@ -62,7 +75,7 @@ type DatabaseTransaction interface {
 	RoomReceiptsAfter(ctx context.Context, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error)
 	// Per-connection receipt tracking for sliding sync (MSC4186)
 	SelectLatestUserReceiptsForConnection(ctx context.Context, connectionKey int64, roomIDs []string, userID string) ([]types.OutputReceiptEvent, error)
-	UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID string, timestamp spec.Timestamp) error
+	UpsertConnectionReceipt(ctx context.Context, connectionKey int64, roomID, receiptType, userID, eventID, threadID string, timestamp spec.Timestamp) error
 	DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error
 	DeleteConnectionReceiptsForRoom(ctx context.Context, connectionKey int64, roomID string) error
 	// AllJoinedUsersInRooms returns a map of room ID to a list of all joined user IDs.
@@ -81,6 +94,9 @@ type DatabaseTransaction interface {
 	// If no event could be found, returns nil
 	// If there was an issue during the retrieval, returns an error
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	// GetStateEvents is GetStateEvent for many type and state key pairs at
+	// once, keyed by pair. Pairs with no current state are absent.
+	GetStateEvents(ctx context.Context, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	// GetStateEventsForRoom fetches the state events for a given room.
 	// Returns an empty slice if no state events could be found for this room.
 	// Returns an error if there was an issue with the retrieval.
@@ -122,6 +138,12 @@ type DatabaseTransaction interface {
 	GetUserUnreadNotificationCountsForRooms(ctx context.Context, userID string, roomIDs map[string]string) (map[string]*eventutil.NotificationData, error)
 	GetPresences(ctx context.Context, userID []string) ([]*types.PresenceInternal, error)
 	PresenceAfter(ctx context.Context, after types.StreamPosition, filter synctypes.EventFilter) (map[string]*types.PresenceInternal, error)
+	ThreadRelations(ctx context.Context, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error)
+	// RelationsInTopologicalRange returns a page of a parent's children, following relations
+	// of relations up to maxDepth levels, in topology order.
+	RelationsInTopologicalRange(ctx context.Context, roomID, eventID, relType, eventType string, maxDepth int, from, to types.TopologyToken, backwards bool, limit int) ([]types.TopologicalRelation, error)
+	// RelationTypesFor reports which of relTypes have children for each parent event, up to the relation watermark.
+	RelationTypesFor(ctx context.Context, roomID string, eventIDs, relTypes []string, watermark types.StreamPosition) (map[string]map[string]bool, error)
 	RelationsFor(ctx context.Context, roomID, eventID, relType, eventType string, from, to types.StreamPosition, backwards bool, limit int) (events []types.StreamEvent, prevBatch, nextBatch string, err error)
 	// UnPartialStatedRoomsInRange returns room IDs that became fully-stated (completed
 	// partial state resync) for a user in the given range. MSC3706 faster joins.
@@ -149,9 +171,16 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility,
 	) (types.StreamPosition, error)
+	// InsertStickyEvent adds an MSC4354 sticky event to the sticky events
+	// stream and returns its position, which an event already in the stream
+	// keeps. It first removes the events that have expired by now.
+	InsertStickyEvent(ctx context.Context, roomID, eventID, sender string, expiresAt, now spec.Timestamp) (types.StreamPosition, error)
 	// PurgeRoomState completely purges room state from the sync API. This is done when
 	// receiving an output event that completely resets the state.
 	PurgeRoomState(ctx context.Context, roomID string) error
+	// CurrentStateEventIDs returns the event IDs of a room's current state in
+	// the sync API, which is empty if the sync API has no state for the room.
+	CurrentStateEventIDs(ctx context.Context, roomID string) ([]string, error)
 	// PurgeRoom entirely eliminates a room from the sync API, timeline, state and all.
 	PurgeRoom(ctx context.Context, roomID string) error
 	// UpsertAccountData keeps track of new or updated account data, by saving the type
@@ -193,7 +222,7 @@ type Database interface {
 	// RedactEvent wipes an event in the database and sets the unsigned.redacted_because key to the redaction event
 	RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error
 	// StoreReceipt stores new receipt events
-	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
 	UpdateIgnoresForUser(ctx context.Context, userID string, ignores *types.IgnoredUsers) error
 	ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error)
 	UpdateRelations(ctx context.Context, event *rstypes.HeaderedEvent) error
@@ -223,7 +252,7 @@ type SharedUsers interface {
 
 type Notifications interface {
 	// UpsertRoomUnreadNotificationCounts updates the notification statistics about a (user, room) key.
-	UpsertRoomUnreadNotificationCounts(ctx context.Context, userID, roomID string, notificationCount, highlightCount int) (types.StreamPosition, error)
+	UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (types.StreamPosition, error)
 }
 
 type SlidingSync interface {

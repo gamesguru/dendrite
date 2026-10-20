@@ -7,15 +7,18 @@
 package test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -48,13 +51,22 @@ func createLocalDB(t *testing.T, dbName string) {
 		return
 	}
 	createDB := exec.Command("createdb", dbName)
+	var stderr bytes.Buffer
+	createDB.Stderr = &stderr
 	if !Quiet {
 		createDB.Stdout = os.Stdout
-		createDB.Stderr = os.Stderr
+		createDB.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	}
 	err := createDB.Run()
-	if err != nil && !Quiet {
-		fmt.Println("createLocalDB returned error:", err)
+	if err != nil {
+		// The database is shared by every test in the package, so we expect it to exist already.
+		if strings.Contains(stderr.String(), "already exists") {
+			return
+		}
+		if !Quiet {
+			fmt.Println("createLocalDB returned error:", err)
+		}
+		fatalErrorf(t, "failed to create local postgres test database %q: %s", dbName, err)
 	}
 }
 

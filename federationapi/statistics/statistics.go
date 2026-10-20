@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
@@ -467,5 +467,15 @@ func (s *ServerStatistics) AddRelayServers(relayServers []spec.ServerName) {
 				s.relayMutex.Unlock()
 			}
 		}
+	}
+}
+
+// Close stops pending retry timers after application senders have stopped.
+func (s *Statistics) Close() {
+	s.backoffMutex.Lock()
+	defer s.backoffMutex.Unlock()
+	for server, timer := range s.backoffTimers {
+		timer.Stop()
+		delete(s.backoffTimers, server)
 	}
 }

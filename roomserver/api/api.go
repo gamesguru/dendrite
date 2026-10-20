@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	asAPI "codefloe.com/pat-s/zendrite/appservice/api"
@@ -218,10 +218,21 @@ type SyncRoomserverAPI interface {
 	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state (MSC3706 faster joins).
 	// Used by sync to filter rooms that may have incomplete state.
 	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
+
+	// QueryServerBannedFromRoom and QueryServerAllowedToSeeEvent guard the
+	// federation timestamp_to_event endpoint, which the sync API serves.
+	QueryServerBannedFromRoom(ctx context.Context, req *QueryServerBannedFromRoomRequest, res *QueryServerBannedFromRoomResponse) error
+	QueryServerAllowedToSeeEvent(ctx context.Context, serverName spec.ServerName, eventID string, roomID string) (allowed bool, err error)
+	// QueryErasedUsers returns the subset of userIDs that asked for erasure
+	// when deactivating their account (MSC4025).
+	QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error)
 }
 
 type AppserviceRoomserverAPI interface {
 	QuerySenderIDAPI
+	// QuerySharedUsers returns the users who share a room with the given
+	// user, to deliver presence to application services (MSC2409).
+	QuerySharedUsers(ctx context.Context, req *QuerySharedUsersRequest, res *QuerySharedUsersResponse) error
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
 	// which room to use by querying the first events roomID.
 	QueryEventsByID(
@@ -273,12 +284,14 @@ type ClientRoomserverAPI interface {
 	PerformAdminEvacuateUser(ctx context.Context, userID string) (affected []string, err error)
 	PerformAdminPurgeRoom(ctx context.Context, roomID string) error
 	PerformAdminDownloadState(ctx context.Context, roomID, userID string, serverName spec.ServerName) error
+	PerformAdminBridgeState(ctx context.Context, roomID, userID string, extraEventIDs []string) error
 	AdminQueryEmptyRooms(ctx context.Context) ([]string, error)
 	PerformPeek(ctx context.Context, req *PerformPeekRequest) (roomID string, err error)
 	PerformUnpeek(ctx context.Context, roomID, userID, deviceID string) error
 	PerformInvite(ctx context.Context, req *PerformInviteRequest) error
 	PerformJoin(ctx context.Context, req *PerformJoinRequest) (roomID string, joinedVia spec.ServerName, err error)
 	PerformLeave(ctx context.Context, req *PerformLeaveRequest, res *PerformLeaveResponse) error
+	PerformKnock(ctx context.Context, req *PerformKnockRequest) (roomID string, err error)
 	PerformPublish(ctx context.Context, req *PerformPublishRequest) error
 	// PerformForget forgets a rooms history for a specific user
 	PerformForget(ctx context.Context, req *PerformForgetRequest, resp *PerformForgetResponse) error
@@ -305,15 +318,28 @@ type ClientRoomserverAPI interface {
 	QueryAdminEventReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (QueryAdminEventReportResponse, error)
 	PerformAdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	// InsertReportedRoom stores a room report (MSC4151).
+	InsertReportedRoom(ctx context.Context, roomID, reportingUserID, reason string) (int64, error)
+	QueryAdminRoomReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]QueryAdminRoomReportsResponse, int64, error)
+	// QueryAnnotationExists reports whether the sender already has an
+	// unredacted annotation of the given event type and key on the target
+	// event, which the sender may then not send again (MSC2677). An
+	// annotation produced by the given client transaction, if any, is not
+	// counted, so that a retry of that transaction is not rejected.
+	QueryAnnotationExists(ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key string, transactionID *TransactionID) (bool, error)
 }
 
 type UserRoomserverAPI interface {
+	QueryEventsByID(ctx context.Context, req *QueryEventsByIDRequest, res *QueryEventsByIDResponse) error
 	QuerySenderIDAPI
 	QueryLatestEventsAndStateAPI
 	KeyserverRoomserverAPI
 	QueryCurrentState(ctx context.Context, req *QueryCurrentStateRequest, res *QueryCurrentStateResponse) error
 	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error
 	PerformAdminEvacuateUser(ctx context.Context, userID string) (affected []string, err error)
+	// PerformUserErasure marks a local user as erased (MSC4025), or clears
+	// the mark when erased is false.
+	PerformUserErasure(ctx context.Context, userID spec.UserID, erased bool) error
 	PerformJoin(ctx context.Context, req *PerformJoinRequest) (roomID string, joinedVia spec.ServerName, err error)
 	JoinedUserCount(ctx context.Context, roomID string) (int, error)
 }
@@ -344,10 +370,20 @@ type FederationRoomserverAPI interface {
 	QueryMissingEvents(ctx context.Context, req *QueryMissingEventsRequest, res *QueryMissingEventsResponse) error
 	// Query whether a server is allowed to see an event
 	QueryServerAllowedToSeeEvent(ctx context.Context, serverName spec.ServerName, eventID string, roomID string) (allowed bool, err error)
+	// QueryServerEventVisibility reports whether a server is allowed to see
+	// an event, and whether it must get a redacted copy because the sender
+	// is erased and the server had no member in the room at the event.
+	QueryServerEventVisibility(ctx context.Context, serverName spec.ServerName, event gomatrixserverlib.PDU) (allowed, redact bool, err error)
 	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
 	QueryRestrictedJoinAllowed(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (string, error)
 	PerformInboundPeek(ctx context.Context, req *PerformInboundPeekRequest, res *PerformInboundPeekResponse) error
 	HandleInvite(ctx context.Context, event *types.HeaderedEvent) error
+	// RetractPendingMembership applies a kick or ban received over federation
+	// to a local user's invite or knock for a room this server is not in,
+	// reporting whether it did. Such events cannot be authorized against the
+	// room state, so only the inviter can rescind an invite, and only servers
+	// named by the knock's room state can reject a knock.
+	RetractPendingMembership(ctx context.Context, event *types.HeaderedEvent) (bool, error)
 
 	PerformInvite(ctx context.Context, req *PerformInviteRequest) error
 	// Query a given amount (or less) of events prior to a given set of events.

@@ -9,8 +9,8 @@ package consumers
 import (
 	"context"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -91,12 +91,7 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		return true
 	}
 
-	metadata, err := msg.Metadata()
-	if err != nil {
-		return false
-	}
-
-	updated, err := s.db.SetNotificationsRead(ctx, localpart, domain, roomID, uint64(spec.AsTimestamp(metadata.Timestamp)), true)
+	updated, err := s.db.SetNotificationsReadForReceipt(ctx, localpart, domain, roomID, readPos, msg.Header.Get("thread_id"))
 	if err != nil {
 		log.WithError(err).Error("userapi EDU consumer")
 		return false

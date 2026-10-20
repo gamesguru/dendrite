@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
@@ -32,12 +32,12 @@ func (f *FakeRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spe
 func TestSyncTokens(t *testing.T) {
 	t.Parallel()
 	shouldPass := map[string]string{
-		"s4_0_0_0_0_0_0_0_3": StreamingToken{4, 0, 0, 0, 0, 0, 0, 0, 3}.String(),
-		"s3_1_0_0_0_0_2_0_5": StreamingToken{3, 1, 0, 0, 0, 0, 2, 0, 5}.String(),
-		"s3_1_2_3_5_0_0_0_6": StreamingToken{3, 1, 2, 3, 5, 0, 0, 0, 6}.String(),
-		"t3_1":               TopologyToken{3, 1}.String(),
+		"s4_0_0_0_0_0_0_0_3_0": StreamingToken{4, 0, 0, 0, 0, 0, 0, 0, 3, 0}.String(),
+		"s3_1_0_0_0_0_2_0_5_0": StreamingToken{3, 1, 0, 0, 0, 0, 2, 0, 5, 0}.String(),
+		"s3_1_2_3_5_0_0_0_6_7": StreamingToken{3, 1, 2, 3, 5, 0, 0, 0, 6, 7}.String(),
+		"t3_1":                 TopologyToken{3, 1}.String(),
 		"t9223372036854775807_9223372036854775807": TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}.String(),
-		"s9223372036854775807_1_2_3_5_0_0_0_6":     StreamingToken{math.MaxInt64, 1, 2, 3, 5, 0, 0, 0, 6}.String(),
+		"s9223372036854775807_1_2_3_5_0_0_0_6_0":   StreamingToken{math.MaxInt64, 1, 2, 3, 5, 0, 0, 0, 6, 0}.String(),
 	}
 
 	for a, b := range shouldPass {
@@ -80,6 +80,41 @@ func TestSyncTokens(t *testing.T) {
 		if _, err := NewTopologyTokenFromString(f); err == nil {
 			t.Errorf("NewTopologyTokenFromString %q should have failed", f)
 		}
+	}
+}
+
+// Tokens issued before the MSC4354 sticky events stream existed have nine
+// positions. They must keep parsing, with the sticky position at zero, and
+// the sticky position must take part in comparisons and updates.
+func TestSyncTokenStickyPosition(t *testing.T) {
+	t.Parallel()
+	old, err := NewStreamTokenFromString("s3_1_2_3_5_0_0_0_6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (StreamingToken{3, 1, 2, 3, 5, 0, 0, 0, 6, 0}); old != want {
+		t.Fatalf("old token parsed as %+v, want %+v", old, want)
+	}
+	if got := old.String(); got != "s3_1_2_3_5_0_0_0_6_0" {
+		t.Fatalf("old token re-encoded as %q", got)
+	}
+
+	sticky, err := NewStreamTokenFromString("s3_1_2_3_5_0_0_0_6_9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sticky.StickyPosition != 9 {
+		t.Fatalf("sticky position parsed as %d, want 9", sticky.StickyPosition)
+	}
+	if !sticky.IsAfter(old) || old.IsAfter(sticky) {
+		t.Fatal("a token ahead only in the sticky stream must compare as after")
+	}
+	if (&StreamingToken{StickyPosition: 1}).IsEmpty() {
+		t.Fatal("a token with only a sticky position is not empty")
+	}
+	old.ApplyUpdates(StreamingToken{StickyPosition: 4})
+	if old.StickyPosition != 4 {
+		t.Fatalf("ApplyUpdates left the sticky position at %d", old.StickyPosition)
 	}
 }
 
@@ -133,6 +168,24 @@ func TestNewInviteResponse(t *testing.T) {
 	}
 }
 
+// Invites stored before invite_room_state was always a list carry an empty
+// object there. They must still reach the client.
+func TestNewInviteResponseWithEmptyObjectState(t *testing.T) {
+	t.Parallel()
+	event := `{"auth_events":[],"content":{"membership":"invite","is_direct":true},"depth":9,"hashes":{"sha256":"8p+Ur4f8vLFX6mkIXhxI0kegPG7X3tWy56QmvBkExAg"},"origin":"matrix.org","origin_server_ts":1602087113066,"prev_events":[],"room_id":"!XbeXirGWSPXbEaGokF:matrix.org","sender":"@neilalexander:matrix.org","signatures":{},"state_key":"@alice:zendrite.test","type":"m.room.member","unsigned":{"invite_room_state":{}}}`
+	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV5).NewEventFromTrustedJSON([]byte(event), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewInviteResponse(context.Background(), &FakeRoomserverAPI{}, &types.HeaderedEvent{PDU: ev}, synctypes.FormatSync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.InviteState.Events) != 1 {
+		t.Fatalf("expected only the invite event, got %d events", len(res.InviteState.Events))
+	}
+}
+
 func TestJoinResponse_MarshalJSON(t *testing.T) {
 	t.Parallel()
 	type fields struct {
@@ -164,11 +217,11 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 			want: []byte("{}"),
 		},
 		{
-			name: "empty ephemeral is removed",
+			name: "empty ephemeral is kept",
 			fields: fields{
 				Ephemeral: &ClientEvents{},
 			},
-			want: []byte("{}"),
+			want: []byte(`{"ephemeral":{"events":[]}}`),
 		},
 		{
 			name: "empty timeline is removed",
@@ -190,6 +243,14 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 				UnreadNotifications: &UnreadNotifications{},
 			},
 			want: []byte("{}"),
+		},
+		{
+			name: "unread notifications are removed, if only ephemeral is empty",
+			fields: fields{
+				Ephemeral:           &ClientEvents{},
+				UnreadNotifications: &UnreadNotifications{},
+			},
+			want: []byte(`{"ephemeral":{"events":[]}}`),
 		},
 		{
 			name: "unread notifications are NOT removed, if state is set",
@@ -230,6 +291,51 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("MarshalJSON() got = %v, want %v", string(got), string(tt.want))
+			}
+		})
+	}
+}
+
+func TestResponseMoveStateToStateAfter(t *testing.T) {
+	t.Parallel()
+	state := []synctypes.ClientEvent{{Type: "m.room.topic", Content: []byte("{}")}}
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{key: StateAfterKey, want: `"state_after"`},
+		{key: UnstableStateAfterKey, want: `"org.matrix.msc4222.state_after"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Parallel()
+			res := NewResponse()
+			res.Rooms.Join["!joined:test"] = NewJoinResponse()
+			res.Rooms.Join["!joined:test"].State.Events = state
+			// A room only another stream added still carries an empty state_after.
+			res.Rooms.Join["!typing:test"] = NewJoinResponse()
+			res.Rooms.Leave["!left:test"] = NewLeaveResponse()
+			res.MoveStateToStateAfter(tt.key)
+
+			for roomID, want := range map[string]string{
+				"!joined:test": `{` + tt.want + `:{"events":[{"content":{},"type":"m.room.topic"}]},` +
+					`"ephemeral":{"events":[]},"unread_notifications":{"highlight_count":0,"notification_count":0}}`,
+				"!typing:test": `{` + tt.want + `:{"events":[]},"ephemeral":{"events":[]}}`,
+			} {
+				got, err := json.Marshal(res.Rooms.Join[roomID])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != want {
+					t.Errorf("%s: got %s want %s", roomID, got, want)
+				}
+			}
+			got, err := json.Marshal(res.Rooms.Leave["!left:test"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := `{` + tt.want + `:{"events":[]}}`; string(got) != want {
+				t.Errorf("left room: got %s want %s", got, want)
 			}
 		})
 	}

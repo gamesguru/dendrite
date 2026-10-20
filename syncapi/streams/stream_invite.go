@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -77,6 +77,16 @@ func (p *InviteStreamProvider) IncrementalSync(
 
 		// skip ignored user events
 		if _, ok := req.IgnoredUsers.List[user.String()]; ok {
+			continue
+		}
+		// Knocks share the invite stream; they belong under rooms.knock.
+		if membership, _ := inviteEvent.Membership(); membership == spec.Knock {
+			kr, err := types.NewKnockResponse(ctx, p.rsAPI, inviteEvent, eventFormat)
+			if err != nil {
+				req.Log.WithError(err).Error("failed creating knock response")
+				continue
+			}
+			req.Response.Rooms.Knock[roomID] = kr
 			continue
 		}
 		ir, err := types.NewInviteResponse(ctx, p.rsAPI, inviteEvent, eventFormat)

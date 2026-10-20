@@ -71,7 +71,7 @@ func TestCollect(t *testing.T) {
 			client:     &http.Client{Timeout: time.Second},
 		}
 
-		stats.collect()
+		stats.collect(t.Context())
 
 		select {
 		case <-time.After(time.Second * 5):

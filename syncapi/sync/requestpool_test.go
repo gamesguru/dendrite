@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
@@ -113,6 +113,7 @@ func TestRequestPool_updatePresence(t *testing.T) {
 		*/
 	}
 	rp := &RequestPool{
+		ctx:      t.Context(),
 		presence: &syncMap,
 		producer: publisher,
 		consumer: consumer,

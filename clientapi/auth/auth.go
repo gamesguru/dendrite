@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -77,7 +77,7 @@ func VerifyUserFromRequest(
 	if res.Device == nil {
 		if res.SoftLogout {
 			// The token expired but the session is intact; the client should
-			// refresh its token (OAuth 2.0 API) instead of logging out.
+			// refresh its token instead of logging out.
 			return nil, &util.JSONResponse{
 				Code: http.StatusUnauthorized,
 				JSON: struct {
@@ -97,6 +97,35 @@ func VerifyUserFromRequest(
 		}
 	}
 	return res.Device, nil
+}
+
+// UserLockedResponse is the soft logout answer to a request from a locked
+// account (MSC3939): the client keeps its session and retries until an
+// administrator unlocks the account.
+func UserLockedResponse() util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusUnauthorized,
+		JSON: struct {
+			ErrCode    string `json:"errcode"`
+			Err        string `json:"error"`
+			SoftLogout bool   `json:"soft_logout"`
+		}{
+			ErrCode:    "M_USER_LOCKED",
+			Err:        "This account has been locked",
+			SoftLogout: true,
+		},
+	}
+}
+
+// UserSuspendedResponse refuses an action to a suspended account (MSC3823).
+func UserSuspendedResponse() util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusForbidden,
+		JSON: spec.MatrixError{
+			ErrCode: "M_USER_SUSPENDED",
+			Err:     "You cannot perform this action while suspended.",
+		},
+	}
 }
 
 // GenerateAccessToken creates a new access token. Returns an error if failed to generate

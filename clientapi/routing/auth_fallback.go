@@ -10,9 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/matrix-org/util"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -103,6 +106,94 @@ customElements.whenDefined('altcha-widget').then(function() {
 </html>
 `
 
+// termsTemplate is an HTML webpage template for accepting the registration
+// terms (MSC1692).
+const termsTemplate = `
+<html>
+<head>
+<title>Authentication</title>
+<meta name='viewport' content='width=device-width, initial-scale=1,
+    user-scalable=no, minimum-scale=1.0, maximum-scale=1.0'>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+</style>
+</head>
+<body>
+<form method="post" action="{{.MyURL}}">
+    <p>Please review and accept the policies of this homeserver:</p>
+    {{range .Policies}}
+    <p>
+        <label>
+            <input type="checkbox" name="accept" value="{{.ID}}" required />
+            I accept the <a href="{{.URL}}" target="_blank" rel="noopener">{{.Name}}</a> (version {{.Version}})
+        </label>
+    </p>
+    {{end}}
+    <input type="hidden" name="session" value="{{.Session}}" />
+    <input type="submit" value="Continue" />
+</form>
+</body>
+</html>
+`
+
+// termsPolicy is one policy shown by termsTemplate.
+type termsPolicy struct {
+	ID, Version, Name, URL string
+}
+
+// termsPolicies picks a language for each policy: English if offered,
+// otherwise the first language in sort order.
+func termsPolicies(policies []config.RegistrationPolicy) []termsPolicy {
+	result := make([]termsPolicy, 0, len(policies))
+	for _, policy := range policies {
+		langs := slices.Sorted(maps.Keys(policy.Translations))
+		if len(langs) == 0 {
+			continue
+		}
+		lang := langs[0]
+		if _, ok := policy.Translations["en"]; ok {
+			lang = "en"
+		}
+		translation := policy.Translations[lang]
+		result = append(result, termsPolicy{ID: policy.ID, Version: policy.Version, Name: translation.Name, URL: translation.URL})
+	}
+	return result
+}
+
+// authFallbackTerms serves the fallback page of the m.login.terms stage.
+// Submitting it with every policy ticked completes the stage.
+func authFallbackTerms(w http.ResponseWriter, req *http.Request, cfg *config.ClientAPI, sessionID string) {
+	policies := termsPolicies(cfg.RegistrationTerms)
+	servePage := func(code int) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(code)
+		t := template.Must(template.New("terms").Parse(termsTemplate))
+		if err := t.Execute(w, map[string]any{"MyURL": req.URL.String(), "Session": sessionID, "Policies": policies}); err != nil {
+			logrus.WithError(err).Error("failed to render terms page")
+		}
+	}
+	switch req.Method {
+	case http.MethodGet:
+		servePage(http.StatusOK)
+	case http.MethodPost:
+		if err := req.ParseForm(); err != nil {
+			servePage(http.StatusBadRequest)
+			return
+		}
+		accepted := req.Form["accept"]
+		for _, policy := range policies {
+			if !slices.Contains(accepted, policy.ID) {
+				servePage(http.StatusBadRequest)
+				return
+			}
+		}
+		sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypeTerms)
+		serveTemplate(w, successTemplate, map[string]string{})
+	default:
+		writeHTTPMessage(w, req, "Bad method", http.StatusMethodNotAllowed)
+	}
+}
+
 // successTemplate is an HTML template presented to the user after successful
 // recaptcha completion.
 const successTemplate = `
@@ -142,6 +233,18 @@ func AuthFallback(
 	cfg *config.ClientAPI,
 ) {
 	switch authType {
+	case authtypes.LoginTypeTerms:
+		if len(cfg.RegistrationTerms) == 0 {
+			writeHTTPMessage(w, req, "This homeserver has no registration terms", http.StatusBadRequest)
+			return
+		}
+		sessionID := req.URL.Query().Get("session")
+		if sessionID == "" {
+			writeHTTPMessage(w, req, "Session ID not provided", http.StatusBadRequest)
+			return
+		}
+		authFallbackTerms(w, req, cfg, sessionID)
+		return
 	case authtypes.LoginTypeRecaptcha, authtypes.LoginTypeAltcha:
 		if !cfg.RecaptchaEnabled {
 			writeHTTPMessage(w, req,

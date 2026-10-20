@@ -14,9 +14,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
@@ -152,14 +152,51 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		HistoryVisibility: historyVisibilityShared,
 	}
 
+	// As in Synapse, only private chats let every member invite; public
+	// rooms leave it to moderators. power_level_content_override still wins.
+	if createRequest.StatePreset == spec.PresetPublicChat {
+		powerLevelContent.Invite = 50
+	}
+
 	if createRequest.PowerLevelContentOverride != nil {
-		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults
+		// Merge powerLevelContentOverride fields by unmarshalling it atop the defaults.
+		// encoding/json reuses non-nil maps, so explicitly empty maps would otherwise
+		// retain the defaults (for example, the default tombstone level of 150).
+		var overrideFields map[string]json.RawMessage
+		if err = json.Unmarshal(createRequest.PowerLevelContentOverride, &overrideFields); err != nil {
+			util.GetLogger(ctx).WithError(err).Error("json.Unmarshal for power_level_content_override failed")
+			return "", &util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON("malformed power_level_content_override"),
+			}
+		}
+		if _, ok := overrideFields["users"]; ok {
+			powerLevelContent.Users = nil
+		}
+		if _, ok := overrideFields["events"]; ok {
+			powerLevelContent.Events = nil
+		}
+		if _, ok := overrideFields["notifications"]; ok {
+			powerLevelContent.Notifications = nil
+		}
 		err = json.Unmarshal(createRequest.PowerLevelContentOverride, &powerLevelContent)
 		if err != nil {
 			util.GetLogger(ctx).WithError(err).Error("json.Unmarshal for power_level_content_override failed")
 			return "", &util.JSONResponse{
 				Code: http.StatusBadRequest,
 				JSON: spec.BadJSON("malformed power_level_content_override"),
+			}
+		}
+		// Creators of rooms with privileged creators (MSC4289) must not be
+		// included in the power levels users map.
+		if verImpl.PrivilegedCreators() {
+			for _, creator := range gomatrixserverlib.CreatorsFromCreateEvent(createEvent) {
+				if _, ok := powerLevelContent.Users[creator]; ok {
+					return "", &util.JSONResponse{
+						Code: http.StatusBadRequest,
+						JSON: spec.BadJSON("power_level_content_override.users must not contain room creators"),
+					}
+				}
 			}
 		}
 	}
@@ -219,13 +256,9 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 			}
 		}
 
-		mapping := &gomatrixserverlib.MXIDMapping{
-			UserRoomKey: spec.SenderIDFromPseudoIDKey(pseudoIDKey),
-			UserID:      userID.String(),
-		}
-
-		// Sign the mapping with the server identity
-		if err = mapping.Sign(identity.ServerName, identity.KeyID, identity.PrivateKey); err != nil {
+		var mapping *gomatrixserverlib.MXIDMapping
+		mapping, err = signedMXIDMapping(userID, spec.SenderIDFromPseudoIDKey(pseudoIDKey), identity.ServerName, identity.KeyID, identity.PrivateKey)
+		if err != nil {
 			return "", &util.JSONResponse{
 				Code: http.StatusInternalServerError,
 				JSON: spec.InternalServerError{},
@@ -236,7 +269,7 @@ func (c *Creator) PerformCreateRoom(ctx context.Context, userID spec.UserID, roo
 		// sign all events with the pseudo ID key
 		identity = &fclient.SigningIdentity{
 			ServerName: spec.ServerName(spec.SenderIDFromPseudoIDKey(pseudoIDKey)),
-			KeyID:      "ed25519:1",
+			KeyID:      pseudoIDRoomKeyID,
 			PrivateKey: pseudoIDKey,
 		}
 	}

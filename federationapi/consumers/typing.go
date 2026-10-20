@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -110,5 +110,7 @@ func (t *OutputTypingConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) 
 		return false
 	}
 
+	// Dropped on purpose. Typing notifications expire on their own, so a
+	// redelivered one would be stale by the time it arrived.
 	return true
 }

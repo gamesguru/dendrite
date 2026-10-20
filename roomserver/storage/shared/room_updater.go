@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -151,6 +151,24 @@ func (u *RoomUpdater) SetState(
 ) error {
 	return u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
 		return u.d.EventsTable.UpdateEventState(ctx, txn, eventNID, stateNID)
+	})
+}
+
+// SetCurrentStateSnapshotNID updates the room's current state pointer without
+// changing its latest events.
+func (u *RoomUpdater) SetCurrentStateSnapshotNID(stateSnapshotNID types.StateSnapshotNID) error {
+	if u.roomInfo == nil {
+		return types.ErrorInvalidRoomInfo
+	}
+	return u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
+		if err := u.d.RoomsTable.UpdateStateSnapshotNID(u.ctx, txn, u.roomInfo.RoomNID, stateSnapshotNID); err != nil {
+			return err
+		}
+		if u.roomInfo != nil {
+			u.roomInfo.SetStateSnapshotNID(stateSnapshotNID)
+			u.roomInfo.SetIsStub(false)
+		}
+		return nil
 	})
 }
 

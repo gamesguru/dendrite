@@ -11,8 +11,8 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // FetcherName implements KeyFetcher.

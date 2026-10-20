@@ -11,7 +11,7 @@ import (
 	"database/sql"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal"
@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS federationsender_inbound_peeks (
 `
 
 const insertInboundPeekSQL = "" +
-	"INSERT INTO federationsender_inbound_peeks (room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval) VALUES ($1, $2, $3, $4, $5, $6)"
+	"INSERT INTO federationsender_inbound_peeks (room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval) VALUES ($1, $2, $3, $4, $5, $6)" +
+	// A repeated peek, or a redelivered one, renews the existing peek.
+	" ON CONFLICT (room_id, server_name, peek_id) DO UPDATE SET renewed_ts = $5, renewal_interval = $6"
 
 const selectInboundPeekSQL = "" +
 	"SELECT room_id, server_name, peek_id, creation_ts, renewed_ts, renewal_interval FROM federationsender_inbound_peeks WHERE room_id = $1 and server_name = $2 and peek_id = $3"

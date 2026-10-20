@@ -10,8 +10,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
@@ -120,7 +120,9 @@ func (t *KeyChangeConsumer) onDeviceKeyMessage(m api.DeviceMessage) bool {
 	if err != nil {
 		sentry.CaptureException(err)
 		logger.WithError(err).Error("failed to calculate joined rooms for user")
-		return true
+		// Transient: without the room list this event reaches no remote server, so
+		// their users keep a stale device list for this one.
+		return false
 	}
 
 	roomIDStrs := make([]string, len(roomIDs))
@@ -133,7 +135,8 @@ func (t *KeyChangeConsumer) onDeviceKeyMessage(m api.DeviceMessage) bool {
 	if err != nil {
 		sentry.CaptureException(err)
 		logger.WithError(err).Error("failed to calculate joined hosts for rooms user is in")
-		return true
+		// Transient, as above: no joined hosts means no destinations.
+		return false
 	}
 
 	if len(destinations) == 0 {
@@ -190,7 +193,8 @@ func (t *KeyChangeConsumer) onCrossSigningMessage(m api.DeviceMessage) bool {
 	if err != nil {
 		sentry.CaptureException(err)
 		logger.WithError(err).Error("fedsender key change consumer: failed to calculate joined rooms for user")
-		return true
+		// Transient: without the room list this event reaches no remote server.
+		return false
 	}
 
 	roomIDStrs := make([]string, len(rooms))
@@ -203,7 +207,8 @@ func (t *KeyChangeConsumer) onCrossSigningMessage(m api.DeviceMessage) bool {
 	if err != nil {
 		sentry.CaptureException(err)
 		logger.WithError(err).Error("fedsender key change consumer: failed to calculate joined hosts for rooms user is in")
-		return true
+		// Transient, as above: no joined hosts means no destinations.
+		return false
 	}
 
 	if len(destinations) == 0 {

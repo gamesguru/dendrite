@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
@@ -37,6 +39,11 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
+// largeStateUpdate is the number of state changes from which a room event's
+// processing is logged with its timings. The consumer is serial, so such an
+// event holds up every later event, including those of unrelated rooms.
+const largeStateUpdate = 1000
+
 // OutputRoomEventConsumer consumes events that originated in the room server.
 type OutputRoomEventConsumer struct {
 	ctx            context.Context
@@ -48,9 +55,11 @@ type OutputRoomEventConsumer struct {
 	db             storage.Database
 	pduStream      streams.StreamProvider
 	inviteStream   streams.StreamProvider
+	stickyStream   streams.StreamProvider
 	notifier       *notifier.Notifier
 	fts            fulltext.Indexer
 	asProducer     *producers.AppserviceEventProducer
+	pushProducer   *producers.PushEventProducer
 	metadataQueuer internal.RoomMetadataQueuer
 }
 
@@ -63,9 +72,11 @@ func NewOutputRoomEventConsumer(
 	notifier *notifier.Notifier,
 	pduStream streams.StreamProvider,
 	inviteStream streams.StreamProvider,
+	stickyStream streams.StreamProvider,
 	rsAPI api.SyncRoomserverAPI,
-	fts *fulltext.Search,
+	fts fulltext.Indexer,
 	asProducer *producers.AppserviceEventProducer,
+	pushProducer *producers.PushEventProducer,
 ) *OutputRoomEventConsumer {
 	return &OutputRoomEventConsumer{
 		ctx:          process.Context(),
@@ -77,9 +88,11 @@ func NewOutputRoomEventConsumer(
 		notifier:     notifier,
 		pduStream:    pduStream,
 		inviteStream: inviteStream,
+		stickyStream: stickyStream,
 		rsAPI:        rsAPI,
 		fts:          fts,
 		asProducer:   asProducer,
+		pushProducer: pushProducer,
 	}
 }
 
@@ -120,21 +133,55 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 			// in the special case where the event redacts itself, just pass the message through because
 			// we will never see the other part of the pair
 			if event.Redacts() != event.EventID() {
+				// Application services receive redactions as they arrive,
+				// like any other event. NAK on failure, or the redaction is
+				// never delivered.
+				if s.asProducer != nil {
+					if err = s.asProducer.ProduceRoomEvents(msg); err != nil {
+						log.WithError(err).Warn("failed to produce OutputAppserviceEvent")
+						return false
+					}
+				}
+				// syncapi stores the redaction only once it is validated, but
+				// userapi still needs it now: it keeps a notification-less
+				// record so that read receipts pointing at a redaction resolve.
+				if s.producePushEvent(msg) != nil {
+					return false
+				}
 				return true
 			}
 		}
 		err = s.onNewRoomEvent(s.ctx, *output.NewRoomEvent) //nolint:contextcheck
-		if err == nil && s.asProducer != nil {
-			if err = s.asProducer.ProduceRoomEvents(msg); err != nil {
-				log.WithError(err).Warn("failed to produce OutputAppserviceEvent")
+		if err == nil {
+			// Assign publish failures to err so that the roomserver message is
+			// NAKed and redelivered. Acking here would drop the appservice
+			// event or the push notification permanently.
+			if s.asProducer != nil {
+				if prodErr := s.asProducer.ProduceRoomEvents(msg); prodErr != nil {
+					log.WithError(prodErr).Warn("failed to produce OutputAppserviceEvent")
+					err = prodErr
+				}
+			}
+			if prodErr := s.producePushEvent(msg); prodErr != nil {
+				err = prodErr
 			}
 		}
 	case api.OutputTypeOldRoomEvent:
 		err = s.onOldRoomEvent(s.ctx, *output.OldRoomEvent) //nolint:contextcheck
 	case api.OutputTypeNewInviteEvent:
-		s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
+		// Publish only once the invite is persisted, so the device is never
+		// woken for an invite that /sync cannot yet return. A failed publish is
+		// not NAKed here: AddInviteEvent has no ON CONFLICT, so the redelivery
+		// would insert a duplicate row and re-advance the invite stream,
+		// re-delivering the invite to the client on every /sync.
+		if s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) == nil { //nolint:contextcheck
+			_ = s.producePushEvent(msg)
+		}
 	case api.OutputTypeRetireInviteEvent:
 		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
+	case api.OutputTypeNewKnockEvent:
+		// Knocks are stored like invites but never pushed: the user sent it.
+		_ = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
 		s.onNewPeek(s.ctx, *output.NewPeek) //nolint:contextcheck
 	case api.OutputTypeRetirePeek:
@@ -167,6 +214,66 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// producePushEvent republishes the raw roomserver message on the push topic so
+// that userapi can consume it. A publish failure is returned rather than
+// swallowed: the caller must NAK, otherwise the push notification is lost.
+func (s *OutputRoomEventConsumer) producePushEvent(msg *nats.Msg) error {
+	if s.pushProducer == nil {
+		return nil
+	}
+	if err := s.pushProducer.ProduceRoomEvents(msg); err != nil {
+		log.WithError(err).Warn("failed to produce OutputPushEvent")
+		return err
+	}
+	return nil
+}
+
+// rewriteAsStateDelta turns an event that rewrites a room's state into the
+// difference from the state the sync API already has for the room, if any.
+// The event's state change is written to the stream, and incremental syncs
+// load every state event it lists: with the full state of a large room, that
+// made each such event cost a sync the whole room state, again and again,
+// although almost none of it had changed.
+func (s *OutputRoomEventConsumer) rewriteAsStateDelta(ctx context.Context, msg *api.OutputNewRoomEvent) error {
+	current, err := s.db.CurrentStateEventIDs(ctx, msg.Event.RoomID().String())
+	if err != nil {
+		return fmt.Errorf("s.db.CurrentStateEventIDs: %w", err)
+	}
+	if len(current) == 0 {
+		// Nothing to compare with, as on a federated join: keep the rewrite.
+		return nil
+	}
+	have := make(map[string]bool, len(current))
+	for _, eventID := range current {
+		have[eventID] = true
+	}
+	next := make(map[string]bool, len(msg.AddsStateEventIDs))
+	adds := make([]string, 0)
+	for _, eventID := range msg.AddsStateEventIDs {
+		next[eventID] = true
+		if !have[eventID] {
+			adds = append(adds, eventID)
+		}
+	}
+	removes := make([]string, 0)
+	for _, eventID := range current {
+		if !next[eventID] {
+			removes = append(removes, eventID)
+		}
+	}
+	log.WithFields(log.Fields{
+		"room_id":    msg.Event.RoomID().String(),
+		"event_id":   msg.Event.EventID(),
+		"rewrites":   len(msg.AddsStateEventIDs),
+		"adds_state": len(adds),
+		"removes":    len(removes),
+	}).Debug("Writing a state rewrite as the difference from the current sync API state")
+	msg.AddsStateEventIDs = adds
+	msg.RemovesStateEventIDs = removes
+	msg.RewritesState = false
+	return nil
 }
 
 func (s *OutputRoomEventConsumer) onRedactEvent(
@@ -209,6 +316,12 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		trace.SetTag("state_key", *ev.StateKey())
 	}
 
+	started := time.Now()
+	if msg.RewritesState {
+		if err := s.rewriteAsStateDelta(ctx, &msg); err != nil {
+			return err
+		}
+	}
 	addsStateEvents, missingEventIDs := msg.NeededStateEventIDs()
 
 	// Work out the list of events we need to find out about. Either
@@ -267,17 +380,11 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}
 	}
 
-	ev, err := s.updateStateEvent(ev)
+	err := s.updateStateEvents(ctx, append([]*rstypes.HeaderedEvent{ev}, addsStateEvents...))
 	if err != nil {
 		return err
 	}
-
-	for i := range addsStateEvents {
-		addsStateEvents[i], err = s.updateStateEvent(addsStateEvents[i])
-		if err != nil {
-			return err
-		}
-	}
+	prepared := time.Now()
 
 	if msg.RewritesState {
 		// A RewritesState event replaces the room's entire current state in the
@@ -313,8 +420,23 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	ev.UserID = *userID
 
-	pduPos, err := s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+	// Retry a write that failed only because the database was unreachable,
+	// such as during a PostgreSQL failover. Refusing the message would let
+	// later room events overtake it, and crashing to retry it costs an HA
+	// leadership change. WriteEvent is one transaction with idempotent
+	// inserts, so repeating it is safe.
+	writeStarted := time.Now()
+	var pduPos types.StreamPosition
+	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+		return err
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// Shutting down: the transaction was rolled back, so leave the
+			// message for redelivery.
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -325,7 +447,25 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
 	}
+	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
+		log.WithFields(log.Fields{
+			"room_id":        ev.RoomID().String(),
+			"event_id":       ev.EventID(),
+			"adds_state":     len(msg.AddsStateEventIDs),
+			"removes_state":  len(msg.RemovesStateEventIDs),
+			"rewrites_state": msg.RewritesState,
+			"prepare":        prepared.Sub(started).String(),
+			"write":          time.Since(writeStarted).String(),
+		}).Info("Wrote a large sync API state update")
+	}
+	stickyPos, err := s.writeStickyEvent(ctx, ev, started)
+	if err != nil {
+		return err
+	}
 	if err = s.writeFTS(ev, pduPos); err != nil {
+		if s.cfg.Matrix.HA.Enabled {
+			return err
+		}
 		log.WithFields(log.Fields{
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
@@ -353,7 +493,8 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	notifyRegion, _ := zendriteInternal.StartRegion(ctx, "NotifySyncClients")
 	notifyRegion.SetTag("pdu_position", pduPos)
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
+	s.advanceSticky(stickyPos)
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 	notifyRegion.EndRegion()
 
 	return nil
@@ -363,6 +504,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	ctx context.Context, msg api.OutputOldRoomEvent,
 ) error {
 	ev := msg.Event
+	received := time.Now()
 
 	// TODO: The state key check when excluding from sync is designed
 	// to stop us from lying to clients with old state, whilst still
@@ -377,8 +519,16 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	}
 	ev.UserID = *userID
 
-	pduPos, err := s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+	// Retried in place, as for new events.
+	var pduPos types.StreamPosition
+	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+		return err
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -388,7 +538,19 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		return nil
 	}
 
+	// Old state events are kept from sync, so they are not delivered as
+	// sticky events either.
+	var stickyPos types.StreamPosition
+	if ev.StateKey() == nil {
+		if stickyPos, err = s.writeStickyEvent(ctx, ev, received); err != nil {
+			return err
+		}
+	}
+
 	if err = s.writeFTS(ev, pduPos); err != nil {
+		if s.cfg.Matrix.HA.Enabled {
+			return err
+		}
 		log.WithFields(log.Fields{
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
@@ -413,9 +575,40 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	s.queueRoomMetadataUpdate(ev, pduPos)
 
 	s.pduStream.Advance(pduPos)
-	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos}) //nolint:contextcheck
+	s.advanceSticky(stickyPos)
+	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 
 	return nil
+}
+
+// writeStickyEvent adds an event that is an unexpired MSC4354 sticky event to
+// the sticky events stream, and returns its position there. It returns 0 for
+// any other event. The sticky period
+// starts when the event was received, unless its origin_server_ts is earlier.
+func (s *OutputRoomEventConsumer) writeStickyEvent(
+	ctx context.Context, ev *rstypes.HeaderedEvent, received time.Time,
+) (types.StreamPosition, error) {
+	now := time.Now()
+	if !ev.IsSticky(now, received) {
+		return 0, nil
+	}
+	expiresAt := spec.AsTimestamp(ev.StickyEndTime(received))
+	var pos types.StreamPosition
+	err := sqlutil.RetryTransient(ctx, "sync API sticky event write of "+ev.EventID(), func() (err error) {
+		pos, err = s.db.InsertStickyEvent(ctx, ev.RoomID().String(), ev.EventID(), ev.UserID.String(), expiresAt, spec.AsTimestamp(now))
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("write sticky event %s: %w", ev.EventID(), err)
+	}
+	return pos, nil
+}
+
+// advanceSticky moves the sticky events stream on to pos, if there is one.
+func (s *OutputRoomEventConsumer) advanceSticky(pos types.StreamPosition) {
+	if pos > 0 && s.stickyStream != nil {
+		s.stickyStream.Advance(pos)
+	}
 }
 
 func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rstypes.HeaderedEvent, sp types.StreamPosition) (types.StreamPosition, error) {
@@ -453,37 +646,52 @@ func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rst
 	return sp, nil
 }
 
+// onNewInviteEvent returns nil once the invite is durably stored, or when there
+// is nothing to store because the invite is not for a local user. The error is
+// used to gate the push publication, not to NAK the message.
 func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	ctx context.Context, msg api.OutputNewInviteEvent,
-) {
-	if msg.Event.StateKey() == nil {
-		return
+) error {
+	return s.addPendingMembershipEvent(ctx, msg.Event)
+}
+
+// addPendingMembershipEvent stores an invite or knock for a local user in the
+// invites table, which backs both rooms.invite and rooms.knock in /sync.
+func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
+	ctx context.Context, event *rstypes.HeaderedEvent,
+) error {
+	if event.StateKey() == nil {
+		return nil
 	}
 
-	userID, err := s.rsAPI.QueryUserIDForSender(ctx, msg.Event.RoomID(), spec.SenderID(*msg.Event.StateKey()))
-	if err != nil || userID == nil {
-		return
+	userID, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(*event.StateKey()))
+	if err != nil {
+		return err
+	}
+	if userID == nil {
+		return nil
 	}
 	if !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
-		return
+		return nil
 	}
 
-	msg.Event.UserID = *userID
+	event.UserID = *userID
 
-	pduPos, err := s.db.AddInviteEvent(ctx, msg.Event)
+	pduPos, err := s.db.AddInviteEvent(ctx, event)
 	if err != nil {
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
-			"event_id":   msg.Event.EventID(),
-			"event":      string(msg.Event.JSON()),
+			"event_id":   event.EventID(),
+			"event":      string(event.JSON()),
 			"pdupos":     pduPos,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: write invite failure")
-		return
+		return err
 	}
 
 	s.inviteStream.Advance(pduPos)
-	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *msg.Event.StateKey())
+	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *event.StateKey())
+	return nil
 }
 
 func (s *OutputRoomEventConsumer) onRetireInviteEvent(
@@ -697,57 +905,76 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	return nil
 }
 
-func (s *OutputRoomEventConsumer) updateStateEvent(event *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
-	event.StateKeyResolved = event.StateKey()
-	if event.StateKey() == nil {
-		return event, nil
-	}
-	stateKey := *event.StateKey()
+// updateStateEvents resolves the state key and sender of each state event and
+// sets the unsigned prev_content of the state it replaces. The replaced state
+// is read in one snapshot with one batched lookup per room: a transaction and
+// a query per event dominated the cost of rewriting a room with tens of
+// thousands of state events.
+func (s *OutputRoomEventConsumer) updateStateEvents(ctx context.Context, events []*rstypes.HeaderedEvent) (err error) {
+	keys := map[string][]gomatrixserverlib.StateKeyTuple{}
+	var stateEvents []*rstypes.HeaderedEvent
+	for _, event := range events {
+		event.StateKeyResolved = event.StateKey()
+		if event.StateKey() == nil {
+			continue
+		}
+		if stateKey := *event.StateKey(); stateKey != "" {
+			sku, queryErr := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(stateKey))
+			if queryErr == nil && sku != nil {
+				sKeyUser := sku.String()
+				event.StateKeyResolved = &sKeyUser
+			}
+		}
+		userID, queryErr := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
+		if queryErr != nil {
+			return queryErr
+		}
+		event.UserID = *userID
 
-	snapshot, err := s.db.NewDatabaseSnapshot(s.ctx)
+		roomID := event.RoomID().String()
+		keys[roomID] = append(keys[roomID], stateKeyOf(event))
+		stateEvents = append(stateEvents, event)
+	}
+	if len(stateEvents) == 0 {
+		return nil
+	}
+
+	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var succeeded bool
 	defer sqlutil.EndTransactionWithCheck(snapshot, &succeeded, &err)
 
-	sKeyUser := ""
-	if stateKey != "" {
-		var sku *spec.UserID
-		sku, err = s.rsAPI.QueryUserIDForSender(s.ctx, event.RoomID(), spec.SenderID(stateKey))
-		if err == nil && sku != nil {
-			sKeyUser = sku.String()
-			event.StateKeyResolved = &sKeyUser
+	prevEvents := make(map[string]map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, len(keys))
+	for roomID, roomKeys := range keys {
+		if prevEvents[roomID], err = snapshot.GetStateEvents(ctx, roomID, roomKeys); err != nil {
+			return err
 		}
 	}
-
-	prevEvent, err := snapshot.GetStateEvent(
-		s.ctx, event.RoomID().String(), event.Type(), sKeyUser,
-	)
-	if err != nil {
-		return event, err
-	}
-
-	userID, err := s.rsAPI.QueryUserIDForSender(s.ctx, event.RoomID(), event.SenderID())
-	if err != nil {
-		return event, err
-	}
-
-	event.UserID = *userID
-
-	if prevEvent == nil || prevEvent.EventID() == event.EventID() {
-		return event, nil
-	}
-
-	prev := synctypes.PrevEventRef{
-		PrevContent:   prevEvent.Content(),
-		ReplacesState: prevEvent.EventID(),
-		PrevSenderID:  string(prevEvent.SenderID()),
-	}
-
-	event.PDU, err = event.SetUnsigned(prev)
 	succeeded = true
-	return event, err
+
+	for _, event := range stateEvents {
+		prevEvent := prevEvents[event.RoomID().String()][stateKeyOf(event)]
+		if prevEvent == nil || prevEvent.EventID() == event.EventID() {
+			continue
+		}
+		prev := synctypes.PrevEventRef{
+			PrevContent:   prevEvent.Content(),
+			ReplacesState: prevEvent.EventID(),
+			PrevSenderID:  string(prevEvent.SenderID()),
+		}
+		if event.PDU, err = event.SetUnsigned(prev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stateKeyOf is the key a state event is stored under in the current state
+// table, which holds the resolved state key rather than the raw one.
+func stateKeyOf(event *rstypes.HeaderedEvent) gomatrixserverlib.StateKeyTuple {
+	return gomatrixserverlib.StateKeyTuple{EventType: event.Type(), StateKey: *event.StateKeyResolved}
 }
 
 func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPosition types.StreamPosition) error {
@@ -771,6 +998,11 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 	case spec.MRoomTopic:
 		e.Content = gjson.GetBytes(ev.Content(), "topic").String()
 	case spec.MRoomRedaction:
+		// A redaction without a target redacts nothing. Deleting an empty ID
+		// fails every time, so the message would be redelivered forever.
+		if ev.Redacts() == "" {
+			return nil
+		}
 		log.Tracef("Redacting event: %s", ev.Redacts())
 		if err := s.fts.Delete(ev.Redacts()); err != nil {
 			return fmt.Errorf("failed to delete entry from fulltext index: %w", err)
@@ -790,8 +1022,11 @@ func (s *OutputRoomEventConsumer) writeFTS(ev *rstypes.HeaderedEvent, pduPositio
 			relatedData := relatesTo.Map()
 			if _, ok := relatedData["rel_type"]; ok && relatedData["rel_type"].Str == "m.replace" {
 				// We remove the original event from the index
-				if srcEventID, ok := relatedData["event_id"]; ok {
+				if srcEventID, ok := relatedData["event_id"]; ok && srcEventID.Str != "" {
 					if err := s.fts.Delete(srcEventID.Str); err != nil {
+						if s.cfg.Matrix.HA.Enabled {
+							return err
+						}
 						log.WithFields(log.Fields{
 							"event_id": ev.EventID(),
 							"src_id":   srcEventID.Str,

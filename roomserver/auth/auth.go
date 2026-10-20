@@ -8,8 +8,8 @@ package auth
 import (
 	"context"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 )
@@ -24,29 +24,48 @@ func IsServerAllowed(
 	serverCurrentlyInRoom bool,
 	authEvents []gomatrixserverlib.PDU,
 ) bool {
-	historyVisibility := HistoryVisibilityForRoom(authEvents)
-
-	// 1. If the history_visibility was set to world_readable, allow.
-	if historyVisibility == gomatrixserverlib.HistoryVisibilityWorldReadable {
+	// Skip the membership scan when it cannot change the answer.
+	if HistoryVisibilityForRoom(authEvents) == gomatrixserverlib.HistoryVisibilityWorldReadable {
 		return true
 	}
+	allowed, _ := ServerEventAccess(ctx, querier, serverName, serverCurrentlyInRoom, authEvents)
+	return allowed
+}
+
+// ServerEventAccess reports whether the server is allowed to see events in
+// the room at this particular state, and whether that is because one of its
+// users was joined, or invited under invited visibility. A server allowed only
+// through shared or world readable visibility is served redacted copies of
+// the events of erased users (MSC4025).
+func ServerEventAccess(
+	ctx context.Context, querier api.QuerySenderIDAPI,
+	serverName spec.ServerName,
+	serverCurrentlyInRoom bool,
+	authEvents []gomatrixserverlib.PDU,
+) (allowed, member bool) {
+	historyVisibility := HistoryVisibilityForRoom(authEvents)
+
 	// 2. If the user's membership was join, allow.
 	joinedUserExists := IsAnyUserOnServerWithMembership(ctx, querier, serverName, authEvents, spec.Join)
 	if joinedUserExists {
-		return true
+		return true, true
+	}
+	// 4. If the user's membership was invite, and the history_visibility was set to invited, allow.
+	if historyVisibility == gomatrixserverlib.HistoryVisibilityInvited &&
+		IsAnyUserOnServerWithMembership(ctx, querier, serverName, authEvents, spec.Invite) {
+		return true, true
+	}
+	// 1. If the history_visibility was set to world_readable, allow.
+	if historyVisibility == gomatrixserverlib.HistoryVisibilityWorldReadable {
+		return true, false
 	}
 	// 3. If history_visibility was set to shared, and the user joined the room at any point after the event was sent, allow.
 	if historyVisibility == gomatrixserverlib.HistoryVisibilityShared && serverCurrentlyInRoom {
-		return true
-	}
-	// 4. If the user's membership was invite, and the history_visibility was set to invited, allow.
-	invitedUserExists := IsAnyUserOnServerWithMembership(ctx, querier, serverName, authEvents, spec.Invite)
-	if invitedUserExists && historyVisibility == gomatrixserverlib.HistoryVisibilityInvited {
-		return true
+		return true, false
 	}
 
 	// 5. Otherwise, deny.
-	return false
+	return false, false
 }
 
 func HistoryVisibilityForRoom(authEvents []gomatrixserverlib.PDU) gomatrixserverlib.HistoryVisibility {

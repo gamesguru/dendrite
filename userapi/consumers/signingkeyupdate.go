@@ -10,9 +10,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
@@ -95,7 +95,9 @@ func (t *SigningKeyUpdateConsumer) onMessage(ctx context.Context, msgs []*nats.M
 	t.userAPI.PerformUploadDeviceKeys(ctx, uploadReq, uploadRes)
 	if uploadRes.Error != nil {
 		logrus.WithError(uploadRes.Error).Error("failed to upload device keys")
-		return true
+		// Transient: the upload failed, so the cross-signing keys were never stored.
+		// Acknowledging here loses the update permanently.
+		return false
 	}
 
 	return true

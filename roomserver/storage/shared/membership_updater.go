@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -147,15 +148,20 @@ func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *
 		if !inserted {
 			return nil
 		}
-		switch {
-		case u.oldMembership != tables.MembershipStateInvite && newMembership == tables.MembershipStateInvite:
-			inserted, err = u.d.InvitesTable.InsertInviteEvent(
-				u.ctx, u.txn, event.EventID(), u.roomNID, u.targetUserNID, senderUserNID, event.JSON(),
-			)
-			if err != nil {
-				return fmt.Errorf("u.d.InvitesTable.InsertInviteEvent: %w", err)
+		// The invites table holds the pending invite or knock of a target, as
+		// both can exist for rooms this server has not joined. Retire the old
+		// one before recording the new one, e.g. a knock answered by an invite.
+		changed := u.oldMembership != newMembership
+		if !changed && newMembership == tables.MembershipStateKnock {
+			// Knocking again replaces the pending knock, e.g. after a
+			// rejection this server never heard about.
+			_, activeIDs, _, selErr := u.d.InvitesTable.SelectInviteActiveForUserInRoom(u.ctx, u.txn, u.targetUserNID, u.roomNID)
+			if selErr != nil {
+				return fmt.Errorf("u.d.InvitesTable.SelectInviteActiveForUserInRoom: %w", selErr)
 			}
-		case u.oldMembership == tables.MembershipStateInvite && newMembership != tables.MembershipStateInvite:
+			changed = !slices.Contains(activeIDs, event.EventID())
+		}
+		if changed && isPendingMembership(u.oldMembership) {
 			retired, err = u.d.InvitesTable.UpdateInviteRetired(
 				u.ctx, u.txn, u.roomNID, u.targetUserNID,
 			)
@@ -163,6 +169,20 @@ func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *
 				return fmt.Errorf("u.d.InvitesTables.UpdateInviteRetired: %w", err)
 			}
 		}
+		if changed && isPendingMembership(newMembership) {
+			inserted, err = u.d.InvitesTable.InsertInviteEvent(
+				u.ctx, u.txn, event.EventID(), u.roomNID, u.targetUserNID, senderUserNID, event.JSON(),
+			)
+			if err != nil {
+				return fmt.Errorf("u.d.InvitesTable.InsertInviteEvent: %w", err)
+			}
+		}
 		return nil
 	})
+}
+
+// isPendingMembership reports whether a membership is recorded in the invites
+// table: an invite or a knock waiting for the room to respond.
+func isPendingMembership(membership tables.MembershipState) bool {
+	return membership == tables.MembershipStateInvite || membership == tables.MembershipStateKnock
 }

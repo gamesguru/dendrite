@@ -14,8 +14,9 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
@@ -52,6 +53,7 @@ type Database struct {
 	SlidingSync             tables.SlidingSync
 	SlidingSyncRoomMetadata tables.SlidingSyncRoomMetadata
 	UnPartialStatedRooms    tables.UnPartialStatedRooms
+	StickyEvents            tables.StickyEvents
 }
 
 func (d *Database) NewDatabaseSnapshot(ctx context.Context) (*DatabaseTransaction, error) {
@@ -116,15 +118,21 @@ func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Dev
 				}).WithError(err).Warnf("Failed to add transaction ID to event")
 				continue
 			}
-			if *deviceSenderID == in[i].SenderID() && device.SessionID == in[i].TransactionID.SessionID {
-				err := out[i].SetUnsignedField(
-					"transaction_id", in[i].TransactionID.TransactionID,
-				)
-				if err != nil {
-					logrus.WithFields(logrus.Fields{
-						"event_id": out[i].EventID(),
-					}).WithError(err).Warnf("Failed to add transaction ID to event")
-				}
+			if *deviceSenderID != in[i].SenderID() {
+				continue
+			}
+			// Delayed events (MSC4140) carry their delay ID, which every
+			// device of the sender may see, instead of a transaction ID.
+			field := "transaction_id"
+			if in[i].TransactionID.SessionID == api.DelayedEventSessionID {
+				field = `org\.matrix\.msc4140\.delay_id` // an sjson path
+			} else if device.SessionID != in[i].TransactionID.SessionID {
+				continue
+			}
+			if err = out[i].SetUnsignedField(field, in[i].TransactionID.TransactionID); err != nil {
+				logrus.WithFields(logrus.Fields{
+					"event_id": out[i].EventID(),
+				}).WithError(err).Warnf("Failed to add transaction ID to event")
 			}
 		}
 	}
@@ -303,13 +311,30 @@ func (d *Database) updateRoomState(
 	topoPosition types.StreamPosition,
 ) error {
 	// remove first, then add, as we do not ever delete state, but do replace state which is a remove followed by an add.
-	for _, eventID := range removedEventIDs {
-		if err := d.CurrentRoomState.DeleteRoomStateByEventID(ctx, txn, eventID); err != nil {
-			return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventID: %w", err)
-		}
+	if err := d.CurrentRoomState.DeleteRoomStateByEventIDs(ctx, txn, removedEventIDs); err != nil {
+		return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventIDs: %w", err)
 	}
 
-	for _, event := range addedEvents {
+	upserts, members, err := stateUpserts(addedEvents)
+	if err != nil {
+		return err
+	}
+	if err = d.Memberships.UpsertMemberships(ctx, txn, members, pduPosition, topoPosition); err != nil {
+		return fmt.Errorf("d.Memberships.UpsertMemberships: %w", err)
+	}
+	if err = d.CurrentRoomState.UpsertRoomStates(ctx, txn, upserts, pduPosition); err != nil {
+		return fmt.Errorf("d.CurrentRoomState.UpsertRoomStates: %w", err)
+	}
+	return nil
+}
+
+// stateUpserts turns the state events among events into current state rows,
+// and separately returns the m.room.member events, which also update the
+// memberships table. Non-state events are skipped.
+func stateUpserts(events []*rstypes.HeaderedEvent) ([]tables.StateUpsert, []*rstypes.HeaderedEvent, error) {
+	upserts := make([]tables.StateUpsert, 0, len(events))
+	var members []*rstypes.HeaderedEvent
+	for _, event := range events {
 		if event.StateKey() == nil {
 			// ignore non state events
 			continue
@@ -318,20 +343,14 @@ func (d *Database) updateRoomState(
 		if event.Type() == "m.room.member" {
 			value, err := event.Membership()
 			if err != nil {
-				return fmt.Errorf("event.Membership: %w", err)
+				return nil, nil, fmt.Errorf("event.Membership: %w", err)
 			}
 			membership = &value
-			if err = d.Memberships.UpsertMembership(ctx, txn, event, pduPosition, topoPosition); err != nil {
-				return fmt.Errorf("d.Memberships.UpsertMembership: %w", err)
-			}
+			members = append(members, event)
 		}
-
-		if err := d.CurrentRoomState.UpsertRoomState(ctx, txn, event, membership, pduPosition); err != nil {
-			return fmt.Errorf("d.CurrentRoomState.UpsertRoomState: %w", err)
-		}
+		upserts = append(upserts, tables.StateUpsert{Event: event, Membership: membership})
 	}
-
-	return nil
+	return upserts, members, nil
 }
 
 func (d *Database) GetFilter(
@@ -367,11 +386,33 @@ func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, reda
 		return err
 	}
 
+	// Redaction clears the event ID from the PDU. Keep the original ID for
+	// both the row lookup and the serialized event header.
 	newEvent := &rstypes.HeaderedEvent{PDU: eventToRedact}
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.OutputEvents.UpdateEventJSON(ctx, txn, newEvent)
+		if err = d.OutputEvents.UpdateEventJSON(ctx, txn, redactedEventID, newEvent); err != nil {
+			return err
+		}
+		// Redaction strips the sticky key, so the event stops being sticky.
+		return d.StickyEvents.DeleteStickyEvent(ctx, txn, redactedEventID)
 	})
 	return err
+}
+
+// InsertStickyEvent adds an MSC4354 sticky event to the sticky events stream
+// and returns its position, which an event already in the stream keeps. It
+// first removes the events that have expired by now.
+func (d *Database) InsertStickyEvent(
+	ctx context.Context, roomID, eventID, sender string, expiresAt, now spec.Timestamp,
+) (pos types.StreamPosition, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err = d.StickyEvents.DeleteExpiredStickyEvents(ctx, txn, now); err != nil {
+			return fmt.Errorf("d.StickyEvents.DeleteExpiredStickyEvents: %w", err)
+		}
+		pos, err = d.StickyEvents.InsertStickyEvent(ctx, txn, roomID, eventID, sender, expiresAt)
+		return err
+	})
+	return pos, err
 }
 
 // fetchStateEvents converts the set of event IDs into a set of events. It will fetch any which are missing from the database.
@@ -379,7 +420,7 @@ func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, reda
 func (d *Database) fetchStateEvents(
 	ctx context.Context, txn *sql.Tx,
 	roomIDToEventIDSet map[string]map[string]bool,
-	eventIDToEvent map[string]types.StreamEvent,
+	eventIDToEvent map[string]types.StreamEvent, rsAPI stateEventQuerier,
 ) (map[string][]types.StreamEvent, error) {
 	stateBetween := make(map[string][]types.StreamEvent)
 	missingEvents := make(map[string][]string)
@@ -404,15 +445,11 @@ func (d *Database) fetchStateEvents(
 	if len(missingEvents) > 0 {
 		// This happens when add_state_ids has an event ID which is not in the provided range.
 		// We need to explicitly fetch them.
-		allMissingEventIDs := []string{}
-		for _, missingEvIDs := range missingEvents {
-			allMissingEventIDs = append(allMissingEventIDs, missingEvIDs...)
-		}
-		evs, err := d.fetchMissingStateEvents(ctx, txn, allMissingEventIDs)
+		evs, err := d.fetchMissingStateEvents(ctx, txn, missingEvents, rsAPI)
 		if err != nil {
 			return nil, err
 		}
-		// we know we got them all otherwise an error would've been returned, so just loop the events
+		// Append the resolved events; unavailable events are reported by the fetcher.
 		for _, ev := range evs {
 			roomID := ev.RoomID().String()
 			stateBetween[roomID] = append(stateBetween[roomID], ev)
@@ -421,9 +458,25 @@ func (d *Database) fetchStateEvents(
 	return stateBetween, nil
 }
 
+// fetchMissingStateEvents converts the given event IDs, keyed by the room they
+// belong to, into events. Resolve older state from roomserver if it is no longer
+// present in either sync table, and report any remaining gaps by room.
 func (d *Database) fetchMissingStateEvents(
-	ctx context.Context, txn *sql.Tx, eventIDs []string,
+	ctx context.Context, txn *sql.Tx, roomIDToEventIDs map[string][]string, rsAPI stateEventQuerier,
 ) ([]types.StreamEvent, error) {
+	total := 0
+	for _, roomEventIDs := range roomIDToEventIDs {
+		total += len(roomEventIDs)
+	}
+	eventIDs := make([]string, 0, total)
+	eventIDToRoomID := make(map[string]string, total)
+	for roomID, roomEventIDs := range roomIDToEventIDs {
+		for _, eventID := range roomEventIDs {
+			eventIDs = append(eventIDs, eventID)
+			eventIDToRoomID[eventID] = roomID
+		}
+	}
+
 	// Fetch from the events table first so we pick up the stream ID for the
 	// event.
 	events, err := d.OutputEvents.SelectEvents(ctx, txn, eventIDs, nil, false)
@@ -452,15 +505,39 @@ func (d *Database) fetchMissingStateEvents(
 	if err != nil {
 		return nil, err
 	}
-	if len(stateEvents) != len(missing) {
-		logrus.WithContext(ctx).Warnf("Failed to map all event IDs to events (got %d, wanted %d)", len(stateEvents), len(missing))
-
-		// TODO: Why is this happening? It's probably the roomserver. Uncomment
-		// this error again when we work out what it is and fix it, otherwise we
-		// just end up returning lots of 500s to the client and that breaks
-		// pretty much everything, rather than just sending what we have.
-		// return nil, fmt.Errorf("failed to map all event IDs to events: (got %d, wanted %d)", len(stateEvents), len(missing))
+	for _, event := range stateEvents {
+		have[event.EventID()] = true
 	}
+	historicalIDs := make(map[string][]string)
+	for _, eventID := range missing {
+		if !have[eventID] {
+			roomID := eventIDToRoomID[eventID]
+			historicalIDs[roomID] = append(historicalIDs[roomID], eventID)
+		}
+	}
+	historical, err := fetchHistoricalStateEvents(ctx, rsAPI, historicalIDs)
+	if err != nil {
+		return nil, err
+	}
+	stateEvents = append(stateEvents, historical...)
+	for _, event := range historical {
+		have[event.EventID()] = true
+	}
+	unresolvedPerRoom := map[string]int{}
+	for _, eventID := range missing {
+		if !have[eventID] {
+			unresolvedPerRoom[eventIDToRoomID[eventID]]++
+		}
+	}
+	if len(unresolvedPerRoom) > 0 {
+		// Preserve partial responses for events absent even from roomserver.
+		util.GetLogger(ctx).WithFields(logrus.Fields{
+			"got":                len(stateEvents),
+			"wanted":             len(missing),
+			"unresolved_by_room": unresolvedPerRoom,
+		}).Warn("Failed to map all event IDs to events")
+	}
+
 	events = append(events, stateEvents...)
 	return events, nil
 }
@@ -526,17 +603,17 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 }
 
 // StoreReceipt stores user receipts.
-func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
+func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, timestamp)
+		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
 		return err
 	})
 	return
 }
 
-func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID, roomID string, notificationCount, highlightCount int) (pos types.StreamPosition, err error) {
+func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		pos, err = d.NotificationData.UpsertRoomUnreadCounts(ctx, txn, userID, roomID, notificationCount, highlightCount)
+		pos, err = d.NotificationData.UpsertRoomUnreadCounts(ctx, txn, userID, data)
 		return err
 	})
 	return
@@ -709,6 +786,7 @@ func (d *Database) ValidateConnectionPosition(ctx context.Context, connectionPos
 func (d *Database) GetConnectionStreams(ctx context.Context, connectionKey int64) (map[string]map[string]*types.SlidingSyncStreamState, error) {
 	var streams map[string]map[string]*types.SlidingSyncStreamState
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		//lint:ignore SA1019 This deliberately returns the latest position across all streams.
 		tableStreams, err := d.SlidingSync.SelectAllLatestConnectionStreams(ctx, txn, connectionKey) //nolint:staticcheck // SA1019: intentional use of deprecated function
 		if err != nil {
 			return err
@@ -946,27 +1024,16 @@ func (d *Database) PopulateRoomStateAfterResync(ctx context.Context, stateEvents
 		pduPosition = types.StreamPosition(maxEventID)
 
 		// Populate current room state for each state event
-		for _, event := range stateEvents {
-			if event.StateKey() == nil {
-				// ignore non state events
-				continue
-			}
-			var membership *string
-			if event.Type() == "m.room.member" {
-				value, membershipErr := event.Membership()
-				if membershipErr != nil {
-					return fmt.Errorf("event.Membership: %w", membershipErr)
-				}
-				membership = &value
-				// Also update the memberships table for sync API
-				if upsertErr := d.Memberships.UpsertMembership(ctx, txn, event, pduPosition, 0); upsertErr != nil {
-					return fmt.Errorf("d.Memberships.UpsertMembership: %w", upsertErr)
-				}
-			}
-
-			if upsertErr := d.CurrentRoomState.UpsertRoomState(ctx, txn, event, membership, pduPosition); upsertErr != nil {
-				return fmt.Errorf("d.CurrentRoomState.UpsertRoomState: %w", upsertErr)
-			}
+		upserts, members, upsertErr := stateUpserts(stateEvents)
+		if upsertErr != nil {
+			return upsertErr
+		}
+		// Also update the memberships table for sync API
+		if upsertErr = d.Memberships.UpsertMemberships(ctx, txn, members, pduPosition, 0); upsertErr != nil {
+			return fmt.Errorf("d.Memberships.UpsertMemberships: %w", upsertErr)
+		}
+		if upsertErr = d.CurrentRoomState.UpsertRoomStates(ctx, txn, upserts, pduPosition); upsertErr != nil {
+			return fmt.Errorf("d.CurrentRoomState.UpsertRoomStates: %w", upsertErr)
 		}
 
 		return nil

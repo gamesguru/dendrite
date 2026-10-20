@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/go-chi/chi/v5"
 )
 

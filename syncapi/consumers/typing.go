@@ -72,10 +72,13 @@ func (s *OutputTypingEventConsumer) onMessage(ctx context.Context, msgs []*nats.
 		log.WithError(err).Errorf("output log: typing parse failure")
 		return true
 	}
-	timeout, err := strconv.Atoi(msg.Header.Get("timeout_ms"))
-	if err != nil {
-		log.WithError(err).Errorf("output log: timeout_ms parse failure")
-		return true
+	timeout := 0
+	if timeoutHeader := msg.Header.Get("timeout_ms"); timeoutHeader != "" {
+		timeout, err = strconv.Atoi(timeoutHeader)
+		if err != nil {
+			log.WithError(err).Errorf("output log: timeout_ms parse failure")
+			return true
+		}
 	}
 
 	log.WithFields(log.Fields{
@@ -87,10 +90,13 @@ func (s *OutputTypingEventConsumer) onMessage(ctx context.Context, msgs []*nats.
 
 	var typingPos types.StreamPosition
 	if typing {
-		expiry := time.Now().Add(time.Duration(timeout) * time.Millisecond)
-		typingPos = types.StreamPosition(
-			s.eduCache.AddTypingUser(userID, roomID, &expiry),
-		)
+		var expiry *time.Time
+		// A missing or non-positive timeout uses the cache's default typing timeout.
+		if timeout > 0 {
+			expireTime := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+			expiry = &expireTime
+		}
+		typingPos = types.StreamPosition(s.eduCache.AddTypingUser(userID, roomID, expiry))
 	} else {
 		typingPos = types.StreamPosition(
 			s.eduCache.RemoveUser(userID, roomID),

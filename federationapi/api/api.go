@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 
 	"codefloe.com/pat-s/zendrite/federationapi/types"
@@ -62,6 +62,8 @@ type RoomserverFederationAPI interface {
 	PerformJoin(ctx context.Context, request *PerformJoinRequest, response *PerformJoinResponse)
 	// Handle an instruction to make_leave & send_leave with a remote server.
 	PerformLeave(ctx context.Context, request *PerformLeaveRequest, response *PerformLeaveResponse) error
+	// Handle an instruction to make_knock & send_knock with a remote server.
+	PerformKnock(ctx context.Context, request *PerformKnockRequest, response *PerformKnockResponse) error
 	// Handle sending an invite to a remote server.
 	SendInvite(ctx context.Context, event gomatrixserverlib.PDU, strippedState []gomatrixserverlib.InviteStrippedState) (gomatrixserverlib.PDU, error)
 	// Handle sending an invite to a remote server.
@@ -189,9 +191,28 @@ type PerformLeaveRequest struct {
 	RoomID      string            `json:"room_id"`
 	UserID      string            `json:"user_id"`
 	ServerNames types.ServerNames `json:"server_names"`
+	Reason      string            `json:"reason,omitempty"`
 }
 
 type PerformLeaveResponse struct{}
+
+type PerformKnockRequest struct {
+	RoomID string `json:"room_id"`
+	UserID string `json:"user_id"`
+	// The sorted list of servers to try. Servers will be tried sequentially, after de-duplication.
+	ServerNames types.ServerNames `json:"server_names"`
+	Content     map[string]any    `json:"content"`
+}
+
+type PerformKnockResponse struct {
+	// The knock event as accepted by the remote server.
+	Event gomatrixserverlib.PDU
+	// The room state returned by the remote server, reduced to the entries
+	// which pass MSC4311 validation.
+	KnockRoomState []gomatrixserverlib.InviteStrippedState
+	KnockedVia     spec.ServerName
+	LastError      *gomatrix.HTTPError
+}
 
 type PerformInviteRequest struct {
 	RoomVersion     gomatrixserverlib.RoomVersion           `json:"room_version"`

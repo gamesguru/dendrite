@@ -21,6 +21,7 @@ var (
 	InputSigningKeyUpdate   = "InputSigningKeyUpdate"
 	OutputRoomEvent         = "OutputRoomEvent"
 	OutputAppserviceEvent   = "OutputAppserviceEvent"
+	OutputPushEvent         = "OutputPushEvent"
 	OutputSendToDeviceEvent = "OutputSendToDeviceEvent"
 	OutputKeyChangeEvent    = "OutputKeyChangeEvent"
 	OutputTypingEvent       = "OutputTypingEvent"
@@ -72,6 +73,11 @@ var streams = []*nats.StreamConfig{
 		Storage:   nats.FileStorage,
 	},
 	{
+		Name:      OutputPushEvent,
+		Retention: nats.InterestPolicy,
+		Storage:   nats.FileStorage,
+	},
+	{
 		Name:      OutputSendToDeviceEvent,
 		Retention: nats.InterestPolicy,
 		Storage:   nats.FileStorage,
@@ -108,4 +114,15 @@ var streams = []*nats.StreamConfig{
 		Storage:   nats.MemoryStorage,
 		MaxAge:    time.Minute * 5, //nolint:mnd
 	},
+}
+
+// StreamDefinitions reports the configuration of every stream the homeserver
+// creates, before a topic prefix is applied. The HA upgrade contract records
+// them, because a changed stream is a change that another build shares.
+func StreamDefinitions() []nats.StreamConfig {
+	out := make([]nats.StreamConfig, 0, len(streams))
+	for _, stream := range streams {
+		out = append(out, *stream)
+	}
+	return out
 }

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
@@ -44,6 +44,7 @@ func JoinRoomByIDOrAlias(
 		RoomIDOrAlias: roomIDOrAlias,
 		UserID:        device.UserID,
 		IsGuest:       device.AccountType == api.AccountTypeGuest,
+		LocalOnly:     device.AccountType == api.AccountTypeCallGuest,
 		Content:       map[string]any{},
 	}
 
@@ -119,10 +120,19 @@ func JoinRoomByIDOrAlias(
 			Code: http.StatusForbidden,
 			JSON: jsonErr,
 		}
-	case errors.As(err, &errHTTP): // this ensures we proxy responses over federation to the client
+	case errors.As(err, &errHTTP) && errHTTP.Code >= 400 && json.Valid([]byte(errHTTP.Message)):
+		// this ensures we proxy responses over federation to the client
 		response = util.JSONResponse{
 			Code: errHTTP.Code,
 			JSON: json.RawMessage(errHTTP.Message),
+		}
+	case errors.As(err, &errHTTP):
+		// The join failed without a remote answer to pass through, e.g.
+		// because the room state it returned could not be stored.
+		util.GetLogger(req.Context()).WithError(err).Warn("Join failed over federation")
+		response = util.JSONResponse{
+			Code: http.StatusBadGateway,
+			JSON: spec.Unknown("Unable to join the room through any server"),
 		}
 	case errors.As(err, &errRoomNoExists):
 		response = util.JSONResponse{

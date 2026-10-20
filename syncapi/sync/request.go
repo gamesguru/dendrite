@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -35,9 +35,12 @@ func newSyncRequest(req *http.Request, device userapi.Device, syncDB storage.Dat
 	timeout := getTimeout(req.URL.Query().Get("timeout"))
 	fullState := req.URL.Query().Get("full_state")
 	wantFullState := fullState != "" && fullState != "false"
+	stateAfter, err := stateAfterKey(req)
+	if err != nil {
+		return nil, err
+	}
 	since, sinceStr := types.StreamingToken{}, req.URL.Query().Get("since")
 	if sinceStr != "" {
-		var err error
 		since, err = types.NewStreamTokenFromString(sinceStr)
 		if err != nil {
 			return nil, err
@@ -95,8 +98,34 @@ func newSyncRequest(req *http.Request, device userapi.Device, syncDB storage.Dat
 		Timeout:           timeout,                   //
 		Rooms:             make(map[string]string),   // Populated by the PDU stream
 		WantFullState:     wantFullState,             //
+		StateAfter:        stateAfter,                //
 		MembershipChanges: make(map[string]struct{}), // Populated by the PDU stream
+		NewlyJoinedRooms:  make(map[string]struct{}), // Populated by the PDU stream
 	}, nil
+}
+
+// errInvalidParam marks a query parameter with a value the request does not
+// accept, which is answered with M_INVALID_PARAM.
+var errInvalidParam = errors.New("invalid query parameter")
+
+// stateAfterKey returns the room response key for the state at the end of
+// the timeline if the client opted in to MSC4222, either with the stable
+// use_state_after parameter or with the unstable one, whose response key is
+// unstable as well. It returns an empty key if the client did not opt in.
+func stateAfterKey(req *http.Request) (string, error) {
+	for _, opt := range []struct{ param, key string }{
+		{"use_state_after", types.StateAfterKey},
+		{"org.matrix.msc4222.use_state_after", types.UnstableStateAfterKey},
+	} {
+		switch value := req.URL.Query().Get(opt.param); value {
+		case "", "false":
+		case "true":
+			return opt.key, nil
+		default:
+			return "", fmt.Errorf("%w: %s must be true or false, got %q", errInvalidParam, opt.param, value)
+		}
+	}
+	return "", nil
 }
 
 func getTimeout(timeoutMS string) time.Duration {

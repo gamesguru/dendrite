@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -350,7 +350,7 @@ func TestRoomserverConsumerOneInvite(t *testing.T) {
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		natsInstance := &jetstream.NATSInstance{}
 
-		evChan := make(chan struct{})
+		evChan := make(chan struct{}, 1)
 		// create a dummy AS url, handling the events
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var txn consumers.ApplicationServiceTransaction
@@ -494,7 +494,10 @@ func TestOutputAppserviceEvent(t *testing.T) {
 						if !gjson.GetBytes(rec.Body.Bytes(), "joined."+bob.ID).Exists() {
 							t.Errorf("Bob is not joined to the room")
 						}
-						evChan <- struct{}{}
+						select {
+						case evChan <- struct{}{}:
+						default:
+						}
 					default:
 						t.Fatalf("Unexpected membership: %s", membership)
 					}
@@ -535,7 +538,7 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		// Start the syncAPI to have `/joined_members` available
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics)
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, natsInstance, usrAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		// start the consumer
 		appservice.NewInternalAPI(processCtx, cfg, natsInstance, usrAPI, rsAPI)
@@ -553,8 +556,12 @@ func TestOutputAppserviceEvent(t *testing.T) {
 		}
 
 		select {
-		// Generous timeout for slow CI environments with race detector
-		case <-time.After(time.Millisecond * 5000): // wait for the AS to process the events
+		// The invite, the join sent in reply, and the join reaching the
+		// appservice each pass through the roomserver and JetStream. With
+		// SQLite, the race detector and other test binaries running in
+		// parallel on CI that has taken longer than 5 s, so allow 30 s; a
+		// passing run returns as soon as the join arrives.
+		case <-time.After(30 * time.Second):
 			t.Errorf("Timed out waiting for join event")
 		case <-evChan:
 		}

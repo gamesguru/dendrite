@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )

@@ -12,9 +12,10 @@ import (
 	"database/sql"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/mediaapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/mediaapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
@@ -40,22 +41,42 @@ CREATE TABLE IF NOT EXISTS mediaapi_media_repository (
     -- Alternate RFC 4648 unpadded base64 encoding string representation of a SHA-256 hash sum of the file data.
     base64hash TEXT NOT NULL,
     -- The user who uploaded the file. Should be a Matrix user ID.
-    user_id TEXT NOT NULL
+    user_id TEXT NOT NULL,
+    -- For media IDs created with POST /create whose content has not been
+    -- uploaded yet: when the reservation expires in UNIX epoch ms. 0 once uploaded.
+    unused_expires_ts INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS mediaapi_media_repository_index ON mediaapi_media_repository (media_id, media_origin);
 `
 
 const insertMediaSQL = `
-INSERT INTO mediaapi_media_repository (media_id, media_origin, content_type, file_size_bytes, creation_ts, upload_name, base64hash, user_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO mediaapi_media_repository (media_id, media_origin, content_type, file_size_bytes, creation_ts, upload_name, base64hash, user_id, unused_expires_ts)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 const selectMediaSQL = `
-SELECT content_type, file_size_bytes, creation_ts, upload_name, base64hash, user_id FROM mediaapi_media_repository WHERE media_id = $1 AND media_origin = $2
+SELECT content_type, file_size_bytes, creation_ts, upload_name, base64hash, user_id, unused_expires_ts FROM mediaapi_media_repository WHERE media_id = $1 AND media_origin = $2
 `
 
+// Pending media has no content yet, so it must never be matched by hash.
 const selectMediaByHashSQL = `
-SELECT content_type, file_size_bytes, creation_ts, upload_name, media_id, user_id FROM mediaapi_media_repository WHERE base64hash = $1 AND media_origin = $2
+SELECT content_type, file_size_bytes, creation_ts, upload_name, media_id, user_id FROM mediaapi_media_repository WHERE base64hash = $1 AND media_origin = $2 AND unused_expires_ts = 0
+`
+
+const countPendingMediaSQL = `
+SELECT COUNT(*) FROM mediaapi_media_repository WHERE user_id = $1 AND unused_expires_ts > $2
+`
+
+// The conditional WHERE makes the upload succeed at most once, even when
+// several requests race on different replicas.
+const updatePendingMediaSQL = `
+UPDATE mediaapi_media_repository
+    SET content_type = $1, file_size_bytes = $2, creation_ts = $3, upload_name = $4, base64hash = $5, unused_expires_ts = 0
+    WHERE media_id = $6 AND media_origin = $7 AND user_id = $8 AND unused_expires_ts > $9
+`
+
+const deleteExpiredPendingMediaSQL = `
+DELETE FROM mediaapi_media_repository WHERE unused_expires_ts > 0 AND unused_expires_ts <= $1
 `
 
 const deleteMediaSQL = `
@@ -68,6 +89,10 @@ type mediaStatements struct {
 	selectMediaStmt       *sql.Stmt
 	selectMediaByHashStmt *sql.Stmt
 	deleteMediaStmt       *sql.Stmt
+
+	countPendingMediaStmt         *sql.Stmt
+	updatePendingMediaStmt        *sql.Stmt
+	deleteExpiredPendingMediaStmt *sql.Stmt
 }
 
 func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
@@ -78,12 +103,24 @@ func NewSQLiteMediaRepositoryTable(db *sql.DB) (tables.MediaRepository, error) {
 	if err != nil {
 		return nil, err
 	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{
+		Version: "mediaapi: add unused_expires_ts for asynchronous uploads",
+		Up:      deltas.UpAsyncUploads,
+		Down:    deltas.DownAsyncUploads,
+	})
+	if err = m.Up(context.Background()); err != nil {
+		return nil, err
+	}
 
 	return s, sqlutil.StatementList{
 		{&s.insertMediaStmt, insertMediaSQL},
 		{&s.selectMediaStmt, selectMediaSQL},
 		{&s.selectMediaByHashStmt, selectMediaByHashSQL},
 		{&s.deleteMediaStmt, deleteMediaSQL},
+		{&s.countPendingMediaStmt, countPendingMediaSQL},
+		{&s.updatePendingMediaStmt, updatePendingMediaSQL},
+		{&s.deleteExpiredPendingMediaStmt, deleteExpiredPendingMediaSQL},
 	}.Prepare(db)
 }
 
@@ -102,6 +139,7 @@ func (s *mediaStatements) InsertMedia(
 		mediaMetadata.UploadName,
 		mediaMetadata.Base64Hash,
 		mediaMetadata.UserID,
+		mediaMetadata.UnusedExpiresAt,
 	)
 	return err
 }
@@ -123,6 +161,7 @@ func (s *mediaStatements) SelectMedia(
 		&mediaMetadata.UploadName,
 		&mediaMetadata.Base64Hash,
 		&mediaMetadata.UserID,
+		&mediaMetadata.UnusedExpiresAt,
 	)
 	return &mediaMetadata, err
 }
@@ -154,4 +193,54 @@ func (s *mediaStatements) SelectMediaByHash(
 		&mediaMetadata.UserID,
 	)
 	return &mediaMetadata, err
+}
+
+func (s *mediaStatements) CountPendingMedia(
+	ctx context.Context, txn *sql.Tx, userID types.MatrixUserID, now spec.Timestamp,
+) (count int64, err error) {
+	stmt := sqlutil.TxStmtContext(ctx, txn, s.countPendingMediaStmt)
+	err = stmt.QueryRowContext(ctx, userID, now).Scan(&count)
+	return count, err
+}
+
+func (s *mediaStatements) UpdatePendingMedia(
+	ctx context.Context, txn *sql.Tx, mediaMetadata *types.MediaMetadata, now spec.Timestamp,
+) (bool, error) {
+	stmt := sqlutil.TxStmtContext(ctx, txn, s.updatePendingMediaStmt)
+	res, err := stmt.ExecContext(
+		ctx,
+		mediaMetadata.ContentType,
+		mediaMetadata.FileSizeBytes,
+		now,
+		mediaMetadata.UploadName,
+		mediaMetadata.Base64Hash,
+		mediaMetadata.MediaID,
+		mediaMetadata.Origin,
+		mediaMetadata.UserID,
+		now,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, nil
+	}
+	mediaMetadata.CreationTimestamp = now
+	mediaMetadata.UnusedExpiresAt = 0
+	return true, nil
+}
+
+func (s *mediaStatements) DeleteExpiredPendingMedia(
+	ctx context.Context, txn *sql.Tx, now spec.Timestamp,
+) (int64, error) {
+	stmt := sqlutil.TxStmtContext(ctx, txn, s.deleteExpiredPendingMediaStmt)
+	res, err := stmt.ExecContext(ctx, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

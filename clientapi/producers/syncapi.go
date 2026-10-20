@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -36,7 +36,7 @@ type SyncAPIProducer struct {
 
 func (p *SyncAPIProducer) SendReceipt(
 	ctx context.Context,
-	userID, roomID, eventID, receiptType string, timestamp spec.Timestamp,
+	userID, roomID, eventID, receiptType, threadID string, timestamp spec.Timestamp,
 ) error {
 	m := &nats.Msg{
 		Subject: p.TopicReceiptEvent,
@@ -46,10 +46,11 @@ func (p *SyncAPIProducer) SendReceipt(
 	m.Header.Set(jetstream.RoomID, roomID)
 	m.Header.Set(jetstream.EventID, eventID)
 	m.Header.Set("type", receiptType)
+	m.Header.Set("thread_id", threadID)
 	m.Header.Set("timestamp", fmt.Sprintf("%d", timestamp))
 
 	log.WithFields(log.Fields{}).Tracef("Producing to topic '%s'", p.TopicReceiptEvent)
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
@@ -109,7 +110,7 @@ func (p *SyncAPIProducer) SendToDevice(
 		m.Header.Set("sender", sender)
 		m.Header.Set(jetstream.UserID, userID)
 
-		if _, err = p.JetStream.PublishMsg(m, nats.Context(ctx)); err != nil {
+		if _, err = jetstream.Publish(ctx, p.JetStream, m); err != nil {
 			if i < len(devices)-1 {
 				log.WithError(err).Warn("sendToDevice failed to PublishMsg, trying further devices")
 				continue
@@ -133,7 +134,7 @@ func (p *SyncAPIProducer) SendTyping(
 	m.Header.Set("typing", strconv.FormatBool(typing))
 	m.Header.Set("timeout_ms", strconv.Itoa(int(timeoutMS)))
 
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }
 
@@ -149,6 +150,6 @@ func (p *SyncAPIProducer) SendPresence(
 
 	m.Header.Set("last_active_ts", strconv.Itoa(int(spec.AsTimestamp(time.Now()))))
 
-	_, err := p.JetStream.PublishMsg(m, nats.Context(ctx))
+	_, err := jetstream.Publish(ctx, p.JetStream, m)
 	return err
 }

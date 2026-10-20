@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
@@ -99,6 +99,61 @@ func TestDefaultACLsWithWhitelist(t *testing.T) {
 	}
 	if !acls.IsServerBannedFromRoom("qux.com:4567", roomID) {
 		t.Fatal("Expected qux.com:4567 to be allowed but wasn't")
+	}
+}
+
+func TestACLGlobsMatchWholeServerName(t *testing.T) {
+	roomID := "!test:test.com"
+	compile := func(globs ...string) []**regexp.Regexp {
+		var regexes []**regexp.Regexp
+		for _, glob := range globs {
+			re, err := compileACLRegex(glob)
+			if err != nil {
+				t.Fatal(err)
+			}
+			regexes = append(regexes, &re)
+		}
+		return regexes
+	}
+
+	acls := ServerACLs{acls: map[string]*serverACL{
+		roomID: {
+			allowedRegexes: compile("foo.com", "*.bar.com", "ba?.org"),
+			deniedRegexes:  compile("evil.foo.com"),
+		},
+	}}
+
+	for serverName, wantBanned := range map[spec.ServerName]bool{
+		// Exact and wildcard matches, case-insensitively (MSC4436).
+		"foo.com":      false,
+		"FOO.com:8448": false,
+		"a.bar.com":    false,
+		"A.B.Bar.Com":  false,
+		"baz.org":      false,
+		"BAZ.ORG":      false,
+		"evil.foo.com": true,
+		"Evil.Foo.Com": true,
+		// A glob matches the whole server name, not a substring of it.
+		"evilfoo.com":      true,
+		"foo.com.evil.org": true,
+		"xfoo.com":         true,
+		"bar.com":          true,
+		"bar.com.evil.org": true,
+		"baaz.org":         true,
+		"xbaz.org":         true,
+	} {
+		if got := acls.IsServerBannedFromRoom(serverName, roomID); got != wantBanned {
+			t.Errorf("IsServerBannedFromRoom(%q) = %v, want %v", serverName, got, wantBanned)
+		}
+	}
+
+	// A deny glob does not ban servers whose name merely contains it.
+	acls.acls[roomID] = &serverACL{
+		allowedRegexes: compile("*"),
+		deniedRegexes:  compile("foo.com"),
+	}
+	if acls.IsServerBannedFromRoom("notfoo.com", roomID) {
+		t.Error("deny foo.com must not ban notfoo.com")
 	}
 }
 

@@ -18,8 +18,8 @@ import (
 	"regexp"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -312,10 +312,26 @@ func (config *Zendrite) Derive() error {
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeRegistrationToken}},
 		}
+		// A call guest signs up without a token. The CAPTCHA flows above
+		// already apply to call guests, so only this case needs the dummy
+		// flow added.
+		if config.ClientAPI.CallGuests.Enabled() {
+			config.Derived.Registration.Flows = append(config.Derived.Registration.Flows,
+				authtypes.Flow{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}})
+		}
 	default:
 		config.Derived.Registration.Flows = []authtypes.Flow{
 			{Stages: []authtypes.LoginType{authtypes.LoginTypeDummy}},
 		}
+	}
+
+	// MSC1692: every flow ends with accepting the registration terms.
+	if len(config.ClientAPI.RegistrationTerms) > 0 {
+		for i := range config.Derived.Registration.Flows {
+			flow := &config.Derived.Registration.Flows[i]
+			flow.Stages = append(flow.Stages, authtypes.LoginTypeTerms)
+		}
+		config.Derived.Registration.Params[authtypes.LoginTypeTerms] = RegistrationTermsParams(config.ClientAPI.RegistrationTerms)
 	}
 
 	// Load application service configuration files
@@ -350,6 +366,7 @@ func (c *Zendrite) Defaults(opts DefaultOpts) {
 }
 
 func (c *Zendrite) Verify(configErrs *ConfigErrors) {
+	c.VerifyHAStorage(configErrs)
 	type verifiable interface {
 		Verify(configErrs *ConfigErrors)
 	}
@@ -364,6 +381,13 @@ func (c *Zendrite) Verify(configErrs *ConfigErrors) {
 }
 
 func (c *Zendrite) Wiring() {
+	if c.FederationAPI.KeyPerspectives == nil && len(c.Global.KeyPerspectives) > 0 {
+		c.FederationAPI.KeyPerspectives = c.Global.KeyPerspectives
+	}
+	if !c.FederationAPI.preferDirectFetchSet {
+		c.FederationAPI.PreferDirectFetch = c.Global.PreferDirectFetch
+	}
+
 	c.Global.JetStream.Matrix = &c.Global
 	c.ClientAPI.Matrix = &c.Global
 	c.FederationAPI.Matrix = &c.Global

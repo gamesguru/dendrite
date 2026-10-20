@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -315,5 +315,28 @@ func Test_UserStatistics(t *testing.T) {
 				t.Errorf("UserStatistics() gotStats = \n%+v\nwant\n%+v", gotStats, wantStats)
 			}
 		})
+	})
+}
+
+// Test_UserStatisticsCallGuests checks that call guests count as guests, and
+// do not break the statistics with an account type they do not know.
+func Test_UserStatisticsCallGuests(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		_, accDB, devDB, statsDB, closeDB := mustMakeDBs(t, dbType) //nolint:contextcheck
+		defer closeDB()
+		mustMakeAccountAndDevice(t, ctx, accDB, devDB, "user", "localhost", api.AccountTypeUser, "Element web")
+		mustMakeAccountAndDevice(t, ctx, accDB, devDB, "callguest", "localhost", api.AccountTypeCallGuest, "Element Call")
+		gotStats, _, err := statsDB.UserStatistics(ctx, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		wantByType := map[string]int64{"native": 1, "guest": 1}
+		if !reflect.DeepEqual(gotStats.RegisteredUsersByType, wantByType) {
+			t.Errorf("RegisteredUsersByType = %v, want %v", gotStats.RegisteredUsersByType, wantByType)
+		}
+		if gotStats.AllUsers != 2 || gotStats.NonBridgedUsers != 2 {
+			t.Errorf("AllUsers = %d, NonBridgedUsers = %d, want 2 and 2", gotStats.AllUsers, gotStats.NonBridgedUsers)
+		}
 	})
 }

@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -135,12 +135,15 @@ func TestLogin(t *testing.T) {
 
 			appServiceFound := false
 			passwordFound := false
+			tokenFound := false
 			for _, flow := range resp.Flows {
 				switch flow.Type {
 				case "m.login.password":
 					passwordFound = true
 				case "m.login.application_service":
 					appServiceFound = true
+				case "m.login.token":
+					tokenFound = flow.GetLoginToken
 				default:
 					t.Fatalf("got unknown login flow: %s", flow.Type)
 				}
@@ -150,6 +153,9 @@ func TestLogin(t *testing.T) {
 			}
 			if !passwordFound {
 				t.Fatal("m.login.password missing from login flows")
+			}
+			if !tokenFound {
+				t.Fatal("m.login.token with get_login_token missing from login flows")
 			}
 		})
 

@@ -19,7 +19,7 @@ import (
 )
 
 const accountDataSchema = `
--- This sequence is shared between all the tables generated from kafka logs.
+-- This sequence is shared between all the tables populated from JetStream streams.
 CREATE SEQUENCE IF NOT EXISTS syncapi_stream_id;
 
 -- Stores the types of account data that a user set has globally and in each room

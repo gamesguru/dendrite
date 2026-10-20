@@ -15,6 +15,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// seconds widens a Rusage time field, which is int32 on 32-bit platforms, to
+// match the int64 timestamps.
+func seconds[T ~int32 | ~int64](v T) int64 {
+	return int64(v)
+}
+
 func getMemoryStats(p *phoneHomeStats) error {
 	oldUsage := p.prevData
 	newUsage := syscall.Rusage{}
@@ -25,7 +31,7 @@ func getMemoryStats(p *phoneHomeStats) error {
 	newData := timestampToRUUsage{timestamp: time.Now().Unix(), usage: newUsage}
 	p.prevData = newData
 
-	usedCPUTime := (newUsage.Utime.Sec + newUsage.Stime.Sec) - (oldUsage.usage.Utime.Sec + oldUsage.usage.Stime.Sec)
+	usedCPUTime := (seconds(newUsage.Utime.Sec) + seconds(newUsage.Stime.Sec)) - (seconds(oldUsage.usage.Utime.Sec) + seconds(oldUsage.usage.Stime.Sec))
 
 	if usedCPUTime == 0 || newData.timestamp == oldUsage.timestamp {
 		p.stats["cpu_average"] = 0

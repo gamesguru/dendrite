@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -193,7 +193,7 @@ func (u *DeviceListUpdater) Start() error {
 		// to stop (in this transaction) until key requests can be made.
 		ch := make(chan spec.ServerName, 10)
 		u.workerChans[i] = ch
-		go u.worker(ch, i)
+		u.process.Go(func() { u.worker(ch, i) })
 	}
 
 	staleLists, err := u.db.StaleDeviceLists(u.process.Context(), []spec.ServerName{})
@@ -206,13 +206,9 @@ func (u *DeviceListUpdater) Start() error {
 	if max := len(newStaleLists); max > 120 {   //nolint:mnd
 		step = (time.Second * 120) / time.Duration(max) //nolint:mnd
 	}
-	for _, userID := range newStaleLists {
-		userID := userID // otherwise we are only sending the last entry
-		time.AfterFunc(offset, func() {
-			u.notifyWorkers(userID)
-		})
-		offset += step
-	}
+	process.Stagger(u.process.Context(), newStaleLists, offset, step, func(userID string) {
+		u.process.Go(func() { u.notifyWorkers(userID) })
+	})
 	return nil
 }
 
@@ -374,9 +370,16 @@ func (u *DeviceListUpdater) notifyWorkers(userID string) {
 	// Since workerChans are buffered, we only increment here and let the worker
 	// decrement it once it is done processing.
 	deviceListUpdaterBackpressure.With(prometheus.Labels{"worker_id": strconv.Itoa(index)}).Inc()
-	u.workerChans[index] <- remoteServer
+	select {
+	case u.workerChans[index] <- remoteServer:
+	case <-u.process.Context().Done():
+		u.clearChannel(userID)
+		return
+	}
 	select {
 	case <-ch:
+	case <-u.process.Context().Done():
+		return
 	case <-time.After(10 * time.Second):
 		// we don't return an error in this case as it's not a failure condition.
 		// we mainly block for the benefit of sytest anyway
@@ -407,15 +410,19 @@ func (u *DeviceListUpdater) worker(ch chan spec.ServerName, workerID int) {
 	retries := make(map[spec.ServerName]time.Time)
 	retriesMu := &sync.Mutex{}
 	// restarter goroutine which will inject failed servers into ch when it is time
-	go func() {
+	u.process.Go(func() {
 		var serversToRetry []spec.ServerName
 		for {
 			// nuke serversToRetry by re-slicing it to be "empty".
 			// The capacity of the slice is unchanged, which ensures we can reuse the memory.
 			serversToRetry = serversToRetry[:0]
 
+			retriesMu.Lock()
 			deviceListUpdaterServersRetrying.With(prometheus.Labels{"worker_id": strconv.Itoa(workerID)}).Set(float64(len(retries)))
-			time.Sleep(time.Second * 2)
+			retriesMu.Unlock()
+			if !process.Sleep(u.process.Context(), time.Second*2) { //nolint:mnd // Preserve the existing retry interval.
+				return
+			}
 
 			// -2, so we have space for incoming device list updates over federation
 			maxServers := (cap(ch) - len(ch)) - 2 //nolint:mnd
@@ -441,11 +448,21 @@ func (u *DeviceListUpdater) worker(ch chan spec.ServerName, workerID int) {
 
 			for _, srv := range serversToRetry {
 				deviceListUpdaterBackpressure.With(prometheus.Labels{"worker_id": strconv.Itoa(workerID)}).Inc()
-				ch <- srv
+				select {
+				case ch <- srv:
+				case <-u.process.Context().Done():
+					return
+				}
 			}
 		}
-	}()
-	for serverName := range ch {
+	})
+	for {
+		var serverName spec.ServerName
+		select {
+		case serverName = <-ch:
+		case <-u.process.Context().Done():
+			return
+		}
 		retriesMu.Lock()
 		_, exists := retries[serverName]
 		retriesMu.Unlock()
@@ -600,9 +617,8 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 }
 
 func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error {
-	ctx := context.Background() // we've got the keys, don't time out when persisting them to the database.
+	ctx := u.process.Context() // Persistence outlives individual requests, but not ownership.
 	keys := make([]api.DeviceMessage, len(res.Devices))
-	existingKeys := make([]api.DeviceMessage, len(res.Devices))
 	for i, device := range res.Devices {
 		keyJSON, err := json.Marshal(device.Keys)
 		if err != nil {
@@ -619,20 +635,6 @@ func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error
 				KeyJSON:     keyJSON,
 			},
 		}
-		existingKeys[i] = api.DeviceMessage{
-			Type: api.TypeDeviceKeyUpdate,
-			DeviceKeys: &api.DeviceKeys{
-				UserID:   res.UserID,
-				DeviceID: device.DeviceID,
-			},
-		}
-	}
-	// fetch what keys we had already and only emit changes
-	if err := u.db.DeviceKeysJSON(ctx, existingKeys); err != nil {
-		// non-fatal, log and continue
-		util.GetLogger(ctx).WithError(err).WithField("user_id", res.UserID).Errorf(
-			"failed to query device keys json for calculating diffs",
-		)
 	}
 
 	err := u.db.StoreRemoteDeviceKeys(ctx, keys, []string{res.UserID})
@@ -643,7 +645,10 @@ func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error
 	if err != nil {
 		return fmt.Errorf("failed to mark device list as fresh: %w", err)
 	}
-	err = emitDeviceKeyChanges(u.producer, existingKeys, keys, false)
+	// A full stale-list refresh is our recovery path after missing updates, so
+	// shared users should be prompted to re-check this user's device list even
+	// if the final snapshot happens to match what was already cached locally.
+	err = u.producer.ProduceKeyChanges(keys)
 	if err != nil {
 		return fmt.Errorf("failed to emit key changes for fresh device list: %w", err)
 	}

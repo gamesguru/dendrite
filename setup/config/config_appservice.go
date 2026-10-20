@@ -82,10 +82,22 @@ type ApplicationService struct {
 	// Whether rate limiting is applied to each application service user
 	RateLimited bool `yaml:"rate_limited"`
 	// Any custom protocols that this application service provides (e.g. IRC)
-	Protocols    []string `yaml:"protocols"`
-	HTTPClient   *http.Client
-	isUnixSocket bool
-	unixSocket   string
+	Protocols []string `yaml:"protocols"`
+	// ReceiveEphemeral asks for typing, receipts and presence in the
+	// ephemeral field of transactions (MSC2409).
+	ReceiveEphemeral bool `yaml:"receive_ephemeral"`
+	// UnstableReceiveEphemeral is the unstable name of ReceiveEphemeral that
+	// older bridges set; it delivers de.sorunome.msc2409.ephemeral instead.
+	UnstableReceiveEphemeral bool `yaml:"de.sorunome.msc2409.push_ephemeral"`
+	HTTPClient               *http.Client
+	isUnixSocket             bool
+	unixSocket               string
+}
+
+// WantsEphemeral reports whether the application service receives typing,
+// receipts and presence (MSC2409).
+func (a *ApplicationService) WantsEphemeral() bool {
+	return a.ReceiveEphemeral || a.UnstableReceiveEphemeral
 }
 
 func (a *ApplicationService) CreateHTTPClient(insecureSkipVerify bool) {
@@ -136,7 +148,8 @@ func (a *ApplicationService) IsInterestedInRoomID(
 }
 
 // IsInterestedInUserID returns a bool on whether an application service's
-// namespace includes the given user ID.
+// namespace includes the given user ID. User namespaces only cover local
+// users (MSC3905); callers that may see remote users must check that first.
 func (a *ApplicationService) IsInterestedInUserID(
 	userID string,
 ) bool {

@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/userapi/api"
@@ -39,7 +39,9 @@ func (a *UserInternalAPI) PerformLoginTokenCreation(ctx context.Context, req *ap
 // PerformLoginTokenDeletion ensures the token doesn't exist.
 func (a *UserInternalAPI) PerformLoginTokenDeletion(ctx context.Context, req *api.PerformLoginTokenDeletionRequest, res *api.PerformLoginTokenDeletionResponse) error {
 	util.GetLogger(ctx).Info("PerformLoginTokenDeletion")
-	return a.DB.RemoveLoginToken(ctx, req.Token)
+	consumed, err := a.DB.RemoveLoginToken(ctx, req.Token)
+	res.Consumed = consumed
+	return err
 }
 
 // QueryLoginToken returns the data associated with a login token. If

@@ -13,9 +13,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -113,6 +114,9 @@ type StreamingToken struct {
 	DeviceListPosition       StreamPosition
 	NotificationDataPosition StreamPosition
 	PresencePosition         StreamPosition
+	// StickyPosition is the position in the MSC4354 sticky events stream.
+	// Tokens issued before the stream existed omit it, which reads as zero.
+	StickyPosition StreamPosition
 }
 
 // This will be used as a fallback by json.Marshal.
@@ -128,12 +132,12 @@ func (s *StreamingToken) UnmarshalText(text []byte) (err error) {
 
 func (t StreamingToken) String() string {
 	posStr := fmt.Sprintf(
-		"s%d_%d_%d_%d_%d_%d_%d_%d_%d",
+		"s%d_%d_%d_%d_%d_%d_%d_%d_%d_%d",
 		t.PDUPosition, t.TypingPosition,
 		t.ReceiptPosition, t.SendToDevicePosition,
 		t.InvitePosition, t.AccountDataPosition,
 		t.DeviceListPosition, t.NotificationDataPosition,
-		t.PresencePosition,
+		t.PresencePosition, t.StickyPosition,
 	)
 	return posStr
 }
@@ -159,12 +163,14 @@ func (t *StreamingToken) IsAfter(other StreamingToken) bool {
 		return true
 	case t.PresencePosition > other.PresencePosition:
 		return true
+	case t.StickyPosition > other.StickyPosition:
+		return true
 	}
 	return false
 }
 
 func (t *StreamingToken) IsEmpty() bool {
-	return t == nil || t.PDUPosition+t.TypingPosition+t.ReceiptPosition+t.SendToDevicePosition+t.InvitePosition+t.AccountDataPosition+t.DeviceListPosition+t.NotificationDataPosition+t.PresencePosition == 0
+	return t == nil || t.PDUPosition+t.TypingPosition+t.ReceiptPosition+t.SendToDevicePosition+t.InvitePosition+t.AccountDataPosition+t.DeviceListPosition+t.NotificationDataPosition+t.PresencePosition+t.StickyPosition == 0
 }
 
 // WithUpdates returns a copy of the StreamingToken with updates applied from another StreamingToken.
@@ -208,6 +214,9 @@ func (t *StreamingToken) ApplyUpdates(other StreamingToken) {
 	if other.PresencePosition > t.PresencePosition {
 		t.PresencePosition = other.PresencePosition
 	}
+	if other.StickyPosition > t.StickyPosition {
+		t.StickyPosition = other.StickyPosition
+	}
 }
 
 type TopologyToken struct {
@@ -239,26 +248,22 @@ func (t TopologyToken) String() string {
 	return fmt.Sprintf("t%d_%d", t.Depth, t.PDUPosition)
 }
 
-// Decrement the topology token to one event earlier.
+// Decrement moves the token to just before the event it identifies.
+//
+// Events are ordered by depth, then by stream position, and a backward range
+// includes events at the token's depth whose stream position is at most the
+// token's. Keeping the depth and stepping the stream position back therefore
+// excludes exactly this event. Stepping the depth back instead would skip
+// every other event at this depth that arrived earlier, which happens
+// whenever the room DAG forks, such as when a remote server sends an event
+// concurrently with a local one.
 func (t *TopologyToken) Decrement() {
-	depth := t.Depth
-	pduPos := t.PDUPosition
-	if depth-1 <= 0 {
-		// nothing can be lower than this
-		depth = 1
-	} else {
-		// this assumes that we will never have 1000 events all with the same
-		// depth. TODO: work out what the right PDU position is to use, probably needs a db hit.
-		depth--
-		pduPos += 1000
+	if t.Depth < 1 {
+		t.Depth = 1
 	}
-	// The lowest token value is 1, therefore we need to manually set it to that
-	// value if we're below it.
-	if depth < 1 {
-		depth = 1
+	if t.PDUPosition > 0 {
+		t.PDUPosition--
 	}
-	t.Depth = depth
-	t.PDUPosition = pduPos
 }
 
 func NewTopologyTokenFromString(tok string) (token TopologyToken, err error) {
@@ -303,7 +308,7 @@ func NewStreamTokenFromString(tok string) (token StreamingToken, err error) {
 	// s478_0_0_0_0_13.dl-0-2 but we have now removed partitioned stream positions
 	tok = strings.Split(tok, ".")[0]
 	parts := strings.Split(tok[1:], "_")
-	var positions [9]StreamPosition
+	var positions [10]StreamPosition
 	for i, p := range parts {
 		if i >= len(positions) {
 			break
@@ -326,6 +331,7 @@ func NewStreamTokenFromString(tok string) (token StreamingToken, err error) {
 		DeviceListPosition:       positions[6],
 		NotificationDataPosition: positions[7],
 		PresencePosition:         positions[8],
+		StickyPosition:           positions[9],
 	}
 	return token, nil
 }
@@ -339,6 +345,7 @@ type RoomsResponse struct {
 	Join   map[string]*JoinResponse   `json:"join,omitempty"`
 	Peek   map[string]*JoinResponse   `json:"peek,omitempty"`
 	Invite map[string]*InviteResponse `json:"invite,omitempty"`
+	Knock  map[string]*KnockResponse  `json:"knock,omitempty"`
 	Leave  map[string]*LeaveResponse  `json:"leave,omitempty"`
 }
 
@@ -374,7 +381,7 @@ func (r Response) MarshalJSON() ([]byte, error) {
 	}
 	if r.Rooms != nil {
 		if len(r.Rooms.Join) == 0 && len(r.Rooms.Peek) == 0 &&
-			len(r.Rooms.Invite) == 0 && len(r.Rooms.Leave) == 0 {
+			len(r.Rooms.Invite) == 0 && len(r.Rooms.Knock) == 0 && len(r.Rooms.Leave) == 0 {
 			a.Rooms = nil
 		}
 	}
@@ -389,6 +396,7 @@ func (r *Response) HasUpdates() bool {
 	return (len(r.AccountData.Events) > 0 ||
 		len(r.Presence.Events) > 0 ||
 		len(r.Rooms.Invite) > 0 ||
+		len(r.Rooms.Knock) > 0 ||
 		len(r.Rooms.Join) > 0 ||
 		len(r.Rooms.Leave) > 0 ||
 		len(r.Rooms.Peek) > 0 ||
@@ -406,6 +414,7 @@ func NewResponse() *Response {
 		Join:   map[string]*JoinResponse{},
 		Peek:   map[string]*JoinResponse{},
 		Invite: map[string]*InviteResponse{},
+		Knock:  map[string]*KnockResponse{},
 		Leave:  map[string]*LeaveResponse{},
 	}
 
@@ -428,6 +437,7 @@ func NewResponse() *Response {
 func (r *Response) IsEmpty() bool {
 	return len(r.Rooms.Join) == 0 &&
 		len(r.Rooms.Invite) == 0 &&
+		len(r.Rooms.Knock) == 0 &&
 		len(r.Rooms.Leave) == 0 &&
 		len(r.AccountData.Events) == 0 &&
 		len(r.Presence.Events) == 0 &&
@@ -440,7 +450,49 @@ type UnreadNotifications struct {
 }
 
 type ClientEvents struct {
-	Events []synctypes.ClientEvent `json:"events,omitempty"`
+	Events []synctypes.ClientEvent `json:"events"`
+}
+
+// StateAfter is the state_after section of a room (MSC4222): the state
+// changes up to the end of the timeline. Unlike state, it is sent even when
+// empty, which tells the client that the server supports the opt-in.
+type StateAfter struct {
+	Events []synctypes.ClientEvent `json:"events"`
+}
+
+// The room response keys of the state_after section (MSC4222). A client
+// that opted in with the unstable query parameter gets the unstable key.
+const (
+	StateAfterKey         = "state_after"
+	UnstableStateAfterKey = "org.matrix.msc4222.state_after"
+)
+
+// newStateAfter returns the given state as a state_after section.
+func newStateAfter(state *ClientEvents) *StateAfter {
+	sa := &StateAfter{Events: []synctypes.ClientEvent{}}
+	if state != nil && len(state.Events) > 0 {
+		sa.Events = state.Events
+	}
+	return sa
+}
+
+// MoveStateToStateAfter replaces the state section of every joined, peeked
+// and left room with a state_after section under the given key (MSC4222).
+// The PDU stream has already put the state at the end of the timeline into
+// the state section of a client that opted in.
+func (r *Response) MoveStateToStateAfter(key string) {
+	if r.Rooms == nil {
+		return
+	}
+	for _, jr := range r.Rooms.Join {
+		jr.moveStateToStateAfter(key)
+	}
+	for _, jr := range r.Rooms.Peek {
+		jr.moveStateToStateAfter(key)
+	}
+	for _, lr := range r.Rooms.Leave {
+		lr.moveStateToStateAfter(key)
+	}
 }
 
 type Timeline struct {
@@ -457,12 +509,20 @@ type Summary struct {
 
 // JoinResponse represents a /sync response for a room which is under the 'join' or 'peek' key.
 type JoinResponse struct {
-	Summary              *Summary      `json:"summary,omitempty"`
-	State                *ClientEvents `json:"state,omitempty"`
-	Timeline             *Timeline     `json:"timeline,omitempty"`
-	Ephemeral            *ClientEvents `json:"ephemeral,omitempty"`
-	AccountData          *ClientEvents `json:"account_data,omitempty"`
+	Summary            *Summary      `json:"summary,omitempty"`
+	State              *ClientEvents `json:"state,omitempty"`
+	StateAfter         *StateAfter   `json:"state_after,omitempty"`
+	UnstableStateAfter *StateAfter   `json:"org.matrix.msc4222.state_after,omitempty"`
+	Timeline           *Timeline     `json:"timeline,omitempty"`
+	Ephemeral          *ClientEvents `json:"ephemeral,omitempty"`
+	AccountData        *ClientEvents `json:"account_data,omitempty"`
+	// MSC4354Sticky holds unexpired sticky events that the timeline does not
+	// already carry (MSC4354).
+	MSC4354Sticky        *ClientEvents `json:"msc4354_sticky,omitempty"`
 	*UnreadNotifications `json:"unread_notifications,omitempty"`
+	// UnreadThreadNotifications holds per-thread counts, keyed by thread
+	// root, when the filter asks for them (MSC3773).
+	UnreadThreadNotifications map[string]*UnreadNotifications `json:"unread_thread_notifications,omitempty"`
 }
 
 func (jr JoinResponse) MarshalJSON() ([]byte, error) {
@@ -471,12 +531,12 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	if jr.State != nil && len(jr.State.Events) == 0 {
 		a.State = nil
 	}
-	if jr.Ephemeral != nil && len(jr.Ephemeral.Events) == 0 {
-		a.Ephemeral = nil
-	}
 	if jr.Ephemeral != nil {
 		// Remove the room_id from EDUs, as this seems to cause Element Web
 		// to trigger notifications - https://github.com/vector-im/element-web/issues/17263
+		if jr.Ephemeral.Events == nil {
+			jr.Ephemeral.Events = []synctypes.ClientEvent{}
+		}
 		for i := range jr.Ephemeral.Events {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}
@@ -497,11 +557,28 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 	}
 	if jr.UnreadNotifications != nil {
 		// if everything else is nil, also remove UnreadNotifications
-		if a.State == nil && a.Ephemeral == nil && a.AccountData == nil && a.Timeline == nil && a.Summary == nil {
+		emptyEphemeral := a.Ephemeral == nil || len(a.Ephemeral.Events) == 0
+		if a.State == nil && a.StateAfter.isEmpty() && a.UnstableStateAfter.isEmpty() &&
+			emptyEphemeral && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
 			a.UnreadNotifications = nil
+			a.UnreadThreadNotifications = nil
 		}
 	}
 	return json.Marshal(a)
+}
+
+func (jr *JoinResponse) moveStateToStateAfter(key string) {
+	sa := newStateAfter(jr.State)
+	jr.State = nil
+	if key == UnstableStateAfterKey {
+		jr.UnstableStateAfter = sa
+	} else {
+		jr.StateAfter = sa
+	}
+}
+
+func (sa *StateAfter) isEmpty() bool {
+	return sa == nil || len(sa.Events) == 0
 }
 
 // NewJoinResponse creates an empty response with initialized arrays.
@@ -526,25 +603,60 @@ type InviteResponse struct {
 // NewInviteResponse creates an empty response with initialized arrays.
 func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent, eventFormat synctypes.ClientEventFormat) (*InviteResponse, error) {
 	res := InviteResponse{}
-	res.InviteState.Events = []json.RawMessage{}
+	events, err := strippedStateWithEvent(ctx, rsAPI, event, "invite_room_state", eventFormat)
+	if err != nil {
+		return nil, err
+	}
+	res.InviteState.Events = events
+	return &res, nil
+}
 
-	// First see if there's invite_room_state in the unsigned key of the invite.
+// KnockResponse represents a /sync response for a room which is under the 'knock' key.
+type KnockResponse struct {
+	KnockState struct {
+		Events []json.RawMessage `json:"events"`
+	} `json:"knock_state"`
+}
+
+// NewKnockResponse builds the knock_state for a room the user knocked on
+// from the room state recorded with the knock and the knock event itself.
+func NewKnockResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent, eventFormat synctypes.ClientEventFormat) (*KnockResponse, error) {
+	res := KnockResponse{}
+	events, err := strippedStateWithEvent(ctx, rsAPI, event, "knock_room_state", eventFormat)
+	if err != nil {
+		return nil, err
+	}
+	res.KnockState.Events = events
+	return &res, nil
+}
+
+// strippedStateWithEvent returns the stripped state stored under the given
+// unsigned key of an invite or knock event, followed by the event itself so
+// clients can tell who sent it.
+func strippedStateWithEvent(
+	ctx context.Context, rsAPI api.QuerySenderIDAPI, event *types.HeaderedEvent,
+	unsignedKey string, eventFormat synctypes.ClientEventFormat,
+) ([]json.RawMessage, error) {
+	events := []json.RawMessage{}
+
+	// First see if there's stripped state in the unsigned key of the event.
 	// If there is then unmarshal it into the response. This will contain the
 	// partial room state such as join rules, room name etc.
-	if inviteRoomState := gjson.GetBytes(event.Unsigned(), "invite_room_state"); inviteRoomState.Exists() {
+	// Older invites may store an empty object here rather than a list.
+	if roomState := gjson.GetBytes(event.Unsigned(), unsignedKey); roomState.IsArray() {
 		if event.Version() == gomatrixserverlib.RoomVersionPseudoIDs && eventFormat != synctypes.FormatSyncFederation {
-			updatedInvite, err := synctypes.GetUpdatedInviteRoomState(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			updated, err := synctypes.GetUpdatedInviteRoomState(func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
-			}, inviteRoomState, event.PDU, event.RoomID(), eventFormat)
+			}, roomState, event.PDU, event.RoomID(), eventFormat)
 			if err != nil {
 				return nil, err
 			}
-			if err := json.Unmarshal(updatedInvite, &res.InviteState.Events); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal updated invite state: %w", err)
+			if err := json.Unmarshal(updated, &events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal updated %s: %w", unsignedKey, err)
 			}
 		} else {
-			if err := json.Unmarshal([]byte(inviteRoomState.Raw), &res.InviteState.Events); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal invite room state: %w", err)
+			if err := json.Unmarshal([]byte(roomState.Raw), &events); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal %s: %w", unsignedKey, err)
 			}
 		}
 	}
@@ -555,9 +667,8 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 		return nil, err
 	}
 
-	// Then we'll see if we can create a partial of the invite event itself.
-	// This is needed for clients to work out *who* sent the invite.
-	inviteEvent, err := synctypes.ToClientEvent(eventNoUnsigned, eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	// Then we'll see if we can create a partial of the event itself.
+	clientEvent, err := synctypes.ToClientEvent(eventNoUnsigned, eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 	if err != nil {
@@ -565,19 +676,20 @@ func NewInviteResponse(ctx context.Context, rsAPI api.QuerySenderIDAPI, event *t
 	}
 
 	// Ensure unsigned field is empty so it isn't marshaled into the final JSON
-	inviteEvent.Unsigned = nil
+	clientEvent.Unsigned = nil
 
-	if ev, err := json.Marshal(*inviteEvent); err == nil {
-		res.InviteState.Events = append(res.InviteState.Events, ev)
+	if ev, err := json.Marshal(*clientEvent); err == nil {
+		events = append(events, ev)
 	}
-
-	return &res, nil
+	return events, nil
 }
 
 // LeaveResponse represents a /sync response for a room which is under the 'leave' key.
 type LeaveResponse struct {
-	State    *ClientEvents `json:"state,omitempty"`
-	Timeline *Timeline     `json:"timeline,omitempty"`
+	State              *ClientEvents `json:"state,omitempty"`
+	StateAfter         *StateAfter   `json:"state_after,omitempty"`
+	UnstableStateAfter *StateAfter   `json:"org.matrix.msc4222.state_after,omitempty"`
+	Timeline           *Timeline     `json:"timeline,omitempty"`
 }
 
 func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
@@ -590,6 +702,16 @@ func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
 		a.Timeline = nil
 	}
 	return json.Marshal(a)
+}
+
+func (lr *LeaveResponse) moveStateToStateAfter(key string) {
+	sa := newStateAfter(lr.State)
+	lr.State = nil
+	if key == UnstableStateAfterKey {
+		lr.UnstableStateAfter = sa
+	} else {
+		lr.StateAfter = sa
+	}
 }
 
 // NewLeaveResponse creates an empty response with initialized arrays.
@@ -619,8 +741,9 @@ type Peek struct {
 	Deleted bool
 }
 
-// OutputReceiptEvent is an entry in the receipt output kafka log.
+// OutputReceiptEvent is an entry in the receipt output JetStream stream.
 type OutputReceiptEvent struct {
+	ThreadID  string         `json:"thread_id,omitempty"`
 	UserID    string         `json:"user_id"`
 	RoomID    string         `json:"room_id"`
 	EventID   string         `json:"event_id"`
@@ -628,7 +751,7 @@ type OutputReceiptEvent struct {
 	Timestamp spec.Timestamp `json:"timestamp"`
 }
 
-// OutputSendToDeviceEvent is an entry in the send-to-device output kafka log.
+// OutputSendToDeviceEvent is an entry in the send-to-device output JetStream stream.
 // This contains the full event content, along with the user ID and device ID
 // to which it is destined.
 type OutputSendToDeviceEvent struct {
@@ -644,4 +767,39 @@ type IgnoredUsers struct {
 type RelationEntry struct {
 	Position StreamPosition
 	EventID  string
+}
+
+// TopologicalRelation identifies a child event and its position in room topology.
+type TopologicalRelation struct {
+	EventID  string
+	Position TopologyToken
+}
+
+// MaxStickyEventsInSync is how many sticky events one sync response carries
+// at most, as suggested by MSC4354. Newly joined rooms are exempt.
+const MaxStickyEventsInSync = 100
+
+// StickyEvent is an MSC4354 sticky event in the sticky events stream.
+type StickyEvent struct {
+	// Position is the event's position in the sticky events stream.
+	Position StreamPosition
+	RoomID   string
+	EventID  string
+	// Sender is the user ID of the sender.
+	Sender string
+	// ExpiresAt is when the event stops being sticky.
+	ExpiresAt spec.Timestamp
+}
+
+// TTL reports how long the event remains sticky after now, or zero once it
+// has expired.
+func (e StickyEvent) TTL(now time.Time) time.Duration {
+	return max(e.ExpiresAt.Time().Sub(now), 0)
+}
+
+// ThreadRelation identifies a thread reply and its position in room topology.
+type ThreadRelation struct {
+	RootEventID string
+	EventID     string
+	Position    TopologyToken
 }

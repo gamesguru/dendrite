@@ -90,3 +90,24 @@ very large. This is mitigated slightly with indexes, but better data structures 
 - `invite_state` is not implemented (for similar reasons to the above point).
 - The current implementation scales badly when a very old `since` token is provided.
 - The entire current room state can be re-sent to the client if they send a duplicate "join" event which should be a no-op.
+
+## Timestamp-to-event lookup
+
+`GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event` is implemented in `syncapi/routing/`.
+It requires authentication, applies the configured rate limits, and returns `event_id` and `origin_server_ts` for the closest locally stored event at or beyond `ts` in direction `f`, or at or before `ts` in direction `b`.
+Candidates include backfilled events and pass through the same room-history visibility filter as other history endpoints.
+Invisible candidates are skipped, including across batches with equal timestamps.
+Unknown rooms, unavailable history, and searches with no visible match return `404 M_NOT_FOUND`.
+
+SQLite uses an expression index on room ID, the event JSON's timestamp, and stream ID.
+PostgreSQL indexes a separate numeric `origin_server_ts` column alongside room ID and stream ID.
+Its startup migration replaces the earlier JSON expression index and fills the column with a single table rewrite, preserving the stored event JSON.
+PostgreSQL reads the timestamp of events without `\u` escapes, and Go's JSON parser decodes the rest in batches.
+This avoids PostgreSQL Unicode errors on valid event content containing escapes such as `\u0000` or lone surrogates, both during upgrades and when storing new events.
+The migration runs in a transaction that locks `syncapi_output_room_events`, so the first startup on a large existing database can take a while.
+It logs when it starts and finishes, and stopping Zendrite cancels it on the server and rolls it back.
+
+The [Matrix specification](https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv1roomsroomidtimestamp_to_event) permits federation lookup when local history is insufficient, but does not require it.
+This implementation searches local history only: Zendrite's federation client currently lacks the corresponding lookup method, and a remote event ID and timestamp alone do not establish whether the requesting user may see the event.
+A future fallback would need server selection, remote event and state retrieval with validation, and per-user history visibility checks before returning a remote candidate.
+Until then, a history gap can yield a more distant local event or `M_NOT_FOUND`.

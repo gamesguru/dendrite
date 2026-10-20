@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
+	"time"
 )
 
 type MediaAPI struct {
@@ -36,6 +38,120 @@ type MediaAPI struct {
 
 	// A list of thumbnail sizes to be pre-generated for downloaded remote / uploaded content
 	ThumbnailSizes []ThumbnailSize `yaml:"thumbnail_sizes"`
+
+	// AsyncUploads configures asynchronous uploads, where a client reserves
+	// an mxc:// URI with POST /create and uploads the content later.
+	AsyncUploads AsyncUploads `yaml:"async_uploads,omitempty"`
+
+	// URLPreview configures GET /_matrix/client/v1/media/preview_url, which
+	// makes the server fetch URLs that clients send it.
+	URLPreview URLPreview `yaml:"url_preview,omitempty"`
+}
+
+// URLPreview configures URL previews (MSC3916's preview_url endpoint).
+type URLPreview struct {
+	// Enabled turns URL previews on. Default: false, as previews make the
+	// server fetch arbitrary URLs for its users.
+	Enabled bool `yaml:"enabled"`
+	// IPRangeBlacklist lists CIDR ranges that are never fetched, in addition
+	// to loopback, private, link-local and other non-public addresses.
+	IPRangeBlacklist []string `yaml:"ip_range_blacklist,omitempty"`
+	// IPRangeWhitelist lists non-public CIDR ranges that may be fetched
+	// anyway, such as an internal wiki. The blacklist takes precedence.
+	IPRangeWhitelist []string `yaml:"ip_range_whitelist,omitempty"`
+	// MaxPageSizeBytes caps how much of a page is read. Default: 10 MiB.
+	MaxPageSizeBytes FileSizeBytes `yaml:"max_page_size_bytes,omitempty"`
+	// CacheDuration is how long a preview is reused for the same URL.
+	// Default: 1h.
+	CacheDuration time.Duration `yaml:"cache_duration,omitempty"`
+}
+
+// Defaults for URL previews, also used when a value is unset.
+const (
+	DefaultURLPreviewMaxPageSizeBytes FileSizeBytes = 10 * 1024 * 1024
+	DefaultURLPreviewCacheDuration                  = time.Hour
+)
+
+// MaxPageSize returns how much of a page is read for a preview.
+func (c URLPreview) MaxPageSize() FileSizeBytes {
+	if c.MaxPageSizeBytes <= 0 {
+		return DefaultURLPreviewMaxPageSizeBytes
+	}
+	return c.MaxPageSizeBytes
+}
+
+// CacheTTL returns how long a preview is reused.
+func (c URLPreview) CacheTTL() time.Duration {
+	if c.CacheDuration <= 0 {
+		return DefaultURLPreviewCacheDuration
+	}
+	return c.CacheDuration
+}
+
+// IPRanges parses the black- and whitelist.
+func (c URLPreview) IPRanges() (blacklist, whitelist []netip.Prefix, err error) {
+	parse := func(name string, values []string) ([]netip.Prefix, error) {
+		prefixes := make([]netip.Prefix, 0, len(values))
+		for i, value := range values {
+			prefix, err := netip.ParsePrefix(value)
+			if err != nil {
+				return nil, fmt.Errorf("media_api.url_preview.%s[%d]: %w", name, i, err)
+			}
+			prefixes = append(prefixes, prefix.Masked())
+		}
+		return prefixes, nil
+	}
+	if blacklist, err = parse("ip_range_blacklist", c.IPRangeBlacklist); err != nil {
+		return nil, nil, err
+	}
+	if whitelist, err = parse("ip_range_whitelist", c.IPRangeWhitelist); err != nil {
+		return nil, nil, err
+	}
+	return blacklist, whitelist, nil
+}
+
+// AsyncUploads contains the limits for asynchronous media uploads (MSC2246).
+type AsyncUploads struct {
+	// UnusedExpiry is how long a created mxc:// URI stays reserved for its
+	// upload. Default: 24h.
+	UnusedExpiry time.Duration `yaml:"unused_expiry"`
+	// MaxPendingPerUser caps how many created but not yet uploaded mxc:// URIs
+	// a single user may hold at once. Default: 10.
+	MaxPendingPerUser int `yaml:"max_pending_per_user"`
+	// MaxDownloadWait caps the timeout_ms a download may wait for pending
+	// media to be uploaded. Default: 60s.
+	MaxDownloadWait time.Duration `yaml:"max_download_wait"`
+}
+
+// Defaults for asynchronous media uploads, also used when a value is unset.
+const (
+	DefaultAsyncUploadUnusedExpiry      = 24 * time.Hour
+	DefaultAsyncUploadMaxPendingPerUser = 10
+	DefaultAsyncUploadMaxDownloadWait   = time.Minute
+)
+
+// Expiry returns how long a created mxc:// URI stays reserved.
+func (c AsyncUploads) Expiry() time.Duration {
+	if c.UnusedExpiry <= 0 {
+		return DefaultAsyncUploadUnusedExpiry
+	}
+	return c.UnusedExpiry
+}
+
+// MaxPending returns how many pending uploads a user may hold at once.
+func (c AsyncUploads) MaxPending() int {
+	if c.MaxPendingPerUser <= 0 {
+		return DefaultAsyncUploadMaxPendingPerUser
+	}
+	return c.MaxPendingPerUser
+}
+
+// MaxWait returns the longest a download waits for pending media.
+func (c AsyncUploads) MaxWait() time.Duration {
+	if c.MaxDownloadWait <= 0 {
+		return DefaultAsyncUploadMaxDownloadWait
+	}
+	return c.MaxDownloadWait
 }
 
 // MediaStorage selects the backend used to persist media files.
@@ -50,6 +166,8 @@ type MediaStorage struct {
 
 // LocalStorage contains configuration for the local filesystem backend.
 type LocalStorage struct {
+	// Shared asserts that every candidate mounts the same durable POSIX filesystem.
+	Shared bool `yaml:"shared"`
 	// BasePath is the path where media files are stored.
 	BasePath Path `yaml:"base_path"`
 }
@@ -82,6 +200,11 @@ var DefaultMaxFileSizeBytes = FileSizeBytes(10485760) //nolint:mnd
 func (c *MediaAPI) Defaults(opts DefaultOpts) {
 	c.MaxFileSizeBytes = DefaultMaxFileSizeBytes
 	c.MaxThumbnailGenerators = 10
+	c.AsyncUploads = AsyncUploads{
+		UnusedExpiry:      DefaultAsyncUploadUnusedExpiry,
+		MaxPendingPerUser: DefaultAsyncUploadMaxPendingPerUser,
+		MaxDownloadWait:   DefaultAsyncUploadMaxDownloadWait,
+	}
 	if opts.Generate {
 		c.ThumbnailSizes = []ThumbnailSize{
 			{
@@ -121,6 +244,13 @@ func (c *MediaAPI) StorageType() string {
 func (c *MediaAPI) Verify(configErrs *ConfigErrors) {
 	checkPositive(configErrs, "media_api.max_file_size_bytes", int64(c.MaxFileSizeBytes))
 	checkPositive(configErrs, "media_api.max_thumbnail_generators", int64(c.MaxThumbnailGenerators))
+	checkPositive(configErrs, "media_api.async_uploads.unused_expiry", int64(c.AsyncUploads.UnusedExpiry))
+	checkPositive(configErrs, "media_api.async_uploads.max_pending_per_user", int64(c.AsyncUploads.MaxPendingPerUser))
+	checkPositive(configErrs, "media_api.async_uploads.max_download_wait", int64(c.AsyncUploads.MaxDownloadWait))
+
+	if _, _, err := c.URLPreview.IPRanges(); err != nil {
+		configErrs.Add(err.Error())
+	}
 
 	for i, size := range c.ThumbnailSizes {
 		checkPositive(configErrs, fmt.Sprintf("media_api.thumbnail_sizes[%d].width", i), int64(size.Width))

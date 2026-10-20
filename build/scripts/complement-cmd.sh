@@ -6,16 +6,16 @@ export GOCOVERDIR=/tmp/covdatafiles
 mkdir -p "${GOCOVERDIR}"
 if [[ "${COVER}" -eq 1 ]]; then
   echo "Running with coverage"
-  exec /dendrite/dendrite-cover \
+  exec /zendrite/zendrite-cover \
     --really-enable-open-registration \
     --tls-cert server.crt \
     --tls-key server.key \
-    --config dendrite.yaml
+    --config zendrite.yaml
 else
   echo "Not running with coverage"
-  exec /dendrite/dendrite \
+  exec /zendrite/zendrite \
     --really-enable-open-registration \
     --tls-cert server.crt \
     --tls-key server.key \
-    --config dendrite.yaml
+    --config zendrite.yaml
 fi

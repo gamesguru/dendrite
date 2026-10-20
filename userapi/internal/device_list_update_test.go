@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	api2 "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
@@ -473,6 +473,7 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	unreachableServer := spec.ServerName("notlocalhost")
 
 	updater := DeviceListUpdater{
+		process:     process.NewProcessContextWithParent(t.Context()),
 		workerChans: make([]chan spec.ServerName, 1),
 		isBlacklistedOrBackingOffFn: func(s spec.ServerName) (*statistics.ServerStatistics, error) {
 			if s == unreachableServer {

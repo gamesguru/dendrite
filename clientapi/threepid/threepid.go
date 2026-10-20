@@ -8,94 +8,78 @@ package threepid
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
-	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
-// EmailAssociationRequest represents the request defined at https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-register-email-requesttoken
+// EmailAssociationRequest represents the body of POST /account/3pid/email/requestToken
+// and POST /register/email/requestToken.
 type EmailAssociationRequest struct {
-	IDServer    string `json:"id_server"`
-	Secret      string `json:"client_secret"`
-	Email       string `json:"email"`
-	SendAttempt int    `json:"send_attempt"`
+	IDServer      string `json:"id_server"`
+	IDAccessToken string `json:"id_access_token"`
+	Secret        string `json:"client_secret"`
+	Email         string `json:"email"`
+	SendAttempt   int    `json:"send_attempt"`
+	NextLink      string `json:"next_link,omitempty"`
 }
 
-// EmailAssociationCheckRequest represents the request defined at https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-account-3pid
+// EmailAssociationCheckRequest represents the body of the deprecated POST /account/3pid.
 type EmailAssociationCheckRequest struct {
 	Creds Credentials `json:"three_pid_creds"`
 	Bind  bool        `json:"bind"`
 }
 
-// Credentials represents the "ThreePidCredentials" structure defined at https://matrix.org/docs/spec/client_server/r0.2.0.html#post-matrix-client-r0-account-3pid
+// Credentials represents the ThreePidCredentials of POST /account/3pid, and
+// the body of POST /account/3pid/add and /account/3pid/bind.
 type Credentials struct {
-	SID      string `json:"sid"`
-	IDServer string `json:"id_server"`
-	Secret   string `json:"client_secret"`
+	SID           string `json:"sid"`
+	IDServer      string `json:"id_server"`
+	IDAccessToken string `json:"id_access_token"`
+	Secret        string `json:"client_secret"`
 }
 
 type SID struct {
 	SID string `json:"sid"`
 }
 
-// CreateSession creates a session on an identity server.
-// Returns the session's ID.
+// CreateSession asks an identity server to send a validation email, and
+// returns the ID of its validation session.
 // Returns an error if there was a problem sending the request or decoding the
 // response, or if the identity server responded with a non-OK status.
-func CreateSession(
-	ctx context.Context, req EmailAssociationRequest, cfg *config.ClientAPI, client *fclient.Client,
-) (string, error) {
-	if err := isTrusted(req.IDServer, cfg); err != nil {
-		return "", err
+func CreateSession(ctx context.Context, req EmailAssociationRequest, auth IdentityAuth) (string, error) {
+	body := map[string]any{
+		"client_secret": req.Secret,
+		"email":         req.Email,
+		"send_attempt":  req.SendAttempt,
 	}
-
-	// Create a session on the ID server
-	postURL := fmt.Sprintf("https://%s/_matrix/identity/api/v1/validate/email/requestToken", req.IDServer)
-
-	data := url.Values{}
-	data.Add("client_secret", req.Secret)
-	data.Add("email", req.Email)
-	data.Add("send_attempt", strconv.Itoa(req.SendAttempt))
-
-	request, err := http.NewRequest(http.MethodPost, postURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return "", err
+	if req.NextLink != "" {
+		body["next_link"] = req.NextLink
 	}
-	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.DoHTTPRequest(ctx, request)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	// Error if the status isn't OK
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("could not create a session on the server %s", req.IDServer)
-	}
-
-	// Extract the SID from the response and return it
 	var sid SID
-	err = json.NewDecoder(resp.Body).Decode(&sid)
-
-	return sid.SID, err
+	if err := auth.do(ctx, req.IDServer, http.MethodPost, "/_matrix/identity/v2/validate/email/requestToken", nil, body, &sid); err != nil {
+		var remote *IdentityServerError
+		if errors.As(err, &remote) {
+			return "", fmt.Errorf("could not create a session on the server %s (HTTP %d): %w", req.IDServer, remote.Code, err)
+		}
+		return "", fmt.Errorf("could not create a session on the server %s: %w", req.IDServer, err)
+	}
+	if sid.SID == "" {
+		return "", fmt.Errorf("identity server returned an empty session ID")
+	}
+	rememberSession(sid.SID, req.Secret, req.IDServer)
+	return sid.SID, nil
 }
 
 type GetValidatedResponse struct {
 	Medium      string `json:"medium"`
 	ValidatedAt int64  `json:"validated_at"`
 	Address     string `json:"address"`
-	ErrCode     string `json:"errcode"`
-	Error       string `json:"error"`
 }
 
 // CheckAssociation checks the status of an ongoing association validation on an
@@ -104,74 +88,23 @@ type GetValidatedResponse struct {
 // If the association has been validated, also returns the related third-party
 // identifier and its medium.
 // Returns an error if there was a problem sending the request or decoding the
-// response, or if the identity server responded with a non-OK status.
-func CheckAssociation(
-	ctx context.Context, creds Credentials, cfg *config.ClientAPI,
-	client *fclient.Client,
-) (bool, string, string, error) {
-	if err := isTrusted(creds.IDServer, cfg); err != nil {
-		return false, "", "", err
-	}
-
-	requestURL := fmt.Sprintf("https://%s/_matrix/identity/api/v1/3pid/getValidated3pid?sid=%s&client_secret=%s", creds.IDServer, creds.SID, creds.Secret)
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return false, "", "", err
-	}
-	resp, err := client.DoHTTPRequest(ctx, req)
-	if err != nil {
-		return false, "", "", err
-	}
-	defer resp.Body.Close()
-
+// response, or if the identity server responded with an error other than
+// M_SESSION_NOT_VALIDATED.
+func CheckAssociation(ctx context.Context, creds Credentials, auth IdentityAuth) (bool, string, string, error) {
 	var respBody GetValidatedResponse
-	if err = json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+	query := url.Values{"sid": {creds.SID}, "client_secret": {creds.Secret}}
+	err := auth.do(ctx, creds.IDServer, http.MethodGet, "/_matrix/identity/v2/3pid/getValidated3pid", query, nil, &respBody)
+	var remote *IdentityServerError
+	switch {
+	case errors.As(err, &remote) && remote.MatrixError.ErrCode == spec.ErrorSessionNotValidated:
+		return false, "", "", nil
+	case err != nil:
 		return false, "", "", err
 	}
-
-	if respBody.ErrCode == string(spec.ErrorSessionNotValidated) {
-		return false, "", "", nil
-	} else if len(respBody.ErrCode) > 0 {
-		return false, "", "", errors.New(respBody.Error)
+	if respBody.Address == "" || (respBody.Medium != "email" && respBody.Medium != "msisdn") {
+		return false, "", "", fmt.Errorf("invalid identity server validation response")
 	}
-
 	return true, respBody.Address, respBody.Medium, nil
-}
-
-// PublishAssociation publishes a validated association between a third-party
-// identifier and a Matrix ID.
-// Returns an error if there was a problem sending the request or decoding the
-// response, or if the identity server responded with a non-OK status.
-func PublishAssociation(ctx context.Context, creds Credentials, userID string, cfg *config.ClientAPI, client *fclient.Client) error {
-	if err := isTrusted(creds.IDServer, cfg); err != nil {
-		return err
-	}
-
-	postURL := fmt.Sprintf("https://%s/_matrix/identity/api/v1/3pid/bind", creds.IDServer)
-
-	data := url.Values{}
-	data.Add("sid", creds.SID)
-	data.Add("client_secret", creds.Secret)
-	data.Add("mxid", userID)
-
-	request, err := http.NewRequest(http.MethodPost, postURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return err
-	}
-	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.DoHTTPRequest(ctx, request)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Error if the status isn't OK
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("could not publish the association on the server %s", creds.IDServer)
-	}
-
-	return nil
 }
 
 // isTrusted checks if a given identity server is part of the list of trusted

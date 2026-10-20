@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -28,6 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/test/testrig"
 	"codefloe.com/pat-s/zendrite/userapi"
+	userapiAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // setupMSC3861Routers creates a full router stack with MSC3861 enabled for testing.
@@ -37,7 +38,18 @@ import (
 // same CI database.
 func setupMSC3861Routers(t *testing.T) (httputil.Routers, *config.Zendrite, func()) {
 	t.Helper()
-	cfg, processCtx, closeDB := testrig.CreateConfig(t, test.DBTypeSQLite)
+	routers, cfg, _, closeDB := setupMSC3861Stack(t, test.DBTypeSQLite, nil)
+	return routers, cfg, closeDB
+}
+
+// setupMSC3861Stack builds the MSC3861-enabled router stack on the given
+// database backend and also returns the user API for direct state setup and
+// assertions. The customize callback, when non-nil, runs on the config before the stack is
+// constructed so tests can override rate limiting, the introspection endpoint
+// and similar settings.
+func setupMSC3861Stack(t *testing.T, dbType test.DBType, customize func(cfg *config.Zendrite)) (httputil.Routers, *config.Zendrite, userapiAPI.ClientUserAPI, func()) {
+	t.Helper()
+	cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 	cfg.ClientAPI.RateLimiting.Enabled = false
 	cfg.MSCs.MSCs = []string{"msc3861"}
 	cfg.MSCs.MSC3861 = config.MSC3861Config{
@@ -71,6 +83,9 @@ func setupMSC3861Routers(t *testing.T) (httputil.Routers, *config.Zendrite, func
 			},
 		},
 	}
+	if customize != nil {
+		customize(cfg)
+	}
 
 	natsInstance := jetstream.NATSInstance{}
 	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -82,7 +97,7 @@ func setupMSC3861Routers(t *testing.T) (httputil.Routers, *config.Zendrite, func
 	routers := httputil.NewRouters()
 	Setup(routers, cfg, nil, nil, userAPI, nil, nil, nil, nil, nil, nil, nil, nil, caching.DisableMetrics)
 
-	return routers, cfg, closeDB
+	return routers, cfg, userAPI, closeDB
 }
 
 func TestMSC3861_DisabledEndpoints(t *testing.T) {
@@ -98,8 +113,13 @@ func TestMSC3861_DisabledEndpoints(t *testing.T) {
 		{"register", http.MethodPost, "/_matrix/client/v3/register"},
 		{"register available", http.MethodGet, "/_matrix/client/v3/register/available"},
 		{"password", http.MethodPost, "/_matrix/client/v3/account/password"},
+		{"password email requestToken", http.MethodPost, "/_matrix/client/v3/account/password/email/requestToken"},
+		{"password msisdn requestToken", http.MethodPost, "/_matrix/client/v3/account/password/msisdn/requestToken"},
 		{"deactivate", http.MethodPost, "/_matrix/client/v3/account/deactivate"},
 		{"3pid POST", http.MethodPost, "/_matrix/client/v3/account/3pid"},
+		{"3pid add", http.MethodPost, "/_matrix/client/v3/account/3pid/add"},
+		{"3pid bind", http.MethodPost, "/_matrix/client/v3/account/3pid/bind"},
+		{"3pid unbind", http.MethodPost, "/_matrix/client/v3/account/3pid/unbind"},
 		{"3pid delete", http.MethodPost, "/_matrix/client/v3/account/3pid/delete"},
 		{"3pid email requestToken", http.MethodPost, "/_matrix/client/v3/account/3pid/email/requestToken"},
 		{"register email requestToken", http.MethodPost, "/_matrix/client/v3/register/email/requestToken"},
@@ -328,39 +348,6 @@ func TestMSC3861_AuthMetadataDiscoversEndpoints(t *testing.T) {
 	}
 	if discoveryHits != 1 {
 		t.Errorf("expected discovery to be cached, got %d hits", discoveryHits)
-	}
-}
-
-func TestMSC3861_MASAdminRoutesRequireAdminToken(t *testing.T) {
-	t.Parallel()
-
-	cfg, processCtx, closeDB := testrig.CreateConfig(t, test.DBTypeSQLite)
-	defer closeDB()
-	cfg.ClientAPI.RateLimiting.Enabled = false
-	cfg.MSCs.MSCs = []string{"msc3861"}
-	cfg.MSCs.MSC3861 = config.MSC3861Config{
-		Issuer:       "https://auth.example.com",
-		ClientID:     "test-client-id",
-		ClientSecret: "test-client-secret",
-		// AdminToken deliberately left empty.
-	}
-	cfg.Global.WellKnownClientName = "https://matrix.example.com"
-
-	natsInstance := jetstream.NATSInstance{}
-	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
-	caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
-	rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
-	rsAPI.SetFederationAPI(nil, nil)
-	userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-
-	routers := httputil.NewRouters()
-	Setup(routers, cfg, nil, nil, userAPI, nil, nil, nil, nil, nil, nil, nil, nil, caching.DisableMetrics)
-
-	req := test.NewRequest(t, http.MethodGet, "/_synapse/admin/v1/username_available?username=alice")
-	rec := httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 when admin_token is empty, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -800,72 +787,11 @@ func TestMSC3861_JWKSProxyServesStaleOnError(t *testing.T) {
 	}
 }
 
-// TestMSC3861_MASAdminUserLifecycle exercises user creation and retrieval
-// through the MAS admin endpoints, including the admin flag mapping.
-func TestMSC3861_MASAdminUserLifecycle(t *testing.T) {
-	t.Parallel()
-	routers, _, closeDB := setupMSC3861Routers(t)
-	defer closeDB()
-
-	// An unknown user maps to 404.
-	req := test_masAdminRequest(t, http.MethodGet, "/_synapse/admin/v1/users/@alice:test", "test-admin-token", "")
-	rec := httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for unknown user, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	// Create a regular user.
-	req = test_masAdminRequest(t, http.MethodPut, "/_synapse/admin/v1/users/@alice:test", "test-admin-token", `{"displayname": "Alice"}`)
-	rec = httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 creating user, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	// Retrieval reports the account record.
-	req = test_masAdminRequest(t, http.MethodGet, "/_synapse/admin/v1/users/@alice:test", "test-admin-token", "")
-	rec = httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 getting user, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var userResp struct {
-		Name        string `json:"name"`
-		DisplayName string `json:"displayname"`
-		Admin       bool   `json:"admin"`
-		Deactivated bool   `json:"deactivated"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &userResp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-	if userResp.Name != "@alice:test" {
-		t.Errorf("expected name @alice:test, got %q", userResp.Name)
-	}
-	if userResp.Admin {
-		t.Error("expected admin=false for a regular user")
-	}
-
-	// Create an admin user and verify the flag comes from the account record.
-	req = test_masAdminRequest(t, http.MethodPut, "/_synapse/admin/v1/users/@admin-user:test", "test-admin-token", `{"admin": true}`)
-	rec = httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 creating admin user, got %d: %s", rec.Code, rec.Body.String())
-	}
-	req = test_masAdminRequest(t, http.MethodGet, "/_synapse/admin/v1/users/@admin-user:test", "test-admin-token", "")
-	rec = httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 getting admin user, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &userResp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-	if !userResp.Admin {
-		t.Error("expected admin=true to be reported from the account record")
-	}
-}
+// TestMSC3861_MASAdminUserLifecycle exercised user creation and retrieval
+// through the legacy /_synapse/admin/v1 endpoints, which were removed in
+// favor of the /_synapse/mas provisioning API. The equivalent coverage lives
+// in TestMASProvisionUser and TestMASQueryUser; the modern API has no admin
+// flag mapping to test.
 
 // TestMSC3861_MASPlaceholderTokenIsRandom verifies that the placeholder device
 // access token comes from the CSPRNG and is unpredictable: a guessable value
@@ -890,37 +816,39 @@ func TestMSC3861_MASPlaceholderTokenIsRandom(t *testing.T) {
 	}
 }
 
-// TestMSC3861_MASAdminDeviceIdempotent verifies that creating an existing
-// device returns it unchanged instead of clobbering it.
+// TestMSC3861_MASAdminDeviceIdempotent verifies that upserting an existing
+// device returns 200 (not 201) and updates its display name, mirroring
+// Synapse's upsert_device semantics.
 func TestMSC3861_MASAdminDeviceIdempotent(t *testing.T) {
 	t.Parallel()
 	routers, _, closeDB := setupMSC3861Routers(t)
 	defer closeDB()
 
-	req := test_masAdminRequest(t, http.MethodPut, "/_synapse/admin/v1/users/@alice:test", "test-admin-token", `{}`)
+	req := test_masAdminRequest(t, http.MethodPost, "/_synapse/mas/provision_user", "test-admin-token", `{"localpart":"alice"}`)
 	rec := httptest.NewRecorder()
 	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 creating user, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 creating user, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	req = test_masAdminRequest(t, http.MethodPut, "/_synapse/admin/v1/users/@alice:test/devices/DEVICEONE", "test-admin-token", `{"display_name": "First name"}`)
+	req = test_masAdminRequest(t, http.MethodPost, "/_synapse/mas/upsert_device", "test-admin-token", `{"localpart": "alice", "device_id": "DEVICEONE", "display_name": "First name"}`)
+	rec = httptest.NewRecorder()
+	routers.SynapseAdmin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 creating device, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// A second upsert for the same device returns 200 and applies the new
+	// display name.
+	req = test_masAdminRequest(t, http.MethodPost, "/_synapse/mas/upsert_device", "test-admin-token", `{"localpart": "alice", "device_id": "DEVICEONE", "display_name": "Second name"}`)
 	rec = httptest.NewRecorder()
 	routers.SynapseAdmin.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 creating device, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	// A second PUT for the same device returns the existing device untouched.
-	req = test_masAdminRequest(t, http.MethodPut, "/_synapse/admin/v1/users/@alice:test/devices/DEVICEONE", "test-admin-token", `{"display_name": "Second name"}`)
-	rec = httptest.NewRecorder()
-	routers.SynapseAdmin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for idempotent device creation, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 for idempotent device upsert, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var deviceResp struct {
-		DeviceID    string `json:"device_id"`
-		DisplayName string `json:"display_name"`
+		DeviceID    string  `json:"device_id"`
+		DisplayName *string `json:"display_name"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &deviceResp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
@@ -928,8 +856,8 @@ func TestMSC3861_MASAdminDeviceIdempotent(t *testing.T) {
 	if deviceResp.DeviceID != "DEVICEONE" {
 		t.Errorf("expected device_id DEVICEONE, got %q", deviceResp.DeviceID)
 	}
-	if deviceResp.DisplayName != "First name" {
-		t.Errorf("expected existing display name to be preserved, got %q", deviceResp.DisplayName)
+	if deviceResp.DisplayName == nil || *deviceResp.DisplayName != "Second name" {
+		t.Errorf("expected display name to be updated to 'Second name', got %v", deviceResp.DisplayName)
 	}
 }
 

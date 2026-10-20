@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
@@ -611,9 +611,14 @@ func TestRegisterUserWithDisplayName(t *testing.T) {
 			&deviceName,
 			&deviceID,
 			api.AccountTypeAdmin,
+			time.Hour,
 		)
 
 		assert.Equal(t, http.StatusOK, response.Code)
+		registered, ok := response.JSON.(registerResponse)
+		assert.True(t, ok)
+		assert.NotEmpty(t, registered.RefreshToken)
+		assert.EqualValues(t, time.Hour.Milliseconds(), registered.ExpiresInMs)
 
 		profile, err := userAPI.QueryProfile(processCtx.Context(), "@user:server")
 		assert.NoError(t, err)

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"reflect"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
@@ -139,7 +139,7 @@ func PutPushRuleByRuleID(ctx context.Context, scope, kind, ruleID, afterRuleID, 
 
 		// TODO: The spec does not say what to do in this case, but
 		// this feels reasonable.
-		*((*rulesPtr)[i]) = newRule
+		*(*rulesPtr)[i] = newRule
 		util.GetLogger(ctx).Infof("Modified existing push rule at %d", i)
 	} else {
 		if i >= 0 {

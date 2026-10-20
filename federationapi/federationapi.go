@@ -9,8 +9,8 @@ package federationapi
 import (
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
@@ -81,6 +81,8 @@ func AddPublicRoutes(
 
 // NewInternalAPI returns a concerete implementation of the internal API. Callers
 // can call functions directly on the returned API or via an HTTP interface using AddInternalRoutes.
+// Its consumers start immediately; use NewUnstartedInternalAPI when rsAPI is
+// not yet wired to the returned API.
 func NewInternalAPI(
 	processContext *process.ProcessContext,
 	zendriteCfg *config.Zendrite,
@@ -92,6 +94,28 @@ func NewInternalAPI(
 	keyRing *gomatrixserverlib.KeyRing,
 	resetBlacklist bool,
 ) *internal.FederationInternalAPI {
+	fedAPI, start := NewUnstartedInternalAPI(processContext, zendriteCfg, cm, natsInstance, federation, rsAPI, caches, keyRing, resetBlacklist)
+	start()
+	return fedAPI
+}
+
+// NewUnstartedInternalAPI is NewInternalAPI without starting the consumers and
+// the partial state worker, all of which call into rsAPI. Call the returned
+// function once the roomserver has been given the federation API with
+// SetFederationAPI. A promoted HA candidate finds a backlog on the output
+// streams, and processing it before then dereferences the roomserver's
+// not yet created queryer and inputer.
+func NewUnstartedInternalAPI(
+	processContext *process.ProcessContext,
+	zendriteCfg *config.Zendrite,
+	cm *sqlutil.Connections,
+	natsInstance *jetstream.NATSInstance,
+	federation fclient.FederationClient,
+	rsAPI roomserverAPI.FederationRoomserverAPI,
+	caches *caching.Caches,
+	keyRing *gomatrixserverlib.KeyRing,
+	resetBlacklist bool,
+) (*internal.FederationInternalAPI, func()) {
 	cfg := &zendriteCfg.FederationAPI
 
 	federationDB, err := storage.NewDatabase(processContext.Context(), cm, &cfg.Database, caches, zendriteCfg.Global.IsLocalServerName)
@@ -104,7 +128,9 @@ func NewInternalAPI(
 	}
 
 	stats := statistics.NewStatistics(federationDB, cfg.FederationMaxRetries+1, cfg.P2PFederationRetriesUntilAssumedOffline+1, cfg.EnableRelays)
+	stats.MinBackoffExponent = cfg.FederationMinRetryExponent
 
+	processContext.Defer(stats.Close)
 	js, nats := natsInstance.Prepare(processContext, &cfg.Matrix.JetStream)
 
 	signingInfo := zendriteCfg.Global.SigningIdentities()
@@ -115,64 +141,67 @@ func NewInternalAPI(
 		cfg.Matrix.ServerName, federation, &stats,
 		signingInfo,
 	)
-
-	rsConsumer := consumers.NewOutputRoomEventConsumer(
-		processContext, cfg, js, nats, queues,
-		federationDB, rsAPI,
-	)
-	if err = rsConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start room server consumer")
+	if zendriteCfg.Global.HA.Enabled && queues.RecoveryError() != nil {
+		logrus.WithError(queues.RecoveryError()).Panic("failed to recover federation destinations")
 	}
-	tsConsumer := consumers.NewOutputSendToDeviceConsumer(
-		processContext, cfg, js, queues, federationDB,
-	)
-	if err = tsConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start send-to-device consumer")
-	}
-	receiptConsumer := consumers.NewOutputReceiptConsumer(
-		processContext, cfg, js, queues, federationDB,
-	)
-	if err = receiptConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start receipt consumer")
-	}
-	typingConsumer := consumers.NewOutputTypingConsumer(
-		processContext, cfg, js, queues, federationDB,
-	)
-	if err = typingConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start typing consumer")
-	}
-	keyConsumer := consumers.NewKeyChangeConsumer(
-		processContext, &zendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
-	)
-	if err = keyConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start key server consumer")
-	}
-
-	presenceConsumer := consumers.NewOutputPresenceConsumer(
-		processContext, cfg, js, queues, federationDB, rsAPI,
-	)
-	if err = presenceConsumer.Start(); err != nil {
-		logrus.WithError(err).Panic("failed to start presence consumer")
-	}
-
-	var cleanExpiredEDUs func()
-	cleanExpiredEDUs = func() {
-		logrus.Infof("Cleaning expired EDUs")
-		if err := federationDB.DeleteExpiredEDUs(processContext.Context()); err != nil {
-			logrus.WithError(err).Error("Failed to clean expired EDUs")
-		}
-		time.AfterFunc(time.Hour, cleanExpiredEDUs)
-	}
-	time.AfterFunc(time.Minute, cleanExpiredEDUs)
 
 	fedAPI := internal.NewFederationInternalAPI(federationDB, cfg, rsAPI, federation, &stats, caches, queues, keyRing)
 
-	// Start the partial state worker for MSC3706 faster joins
+	// The partial state worker handles MSC3706 faster joins.
 	partialStateWorker := internal.NewPartialStateWorker(processContext, rsAPI, fedAPI)
 	fedAPI.SetPartialStateWorker(partialStateWorker)
-	if err := partialStateWorker.Start(); err != nil {
-		logrus.WithError(err).Warn("failed to start partial state worker")
-	}
 
-	return fedAPI
+	start := func() {
+		rsConsumer := consumers.NewOutputRoomEventConsumer(
+			processContext, cfg, js, nats, queues,
+			federationDB, rsAPI,
+		)
+		if err := rsConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start room server consumer")
+		}
+		tsConsumer := consumers.NewOutputSendToDeviceConsumer(
+			processContext, cfg, js, queues, federationDB,
+		)
+		if err := tsConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start send-to-device consumer")
+		}
+		receiptConsumer := consumers.NewOutputReceiptConsumer(
+			processContext, cfg, js, queues, federationDB,
+		)
+		if err := receiptConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start receipt consumer")
+		}
+		typingConsumer := consumers.NewOutputTypingConsumer(
+			processContext, cfg, js, queues, federationDB,
+		)
+		if err := typingConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start typing consumer")
+		}
+		keyConsumer := consumers.NewKeyChangeConsumer(
+			processContext, &zendriteCfg.KeyServer, js, queues, federationDB, rsAPI,
+		)
+		if err := keyConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start key server consumer")
+		}
+
+		presenceConsumer := consumers.NewOutputPresenceConsumer(
+			processContext, cfg, js, queues, federationDB, rsAPI,
+		)
+		if err := presenceConsumer.Start(); err != nil {
+			logrus.WithError(err).Panic("failed to start presence consumer")
+		}
+
+		cleanExpiredEDUs := func() {
+			logrus.Infof("Cleaning expired EDUs")
+			if err := federationDB.DeleteExpiredEDUs(processContext.Context()); err != nil {
+				logrus.WithError(err).Error("Failed to clean expired EDUs")
+			}
+		}
+		process.Repeat(processContext.Context(), time.Minute, time.Hour, cleanExpiredEDUs)
+
+		if err := partialStateWorker.Start(); err != nil {
+			logrus.WithError(err).Warn("failed to start partial state worker")
+		}
+	}
+	return fedAPI, start
 }

@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
+	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -50,7 +52,13 @@ type Database struct {
 	Purge              tables.Purge
 	UserRoomKeyTable   tables.UserRoomKeys
 	PartialStateTable  tables.PartialState
-	GetRoomUpdaterFn   func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
+	// ErasedUsersTable records users erased on deactivation (MSC4025).
+	ErasedUsersTable tables.ErasedUsers
+	// ReportedRoomsTable stores room reports (MSC4151).
+	ReportedRoomsTable tables.ReportedRooms
+	// ClientTransactionsTable maps client transaction IDs to their events.
+	ClientTransactionsTable tables.ClientTransactions
+	GetRoomUpdaterFn        func(ctx context.Context, roomInfo *types.RoomInfo) (*RoomUpdater, error)
 }
 
 // EventDatabase contains all tables needed to work with events.
@@ -65,6 +73,8 @@ type EventDatabase struct {
 	PrevEventsTable     tables.PreviousEvents
 	RedactionsTable     tables.Redactions
 	ReportedEventsTable tables.ReportedEvents
+	// AnnotationsTable indexes unredacted annotations (MSC2677).
+	AnnotationsTable tables.Annotations
 }
 
 func (d *Database) SupportsConcurrentRoomInputs() bool {
@@ -1116,6 +1126,12 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("d.RedactionsTable.MarkRedactionValidated: %w", err)
 		}
 
+		// A redacted annotation no longer counts as a duplicate.
+		err = d.AnnotationsTable.DeleteAnnotation(ctx, txn, redactedEvent.EventID())
+		if err != nil {
+			return fmt.Errorf("d.AnnotationsTable.DeleteAnnotation: %w", err)
+		}
+
 		// We remove the entry from the cache, as if we just "StoreRoomServerEvent", we can't be
 		// certain that the cached entry actually is updated, since ristretto is eventual-persistent.
 		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
@@ -1789,6 +1805,18 @@ func (d *Database) PurgeableRooms(ctx context.Context, mode config.AutoPurgeMode
 
 	purgeable := make([]types.RoomNID, 0, len(roomNIDs))
 	for i := range roomNIDs {
+		// A room is only empty once a local membership has been applied
+		// and later left or forgotten. Without any local membership row it
+		// is still being created or joined: its membership events are
+		// stored before the membership table is updated, and purging it in
+		// that window would delete a room its creator is about to enter.
+		applied, err := d.MembershipTable.SelectAnyLocalMembership(ctx, nil, roomNIDs[i])
+		if err != nil {
+			return nil, err
+		}
+		if !applied {
+			continue
+		}
 		var keep bool
 		switch mode {
 		case config.AutoPurgeOnEmpty:
@@ -2289,6 +2317,45 @@ func (d *Database) QueryAdminEventReport(ctx context.Context, reportID uint64) (
 	return report, nil
 }
 
+// InsertReportedRoom stores a room report (MSC4151).
+func (d *Database) InsertReportedRoom(ctx context.Context, roomID, userID, reason string) (reportID int64, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		reportID, err = d.ReportedRoomsTable.InsertReportedRoom(ctx, txn, roomID, userID, reason)
+		return err
+	})
+	return
+}
+
+// QueryAdminRoomReports lists room reports, newest first when backwards, with
+// the current name and canonical alias of each room that is still known.
+func (d *Database) QueryAdminRoomReports(
+	ctx context.Context, from, limit uint64, backwards bool, userID, roomID string,
+) ([]api.QueryAdminRoomReportsResponse, int64, error) {
+	reports, count, err := d.ReportedRoomsTable.SelectReportedRooms(ctx, nil, from, limit, backwards, userID, roomID)
+	if err != nil || len(reports) == 0 {
+		return reports, count, err
+	}
+	roomIDs := make([]string, 0, len(reports))
+	seen := make(map[string]struct{}, len(reports))
+	for _, report := range reports {
+		if _, ok := seen[report.RoomID]; !ok {
+			seen[report.RoomID] = struct{}{}
+			roomIDs = append(roomIDs, report.RoomID)
+		}
+	}
+	stateContent, err := d.GetBulkStateContent(ctx, roomIDs, []gomatrixserverlib.StateKeyTuple{
+		{EventType: spec.MRoomName, StateKey: ""},
+		{EventType: spec.MRoomCanonicalAlias, StateKey: ""},
+	}, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range reports {
+		reports[i].RoomName, reports[i].CanonicalAlias = findRoomNameAndCanonicalAlias(stateContent, reports[i].RoomID)
+	}
+	return reports, count, nil
+}
+
 func (d *Database) AdminDeleteEventReport(ctx context.Context, reportID uint64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.ReportedEventsTable.DeleteReportedEvent(ctx, txn, reportID)
@@ -2433,3 +2500,104 @@ func (s stateEntryByStateKeySorter) Less(i, j int) bool {
 	return s[i].StateKeyTuple.LessThan(s[j].StateKeyTuple)
 }
 func (s stateEntryByStateKeySorter) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+// ClientTransactionEventID implements storage.RoomDatabase.
+func (d *Database) ClientTransactionEventID(
+	ctx context.Context, roomID, senderID string, sessionID int64, transactionID string,
+) (string, error) {
+	eventID, err := d.ClientTransactionsTable.SelectClientTransactionEventID(ctx, nil, roomID, senderID, sessionID, transactionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return eventID, err
+}
+
+// StoreClientTransaction implements storage.RoomDatabase. Recording the same
+// transaction again keeps the event first recorded for it.
+func (d *Database) StoreClientTransaction(
+	ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.ClientTransactionsTable.InsertClientTransaction(
+			ctx, txn, roomID, senderID, sessionID, transactionID, eventID, time.Now().UnixMilli(),
+		)
+	})
+}
+
+// EventSentToOutput implements storage.RoomDatabase.
+func (d *Database) EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error) {
+	return d.EventsTable.SelectEventSentToOutput(ctx, nil, eventNID)
+}
+
+// ExpireClientTransactions implements storage.RoomDatabase.
+func (d *Database) ExpireClientTransactions(ctx context.Context, before time.Time) (removed int64, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		removed, err = d.ClientTransactionsTable.DeleteClientTransactionsBefore(ctx, txn, before.UnixMilli())
+		return err
+	})
+	return removed, err
+}
+
+// annotationOf returns the target event ID and key of an m.annotation
+// relation (MSC2677) in the given event content.
+func annotationOf(content []byte) (targetEventID, key string, ok bool) {
+	relation := gjson.GetBytes(content, `m\.relates_to`)
+	target, annotationKey := relation.Get("event_id"), relation.Get("key")
+	if relation.Get("rel_type").Str != "m.annotation" || target.Type != gjson.String || annotationKey.Type != gjson.String {
+		return "", "", false
+	}
+	// PostgreSQL cannot store a NUL character in text, so such annotations
+	// are not indexed on either database.
+	if strings.ContainsRune(target.Str, 0) || strings.ContainsRune(annotationKey.Str, 0) {
+		return "", "", false
+	}
+	return target.Str, annotationKey.Str, true
+}
+
+// StoreAnnotation implements storage.RoomDatabase. It records the event if
+// it is an annotation, unless the event has already been redacted.
+func (d *Database) StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error {
+	targetEventID, key, ok := annotationOf(event.Content())
+	if !ok {
+		return nil
+	}
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.AnnotationsTable.InsertAnnotation(
+			ctx, txn, roomInfo.RoomNID, event.EventID(), targetEventID, string(event.SenderID()), event.Type(), key,
+		)
+	})
+}
+
+// AnnotationExists implements storage.Database.
+func (d *Database) AnnotationExists(
+	ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key, excludeEventID string,
+) (bool, error) {
+	if strings.ContainsRune(targetEventID, 0) || strings.ContainsRune(key, 0) {
+		return false, nil // never indexed, see annotationOf
+	}
+	roomInfo, err := d.RoomInfo(ctx, roomID)
+	if err != nil || roomInfo == nil {
+		return false, err
+	}
+	return d.AnnotationsTable.SelectAnnotationExists(
+		ctx, nil, roomInfo.RoomNID, targetEventID, string(senderID), eventType, key, excludeEventID,
+	)
+}
+
+// SetUserErased implements storage.Database.
+func (d *Database) SetUserErased(ctx context.Context, userID string, erased bool) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if erased {
+			return d.ErasedUsersTable.InsertErasedUser(ctx, txn, userID, time.Now().UnixMilli())
+		}
+		return d.ErasedUsersTable.DeleteErasedUser(ctx, txn, userID)
+	})
+}
+
+// ErasedUsers implements storage.Database.
+func (d *Database) ErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
+	if len(userIDs) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	return d.ErasedUsersTable.SelectErasedUsers(ctx, nil, userIDs)
+}

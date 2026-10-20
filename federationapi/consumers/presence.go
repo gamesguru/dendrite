@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
@@ -97,6 +97,8 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join") //nolint:contextcheck
 	if err != nil {
 		log.WithError(err).Error("failed to calculate joined rooms for user")
+		// Dropped on purpose. Presence is ephemeral and the next update supersedes
+		// this one, so redelivering a stale presence state has no value.
 		return true
 	}
 
@@ -116,6 +118,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true) //nolint:contextcheck
 	if err != nil {
 		log.WithError(err).Error("failed to get joined hosts")
+		// Dropped on purpose, as above.
 		return true
 	}
 
@@ -158,5 +161,6 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		return false
 	}
 
+	// Dropped on purpose, as above.
 	return true
 }

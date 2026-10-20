@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 
@@ -114,7 +114,7 @@ func CreateRoom(
 	if resErr = createRequest.Validate(); resErr != nil {
 		return *resErr
 	}
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	// Import the postgres database driver.
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -81,7 +81,15 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresProfilesTable: %w", err)
 	}
-	threePIDTable, err := NewPostgresThreePIDTable(db)
+	profileFieldsTable, err := NewPostgresProfileFieldsTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresProfileFieldsTable: %w", err)
+	}
+	delayedEventsTable, err := NewPostgresDelayedEventsTable(db) //nolint:contextcheck
+	if err != nil {
+		return nil, fmt.Errorf("NewPostgresDelayedEventsTable: %w", err)
+	}
+	threePIDTable, err := NewPostgresThreePIDTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresThreePIDTable: %w", err)
 	}
@@ -93,11 +101,11 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresPusherTable: %w", err)
 	}
-	notificationsTable, err := NewPostgresNotificationTable(db)
+	notificationsTable, err := NewPostgresNotificationTable(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresNotificationTable: %w", err)
 	}
-	statsTable, err := NewPostgresStatsTable(db, serverName) //nolint:contextcheck
+	statsTable, err := NewPostgresStatsTable(db, serverName, ctx) //nolint:contextcheck // The optional context is propagated to the maintenance task.
 	if err != nil {
 		return nil, fmt.Errorf("NewPostgresStatsTable: %w", err)
 	}
@@ -126,6 +134,8 @@ func NewDatabase(ctx context.Context, conMan *sqlutil.Connections, dbProperties 
 		LoginTokens:           loginTokenTable,
 		OpenIDTokens:          openIDTable,
 		Profiles:              profilesTable,
+		ProfileFields:         profileFieldsTable,
+		DelayedEvents:         delayedEventsTable,
 		ThreePIDs:             threePIDTable,
 		ExternalIDs:           externalIDsTable,
 		Pushers:               pusherTable,

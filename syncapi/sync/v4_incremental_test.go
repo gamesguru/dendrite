@@ -9,7 +9,7 @@ package sync
 import (
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -421,17 +421,17 @@ func TestStreamTokenParsing(t *testing.T) {
 	}{
 		{
 			name:      "valid token",
-			input:     "s100_50_25_10_5_3_1_0_8",
+			input:     "s100_50_25_10_5_3_1_0_8_2",
 			wantError: false,
 		},
 		{
 			name:      "zero positions",
-			input:     "s0_0_0_0_0_0_0_0_0",
+			input:     "s0_0_0_0_0_0_0_0_0_0",
 			wantError: false,
 		},
 		{
 			name:      "large positions",
-			input:     "s999999_888888_777777_666666_555555_444444_333333_222222_111111",
+			input:     "s999999_888888_777777_666666_555555_444444_333333_222222_111111_99999",
 			wantError: false,
 		},
 		{

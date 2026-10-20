@@ -9,18 +9,20 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/version"
+	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // GetCapabilities returns information about the server's supported feature set
 // and other relevant capabilities to an authenticated user. When oidcEnabled is
 // true (MSC3861 delegated authentication), password and 3PID management are
 // delegated to the OIDC provider and reported as unavailable.
-func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool) util.JSONResponse {
+func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool, delayedEvents *config.DelayedEvents, device *userapi.Device) util.JSONResponse {
 	versionsMap := map[gomatrixserverlib.RoomVersion]string{}
 	for v, desc := range version.SupportedRoomVersions() {
 		if desc.Stable() {
@@ -30,26 +32,56 @@ func GetCapabilities(rsAPI roomserverAPI.ClientRoomserverAPI, oidcEnabled bool) 
 		}
 	}
 
-	response := map[string]any{
-		"capabilities": map[string]any{
-			"m.change_password": map[string]bool{
-				"enabled": !oidcEnabled,
-			},
-			"m.room_versions": map[string]any{
-				"default":   rsAPI.DefaultRoomVersion(),
-				"available": versionsMap,
-			},
-			"m.forget_forced_upon_leave": map[string]bool{
-				"enabled": rsAPI.AutoForgetOnLeaveEnabled(),
-			},
-			"m.3pid_changes": map[string]bool{
-				"enabled": !oidcEnabled,
-			},
+	capabilities := map[string]any{
+		"m.change_password": map[string]bool{
+			"enabled": !oidcEnabled,
 		},
+		"m.get_login_token": map[string]bool{
+			"enabled": !oidcEnabled,
+		},
+		"m.room_versions": map[string]any{
+			"default":   rsAPI.DefaultRoomVersion(),
+			"available": versionsMap,
+		},
+		"m.forget_forced_upon_leave": map[string]bool{
+			"enabled": rsAPI.AutoForgetOnLeaveEnabled(),
+		},
+		"m.3pid_changes": map[string]bool{
+			"enabled": !oidcEnabled,
+		},
+		// Every profile field may be set (MSC4133). m.set_displayname and
+		// m.set_avatar_url must agree with m.profile_fields.
+		"m.profile_fields": map[string]bool{
+			"enabled": true,
+		},
+		"uk.tcpip.msc4133.profile_fields": map[string]bool{
+			"enabled": true,
+		},
+		"m.set_displayname": map[string]bool{
+			"enabled": true,
+		},
+		"m.set_avatar_url": map[string]bool{
+			"enabled": true,
+		},
+		// MSC4140 limits, as Synapse reports them: a zero maximum delay
+		// tells clients that delayed events are disabled.
+		"org.matrix.msc4140.delayed_events": map[string]int64{
+			"max_delay_ms":  delayedEvents.MaxDelay.Milliseconds(),
+			"max_scheduled": int64(delayedEvents.MaxPerUser),
+		},
+	}
+
+	// Administrators can suspend accounts, and lock them unless the OIDC
+	// provider does (MSC4323). The capability is omitted for everyone else.
+	if device.AccountType == userapi.AccountTypeAdmin {
+		capabilities["m.account_moderation"] = map[string]bool{
+			"lock":    !oidcEnabled,
+			"suspend": true,
+		}
 	}
 
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: response,
+		JSON: map[string]any{"capabilities": capabilities},
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
@@ -27,7 +27,7 @@ func SendToDevice(
 	eventType string, txnID *string,
 ) util.JSONResponse {
 	if txnID != nil {
-		if res, ok := txnCache.FetchTransaction(device.AccessToken, *txnID, req.URL); ok {
+		if res, ok := txnCache.FetchTransaction(device, *txnID, req.URL); ok {
 			return *res
 		}
 	}
@@ -60,7 +60,7 @@ func SendToDevice(
 	}
 
 	if txnID != nil {
-		txnCache.AddTransaction(device.AccessToken, *txnID, req.URL, &res)
+		txnCache.AddTransaction(device, *txnID, req.URL, &res)
 	}
 
 	return res

@@ -5,13 +5,13 @@ when:
 
 clone:
   git:
-    image: codefloe.com/crow-plugins/clone:1.1.0
+    image: codefloe.com/crow-plugins/clone:1.2.1
     settings:
       tags: true
 
 steps:
   auto-release:
-    image: codefloe.com/crow-plugins/auto-releaser:0.3.1
+    image: codefloe.com/crow-plugins/auto-releaser:0.3.3
     settings:
       tag_after: 30d
       ssh_key:

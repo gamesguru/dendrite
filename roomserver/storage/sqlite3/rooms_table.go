@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -54,6 +54,9 @@ const selectLatestEventNIDsForUpdateSQL = "" +
 const updateLatestEventNIDsSQL = "" +
 	"UPDATE roomserver_rooms SET latest_event_nids = $1, last_event_sent_nid = $2, state_snapshot_nid = $3 WHERE room_nid = $4"
 
+const updateStateSnapshotNIDSQL = "" +
+	"UPDATE roomserver_rooms SET state_snapshot_nid = $1 WHERE room_nid = $2"
+
 const selectRoomVersionsForRoomNIDsSQL = "" +
 	"SELECT room_nid, room_version FROM roomserver_rooms WHERE room_nid IN ($1)"
 
@@ -66,14 +69,14 @@ const bulkSelectRoomIDsSQL = "" +
 const bulkSelectRoomNIDsSQL = "" +
 	"SELECT room_nid FROM roomserver_rooms WHERE room_id IN ($1)"
 
-const selectRoomNIDForUpdateSQL = "" +
-	"SELECT room_nid FROM roomserver_rooms WHERE room_id = $1"
-
 const selectResyncStateNIDSQL = "" +
 	"SELECT resync_state_nid FROM roomserver_rooms WHERE room_nid = $1"
 
 const updateResyncStateNIDSQL = "" +
 	"UPDATE roomserver_rooms SET resync_state_nid = $2 WHERE room_nid = $1"
+
+const selectRoomNIDForUpdateSQL = "" +
+	"SELECT room_nid FROM roomserver_rooms WHERE room_id = $1"
 
 type roomStatements struct {
 	db                                 *sql.DB
@@ -83,15 +86,14 @@ type roomStatements struct {
 	selectLatestEventNIDsStmt          *sql.Stmt
 	selectLatestEventNIDsForUpdateStmt *sql.Stmt
 	updateLatestEventNIDsStmt          *sql.Stmt
-	// selectRoomVersionForRoomNIDStmt    *sql.Stmt
-	selectRoomInfoStmt       *sql.Stmt
-	selectResyncStateNIDStmt *sql.Stmt
-	updateResyncStateNIDStmt *sql.Stmt
+	updateStateSnapshotNIDStmt         *sql.Stmt
+	selectRoomInfoStmt                 *sql.Stmt
+	selectResyncStateNIDStmt           *sql.Stmt
+	updateResyncStateNIDStmt           *sql.Stmt
 }
 
 func CreateRoomsTable(db *sql.DB) error {
-	_, err := db.Exec(roomsSchema)
-	if err != nil {
+	if _, err := db.Exec(roomsSchema); err != nil {
 		return err
 	}
 	m := sqlutil.NewMigrator(db)
@@ -113,7 +115,7 @@ func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
 		{&s.selectLatestEventNIDsStmt, selectLatestEventNIDsSQL},
 		{&s.selectLatestEventNIDsForUpdateStmt, selectLatestEventNIDsForUpdateSQL},
 		{&s.updateLatestEventNIDsStmt, updateLatestEventNIDsSQL},
-		// {&s.selectRoomVersionForRoomNIDsStmt, selectRoomVersionForRoomNIDsSQL},
+		{&s.updateStateSnapshotNIDStmt, updateStateSnapshotNIDSQL},
 		{&s.selectRoomInfoStmt, selectRoomInfoSQL},
 		{&s.selectRoomNIDForUpdateStmt, selectRoomNIDForUpdateSQL},
 		{&s.selectResyncStateNIDStmt, selectResyncStateNIDSQL},
@@ -224,6 +226,17 @@ func (s *roomStatements) UpdateLatestEventNIDs(
 		int64(stateSnapshotNID),
 		roomNID,
 	)
+	return err
+}
+
+func (s *roomStatements) UpdateStateSnapshotNID(
+	ctx context.Context,
+	txn *sql.Tx,
+	roomNID types.RoomNID,
+	stateSnapshotNID types.StateSnapshotNID,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateStateSnapshotNIDStmt)
+	_, err := stmt.ExecContext(ctx, stateSnapshotNID, roomNID)
 	return err
 }
 

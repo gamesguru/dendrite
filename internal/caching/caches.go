@@ -7,8 +7,8 @@
 package caching
 
 import (
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -17,6 +17,7 @@ import (
 // different implementations as long as they satisfy the Cache
 // interface.
 type Caches struct {
+	close                   func()
 	RoomVersions            Cache[string, gomatrixserverlib.RoomVersion]           // room ID -> room version
 	ServerKeys              Cache[string, gomatrixserverlib.PublicKeyLookupResult] // server name -> server keys
 	RoomServerRoomNIDs      Cache[string, types.RoomNID]                           // room ID -> room NID
@@ -30,7 +31,7 @@ type Caches struct {
 	FederationEDUs          Cache[int64, *gomatrixserverlib.EDU]                   // queue NID -> EDU
 	RoomHierarchies         Cache[string, fclient.RoomHierarchyResponse]           // room ID -> space response
 	RoomHierarchyFailures   Cache[string, struct{}]                                // room ID -> failed federation marker
-	LazyLoading             Cache[lazyLoadingCacheKey, string]                     // composite key -> event ID
+	LazyLoading             Cache[lazyLoadingCacheKey, LazyLoadedMember]           // composite key -> membership sent
 	RoomSummaries           Cache[string, RoomSummaryResponse]                     // "roomID:auth" -> summary response
 }
 
@@ -48,9 +49,9 @@ type RoomSummaryResponse struct {
 	WorldReadable    bool     `json:"world_readable"`
 	JoinRule         string   `json:"join_rule,omitempty"`
 	AllowedRoomIDs   []string `json:"allowed_room_ids,omitempty"`
-	Encryption       string   `json:"im.nheko.summary.encryption,omitempty"`
+	Encryption       string   `json:"encryption,omitempty"`
 	Membership       string   `json:"membership,omitempty"`
-	RoomVersion      string   `json:"im.nheko.summary.room_version,omitempty"`
+	RoomVersion      string   `json:"room_version,omitempty"`
 }
 
 // Cache is the interface that an implementation must satisfy.
@@ -67,4 +68,11 @@ type keyable interface {
 
 type costable interface {
 	CacheCost() int
+}
+
+// Close releases the cache after all application users have stopped.
+func (c *Caches) Close() {
+	if c.close != nil {
+		c.close()
+	}
 }

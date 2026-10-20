@@ -9,23 +9,25 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
-	"codefloe.com/pat-s/zendrite/internal/hooks"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/mscs/msc2836"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/test/testrig"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -563,19 +565,33 @@ func injectEvents(t *testing.T, userAPI userapi.UserInternalAPI, rsAPI roomserve
 		SingleDatabase: true,
 	})
 	cfg.Global.ServerName = "localhost"
-	cfg.MSCs.Database.ConnectionString = "file:msc2836_test.db"
+	cfg.MSCs.Database.ConnectionString = config.DataSource("file:" + filepath.Join(t.TempDir(), "msc2836_test.db"))
 	cfg.MSCs.MSCs = []string{"msc2836"}
+	cfg.Global.JetStream.InMemory = true
 
 	processCtx := process.NewProcessContext()
+	t.Cleanup(func() {
+		processCtx.ShutdownZendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+	natsInstance := jetstream.NATSInstance{}
+	js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 	cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 	routers := httputil.NewRouters()
-	err := msc2836.Enable(cfg, cm, routers, rsAPI, nil, userAPI, nil)
+	err := msc2836.Enable(processCtx, cfg, cm, js, routers, rsAPI, nil, userAPI, nil)
 	if err != nil {
 		t.Fatalf("failed to enable MSC2836: %s", err)
 	}
 	for _, ev := range events {
-		hooks.Run(hooks.KindNewEventPersisted, ev)
+		testrig.MustPublishMsgs(t, js, testrig.NewOutputEventMsg(t, cfg, ev.RoomID().String(), roomserver.OutputEvent{
+			Type:         roomserver.OutputTypeNewRoomEvent,
+			NewRoomEvent: &roomserver.OutputNewRoomEvent{Event: ev},
+		}))
 	}
+	// The relationship index is built asynchronously from the output stream.
+	stream := cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent)
+	durable := cfg.Global.JetStream.Durable("MSC2836RoomServerConsumer") + "Pull"
+	msc2836.WaitConsumed(t, js, stream, durable)
 	return routers.Client
 }
 

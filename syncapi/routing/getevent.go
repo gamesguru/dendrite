@@ -9,7 +9,7 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -76,6 +76,34 @@ func GetEvent(
 		}
 	}
 
+	// The roomserver accepts a redaction before the sync consumer has
+	// necessarily applied it to its event copy. Prefer the roomserver's
+	// redacted event in that short window so /event does not expose the old
+	// content after the redaction request has completed.
+	if !events[0].Redacted() {
+		var roomEvents api.QueryEventsByIDResponse
+		if err = rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+			RoomID:   rawRoomID,
+			EventIDs: []string{eventID},
+		}, &roomEvents); err != nil {
+			logger.WithError(err).Error("GetEvent: rsAPI.QueryEventsByID failed")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+		for _, roomEvent := range roomEvents.Events {
+			if roomEvent.EventID() == eventID && roomEvent.Redacted() {
+				// Keep the sync copy's history visibility, which the
+				// roomserver's event does not carry.
+				copied := *events[0]
+				copied.PDU = roomEvent.PDU
+				events[0] = &copied
+				break
+			}
+		}
+	}
+
 	// If the request is coming from an appservice, get the user from the request
 	rawUserID := device.UserID
 	if asUserID := req.FormValue("user_id"); device.AppserviceID != "" && asUserID != "" {
@@ -116,6 +144,17 @@ func GetEvent(
 	})
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).WithField("senderID", events[0].SenderID()).WithField("roomID", *roomID).Error("Failed converting to ClientEvent")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	bundler, err := internal.NewRelationBundler(ctx, db, rsAPI, *userID)
+	if err == nil {
+		err = bundler.BundleEvent(ctx, events[0], clientEvent, synctypes.FormatAll)
+	}
+	if err != nil {
+		logger.WithError(err).Error("GetEvent: failed to bundle relations")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},

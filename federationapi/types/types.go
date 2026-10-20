@@ -6,7 +6,7 @@
 
 package types
 
-import "codefloe.com/pat-s/gomatrixserverlib/spec"
+import "github.com/gamesguru/gomatrixserverlib/spec"
 
 const MSigningKeyUpdate = "m.signing_key_update" // TODO: move to gomatrixserverlib
 
@@ -54,7 +54,8 @@ type FederationReceiptData struct {
 }
 
 type ReceiptTS struct {
-	TS spec.Timestamp `json:"ts"`
+	ThreadID string         `json:"thread_id,omitempty"`
+	TS       spec.Timestamp `json:"ts"`
 }
 
 type Presence struct {

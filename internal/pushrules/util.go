@@ -129,3 +129,24 @@ func parseRoomMemberCountCondition(s string) (func(int) bool, error) {
 func pointer[t any](s t) *t {
 	return &s
 }
+
+// splitPropertyPath decodes escaped dots and backslashes in event keys.
+func splitPropertyPath(key string) []string {
+	parts := []string{}
+	var part strings.Builder
+	for i := 0; i < len(key); i++ {
+		switch key[i] {
+		case '.':
+			parts = append(parts, part.String())
+			part.Reset()
+		case '\\':
+			if i+1 < len(key) && (key[i+1] == '.' || key[i+1] == '\\') {
+				i++
+			}
+			part.WriteByte(key[i])
+		default:
+			part.WriteByte(key[i])
+		}
+	}
+	return append(parts, part.String())
+}

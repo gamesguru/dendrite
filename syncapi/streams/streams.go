@@ -22,9 +22,11 @@ type Streams struct {
 	DeviceListStreamProvider       StreamProvider
 	NotificationDataStreamProvider StreamProvider
 	PresenceStreamProvider         StreamProvider
+	StickyEventsStreamProvider     StreamProvider
 }
 
 func NewSyncStreamProviders(
+	ctx context.Context,
 	d storage.Database, userAPI userapi.SyncUserAPI,
 	rsAPI rsapi.SyncRoomserverAPI,
 	eduCache *caching.EDUCache, lazyLoadCache caching.LazyLoadCache, notifier *notifier.Notifier,
@@ -66,9 +68,13 @@ func NewSyncStreamProviders(
 			DefaultStreamProvider: DefaultStreamProvider{DB: d},
 			notifier:              notifier,
 		},
+		StickyEventsStreamProvider: &StickyEventsStreamProvider{
+			DefaultStreamProvider: DefaultStreamProvider{DB: d},
+			rsAPI:                 rsAPI,
+			lazyLoadCache:         lazyLoadCache,
+		},
 	}
 
-	ctx := context.TODO()
 	snapshot, err := d.NewDatabaseSnapshot(ctx)
 	if err != nil {
 		panic(err)
@@ -85,6 +91,7 @@ func NewSyncStreamProviders(
 	streams.NotificationDataStreamProvider.Setup(ctx, snapshot)
 	streams.DeviceListStreamProvider.Setup(ctx, snapshot)
 	streams.PresenceStreamProvider.Setup(ctx, snapshot)
+	streams.StickyEventsStreamProvider.Setup(ctx, snapshot)
 
 	succeeded = true
 	return streams
@@ -101,5 +108,6 @@ func (s *Streams) Latest(ctx context.Context) types.StreamingToken {
 		NotificationDataPosition: s.NotificationDataStreamProvider.LatestPosition(ctx),
 		DeviceListPosition:       s.DeviceListStreamProvider.LatestPosition(ctx),
 		PresencePosition:         s.PresenceStreamProvider.LatestPosition(ctx),
+		StickyPosition:           s.StickyEventsStreamProvider.LatestPosition(ctx),
 	}
 }

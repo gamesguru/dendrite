@@ -9,8 +9,11 @@
 package caching
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 const defaultTypingTimeout = 10 * time.Second
@@ -30,6 +33,7 @@ type roomData struct {
 
 // EDUCache maintains a list of users typing in each room.
 type EDUCache struct {
+	ctx context.Context
 	sync.RWMutex
 	latestSyncPosition int64
 	data               map[string]*roomData
@@ -46,8 +50,12 @@ func (t *EDUCache) newRoomData() *roomData {
 }
 
 // NewTypingCache returns a new EDUCache initialized for use.
-func NewTypingCache() *EDUCache {
-	return &EDUCache{data: make(map[string]*roomData)}
+func NewTypingCache(contexts ...context.Context) *EDUCache {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	return &EDUCache{ctx: ctx, data: make(map[string]*roomData)}
 }
 
 // SetTimeoutCallback sets a callback function that is called right after
@@ -95,10 +103,12 @@ func (t *EDUCache) AddTypingUser(
 	expireTime := getExpireTime(expire)
 	if until := time.Until(expireTime); until > 0 {
 		timer := time.AfterFunc(until, func() {
-			latestSyncPosition := t.RemoveUser(userID, roomID)
-			if t.timeoutCallback != nil {
-				t.timeoutCallback(userID, roomID, latestSyncPosition)
-			}
+			process.Do(t.ctx, func() {
+				latestSyncPosition := t.RemoveUser(userID, roomID)
+				if t.timeoutCallback != nil {
+					t.timeoutCallback(userID, roomID, latestSyncPosition)
+				}
+			})
 		})
 		return t.addUser(userID, roomID, timer)
 	}
@@ -173,4 +183,15 @@ func getExpireTime(expire *time.Time) time.Time {
 		return *expire
 	}
 	return time.Now().Add(defaultTypingTimeout)
+}
+
+// Close releases outstanding typing expiry timers after consumers have stopped.
+func (t *EDUCache) Close() {
+	t.Lock()
+	defer t.Unlock()
+	for _, room := range t.data {
+		for _, timer := range room.userSet {
+			timer.Stop()
+		}
+	}
 }

@@ -117,6 +117,28 @@ If successfully sent, the API will return the following response:
 
 Shared secret registration — please see the [user creation page](/administration/createusers) for guidance on configuring and using this endpoint.
 
+## GET and PUT `/_matrix/client/v1/admin/lock/{userId}`
+
+From the [Matrix Spec](https://spec.matrix.org/v1.18/client-server-api/#put_matrixclientv1adminlockuserid).
+`PUT` locks (`{"locked": true}`) or unlocks (`{"locked": false}`) a local account, and `GET` returns `{"locked": <bool>}`.
+A locked account keeps its sessions but can only log out until it is unlocked; see [account locking](/mscs/#account-locking).
+The user ID must belong to this server (otherwise 400 `M_INVALID_PARAM`), and the account must exist and not be deactivated (otherwise 404 `M_NOT_FOUND`).
+Administrators cannot lock themselves or another administrator (403 `M_FORBIDDEN`).
+With MSC3861 delegated authentication, both methods return 403; lock the account in the authentication service instead.
+
+## GET and PUT `/_matrix/client/v1/admin/suspend/{userId}`
+
+From the [Matrix Spec](https://spec.matrix.org/v1.18/client-server-api/#put_matrixclientv1adminsuspenduserid).
+`PUT` suspends (`{"suspended": true}`) or unsuspends (`{"suspended": false}`) a local account, and `GET` returns `{"suspended": <bool>}`.
+A suspended account can still read and log in, but not join rooms, send messages or change its profile; see [account suspension](/mscs/#account-suspension).
+The errors are those of the lock endpoints, and suspension also works with MSC3861 delegated authentication.
+
+## GET `/_synapse/admin/v1/room_reports`
+
+Lists room reports (MSC4151), newest first, as Synapse does.
+The optional `from` (offset, default 0), `limit` (default 100), `dir` (`b`, the default, or `f` for oldest first), `user_id` (the reporter) and `room_id` filter the list.
+The response holds `room_reports` (each with `id`, `received_ts`, `room_id`, `name`, `canonical_alias`, `user_id` and `reason`), `total`, and `next_token` when more reports follow.
+
 ## GET `/_matrix/client/v3/admin/whois/{userId}`
 
 From the [Matrix Spec](https://spec.matrix.org/v1.3/client-server-api/#get_matrixclientv3adminwhoisuserid).

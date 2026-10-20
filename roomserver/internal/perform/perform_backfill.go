@@ -11,8 +11,8 @@ import (
 	"errors"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
@@ -28,7 +28,11 @@ import (
 // the max number of servers to backfill from per request. If this is too low we may fail to backfill when
 // we could've from another server. If this is too high we may take far too long to successfully backfill
 // as we try dead servers.
-const maxBackfillServers = 5
+const (
+	maxBackfillServers    = 5
+	maxBackfillEvents     = 100
+	minBackfillFromEvents = 2
+)
 
 type Backfiller struct {
 	IsLocalServerName func(spec.ServerName) bool
@@ -92,7 +96,13 @@ func (r *Backfiller) PerformBackfill(
 
 	for _, event := range loadedEvents {
 		if _, ok := redactEventIDs[event.EventID()]; ok {
-			event.Redact()
+			// Loaded events can be shared through the event cache, so
+			// redact a copy. A copy that cannot be made is left out.
+			redacted, redactErr := types.RedactedCopy(event)
+			if redactErr != nil {
+				continue
+			}
+			event = redacted
 		}
 		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event})
 	}
@@ -114,9 +124,10 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// We can't honor exactly the limit as some sytests rely on requesting more for tests to pass
 	// (so we don't need to hit /state_ids which the test has no listener for)
 	// Specifically the test "Outbound federation can backfill events"
+	fromEventIDs := prioritiseBackfillFromEventIDs(ctx, req.RoomID, req.PrevEventIDs(), requester.ServersAtEvent)
 	events, err := gomatrixserverlib.RequestBackfill(
 		ctx, req.VirtualHost, requester,
-		r.KeyRing, req.RoomID, info.RoomVersion, req.PrevEventIDs(), 100, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) { //nolint:mnd
+		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 	)
@@ -128,18 +139,6 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// If we got an error but still got events, that's fine, because a server might have returned a 404 (or something)
 	// but other servers could provide the missing event.
 	logrus.WithError(err).WithField("room_id", req.RoomID).Infof("backfilled %d events", len(events))
-
-	// Requesting events from federation can take a while, during which the room
-	// may have been purged. Re-check before persisting so we neither resurrect
-	// the room locally nor hand the events back to the caller (e.g. the sync API)
-	// to store into the purged room (#224).
-	if info, err = r.DB.RoomInfo(ctx, req.RoomID); err != nil {
-		return err
-	}
-	if info == nil || info.IsStub() {
-		logrus.WithField("room_id", req.RoomID).Warn("Discarding backfilled events: room no longer exists, it was likely purged")
-		return nil
-	}
 
 	// persist these new events - auth checks have already been done
 	roomNID, storedEvents := persistEvents(ctx, r.DB, r.Querier, events)
@@ -185,6 +184,36 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	return nil
 }
 
+func prioritiseBackfillFromEventIDs(
+	ctx context.Context,
+	roomID string,
+	fromEventIDs []string,
+	serversAtEvent func(context.Context, string, string) []spec.ServerName,
+) []string {
+	if len(fromEventIDs) < minBackfillFromEvents {
+		return fromEventIDs
+	}
+
+	bestIndex := 0
+	bestServerCount := len(serversAtEvent(ctx, roomID, fromEventIDs[0]))
+	for i := 1; i < len(fromEventIDs); i++ {
+		serverCount := len(serversAtEvent(ctx, roomID, fromEventIDs[i]))
+		if serverCount > bestServerCount {
+			bestIndex = i
+			bestServerCount = serverCount
+		}
+	}
+	if bestIndex == 0 {
+		return fromEventIDs
+	}
+
+	reordered := make([]string, 0, len(fromEventIDs))
+	reordered = append(reordered, fromEventIDs[bestIndex])
+	reordered = append(reordered, fromEventIDs[:bestIndex]...)
+	reordered = append(reordered, fromEventIDs[bestIndex+1:]...)
+	return reordered
+}
+
 // fetchAndStoreMissingEvents does a best-effort fetch and store of missing events specified in stateIDs. Returns no error as it is just
 // best effort.
 func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gomatrixserverlib.RoomVersion,
@@ -218,7 +247,10 @@ func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gom
 				logger.WithError(err).Warn("failed to get event from server")
 				continue
 			}
-			loader := gomatrixserverlib.NewEventsLoader(roomVer, r.KeyRing, backfillRequester, backfillRequester.ProvideEvents, false)
+			loader := gomatrixserverlib.NewEventsLoader(roomVer, r.KeyRing, backfillRequester,
+				func(roomVer gomatrixserverlib.RoomVersion, eventIDs []string) ([]gomatrixserverlib.PDU, error) {
+					return backfillRequester.ProvideEventsContext(ctx, roomVer, eventIDs)
+				}, false)
 			result, err := loader.LoadAndVerify(ctx, res.PDUs, gomatrixserverlib.TopologicalOrderByPrevEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
 			})
@@ -228,20 +260,20 @@ func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gom
 			}
 			logger.Infof("returned %d PDUs which made events %+v", len(res.PDUs), result)
 			for _, res := range result {
-				var sigErr gomatrixserverlib.SignatureErr
+				var signatureErr gomatrixserverlib.SignatureErr
 				var authChainErr gomatrixserverlib.AuthChainErr
 				var authRulesErr gomatrixserverlib.AuthRulesErr
 				switch {
 				case res.Error == nil:
-				case errors.As(res.Error, &sigErr):
+				case errors.As(res.Error, &signatureErr):
 					// The signature of the event might not be valid anymore, for example if
 					// the key ID was reused with a different signature.
 					logger.WithError(res.Error).Errorf("event failed PDU checks, storing anyway")
-				case errors.As(res.Error, &authChainErr) || errors.As(res.Error, &authRulesErr):
+				case errors.As(res.Error, &authChainErr), errors.As(res.Error, &authRulesErr):
 					logger.WithError(res.Error).Warn("event failed PDU checks")
 					continue
 				default:
-					logger.WithError(err).Warn("event failed PDU checks")
+					logger.WithError(res.Error).Warn("event failed PDU checks")
 					continue
 				}
 				missingMap[id] = &types.HeaderedEvent{PDU: res.Event}
@@ -397,7 +429,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 	event gomatrixserverlib.PDU, eventIDs []string,
 ) (map[string]gomatrixserverlib.PDU, error) {
 	// try to fetch the events from the database first
-	events, err := b.ProvideEvents(roomVer, eventIDs) //nolint:contextcheck
+	events, err := b.ProvideEventsContext(ctx, roomVer, eventIDs)
 	if err != nil {
 		// non-fatal, fallthrough
 		logrus.WithError(err).Info("Failed to fetch events")
@@ -536,7 +568,10 @@ func (b *backfillRequester) Backfill(ctx context.Context, origin, server spec.Se
 }
 
 func (b *backfillRequester) ProvideEvents(roomVer gomatrixserverlib.RoomVersion, eventIDs []string) ([]gomatrixserverlib.PDU, error) {
-	ctx := context.Background()
+	return b.ProvideEventsContext(context.Background(), roomVer, eventIDs)
+}
+
+func (b *backfillRequester) ProvideEventsContext(ctx context.Context, roomVer gomatrixserverlib.RoomVersion, eventIDs []string) ([]gomatrixserverlib.PDU, error) {
 	nidMap, err := b.db.EventNIDs(ctx, eventIDs)
 	if err != nil {
 		logrus.WithError(err).WithField("event_ids", eventIDs).Error("Failed to find events")
@@ -625,18 +660,9 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 			i++
 		}
 
-		// Look the room up rather than creating it: backfill only ever adds
-		// historical events to a room we already have. If the room is missing
-		// (e.g. it was purged while this backfill was in flight) we must not
-		// re-create it, otherwise the purged room is silently resurrected (#224).
-		roomInfo, err := db.RoomInfo(ctx, ev.RoomID().String())
+		roomInfo, err := db.GetOrCreateRoomInfo(ctx, ev)
 		if err != nil {
-			logrus.WithError(err).Error("failed to look up roomNID")
-			continue
-		}
-		if roomInfo == nil || roomInfo.IsStub() {
-			logrus.WithField("room_id", ev.RoomID().String()).WithField("event_id", ev.EventID()).
-				Warn("Refusing to persist backfilled event into a missing room; it was likely purged")
+			logrus.WithError(err).Error("failed to get or create roomNID")
 			continue
 		}
 		roomNID = roomInfo.RoomNID

@@ -11,10 +11,11 @@ import (
 	"database/sql"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage/sqlite3/deltas"
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS userapi_accounts (
     appservice_id TEXT,
     -- If the account is currently active
     is_deactivated BOOLEAN DEFAULT 0,
-	-- The account_type (user = 1, guest = 2, admin = 3, appservice = 4)
+	-- The account_type (user = 1, guest = 2, admin = 3, appservice = 4, call guest = 5)
 	account_type INTEGER NOT NULL
     -- TODO:
     -- upgraded_ts, devices, any email reset stuff?
@@ -53,8 +54,18 @@ const updatePasswordSQL = "" +
 const deactivateAccountSQL = "" +
 	"UPDATE userapi_accounts SET is_deactivated = 1 WHERE localpart = $1 AND server_name = $2"
 
+const reactivateAccountSQL = "" +
+	"UPDATE userapi_accounts SET is_deactivated = 0 WHERE localpart = $1 AND server_name = $2"
+
 const selectAccountByLocalpartSQL = "" +
-	"SELECT localpart, server_name, appservice_id, account_type FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+	"SELECT localpart, server_name, appservice_id, account_type, COALESCE(is_deactivated, FALSE), locked, suspended" +
+	" FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
+
+const updateLockedSQL = "" +
+	"UPDATE userapi_accounts SET locked = $1 WHERE localpart = $2 AND server_name = $3"
+
+const updateSuspendedSQL = "" +
+	"UPDATE userapi_accounts SET suspended = $1 WHERE localpart = $2 AND server_name = $3"
 
 const selectIsDeactivatedSQL = "" +
 	"SELECT is_deactivated FROM userapi_accounts WHERE localpart = $1 AND server_name = $2"
@@ -67,16 +78,25 @@ const selectNewNumericLocalpartSQL = "" +
 
 const countAccountsSQL = "SELECT COUNT(*) FROM userapi_accounts"
 
+const selectActiveAccountsCreatedBeforeSQL = "" +
+	"SELECT localpart, server_name FROM userapi_accounts" +
+	" WHERE account_type = $1 AND created_ts < $2 AND is_deactivated = 0" +
+	" ORDER BY created_ts LIMIT $3"
+
 type accountsStatements struct {
 	db                            *sql.DB
 	insertAccountStmt             *sql.Stmt
 	countAccountsStmt             *sql.Stmt
 	updatePasswordStmt            *sql.Stmt
 	deactivateAccountStmt         *sql.Stmt
+	reactivateAccountStmt         *sql.Stmt
 	selectAccountByLocalpartStmt  *sql.Stmt
+	updateLockedStmt              *sql.Stmt
+	updateSuspendedStmt           *sql.Stmt
 	selectIsDeactivatedStmt       *sql.Stmt
 	selectPasswordHashStmt        *sql.Stmt
 	selectNewNumericLocalpartStmt *sql.Stmt
+	selectActiveCreatedBeforeStmt *sql.Stmt
 	serverName                    spec.ServerName
 }
 
@@ -101,6 +121,14 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 			Up:      deltas.UpAddAccountType,
 			Down:    deltas.DownAddAccountType,
 		},
+		{
+			Version: "userapi: add account locks",
+			Up:      tables.AddAccountLocked,
+		},
+		{
+			Version: "userapi: add account suspensions",
+			Up:      tables.AddAccountSuspended,
+		},
 	}...)
 	err = m.Up(context.Background())
 	if err != nil {
@@ -111,10 +139,14 @@ func NewSQLiteAccountsTable(db *sql.DB, serverName spec.ServerName) (tables.Acco
 		{&s.countAccountsStmt, countAccountsSQL},
 		{&s.updatePasswordStmt, updatePasswordSQL},
 		{&s.deactivateAccountStmt, deactivateAccountSQL},
+		{&s.reactivateAccountStmt, reactivateAccountSQL},
 		{&s.selectAccountByLocalpartStmt, selectAccountByLocalpartSQL},
+		{&s.updateLockedStmt, updateLockedSQL},
+		{&s.updateSuspendedStmt, updateSuspendedSQL},
 		{&s.selectIsDeactivatedStmt, selectIsDeactivatedSQL},
 		{&s.selectPasswordHashStmt, selectPasswordHashSQL},
 		{&s.selectNewNumericLocalpartStmt, selectNewNumericLocalpartSQL},
+		{&s.selectActiveCreatedBeforeStmt, selectActiveAccountsCreatedBeforeSQL},
 	}.Prepare(db)
 }
 
@@ -169,6 +201,45 @@ func (s *accountsStatements) DeactivateAccount(
 	return
 }
 
+// ReactivateAccount clears the deactivated flag and reports sql.ErrNoRows
+// when no account matches, so callers need no separate existence lookup.
+func (s *accountsStatements) ReactivateAccount(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+) error {
+	return execOneAccount(s.reactivateAccountStmt.ExecContext(ctx, localpart, serverName))
+}
+
+// UpdateLocked sets whether the account is locked (MSC3939) and reports
+// sql.ErrNoRows when no account matches.
+func (s *accountsStatements) UpdateLocked(
+	ctx context.Context, localpart string, serverName spec.ServerName, locked bool,
+) error {
+	return execOneAccount(s.updateLockedStmt.ExecContext(ctx, locked, localpart, serverName))
+}
+
+// UpdateSuspended sets whether the account is suspended (MSC3823) and reports
+// sql.ErrNoRows when no account matches.
+func (s *accountsStatements) UpdateSuspended(
+	ctx context.Context, localpart string, serverName spec.ServerName, suspended bool,
+) error {
+	return execOneAccount(s.updateSuspendedStmt.ExecContext(ctx, suspended, localpart, serverName))
+}
+
+// execOneAccount reports sql.ErrNoRows when an update matched no account.
+func execOneAccount(result sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *accountsStatements) SelectPasswordHash(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 ) (hash string, err error) {
@@ -183,7 +254,7 @@ func (s *accountsStatements) SelectAccountByLocalpart(
 	var acc api.Account
 
 	stmt := s.selectAccountByLocalpartStmt
-	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType)
+	err := stmt.QueryRowContext(ctx, localpart, serverName).Scan(&acc.Localpart, &acc.ServerName, &appserviceIDPtr, &acc.AccountType, &acc.Deactivated, &acc.Locked, &acc.Suspended)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.WithError(err).Error("Unable to retrieve user from the db")
@@ -218,4 +289,24 @@ func (s *accountsStatements) SelectNewNumericLocalpart(
 		return 1, nil
 	}
 	return id + 1, err
+}
+
+func (s *accountsStatements) SelectActiveAccountsCreatedBefore(
+	ctx context.Context, accountType api.AccountType, before spec.Timestamp, limit int,
+) ([]api.Account, error) {
+	rows, err := s.selectActiveCreatedBeforeStmt.QueryContext(ctx, accountType, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectActiveAccountsCreatedBefore: rows.close() failed")
+	var accounts []api.Account
+	for rows.Next() {
+		acc := api.Account{AccountType: accountType}
+		if err = rows.Scan(&acc.Localpart, &acc.ServerName); err != nil {
+			return nil, err
+		}
+		acc.UserID = userutil.MakeUserID(acc.Localpart, acc.ServerName)
+		accounts = append(accounts, acc)
+	}
+	return accounts, rows.Err()
 }

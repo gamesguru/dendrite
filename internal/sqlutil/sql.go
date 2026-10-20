@@ -48,6 +48,21 @@ func EndTransactionWithCheck(txn Transaction, succeeded *bool, err *error) {
 	}
 }
 
+// ErrIsCanceled reports whether err is a consequence of the caller's context
+// being canceled or having expired.
+//
+// As well as the context errors themselves, this covers sql.ErrTxDone: as soon
+// as the context that a transaction was started with is done, database/sql
+// rolls that transaction back in the background, so any work still in flight
+// fails with sql.ErrTxDone from then on. Those are all symptoms of a single
+// cancellation rather than independent database failures, so callers should
+// collapse them into one and give up rather than reporting each one.
+func ErrIsCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, sql.ErrTxDone)
+}
+
 // WithTransaction runs a block of code passing in an SQL transaction
 // If the code returns an error or panics then the transactions is rolledback
 // Otherwise the transaction is committed.

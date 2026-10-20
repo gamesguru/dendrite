@@ -7,23 +7,27 @@
 package queue
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
+	"codefloe.com/pat-s/zendrite/internal/ownership"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
 )
@@ -52,8 +56,10 @@ type destinationQueue struct {
 	backingOff         atomic.Bool                     // true if we're backing off
 	overflowed         atomic.Bool                     // the queues exceed maxPDUsInMemory/maxEDUsInMemory, so we should consult the database for more
 	statistics         *statistics.ServerStatistics    // statistics about this remote server
-	transactionIDMutex sync.Mutex                      // protects transactionID
+	transactionIDMutex sync.Mutex                      // protects transactionID and transactionKey
 	transactionID      gomatrixserverlib.TransactionID // last transaction ID if retrying, or "" if last txn was successful
+	transactionKey     [sha256.Size]byte               // digest of the content last sent under transactionID
+	transactionAttempt int64                           // distinguishes IDs created within one millisecond
 	notify             chan struct{}                   // interrupts idle wait pending PDUs/EDUs
 	pendingPDUs        []*queuedPDU                    // PDUs waiting to be sent
 	pendingEDUs        []*queuedEDU                    // EDUs waiting to be sent
@@ -181,7 +187,7 @@ func (oq *destinationQueue) wakeQueueIfNeeded() {
 	// If we aren't running then wake up the queue.
 	if !oq.running.Load() {
 		// Start the queue.
-		go oq.backgroundSend()
+		oq.process.Go(oq.backgroundSend)
 	}
 }
 
@@ -250,6 +256,19 @@ func (oq *destinationQueue) getPendingFromDatabase() {
 		} else {
 			logrus.WithError(err).Errorf("Failed to get pending EDUs for %q", oq.destination)
 		}
+	}
+
+	// Send in the order the events were queued. The database hands them back
+	// unordered, and events queued since a restart are already in memory ahead
+	// of the older backlog. A receiver that gets an event before its prev_events
+	// may reject it permanently.
+	if retrieved {
+		slices.SortStableFunc(oq.pendingPDUs, func(a, b *queuedPDU) int {
+			return cmp.Compare(a.dbReceipt.GetNID(), b.dbReceipt.GetNID())
+		})
+		slices.SortStableFunc(oq.pendingEDUs, func(a, b *queuedEDU) int {
+			return cmp.Compare(a.dbReceipt.GetNID(), b.dbReceipt.GetNID())
+		})
 	}
 
 	// If we've retrieved all of the events from the database with room to spare
@@ -384,6 +403,26 @@ func (oq *destinationQueue) backgroundSend() {
 		// If we have pending PDUs or EDUs then construct a transaction.
 		// Try sending the next transaction and see what happens.
 		sendMethod, terr := oq.nextTransaction(toSendPDUs, toSendEDUs)
+		if errors.Is(terr, ownership.ErrDispatchRefused) {
+			// This homeserver refused to dispatch, so the destination told us
+			// nothing. Charging it would persist retry state, divert to relays
+			// and eventually blacklist a server that was never unreachable,
+			// in a database the successor inherits. Stop instead and let the
+			// promoted activation resume the queue.
+			logrus.WithError(terr).WithField("destination", oq.destination).
+				Warn("Stopping destination queue: ownership is no longer held")
+			return
+		}
+		if terr != nil && oq.process.Context().Err() != nil {
+			// The transaction was cut short because this process is shutting
+			// down, for example an HA owner that lost its lease. Charging
+			// the destination would persist a backoff of minutes, which the
+			// successor inherits, for a server that was never unreachable.
+			logrus.WithError(terr).WithField("destination", oq.destination).
+				Info("Stopping destination queue: the process is shutting down")
+			oq.statistics.ClearBackoff()
+			return
+		}
 		if terr != nil {
 			// We failed to send the transaction. Mark it as a failure.
 			_, blacklisted := oq.statistics.Failure()
@@ -512,17 +551,6 @@ func (oq *destinationQueue) createTransaction(
 	pdus []*queuedPDU,
 	edus []*queuedEDU,
 ) (gomatrixserverlib.Transaction, []*receipt.Receipt, []*receipt.Receipt) {
-	// If there's no projected transaction ID then generate one. If
-	// the transaction succeeds then we'll set it back to "" so that
-	// we generate a new one next time. If it fails, we'll preserve
-	// it so that we retry with the same transaction ID.
-	oq.transactionIDMutex.Lock()
-	if oq.transactionID == "" {
-		now := spec.AsTimestamp(time.Now())
-		oq.transactionID = gomatrixserverlib.TransactionID(fmt.Sprintf("%d-%d", now, oq.statistics.SuccessCount()))
-	}
-	oq.transactionIDMutex.Unlock()
-
 	t := gomatrixserverlib.Transaction{
 		PDUs: []json.RawMessage{},
 		EDUs: []gomatrixserverlib.EDU{},
@@ -530,7 +558,6 @@ func (oq *destinationQueue) createTransaction(
 	t.Origin = oq.origin
 	t.Destination = oq.destination
 	t.OriginServerTS = spec.AsTimestamp(time.Now())
-	t.TransactionID = oq.transactionID
 
 	var pduReceipts []*receipt.Receipt
 	var eduReceipts []*receipt.Receipt
@@ -558,7 +585,32 @@ func (oq *destinationQueue) createTransaction(
 		eduReceipts = append(eduReceipts, edu.dbReceipt)
 	}
 
+	t.TransactionID = oq.transactionIDFor(t)
 	return t, pduReceipts, eduReceipts
+}
+
+// transactionIDFor returns the ID to send a transaction under. A retry of the
+// same content keeps the previous attempt's ID, so the destination can
+// recognize an attempt it already processed. Content that changed while the
+// previous attempt was failing, typically because more events were queued,
+// gets a new ID: a destination that matches transactions by ID would
+// otherwise answer it with the earlier attempt's outcome and never process
+// what was added. A successful send clears the ID.
+func (oq *destinationQueue) transactionIDFor(t gomatrixserverlib.Transaction) gomatrixserverlib.TransactionID {
+	content, err := json.Marshal(struct {
+		PDUs []json.RawMessage       `json:"pdus"`
+		EDUs []gomatrixserverlib.EDU `json:"edus"`
+	}{t.PDUs, t.EDUs})
+	key := sha256.Sum256(content)
+	oq.transactionIDMutex.Lock()
+	defer oq.transactionIDMutex.Unlock()
+	if oq.transactionID == "" || err != nil || key != oq.transactionKey {
+		oq.transactionAttempt++
+		now := spec.AsTimestamp(time.Now())
+		oq.transactionID = gomatrixserverlib.TransactionID(fmt.Sprintf("%d-%d-%d", now, oq.statistics.SuccessCount(), oq.transactionAttempt))
+		oq.transactionKey = key
+	}
+	return oq.transactionID
 }
 
 // blacklistDestination removes all pending PDUs and EDUs that have been cached

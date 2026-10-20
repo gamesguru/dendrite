@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
@@ -239,6 +239,11 @@ type SlidingList struct {
 
 	// Operations describing how to update the list
 	Ops []SlidingOperation `json:"ops,omitempty"`
+
+	// MatchedRoomIDs holds every room the list's filters match, beyond its
+	// window. Extensions that cover every room the client is interested in,
+	// such as sticky events, read it.
+	MatchedRoomIDs []string `json:"-"`
 }
 
 // SlidingOperation describes a change to a room list.
@@ -343,6 +348,8 @@ type ExtensionRequest struct {
 	AccountData *AccountDataRequest `json:"account_data,omitempty"`
 	Receipts    *ReceiptsRequest    `json:"receipts,omitempty"`
 	Typing      *TypingRequest      `json:"typing,omitempty"`
+	// StickyEvents is the MSC4354 sticky events extension (MSC4480).
+	StickyEvents *StickyEventsRequest `json:"org.matrix.msc4354.sticky_events,omitempty"`
 }
 
 // ToDeviceRequest configures to-device message extension.
@@ -378,6 +385,18 @@ type TypingRequest struct {
 	Rooms   []string `json:"rooms,omitempty"` // Optional room filter (MSC3960)
 }
 
+// StickyEventsRequest configures the MSC4354 sticky events extension
+// (MSC4480). It covers every joined room the lists or room subscriptions
+// match, whether or not the room is in a list's window.
+type StickyEventsRequest struct {
+	Enabled bool `json:"enabled"`
+	// Since is the next_batch of the previous response of this extension.
+	// Without it, delivery starts from the beginning of the stream.
+	Since string `json:"since,omitempty"`
+	// Limit is how many sticky events to return at most, 100 by default.
+	Limit *int `json:"limit,omitempty"`
+}
+
 // ExtensionResponse contains all extension responses from the server.
 type ExtensionResponse struct {
 	ToDevice    *V4ToDeviceResponse  `json:"to_device,omitempty"`
@@ -385,6 +404,21 @@ type ExtensionResponse struct {
 	AccountData *AccountDataResponse `json:"account_data,omitempty"`
 	Receipts    *ReceiptsResponse    `json:"receipts,omitempty"`
 	Typing      *TypingResponse      `json:"typing,omitempty"`
+	// StickyEvents is omitted when there are no sticky events to deliver.
+	StickyEvents *StickyEventsResponse `json:"org.matrix.msc4354.sticky_events,omitempty"`
+}
+
+// StickyEventsResponse carries unexpired MSC4354 sticky events per room,
+// leaving out those that the room's timeline in the same response carries.
+type StickyEventsResponse struct {
+	Rooms map[string]StickyEventsRoom `json:"rooms"`
+	// NextBatch is the since of the next request of this extension.
+	NextBatch string `json:"next_batch"`
+}
+
+// StickyEventsRoom holds the sticky events of one room, in stream order.
+type StickyEventsRoom struct {
+	Events []synctypes.ClientEvent `json:"events"`
 }
 
 // V4ToDeviceResponse contains to-device messages for v4 sliding sync

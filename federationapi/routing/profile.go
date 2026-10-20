@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"
-	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -59,32 +59,31 @@ func GetProfile(
 		}
 	}
 
-	var res any
-	code := http.StatusOK
-
-	if field != "" {
-		switch field {
-		case "displayname":
-			res = eventutil.UserProfile{
-				DisplayName: profile.DisplayName,
-			}
-		case "avatar_url":
-			res = eventutil.UserProfile{
-				AvatarURL: profile.AvatarURL,
-			}
-		default:
-			code = http.StatusBadRequest
-			res = spec.InvalidParam("The request body did not contain an allowed value of argument 'field'. Allowed values are either: 'avatar_url', 'displayname'.")
-		}
-	} else {
-		res = eventutil.UserProfile{
-			AvatarURL:   profile.AvatarURL,
-			DisplayName: profile.DisplayName,
+	fields := profile.ClientFields()
+	if field == "" {
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			JSON: fields,
 		}
 	}
 
+	// Any profile field may be requested (MSC4133). An unset display name or
+	// avatar URL is reported as an empty object, as before.
+	value, ok := fields[field]
+	switch {
+	case ok:
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			JSON: map[string]any{field: value},
+		}
+	case field == authtypes.ProfileFieldDisplayName, field == authtypes.ProfileFieldAvatarURL:
+		return util.JSONResponse{
+			Code: http.StatusOK,
+			JSON: struct{}{},
+		}
+	}
 	return util.JSONResponse{
-		Code: code,
-		JSON: res,
+		Code: http.StatusNotFound,
+		JSON: spec.NotFound("The requested profile key does not exist."),
 	}
 }

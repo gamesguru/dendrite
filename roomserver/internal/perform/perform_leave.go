@@ -10,14 +10,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -25,6 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
 	"codefloe.com/pat-s/zendrite/roomserver/internal/input"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -81,24 +85,26 @@ func (r *Leaver) performLeaveRoomByID(
 
 	// If there's an invite outstanding for the room then respond to
 	// that.
-	isInvitePending, senderUser, eventID, _, err := helpers.IsInvitePending(ctx, r.DB, req.RoomID, *leaver)
+	isInvitePending, senderUser, eventID, inviteEvent, err := helpers.IsInvitePending(ctx, r.DB, req.RoomID, *leaver)
 	if err == nil && isInvitePending {
 		sender, serr := r.RSAPI.QueryUserIDForSender(ctx, *roomID, senderUser)
 		if serr != nil {
 			return nil, fmt.Errorf("failed looking up userID for sender %q: %w", senderUser, serr)
 		}
 
-		var domain spec.ServerName
+		if sender != nil && !r.Cfg.Matrix.IsLocalServerName(sender.Domain()) {
+			return r.performFederatedLeaveFromPending(ctx, req, res, []spec.ServerName{sender.Domain()}, eventID, *leaver)
+		}
 		if sender == nil {
 			// TODO: Currently a federated invite has no way of knowing the mxid_mapping of the inviter.
 			// Should we add the inviter's m.room.member event (with mxid_mapping) to invite_room_state to allow
 			// the invited user to leave via the inviter's server?
-			domain = roomID.Domain()
-		} else {
-			domain = sender.Domain()
-		}
-		if !r.Cfg.Matrix.IsLocalServerName(domain) {
-			return r.performFederatedRejectInvite(ctx, req, res, domain, eventID, *leaver)
+			// Until then, reject through the room ID's server, which room version 12 IDs do not name, and the
+			// servers of the invite's stripped state. With none of them, the invite is still retired locally.
+			if domain := eventutil.RoomIDDomain(*roomID); domain == "" || !r.Cfg.Matrix.IsLocalServerName(domain) {
+				servers := r.pendingStateServers(*roomID, inviteEvent, "invite_room_state")
+				return r.performFederatedLeaveFromPending(ctx, req, res, servers, eventID, *leaver)
+			}
 		}
 		// check that this is not a "server notice room"
 		accData := &userapi.QueryAccountDataResponse{}
@@ -124,6 +130,19 @@ func (r *Leaver) performLeaveRoomByID(
 					return nil, spec.LeaveServerNoticeError()
 				}
 			}
+		}
+	}
+
+	// A knock on a room this server is not in has to be rescinded through a
+	// server which is. Knocks on rooms we are in take the local path below.
+	isKnockPending, knockEventID, knockEvent, err := helpers.IsKnockPending(ctx, r.DB, req.RoomID, *leaver)
+	if err == nil && isKnockPending {
+		inRoomRes := rsAPI.QueryServerJoinedToRoomResponse{}
+		if err = r.RSAPI.QueryServerJoinedToRoom(ctx, &rsAPI.QueryServerJoinedToRoomRequest{RoomID: req.RoomID}, &inRoomRes); err != nil {
+			return nil, fmt.Errorf("QueryServerJoinedToRoom: %w", err)
+		}
+		if !inRoomRes.IsInRoom {
+			return r.performFederatedLeaveFromPending(ctx, req, res, r.knockServers(*roomID, knockEvent), knockEventID, *leaver)
 		}
 	}
 
@@ -154,7 +173,7 @@ func (r *Leaver) performLeaveRoomByID(
 	if err != nil {
 		return nil, fmt.Errorf("error getting membership: %w", err)
 	}
-	if membership != spec.Join && membership != spec.Invite {
+	if membership != spec.Join && membership != spec.Invite && membership != spec.Knock {
 		return nil, spec.Forbidden(fmt.Sprintf("user %q is not joined to the room (membership is %q)", req.Leaver.String(), membership))
 	}
 
@@ -167,7 +186,11 @@ func (r *Leaver) performLeaveRoomByID(
 		RoomID:   req.RoomID,
 		Redacts:  "",
 	}
-	if err = proto.SetContent(map[string]any{"membership": "leave"}); err != nil {
+	content := map[string]any{"membership": spec.Leave}
+	if req.Reason != "" {
+		content["reason"] = req.Reason
+	}
+	if err = proto.SetContent(content); err != nil {
 		return nil, fmt.Errorf("eb.SetContent: %w", err)
 	}
 	if err = proto.SetUnsigned(struct{}{}); err != nil {
@@ -220,50 +243,162 @@ func (r *Leaver) performLeaveRoomByID(
 	return nil, nil
 }
 
-func (r *Leaver) performFederatedRejectInvite(
+// RetractPendingMembership retires a local user's invite or knock for a room
+// this server is not in, when the inviter rescinds the invite or a server in
+// the room rejects the knock. It returns the output events and whether it
+// applied.
+func (r *Leaver) RetractPendingMembership(
+	ctx context.Context, event *types.HeaderedEvent,
+) ([]rsAPI.OutputEvent, bool, error) {
+	membership, err := event.Membership()
+	if err != nil || event.Type() != spec.MRoomMember || event.StateKey() == nil ||
+		(membership != spec.Leave && membership != spec.Ban) {
+		return nil, false, nil
+	}
+	roomID := event.RoomID()
+	target, err := r.RSAPI.QueryUserIDForSender(ctx, roomID, spec.SenderID(*event.StateKey()))
+	if err != nil || target == nil || !r.Cfg.Matrix.IsLocalServerName(target.Domain()) {
+		return nil, false, nil
+	}
+	sender, err := r.RSAPI.QueryUserIDForSender(ctx, roomID, event.SenderID())
+	if err != nil || sender == nil {
+		return nil, false, nil
+	}
+	inRoomRes := rsAPI.QueryServerJoinedToRoomResponse{}
+	if err = r.RSAPI.QueryServerJoinedToRoom(ctx, &rsAPI.QueryServerJoinedToRoomRequest{RoomID: roomID.String()}, &inRoomRes); err != nil {
+		return nil, false, fmt.Errorf("QueryServerJoinedToRoom: %w", err)
+	}
+	if inRoomRes.IsInRoom {
+		// The event can be authorized against the room state as usual.
+		return nil, false, nil
+	}
+
+	targetID := spec.SenderID(*event.StateKey())
+	var pendingEventID string
+	var trusted []spec.ServerName
+	if invited, inviter, eventID, _, inviteErr := helpers.IsInvitePending(ctx, r.DB, roomID.String(), targetID); inviteErr == nil && invited {
+		// Only the inviter can rescind an invite, as in Synapse.
+		if event.SenderID() != inviter {
+			return nil, false, nil
+		}
+		pendingEventID = eventID
+		trusted = []spec.ServerName{sender.Domain()}
+	} else if knocked, eventID, knock, knockErr := helpers.IsKnockPending(ctx, r.DB, roomID.String(), targetID); knockErr == nil && knocked {
+		pendingEventID = eventID
+		trusted = r.knockServers(roomID, knock)
+	}
+	if pendingEventID == "" || !slices.Contains(trusted, sender.Domain()) {
+		return nil, false, nil
+	}
+
+	info, err := r.DB.RoomInfo(ctx, roomID.String())
+	if err != nil || info == nil {
+		return nil, false, fmt.Errorf("failed to get RoomInfo: %w", err)
+	}
+	updater, err := r.DB.MembershipUpdater(ctx, roomID.String(), string(targetID), true, info.RoomVersion)
+	if err != nil {
+		return nil, false, fmt.Errorf("r.DB.MembershipUpdater: %w", err)
+	}
+	if err = updater.Delete(); err != nil {
+		_ = updater.Rollback()
+		return nil, false, fmt.Errorf("updater.Delete: %w", err)
+	}
+	if err = updater.Commit(); err != nil {
+		return nil, false, fmt.Errorf("updater.Commit: %w", err)
+	}
+	return []rsAPI.OutputEvent{{
+		Type: rsAPI.OutputTypeRetireInviteEvent,
+		RetireInviteEvent: &rsAPI.OutputRetireInviteEvent{
+			EventID:          pendingEventID,
+			RoomID:           roomID.String(),
+			Membership:       membership,
+			RetiredByEventID: event.EventID(),
+			TargetSenderID:   targetID,
+		},
+	}}, true, nil
+}
+
+// knockServers lists the servers to rescind a knock through: the room ID's
+// domain, if it has one, and the senders of the room state returned with the
+// knock, starting with the creator's.
+func (r *Leaver) knockServers(roomID spec.RoomID, knockEvent gomatrixserverlib.PDU) []spec.ServerName {
+	return r.pendingStateServers(roomID, knockEvent, "knock_room_state")
+}
+
+// pendingStateServers lists the servers known to be in a room this server is
+// not in, from the room ID's domain and the senders of the stripped state
+// stored under unsignedKey on an invite or knock, the creator's first.
+func (r *Leaver) pendingStateServers(roomID spec.RoomID, event gomatrixserverlib.PDU, unsignedKey string) []spec.ServerName {
+	var servers []spec.ServerName
+	seen := map[spec.ServerName]bool{}
+	add := func(server spec.ServerName) {
+		if server == "" || seen[server] || r.Cfg.Matrix.IsLocalServerName(server) {
+			return
+		}
+		seen[server] = true
+		servers = append(servers, server)
+	}
+	add(eventutil.RoomIDDomain(roomID))
+	state := gjson.GetBytes(event.Unsigned(), unsignedKey).Array()
+	sort.SliceStable(state, func(i, j int) bool {
+		return state[i].Get("type").Str == spec.MRoomCreate && state[j].Get("type").Str != spec.MRoomCreate
+	})
+	for _, entry := range state {
+		if sender, err := spec.NewUserID(entry.Get("sender").Str, true); err == nil {
+			add(sender.Domain())
+		}
+	}
+	return servers
+}
+
+// performFederatedLeaveFromPending rejects an invite or rescinds a knock for a
+// room this server is not in, then retires it locally even if no remote server
+// could be reached.
+func (r *Leaver) performFederatedLeaveFromPending(
 	ctx context.Context,
 	req *rsAPI.PerformLeaveRequest,
 	res *rsAPI.PerformLeaveResponse, //nolint:unparam
-	inviteDomain spec.ServerName, eventID string,
+	servers []spec.ServerName, eventID string,
 	leaver spec.SenderID,
 ) ([]rsAPI.OutputEvent, error) {
 	// Ask the federation sender to perform a federated leave for us.
 	leaveReq := fsAPI.PerformLeaveRequest{
 		RoomID:      req.RoomID,
 		UserID:      req.Leaver.String(),
-		ServerNames: []spec.ServerName{inviteDomain},
+		ServerNames: servers,
+		Reason:      req.Reason,
 	}
 	leaveRes := fsAPI.PerformLeaveResponse{}
 	if err := r.FSAPI.PerformLeave(ctx, &leaveReq, &leaveRes); err != nil {
 		// failures in PerformLeave should NEVER stop us from telling other components like the
-		// sync API that the invite was withdrawn. Otherwise we can end up with stuck invites.
-		util.GetLogger(ctx).WithError(err).Errorf("failed to PerformLeave, still retiring invite event")
+		// sync API that the invite or knock was withdrawn. Otherwise we can end up with stuck invites.
+		util.GetLogger(ctx).WithError(err).Errorf("failed to PerformLeave, still retiring the invite or knock")
 	}
 
 	info, err := r.DB.RoomInfo(ctx, req.RoomID)
 	if err != nil {
-		util.GetLogger(ctx).WithError(err).Errorf("failed to get RoomInfo, still retiring invite event")
+		util.GetLogger(ctx).WithError(err).Errorf("failed to get RoomInfo, still retiring the invite or knock")
 	}
 
 	updater, err := r.DB.MembershipUpdater(ctx, req.RoomID, string(leaver), true, info.RoomVersion)
 	if err != nil {
-		util.GetLogger(ctx).WithError(err).Errorf("failed to get MembershipUpdater, still retiring invite event")
+		util.GetLogger(ctx).WithError(err).Errorf("failed to get MembershipUpdater, still retiring the invite or knock")
 	}
 	if updater != nil {
 		if err = updater.Delete(); err != nil {
-			util.GetLogger(ctx).WithError(err).Errorf("failed to delete membership, still retiring invite event")
+			util.GetLogger(ctx).WithError(err).Errorf("failed to delete membership, still retiring the invite or knock")
 			if err = updater.Rollback(); err != nil {
-				util.GetLogger(ctx).WithError(err).Errorf("failed to rollback deleting membership, still retiring invite event")
+				util.GetLogger(ctx).WithError(err).Errorf("failed to rollback deleting membership, still retiring the invite or knock")
 			}
 		} else {
 			if err = updater.Commit(); err != nil {
-				util.GetLogger(ctx).WithError(err).Errorf("failed to commit deleting membership, still retiring invite event")
+				util.GetLogger(ctx).WithError(err).Errorf("failed to commit deleting membership, still retiring the invite or knock")
 			}
 		}
 	}
 
-	// Withdraw the invite, so that the sync API etc are
-	// notified that we rejected it.
+	// Withdraw the invite or knock, so that the sync API etc are
+	// notified that we left.
 	return []rsAPI.OutputEvent{
 		{
 			Type: rsAPI.OutputTypeRetireInviteEvent,

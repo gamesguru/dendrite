@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -20,6 +20,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushgateway"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
+	"codefloe.com/pat-s/zendrite/internal/receipts"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -62,12 +63,14 @@ func NewOutputRoomEventConsumer(
 	syncProducer *producers.SyncAPI,
 ) *OutputRoomEventConsumer {
 	return &OutputRoomEventConsumer{
-		ctx:          process.Context(),
-		cfg:          cfg,
-		jetstream:    js,
-		db:           store,
-		durable:      cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
-		topic:        cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
+		ctx:       process.Context(),
+		cfg:       cfg,
+		jetstream: js,
+		db:        store,
+		durable:   cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
+		// Consume the syncapi-forwarded topic, not the raw roomserver output -
+		// see producers.PushEventProducer for why.
+		topic:        cfg.Matrix.JetStream.Prefixed(jetstream.OutputPushEvent),
 		pgClient:     pgClient,
 		rsAPI:        rsAPI,
 		syncProducer: syncProducer,
@@ -85,6 +88,23 @@ func (s *OutputRoomEventConsumer) Start() error {
 		s.onMessage, nats.DeliverAll(), nats.ManualAck(),
 	); err != nil {
 		return err
+	}
+	// This consumer used to read the raw roomserver output. Delete the durables
+	// left behind on that stream: OutputRoomEvent is interest-based with no
+	// MaxAge, so an abandoned consumer pins every message on it forever. Both
+	// names are tried because pre-Pull-era deployments have the unsuffixed one.
+	//
+	// HA refuses consumer deletion outright, so there the cleanup is an offline
+	// migration step. Failing to clean up never aborts startup: the caller
+	// panics on a Start error, and an orphaned consumer is not worth that.
+	if jetstream.OwnershipOf(s.jetstream) == nil {
+		stream := s.cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent)
+		for _, durable := range []string{s.durable + "Pull", s.durable} {
+			err := s.jetstream.DeleteConsumer(stream, durable)
+			if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+				log.WithError(err).Warnf("Failed to clean up old consumer %q on stream %q", durable, stream)
+			}
+		}
 	}
 	return nil
 }
@@ -108,6 +128,9 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 		if isNewRoomEvent {
 			event = output.NewRoomEvent.Event
+			if event != nil {
+				s.cancelDelayedStateEvents(ctx, output.NewRoomEvent)
+			}
 		} else {
 			event = output.NewInviteEvent.Event
 		}
@@ -126,7 +149,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	if s.cfg.Matrix.ReportStats.Enabled {
-		go s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String())
+		process.Go(ctx, func() { s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String()) })
 	}
 
 	metadata, err := msg.Metadata()
@@ -141,6 +164,35 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// cancelDelayedStateEvents cancels other users' MSC4140 delayed events for
+// state that this event has just changed, as Synapse does: a delayed state
+// event must not overwrite state that someone else set in the meantime. A
+// user's own delayed events survive their own changes, so that clients may
+// update the state they will reset later.
+func (s *OutputRoomEventConsumer) cancelDelayedStateEvents(ctx context.Context, output *rsapi.OutputNewRoomEvent) {
+	event := output.Event
+	if event.StateKey() == nil || !slices.Contains(output.AddsStateEventIDs, event.EventID()) {
+		return
+	}
+	sender, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
+	if err != nil || sender == nil {
+		log.WithError(err).WithField("event_id", event.EventID()).Warn("userapi consumer: unknown sender, not canceling delayed state events")
+		return
+	}
+	// A remote sender is nobody's own change, so it cancels every local user's.
+	var exceptLocalpart string
+	var exceptServerName spec.ServerName
+	if s.cfg.Matrix.IsLocalServerName(sender.Domain()) {
+		exceptLocalpart, exceptServerName = sender.Local(), sender.Domain()
+	}
+	if err = s.db.CancelDelayedStateEvents(
+		ctx, event.RoomID().String(), event.Type(), *event.StateKey(),
+		exceptLocalpart, exceptServerName, spec.AsTimestamp(time.Now()),
+	); err != nil {
+		log.WithError(err).WithField("event_id", event.EventID()).Error("userapi consumer: failed to cancel delayed state events")
+	}
 }
 
 func (s *OutputRoomEventConsumer) storeMessageStats(ctx context.Context, eventType, eventSender, roomID string) {
@@ -391,8 +443,13 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	// TODO: does it have to be set? It's not required, and
 	// removing it means we can send all notifications to
 	// e.g. Element's Push gateway in one go.
+	var notified []string
 	for _, mem := range members {
-		if err := s.notifyLocal(ctx, event, mem, roomSize, roomName, streamPos); err != nil {
+		inserted, err := s.notifyLocal(ctx, event, mem, roomSize, roomName, streamPos)
+		if inserted {
+			notified = append(notified, mem.UserID)
+		}
+		if err != nil {
 			log.WithFields(log.Fields{
 				"localpart": mem.Localpart,
 			}).WithError(err).Error("Unable to push to local user")
@@ -400,6 +457,38 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 		}
 	}
 
+	var users []string
+	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
+	if err == nil {
+		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos)
+	}
+	// Counts are published once the event's thread is recorded, so that a
+	// new notification is counted in its thread rather than the main timeline.
+	// They are published even if recording failed, counting the event in the
+	// main timeline, because the notifications are already stored and pushed.
+	for _, userID := range notified {
+		if slices.Contains(users, userID) {
+			continue
+		}
+		if publishErr := s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); publishErr != nil {
+			log.WithField("user_id", userID).WithError(publishErr).Error("Unable to send notification counts")
+		}
+	}
+	if err != nil {
+		return err
+	}
+	for _, userID := range users {
+		if err = s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); err != nil {
+			return err
+		}
+		localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
+		if err != nil {
+			return err
+		}
+		if err = util.NotifyUserCountsAsync(ctx, s.pgClient, localpart, domain, s.db); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -561,14 +650,15 @@ func unmarshalCanonicalAlias(event *rstypes.HeaderedEvent) (string, error) {
 }
 
 // notifyLocal finds the right push actions for a local user, given an event.
-func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstypes.HeaderedEvent, mem *localMembership, roomSize int, roomName string, streamPos uint64) error {
+// It reports whether it stored a notification, even when a later step fails.
+func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstypes.HeaderedEvent, mem *localMembership, roomSize int, roomName string, streamPos uint64) (bool, error) {
 	actions, err := s.evaluatePushRules(ctx, event, mem, roomSize)
 	if err != nil {
-		return fmt.Errorf("s.evaluatePushRules: %w", err)
+		return false, fmt.Errorf("s.evaluatePushRules: %w", err)
 	}
 	a, tweaks, err := pushrules.ActionsToTweaks(actions)
 	if err != nil {
-		return fmt.Errorf("pushrules.ActionsToTweaks: %w", err)
+		return false, fmt.Errorf("pushrules.ActionsToTweaks: %w", err)
 	}
 
 	if a != pushrules.NotifyAction {
@@ -577,18 +667,18 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 			"room_id":   event.RoomID().String(),
 			"localpart": mem.Localpart,
 		}).Tracef("Push rule evaluation rejected the event")
-		return nil
+		return false, nil
 	}
 
 	devicesByURLAndFormat, profileTag, err := s.localPushDevices(ctx, mem.Localpart, mem.Domain, tweaks)
 	if err != nil {
-		return fmt.Errorf("s.localPushDevices: %w", err)
+		return false, fmt.Errorf("s.localPushDevices: %w", err)
 	}
 	clientEvent, err := synctypes.ToClientEvent(event, synctypes.FormatSync, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return s.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	n := &api.Notification{
@@ -606,17 +696,13 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		TS:         spec.AsTimestamp(time.Now()),
 	}
 	if err = s.db.InsertNotification(ctx, mem.Localpart, mem.Domain, event.EventID(), streamPos, tweaks, n); err != nil {
-		return fmt.Errorf("s.db.InsertNotification: %w", err)
-	}
-
-	if err = s.syncProducer.GetAndSendNotificationData(ctx, mem.UserID, event.RoomID().String()); err != nil {
-		return fmt.Errorf("s.syncProducer.GetAndSendNotificationData: %w", err)
+		return false, fmt.Errorf("s.db.InsertNotification: %w", err)
 	}
 
 	// We do this after InsertNotification. Thus, this should always return >=1.
 	userNumUnreadNotifs, err := s.db.GetNotificationCount(ctx, mem.Localpart, mem.Domain, tables.AllNotifications)
 	if err != nil {
-		return fmt.Errorf("s.db.GetNotificationCount: %w", err)
+		return true, fmt.Errorf("s.db.GetNotificationCount: %w", err)
 	}
 
 	log.WithFields(log.Fields{
@@ -634,11 +720,11 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 	//
 	// TODO: think about bounding this to one per user, and what
 	// ordering guarantees we must provide.
-	go func() { //nolint:contextcheck
+	process.Go(process.Lifetime(ctx), func() {
 		// This background processing cannot be tied to a request.
 		// We're generous with the "global" timeout, each HTTP request gets its own context with
 		// at most 30 seconds below.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) //nolint:mnd
+		ctx, cancel := context.WithTimeout(process.Lifetime(ctx), 5*time.Minute) //nolint:mnd
 		defer cancel()
 
 		var rejected []*pushgateway.Device
@@ -654,6 +740,12 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 				// one Sytest that expects one HTTP request per
 				// device, rather than per URL. For now, we must
 				// notify each one separately.
+				// Delivery begins inside the consumer callback, which the
+				// fetch and acknowledgement barriers do not cover.
+				if err := jetstream.Owned(s.jetstream); err != nil {
+					log.WithError(err).Warn("Not notifying pushers: ownership is no longer held")
+					return
+				}
 				for _, dev := range devices {
 					// Give each HTTP request its own context.
 					httpCtx, httpCancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd
@@ -674,9 +766,9 @@ func (s *OutputRoomEventConsumer) notifyLocal(ctx context.Context, event *rstype
 		if len(rejected) > 0 {
 			s.deleteRejectedPushers(ctx, rejected, mem.Localpart, mem.Domain)
 		}
-	}()
+	})
 
-	return nil
+	return true, nil
 }
 
 // evaluatePushRules fetches and evaluates the push rules of a local
@@ -775,12 +867,15 @@ func (rse *ruleSetEvalContext) HasPowerLevel(senderID spec.SenderID, levelKey st
 			plEvent = res.StateEvents[i]
 		}
 	}
+	if createEvent == nil {
+		return false, fmt.Errorf("missing room create event for notification permissions")
+	}
 	verImpl := gomatrixserverlib.MustGetRoomVersion(createEvent.Version())
 	if verImpl.PrivilegedCreators() && slices.Contains(gomatrixserverlib.CreatorsFromCreateEvent(createEvent), string(senderID)) {
 		return true, nil
 	}
 	if plEvent == nil {
-		return true, nil // unsure, but this is what we did before
+		return senderID == createEvent.SenderID(), nil
 	}
 	plc, err := gomatrixserverlib.NewPowerLevelContentFromEvent(plEvent.PDU)
 	if err != nil {

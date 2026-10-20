@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 
@@ -343,5 +343,49 @@ func TestRelayServersStored(t *testing.T) {
 		relayServers, err = db.P2PGetRelayServersForServer(context.Background(), server)
 		assert.Nil(t, err)
 		assert.Zero(t, len(relayServers))
+	})
+}
+
+// A remote server renews its peek by peeking again, and a peek event can be
+// redelivered after a crash, so adding an existing peek must renew it rather
+// than fail on the unique constraint.
+func TestRepeatedPeeksRenew(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	_, serverName, _ := gomatrixserverlib.SplitID('@', alice.ID)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
+		defer closeDB()
+		peekID := util.RandomString(8)
+
+		if err := db.AddInboundPeek(ctx, serverName, room.ID, peekID, 1000); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddInboundPeek(ctx, serverName, room.ID, peekID, 2000); err != nil {
+			t.Fatalf("adding an existing inbound peek failed: %s", err)
+		}
+		inboundPeeks, err := db.GetInboundPeeks(ctx, room.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inboundPeeks) != 1 || inboundPeeks[0].RenewalInterval != 2000 {
+			t.Fatalf("expected one inbound peek renewed to 2000ms, got %+v", inboundPeeks)
+		}
+
+		if err = db.AddOutboundPeek(ctx, serverName, room.ID, peekID, 1000); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.AddOutboundPeek(ctx, serverName, room.ID, peekID, 2000); err != nil {
+			t.Fatalf("adding an existing outbound peek failed: %s", err)
+		}
+		outboundPeeks, err := db.GetOutboundPeeks(ctx, room.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(outboundPeeks) != 1 || outboundPeeks[0].RenewalInterval != 2000 {
+			t.Fatalf("expected one outbound peek renewed to 2000ms, got %+v", outboundPeeks)
+		}
 	})
 }

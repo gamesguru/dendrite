@@ -2,6 +2,9 @@
 # Wire the commit-msg stage so `pre-commit install` also installs the
 # commitlint hook (which validates the commit title, not the staged files).
 default_install_hook_types: [pre-commit, commit-msg]
+# Hooks without their own stages run on staged files only; otherwise the
+# commit-msg stage hands them the commit message file, which prettier rejects.
+default_stages: [pre-commit]
 repos:
   - repo: meta
     hooks:
@@ -15,7 +18,7 @@ repos:
         args:
           - --markdown-linebreak-ext=md
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.12.2
+    rev: v2.14.0
     hooks:
       - id: golangci-lint
   - repo: https://github.com/igorshubovych/markdownlint-cli
@@ -28,7 +31,7 @@ repos:
       - id: hadolint
         exclude: ^build/(scripts|docker)/
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: v3.9.6
+    rev: v3.9.10
     hooks:
       - id: prettier
   - repo: https://github.com/adrienverge/yamllint.git
@@ -44,11 +47,11 @@ repos:
         language: fail
         files: .yml$
   - repo: https://github.com/editorconfig-checker/editorconfig-checker
-    rev: v3.11.1
+    rev: v4.0.2
     hooks:
       - id: editorconfig-checker
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
-    rev: v9.26.0
+    rev: v9.27.0
     hooks:
       # Enforce Conventional Commits with a mandatory package scope; rules live
       # in .commitlintrc.json. Runs on the commit message, so it needs the

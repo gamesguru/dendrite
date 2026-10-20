@@ -9,15 +9,45 @@ package api
 
 import (
 	"fmt"
+	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-// for detecting rejected events and returning 403 instead of 500ing.
+// InputWasRejected marks the error returned when the roomserver refused an
+// event because it failed the auth checks, so that callers can map it to 403
+// instead of 500ing. The auth reason, when known, follows as ": <reason>".
 const InputWasRejected = "InputWasRejected"
+
+// IsInputRejected reports whether err signals that the roomserver rejected an
+// event because it failed the auth checks, as opposed to a transient failure.
+func IsInputRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return msg == InputWasRejected || strings.HasPrefix(msg, InputWasRejected+": ")
+}
+
+// InputRejectionReason returns the auth reason behind a rejection with the
+// InputWasRejected marker stripped, so that it can be shown to the client.
+// For any other error it returns the error's own message.
+func InputRejectionReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if reason, ok := strings.CutPrefix(msg, InputWasRejected+": "); ok {
+		return reason
+	}
+	if msg == InputWasRejected {
+		return "the event was rejected"
+	}
+	return msg
+}
 
 type Kind int
 
@@ -98,6 +128,13 @@ type TransactionID struct {
 	TransactionID string `json:"id"`
 }
 
+// DelayedEventSessionID is the session ID of the transactions that send
+// MSC4140 delayed events, whose transaction ID is the delay ID. A resend after
+// a crash is then recognized as the same transaction. No device has a
+// negative session ID, so the delay ID is never reported as a transaction
+// ID; the sync API reports it to the sender as the event's delay ID instead.
+const DelayedEventSessionID int64 = -4140
+
 // InputRoomEventsRequest is a request to InputRoomEvents.
 type InputRoomEventsRequest struct {
 	InputRoomEvents []InputRoomEvent `json:"input_room_events"`
@@ -109,6 +146,10 @@ type InputRoomEventsRequest struct {
 type InputRoomEventsResponse struct {
 	ErrMsg     string // set if there was any error
 	NotAllowed bool   // true if an event in the input was not allowed.
+	// DuplicateOf maps the ID of an input event that retried a client
+	// transaction to the event the transaction already produced. The input
+	// event was not stored.
+	DuplicateOf map[string]string
 }
 
 func (r *InputRoomEventsResponse) Err() error {

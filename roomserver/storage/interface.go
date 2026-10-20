@@ -9,9 +9,10 @@ package storage
 import (
 	"context"
 	"crypto/ed25519"
+	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
@@ -24,6 +25,11 @@ import (
 type Database interface {
 	UserRoomKeys
 	ReportedEvents
+	// SetUserErased marks a local user as erased (MSC4025), or clears the
+	// mark when the account is reactivated.
+	SetUserErased(ctx context.Context, userID string, erased bool) error
+	// ErasedUsers returns the subset of userIDs that is erased.
+	ErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error)
 	// Do we support processing input events for more than one room at a time?
 	SupportsConcurrentRoomInputs() bool
 	AssignRoomNID(ctx context.Context, roomID spec.RoomID, roomVersion gomatrixserverlib.RoomVersion) (roomNID types.RoomNID, err error)
@@ -204,6 +210,17 @@ type Database interface {
 	QueryAdminEventReports(ctx context.Context, from uint64, limit uint64, backwards bool, userID string, roomID string) ([]api.QueryAdminEventReportsResponse, int64, error)
 	QueryAdminEventReport(ctx context.Context, reportID uint64) (api.QueryAdminEventReportResponse, error)
 	AdminDeleteEventReport(ctx context.Context, reportID uint64) error
+	InsertReportedRoom(ctx context.Context, roomID, userID, reason string) (int64, error)
+	QueryAdminRoomReports(ctx context.Context, from, limit uint64, backwards bool, userID, roomID string) ([]api.QueryAdminRoomReportsResponse, int64, error)
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
+	// AnnotationExists reports whether the sender has an unredacted annotation
+	// of the given event type and key on the target event (MSC2677), other
+	// than the event excludeEventID, which may be empty.
+	AnnotationExists(ctx context.Context, roomID, targetEventID string, senderID spec.SenderID, eventType, key, excludeEventID string) (bool, error)
 
 	// Partial state methods for MSC3706 faster joins
 	// IsRoomPartialState returns true if the room has partial state from a faster join
@@ -271,6 +288,19 @@ type RoomDatabase interface {
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// ClientTransactionEventID returns the event a client transaction produced,
+	// or "" if the transaction is unknown.
+	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)
+	// StoreClientTransaction records the event a client transaction produced.
+	StoreClientTransaction(ctx context.Context, roomID, senderID string, sessionID int64, transactionID, eventID string) error
+	// EventSentToOutput reports whether the event's output events were
+	// published and the room updated with it.
+	EventSentToOutput(ctx context.Context, eventNID types.EventNID) (bool, error)
+	// ExpireClientTransactions forgets transactions recorded before the given time.
+	ExpireClientTransactions(ctx context.Context, before time.Time) (int64, error)
+	// StoreAnnotation records the event if it is an annotation (MSC2677) that
+	// has not been redacted.
+	StoreAnnotation(ctx context.Context, roomInfo *types.RoomInfo, event gomatrixserverlib.PDU) error
 }
 
 type EventDatabase interface {

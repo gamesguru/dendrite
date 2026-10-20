@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
 	"golang.org/x/crypto/bcrypt"
 
@@ -72,6 +72,9 @@ func main() {
 			cfg.ClientAPI.RateLimiting.Enabled = false
 			cfg.FederationAPI.DisableTLSValidation = false
 			cfg.FederationAPI.DisableHTTPKeepalives = true
+			// Complement restarts servers and expects delivery to resume
+			// within seconds, as Synapse's Complement config does.
+			cfg.FederationAPI.FederationMinRetryExponent = 0
 			// Allow allow networks when running in CI, as otherwise connections
 			// to other servers might be blocked when running Complement/Sytest.
 			cfg.FederationAPI.DenyNetworkCIDRs = []string{}

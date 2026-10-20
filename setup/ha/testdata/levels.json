@@ -1,0 +1,93 @@
+[
+  {
+    "protocol": 1,
+    "level": 1,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "88bf4094bfc399e0d08ba2f30db185fc64902fd0d2e0439a5723005f24bc9347"
+  },
+  {
+    "protocol": 1,
+    "level": 2,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "ca0c8372dd66940984f192f4566132fb49bd47c459e39e8482113db7d1befc51"
+  },
+  {
+    "protocol": 1,
+    "level": 3,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "9ec09518709462fe3443568446b69f224ccedb39dd096fbdda6596e068a732c3"
+  },
+  {
+    "protocol": 1,
+    "level": 4,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "e165c63fd2aa1a89aeec94d37d9e56b8975bcb55dd72153c07f37c1468de545a"
+  },
+  {
+    "protocol": 1,
+    "level": 5,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "2ddc1aa3252e47ab5674dca8139edb1aacc46f0555504b3188c21ebab7cd7c83"
+  },
+  {
+    "protocol": 1,
+    "level": 6,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "a8344fec9b497cf5f35ac6cbe38b5228161a891f856300aba9c5575544827705"
+  },
+  {
+    "protocol": 1,
+    "level": 7,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "ae94be11f04c39d6c8782da01477906205b08d9090ea576fdaa7f020e0cbb945"
+  },
+  {
+    "protocol": 1,
+    "level": 8,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "7b18643e2d18777fe285b29d3ffdeb68aebf495a731ac8f9d2c9d054d14b8bd7"
+  },
+  {
+    "protocol": 1,
+    "level": 9,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "099df2276cb080b022b29951d35316d4d321158eaeaf5445c31c0ea4b62580f6"
+  },
+  {
+    "protocol": 1,
+    "level": 10,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "e001c22fedd8715c0f7d3b6fbdf28da9ec0fcaa03caf32a26de95b225ea8ed37"
+  },
+  {
+    "protocol": 1,
+    "level": 11,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "b4427931549421774c0d68ca51ee5661bd58a53cca8dcc22b393f7b6264a81df"
+  },
+  {
+    "protocol": 1,
+    "level": 12,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "111aa1be5a79ae3631722d5f00a7f8058dbc5ef3074eedb62116f25b0b4fe402"
+  },
+  {
+    "protocol": 1,
+    "level": 13,
+    "upgrade_from": 1,
+    "rollback_to": 1,
+    "surface": "f0d4aab66dac9816e45cc7dd962abe6dc8deb9d51bc4a4c6ff93821a6400c3ed"
+  }
+]

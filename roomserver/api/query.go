@@ -11,11 +11,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -363,6 +364,18 @@ type QueryAdminEventReportsResponse struct {
 	ReceivedTS       spec.Timestamp         `json:"received_ts"`
 }
 
+// QueryAdminRoomReportsResponse is a room report (MSC4151) in the shape of
+// Synapse's room reports admin API.
+type QueryAdminRoomReportsResponse struct {
+	ID             int64          `json:"id"`
+	RoomID         string         `json:"room_id"`
+	UserID         string         `json:"user_id"` // the user reporting the room
+	Reason         string         `json:"reason"`
+	CanonicalAlias string         `json:"canonical_alias"`
+	RoomName       string         `json:"name"`
+	ReceivedTS     spec.Timestamp `json:"received_ts"`
+}
+
 type QueryAdminEventReportResponse struct {
 	QueryAdminEventReportsResponse
 	EventJSON json.RawMessage `json:"event_json"`
@@ -441,7 +454,30 @@ type QueryLeftUsersResponse struct {
 }
 
 type JoinRoomQuerier struct {
-	Roomserver RestrictedJoinAPI
+	Roomserver            RestrictedJoinAPI
+	TargetRoomID          string
+	allowedRoomMembership bool
+}
+
+const (
+	ErrorUnableToGrantJoin     spec.MatrixErrorCode = "M_UNABLE_TO_GRANT_JOIN"
+	ErrorUnableToAuthoriseJoin spec.MatrixErrorCode = "M_UNABLE_TO_AUTHORISE_JOIN" //nolint:misspell // Matrix specifies British spelling.
+)
+
+// RestrictedJoinError corrects the legacy error codes returned by
+// gomatrixserverlib. A validated allow condition with no local authorizing
+// user needs another server to grant the join; unknown conditions cannot be
+// authorized. Track the membership check instead of matching error messages.
+func (rq *JoinRoomQuerier) RestrictedJoinError(err error) error {
+	var matrixErr spec.MatrixError
+	if !errors.As(err, &matrixErr) || matrixErr.ErrCode != spec.ErrorUnableToAuthoriseJoin {
+		return err
+	}
+	matrixErr.ErrCode = ErrorUnableToAuthoriseJoin
+	if rq.allowedRoomMembership {
+		matrixErr.ErrCode = ErrorUnableToGrantJoin
+	}
+	return matrixErr
 }
 
 func (rq *JoinRoomQuerier) CurrentStateEvent(ctx context.Context, roomID spec.RoomID, eventType string, stateKey string) (gomatrixserverlib.PDU, error) {
@@ -478,6 +514,10 @@ func (rq *JoinRoomQuerier) RestrictedRoomJoinInfo(ctx context.Context, roomID sp
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("rsAPI.GetLocallyJoinedUsers failed")
 		return nil, fmt.Errorf("InternalServerError: %w", err)
+	}
+
+	if roomID.String() != rq.TargetRoomID && res.IsInRoom && userJoinedToRoom {
+		rq.allowedRoomMembership = true
 	}
 
 	return &gomatrixserverlib.RestrictedRoomJoinInfo{

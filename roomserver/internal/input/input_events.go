@@ -16,10 +16,11 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -27,7 +28,6 @@ import (
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
-	"codefloe.com/pat-s/zendrite/internal/hooks"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/acls"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -35,6 +35,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	userAPI "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -58,11 +59,64 @@ var processRoomEventDuration = prometheus.NewHistogramVec(
 	[]string{"room_id"},
 )
 
+// retryClientTransaction answers a retried client transaction whose first
+// attempt produced the event originalID. It reports whether it handled the
+// retry; if not, the retry is processed as a new event.
+//
+// The transaction is recorded just before the first attempt publishes its
+// output events, and the event is marked as sent in the same database
+// transaction that updates the room, which commits after publishing. An event
+// that is not marked as sent therefore failed on one side of publishing or the
+// other: its output was never published (the broker failed), or it was
+// published and the room update then failed to commit (the database failed).
+// The two cannot be told apart, and answering the retry with the event would
+// lose it in the first case, while storing a new event would duplicate it in
+// the second. So the event is processed again instead: its output events are
+// published, possibly a second time, and the room is updated with it. The
+// consumers of the output stream store events by event ID, so clients and
+// servers see the event once either way, and the retry is answered with it.
+func (r *Inputer) retryClientTransaction(
+	ctx context.Context,
+	virtualHost spec.ServerName,
+	input *api.InputRoomEvent,
+	roomInfo *types.RoomInfo,
+	originalID string,
+	logger *logrus.Entry,
+) (bool, error) {
+	logger = logger.WithField("original_event_id", originalID)
+	events, err := r.DB.EventsFromIDs(ctx, roomInfo, []string{originalID})
+	if err != nil {
+		return true, fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+	}
+	if len(events) == 0 || events[0].PDU == nil {
+		// The transaction is recorded only after its event is stored, and
+		// both are purged with the room, so this is not expected.
+		logger.Warn("The event of a retried client transaction is not stored, storing the retry instead")
+		return false, nil
+	}
+	original := events[0]
+	sent, err := r.DB.EventSentToOutput(ctx, original.EventNID)
+	if err != nil {
+		return true, fmt.Errorf("r.DB.EventSentToOutput: %w", err)
+	}
+	if sent {
+		logger.Info("Skipping a retried client transaction")
+		return true, types.DuplicateTransactionError{EventID: originalID}
+	}
+	logger.Info("Processing the unsent event of a retried client transaction again")
+	again := *input
+	again.Event = &types.HeaderedEvent{PDU: original.PDU}
+	if err = r.processRoomEvent(ctx, virtualHost, &again); err != nil {
+		return true, fmt.Errorf("processing event %s of a retried client transaction: %w", originalID, err)
+	}
+	return true, types.DuplicateTransactionError{EventID: originalID}
+}
+
 // processRoomEvent can only be called once at a time
 //
 // TODO(#375): This should be rewritten to allow concurrent calls. The
 // difficulty is in ensuring that we correctly annotate events with the correct
-// state deltas when sending to kafka streams
+// state deltas when sending to JetStream streams
 // TODO: Break up function - we should probably do transaction ID checks before calling this.
 //
 //nolint:gocyclo
@@ -135,6 +189,25 @@ func (r *Inputer) processRoomEvent(
 	senderDomain := spec.ServerName("")
 	if sender != nil {
 		senderDomain = sender.Domain()
+	}
+
+	// A retried client transaction must not store a second event. The first
+	// attempt may have been stored by a previous owner after an HA takeover,
+	// or after its request failed. It is always ahead of the retry on this
+	// room's input subject, so its mapping is known by now.
+	if input.Kind == api.KindNew && input.TransactionID != nil && roomInfo != nil {
+		originalID, terr := r.DB.ClientTransactionEventID(
+			ctx, event.RoomID().String(), string(event.SenderID()),
+			input.TransactionID.SessionID, input.TransactionID.TransactionID,
+		)
+		if terr != nil {
+			return fmt.Errorf("r.DB.ClientTransactionEventID: %w", terr)
+		}
+		if originalID != "" && originalID != event.EventID() {
+			if handled, rerr := r.retryClientTransaction(ctx, virtualHost, input, roomInfo, originalID, logger); handled {
+				return rerr
+			}
+		}
 	}
 
 	// Check if the room has partial state (MSC3706 faster joins)
@@ -237,23 +310,13 @@ func (r *Inputer) processRoomEvent(
 				}
 			}
 		}
-		// Filter out servers that are currently backing off or blacklisted.
-		// This avoids iterating hundreds of dead servers in missing-state resolution.
-		// The join server (first in list for partial state rooms) is exempt from
-		// this filter since it recently processed our join.
-		filtered := serverRes.ServerNames[:0]
 		var joinServerName spec.ServerName
 		if hasPartialState && roomInfo != nil {
 			if joinServer, jsErr := r.DB.GetPartialStateJoinServer(ctx, roomInfo.RoomNID); jsErr == nil && joinServer != "" {
 				joinServerName = spec.ServerName(joinServer)
 			}
 		}
-		for _, server := range serverRes.ServerNames {
-			if server == joinServerName || !r.FSAPI.IsServerBackingOff(server) {
-				filtered = append(filtered, server)
-			}
-		}
-		serverRes.ServerNames = filtered
+		serverRes.ServerNames = withoutBackingOffServers(serverRes.ServerNames, input.Origin, joinServerName, r.FSAPI.IsServerBackingOff)
 	}
 
 	// Check that the auth events of the event are known.
@@ -265,19 +328,26 @@ func (r *Inputer) processRoomEvent(
 	// to multi-minute stalls between batch processing.
 	authEvents, _ := gomatrixserverlib.NewAuthEvents(nil)
 	knownEvents := map[string]*types.Event{}
+	isRejected := false
+	var rejectionErr error
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
 	} else if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
-		return fmt.Errorf("r.fetchAuthEvents: %w", err)
+		if input.Kind != api.KindOutlier {
+			return fmt.Errorf("r.fetchAuthEvents: %w", err)
+		}
+		// An outlier whose auth events cannot be obtained, e.g. because they
+		// are badly signed, is rejected rather than failing the whole batch
+		// it came with, such as the room state of a join.
+		isRejected = true
+		rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
+		logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
 	}
-
-	isRejected := false
-	var rejectionErr error
 
 	// Check if the event is allowed by its auth events. If it isn't then
 	// we consider the event to be "rejected" — it will still be persisted.
 	// Skip this check for admin operations that set SkipEventAuth.
-	if !input.SkipEventAuth {
+	if !input.SkipEventAuth && !isRejected {
 		if err = gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		}); err != nil {
@@ -310,6 +380,11 @@ func (r *Inputer) processRoomEvent(
 	// subsequent transaction.
 	didStateResolution := false
 	var stateResolutionRoomID string
+	// stateFromGap is set when the state before the event was fetched to
+	// bridge a gap in the room DAG. That state covers the remote server's
+	// branch only, so unlike the state given with a federated join it must
+	// not replace the room's current state and forward extremities.
+	stateFromGap := false
 
 	if missingPrev && input.Kind == api.KindNew && !input.SkipMissingEvents {
 		// Don't do this for KindOld events, otherwise old events that we fetch
@@ -331,20 +406,26 @@ func (r *Inputer) processRoomEvent(
 		}
 
 		// Check if state resolution recently failed for this room. If so, skip
-		// the expensive federation lookup and reject immediately. This prevents
-		// rooms stuck in a failure loop from consuming unbounded CPU and memory
-		// by loading thousands of state events on every incoming transaction.
+		// the expensive federation lookup. This prevents rooms stuck in a
+		// failure loop from consuming unbounded CPU and memory by loading
+		// thousands of state events on every incoming transaction.
+		//
+		// The event is deferred, not rejected: nothing about it has been
+		// looked at. The sender does not resend it, and a rejected event is
+		// left out of the auth events of every later event that cites it, so
+		// a rejected membership, for example, gets its sender's following
+		// events rejected too. Nothing is stored instead, so the event stays
+		// missing, and the first event in the room after the cooldown fetches
+		// it with its other missing prev events.
 		if !isRejected {
 			if lastFail, ok := r.missingStateCooldown.Load(stateResolutionRoomID); ok {
 				lastFailTime, _ := lastFail.(time.Time)
-				if time.Since(lastFailTime) < missingStateCooldownDuration {
-					logger.Warnf("Skipping state resolution for room %s (cooldown active after recent failure)", stateResolutionRoomID)
-					isRejected = true
-					rejectionErr = fmt.Errorf("state resolution cooldown active for room %s", stateResolutionRoomID)
-				} else {
-					// Cooldown expired, clear it and retry.
-					r.missingStateCooldown.Delete(stateResolutionRoomID)
+				if remaining := missingStateCooldownDuration - time.Since(lastFailTime); remaining > 0 {
+					logger.Warnf("Deferring event with missing prev events in room %s (state resolution cooldown active after recent failure)", stateResolutionRoomID)
+					return fmt.Errorf("%w for room %s, ending in %s", errMissingStateCooldown, stateResolutionRoomID, remaining.Round(time.Second))
 				}
+				// Cooldown expired, clear it and retry.
+				r.missingStateCooldown.Delete(stateResolutionRoomID)
 			}
 		}
 
@@ -366,6 +447,16 @@ func (r *Inputer) processRoomEvent(
 			}
 			var stateSnapshot *parsedRespState
 			if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
+				// A failure of this server's own database, broker or HA
+				// ownership, as during a PostgreSQL failover, says nothing
+				// about the event. Rejecting it would be permanent, since the
+				// sender does not resend it, and would start the cooldown that
+				// rejects the room's following events too. Fail the input
+				// instead: nothing is stored, and the next event in the room
+				// fetches this one again as a missing prev event.
+				if unavailableHere(ctx, err) {
+					return fmt.Errorf("missingState.processEventWithMissingState: %w", err)
+				}
 				// Something went wrong with retrieving the missing state, so we can't
 				// really do anything with the event other than reject it at this point.
 				isRejected = true
@@ -380,6 +471,7 @@ func (r *Inputer) processRoomEvent(
 						missingPrev = false
 						input.HasState = true
 						input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
+						stateFromGap = true
 					}
 				}
 			} else if stateSnapshot != nil {
@@ -390,6 +482,7 @@ func (r *Inputer) processRoomEvent(
 				missingPrev = false
 				input.HasState = true
 				input.StateEventIDs = stateSnapshotEventIDs(stateSnapshot)
+				stateFromGap = true
 			} else {
 				// We retrieved some state and it would appear that rolling forward the
 				// state did everything we needed it to do, so we can just resolve the
@@ -413,8 +506,9 @@ func (r *Inputer) processRoomEvent(
 			// Unknown auth events only really matter if the event actually failed
 			// auth. If it passed auth then we can assume that everything that was
 			// known was sufficient, even if extraneous auth events were specified
-			// but weren't found.
-			if isRejected {
+			// but weren't found. A rejected outlier is stored as rejected all the
+			// same, so that it does not fail the batch it arrived with.
+			if isRejected && input.Kind != api.KindOutlier {
 				if event.StateKey() != nil {
 					return fmt.Errorf(
 						"missing auth event %s for state event %s (type %q, state key %q)",
@@ -493,11 +587,14 @@ func (r *Inputer) processRoomEvent(
 	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
 	// and memory on federation state lookups for every incoming transaction.
 	if didStateResolution && stateResolutionRoomID != "" {
-		if isRejected {
+		switch {
+		case !isRejected:
+			r.missingStateCooldown.Delete(stateResolutionRoomID)
+		case errors.Is(rejectionErr, errNoValidMissingEvents):
+			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
+		default:
 			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
 			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
-		} else {
-			r.missingStateCooldown.Delete(stateResolutionRoomID)
 		}
 	}
 
@@ -506,7 +603,6 @@ func (r *Inputer) processRoomEvent(
 	// notify anyone about it.
 	if input.Kind == api.KindOutlier {
 		logger.WithField("rejected", isRejected).Debug("Stored outlier")
-		hooks.Run(hooks.KindNewEventPersisted, headered)
 		return nil
 	}
 
@@ -565,6 +661,15 @@ func (r *Inputer) processRoomEvent(
 		return nil
 	}
 
+	// Index an accepted annotation, so that its sender can be stopped from
+	// sending it again (MSC2677). This runs after MaybeRedactEvent, which
+	// strips the content of an annotation whose redaction arrived first, so
+	// that it is not indexed. The index only serves that check, so failing
+	// to update it does not fail the event.
+	if err = r.DB.StoreAnnotation(ctx, roomInfo, event); err != nil {
+		logger.WithError(err).Warn("Failed to index annotation")
+	}
+
 	// TODO: Revist this to ensure we don't replace a current state mxid_mapping with an older one.
 	if event.Version() == gomatrixserverlib.RoomVersionPseudoIDs && event.Type() == spec.MRoomMember {
 		mapping := gomatrixserverlib.MemberContent{}
@@ -585,6 +690,25 @@ func (r *Inputer) processRoomEvent(
 
 	switch input.Kind {
 	case api.KindNew:
+		// Remember which event this client transaction produced before its
+		// output events are published, so that a retry is answered with it
+		// rather than storing another event. Once published, clients and
+		// servers may have received the event even if the request then
+		// fails, for example because the database connection is lost before
+		// the room update commits. A retry finds the event not marked as
+		// sent and processes it again (see retryClientTransaction), so it
+		// is delivered whichever side of publishing the request failed on.
+		if input.TransactionID != nil {
+			if err = r.DB.StoreClientTransaction(
+				ctx, event.RoomID().String(), string(event.SenderID()),
+				input.TransactionID.SessionID, input.TransactionID.TransactionID, event.EventID(),
+			); err != nil {
+				// Nothing is published yet: the retry stores a new event.
+				return fmt.Errorf("r.DB.StoreClientTransaction: %w", err)
+			}
+		}
+		// State fetched to bridge a gap is merged like any other state.
+		rewritesState := input.HasState && !stateFromGap
 		localLeftJoin, err := r.updateLatestEvents(
 			ctx,                 // context
 			roomInfo,            // room info for the room being updated
@@ -592,7 +716,7 @@ func (r *Inputer) processRoomEvent(
 			event,               // event
 			input.SendAsServer,  // send as server
 			input.TransactionID, // transaction ID
-			input.HasState,      // rewrites state?
+			rewritesState,       // rewrites state?
 			historyVisibility,   // the history visibility before the event
 		)
 		if err != nil {
@@ -677,8 +801,7 @@ func (r *Inputer) processRoomEvent(
 	}
 
 	// Everything was OK — the latest events updater didn't error and
-	// we've sent output events. Finally, generate a hook call.
-	hooks.Run(hooks.KindNewEventPersisted, headered)
+	// we've sent output events.
 	return nil
 }
 
@@ -1074,7 +1197,7 @@ nextAuthEvent:
 			return fmt.Errorf("r.DB.GetOrCreateEventTypeNID: %w", err)
 		}
 
-		eventStateKeyNID, err := r.DB.GetOrCreateEventStateKeyNID(ctx, event.StateKey())
+		eventStateKeyNID, err := r.DB.GetOrCreateEventStateKeyNID(ctx, authEvent.StateKey())
 		if err != nil {
 			return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 		}
@@ -1263,4 +1386,37 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 		ids = append(ids, e.EventID())
 	}
 	return ids
+}
+
+// withoutBackingOffServers drops the servers we are backing off from, so that
+// missing-state resolution does not iterate hundreds of dead servers. Two
+// servers are known to be alive and are kept regardless: the origin, which just
+// sent us the event, and the partial state join server, which recently
+// processed our join. Our backoff towards the origin only reflects our own
+// failed sends, for example while it was restarting, and dropping it would
+// reject every event that arrives ahead of its prev events.
+// UnavailableHere reports whether processing failed on this server's own
+// dependencies rather than on the event or the servers asked about it.
+// Generic network errors are not counted: while filling a gap they may as
+// well come from a remote server, whose failures the cooldown is for.
+func unavailableHere(ctx context.Context, err error) bool {
+	return ctx.Err() != nil ||
+		sqlutil.IsDatabaseUnavailable(err) ||
+		errors.Is(err, jetstream.ErrPublicationRefused) ||
+		errors.Is(err, nats.ErrTimeout) ||
+		errors.Is(err, nats.ErrNoStreamResponse) ||
+		jetstream.IsTransientFetchError(err)
+}
+
+func withoutBackingOffServers(
+	servers []spec.ServerName, origin, joinServer spec.ServerName,
+	isBackingOff func(spec.ServerName) bool,
+) []spec.ServerName {
+	filtered := servers[:0]
+	for _, server := range servers {
+		if server == origin || server == joinServer || !isBackingOff(server) {
+			filtered = append(filtered, server)
+		}
+	}
+	return filtered
 }

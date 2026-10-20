@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,7 +64,7 @@ func Setup(
 
 	if enableMetrics {
 		prometheus.MustRegister(
-			internal.PDUCountTotal, internal.EDUCountTotal,
+			internal.PDUCountTotal, internal.EDUCountTotal, internal.TxnCountTotal,
 		)
 	}
 
@@ -89,12 +89,15 @@ func Setup(
 		var pkReq *gomatrixserverlib.PublicKeyNotaryLookupRequest
 		serverName := spec.ServerName(vars["serverName"])
 		keyID := gomatrixserverlib.KeyID(vars["keyID"])
-		if serverName != "" && keyID != "" {
+		if serverName != "" {
+			// Without a key ID (MSC3938), an empty criteria map asks for all keys.
+			criteria := map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{}
+			if keyID != "" {
+				criteria[keyID] = gomatrixserverlib.PublicKeyNotaryQueryCriteria{}
+			}
 			pkReq = &gomatrixserverlib.PublicKeyNotaryLookupRequest{
 				ServerKeys: map[spec.ServerName]map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{
-					serverName: {
-						keyID: gomatrixserverlib.PublicKeyNotaryQueryCriteria{},
-					},
+					serverName: criteria,
 				},
 			}
 		}
@@ -124,6 +127,7 @@ func Setup(
 	v2keysmux.Handle("/server/", localKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/server", localKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/query", notaryKeys).Methods(http.MethodPost)
+	v2keysmux.Handle("/query/{serverName}", notaryKeys).Methods(http.MethodGet)
 	v2keysmux.Handle("/query/{serverName}/{keyID}", notaryKeys).Methods(http.MethodGet)
 
 	mu := internal.NewMutexByRoom()
@@ -453,6 +457,63 @@ func Setup(
 		},
 	)).Methods(http.MethodPut)
 
+	v1fedmux.Handle("/make_knock/{roomID}/{userID}", MakeFedAPI(
+		"federation_make_knock", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
+		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
+				return util.JSONResponse{
+					Code: http.StatusForbidden,
+					JSON: spec.Forbidden("Forbidden by server ACLs"),
+				}
+			}
+			roomID, err := spec.NewRoomID(vars["roomID"])
+			if err != nil {
+				return util.JSONResponse{
+					Code: http.StatusBadRequest,
+					JSON: spec.InvalidParam("Invalid RoomID"),
+				}
+			}
+			userID, err := spec.NewUserID(vars["userID"], true)
+			if err != nil {
+				return util.JSONResponse{
+					Code: http.StatusBadRequest,
+					JSON: spec.InvalidParam("Invalid UserID"),
+				}
+			}
+			// Unlike make_join, the ver parameter is required: without it
+			// no room version can support knocking.
+			var remoteVersions []gomatrixserverlib.RoomVersion
+			for _, v := range httpReq.URL.Query()["ver"] {
+				remoteVersions = append(remoteVersions, gomatrixserverlib.RoomVersion(v))
+			}
+			return MakeKnock(
+				httpReq, request, cfg, rsAPI, *roomID, *userID, remoteVersions,
+			)
+		},
+	)).Methods(http.MethodGet)
+
+	v1fedmux.Handle("/send_knock/{roomID}/{eventID}", MakeFedAPI(
+		"federation_send_knock", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
+		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
+				return util.JSONResponse{
+					Code: http.StatusForbidden,
+					JSON: spec.Forbidden("Forbidden by server ACLs"),
+				}
+			}
+			roomID, err := spec.NewRoomID(vars["roomID"])
+			if err != nil {
+				return util.JSONResponse{
+					Code: http.StatusBadRequest,
+					JSON: spec.InvalidParam("Invalid RoomID"),
+				}
+			}
+			return SendKnock(
+				httpReq, request, cfg, rsAPI, keys, *roomID, vars["eventID"],
+			)
+		},
+	)).Methods(http.MethodPut)
+
 	v1fedmux.Handle("/make_leave/{roomID}/{userID}", MakeFedAPI(
 		"federation_make_leave", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
@@ -747,19 +808,42 @@ func MakeFedHTTPAPI(
 	return http.HandlerFunc(h)
 }
 
+// FederationWakeups retries delivery to servers that have just made an
+// authenticated request to us, since that shows they are reachable again.
 type FederationWakeups struct {
-	FsAPI   *fedInternal.FederationInternalAPI
+	FsAPI   wakeupAPI
 	origins sync.Map
 }
 
+type wakeupAPI interface {
+	IsServerBackingOff(spec.ServerName) bool
+	MarkServersAlive([]spec.ServerName)
+}
+
+const (
+	// WakeupInterval limits how often a server we are not backing off from is
+	// marked alive, which then has little to do.
+	wakeupInterval = time.Minute
+	// BackingOffWakeupInterval limits the retries a server we are backing off
+	// from can trigger. The first wakeup can come too early to succeed, for
+	// example from a restarting or promoted HA homeserver that sends before
+	// it is routable, and waiting the full wakeupInterval for the next one
+	// would leave our backlog for it undelivered while it keeps contacting us.
+	backingOffWakeupInterval = 5 * time.Second
+)
+
 func (f *FederationWakeups) Wakeup(ctx context.Context, origin spec.ServerName) {
+	interval := wakeupInterval
+	if f.FsAPI.IsServerBackingOff(origin) {
+		interval = backingOffWakeupInterval
+	}
 	key, keyok := f.origins.Load(origin)
 	if keyok {
 		lastTime, ok := key.(time.Time)
-		if ok && time.Since(lastTime) < time.Minute {
+		if ok && time.Since(lastTime) < interval {
 			return
 		}
 	}
-	f.FsAPI.MarkServersAlive([]spec.ServerName{origin}) //nolint:contextcheck
+	f.FsAPI.MarkServersAlive([]spec.ServerName{origin})
 	f.origins.Store(origin, time.Now())
 }

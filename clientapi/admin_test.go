@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
 	capi "codefloe.com/pat-s/zendrite/clientapi/api"
@@ -792,9 +793,19 @@ func TestPurgeRoom(t *testing.T) {
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
 		natsInstance := jetstream.NATSInstance{}
 		defer func() {
-			// give components the time to process purge requests
-			time.Sleep(time.Millisecond * 50)
-			close()
+			defer close()
+			// Purging queues leave events and a purge event for both consumers.
+			// Keep their databases open until every queued message is acknowledged.
+			js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+			assert.Eventually(t, func() bool {
+				for _, consumer := range []string{"SyncAPIRoomServerConsumer", "FederationAPIRoomServerConsumer"} {
+					info, err := js.ConsumerInfo(cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent), cfg.Global.JetStream.Durable(consumer)+"Pull")
+					if err != nil || info.NumPending != 0 || info.NumAckPending != 0 {
+						return false
+					}
+				}
+				return true
+			}, 10*time.Second, 10*time.Millisecond, "room event consumers did not finish before shutdown")
 		}()
 
 		routers := httputil.NewRouters()
@@ -806,7 +817,7 @@ func TestPurgeRoom(t *testing.T) {
 		rsAPI.SetFederationAPI(fsAPI, nil)
 
 		userAPI := userapi.NewInternalAPI(processCtx, cfg, cm, &natsInstance, rsAPI, nil, caching.DisableMetrics, testIsBlacklistedOrBackingOff)
-		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics) //nolint:contextcheck
+		syncapi.AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, userAPI, rsAPI, caches, caching.DisableMetrics, nil, nil)
 
 		// Create the room
 		if err := api.SendEvents(ctx, rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {

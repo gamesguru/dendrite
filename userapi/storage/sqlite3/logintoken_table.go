@@ -19,9 +19,10 @@ import (
 )
 
 type loginTokenStatements struct {
-	insertStmt *sql.Stmt
-	deleteStmt *sql.Stmt
-	selectStmt *sql.Stmt
+	insertStmt  *sql.Stmt
+	deleteStmt  *sql.Stmt
+	consumeStmt *sql.Stmt
+	selectStmt  *sql.Stmt
 }
 
 const loginTokenSchema = `
@@ -45,6 +46,9 @@ const insertLoginTokenSQL = "" +
 const deleteLoginTokenSQL = "" +
 	"DELETE FROM userapi_login_tokens WHERE token = $1 OR token_expires_at <= $2"
 
+const consumeLoginTokenSQL = "" +
+	"DELETE FROM userapi_login_tokens WHERE token = $1 AND token_expires_at > $2"
+
 const selectLoginTokenSQL = "" +
 	"SELECT user_id FROM userapi_login_tokens WHERE token = $1 AND token_expires_at > $2"
 
@@ -57,6 +61,7 @@ func NewSQLiteLoginTokenTable(db *sql.DB) (tables.LoginTokenTable, error) {
 	return s, sqlutil.StatementList{
 		{&s.insertStmt, insertLoginTokenSQL},
 		{&s.deleteStmt, deleteLoginTokenSQL},
+		{&s.consumeStmt, consumeLoginTokenSQL},
 		{&s.selectStmt, selectLoginTokenSQL},
 	}.Prepare(db)
 }
@@ -82,6 +87,18 @@ func (s *loginTokenStatements) DeleteLoginToken(ctx context.Context, txn *sql.Tx
 		util.GetLogger(ctx).WithField("num_deleted", n).Infof("Deleted %d login tokens (%d likely additional expired token)", n, n-1)
 	}
 	return nil
+}
+
+// ConsumeLoginToken removes the named token if it has not expired, and
+// reports whether it did. Only one caller can consume a token.
+func (s *loginTokenStatements) ConsumeLoginToken(ctx context.Context, txn *sql.Tx, token string) (bool, error) {
+	stmt := sqlutil.TxStmt(txn, s.consumeStmt)
+	res, err := stmt.ExecContext(ctx, token, time.Now().UTC())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // selectByToken returns the data associated with the given token. May return sql.ErrNoRows.

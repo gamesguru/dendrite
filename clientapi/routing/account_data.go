@@ -11,8 +11,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
@@ -86,7 +87,15 @@ func SaveAccountData(
 		}
 	}
 
+	// The spec reserves these types for the server: a 405 with M_BAD_JSON
+	// rejects them for both global and room account data (MSC4010).
 	if dataType == "m.fully_read" || dataType == "m.push_rules" {
+		return util.JSONResponse{
+			Code: http.StatusMethodNotAllowed,
+			JSON: spec.BadJSON(fmt.Sprintf("Cannot set %s through this API.", dataType)),
+		}
+	}
+	if strings.HasPrefix(dataType, threePIDBindingPrefix) {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden(fmt.Sprintf("Unable to modify %q using this API", dataType)),
@@ -181,10 +190,10 @@ func SaveReadMarker(
 
 	// Handle the read receipts that may be included in the read marker.
 	if r.Read != "" {
-		return SetReceipt(req, userAPI, syncProducer, device, roomID, "m.read", r.Read)
+		return setReceipt(req, userAPI, syncProducer, device, roomID, "m.read", r.Read, "")
 	}
 	if r.ReadPrivate != "" {
-		return SetReceipt(req, userAPI, syncProducer, device, roomID, "m.read.private", r.ReadPrivate)
+		return setReceipt(req, userAPI, syncProducer, device, roomID, "m.read.private", r.ReadPrivate, "")
 	}
 
 	return util.JSONResponse{

@@ -7,9 +7,12 @@ package perform
 
 import (
 	"context"
+	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/internal/helpers"
@@ -30,7 +33,7 @@ type InboundPeeker struct {
 // initiates a /peek over federation.
 //
 // It should atomically figure out the current state of the room (for the
-// response to /peek) while adding the new inbound peek to the kafka stream so the
+// response to /peek) while adding the new inbound peek to the JetStream stream so the
 // fed sender can start sending peeked events without a race between the state
 // snapshot and the stream of peeked events.
 func (r *InboundPeeker) PerformInboundPeek(
@@ -47,6 +50,13 @@ func (r *InboundPeeker) PerformInboundPeek(
 	}
 	response.RoomExists = true
 	response.RoomVersion = info.RoomVersion
+
+	// Like a local peek, a remote server may only peek into a world-readable,
+	// unencrypted room. Checking before the peek is published keeps a refused
+	// server from being sent the room's events.
+	if err = r.checkPeekable(ctx, request.RoomID); err != nil {
+		return err
+	}
 
 	var stateEvents []gomatrixserverlib.PDU
 
@@ -67,7 +77,8 @@ func (r *InboundPeeker) PerformInboundPeek(
 		sortedLatestEvents,
 		gomatrixserverlib.TopologicalOrderByPrevEvents,
 	)
-	response.LatestEvent = &types.HeaderedEvent{PDU: sortedLatestEvents[0]}
+	// Events read through the cache are HeaderedEvents already; do not nest them.
+	response.LatestEvent = &types.HeaderedEvent{PDU: (&types.HeaderedEvent{PDU: sortedLatestEvents[0]}).Unwrap()}
 
 	// XXX: do we actually need to do a state resolution here?
 	roomState := state.NewStateResolution(r.DB, info, r.Inputer.Queryer)
@@ -117,4 +128,23 @@ func (r *InboundPeeker) PerformInboundPeek(
 		},
 	})
 	return err
+}
+
+// checkPeekable returns api.ErrNotAllowed unless the room's current state lets
+// anyone read it.
+func (r *InboundPeeker) checkPeekable(ctx context.Context, roomID string) error {
+	ev, err := r.DB.GetStateEvent(ctx, roomID, spec.MRoomHistoryVisibility, "")
+	if err != nil {
+		return fmt.Errorf("r.DB.GetStateEvent: %w", err)
+	}
+	if ev == nil || gjson.GetBytes(ev.Content(), "history_visibility").Str != string(gomatrixserverlib.HistoryVisibilityWorldReadable) {
+		return api.ErrNotAllowed{Err: fmt.Errorf("room is not world-readable")}
+	}
+	if ev, err = r.DB.GetStateEvent(ctx, roomID, spec.MRoomEncryption, ""); err != nil {
+		return fmt.Errorf("r.DB.GetStateEvent: %w", err)
+	}
+	if ev != nil {
+		return api.ErrNotAllowed{Err: fmt.Errorf("cannot peek into an encrypted room")}
+	}
+	return nil
 }

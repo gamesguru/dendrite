@@ -3,10 +3,10 @@ package pushrules
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+	"math"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // A RuleSetEvaluator encapsulates context to evaluate an event
@@ -89,6 +89,19 @@ func ruleMatches(rule *Rule, kind Kind, event gomatrixserverlib.PDU, ec Evaluati
 		return false, nil
 	}
 
+	// Preserve text mentions only for events from legacy clients.
+	if rule.RuleID == MRuleContainsDisplayName || rule.RuleID == MRuleContainsUserName || rule.RuleID == MRuleRoomNotif {
+		var content map[string]json.RawMessage
+		if len(event.Content()) > 0 {
+			if err := json.Unmarshal(event.Content(), &content); err != nil {
+				return false, err
+			}
+		}
+		if _, present := content["m.mentions"]; present {
+			return false, nil
+		}
+	}
+
 	switch kind {
 	case OverrideKind, UnderrideKind:
 		for _, cond := range rule.Conditions {
@@ -134,6 +147,33 @@ func conditionMatches(cond *Condition, event gomatrixserverlib.PDU, ec Evaluatio
 		}
 		return patternMatches(cond.Key, *cond.Pattern, event)
 
+	case EventPropertyIsCondition, EventPropertyContainsCondition:
+		var want any
+		if len(cond.Value) == 0 || json.Unmarshal(cond.Value, &want) != nil || !scalarValue(want) {
+			return false, nil
+		}
+		var eventMap map[string]any
+		if err := json.Unmarshal(event.JSON(), &eventMap); err != nil {
+			return false, err
+		}
+		got, err := lookupMapPath(splitPropertyPath(cond.Key), eventMap)
+		if err != nil {
+			return false, nil
+		}
+		if cond.Kind == EventPropertyIsCondition {
+			return scalarValue(got) && got == want, nil
+		}
+		values, ok := got.([]any)
+		if !ok {
+			return false, nil
+		}
+		for _, value := range values {
+			if scalarValue(value) && value == want {
+				return true, nil
+			}
+		}
+		return false, nil
+
 	case ContainsDisplayNameCondition:
 		return patternMatches("content.body", ec.UserDisplayName(), event)
 
@@ -175,7 +215,7 @@ func patternMatches(key, pattern string, event gomatrixserverlib.PDU) (bool, err
 	// "If the property specified by key is completely absent from
 	// the event, or does not have a string value, then the condition
 	// will not match, even if pattern is *."
-	v, err := lookupMapPath(strings.Split(key, "."), eventMap)
+	v, err := lookupMapPath(splitPropertyPath(key), eventMap)
 	if err != nil {
 		// An unknown path is a benign error that shouldn't stop rule
 		// processing. It's just a non-match.
@@ -187,4 +227,16 @@ func patternMatches(key, pattern string, event gomatrixserverlib.PDU) (bool, err
 	}
 
 	return re.MatchString(fmt.Sprint(v)), nil
+}
+
+// scalarValue excludes compound values and numbers outside canonical JSON.
+func scalarValue(value any) bool {
+	switch v := value.(type) {
+	case nil, string, bool:
+		return true
+	case float64:
+		return math.Trunc(v) == v && math.Abs(v) <= 9007199254740991
+	default:
+		return false
+	}
 }

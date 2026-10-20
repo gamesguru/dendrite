@@ -10,21 +10,31 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
+	clienthttputil "codefloe.com/pat-s/zendrite/clientapi/httputil"
+	"codefloe.com/pat-s/zendrite/clientapi/userutil"
+	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// This file implements the modern MAS provisioning API served under
+// /_synapse/mas, which MAS calls when configured with
+// matrix.kind: synapse (or synapse_modern / synapse_read_only).
+// The contract mirrors Synapse's synapse/rest/synapse/mas handlers:
+// every endpoint authenticates with the shared secret as a bearer token,
+// returns Matrix error JSON (errcode) on failure and {} on success, and
+// reports unknown users with 404 M_NOT_FOUND.
 
 // verifyMASAdminToken checks the Authorization header for a valid MAS admin token.
 // Returns a JSON error response if verification fails, or nil if successful.
@@ -71,28 +81,23 @@ func verifyMASAdminToken(req *http.Request, adminToken string) *util.JSONRespons
 	return nil
 }
 
-// extractUserIDLocalpart parses a full Matrix user ID (@user:server) and returns the localpart.
-// Returns a JSON error response if the user ID is malformed or not local.
-func extractUserIDLocalpart(userID string, cfg *config.ClientAPI) (string, spec.ServerName, *util.JSONResponse) {
-	localpart, domain, err := gomatrixserverlib.SplitID('@', userID)
-	if err != nil {
-		res := util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.InvalidParam("Invalid user ID: " + userID),
+// masRoute wraps a MAS admin endpoint handler with per-caller rate limiting
+// and bearer-token auth. The limiter runs first so that guessing the admin
+// token is throttled like any other unauthenticated request.
+func masRoute(name, adminToken string, rateLimits *httputil.RateLimits, h func(*http.Request) util.JSONResponse) http.Handler {
+	return httputil.MakeExternalAPI("mas_"+name, func(req *http.Request) util.JSONResponse {
+		if r := rateLimits.Limit(req, nil); r != nil {
+			return *r
 		}
-		return "", "", &res
-	}
-	if !cfg.Matrix.IsLocalServerName(domain) {
-		res := util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.InvalidParam("User ID does not belong to this server"),
+		if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
+			return *errRes
 		}
-		return "", "", &res
-	}
-	return localpart, domain, nil
+		return h(req)
+	})
 }
 
-// setupMASAdminRoutes registers the Synapse-compatible admin endpoints that MAS calls.
+// setupMASAdminRoutes registers the /_synapse/mas provisioning endpoints that
+// MAS calls with its shared secret as a bearer token.
 func setupMASAdminRoutes(
 	synapseAdminRouter *httputil.Router,
 	mscCfg *config.MSCs,
@@ -102,179 +107,204 @@ func setupMASAdminRoutes(
 ) {
 	adminToken := mscCfg.MSC3861.AdminToken
 
-	// GET /_synapse/admin/v1/username_available
-	synapseAdminRouter.Handle("/admin/v1/username_available",
-		httputil.MakeExternalAPI("mas_username_available", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			return MASCheckUsernameAvailable(req, cfg, userAPI)
-		}),
-	).Methods(http.MethodGet, http.MethodOptions)
-
-	// PUT /_synapse/admin/v1/users/{userId}
-	synapseAdminRouter.Handle("/admin/v1/users/{userId}",
-		httputil.MakeExternalAPI("mas_create_or_update_user", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			switch req.Method {
-			case http.MethodPut:
-				return MASCreateOrUpdateUser(req, cfg, userAPI)
-			case http.MethodGet:
-				return MASGetUser(req, cfg, userAPI)
-			default:
-				return util.JSONResponse{
-					Code: http.StatusMethodNotAllowed,
-					JSON: spec.NotFound("unknown method"),
-				}
-			}
-		}),
-	).Methods(http.MethodPut, http.MethodGet, http.MethodOptions)
-
-	// PUT/DELETE /_synapse/admin/v1/users/{userId}/devices/{deviceId}
-	synapseAdminRouter.Handle("/admin/v1/users/{userId}/devices/{deviceId}",
-		httputil.MakeExternalAPI("mas_device", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			switch req.Method {
-			case http.MethodPut:
-				return MASCreateOrGetDevice(req, cfg, userAPI)
-			case http.MethodDelete:
-				return MASDeleteDevice(req, cfg, userAPI)
-			default:
-				return util.JSONResponse{
-					Code: http.StatusMethodNotAllowed,
-					JSON: spec.NotFound("unknown method"),
-				}
-			}
-		}),
-	).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
-
-	// DELETE /_synapse/admin/v1/users/{userId}/devices
-	synapseAdminRouter.Handle("/admin/v1/users/{userId}/devices",
-		httputil.MakeExternalAPI("mas_delete_all_devices", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			return MASDeleteAllDevices(req, cfg, userAPI)
-		}),
-	).Methods(http.MethodDelete, http.MethodOptions)
-
-	// POST /_synapse/admin/v1/users/{userId}/_deactivate
-	synapseAdminRouter.Handle("/admin/v1/users/{userId}/_deactivate",
-		httputil.MakeExternalAPI("mas_deactivate_user", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			return MASDeactivateUser(req, cfg, userAPI)
-		}),
-	).Methods(http.MethodPost, http.MethodOptions)
-
-	// POST /_synapse/admin/v1/users/{userId}/_allow_cross_signing_replacement_without_uia
-	synapseAdminRouter.Handle("/admin/v1/users/{userId}/_allow_cross_signing_replacement_without_uia",
-		httputil.MakeExternalAPI("mas_allow_cross_signing_replacement", func(req *http.Request) util.JSONResponse {
-			if r := rateLimits.Limit(req, nil); r != nil {
-				return *r
-			}
-			if errRes := verifyMASAdminToken(req, adminToken); errRes != nil {
-				return *errRes
-			}
-			return MASAllowCrossSigningReplacement(req, cfg)
-		}),
-	).Methods(http.MethodPost, http.MethodOptions)
-}
-
-// MASCheckUsernameAvailable checks if a username is available for registration.
-// GET /_synapse/admin/v1/username_available?username=foo.
-func MASCheckUsernameAvailable(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	username := req.URL.Query().Get("username")
-	if username == "" {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.MissingParam("Missing 'username' query parameter"),
-		}
+	handle := func(path, name string, h masHandler, methods ...string) {
+		synapseAdminRouter.Handle(path, masRoute(name, adminToken, rateLimits, func(req *http.Request) util.JSONResponse {
+			return h(req, cfg, userAPI)
+		})).Methods(methods...)
 	}
 
-	var availRes userapi.QueryAccountAvailabilityResponse
-	if err := userAPI.QueryAccountAvailability(req.Context(), &userapi.QueryAccountAvailabilityRequest{
-		Localpart:  username,
+	handle("/mas/query_user", "query_user", MASQueryUser, http.MethodGet, http.MethodOptions)
+	handle("/mas/provision_user", "provision_user", MASProvisionUser, http.MethodPost, http.MethodOptions)
+	handle("/mas/is_localpart_available", "is_localpart_available", MASIsLocalpartAvailable, http.MethodGet, http.MethodOptions)
+	handle("/mas/upsert_device", "upsert_device", MASUpsertDevice, http.MethodPost, http.MethodOptions)
+	handle("/mas/update_device_display_name", "update_device_display_name", MASUpdateDeviceDisplayName, http.MethodPost, http.MethodOptions)
+	handle("/mas/delete_device", "delete_device", MASDeleteDevice, http.MethodPost, http.MethodOptions)
+	handle("/mas/sync_devices", "sync_devices", MASSyncDevices, http.MethodPost, http.MethodOptions)
+	handle("/mas/delete_user", "delete_user", MASDeleteUser, http.MethodPost, http.MethodOptions)
+	handle("/mas/reactivate_user", "reactivate_user", MASReactivateUser, http.MethodPost, http.MethodOptions)
+	handle("/mas/set_displayname", "set_displayname", MASSetDisplayName, http.MethodPost, http.MethodOptions)
+	handle("/mas/unset_displayname", "unset_displayname", MASUnsetDisplayName, http.MethodPost, http.MethodOptions)
+	handle("/mas/allow_cross_signing_reset", "allow_cross_signing_reset", MASAllowCrossSigningReset, http.MethodPost, http.MethodOptions)
+}
+
+// masHandler is the shared signature of every /_synapse/mas endpoint.
+type masHandler func(*http.Request, *config.ClientAPI, userapi.ClientUserAPI) util.JSONResponse
+
+// masRequireLocalpart returns a 400 response when the localpart is empty.
+func masRequireLocalpart(localpart string) *util.JSONResponse {
+	if localpart == "" {
+		res := util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'localpart'"),
+		}
+		return &res
+	}
+	return nil
+}
+
+// masLookupAccount validates the localpart and verifies that an account
+// exists for it, returning a 404/400/500 response when validation fails or
+// the account is unknown.
+func masLookupAccount(ctx context.Context, userAPI userapi.ClientUserAPI, cfg *config.ClientAPI, localpart string) *util.JSONResponse {
+	if err := internal.ValidateUsername(localpart, cfg.Matrix.ServerName); err != nil {
+		return internal.UsernameResponse(err)
+	}
+
+	var accRes userapi.QueryAccountByLocalpartResponse
+	err := userAPI.QueryAccountByLocalpart(ctx, &userapi.QueryAccountByLocalpartRequest{
+		Localpart:  localpart,
 		ServerName: cfg.Matrix.ServerName,
-	}, &availRes); err != nil {
-		logrus.WithError(err).Error("MAS admin: failed to check username availability")
-		return util.JSONResponse{
+	}, &accRes)
+	switch {
+	case errors.Is(err, sql.ErrNoRows), err == nil && accRes.Account == nil:
+		res := util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("User not found"),
+		}
+		return &res
+	case err != nil:
+		logrus.WithError(err).Error("MAS admin: failed to query account")
+		res := util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
 		}
+		return &res
 	}
-
-	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: struct {
-			Available bool `json:"available"`
-		}{Available: availRes.Available},
-	}
+	return nil
 }
 
-// masUserRequest is the JSON body for PUT /_synapse/admin/v1/users/{userId}.
-type masUserRequest struct {
-	DisplayName *string `json:"displayname,omitempty"`
-	AvatarURL   *string `json:"avatar_url,omitempty"`
-	Admin       *bool   `json:"admin,omitempty"`
-	Deactivated *bool   `json:"deactivated,omitempty"`
+// masQueryUserResponse is the response body for GET /_synapse/mas/query_user.
+// Display_name and avatar_url serialize as null when unset, matching Synapse.
+type masQueryUserResponse struct {
+	UserID        string  `json:"user_id"`
+	DisplayName   *string `json:"display_name"`
+	AvatarURL     *string `json:"avatar_url"`
+	IsSuspended   bool    `json:"is_suspended"`
+	IsDeactivated bool    `json:"is_deactivated"`
 }
 
-// MASCreateOrUpdateUser creates or updates a user account.
-// PUT /_synapse/admin/v1/users/{userId}.
-func MASCreateOrUpdateUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
-
-	localpart, serverName, errRes := extractUserIDLocalpart(userID, cfg)
-	if errRes != nil {
+// MASQueryUser returns account and profile information for a localpart.
+// GET /_synapse/mas/query_user?localpart=alice.
+func MASQueryUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	localpart := req.URL.Query().Get("localpart")
+	if errRes := masRequireLocalpart(localpart); errRes != nil {
 		return *errRes
 	}
 
-	var body masUserRequest
-	if req.Body != nil {
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			return util.JSONResponse{
-				Code: http.StatusBadRequest,
-				JSON: spec.BadJSON("Failed to parse request body: " + err.Error()),
-			}
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, localpart); errRes != nil {
+		return *errRes
+	}
+
+	userID := userutil.MakeUserID(localpart, cfg.Matrix.ServerName)
+
+	// The profile only carries cosmetic fields; a missing profile must not
+	// hide an existing account.
+	var displayName, avatarURL *string
+	profile, err := userAPI.QueryProfile(req.Context(), userID)
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).Warn("MAS admin: failed to query profile")
+	} else if profile != nil {
+		if profile.DisplayName != "" {
+			displayName = &profile.DisplayName
+		}
+		if profile.AvatarURL != "" {
+			avatarURL = &profile.AvatarURL
 		}
 	}
 
-	accountType := userapi.AccountTypeUser
-	if body.Admin != nil && *body.Admin {
-		accountType = userapi.AccountTypeAdmin
+	// The deactivated flag lives on a separate query; a failure here must not
+	// hide the account either.
+	deactivated, err := userAPI.IsAccountDeactivated(req.Context(), localpart, cfg.Matrix.ServerName)
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).Warn("MAS admin: failed to query deactivation state")
+		deactivated = false
 	}
 
-	// Create or update the account.
+	// Zendrite has no suspension concept; suspended users are already blocked
+	// at token introspection time on the MAS side.
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: masQueryUserResponse{
+			UserID:        userID,
+			DisplayName:   displayName,
+			AvatarURL:     avatarURL,
+			IsSuspended:   false,
+			IsDeactivated: deactivated,
+		},
+	}
+}
+
+// masProvisionUserRequest is the JSON body for POST /_synapse/mas/provision_user.
+type masProvisionUserRequest struct {
+	Localpart        string   `json:"localpart"`
+	SetDisplayname   *string  `json:"set_displayname,omitempty"`
+	UnsetDisplayname bool     `json:"unset_displayname"`
+	SetAvatarURL     *string  `json:"set_avatar_url,omitempty"`
+	UnsetAvatarURL   bool     `json:"unset_avatar_url"`
+	SetEmails        []string `json:"set_emails,omitempty"`
+	UnsetEmails      bool     `json:"unset_emails"`
+	Locked           *bool    `json:"locked,omitempty"`
+}
+
+// MASProvisionUser creates a new account or updates the profile of an
+// existing one. It responds 201 when the account was created and 200 when it
+// already existed, which is how MAS distinguishes the two outcomes.
+// POST /_synapse/mas/provision_user.
+func MASProvisionUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masProvisionUserRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if body.SetDisplayname != nil && body.UnsetDisplayname {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("Cannot specify both set_displayname and unset_displayname"),
+		}
+	}
+	if body.SetAvatarURL != nil && body.UnsetAvatarURL {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("Cannot specify both set_avatar_url and unset_avatar_url"),
+		}
+	}
+	if body.SetEmails != nil && body.UnsetEmails {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.InvalidParam("Cannot specify both set_emails and unset_emails"),
+		}
+	}
+
+	// MAS only consults is_localpart_available for brand new registrations,
+	// so the namespace rules are enforced here as well for users it already
+	// knows about.
+	if errRes := validateLocalpartNamespace(cfg, body.Localpart, cfg.Matrix.ServerName); errRes != nil {
+		return *errRes
+	}
+	if errRes := callGuestLocalpartReserved(body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	// Emails and the locked flag are owned by MAS under delegated auth:
+	// Zendrite's 3PID endpoints are disabled with MSC3861 and token
+	// introspection already rejects locked users. Log for observability.
+	if body.SetEmails != nil || body.UnsetEmails {
+		logrus.WithField("localpart", body.Localpart).Debug("MAS admin: ignoring email change request; MAS owns 3PIDs under delegated auth")
+	}
+	if body.Locked != nil {
+		logrus.WithField("localpart", body.Localpart).Debug("MAS admin: ignoring lock change request; Zendrite has no suspension support")
+	}
+
+	// Create or update the account. ConflictUpdate makes this idempotent and
+	// race-tolerant: AccountCreated reports which of the two happened.
 	var createRes userapi.PerformAccountCreationResponse
 	if err := userAPI.PerformAccountCreation(req.Context(), &userapi.PerformAccountCreationRequest{
-		AccountType: accountType,
-		Localpart:   localpart,
-		ServerName:  serverName,
+		AccountType: userapi.AccountTypeUser,
+		Localpart:   body.Localpart,
+		ServerName:  cfg.Matrix.ServerName,
 		OnConflict:  userapi.ConflictUpdate,
 	}, &createRes); err != nil {
 		logrus.WithError(err).Error("MAS admin: failed to create/update user")
@@ -284,177 +314,98 @@ func MASCreateOrUpdateUser(req *http.Request, cfg *config.ClientAPI, userAPI use
 		}
 	}
 
-	// Update display name if provided.
-	if body.DisplayName != nil {
-		if _, _, err := userAPI.SetDisplayName(req.Context(), localpart, serverName, *body.DisplayName); err != nil {
+	// Apply the profile fields. On creation only the set variants are
+	// meaningful; on update the unset variants clear the stored value.
+	if body.SetDisplayname != nil {
+		if _, _, err := userAPI.SetDisplayName(req.Context(), body.Localpart, cfg.Matrix.ServerName, *body.SetDisplayname); err != nil {
 			logrus.WithError(err).Error("MAS admin: failed to set display name")
 		}
+	} else if body.UnsetDisplayname && !createRes.AccountCreated {
+		if _, _, err := userAPI.SetDisplayName(req.Context(), body.Localpart, cfg.Matrix.ServerName, ""); err != nil {
+			logrus.WithError(err).Error("MAS admin: failed to unset display name")
+		}
 	}
-
-	// Update avatar URL if provided.
-	if body.AvatarURL != nil {
-		if _, _, err := userAPI.SetAvatarURL(req.Context(), localpart, serverName, *body.AvatarURL); err != nil {
+	if body.SetAvatarURL != nil {
+		if _, _, err := userAPI.SetAvatarURL(req.Context(), body.Localpart, cfg.Matrix.ServerName, *body.SetAvatarURL); err != nil {
 			logrus.WithError(err).Error("MAS admin: failed to set avatar URL")
 		}
-	}
-
-	// Handle deactivation.
-	if body.Deactivated != nil && *body.Deactivated {
-		var deactivateRes userapi.PerformAccountDeactivationResponse
-		if err := userAPI.PerformAccountDeactivation(req.Context(), &userapi.PerformAccountDeactivationRequest{
-			Localpart:  localpart,
-			ServerName: serverName,
-		}, &deactivateRes); err != nil {
-			logrus.WithError(err).Error("MAS admin: failed to deactivate user")
+	} else if body.UnsetAvatarURL && !createRes.AccountCreated {
+		if _, _, err := userAPI.SetAvatarURL(req.Context(), body.Localpart, cfg.Matrix.ServerName, ""); err != nil {
+			logrus.WithError(err).Error("MAS admin: failed to unset avatar URL")
 		}
 	}
 
+	status := http.StatusOK
+	if createRes.AccountCreated {
+		status = http.StatusCreated
+	}
 	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: struct {
-			Name           string `json:"name"`
-			DisplayName    string `json:"displayname,omitempty"`
-			AvatarURL      string `json:"avatar_url,omitempty"`
-			Admin          bool   `json:"admin"`
-			Deactivated    bool   `json:"deactivated"`
-			AccountCreated bool   `json:"account_created"`
-		}{
-			Name:           userID,
-			Admin:          accountType == userapi.AccountTypeAdmin,
-			Deactivated:    body.Deactivated != nil && *body.Deactivated,
-			AccountCreated: createRes.AccountCreated,
-		},
+		Code: status,
+		JSON: struct{}{},
 	}
 }
 
-// accountByLocalpartQuerier is implemented by the full user internal API. It
-// is asserted at runtime so these handlers only depend on ClientUserAPI.
-type accountByLocalpartQuerier interface {
-	QueryAccountByLocalpart(ctx context.Context, req *userapi.QueryAccountByLocalpartRequest, res *userapi.QueryAccountByLocalpartResponse) error
-}
-
-// accountDeactivationQuerier is implemented by the full user internal API. It
-// is asserted at runtime so these handlers only depend on ClientUserAPI.
-type accountDeactivationQuerier interface {
-	IsAccountDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
-}
-
-// MASGetUser retrieves information about a user account.
-// GET /_synapse/admin/v1/users/{userId}.
-func MASGetUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
-
-	localpart, serverName, errRes := extractUserIDLocalpart(userID, cfg)
-	if errRes != nil {
+// MASIsLocalpartAvailable reports whether a localpart can be registered. MAS
+// reads only the errcode: any 2xx means available, M_USER_IN_USE /
+// M_INVALID_USERNAME / M_EXCLUSIVE mean taken or invalid. The localpart is
+// checked exactly as sent, like provision_user validates it, so a name
+// reported as available is guaranteed to provision.
+// GET /_synapse/mas/is_localpart_available?localpart=alice.
+func MASIsLocalpartAvailable(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	localpart := req.URL.Query().Get("localpart")
+	if errRes := masRequireLocalpart(localpart); errRes != nil {
 		return *errRes
 	}
 
-	// The account record is authoritative for existence and account type.
-	querier, ok := userAPI.(accountByLocalpartQuerier)
-	if !ok {
-		logrus.Error("MAS admin: user API does not support QueryAccountByLocalpart")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
+	if errRes := checkLocalpartRegistrable(req.Context(), cfg, userAPI, localpart, cfg.Matrix.ServerName); errRes != nil {
+		if errRes.Code == http.StatusInternalServerError {
+			logrus.WithField("localpart", localpart).Error("MAS admin: failed to check localpart availability")
 		}
-	}
-	var accRes userapi.QueryAccountByLocalpartResponse
-	err = querier.QueryAccountByLocalpart(req.Context(), &userapi.QueryAccountByLocalpartRequest{
-		Localpart:  localpart,
-		ServerName: serverName,
-	}, &accRes)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("User not found"),
-		}
-	case err != nil:
-		logrus.WithError(err).Error("MAS admin: failed to query account")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}
-	case accRes.Account == nil:
-		return util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("User not found"),
-		}
-	}
-
-	// The profile only carries cosmetic fields; a missing profile must not
-	// hide an existing account.
-	var displayName, avatarURL string
-	profile, err := userAPI.QueryProfile(req.Context(), userID)
-	if err != nil {
-		logrus.WithError(err).WithField("user_id", userID).Warn("MAS admin: failed to query profile")
-	} else {
-		displayName = profile.DisplayName
-		avatarURL = profile.AvatarURL
-	}
-
-	// The deactivated flag lives on a separate query; a failure here must not
-	// hide the account either.
-	var deactivated bool
-	if dq, ok := userAPI.(accountDeactivationQuerier); ok {
-		deactivated, err = dq.IsAccountDeactivated(req.Context(), localpart, serverName)
-		if err != nil {
-			logrus.WithError(err).WithField("user_id", userID).Warn("MAS admin: failed to query deactivation state")
-			deactivated = false
-		}
-	} else {
-		logrus.Error("MAS admin: user API does not support IsAccountDeactivated")
+		return *errRes
 	}
 
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: struct {
-			Name        string `json:"name"`
-			DisplayName string `json:"displayname,omitempty"`
-			AvatarURL   string `json:"avatar_url,omitempty"`
-			Admin       bool   `json:"admin"`
-			Deactivated bool   `json:"deactivated"`
-		}{
-			Name:        userID,
-			DisplayName: displayName,
-			AvatarURL:   avatarURL,
-			Admin:       accRes.Account.AccountType == userapi.AccountTypeAdmin,
-			Deactivated: deactivated,
-		},
+		JSON: struct{}{},
 	}
 }
 
-// masDeviceRequest is the JSON body for PUT /_synapse/admin/v1/users/{userId}/devices/{deviceId}.
-type masDeviceRequest struct {
+// masUpsertDeviceRequest is the JSON body for POST /_synapse/mas/upsert_device.
+type masUpsertDeviceRequest struct {
+	Localpart   string  `json:"localpart"`
+	DeviceID    string  `json:"device_id"`
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-// MASCreateOrGetDevice creates or retrieves a device.
-// PUT /_synapse/admin/v1/users/{userId}/devices/{deviceId}.
-func MASCreateOrGetDevice(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
-	deviceID := vars["deviceId"]
+// masDeviceResponse is the JSON body for device responses carrying the
+// device id and optional display name.
+type masDeviceResponse struct {
+	DeviceID    string  `json:"device_id"`
+	DisplayName *string `json:"display_name"`
+}
 
-	localpart, serverName, errRes := extractUserIDLocalpart(userID, cfg)
-	if errRes != nil {
+// MASUpsertDevice creates a device (201) or updates the display name of an
+// existing one (200).
+// POST /_synapse/mas/upsert_device.
+func MASUpsertDevice(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masUpsertDeviceRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
 		return *errRes
 	}
-
-	var body masDeviceRequest
-	if req.Body != nil {
-		if decodeErr := json.NewDecoder(req.Body).Decode(&body); decodeErr != nil {
-			// Ignore decode errors -- body is optional.
-			body = masDeviceRequest{}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if body.DeviceID == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'device_id'"),
 		}
 	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
+		return *errRes
+	}
+	userID := userutil.MakeUserID(body.Localpart, cfg.Matrix.ServerName)
 
 	// Look up the device first: PerformDeviceCreation deletes and re-inserts
 	// the device row, which would clobber a real access token already stored
@@ -468,41 +419,30 @@ func MASCreateOrGetDevice(req *http.Request, cfg *config.ClientAPI, userAPI user
 		}
 	}
 	for _, existing := range queryRes.Devices {
-		if existing.ID == deviceID {
+		if existing.ID == body.DeviceID {
+			if body.DisplayName != nil && existing.DisplayName != *body.DisplayName {
+				var updateRes userapi.PerformDeviceUpdateResponse
+				if err := userAPI.PerformDeviceUpdate(req.Context(), &userapi.PerformDeviceUpdateRequest{
+					RequestingUserID: userID,
+					DeviceID:         body.DeviceID,
+					DisplayName:      body.DisplayName,
+				}, &updateRes); err != nil {
+					logrus.WithError(err).Error("MAS admin: failed to update device display name")
+					return util.JSONResponse{
+						Code: http.StatusInternalServerError,
+						JSON: spec.InternalServerError{},
+					}
+				}
+			}
 			return util.JSONResponse{
 				Code: http.StatusOK,
-				JSON: struct {
-					DeviceID    string `json:"device_id"`
-					DisplayName string `json:"display_name,omitempty"`
-				}{
-					DeviceID:    existing.ID,
-					DisplayName: existing.DisplayName,
-				},
+				JSON: masDeviceResponse{DeviceID: body.DeviceID, DisplayName: body.DisplayName},
 			}
 		}
 	}
 
-	// Generate a placeholder access token since the DB requires unique tokens.
-	// MAS will supply the real token during OIDC login flows.
-	placeholderToken, err := generatePlaceholderToken()
-	if err != nil {
-		logrus.WithError(err).Error("MAS admin: failed to generate placeholder access token")
-		return util.JSONResponse{
-			Code: http.StatusInternalServerError,
-			JSON: spec.InternalServerError{},
-		}
-	}
-
-	var deviceRes userapi.PerformDeviceCreationResponse
-	if err := userAPI.PerformDeviceCreation(req.Context(), &userapi.PerformDeviceCreationRequest{
-		Localpart:          localpart,
-		ServerName:         serverName,
-		AccessToken:        placeholderToken,
-		DeviceID:           &deviceID,
-		DeviceDisplayName:  body.DisplayName,
-		NoDeviceListUpdate: true,
-	}, &deviceRes); err != nil {
-		logrus.WithError(err).Error("MAS admin: failed to create device")
+	if err := masCreateDevice(req.Context(), userAPI, cfg, body.Localpart, body.DeviceID, body.DisplayName); err != nil {
+		logrus.WithError(err).WithField("device_id", body.DeviceID).Error("MAS admin: failed to create device")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
@@ -510,35 +450,105 @@ func MASCreateOrGetDevice(req *http.Request, cfg *config.ClientAPI, userAPI user
 	}
 
 	return util.JSONResponse{
-		Code: http.StatusOK,
-		JSON: struct {
-			DeviceID    string `json:"device_id"`
-			DisplayName string `json:"display_name,omitempty"`
-		}{
-			DeviceID:    deviceID,
-			DisplayName: deviceRes.Device.DisplayName,
-		},
+		Code: http.StatusCreated,
+		JSON: masDeviceResponse{DeviceID: body.DeviceID, DisplayName: body.DisplayName},
 	}
 }
 
-// MASDeleteDevice deletes a specific device.
-// DELETE /_synapse/admin/v1/users/{userId}/devices/{deviceId}.
-func MASDeleteDevice(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
-	deviceID := vars["deviceId"]
+// masDeviceDisplayNameRequest is the JSON body for
+// POST /_synapse/mas/update_device_display_name.
+type masDeviceDisplayNameRequest struct {
+	Localpart   string `json:"localpart"`
+	DeviceID    string `json:"device_id"`
+	DisplayName string `json:"display_name"`
+}
 
-	if _, _, errRes := extractUserIDLocalpart(userID, cfg); errRes != nil {
+// MASUpdateDeviceDisplayName updates the display name of a device.
+// POST /_synapse/mas/update_device_display_name.
+func MASUpdateDeviceDisplayName(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masDeviceDisplayNameRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if body.DeviceID == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'device_id'"),
+		}
+	}
+	if body.DisplayName == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'display_name'"),
+		}
+	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	var updateRes userapi.PerformDeviceUpdateResponse
+	if err := userAPI.PerformDeviceUpdate(req.Context(), &userapi.PerformDeviceUpdateRequest{
+		RequestingUserID: userutil.MakeUserID(body.Localpart, cfg.Matrix.ServerName),
+		DeviceID:         body.DeviceID,
+		DisplayName:      &body.DisplayName,
+	}, &updateRes); err != nil {
+		logrus.WithError(err).Error("MAS admin: failed to update device display name")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	if !updateRes.DeviceExists {
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("Device not found"),
+		}
+	}
+
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: struct{}{},
+	}
+}
+
+// masDeviceIDRequest is the JSON body for endpoints taking a localpart and a
+// single device ID.
+type masDeviceIDRequest struct {
+	Localpart string `json:"localpart"`
+	DeviceID  string `json:"device_id"`
+}
+
+// MASDeleteDevice deletes a single device and responds 204. The Go HTTP server never
+// writes a body for that status, so the JSON wrapper's payload is dropped
+// on the wire.
+// POST /_synapse/mas/delete_device.
+func MASDeleteDevice(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masDeviceIDRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if body.DeviceID == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'device_id'"),
+		}
+	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
 		return *errRes
 	}
 
 	var deleteRes userapi.PerformDeviceDeletionResponse
 	if err := userAPI.PerformDeviceDeletion(req.Context(), &userapi.PerformDeviceDeletionRequest{
-		UserID:    userID,
-		DeviceIDs: []string{deviceID},
+		UserID:    userutil.MakeUserID(body.Localpart, cfg.Matrix.ServerName),
+		DeviceIDs: []string{body.DeviceID},
 	}, &deleteRes); err != nil {
 		logrus.WithError(err).Error("MAS admin: failed to delete device")
 		return util.JSONResponse{
@@ -548,34 +558,105 @@ func MASDeleteDevice(req *http.Request, cfg *config.ClientAPI, userAPI userapi.C
 	}
 
 	return util.JSONResponse{
-		Code: http.StatusOK,
+		Code: http.StatusNoContent,
 		JSON: struct{}{},
 	}
 }
 
-// MASDeleteAllDevices deletes all devices for a user.
-// DELETE /_synapse/admin/v1/users/{userId}/devices.
-func MASDeleteAllDevices(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
+// masSyncDevicesRequest is the JSON body for POST /_synapse/mas/sync_devices.
+type masSyncDevicesRequest struct {
+	Localpart string   `json:"localpart"`
+	Devices   []string `json:"devices"`
+}
 
-	if _, _, errRes := extractUserIDLocalpart(userID, cfg); errRes != nil {
+// MASSyncDevices reconciles the stored device list with the set of device IDs
+// MAS reports: devices absent from the set are deleted, missing ones created.
+// The dehydrated device (MSC3814) and the fallback OIDC device have no MAS
+// session and are never in the target set, so both are excluded from
+// deletion.
+// POST /_synapse/mas/sync_devices.
+func MASSyncDevices(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masSyncDevicesRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
 		return *errRes
 	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if body.Devices == nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'devices'"),
+		}
+	}
 
-	// Empty DeviceIDs means "delete all".
-	var deleteRes userapi.PerformDeviceDeletionResponse
-	if err := userAPI.PerformDeviceDeletion(req.Context(), &userapi.PerformDeviceDeletionRequest{
-		UserID:    userID,
-		DeviceIDs: []string{},
-	}, &deleteRes); err != nil {
-		logrus.WithError(err).Error("MAS admin: failed to delete all devices")
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
+		return *errRes
+	}
+	userID := userutil.MakeUserID(body.Localpart, cfg.Matrix.ServerName)
+
+	var queryRes userapi.QueryDevicesResponse
+	if err := userAPI.QueryDevices(req.Context(), &userapi.QueryDevicesRequest{UserID: userID}, &queryRes); err != nil {
+		logrus.WithError(err).Error("MAS admin: failed to query devices")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
+		}
+	}
+
+	// The dehydrated device is managed through its own MSC3814 API and must
+	// survive the reconciliation.
+	dehydratedID := ""
+	var dehydRes userapi.QueryDehydratedDeviceResponse
+	if err := userAPI.QueryDehydratedDevice(req.Context(), &userapi.QueryDehydratedDeviceRequest{UserID: userID}, &dehydRes); err == nil && dehydRes.Found {
+		dehydratedID = dehydRes.DeviceID
+	}
+
+	target := make(map[string]struct{}, len(body.Devices))
+	for _, id := range body.Devices {
+		target[id] = struct{}{}
+	}
+	current := make(map[string]struct{}, len(queryRes.Devices))
+	for _, d := range queryRes.Devices {
+		current[d.ID] = struct{}{}
+	}
+
+	// The fallback device that binds tokens without a device scope has no
+	// MAS session either and must survive as well.
+	var toDelete []string
+	for id := range current {
+		if _, ok := target[id]; !ok && id != dehydratedID && id != userapi.MSC3861FallbackDeviceID {
+			toDelete = append(toDelete, id)
+		}
+	}
+	var toAdd []string
+	for id := range target {
+		if _, ok := current[id]; !ok {
+			toAdd = append(toAdd, id)
+		}
+	}
+
+	if len(toDelete) > 0 {
+		var deleteRes userapi.PerformDeviceDeletionResponse
+		if err := userAPI.PerformDeviceDeletion(req.Context(), &userapi.PerformDeviceDeletionRequest{
+			UserID:    userID,
+			DeviceIDs: toDelete,
+		}, &deleteRes); err != nil {
+			logrus.WithError(err).WithField("user_id", userID).Error("MAS admin: failed to delete devices during sync")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+	}
+
+	for _, id := range toAdd {
+		if err := masCreateDevice(req.Context(), userAPI, cfg, body.Localpart, id, nil); err != nil {
+			logrus.WithError(err).WithField("device_id", id).Error("MAS admin: failed to create device during sync")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
 		}
 	}
 
@@ -585,24 +666,34 @@ func MASDeleteAllDevices(req *http.Request, cfg *config.ClientAPI, userAPI usera
 	}
 }
 
-// MASDeactivateUser deactivates a user account.
-// POST /_synapse/admin/v1/users/{userId}/_deactivate.
-func MASDeactivateUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
+// masDeleteUserRequest is the JSON body for POST /_synapse/mas/delete_user.
+type masDeleteUserRequest struct {
+	Localpart string `json:"localpart"`
+	Erase     bool   `json:"erase"`
+}
 
-	localpart, serverName, errRes := extractUserIDLocalpart(userID, cfg)
-	if errRes != nil {
+// MASDeleteUser deactivates a user account. With erase, the user's events
+// are served redacted to anyone who was not in the room when they were sent,
+// and the user's account data and 3PIDs are deleted (MSC4025).
+// POST /_synapse/mas/delete_user.
+func MASDeleteUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masDeleteUserRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
 		return *errRes
 	}
 
 	var deactivateRes userapi.PerformAccountDeactivationResponse
 	if err := userAPI.PerformAccountDeactivation(req.Context(), &userapi.PerformAccountDeactivationRequest{
-		Localpart:  localpart,
-		ServerName: serverName,
+		Localpart:  body.Localpart,
+		ServerName: cfg.Matrix.ServerName,
+		Erase:      body.Erase,
 	}, &deactivateRes); err != nil {
 		logrus.WithError(err).Error("MAS admin: failed to deactivate user")
 		return util.JSONResponse{
@@ -613,16 +704,128 @@ func MASDeactivateUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi
 
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: struct {
-			IDServerUnbindResult string `json:"id_server_unbind_result"`
-		}{
-			IDServerUnbindResult: "no-support",
-		},
+		JSON: struct{}{},
+	}
+}
+
+// masLocalpartOnlyRequest is the JSON body for endpoints taking only a localpart.
+type masLocalpartOnlyRequest struct {
+	Localpart string `json:"localpart"`
+}
+
+// MASReactivateUser re-enables login for a deactivated account.
+// POST /_synapse/mas/reactivate_user.
+func MASReactivateUser(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masLocalpartOnlyRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if err := internal.ValidateUsername(body.Localpart, cfg.Matrix.ServerName); err != nil {
+		return *internal.UsernameResponse(err)
+	}
+
+	// The update itself reports a missing account, so no lookup is needed.
+	var reactivateRes userapi.PerformAccountReactivationResponse
+	err := userAPI.PerformAccountReactivation(req.Context(), &userapi.PerformAccountReactivationRequest{
+		Localpart:  body.Localpart,
+		ServerName: cfg.Matrix.ServerName,
+	}, &reactivateRes)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("User not found"),
+		}
+	case err != nil:
+		logrus.WithError(err).Error("MAS admin: failed to reactivate user")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: struct{}{},
+	}
+}
+
+// masSetDisplayNameRequest is the JSON body for POST /_synapse/mas/set_displayname.
+type masSetDisplayNameRequest struct {
+	Localpart   string `json:"localpart"`
+	Displayname string `json:"displayname"`
+}
+
+// MASSetDisplayName sets the display name of a user.
+// POST /_synapse/mas/set_displayname.
+func MASSetDisplayName(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masSetDisplayNameRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if body.Displayname == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Missing 'displayname'"),
+		}
+	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if _, _, err := userAPI.SetDisplayName(req.Context(), body.Localpart, cfg.Matrix.ServerName, body.Displayname); err != nil {
+		logrus.WithError(err).Error("MAS admin: failed to set display name")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: struct{}{},
+	}
+}
+
+// MASUnsetDisplayName clears the display name of a user.
+// POST /_synapse/mas/unset_displayname.
+func MASUnsetDisplayName(req *http.Request, cfg *config.ClientAPI, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	var body masLocalpartOnlyRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
+		return *errRes
+	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if errRes := masLookupAccount(req.Context(), userAPI, cfg, body.Localpart); errRes != nil {
+		return *errRes
+	}
+
+	if _, _, err := userAPI.SetDisplayName(req.Context(), body.Localpart, cfg.Matrix.ServerName, ""); err != nil {
+		logrus.WithError(err).Error("MAS admin: failed to unset display name")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: struct{}{},
 	}
 }
 
 // masCrossSigningConfirmationTTL is how long a cross-signing replacement
-// confirmation recorded via the MAS admin API remains valid.
+// confirmation recorded via the MAS provisioning API remains valid.
 const masCrossSigningConfirmationTTL = 10 * time.Minute
 
 var (
@@ -653,31 +856,52 @@ func consumeMASCrossSigningConfirmation(userID string) bool {
 	return true
 }
 
-// MASAllowCrossSigningReplacement records that the user confirmed a
-// cross-signing key replacement in the OIDC provider's account management UI.
-// The next m.oauth UIA resubmission for this user consumes the confirmation.
-// POST /_synapse/admin/v1/users/{userId}/_allow_cross_signing_replacement_without_uia.
-func MASAllowCrossSigningReplacement(req *http.Request, cfg *config.ClientAPI) util.JSONResponse {
-	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	userID := vars["userId"]
-
-	if _, _, errRes := extractUserIDLocalpart(userID, cfg); errRes != nil {
+// MASAllowCrossSigningReset records that the user confirmed a cross-signing
+// key replacement in the OIDC provider's account management UI. The next
+// m.oauth UIA resubmission for this user consumes the confirmation.
+// Unlike the other endpoints it does not verify the account exists: the
+// confirmation is only ever consumed when the named user uploads
+// cross-signing keys with an authenticated device, and the endpoint is
+// already restricted to the MAS admin token.
+// POST /_synapse/mas/allow_cross_signing_reset.
+func MASAllowCrossSigningReset(req *http.Request, cfg *config.ClientAPI, _ userapi.ClientUserAPI) util.JSONResponse {
+	var body masLocalpartOnlyRequest
+	if errRes := clienthttputil.UnmarshalJSONRequest(req, &body); errRes != nil {
 		return *errRes
 	}
+	if errRes := masRequireLocalpart(body.Localpart); errRes != nil {
+		return *errRes
+	}
+	if err := internal.ValidateUsername(body.Localpart, cfg.Matrix.ServerName); err != nil {
+		return *internal.UsernameResponse(err)
+	}
 
-	recordMASCrossSigningConfirmation(userID)
+	recordMASCrossSigningConfirmation(userutil.MakeUserID(body.Localpart, cfg.Matrix.ServerName))
 
 	return util.JSONResponse{
 		Code: http.StatusOK,
-		JSON: struct {
-			UpdatedAt int64 `json:"updated_at"`
-		}{
-			UpdatedAt: time.Now().UnixMilli(),
-		},
+		JSON: struct{}{},
 	}
+}
+
+// masCreateDevice creates a device row for a MAS-provisioned session. The
+// row carries a placeholder access token because the database requires one;
+// the introspection path swaps in the real token on the client's first
+// request.
+func masCreateDevice(ctx context.Context, userAPI userapi.ClientUserAPI, cfg *config.ClientAPI, localpart, deviceID string, displayName *string) error {
+	placeholderToken, err := generatePlaceholderToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate placeholder access token: %w", err)
+	}
+	var deviceRes userapi.PerformDeviceCreationResponse
+	return userAPI.PerformDeviceCreation(ctx, &userapi.PerformDeviceCreationRequest{
+		Localpart:          localpart,
+		ServerName:         cfg.Matrix.ServerName,
+		AccessToken:        placeholderToken,
+		DeviceID:           &deviceID,
+		DeviceDisplayName:  displayName,
+		NoDeviceListUpdate: true,
+	}, &deviceRes)
 }
 
 // generatePlaceholderToken creates a unique placeholder access token for

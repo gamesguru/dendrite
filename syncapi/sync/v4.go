@@ -9,18 +9,20 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"strings"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
@@ -82,6 +84,35 @@ type V4ConnectionState struct {
 	// Room configs from previous syncs (for timeline expansion tracking)
 	// map[roomID]*RoomConfig
 	PreviousRoomConfigs map[string]*types.SlidingSyncRoomConfig
+	// Rooms whose account_data position this response has already written, so
+	// copyForwardAccountDataState knows which ones still need carrying over.
+	AccountDataWritten map[string]bool
+}
+
+// laggingRoomSet lists the rooms whose own last-sent token sits behind the
+// connection's since token, along with the oldest of those tokens.
+type laggingRoomSet struct {
+	roomIDs     []string
+	oldestToken types.StreamPosition
+}
+
+// laggingRooms finds rooms that were excluded from earlier responses while the
+// connection advanced elsewhere. Events sent into such a room during the gap
+// predate since, so the since-keyed change filter cannot see them; they are
+// recovered by the widened lower bound in getTimelineEvents, but only if the
+// room survives filtering in the first place.
+func laggingRooms(roomStates map[string]types.RoomStreamState, since types.StreamPosition) laggingRoomSet {
+	var lagging laggingRoomSet
+	for roomID, roomState := range roomStates {
+		if roomState.LastToken == nil || roomState.LastToken.PDUPosition >= since {
+			continue
+		}
+		if len(lagging.roomIDs) == 0 || roomState.LastToken.PDUPosition < lagging.oldestToken {
+			lagging.oldestToken = roomState.LastToken.PDUPosition
+		}
+		lagging.roomIDs = append(lagging.roomIDs, roomID)
+	}
+	return lagging
 }
 
 // determineRoomStreamState determines the RoomStreamState for a room based on connection state
@@ -226,6 +257,192 @@ func logV4Response(response any, userID, deviceID string, statusCode int) {
 			"response_body": string(responseBodyJSON),
 		}).Trace("[V4_SYNC_DEBUG] Full response")
 	}
+}
+
+// copyForwardStreamStates persists the "events" stream state of every room the
+// client has been sent on this connection but which is absent from the response
+// being built, so that cascade-deleting old positions does not lose it and make
+// the room look like it was never sent.
+//
+// Each such room is recorded as PREVIOUSLY rather than keeping its stored
+// status, mirroring Synapse's record_unsent_rooms: the room was sent before but
+// is not part of this response. LastToken is carried over untouched, so it keeps
+// pointing at the position the room was last actually sent at, which is where a
+// future gap recovery has to resume from.
+//
+// Nothing distinguishes PREVIOUSLY from LIVE when reading the state back yet
+// (see determineRoomStreamState's callers), so this only aligns what is stored
+// with the state machine documented on types.HaveSentRoomFlag.
+//
+// It returns the number of rooms whose state was copied forward. Once the
+// request context is done it stops and returns the context's error instead of
+// failing, and logging, one write per remaining room: the client is gone, so
+// the new position is never acknowledged and is deleted when the client
+// retries from the position it still holds.
+func (rp *RequestPool) copyForwardStreamStates(
+	ctx context.Context,
+	connState *V4ConnectionState,
+	roomsToPopulate map[string]types.RoomSubscriptionConfig,
+) (int, error) {
+	copiedCount := 0
+	for roomID, streams := range connState.PreviousStreamStates {
+		if err := ctx.Err(); err != nil {
+			return copiedCount, err
+		}
+		// Skip rooms that were processed in this response (they already have updated state)
+		if _, processed := roomsToPopulate[roomID]; processed {
+			continue
+		}
+		eventsStream, ok := streams["events"]
+		if !ok {
+			continue
+		}
+		if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", types.HaveSentRoomPreviously.String(), eventsStream.LastToken); updateErr != nil {
+			if err := ctx.Err(); err != nil {
+				return copiedCount, err
+			}
+			logrus.WithError(updateErr).WithFields(logrus.Fields{
+				"room_id":             roomID,
+				"connection_position": connState.ConnectionPosition,
+			}).Error("[V4_STATE_DEBUG] Failed to copy forward stream state")
+			continue
+		}
+		copiedCount++
+	}
+	if copiedCount > 0 {
+		logrus.WithFields(logrus.Fields{
+			"copied_count":        copiedCount,
+			"connection_position": connState.ConnectionPosition,
+		}).Debug("[V4_STATE_DEBUG] Copied forward stream states for unchanged rooms")
+	}
+	return copiedCount, nil
+}
+
+// copyForwardRoomConfigs persists the room config of every room the client has
+// been sent on this connection but which is absent from the response being
+// built. Without it, cascade-deleting the old position loses the config and
+// the room's next appearance is mistaken for a timeline expansion.
+//
+// Like copyForwardStreamStates, it stops at the first sign of cancellation and
+// returns the context's error.
+func (rp *RequestPool) copyForwardRoomConfigs(
+	ctx context.Context,
+	connState *V4ConnectionState,
+	roomsToPopulate map[string]types.RoomSubscriptionConfig,
+) error {
+	copiedCount := 0
+	for roomID, prevConfig := range connState.PreviousRoomConfigs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Skip rooms that were processed in this response (they already have updated config)
+		if _, processed := roomsToPopulate[roomID]; processed {
+			continue
+		}
+		if updateErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, prevConfig.TimelineLimit, prevConfig.RequiredStateID); updateErr != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			logrus.WithError(updateErr).WithFields(logrus.Fields{
+				"room_id":             roomID,
+				"connection_position": connState.ConnectionPosition,
+			}).Error("[V4_STATE_DEBUG] Failed to copy forward room config")
+			continue
+		}
+		copiedCount++
+	}
+	if copiedCount > 0 {
+		logrus.WithFields(logrus.Fields{
+			"copied_count":        copiedCount,
+			"connection_position": connState.ConnectionPosition,
+		}).Debug("[V4_STATE_DEBUG] Copied forward room configs for unchanged rooms")
+	}
+	return nil
+}
+
+// abandonV4Sync answers a sliding sync request whose context ended while its
+// response was being built. The client cannot receive the answer, so it is
+// reported once here instead of once per room or extension that failed after
+// the fact.
+//
+// The new connection position, possibly only partly written, is never handed
+// out: the response carries the position the client already holds (or none
+// for an initial sync), so a retry resumes from state that was fully
+// persisted, and DeleteOtherConnectionPositions removes the partial one.
+func abandonV4Sync(ctx context.Context, since *types.SlidingSyncStreamToken, connState *V4ConnectionState) util.JSONResponse {
+	logrus.WithError(context.Cause(ctx)).WithFields(logrus.Fields{
+		"connection_key":      connState.ConnectionKey,
+		"connection_position": connState.ConnectionPosition,
+	}).Debug("[V4_SYNC] Abandoning sliding sync request, the client went away")
+	resp := types.SlidingSyncResponse{
+		Lists:      make(map[string]types.SlidingList),
+		Rooms:      make(map[string]types.SlidingRoomData),
+		Extensions: &types.ExtensionResponse{},
+	}
+	if since != nil {
+		resp.Pos = since.String()
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: resp,
+	}
+}
+
+// recordDeliveredReceipts marks receipts as delivered on this connection, in a
+// write transaction separate from the response's read-only snapshot.
+//
+// The connection receipt table is keyed by connection, not by position, so a
+// receipt recorded here is filtered out of every later response, including a
+// retry from an older position. It therefore must not be recorded for a
+// response the client will never see: it returns false, having written
+// nothing, once the request context is done, and the caller abandons the
+// response. Other write failures are logged and leave the receipts to be
+// delivered again.
+func (rp *RequestPool) recordDeliveredReceipts(ctx context.Context, connectionKey int64, receipts []types.OutputReceiptEvent) bool {
+	if len(receipts) == 0 {
+		return true
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	logrus.WithField("count", len(receipts)).Debug("[RECEIPTS] Updating connection state for delivered receipts")
+	txn, err := rp.db.NewDatabaseTransaction(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+		logrus.WithError(err).Error("[RECEIPTS] Failed to create write transaction")
+		return true
+	}
+	defer func() { _ = txn.Rollback() }()
+	for _, receipt := range receipts {
+		if err = txn.UpsertConnectionReceipt(
+			ctx, connectionKey,
+			receipt.RoomID, receipt.Type, receipt.UserID,
+			receipt.EventID, receipt.ThreadID, receipt.Timestamp,
+		); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"room_id": receipt.RoomID,
+				"type":    receipt.Type,
+			}).Error("[RECEIPTS] Failed to update connection receipt")
+			// Keep the receipts already recorded.
+			break
+		}
+	}
+	// Checked last so that a cancellation during the upserts commits nothing.
+	if ctx.Err() != nil {
+		return false
+	}
+	if err := txn.Commit(); err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+		logrus.WithError(err).Error("[RECEIPTS] Failed to commit connection receipt updates")
+	}
+	return true
 }
 
 // OnIncomingSyncRequestV4 handles POST /v4/sync requests (MSC4186 Simplified Sliding Sync)
@@ -434,7 +651,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 	// Update presence and last seen (reuse existing v3 logic)
 	rp.updateLastSeen(req, device)
-	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID) //nolint:contextcheck
+	rp.updatePresence(rp.db, v4Req.SetPresence, device.UserID)
 
 	// Main sync loop - similar to v3 sync
 	// Loop until we have updates to return or timeout expires
@@ -493,6 +710,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					Code: http.StatusOK,
 					JSON: timeoutResp,
 				}
+			case <-process.Quiescing(req.Context()): //nolint:contextcheck
+				// A planned handover answers as if the timeout had been
+				// reached, so the next request reaches the successor.
+				logrus.Info("[V4_SYNC] Answering early for a planned handover")
+				return util.JSONResponse{
+					Code: http.StatusOK,
+					JSON: rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout"), //nolint:contextcheck
+				}
 			case <-req.Context().Done():
 				// Client disconnected
 				logrus.Info("[V4_SYNC] Client disconnected during wait")
@@ -509,6 +734,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// This is what goes into the pos token
 		connState.ConnectionPosition, err = rp.db.CreateConnectionPosition(req.Context(), connState.ConnectionKey) //nolint:contextcheck
 		if err != nil {
+			if req.Context().Err() != nil {
+				return abandonV4Sync(req.Context(), since, connState) //nolint:contextcheck
+			}
 			logrus.WithError(err).Error("Failed to create connection position")
 			return util.JSONResponse{
 				Code: http.StatusInternalServerError,
@@ -541,8 +769,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				"force_initial":  forceInitialSync,
 			}).Debug("[V4_SYNC] Processing list")
 
+			if ctx.Err() != nil {
+				return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+			}
 			list, err := rp.processRoomList(ctx, device.UserID, listName, listConfig, connState, forceInitialSync) //nolint:contextcheck
 			if err != nil {
+				if ctx.Err() != nil {
+					return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+				}
 				// Log error but continue processing other lists
 				logrus.WithError(err).WithField("list_name", listName).Error("[V4_SYNC] Failed to process list")
 				continue
@@ -738,6 +972,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			// Create temporary snapshot for filtering query
 			filterSnapshot, filterSnapshotErr := rp.db.NewDatabaseSnapshot(ctx) //nolint:contextcheck
 			if filterSnapshotErr != nil {
+				if ctx.Err() != nil {
+					return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+				}
 				return util.JSONResponse{
 					Code: http.StatusInternalServerError,
 					JSON: spec.InternalServerError{},
@@ -783,15 +1020,47 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 
 				// Also include rooms that have never been sent on this connection
-				// These should always be included as they're "new" to the client
+				// These should always be included as they're "new" to the client,
+				// and rooms whose own last-sent token lags behind the connection's
+				// since token: their missed events can all predate since, in which
+				// case RoomsWithEventsSince above does not see them at all and the
+				// widened lower bound in getTimelineEvents never gets to run.
+				//
+				// determineRoomStreamState issues membership queries, so each
+				// candidate's state is resolved once and reused for both checks.
+				roomStates := make(map[string]types.RoomStreamState, len(roomsToPopulate))
 				for roomID := range roomsToPopulate {
-					roomState := determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID) //nolint:contextcheck
+					roomStates[roomID] = determineRoomStreamState(ctx, filterSnapshot, connState, roomID, device.UserID) //nolint:contextcheck
+				}
+
+				for roomID, roomState := range roomStates {
 					if roomState.Status == types.HaveSentRoomNever {
 						roomsToKeep[roomID] = true
 						if roomKeepReasons[roomID] != "" {
 							roomKeepReasons[roomID] += ",status_never"
 						} else {
 							roomKeepReasons[roomID] = "status_never"
+						}
+					}
+				}
+
+				lagging := laggingRooms(roomStates, since.StreamToken.PDUPosition)
+				if len(lagging.roomIDs) > 0 {
+					// One batched query from the oldest lagging token. This can
+					// over-report a room whose events all fall between that
+					// oldest token and its own, which costs an extra room with
+					// an empty timeline rather than a wrong response.
+					laggingWithEvents, laggingErr := filterSnapshot.RoomsWithEventsSince(ctx, lagging.roomIDs, lagging.oldestToken) //nolint:contextcheck
+					if laggingErr != nil {
+						logrus.WithError(laggingErr).Error("[V4_SYNC] Failed to filter lagging rooms; including all of them")
+						laggingWithEvents = lagging.roomIDs
+					}
+					for _, roomID := range laggingWithEvents {
+						roomsToKeep[roomID] = true
+						if roomKeepReasons[roomID] != "" {
+							roomKeepReasons[roomID] += ",lagging_room_token"
+						} else {
+							roomKeepReasons[roomID] = "lagging_room_token"
 						}
 					}
 				}
@@ -884,6 +1153,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// Create a single database snapshot for all room queries
 		snapshot, err := rp.db.NewDatabaseSnapshot(ctx) //nolint:contextcheck
 		if err != nil {
+			if ctx.Err() != nil {
+				return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+			}
 			return util.JSONResponse{
 				Code: http.StatusInternalServerError,
 				JSON: spec.InternalServerError{},
@@ -903,7 +1175,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			"from_subscriptions":    len(v4Req.RoomSubscriptions),
 		}).Debug("[V4_SYNC] Populating room data")
 
+	populate:
 		for roomID, config := range roomsToPopulate {
+			if ctx.Err() != nil {
+				break
+			}
 			// Phase 10: Determine room state from previous stream states
 			// This drives incremental sync behavior (initial vs live vs previously)
 			roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID) //nolint:contextcheck
@@ -976,6 +1252,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 			roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, currentPos, fromPosPtr, requiredStateConfig, timelineExpanded) //nolint:contextcheck
 			if buildErr != nil {
+				if ctx.Err() != nil {
+					break populate
+				}
 				// Log error but continue with other rooms
 				logrus.WithError(buildErr).WithField("room_id", roomID).Error("[V4_SYNC] Failed to build room data")
 				continue
@@ -1011,6 +1290,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				"last_token":          lastToken,
 			}).Debug("[V4_STATE_DEBUG] Persisting stream state to database")
 			if streamErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", roomStatus, lastToken); streamErr != nil { //nolint:contextcheck
+				if ctx.Err() != nil {
+					break populate
+				}
 				logrus.WithError(streamErr).WithFields(logrus.Fields{
 					"room_id":             roomID,
 					"connection_position": connState.ConnectionPosition,
@@ -1036,6 +1318,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					var getErr error
 					requiredStateID, getErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, string(requiredStateJSON)) //nolint:contextcheck
 					if getErr != nil {
+						if ctx.Err() != nil {
+							break populate
+						}
 						logrus.WithError(getErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to get/create required_state_id")
 					}
 				}
@@ -1046,6 +1331,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				var defaultErr error
 				requiredStateID, defaultErr = rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, emptyJSON) //nolint:contextcheck
 				if defaultErr != nil {
+					if ctx.Err() != nil {
+						break populate
+					}
 					logrus.WithError(defaultErr).WithField("room_id", roomID).Error("[V4_STATE_DEBUG] Failed to get/create default required_state_id")
 					// Continue without storing room config - this will cause timeline expansion to repeat
 					// but at least it won't cause the sync to fail
@@ -1053,6 +1341,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 			if requiredStateID != 0 {
 				if configErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, config.TimelineLimit, requiredStateID); configErr != nil { //nolint:contextcheck
+					if ctx.Err() != nil {
+						break populate
+					}
 					logrus.WithError(configErr).WithFields(logrus.Fields{
 						"room_id":           roomID,
 						"timeline_limit":    config.TimelineLimit,
@@ -1069,36 +1360,20 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 		}
 
+		// A pass the client gave up on is never acknowledged, so stop here
+		// rather than writing, and logging the failure of, every remaining row.
+		if ctx.Err() != nil {
+			return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+		}
+
 		// CRITICAL FIX: Copy forward stream states for rooms that were previously sent
 		// but not processed in this response. Without this, when we delete old positions
 		// (via cascade delete), we lose the stream state for rooms that had no changes.
 		// This causes those rooms to incorrectly appear as "never sent" on the next request,
 		// even though they were sent before.
-		// See: https://codefloe.com/pat-s/zendrite/issues/XXXX
 		if since != nil && connState.PreviousStreamStates != nil {
-			copiedCount := 0
-			for roomID, streams := range connState.PreviousStreamStates {
-				// Skip rooms that were processed in this response (they already have updated state)
-				if _, processed := roomsToPopulate[roomID]; processed {
-					continue
-				}
-				// Copy forward the "events" stream state to the new position
-				if eventsStream, ok := streams["events"]; ok {
-					if updateErr := rp.db.UpdateConnectionStream(ctx, connState.ConnectionPosition, roomID, "events", eventsStream.RoomStatus, eventsStream.LastToken); updateErr != nil { //nolint:contextcheck
-						logrus.WithError(updateErr).WithFields(logrus.Fields{
-							"room_id":             roomID,
-							"connection_position": connState.ConnectionPosition,
-						}).Error("[V4_STATE_DEBUG] Failed to copy forward stream state")
-					} else {
-						copiedCount++
-					}
-				}
-			}
-			if copiedCount > 0 {
-				logrus.WithFields(logrus.Fields{
-					"copied_count":        copiedCount,
-					"connection_position": connState.ConnectionPosition,
-				}).Debug("[V4_STATE_DEBUG] Copied forward stream states for unchanged rooms")
+			if _, copyErr := rp.copyForwardStreamStates(ctx, connState, roomsToPopulate); copyErr != nil { //nolint:contextcheck
+				return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
 			}
 		}
 
@@ -1107,31 +1382,10 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// (via cascade delete), we lose the room config for rooms that had no changes.
 		// This causes those rooms to incorrectly trigger timeline expansion on the next request.
 		if since != nil && connState.PreviousRoomConfigs != nil {
-			copiedCount := 0
-			for roomID, prevConfig := range connState.PreviousRoomConfigs {
-				// Skip rooms that were processed in this response (they already have updated config)
-				if _, processed := roomsToPopulate[roomID]; processed {
-					continue
-				}
-				// Copy forward the room config to the new position
-				if updateErr := rp.db.UpdateRoomConfig(ctx, connState.ConnectionPosition, roomID, prevConfig.TimelineLimit, prevConfig.RequiredStateID); updateErr != nil { //nolint:contextcheck
-					logrus.WithError(updateErr).WithFields(logrus.Fields{
-						"room_id":             roomID,
-						"connection_position": connState.ConnectionPosition,
-					}).Error("[V4_STATE_DEBUG] Failed to copy forward room config")
-				} else {
-					copiedCount++
-				}
-			}
-			if copiedCount > 0 {
-				logrus.WithFields(logrus.Fields{
-					"copied_count":        copiedCount,
-					"connection_position": connState.ConnectionPosition,
-				}).Debug("[V4_STATE_DEBUG] Copied forward room configs for unchanged rooms")
+			if copyErr := rp.copyForwardRoomConfigs(ctx, connState, roomsToPopulate); copyErr != nil { //nolint:contextcheck
+				return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
 			}
 		}
-
-		succeeded = true
 
 		// Phase 9: Process extensions
 		var fromPosPtr *types.StreamingToken
@@ -1143,7 +1397,17 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions) //nolint:contextcheck
+		extensionResp, updatedPos, deliveredReceipts, err := rp.ProcessExtensions(ctx, snapshot, connState, &v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, response.Lists, roomSubscriptions, response.Rooms) //nolint:contextcheck
+		if ctx.Err() != nil {
+			return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+		}
+		// Runs whether or not the account_data extension was processed: rooms it
+		// did not write still need their stored position carried onto this
+		// connection position before the old one is cascade-deleted.
+		if copyErr := rp.copyForwardAccountDataState(ctx, connState); copyErr != nil { //nolint:contextcheck
+			return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
+		}
+		succeeded = true
 		if err != nil {
 			logrus.WithError(err).Error("Failed to process extensions")
 			// Continue anyway - extensions are optional, return empty extension response
@@ -1169,31 +1433,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 			// Update connection state for delivered receipts in a write transaction
 			// IMPORTANT: This must be done in a separate write transaction, NOT in the read-only snapshot
-			if len(deliveredReceipts) > 0 {
-				logrus.WithField("count", len(deliveredReceipts)).Debug("[RECEIPTS] Updating connection state for delivered receipts")
-				txn, err := rp.db.NewDatabaseTransaction(ctx) //nolint:contextcheck
-				if err != nil {
-					logrus.WithError(err).Error("[RECEIPTS] Failed to create write transaction")
-				} else {
-					defer func() { _ = txn.Rollback() }()
-					for _, receipt := range deliveredReceipts {
-						err := txn.UpsertConnectionReceipt( //nolint:contextcheck
-							ctx, connectionKey,
-							receipt.RoomID, receipt.Type, receipt.UserID,
-							receipt.EventID, receipt.Timestamp,
-						)
-						if err != nil {
-							logrus.WithError(err).WithFields(logrus.Fields{
-								"room_id": receipt.RoomID,
-								"type":    receipt.Type,
-							}).Error("[RECEIPTS] Failed to update connection receipt")
-							break
-						}
-					}
-					if err := txn.Commit(); err != nil {
-						logrus.WithError(err).Error("[RECEIPTS] Failed to commit connection receipt updates")
-					}
-				}
+			if !rp.recordDeliveredReceipts(ctx, connectionKey, deliveredReceipts) { //nolint:contextcheck
+				return abandonV4Sync(ctx, since, connState) //nolint:contextcheck
 			}
 		}
 
@@ -1302,6 +1543,11 @@ func v4ResponseHasUpdates(response types.SlidingSyncResponse) bool {
 		if response.Extensions.Typing != nil && len(response.Extensions.Typing.Rooms) > 0 {
 			return true
 		}
+
+		// Sticky events (MSC4354)
+		if response.Extensions.StickyEvents != nil && len(response.Extensions.StickyEvents.Rooms) > 0 {
+			return true
+		}
 	}
 
 	return false
@@ -1326,7 +1572,7 @@ func (rp *RequestPool) getRoomsForList(
 }
 
 // getAllActiveMembershipRooms fetches all rooms where user has active membership
-// Per MSC4186 and Synapse behavior: joined, invited, banned, kicked rooms are included
+// Per MSC4186 and Synapse behavior: joined, invited, knocked, banned, kicked rooms are included
 // Self-left rooms are excluded from default lists.
 func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID string) ([]RoomWithBumpStamp, error) {
 	joinedRooms, err := rp.GetRoomsForUser(ctx, userID, "join")
@@ -1334,6 +1580,10 @@ func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID s
 		return nil, err
 	}
 	invitedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Invite)
+	if err != nil {
+		return nil, err
+	}
+	knockedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Knock)
 	if err != nil {
 		return nil, err
 	}
@@ -1347,13 +1597,14 @@ func (rp *RequestPool) getAllActiveMembershipRooms(ctx context.Context, userID s
 	}
 
 	// Combine all membership types
-	rooms := make([]RoomWithBumpStamp, 0, len(joinedRooms)+len(invitedRooms)+len(bannedRooms)+len(kickedRooms))
+	rooms := make([]RoomWithBumpStamp, 0, len(joinedRooms)+len(invitedRooms)+len(knockedRooms)+len(bannedRooms)+len(kickedRooms))
 	rooms = append(rooms, joinedRooms...)
 	rooms = append(rooms, invitedRooms...)
+	rooms = append(rooms, knockedRooms...)
 	rooms = append(rooms, bannedRooms...)
 	rooms = append(rooms, kickedRooms...)
 
-	// Deduplicate rooms - keep first occurrence (highest priority: join > invite > ban > kicked)
+	// Deduplicate rooms - keep first occurrence (highest priority: join > invite > knock > ban > kicked)
 	return deduplicateRooms(rooms), nil
 }
 
@@ -1488,9 +1739,14 @@ func (rp *RequestPool) processRoomList(
 		// If list hasn't changed, return empty ops (no update needed)
 	}
 
+	matchedRoomIDs := make([]string, len(rooms))
+	for i, room := range rooms {
+		matchedRoomIDs[i] = room.RoomID
+	}
 	return types.SlidingList{
-		Count: totalCount,
-		Ops:   ops,
+		Count:          totalCount,
+		Ops:            ops,
+		MatchedRoomIDs: matchedRoomIDs,
 	}, nil
 }
 
@@ -1526,11 +1782,23 @@ func (rp *RequestPool) buildInterruptResponse(
 		Extensions: &types.ExtensionResponse{},
 	}
 
+	// A disconnected client cannot receive this response. The timeout and
+	// disconnect cases can also become ready together, so check before any I/O.
+	if ctx.Err() != nil {
+		return resp
+	}
+
 	// Process requested lists to include their current state
 	roomsInLists := make(map[string]types.RoomSubscriptionConfig)
 	for listName, listConfig := range v4Req.Lists {
+		if ctx.Err() != nil {
+			return resp
+		}
 		list, listErr := rp.processRoomList(ctx, device.UserID, listName, listConfig, connState, false)
 		if listErr != nil {
+			if errors.Is(listErr, context.Canceled) || errors.Is(listErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(listErr).WithFields(logrus.Fields{
 				"list_name":     listName,
 				"response_type": responseType,
@@ -1557,9 +1825,15 @@ func (rp *RequestPool) buildInterruptResponse(
 	}
 
 	// Populate room data for rooms that appear in list operations
+	if ctx.Err() != nil {
+		return resp
+	}
 	if len(roomsInLists) > 0 {
 		snapshot, snapshotErr := rp.db.NewDatabaseSnapshot(ctx)
 		if snapshotErr != nil {
+			if errors.Is(snapshotErr, context.Canceled) || errors.Is(snapshotErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(snapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for room data")
 		} else {
 			var succeeded bool
@@ -1576,12 +1850,26 @@ func (rp *RequestPool) buildInterruptResponse(
 			}).Debug("[V4_SYNC] Populating room data for interrupt response")
 
 			for roomID, config := range roomsInLists {
+				if ctx.Err() != nil {
+					return resp
+				}
 				var requiredStateConfig *types.RequiredStateConfig
 				if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 {
 					requiredStateConfig = &config.RequiredState
 				}
 
 				roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID)
+
+				// An interrupt response persists no stream state and returns
+				// pos unchanged, so anything it emits is emitted again on the
+				// next timeout and in the following real response. Pin
+				// LastToken to since so getTimelineEvents does not widen the
+				// range down to a lagging room token here: the gap is caught
+				// up by the next real response, which does persist state.
+				if roomState.LastToken != nil && since != nil {
+					pinned := since.StreamToken
+					roomState.LastToken = &pinned
+				}
 
 				var fromPosPtr *types.StreamingToken
 				if since != nil {
@@ -1590,6 +1878,9 @@ func (rp *RequestPool) buildInterruptResponse(
 
 				roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false)
 				if buildErr != nil {
+					if errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded) {
+						return resp
+					}
 					logrus.WithError(buildErr).WithFields(logrus.Fields{
 						"room_id":       roomID,
 						"response_type": responseType,
@@ -1603,9 +1894,16 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 	}
 
+	if ctx.Err() != nil {
+		return resp
+	}
+
 	// Process extensions (provides e2ee data like OTK counts)
 	extSnapshot, extSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
 	if extSnapshotErr != nil {
+		if errors.Is(extSnapshotErr, context.Canceled) || errors.Is(extSnapshotErr, context.DeadlineExceeded) {
+			return resp
+		}
 		logrus.WithError(extSnapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for extensions")
 	} else {
 		var succeeded bool
@@ -1624,8 +1922,11 @@ func (rp *RequestPool) buildInterruptResponse(
 		for roomID := range v4Req.RoomSubscriptions {
 			roomSubscriptions[roomID] = true
 		}
-		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions)
+		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions, resp.Rooms)
 		if extErr != nil {
+			if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
+				return resp
+			}
 			logrus.WithError(extErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to process extensions")
 		} else {
 			resp.Extensions = extensionResp

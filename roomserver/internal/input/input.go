@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -99,12 +99,19 @@ type Inputer struct {
 // resolution.
 const missingStateCooldownDuration = 5 * time.Minute
 
+// errMissingStateCooldown fails an input deferred by the missing-state
+// cooldown. It is expected for as long as a room is broken, so it is logged
+// where the input is deferred rather than reported as a processing failure.
+var errMissingStateCooldown = errors.New("state resolution cooldown active")
+
 // If a room consumer is inactive for a while then we will allow NATS
 // to clean it up. This stops us from holding onto durable consumers
 // indefinitely for rooms that might no longer be active, since they do
 // have an interest overhead in the NATS Server. If the room becomes
 // active again then we'll recreate the consumer anyway.
 const inactiveThreshold = time.Hour * 24
+
+const roomAckSlack = 10 * time.Second
 
 type worker struct {
 	sync.Mutex
@@ -117,7 +124,15 @@ type worker struct {
 	cancel       context.CancelCauseFunc
 	ephemeralSeq uint64
 	// last seq we fully processed
-	durableSeq uint64
+	durableSeq   uint64
+	lastActivity time.Time
+	// announcements are headers-only deliveries for this room that wait for
+	// its durable consumer. The input stream keeps a message only while some
+	// consumer still needs it, so acknowledging an announcement before the
+	// room's consumer exists would let the stream discard the event. They
+	// are keyed by stream sequence, as an announcement left unacknowledged
+	// is delivered again.
+	announcements map[uint64]*nats.Msg
 }
 
 // notify queues a call to _next in the worker's goroutine.
@@ -131,33 +146,58 @@ func (w *worker) notify() {
 // start launches the worker goroutine that processes events serially.
 // The caller should take a lock before calling start.
 func (w *worker) start() {
-	// Worker is already running
-	if w.ctx != nil {
+	// Worker is already running. A worker whose context is canceled is on its
+	// way out: it will not process anything else, so it is replaced rather
+	// than left to exit and strand the work it was just asked to do.
+	if w.ctx != nil && w.ctx.Err() == nil {
 		return
 	}
 
-	w.ctx, w.cancel = context.WithCancelCause(context.Background())
+	w.lastActivity = time.Now()
+	ctx, cancel := context.WithCancelCause(w.r.ProcessContext.Context())
+	w.ctx, w.cancel = ctx, cancel
 
-	go func() {
+	if !w.r.ProcessContext.Go(func() {
 		logrus.Debugf("worker for room %q started", w.roomID)
 		for {
 			select {
-			case <-w.ctx.Done():
-				// Cleanup after the context is canceled, so we still can log the reason for cancellation.
-				logrus.WithError(w.ctx.Err()).Debugf("worker for room %q stopped", w.roomID)
-				w.Lock()
-				w.ctx = nil
-				w.Unlock()
-				return
+			case <-ctx.Done():
 			case <-w.ch:
-				w._next()
+				if ctx.Err() == nil {
+					w._next() //nolint:contextcheck // ctx only bounds this worker's lifetime; _next works on the process context.
+					continue
+				}
+				// Hand the wake-up to the worker that replaces this one.
+				w.notify()
 			}
+			// Cleanup after the context is canceled, so we still can log the reason for cancellation.
+			logrus.WithError(context.Cause(ctx)).Debugf("worker for room %q stopped", w.roomID)
+			w.Lock()
+			if w.ctx == ctx {
+				w.ctx = nil
+			}
+			w.Unlock()
+			return
 		}
-	}()
+	}) {
+		cancel(context.Canceled)
+		w.ctx = nil
+		w.cancel = nil
+	}
 }
 
-func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
-	v, loaded := r.workers.LoadOrStore(roomID, &worker{
+// startWorkerForRoom records that the input stream holds an event for the
+// room up to seq and wakes the room's worker, starting it if needed. The
+// announcement is acknowledged once the room's durable consumer exists.
+//
+// It runs on the stream-wide headers-only subscription, so it must not wait
+// on the broker: a slow call here would hold up the input of every room. The
+// worker sets up the room's durable consumer itself, retrying until it
+// succeeds, because no further notification may ever come for a room whose
+// queued events are all announced already, as when createRoom queues every
+// initial event at once and waits for them.
+func (r *Inputer) startWorkerForRoom(roomID string, seq uint64, announcement *nats.Msg) {
+	v, _ := r.workers.LoadOrStore(roomID, &worker{
 		r:         r,
 		roomID:    roomID,
 		sentryHub: sentry.CurrentHub().Clone(),
@@ -168,109 +208,142 @@ func (r *Inputer) startWorkerForRoom(roomID string, seq uint64) {
 		return
 	}
 	w.Lock()
-	defer w.Unlock()
-
-	w.ephemeralSeq = seq
-	logrus.Debugf("loaded worker for room %q at seq %d (loaded=%t, subscription=%v)", roomID, seq, loaded, w.subscription)
-	if !loaded || w.subscription == nil {
-		streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
-		consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
-		subject := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEventSubj(w.roomID))
-
-		logger := logrus.WithFields(logrus.Fields{
-			"stream_name": streamName,
-			"consumer":    consumer,
-		})
-		// Create the consumer. We do this as a specific step rather than
-		// letting PullSubscribe create it for us because we need the consumer
-		// to outlive the subscription. If we do it this way, we can Bind in the
-		// next step, and when we Unsubscribe, the consumer continues to live. If
-		// we leave PullSubscribe to create the durable consumer, Unsubscribe will
-		// delete it because it thinks it "owns" it, which in turn breaks the
-		// interest-based retention storage policy.
-		// If the durable consumer already exists, this is effectively a no-op.
-		// Another interesting tid-bit here: the ACK policy is set to "all" so that
-		// if we acknowledge a message, we also acknowledge everything that comes
-		// before it. This is necessary because otherwise our consumer will never
-		// acknowledge things we filtered out for other subjects and therefore they
-		// will linger around forever.
-
-		info, err := w.r.JetStream.ConsumerInfo(streamName, consumer)
-		if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-			// log and return, we will retry anyway
-			logger.WithError(err).Errorf("failed to get consumer info")
-			return
+	// An announcement left unacknowledged is delivered again, possibly after
+	// newer ones.
+	w.ephemeralSeq = max(w.ephemeralSeq, seq)
+	logrus.Debugf("loaded worker for room %q at seq %d (subscription=%v)", roomID, seq, w.subscription)
+	subscribed := w.subscription != nil
+	if !subscribed && announcement != nil {
+		if w.announcements == nil {
+			w.announcements = map[uint64]*nats.Msg{}
 		}
-
-		consumerConfig := &nats.ConsumerConfig{
-			Durable:           consumer,
-			AckPolicy:         nats.AckExplicitPolicy,
-			DeliverPolicy:     nats.DeliverAllPolicy,
-			FilterSubject:     subject,
-			AckWait:           MaximumMissingProcessingTime + (time.Second * 10), //nolint:mnd
-			InactiveThreshold: inactiveThreshold,
-		}
-
-		// The consumer already exists, try to update if necessary.
-		if info != nil {
-			// Not using reflect.DeepEqual here, since consumerConfig does not explicitly set
-			// e.g. the consumerName, which is added by NATS later. So this would result
-			// in constantly updating/recreating the consumer.
-			switch {
-			case info.Config.AckWait.Nanoseconds() != consumerConfig.AckWait.Nanoseconds():
-				// Initially we had a AckWait of 2m 10s, now we have 5m 10s, so we need to update
-				// existing consumers.
-				fallthrough
-			case info.Config.AckPolicy != consumerConfig.AckPolicy:
-				// We've changed the AckPolicy from AckAll to AckExplicit, this needs a
-				// recreation of the consumer. (Note: Only a few changes actually need a recreat)
-				logger.Warn("Consumer already exists, trying to update it.")
-				// Try updating the consumer first
-				if _, err = w.r.JetStream.UpdateConsumer(streamName, consumerConfig); err != nil {
-					// We failed to update the consumer, recreate it
-					logger.WithError(err).Warn("Unable to update consumer, recreating...")
-					if err = w.r.JetStream.DeleteConsumer(streamName, consumer); err != nil {
-						logger.WithError(err).Fatal("Unable to delete consumer")
-						return
-					}
-					// Set info to nil, so it can be recreated with the correct config.
-					info = nil
-				}
-			}
-		}
-
-		if info == nil {
-			// Create the consumer with the correct config
-			if _, err = w.r.JetStream.AddConsumer(
-				r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent),
-				consumerConfig,
-			); err != nil {
-				logger.WithError(err).Errorf("Failed to create consumer for room %q", w.roomID)
-				return
-			}
-		}
-
-		// Bind to our durable consumer. We want to receive all messages waiting
-		// for this subject and we want to manually acknowledge them, so that we
-		// can ensure they are only cleaned up when we are done processing them.
-		sub, err := w.r.JetStream.PullSubscribe(
-			subject, consumer,
-			nats.ManualAck(),
-			nats.DeliverAll(),
-			nats.AckWait(MaximumMissingProcessingTime+(time.Second*10)), //nolint:mnd
-			nats.Bind(r.InputRoomEventTopic, consumer),
-			nats.InactiveThreshold(inactiveThreshold),
-		)
-		if err != nil {
-			logger.WithError(err).Errorf("Failed to subscribe to stream for room %q", w.roomID)
-			return
-		}
-
-		// Go and start pulling messages off the queue.
-		w.subscription = sub
-		w.start()
-		w.notify()
+		w.announcements[seq] = announcement
 	}
+	w.start()
+	w.Unlock()
+	w.notify()
+	if subscribed && announcement != nil {
+		_ = announcement.Ack()
+	}
+}
+
+// consumerSetupTimeout bounds each JetStream request that sets up a room's
+// durable consumer. A replicated consumer is not answered for until its own
+// Raft group has a leader, which on a loaded cluster can take longer than the
+// client's five-second default. Abandoning the request then only means
+// asking again for a consumer that has no leader yet.
+const consumerSetupTimeout = 30 * time.Second
+
+// consumerSetupRetryDelay spaces attempts to set up a room's durable consumer.
+var consumerSetupRetryDelay = time.Second
+
+// subscribe creates or updates the room's durable consumer and binds a pull
+// subscription to it. It must only be called by the worker's goroutine.
+func (w *worker) subscribe(ctx context.Context) error {
+	r := w.r
+	ctx, cancel := context.WithTimeout(ctx, consumerSetupTimeout)
+	defer cancel()
+	streamName := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
+	consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(w.roomID))
+	subject := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEventSubj(w.roomID))
+
+	logger := logrus.WithFields(logrus.Fields{
+		"stream_name": streamName,
+		"consumer":    consumer,
+	})
+	// Create the consumer. We do this as a specific step rather than
+	// letting PullSubscribe create it for us because we need the consumer
+	// to outlive the subscription. If we do it this way, we can Bind in the
+	// next step, and when we Unsubscribe, the consumer continues to live. If
+	// we leave PullSubscribe to create the durable consumer, Unsubscribe will
+	// delete it because it thinks it "owns" it, which in turn breaks the
+	// interest-based retention storage policy.
+	// If the durable consumer already exists, this is effectively a no-op.
+	// Another interesting tid-bit here: the ACK policy is set to "all" so that
+	// if we acknowledge a message, we also acknowledge everything that comes
+	// before it. This is necessary because otherwise our consumer will never
+	// acknowledge things we filtered out for other subjects and therefore they
+	// will linger around forever.
+
+	info, err := r.JetStream.ConsumerInfo(streamName, consumer, nats.Context(ctx))
+	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("get consumer info: %w", err)
+	}
+
+	ackWait := MaximumMissingProcessingTime + roomAckSlack
+	if jetstream.OwnershipOf(r.JetStream) != nil {
+		ackWait = jetstream.HAConsumerAckWait
+	}
+	consumerConfig := &nats.ConsumerConfig{
+		Durable:           consumer,
+		AckPolicy:         nats.AckExplicitPolicy,
+		DeliverPolicy:     nats.DeliverAllPolicy,
+		FilterSubject:     subject,
+		AckWait:           ackWait,
+		InactiveThreshold: inactiveThreshold,
+	}
+
+	// The consumer already exists, try to update if necessary.
+	if info != nil {
+		// Not using reflect.DeepEqual here, since consumerConfig does not explicitly set
+		// e.g. the consumerName, which is added by NATS later. So this would result
+		// in constantly updating/recreating the consumer.
+		switch {
+		case info.Config.AckWait.Nanoseconds() != consumerConfig.AckWait.Nanoseconds():
+			// Initially we had a AckWait of 2m 10s, now we have 5m 10s, so we need to update
+			// existing consumers.
+			fallthrough
+		case info.Config.AckPolicy != consumerConfig.AckPolicy:
+			// We've changed the AckPolicy from AckAll to AckExplicit, this needs a
+			// recreation of the consumer. (Note: Only a few changes actually need a recreat)
+			logger.Warn("Consumer already exists, trying to update it.")
+			// Try updating the consumer first
+			if _, err = r.JetStream.UpdateConsumer(streamName, consumerConfig, nats.Context(ctx)); err != nil {
+				// We failed to update the consumer, recreate it
+				logger.WithError(err).Warn("Unable to update consumer, recreating...")
+				if err = r.JetStream.DeleteConsumer(streamName, consumer, nats.Context(ctx)); err != nil {
+					logger.WithError(err).Fatal("Unable to delete consumer")
+					return err
+				}
+				// Set info to nil, so it can be recreated with the correct config.
+				info = nil
+			}
+		}
+	}
+
+	if info == nil {
+		// Create the consumer with the correct config
+		if _, err = r.JetStream.AddConsumer(streamName, consumerConfig, nats.Context(ctx)); err != nil {
+			return fmt.Errorf("create consumer: %w", err)
+		}
+	}
+
+	// Bind to our durable consumer. We want to receive all messages waiting
+	// for this subject and we want to manually acknowledge them, so that we
+	// can ensure they are only cleaned up when we are done processing them.
+	sub, err := r.JetStream.PullSubscribe(
+		subject, consumer,
+		nats.ManualAck(),
+		nats.DeliverAll(),
+		nats.AckWait(ackWait),
+		nats.Bind(r.InputRoomEventTopic, consumer),
+		nats.InactiveThreshold(inactiveThreshold),
+		// No nats.Context here: the subscription would end with it.
+	)
+	if err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	w.Lock()
+	w.subscription = sub
+	announcements := w.announcements
+	w.announcements = nil
+	w.Unlock()
+	// The room's consumer now holds its events, so the stream-wide
+	// announcements are no longer needed to keep them.
+	for _, announcement := range announcements {
+		_ = announcement.Ack()
+	}
+	return nil
 }
 
 // Start creates an ephemeral non-durable consumer on the roomserver
@@ -283,20 +356,12 @@ func (r *Inputer) Start() error {
 	if r.EnableMetrics {
 		prometheus.MustRegister(roomserverInputBackpressure, processRoomEventDuration)
 	}
-	_, err := r.JetStream.Subscribe(
-		"", // This is blank because we specified it in BindStream.
-		func(m *nats.Msg) {
-			roomID := m.Header.Get(jetstream.RoomID)
-			meta, _ := m.Metadata()
-			r.startWorkerForRoom(roomID, meta.Sequence.Stream)
-			_ = m.Ack()
-		},
-		nats.HeadersOnly(),
-		nats.DeliverAll(),
-		nats.AckExplicit(),
-		nats.ReplayInstant(),
-		nats.BindStream(r.InputRoomEventTopic),
-	)
+	announcements, err := r.subscribeAnnouncements()
+	if err == nil {
+		r.ProcessContext.Go(func() { r.watchAnnouncements(announcements) })
+	}
+
+	r.ProcessContext.Go(r.expireClientTransactions)
 
 	// Make sure that the room consumers have the right config.
 	stream := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
@@ -315,16 +380,134 @@ func (r *Inputer) Start() error {
 	return err
 }
 
+// announcerInactiveThreshold is how long the broker keeps the stream-wide
+// headers-only consumer while this process is not connected to it. That
+// consumer is ephemeral, so the broker deletes it after five seconds without
+// a listener by default, which a reconnect easily exceeds once the client has
+// to wait between attempts. While it is gone, the input stream, which keeps a
+// message only while some consumer needs it, discards every event for a room
+// that has no durable consumer yet, such as a room being created or peeked.
+var announcerInactiveThreshold = 5 * time.Minute
+
+// announcerCheckInterval spaces checks that the stream-wide headers-only
+// consumer still exists.
+var announcerCheckInterval = 10 * time.Second
+
+// subscribeAnnouncements creates the stream-wide headers-only consumer that
+// announces each queued event to its room's worker.
+func (r *Inputer) subscribeAnnouncements() (*nats.Subscription, error) {
+	return r.JetStream.Subscribe(
+		"", // This is blank because we specified it in BindStream.
+		func(m *nats.Msg) {
+			r.ProcessContext.Do(func() {
+				roomID := m.Header.Get(jetstream.RoomID)
+				meta, _ := m.Metadata()
+				r.startWorkerForRoom(roomID, meta.Sequence.Stream, m)
+			})
+		},
+		nats.HeadersOnly(),
+		nats.DeliverAll(),
+		nats.AckExplicit(),
+		// The room's worker acknowledges each announcement once the room's
+		// durable consumer exists, rather than as soon as this callback
+		// returns, so the input stream keeps the event until then.
+		nats.ManualAck(),
+		nats.ReplayInstant(),
+		nats.InactiveThreshold(announcerInactiveThreshold),
+		nats.BindStream(r.InputRoomEventTopic),
+	)
+}
+
+// watchAnnouncements recreates the stream-wide headers-only consumer if the
+// broker deletes it, as after a disconnect longer than
+// announcerInactiveThreshold. Nothing else would notice: the subscription
+// stays open but receives nothing, so no room gets a worker again once its
+// current one stops, and synchronous input for a new room waits forever.
+// The new consumer delivers the stream from the start again, which announces
+// every room that still has events queued.
+func (r *Inputer) watchAnnouncements(sub *nats.Subscription) {
+	ctx := r.ProcessContext.Context()
+	for process.Sleep(ctx, announcerCheckInterval) {
+		if sub != nil {
+			if _, err := sub.ConsumerInfo(); !errors.Is(err, nats.ErrConsumerNotFound) {
+				continue
+			}
+			logrus.Error("The broker deleted the room input announcement consumer, recreating it")
+			_ = sub.Unsubscribe()
+		}
+		var err error
+		if sub, err = r.subscribeAnnouncements(); err != nil {
+			sub = nil
+			logrus.WithError(err).Error("Failed to recreate the room input announcement consumer, retrying")
+		}
+	}
+}
+
+// clientTransactionRetention is how long a client transaction ID keeps
+// deduplicating retries, as in Synapse. Clients retry within minutes.
+const clientTransactionRetention = 24 * time.Hour
+
+// expireClientTransactions periodically forgets client transactions older
+// than clientTransactionRetention.
+func (r *Inputer) expireClientTransactions() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		removed, err := r.DB.ExpireClientTransactions(r.ProcessContext.Context(), time.Now().Add(-clientTransactionRetention))
+		if err != nil && r.ProcessContext.Context().Err() == nil {
+			logrus.WithError(err).Warn("Failed to expire client transactions")
+		} else if removed > 0 {
+			logrus.WithField("removed", removed).Debug("Expired client transactions")
+		}
+		select {
+		case <-r.ProcessContext.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // _next is called by the worker for the room. It must only be called
 // by the worker's goroutine.
 func (w *worker) _next() {
 	// Look up what the next event is that's waiting to be processed.
 	ctx, cancel := context.WithTimeout(w.r.ProcessContext.Context(), time.Minute)
 	defer cancel()
+	// This consumer manages its own subscription, so the barrier in
+	// jetstream.JetStreamConsumer does not cover it. Without this check a
+	// retired owner would keep fetching, fail because the database is fenced,
+	// and acknowledge the messages anyway, discarding room events before the
+	// promoted activation could redeliver them.
+	if err := jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
+		logrus.WithError(err).WithField("room_id", w.roomID).
+			Warn("Not processing room events: ownership is no longer held")
+		// Ownership that is merely unconfirmed for longer than this fetch
+		// deadline is transient, so queue another attempt. Returning without
+		// one would leave the worker waiting for new activity in this room,
+		// which may never come, with events already queued unprocessed.
+		if errors.Is(err, context.DeadlineExceeded) {
+			w.notify()
+		}
+		return
+	}
 	w.sentryHub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetTag("room_id", w.roomID)
 	})
-	msgs, err := w.subscription.Fetch(1, nats.Context(ctx))
+	if w.subscription == nil {
+		if err := w.subscribe(w.r.ProcessContext.Context()); err != nil {
+			if w.r.ProcessContext.Context().Err() != nil {
+				return
+			}
+			logrus.WithError(err).WithField("room_id", w.roomID).Error("Failed to subscribe to the room's input consumer, retrying")
+			// The room has queued events, so try again now rather than when
+			// the room next sees activity, which may never happen.
+			if process.Sleep(w.r.ProcessContext.Context(), consumerSetupRetryDelay) {
+				w.notify()
+			}
+			return
+		}
+	}
+	msgs, err := jetstream.FetchOwned(ctx, w.subscription, 1, jetstream.OwnershipOf(w.r.JetStream))
 	switch {
 	case err == nil:
 		// Is the server shutting down? If so, stop processing.
@@ -334,7 +517,18 @@ func (w *worker) _next() {
 		// Make sure that once we're done here, we queue up another call
 		// to _next in the worker goroutine.
 		defer w.notify()
+	case jetstream.IsTransientFetchError(err):
+		// Keep the durable subscription and retry even if no new room
+		// activity arrives. Broker failover must not strand queued events.
+		if process.Sleep(w.r.ProcessContext.Context(), jetstream.FetchRetryDelay) {
+			w.notify()
+		}
+		return
 	case errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		if jetstream.OwnershipOf(w.r.JetStream) != nil && ctx.Err() == nil && time.Since(w.lastActivity) < time.Minute {
+			w.notify()
+			return
+		}
 		// Is the server shutting down? If so, stop processing.
 		if w.r.ProcessContext.Context().Err() != nil {
 			return
@@ -374,18 +568,27 @@ func (w *worker) _next() {
 		return
 	default:
 		// Something went wrong while trying to fetch the next event
-		// from the queue. In which case, we'll shut down the subscriber
-		// and wait to be notified about new room activity again. Maybe
-		// the problem will be corrected by then.
+		// from the queue. In which case, we'll shut down the subscriber.
 		// atomically clear the subscription and unsubscribe
 		w.Lock()
 
 		logrus.WithError(err).Errorf("Failed to get next stream message for room %q", w.roomID)
-		if err = w.subscription.Unsubscribe(); err != nil {
-			logrus.WithError(err).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
+		if uerr := w.subscription.Unsubscribe(); uerr != nil {
+			logrus.WithError(uerr).Errorf("Failed to unsubscribe to stream for room %q", w.roomID)
 		}
-		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.subscription = nil
+		// Events announced for this room are still queued: subscribe again
+		// shortly rather than wait for room activity that may never come.
+		if w.ephemeralSeq > w.durableSeq {
+			w.Unlock()
+			if process.Sleep(w.r.ProcessContext.Context(), consumerSetupRetryDelay) {
+				w.notify()
+			}
+			return
+		}
+		// Otherwise wait to be notified about new room activity again.
+		// Maybe the problem will be corrected by then.
+		w.cancel(fmt.Errorf("fetch failed: %w, restarting subscriber on new activity", err))
 		w.Unlock()
 		return
 	}
@@ -399,12 +602,21 @@ func (w *worker) _next() {
 		return
 	}
 
+	// A fetch issued before suspension may finish after this owner retires.
+	if err = jetstream.AwaitOwnership(ctx, jetstream.OwnershipOf(w.r.JetStream)); err != nil {
+		return
+	}
+
 	// Try to unmarshal the input room event. If the JSON unmarshalling
 	// fails then we'll terminate the message — this notifies NATS that
 	// we are done with the message and never want to see it again.
 	msg := msgs[0]
 	meta, _ := msg.Metadata()
+	// A synchronous caller reads these under the lock to describe the worker.
+	w.Lock()
+	w.lastActivity = time.Now()
 	w.durableSeq = meta.Sequence.Stream
+	w.Unlock()
 
 	var inputRoomEvent api.InputRoomEvent
 	if err = json.Unmarshal(msg.Data, &inputRoomEvent); err != nil {
@@ -417,17 +629,22 @@ func (w *worker) _next() {
 		scope.SetTag("event_id", inputRoomEvent.Event.EventID())
 	})
 
-	// Process the room event. If something goes wrong then we'll tell
-	// NATS to terminate the message. We'll store the error result as
-	// a string, because we might want to return that to the caller if
-	// it was a synchronous request.
+	// Process the room event. An asynchronous input that fails on this
+	// server's own dependencies is retried first; if it still fails, the
+	// message is acknowledged below all the same. We'll store the error
+	// result as a string, because we might want to return that to the
+	// caller if it was a synchronous request.
 	var errString string
 	wasRejected := false
-	if err = w.r.processRoomEvent(
-		w.r.ProcessContext.Context(),
-		spec.ServerName(msg.Header.Get("virtual_host")),
-		&inputRoomEvent,
-	); err != nil {
+	err = w.processInput(msg, &inputRoomEvent)
+	// A retried client transaction is done: the caller is told which event
+	// the transaction produced instead.
+	var duplicateOf string
+	if dupErr := (types.DuplicateTransactionError{}); errors.As(err, &dupErr) {
+		duplicateOf = dupErr.EventID
+		err = nil
+	}
+	if err != nil {
 		var rejErr types.RejectedError
 		if errors.As(err, &rejErr) {
 			// Don't send events that were rejected to Sentry
@@ -437,7 +654,7 @@ func (w *worker) _next() {
 				"type":     inputRoomEvent.Event.Type(),
 			}).Warn("Roomserver rejected event")
 			wasRejected = true
-		} else {
+		} else if !errors.Is(err, errMissingStateCooldown) {
 			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 				w.sentryHub.CaptureException(err)
 			}
@@ -450,16 +667,28 @@ func (w *worker) _next() {
 		// Even though we failed to process this message (e.g. due to Zendrite restarting and receiving a context canceled),
 		// the message may already have been queued for redelivery or will be, so this makes sure that we still reprocess the msg
 		// after restarting. We only Ack if the context was not yet canceled.
-		if w.r.ProcessContext.Context().Err() == nil {
+		//
+		// A retired owner must not acknowledge here either: its failure is the
+		// fence refusing the write, and acknowledging would discard an event
+		// the successor still has to process.
+		if w.r.ProcessContext.Context().Err() == nil && w.ownedForAck() {
 			_ = msg.AckSync()
 		}
 		errString = err.Error()
-	} else {
+	} else if w.ownedForAck() {
 		_ = msg.AckSync()
 	}
 
 	if wasRejected {
-		errString = api.InputWasRejected
+		// Keep the auth reason alongside the marker: without it the client is
+		// told only that something was rejected, and the "why" stays buried in
+		// the server logs.
+		errString = api.InputWasRejected + ": " + err.Error()
+	}
+
+	// A retired worker must not answer a successor's pending synchronous input.
+	if !w.ownedForAck() {
+		return
 	}
 
 	// If it was a synchronous input request then the "sync" field
@@ -469,7 +698,14 @@ func (w *worker) _next() {
 	// was no error then we'll return a blank message, which means
 	// that everything was OK.
 	if replyTo := msg.Header.Get("sync"); replyTo != "" {
-		if err = w.r.NATSClient.Publish(replyTo, []byte(errString)); err != nil {
+		reply := &nats.Msg{Subject: replyTo, Data: []byte(errString), Header: nats.Header{}}
+		// The event ID lets a caller that waits too long say which of its
+		// inputs went unanswered.
+		reply.Header.Set("event_id", inputRoomEvent.Event.EventID())
+		if duplicateOf != "" {
+			reply.Header.Set("duplicate_of", duplicateOf)
+		}
+		if err = w.r.NATSClient.PublishMsg(reply); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  w.roomID,
 				"event_id": inputRoomEvent.Event.EventID(),
@@ -479,12 +715,20 @@ func (w *worker) _next() {
 	}
 }
 
+// queuedInput is an input queued on the input stream for a synchronous caller.
+type queuedInput struct {
+	roomID  string
+	eventID string
+	seq     uint64
+}
+
 // queueInputRoomEvents queues events into the roomserver input
-// stream in NATS.
+// stream in NATS. For a synchronous request it also returns where each input
+// was queued.
 func (r *Inputer) queueInputRoomEvents(
 	ctx context.Context,
 	request *api.InputRoomEventsRequest,
-) (replySub *nats.Subscription, err error) {
+) (replySub *nats.Subscription, queued []queuedInput, err error) {
 	// If the request is synchronous then we need to create a
 	// temporary inbox to wait for responses on, and then create
 	// a subscription to it. If it's asynchronous then we won't
@@ -494,13 +738,13 @@ func (r *Inputer) queueInputRoomEvents(
 		replyTo = nats.NewInbox()
 		replySub, err = r.NATSClient.SubscribeSync(replyTo)
 		if err != nil {
-			return nil, fmt.Errorf("r.NATSClient.SubscribeSync: %w", err)
+			return nil, nil, fmt.Errorf("r.NATSClient.SubscribeSync: %w", err)
 		}
 		if replySub == nil {
 			// This shouldn't ever happen, but it doesn't hurt to check
 			// because we can potentially avoid a nil pointer panic later
 			// if it did for some reason.
-			return nil, fmt.Errorf("expected a subscription to the temporary inbox")
+			return nil, nil, fmt.Errorf("expected a subscription to the temporary inbox")
 		}
 	}
 
@@ -520,15 +764,19 @@ func (r *Inputer) queueInputRoomEvents(
 		msg.Header.Set("virtual_host", string(request.VirtualHost))
 		msg.Data, err = json.Marshal(e)
 		if err != nil {
-			return nil, fmt.Errorf("json.Marshal: %w", err)
+			return nil, nil, fmt.Errorf("json.Marshal: %w", err)
 		}
-		if _, err = r.JetStream.PublishMsg(msg, nats.Context(ctx)); err != nil {
+		ack, pubErr := jetstream.Publish(ctx, r.JetStream, msg)
+		if err = pubErr; err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":  roomID,
 				"event_id": e.Event.EventID(),
 				"subj":     subj,
 			}).Error("Roomserver failed to queue async event")
-			return nil, fmt.Errorf("r.JetStream.PublishMsg: %w", err)
+			return nil, nil, fmt.Errorf("r.JetStream.PublishMsg: %w", err)
+		}
+		if replySub != nil {
+			queued = append(queued, queuedInput{roomID: roomID, eventID: e.Event.EventID(), seq: ack.Sequence})
 		}
 
 		// Now that the event is queued, increment the room backpressure
@@ -544,7 +792,7 @@ func (r *Inputer) InputRoomEvents(
 	response *api.InputRoomEventsResponse,
 ) {
 	// Queue up the event into the roomserver.
-	replySub, err := r.queueInputRoomEvents(ctx, request)
+	replySub, queued, err := r.queueInputRoomEvents(ctx, request)
 	if err != nil {
 		response.ErrMsg = err.Error()
 		return
@@ -561,16 +809,98 @@ func (r *Inputer) InputRoomEvents(
 	// input we submitted. The last error value we receive will
 	// be the one returned as the error string.
 	defer replySub.Drain() //nolint:errcheck
+	unanswered := make(map[string]queuedInput, len(queued))
+	for _, q := range queued {
+		unanswered[q.eventID] = q
+	}
+	started := time.Now()
+	warned := false
 	for i := 0; i < len(request.InputRoomEvents); i++ {
-		msg, err := replySub.NextMsgWithContext(ctx)
+		waitCtx, cancel := ctx, context.CancelFunc(func() {})
+		if !warned {
+			waitCtx, cancel = context.WithDeadline(ctx, started.Add(syncInputReplyOverdue))
+		}
+		msg, err := replySub.NextMsgWithContext(waitCtx)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) && !warned && ctx.Err() == nil {
+			warned = true
+			r.warnUnansweredInput(ctx, unanswered, len(request.InputRoomEvents)-i, time.Since(started))
+			msg, err = replySub.NextMsgWithContext(ctx)
+		}
 		if err != nil {
 			response.ErrMsg = err.Error()
 			return
 		}
+		delete(unanswered, msg.Header.Get("event_id"))
 		if len(msg.Data) > 0 {
 			response.ErrMsg = string(msg.Data)
 		}
+		if original := msg.Header.Get("duplicate_of"); original != "" {
+			if response.DuplicateOf == nil {
+				response.DuplicateOf = map[string]string{}
+			}
+			response.DuplicateOf[msg.Header.Get("event_id")] = original
+		}
 	}
+}
+
+// syncInputReplyOverdue is how long a synchronous caller waits for the
+// roomserver's replies before it reports which of its inputs are unanswered.
+// It keeps waiting afterwards, for as long as its context allows.
+var syncInputReplyOverdue = 30 * time.Second
+
+// warnUnansweredInput reports a synchronous input whose replies are overdue,
+// with what the room's worker and durable consumer have done since. Every
+// input is processed and answered in turn, so a reply that never comes means
+// the input was lost on its way to the worker or its reply on the way back.
+func (r *Inputer) warnUnansweredInput(ctx context.Context, unanswered map[string]queuedInput, missing int, waited time.Duration) {
+	events := make([]string, 0, len(unanswered))
+	rooms := map[string]bool{}
+	for _, q := range unanswered {
+		events = append(events, fmt.Sprintf("%s@%d", q.eventID, q.seq))
+		rooms[q.roomID] = true
+	}
+	state := make([]string, 0, len(rooms))
+	for roomID := range rooms {
+		state = append(state, fmt.Sprintf("%s: worker %s; consumer %s", roomID, r.describeWorker(roomID), r.describeRoomConsumer(ctx, roomID)))
+	}
+	logrus.WithFields(logrus.Fields{
+		"missing_replies": missing,
+		"unanswered":      events,
+		"rooms":           state,
+		"waited":          waited.Round(time.Second).String(),
+	}).Warn("The roomserver has not answered synchronous input")
+}
+
+// describeWorker summarizes the room's worker for diagnostics.
+func (r *Inputer) describeWorker(roomID string) string {
+	v, ok := r.workers.Load(roomID)
+	if !ok {
+		return "none"
+	}
+	w, ok := v.(*worker)
+	if !ok {
+		return "invalid"
+	}
+	w.Lock()
+	defer w.Unlock()
+	return fmt.Sprintf("running=%t subscribed=%t announced_seq=%d processed_seq=%d held_announcements=%d last_activity=%s",
+		w.ctx != nil && w.ctx.Err() == nil, w.subscription != nil, w.ephemeralSeq, w.durableSeq, len(w.announcements),
+		time.Since(w.lastActivity).Round(time.Second))
+}
+
+// describeRoomConsumer summarizes the room's durable consumer for diagnostics.
+func (r *Inputer) describeRoomConsumer(ctx context.Context, roomID string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) //nolint:mnd
+	defer cancel()
+	stream := r.Cfg.Matrix.JetStream.Prefixed(jetstream.InputRoomEvent)
+	consumer := r.Cfg.Matrix.JetStream.Prefixed("RoomInput" + jetstream.Tokenise(roomID))
+	info, err := r.JetStream.ConsumerInfo(stream, consumer, nats.Context(ctx))
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("delivered_seq=%d ack_floor_seq=%d num_pending=%d num_ack_pending=%d num_redelivered=%d num_waiting=%d",
+		info.Delivered.Stream, info.AckFloor.Stream, info.NumPending, info.NumAckPending, info.NumRedelivered, info.NumWaiting)
 }
 
 var roomserverInputBackpressure = prometheus.NewGaugeVec(
@@ -582,3 +912,19 @@ var roomserverInputBackpressure = prometheus.NewGaugeVec(
 	},
 	[]string{"room_id"},
 )
+
+// ownedForAck reports whether this activation may still acknowledge work on the
+// input stream. It never waits: acknowledgement happens after the work is done,
+// so a stale owner leaves the message pending for redelivery instead.
+func (w *worker) ownedForAck() bool {
+	owner := jetstream.OwnershipOf(w.r.JetStream)
+	if owner == nil {
+		return true
+	}
+	if err := owner.Valid(); err != nil {
+		logrus.WithError(err).WithField("room_id", w.roomID).
+			Warn("Not acknowledging room event: ownership is no longer held")
+		return false
+	}
+	return true
+}

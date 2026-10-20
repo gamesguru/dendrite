@@ -304,7 +304,7 @@ func (s *eventStatements) BulkSelectStateEventByID(
 	if !excludeRejected && i != len(eventIDs) {
 		// If there are fewer rows returned than IDs then we were asked to lookup event IDs we don't have.
 		// We don't know which ones were missing because we don't return the string IDs in the query.
-		// However it should be possible debug this by replaying queries or entries from the input kafka logs.
+		// However, it should be possible to debug this by replaying queries or retained events from the input JetStream stream.
 		// If this turns out to be impossible and we do need the debug information here, it would be better
 		// to do it as a separate query rather than slowing down/complicating the internal case.
 		return nil, types.MissingEventError(

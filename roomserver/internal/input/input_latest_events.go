@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"

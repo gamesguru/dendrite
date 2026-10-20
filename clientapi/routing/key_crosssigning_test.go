@@ -10,10 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"github.com/go-chi/chi/v5"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -304,17 +303,21 @@ func oauthUIAMSCConfig(adminToken string) *config.MSCs {
 	}
 }
 
-// recordCrossSigningConfirmation simulates MAS calling the admin endpoint after
-// the user confirmed the reset in the account management web UI.
+// recordCrossSigningConfirmation simulates MAS calling the provisioning
+// endpoint after the user confirmed the reset in the account management web
+// UI.
 func recordCrossSigningConfirmation(t *testing.T, cfg *config.ClientAPI, userID string) {
 	t.Helper()
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("userId", userID)
-	masReq := httptest.NewRequest(http.MethodPost, "/", nil)
-	masReq = masReq.WithContext(context.WithValue(masReq.Context(), chi.RouteCtxKey, rctx))
-	res := MASAllowCrossSigningReplacement(masReq, cfg)
+	localpart, _, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil {
+		t.Fatalf("failed to split user ID %s: %v", userID, err)
+	}
+	body := fmt.Sprintf(`{"localpart": %q}`, localpart)
+	masReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	masReq.Header.Set("Content-Type", "application/json")
+	res := MASAllowCrossSigningReset(masReq, cfg, nil)
 	if res.Code != http.StatusOK {
-		t.Fatalf("expected status %d from MAS admin endpoint, got %d", http.StatusOK, res.Code)
+		t.Fatalf("expected status %d from MAS provisioning endpoint, got %d", http.StatusOK, res.Code)
 	}
 }
 
@@ -473,17 +476,14 @@ func Test_UploadCrossSigningDeviceKeys_OAuthUIA_AdminTokenRequiresConfirmation(t
 	}
 }
 
-// The MAS admin endpoint rejects user IDs that are not local.
-func Test_MASAllowCrossSigningReplacement_RejectsRemoteUser(t *testing.T) {
+// The provisioning endpoint rejects malformed localparts.
+func Test_MASAllowCrossSigningReset_RejectsInvalidLocalpart(t *testing.T) {
 	cfg, _, closeDB := testrig.CreateConfig(t, test.DBTypeSQLite)
 	defer closeDB()
-	cfg.Global.ServerName = "example.com"
 
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("userId", "@user:remote.example.org")
-	masReq := httptest.NewRequest(http.MethodPost, "/", nil)
-	masReq = masReq.WithContext(context.WithValue(masReq.Context(), chi.RouteCtxKey, rctx))
-	res := MASAllowCrossSigningReplacement(masReq, &cfg.ClientAPI)
+	masReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"localpart": "not a localpart!"}`))
+	masReq.Header.Set("Content-Type", "application/json")
+	res := MASAllowCrossSigningReset(masReq, &cfg.ClientAPI, nil)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, res.Code)
 	}

@@ -12,9 +12,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	clientapi "codefloe.com/pat-s/zendrite/clientapi/api"
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -35,6 +35,8 @@ type AccountDataTable interface {
 	InsertAccountData(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, dataType string, content json.RawMessage) error
 	SelectAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (map[string]json.RawMessage, map[string]map[string]json.RawMessage, error)
 	SelectAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) (data json.RawMessage, err error)
+	// DeleteAccountData deletes all global and room account data of a user.
+	DeleteAccountData(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 }
 
 type AccountsTable interface {
@@ -45,7 +47,17 @@ type AccountsTable interface {
 	SelectPasswordHash(ctx context.Context, localpart string, serverName spec.ServerName) (hash string, err error)
 	SelectAccountByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*api.Account, error)
 	SelectIsDeactivated(ctx context.Context, localpart string, serverName spec.ServerName) (bool, error)
+	// ReactivateAccount returns sql.ErrNoRows when no account matches.
+	ReactivateAccount(ctx context.Context, localpart string, serverName spec.ServerName) (err error)
+	// UpdateLocked returns sql.ErrNoRows when no account matches.
+	UpdateLocked(ctx context.Context, localpart string, serverName spec.ServerName, locked bool) error
+	// UpdateSuspended returns sql.ErrNoRows when no account matches.
+	UpdateSuspended(ctx context.Context, localpart string, serverName spec.ServerName, suspended bool) error
 	SelectNewNumericLocalpart(ctx context.Context, txn *sql.Tx, serverName spec.ServerName) (id int64, err error)
+	// SelectActiveAccountsCreatedBefore returns up to limit accounts of the
+	// given type that are not deactivated and were created before the given
+	// time, oldest first.
+	SelectActiveAccountsCreatedBefore(ctx context.Context, accountType api.AccountType, before spec.Timestamp, limit int) ([]api.Account, error)
 }
 
 type DevicesTable interface {
@@ -61,6 +73,10 @@ type DevicesTable interface {
 	SelectDevicesByLocalpart(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, exceptDeviceID string) ([]api.Device, error)
 	SelectDevicesByID(ctx context.Context, deviceIDs []string) ([]api.Device, error)
 	UpdateDeviceLastSeen(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID, ipAddr, userAgent string) error
+	UpdateDeviceRefreshToken(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, deviceID string, expiresTS int64, refreshTokenHash string) error
+	RefreshDeviceTokens(ctx context.Context, txn *sql.Tx, refreshTokenHash, accessToken string, expiresTS int64, newRefreshTokenHash string) (*api.Device, error)
+	ClearPrevRefreshToken(ctx context.Context, txn *sql.Tx, accessToken string) error
+	SelectRefreshTokenOwner(ctx context.Context, refreshTokenHash string) (localpart string, serverName spec.ServerName, err error)
 }
 
 type KeyBackupTable interface {
@@ -70,6 +86,7 @@ type KeyBackupTable interface {
 	SelectKeys(ctx context.Context, txn *sql.Tx, userID, version string) (map[string]map[string]api.KeyBackupSession, error)
 	SelectKeysByRoomID(ctx context.Context, txn *sql.Tx, userID, version, roomID string) (map[string]map[string]api.KeyBackupSession, error)
 	SelectKeysByRoomIDAndSessionID(ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string) (map[string]map[string]api.KeyBackupSession, error)
+	DeleteKeys(ctx context.Context, txn *sql.Tx, userID, version, roomID, sessionID string) (int64, error)
 }
 
 type KeyBackupVersionTable interface {
@@ -83,6 +100,7 @@ type KeyBackupVersionTable interface {
 type LoginTokenTable interface {
 	InsertLoginToken(ctx context.Context, txn *sql.Tx, metadata *api.LoginTokenMetadata, data *api.LoginTokenData) error
 	DeleteLoginToken(ctx context.Context, txn *sql.Tx, token string) error
+	ConsumeLoginToken(ctx context.Context, txn *sql.Tx, token string) (bool, error)
 	SelectLoginToken(ctx context.Context, token string) (*api.LoginTokenData, error)
 }
 
@@ -94,16 +112,58 @@ type OpenIDTable interface {
 type ProfileTable interface {
 	InsertProfile(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
 	SelectProfileByLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (*authtypes.Profile, error)
+	SelectProfileForUpdate(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (*authtypes.Profile, error)
 	SetAvatarURL(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error)
 	SetDisplayName(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, displayName string) (*authtypes.Profile, bool, error)
 	SelectProfilesBySearch(ctx context.Context, searchString string, limit int) ([]authtypes.Profile, error)
+}
+
+// ProfileFieldsTable stores the custom profile fields of accounts (MSC4133).
+type ProfileFieldsTable interface {
+	UpsertProfileField(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fieldName string, value json.RawMessage) error
+	SelectProfileFields(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (map[string]json.RawMessage, error)
+	DeleteProfileField(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, fieldName string) error
+	DeleteProfileFields(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
+}
+
+// DelayedEventsTable stores MSC4140 delayed events and, for a while, the
+// outcome of finalized ones.
+type DelayedEventsTable interface {
+	InsertDelayedEvent(ctx context.Context, txn *sql.Tx, event *api.DelayedEvent) error
+	SelectDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) (*api.DelayedEvent, error)
+	// SelectDelayedEventsForUser returns finalized events newest first, or
+	// pending (scheduled or sending) events in order of send time.
+	SelectDelayedEventsForUser(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, finalized bool) ([]api.DelayedEvent, error)
+	// CountPendingDelayedEvents counts a user's scheduled and sending events,
+	// and returns the earliest send time among them.
+	CountPendingDelayedEvents(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) (count int, nextSendTS spec.Timestamp, err error)
+	RestartDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string, now spec.Timestamp) (bool, error)
+	// ClaimDelayedEvent marks a scheduled event as sending and returns it, or
+	// nil if it is not scheduled.
+	ClaimDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) (*api.DelayedEvent, error)
+	// ClaimDueDelayedEvents marks every scheduled event due at now as sending
+	// and returns them. With reclaim, events already sending are returned too.
+	ClaimDueDelayedEvents(ctx context.Context, txn *sql.Tx, now spec.Timestamp, reclaim bool) ([]api.DelayedEvent, error)
+	UnclaimDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string) error
+	// FinalizeDelayedEvent finalizes an event in the from status with the
+	// given outcome, and reports whether it was in that status.
+	FinalizeDelayedEvent(ctx context.Context, txn *sql.Tx, delayID string, from api.DelayedEventStatus, eventID string, sendErr json.RawMessage, now spec.Timestamp) (bool, error)
+	// CancelDelayedStateEvents finalizes the scheduled events for one piece
+	// of state, except those of the given user.
+	CancelDelayedStateEvents(ctx context.Context, txn *sql.Tx, roomID, eventType, stateKey, exceptLocalpart string, exceptServerName spec.ServerName, now spec.Timestamp) error
+	SelectNextSendTS(ctx context.Context, txn *sql.Tx) (spec.Timestamp, bool, error)
+	DeleteDelayedEventsForUser(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName) error
+	// DeleteFinalizedDelayedEvents forgets events finalized before the given time.
+	DeleteFinalizedDelayedEvents(ctx context.Context, txn *sql.Tx, before spec.Timestamp) error
+	// DeleteExcessFinalizedDelayedEvents keeps only a user's newest finalized events.
+	DeleteExcessFinalizedDelayedEvents(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, keep int) error
 }
 
 type ThreePIDTable interface {
 	SelectLocalpartForThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string) (localpart string, serverName spec.ServerName, err error)
 	SelectThreePIDsForLocalpart(ctx context.Context, localpart string, serverName spec.ServerName) (threepids []authtypes.ThreePID, err error)
 	InsertThreePID(ctx context.Context, txn *sql.Tx, threepid, medium, localpart string, serverName spec.ServerName) (err error)
-	DeleteThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string) (err error)
+	DeleteThreePID(ctx context.Context, txn *sql.Tx, threepid string, medium string, localpart string, serverName spec.ServerName) (err error)
 }
 
 type PusherTable interface {

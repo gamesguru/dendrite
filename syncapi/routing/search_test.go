@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"
 
 	"codefloe.com/pat-s/zendrite/internal/fulltext"
@@ -286,5 +287,24 @@ func TestSearch(t *testing.T) {
 				}
 			})
 		}
+
+		t.Run("rebuilding index asks the client to retry", func(t *testing.T) {
+			recovering := fulltext.NewRecovering(fts)
+			search := func() util.JSONResponse {
+				body, encodeErr := json.Marshal(SearchRequest{SearchCategories: SearchCategories{RoomEvents: RoomEvents{SearchTerm: "hello"}}})
+				assert.NoError(t, encodeErr)
+				return Search(httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body)), &aliceDevice, db, recovering, nil, &FakeSyncRoomserverAPI{})
+			}
+			res := search()
+			assert.Equal(t, http.StatusServiceUnavailable, res.Code)
+			assert.Equal(t, "5", res.Headers["Retry-After"])
+
+			assert.NoError(t, recovering.Finish())
+			res = search()
+			assert.Equal(t, http.StatusOK, res.Code)
+			resp, ok := res.JSON.(SearchResponse)
+			assert.True(t, ok)
+			assert.Equal(t, 1, resp.SearchCategories.RoomEvents.Count)
+		})
 	})
 }

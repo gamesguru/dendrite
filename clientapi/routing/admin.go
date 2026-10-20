@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
@@ -23,6 +22,7 @@ import (
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -123,7 +123,7 @@ func AdminCreateNewRegistrationToken(req *http.Request, cfg *config.ClientAPI, u
 		}
 	}
 	return util.JSONResponse{
-		Code: 200, //nolint:mnd
+		Code: http.StatusOK,
 		JSON: map[string]any{
 			"token":        token,
 			"uses_allowed": internal.PtrOrNil(usesAllowed),
@@ -308,7 +308,7 @@ func AdminPurgeRoom(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI) 
 		return util.ErrorResponse(err)
 	}
 
-	if err = rsAPI.PerformAdminPurgeRoom(context.Background(), vars["roomID"]); err != nil {
+	if err = rsAPI.PerformAdminPurgeRoom(req.Context(), vars["roomID"]); err != nil {
 		return util.ErrorResponse(err)
 	}
 
@@ -472,8 +472,8 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 	// so we deliberately do not impose a timeout: a genuinely stuck download is
 	// cleared by a server restart, whereas a premature cancellation would leave
 	// the room only partially repaired.
-	go func() {
-		ctx := context.Background()
+	ctx := process.Lifetime(req.Context())
+	process.Go(ctx, func() {
 		if err := rsAPI.PerformAdminDownloadState(ctx, roomID, device.UserID, spec.ServerName(serverName)); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"userID":     device.UserID,
@@ -486,12 +486,70 @@ func AdminDownloadState(req *http.Request, device *userapi.Device, rsAPI roomser
 				"roomID":     roomID,
 			}).Info("successfully downloaded state")
 		}
-	}()
+	})
 	return util.JSONResponse{
 		Code: 200, //nolint:mnd
 		JSON: struct {
 			Status string `json:"status"`
 		}{Status: "processing"},
+	}
+}
+
+// AdminBridgeState submits an ordinary new event from the requesting user
+// whose prev_events span both the room's current forward extremities and
+// the given extraEventIDs - events den already holds, connected to the
+// room's graph, but not currently part of current state. Unlike
+// AdminDownloadState this does not override state; it's a real event that
+// goes through ordinary state resolution, and it only works if the
+// requesting user is currently recognized as a room member. It is
+// outward-facing: the resulting event is signed by this server and
+// federated to every other server in the room.
+func AdminBridgeState(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, ok := vars["roomID"]
+	if !ok {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting room ID."),
+		}
+	}
+
+	var body struct {
+		EventIDs []string `json:"event_ids"`
+	}
+	if err = json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error()),
+		}
+	}
+	if len(body.EventIDs) == 0 {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting a non-empty \"event_ids\" array in the request body."),
+		}
+	}
+
+	if err = rsAPI.PerformAdminBridgeState(req.Context(), roomID, device.UserID, body.EventIDs); err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{
+				Code: http.StatusOK,
+				JSON: spec.NotFound(err.Error()),
+			}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"userID":   device.UserID,
+			"roomID":   roomID,
+			"eventIDs": body.EventIDs,
+		}).Error("failed to bridge state")
+		return util.ErrorResponse(err)
+	}
+	return util.JSONResponse{
+		Code: http.StatusOK,
+		JSON: struct{}{},
 	}
 }
 
@@ -526,6 +584,33 @@ func GetEventReports(
 		Code: http.StatusOK,
 		JSON: resp,
 	}
+}
+
+// GetRoomReports implements GET /_synapse/admin/v1/room_reports, which lists
+// room reports (MSC4151) like Synapse.
+func GetRoomReports(
+	req *http.Request,
+	rsAPI roomserverAPI.ClientRoomserverAPI,
+	from, limit uint64,
+	backwards bool,
+	userID, roomID string,
+) util.JSONResponse {
+	reports, count, err := rsAPI.QueryAdminRoomReports(req.Context(), from, limit, backwards, userID, roomID)
+	if err != nil {
+		logrus.WithError(err).Error("failed to query room reports")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
+		}
+	}
+	resp := map[string]any{
+		"room_reports": reports,
+		"total":        count,
+	}
+	if int64(from+limit) < count {
+		resp["next_token"] = int(from) + len(reports)
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: resp}
 }
 
 func GetEventReport(req *http.Request, rsAPI roomserverAPI.ClientRoomserverAPI, reportID string) util.JSONResponse {

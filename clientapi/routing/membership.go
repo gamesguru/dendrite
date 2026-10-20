@@ -15,9 +15,9 @@ import (
 	"slices"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 
@@ -37,7 +37,7 @@ func SendBan(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -120,10 +120,10 @@ func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, devic
 		false,
 	); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
-		if err.Error() == roomserverAPI.InputWasRejected {
+		if roomserverAPI.IsInputRejected(err) {
 			return util.JSONResponse{
 				Code: http.StatusForbidden,
-				JSON: spec.Forbidden("the event was rejected"),
+				JSON: spec.Forbidden(roomserverAPI.InputRejectionReason(err)),
 			}
 		}
 		return util.JSONResponse{
@@ -143,7 +143,7 @@ func SendKick(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -210,8 +210,9 @@ func SendKick(
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	// kick is only valid if the user is not currently banned or left (that is, they are joined or invited)
-	if queryRes.Membership != spec.Join && queryRes.Membership != spec.Invite {
+	// kick is only valid if the user is not currently banned or left (that is,
+	// they are joined, invited or knocking; kicking a knock rejects it)
+	if queryRes.Membership != spec.Join && queryRes.Membership != spec.Invite && queryRes.Membership != spec.Knock {
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
 			JSON: spec.Forbidden("cannot /kick banned or left users"),
@@ -226,7 +227,7 @@ func SendUnban(
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
@@ -281,14 +282,28 @@ func SendInvite(
 	req *http.Request, profileAPI userapi.ClientUserAPI, device *userapi.Device,
 	roomID string, cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI, asAPI appserviceAPI.AppServiceInternalAPI,
+	identityClient *fclient.Client,
 ) util.JSONResponse {
-	body, evTime, reqErr := extractRequestData(req)
+	body, evTime, reqErr := extractRequestData(req, device)
 	if reqErr != nil {
 		return *reqErr
 	}
 
+	// Only members may invite, which is checked before a 3PID invite reaches
+	// the identity server, as storing one there shares the room's details.
+	deviceUserID, err := spec.NewUserID(device.UserID, true)
+	if err != nil {
+		return util.JSONResponse{
+			Code: http.StatusForbidden,
+			JSON: spec.Forbidden("You don't have permission to invite, bad userID"),
+		}
+	}
+	if errRes := checkMemberInRoom(req.Context(), rsAPI, *deviceUserID, roomID); errRes != nil {
+		return *errRes
+	}
+
 	inviteStored, jsonErrResp := checkAndProcessThreepid(
-		req, device, body, cfg, rsAPI, profileAPI, roomID, evTime,
+		req, device, body, cfg, rsAPI, profileAPI, identityClient, roomID, evTime,
 	)
 	if jsonErrResp != nil {
 		return *jsonErrResp
@@ -309,19 +324,6 @@ func SendInvite(
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON("missing user_id"),
 		}
-	}
-
-	deviceUserID, err := spec.NewUserID(device.UserID, true)
-	if err != nil {
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden("You don't have permission to kick this user, bad userID"),
-		}
-	}
-
-	errRes := checkMemberInRoom(req.Context(), rsAPI, *deviceUserID, roomID)
-	if errRes != nil {
-		return *errRes
 	}
 
 	// We already received the return value, so no need to check for an error here.
@@ -514,13 +516,13 @@ func loadProfile(
 	return profile, err
 }
 
-func extractRequestData(req *http.Request) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
+func extractRequestData(req *http.Request, device *userapi.Device) (body *threepid.MembershipRequest, evTime time.Time, resErr *util.JSONResponse) {
 	if reqErr := httputil.UnmarshalJSONRequest(req, &body); reqErr != nil {
 		resErr = reqErr
 		return
 	}
 
-	evTime, err := httputil.ParseTSParam(req)
+	evTime, err := httputil.ParseTSParam(req, device)
 	if err != nil {
 		resErr = &util.JSONResponse{
 			Code: http.StatusBadRequest,
@@ -538,11 +540,12 @@ func checkAndProcessThreepid(
 	cfg *config.ClientAPI,
 	rsAPI roomserverAPI.ClientRoomserverAPI,
 	profileAPI userapi.ClientUserAPI,
+	identityClient *fclient.Client,
 	roomID string,
 	evTime time.Time,
 ) (inviteStored bool, errRes *util.JSONResponse) {
 	inviteStored, err := threepid.CheckAndProcessInvite(
-		req.Context(), device, body, cfg, rsAPI, profileAPI,
+		req.Context(), device, body, cfg, rsAPI, profileAPI, identityClient,
 		roomID, evTime,
 	)
 	{
@@ -550,11 +553,15 @@ func checkAndProcessThreepid(
 		var e1 threepid.ErrNotTrusted
 		var e2 eventutil.ErrRoomNoExists
 		var e3 gomatrixserverlib.BadJSONError
+		var e4 *threepid.IdentityServerError
 		switch {
 		case err == nil:
 		case errors.As(err, &e):
 			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
-			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
+			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam(err.Error())}
+		case errors.As(err, &e4):
+			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
+			return inviteStored, &util.JSONResponse{Code: e4.Code, JSON: e4.Body}
 		case errors.As(err, &e1):
 			util.GetLogger(req.Context()).WithError(err).Error("threepid.CheckAndProcessInvite failed")
 			return inviteStored, &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.NotTrusted(body.IDServer)}
@@ -631,7 +638,7 @@ func SendForget(
 	if membershipRes.IsInRoom {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.Forbidden(fmt.Sprintf("User %s is still in room %s", device.UserID, roomID)),
+			JSON: spec.Unknown(fmt.Sprintf("User %s is still in room %s", device.UserID, roomID)),
 		}
 	}
 

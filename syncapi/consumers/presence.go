@@ -10,7 +10,7 @@ import (
 	"context"
 	"strconv"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
@@ -70,52 +70,54 @@ func NewPresenceConsumer(
 func (s *PresenceConsumer) Start() error {
 	// Normal NATS subscription, used by Request/Reply
 	_, err := s.nats.Subscribe(s.requestTopic, func(msg *nats.Msg) {
-		userID := msg.Header.Get(jetstream.UserID)
-		presences, err := s.db.GetPresences(context.Background(), []string{userID})
-		m := &nats.Msg{
-			Header: nats.Header{},
-		}
-		if err != nil {
-			m.Header.Set("error", err.Error())
+		process.Do(s.ctx, func() {
+			userID := msg.Header.Get(jetstream.UserID)
+			presences, err := s.db.GetPresences(s.ctx, []string{userID})
+			m := &nats.Msg{
+				Header: nats.Header{},
+			}
+			if err != nil {
+				m.Header.Set("error", err.Error())
+				if err = msg.RespondMsg(m); err != nil {
+					logrus.WithError(err).Error("Unable to respond to messages")
+				}
+				return
+			}
+
+			presence := &types.PresenceInternal{
+				UserID: userID,
+			}
+			if len(presences) > 0 {
+				presence = presences[0]
+			}
+
+			deviceRes := api.QueryDevicesResponse{}
+			if err = s.deviceAPI.QueryDevices(s.ctx, &api.QueryDevicesRequest{UserID: userID}, &deviceRes); err != nil {
+				m.Header.Set("error", err.Error())
+				if err = msg.RespondMsg(m); err != nil {
+					logrus.WithError(err).Error("Unable to respond to messages")
+				}
+				return
+			}
+
+			for i := range deviceRes.Devices {
+				if int64(presence.LastActiveTS) < deviceRes.Devices[i].LastSeenTS {
+					presence.LastActiveTS = spec.Timestamp(deviceRes.Devices[i].LastSeenTS)
+				}
+			}
+
+			m.Header.Set(jetstream.UserID, presence.UserID)
+			m.Header.Set("presence", presence.ClientFields.Presence)
+			if presence.ClientFields.StatusMsg != nil {
+				m.Header.Set("status_msg", *presence.ClientFields.StatusMsg)
+			}
+			m.Header.Set("last_active_ts", strconv.Itoa(int(presence.LastActiveTS)))
+
 			if err = msg.RespondMsg(m); err != nil {
 				logrus.WithError(err).Error("Unable to respond to messages")
+				return
 			}
-			return
-		}
-
-		presence := &types.PresenceInternal{
-			UserID: userID,
-		}
-		if len(presences) > 0 {
-			presence = presences[0]
-		}
-
-		deviceRes := api.QueryDevicesResponse{}
-		if err = s.deviceAPI.QueryDevices(s.ctx, &api.QueryDevicesRequest{UserID: userID}, &deviceRes); err != nil {
-			m.Header.Set("error", err.Error())
-			if err = msg.RespondMsg(m); err != nil {
-				logrus.WithError(err).Error("Unable to respond to messages")
-			}
-			return
-		}
-
-		for i := range deviceRes.Devices {
-			if int64(presence.LastActiveTS) < deviceRes.Devices[i].LastSeenTS {
-				presence.LastActiveTS = spec.Timestamp(deviceRes.Devices[i].LastSeenTS)
-			}
-		}
-
-		m.Header.Set(jetstream.UserID, presence.UserID)
-		m.Header.Set("presence", presence.ClientFields.Presence)
-		if presence.ClientFields.StatusMsg != nil {
-			m.Header.Set("status_msg", *presence.ClientFields.StatusMsg)
-		}
-		m.Header.Set("last_active_ts", strconv.Itoa(int(presence.LastActiveTS)))
-
-		if err = msg.RespondMsg(m); err != nil {
-			logrus.WithError(err).Error("Unable to respond to messages")
-			return
-		}
+		})
 	})
 	if err != nil {
 		return err

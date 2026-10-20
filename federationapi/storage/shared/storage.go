@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/federationapi/storage/shared/receipt"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/tables"
@@ -42,11 +42,9 @@ type Database struct {
 	FederationRetryState     tables.FederationRetryState
 }
 
-// UpdateRoom updates the joined hosts for a room and returns what the joined
-// hosts were before the update, or nil if this was a duplicate message.
-// This is called when we receive a message from kafka, so we pass in
-// oldEventID and newEventID to check that we haven't missed any messages or
-// this isn't a duplicate message.
+// UpdateRoom updates the joined hosts for a room when processing a roomserver
+// event from JetStream.
+// It returns the previous hosts, or the added hosts when purgeRoomFirst is set.
 func (d *Database) UpdateRoom(
 	ctx context.Context,
 	roomID string,

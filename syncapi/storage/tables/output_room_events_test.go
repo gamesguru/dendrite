@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -32,7 +32,7 @@ func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, 
 	var tab tables.Events
 	switch dbType {
 	case test.DBTypePostgres:
-		tab, err = postgres.NewPostgresEventsTable(db)
+		tab, err = postgres.NewPostgresEventsTable(context.Background(), db)
 	case test.DBTypeSQLite:
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {

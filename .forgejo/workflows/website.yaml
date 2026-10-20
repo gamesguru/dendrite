@@ -37,7 +37,7 @@ jobs:
         run: bun run build
 
       - name: Upload artifact
-        uses: forgejo/upload-artifact@v4
+        uses: forgejo/upload-artifact@v5
         with:
           name: website-dist
           path: website/dist
@@ -47,7 +47,7 @@ jobs:
     needs: build
     steps:
       - name: Download artifact
-        uses: forgejo/download-artifact@v4
+        uses: forgejo/download-artifact@v7
         with:
           name: website-dist
           path: dist
@@ -74,7 +74,7 @@ jobs:
     needs: [build, links]
     steps:
       - name: Download artifact
-        uses: forgejo/download-artifact@v4
+        uses: forgejo/download-artifact@v7
         with:
           name: website-dist
           path: dist

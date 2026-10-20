@@ -1,18 +1,22 @@
 package httputil
 
 import (
+	"context"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type RateLimits struct {
+	ctx              context.Context
 	limits           map[string]chan struct{}
 	limitsMutex      sync.RWMutex
 	cleanMutex       sync.RWMutex
@@ -22,8 +26,13 @@ type RateLimits struct {
 	exemptUserIDs    map[string]struct{}
 }
 
-func NewRateLimits(cfg *config.RateLimiting) *RateLimits {
+func NewRateLimits(cfg *config.RateLimiting, contexts ...context.Context) *RateLimits {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	l := &RateLimits{
+		ctx:              ctx,
 		limits:           make(map[string]chan struct{}),
 		enabled:          cfg.Enabled,
 		requestThreshold: cfg.Threshold,
@@ -34,7 +43,7 @@ func NewRateLimits(cfg *config.RateLimiting) *RateLimits {
 		l.exemptUserIDs[userID] = struct{}{}
 	}
 	if l.enabled {
-		go l.clean()
+		process.Go(ctx, l.clean)
 	}
 	return l
 }
@@ -45,7 +54,9 @@ func (l *RateLimits) clean() {
 		// lock of the entire map and see if any of the channels are
 		// empty. If they are then we will close and delete them,
 		// freeing up memory.
-		time.Sleep(time.Second * 30)
+		if !process.Sleep(l.ctx, time.Second*30) { //nolint:mnd // Preserve the existing cleanup interval.
+			return
+		}
 		l.cleanMutex.Lock()
 		l.limitsMutex.Lock()
 		for k, c := range l.limits {
@@ -117,17 +128,34 @@ func (l *RateLimits) Limit(req *http.Request, device *userapi.Device) *util.JSON
 	case rateLimit <- struct{}{}:
 	default:
 		// We hit the rate limit. Tell the client to back off.
-		return &util.JSONResponse{
-			Code: http.StatusTooManyRequests,
-			JSON: spec.LimitExceeded("You are sending too many requests too quickly!", l.cooloffDuration.Milliseconds()),
-		}
+		response := LimitExceededResponse("You are sending too many requests too quickly!", l.cooloffDuration)
+		return &response
 	}
 
 	// After the time interval, drain a resource from the rate limiting
 	// channel. This will free up space in the channel for new requests.
-	go func() {
-		<-time.After(l.cooloffDuration)
+	process.Go(l.ctx, func() {
+		if !process.Sleep(l.ctx, l.cooloffDuration) {
+			return
+		}
 		<-rateLimit
-	}()
+	})
 	return nil
+}
+
+// LimitExceededResponse includes retry guidance for both current and legacy clients.
+func LimitExceededResponse(message string, delay time.Duration) util.JSONResponse {
+	if delay < 0 {
+		delay = 0
+	}
+	// Round up so clients never retry before the configured delay has elapsed.
+	seconds := delay / time.Second
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	return util.JSONResponse{
+		Code:    http.StatusTooManyRequests,
+		Headers: map[string]string{"Retry-After": strconv.FormatInt(int64(seconds), 10)},
+		JSON:    spec.LimitExceeded(message, delay.Milliseconds()),
+	}
 }

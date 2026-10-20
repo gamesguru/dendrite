@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"gotest.tools/v3/poll"
@@ -407,8 +407,9 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 		roomID: map[string]any{
 			"m.read": map[string]any{
 				"@john:kaer.morhen": map[string]any{
-					"data": map[string]int64{
-						"ts": 1533358089009,
+					"data": map[string]any{
+						"ts":        1533358089009,
+						"thread_id": "$thread-root",
 					},
 					"event_ids": []string{
 						"$read_this_event:matrix.org",
@@ -467,6 +468,7 @@ func TestProcessTransactionRequestEDUReceipt(t *testing.T) {
 		var output types.OutputReceiptEvent
 		output.RoomID = msg.Header.Get(jetstream.RoomID)
 		assert.Equal(t, roomID, output.RoomID)
+		assert.Equal(t, "$thread-root", msg.Header.Get("thread_id"))
 
 		received.Store(true)
 		return true

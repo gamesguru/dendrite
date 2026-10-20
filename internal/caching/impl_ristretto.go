@@ -12,9 +12,9 @@ import (
 	"time"
 	"unsafe"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
 	"github.com/dgraph-io/ristretto/v2"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -72,6 +72,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 		})
 	}
 	return &Caches{
+		close: cache.Close,
 		RoomVersions: &RistrettoCachePartition[string, gomatrixserverlib.RoomVersion]{ // room ID -> room version
 			cache:  cache,
 			Prefix: roomVersionsCache,
@@ -150,7 +151,7 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 			Mutable: true,
 			MaxAge:  lesserOf(5*time.Minute, maxAge), //nolint:mnd // 5 minute TTL for negative cache
 		},
-		LazyLoading: &RistrettoCachePartition[lazyLoadingCacheKey, string]{ // composite key -> event ID
+		LazyLoading: &RistrettoCachePartition[lazyLoadingCacheKey, LazyLoadedMember]{ // composite key -> membership sent
 			cache:   cache,
 			Prefix:  lazyLoadingCache,
 			Mutable: true,

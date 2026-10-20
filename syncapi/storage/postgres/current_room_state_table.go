@@ -12,9 +12,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -68,11 +70,34 @@ const upsertRoomStateSQL = "" +
 	" ON CONFLICT ON CONSTRAINT syncapi_room_state_unique" +
 	" DO UPDATE SET event_id = $2, sender=$4, contains_url=$5, headered_event_json = $7, membership = $8, added_at = $9"
 
+// upsertChunkSize bounds the rows sent in one batched statement. Large enough
+// that a 50,000-entry state rewrite costs tens of round trips, small enough
+// that one statement stays a few megabytes.
+const upsertChunkSize = 1000
+
+// upsertRoomStatesSQL is upsertRoomStateSQL for many rows in one round trip.
+// The rows must not share a (room_id, type, state_key), because ON CONFLICT
+// cannot update the same row twice within one statement.
+const upsertRoomStatesSQL = "" +
+	"INSERT INTO syncapi_current_room_state (room_id, event_id, type, sender, contains_url, state_key, headered_event_json, membership, added_at, history_visibility)" +
+	" SELECT room_id, event_id, type, sender, contains_url, state_key, headered_event_json, membership, $9, history_visibility" +
+	" FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bool[], $6::text[], $7::text[], $8::text[], $10::smallint[])" +
+	" AS rows(room_id, event_id, type, sender, contains_url, state_key, headered_event_json, membership, history_visibility)" +
+	" ON CONFLICT ON CONSTRAINT syncapi_room_state_unique" +
+	" DO UPDATE SET event_id = EXCLUDED.event_id, sender = EXCLUDED.sender, contains_url = EXCLUDED.contains_url," +
+	" headered_event_json = EXCLUDED.headered_event_json, membership = EXCLUDED.membership, added_at = EXCLUDED.added_at"
+
 const deleteRoomStateByEventIDSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = $1"
 
+const deleteRoomStateByEventIDsSQL = "" +
+	"DELETE FROM syncapi_current_room_state WHERE event_id = ANY($1)"
+
 const deleteRoomStateForRoomSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE room_id = $1"
+
+const selectRoomStateEventIDsSQL = "" +
+	"SELECT event_id FROM syncapi_current_room_state WHERE room_id = $1"
 
 const selectRoomIDsWithMembershipSQL = "" +
 	"SELECT DISTINCT room_id FROM syncapi_current_room_state WHERE type = 'm.room.member' AND state_key = $1 AND membership = $2"
@@ -103,6 +128,10 @@ const selectJoinedUsersInRoomSQL = "" +
 const selectStateEventSQL = "" +
 	"SELECT headered_event_json FROM syncapi_current_room_state WHERE room_id = $1 AND type = $2 AND state_key = $3"
 
+const selectStateEventsSQL = "" +
+	"SELECT type, state_key, headered_event_json FROM syncapi_current_room_state WHERE room_id = $1" +
+	" AND (type, state_key) IN (SELECT * FROM unnest($2::text[], $3::text[]))"
+
 const selectEventsWithEventIDsSQL = "" +
 	"SELECT event_id, added_at, headered_event_json, history_visibility FROM syncapi_current_room_state WHERE event_id = ANY($1)"
 
@@ -122,8 +151,11 @@ LIMIT 5
 
 type currentRoomStateStatements struct {
 	upsertRoomStateStmt                *sql.Stmt
+	upsertRoomStatesStmt               *sql.Stmt
 	deleteRoomStateByEventIDStmt       *sql.Stmt
+	deleteRoomStateByEventIDsStmt      *sql.Stmt
 	deleteRoomStateForRoomStmt         *sql.Stmt
+	selectRoomStateEventIDsStmt        *sql.Stmt
 	selectRoomIDsWithMembershipStmt    *sql.Stmt
 	selectKickedRoomIDsStmt            *sql.Stmt
 	selectRoomIDsWithAnyMembershipStmt *sql.Stmt
@@ -132,6 +164,7 @@ type currentRoomStateStatements struct {
 	selectJoinedUsersInRoomStmt        *sql.Stmt
 	selectEventsWithEventIDsStmt       *sql.Stmt
 	selectStateEventStmt               *sql.Stmt
+	selectStateEventsStmt              *sql.Stmt
 	selectSharedUsersStmt              *sql.Stmt
 	selectMembershipCountStmt          *sql.Stmt
 	selectRoomHeroesStmt               *sql.Stmt
@@ -156,8 +189,11 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 
 	return s, sqlutil.StatementList{
 		{&s.upsertRoomStateStmt, upsertRoomStateSQL},
+		{&s.upsertRoomStatesStmt, upsertRoomStatesSQL},
 		{&s.deleteRoomStateByEventIDStmt, deleteRoomStateByEventIDSQL},
+		{&s.deleteRoomStateByEventIDsStmt, deleteRoomStateByEventIDsSQL},
 		{&s.deleteRoomStateForRoomStmt, deleteRoomStateForRoomSQL},
+		{&s.selectRoomStateEventIDsStmt, selectRoomStateEventIDsSQL},
 		{&s.selectRoomIDsWithMembershipStmt, selectRoomIDsWithMembershipSQL},
 		{&s.selectKickedRoomIDsStmt, selectKickedRoomIDsSQL},
 		{&s.selectRoomIDsWithAnyMembershipStmt, selectRoomIDsWithAnyMembershipSQL},
@@ -166,6 +202,7 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 		{&s.selectJoinedUsersInRoomStmt, selectJoinedUsersInRoomSQL},
 		{&s.selectEventsWithEventIDsStmt, selectEventsWithEventIDsSQL},
 		{&s.selectStateEventStmt, selectStateEventSQL},
+		{&s.selectStateEventsStmt, selectStateEventsSQL},
 		{&s.selectSharedUsersStmt, selectSharedUsersSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCount},
 		{&s.selectRoomHeroesStmt, selectRoomHeroes},
@@ -337,6 +374,17 @@ func (s *currentRoomStateStatements) DeleteRoomStateByEventID(
 	return err
 }
 
+func (s *currentRoomStateStatements) DeleteRoomStateByEventIDs(
+	ctx context.Context, txn *sql.Tx, eventIDs []string,
+) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	stmt := sqlutil.TxStmt(txn, s.deleteRoomStateByEventIDsStmt)
+	_, err := stmt.ExecContext(ctx, eventIDs)
+	return err
+}
+
 func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
@@ -345,19 +393,32 @@ func (s *currentRoomStateStatements) DeleteRoomStateForRoom(
 	return err
 }
 
+// SelectRoomStateEventIDs returns the event IDs of a room's current state.
+func (s *currentRoomStateStatements) SelectRoomStateEventIDs(
+	ctx context.Context, txn *sql.Tx, roomID string,
+) ([]string, error) {
+	stmt := sqlutil.TxStmt(txn, s.selectRoomStateEventIDsStmt)
+	rows, err := stmt.QueryContext(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "selectRoomStateEventIDs: rows.close() failed")
+	var eventIDs []string
+	for rows.Next() {
+		var eventID string
+		if err = rows.Scan(&eventID); err != nil {
+			return nil, err
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	return eventIDs, rows.Err()
+}
+
 func (s *currentRoomStateStatements) UpsertRoomState(
 	ctx context.Context, txn *sql.Tx,
 	event *rstypes.HeaderedEvent, membership *string, addedAt types.StreamPosition,
 ) error {
-	// Parse content as JSON and search for an "url" key
-	containsURL := false
-	var content map[string]any
-	if json.Unmarshal(event.Content(), &content) != nil {
-		// Set containsURL to true if url is present
-		_, containsURL = content["url"]
-	}
-
-	headeredJSON, err := json.Marshal(event)
+	containsURL, headeredJSON, err := stateRowFields(event)
 	if err != nil {
 		return err
 	}
@@ -378,6 +439,110 @@ func (s *currentRoomStateStatements) UpsertRoomState(
 		event.Visibility,
 	)
 	return err
+}
+
+// stateRowFields derives the columns of a current state row that are not
+// copied directly from the event.
+func stateRowFields(event *rstypes.HeaderedEvent) (containsURL bool, headeredJSON []byte, err error) {
+	// Parse content as JSON and search for an "url" key
+	var content map[string]any
+	if json.Unmarshal(event.Content(), &content) != nil {
+		// Set containsURL to true if url is present
+		_, containsURL = content["url"]
+	}
+	headeredJSON, err = json.Marshal(event)
+	return containsURL, headeredJSON, err
+}
+
+// UpsertRoomStates writes the upserts in chunks of upsertChunkSize rows, so a
+// room with tens of thousands of state events costs tens of round trips
+// rather than tens of thousands.
+func (s *currentRoomStateStatements) UpsertRoomStates(
+	ctx context.Context, txn *sql.Tx, upserts []tables.StateUpsert, addedAt types.StreamPosition,
+) error {
+	upserts = sqlutil.LastByKey(upserts, func(u tables.StateUpsert) [3]string {
+		return [3]string{u.Event.RoomID().String(), u.Event.Type(), *u.Event.StateKeyResolved}
+	})
+	stmt := sqlutil.TxStmt(txn, s.upsertRoomStatesStmt)
+	for chunk := range slices.Chunk(upserts, upsertChunkSize) {
+		roomIDs := make([]string, len(chunk))
+		eventIDs := make([]string, len(chunk))
+		evTypes := make([]string, len(chunk))
+		senders := make([]string, len(chunk))
+		containsURLs := make([]bool, len(chunk))
+		stateKeys := make([]string, len(chunk))
+		headeredJSONs := make([]string, len(chunk))
+		memberships := make([]*string, len(chunk))
+		visibilities := make([]int64, len(chunk))
+		for i, u := range chunk {
+			containsURL, headeredJSON, err := stateRowFields(u.Event)
+			if err != nil {
+				return err
+			}
+			visibility, err := u.Event.Visibility.Value()
+			if err != nil {
+				return err
+			}
+			roomIDs[i] = u.Event.RoomID().String()
+			eventIDs[i] = u.Event.EventID()
+			evTypes[i] = u.Event.Type()
+			senders[i] = u.Event.UserID.String()
+			containsURLs[i] = containsURL
+			stateKeys[i] = *u.Event.StateKeyResolved
+			headeredJSONs[i] = string(headeredJSON)
+			memberships[i] = u.Membership
+			v, ok := visibility.(int64)
+			if !ok {
+				return fmt.Errorf("history visibility %q encodes as %T, want int64", u.Event.Visibility, visibility)
+			}
+			visibilities[i] = v
+		}
+		if _, err := stmt.ExecContext(
+			ctx, roomIDs, eventIDs, evTypes, senders, containsURLs, stateKeys,
+			headeredJSONs, memberships, addedAt, visibilities,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *currentRoomStateStatements) SelectStateEvents(
+	ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple,
+) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error) {
+	result := make(map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, len(keys))
+	stmt := sqlutil.TxStmt(txn, s.selectStateEventsStmt)
+	for chunk := range slices.Chunk(keys, upsertChunkSize) {
+		evTypes := make([]string, len(chunk))
+		stateKeys := make([]string, len(chunk))
+		for i, key := range chunk {
+			evTypes[i] = key.EventType
+			stateKeys[i] = key.StateKey
+		}
+		if err := func() error {
+			rows, err := stmt.QueryContext(ctx, roomID, evTypes, stateKeys)
+			if err != nil {
+				return err
+			}
+			defer internal.CloseAndLogIfError(ctx, rows, "selectStateEvents: rows.close() failed")
+			for rows.Next() {
+				var key gomatrixserverlib.StateKeyTuple
+				var eventBytes []byte
+				if err = rows.Scan(&key.EventType, &key.StateKey, &eventBytes); err != nil {
+					return err
+				}
+				var ev rstypes.HeaderedEvent
+				if err = json.Unmarshal(eventBytes, &ev); err != nil {
+					return err
+				}
+				result[key] = &ev
+			}
+			return rows.Err()
+		}(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func (s *currentRoomStateStatements) SelectEventsWithEventIDs(

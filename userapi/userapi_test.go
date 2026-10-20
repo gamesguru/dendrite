@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/crypto/bcrypt"
@@ -92,15 +92,16 @@ func MustMakeInternalAPI(t *testing.T, opts apiTestOpts, dbType test.DBType, pub
 
 	syncProducer := producers.NewSyncAPI(accountDB, publisher, "client_data", "notification_data")
 	keyChangeProducer := &producers.KeyChange{DB: keyDB, JetStream: publisher, Topic: "keychange"}
-	return &internal.UserInternalAPI{
-			DB:                accountDB,
-			KeyDatabase:       keyDB,
-			Config:            &cfg.UserAPI,
-			SyncProducer:      syncProducer,
-			KeyChangeProducer: keyChangeProducer,
-		}, accountDB, func() {
-			close()
-		}
+	userAPI := &internal.UserInternalAPI{
+		DB:                accountDB,
+		KeyDatabase:       keyDB,
+		Config:            &cfg.UserAPI,
+		SyncProducer:      syncProducer,
+		KeyChangeProducer: keyChangeProducer,
+	}
+	return userAPI, accountDB, func() {
+		close()
+	}
 }
 
 func TestQueryProfile(t *testing.T) {

@@ -9,12 +9,14 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,7 +48,43 @@ var (
 			Help:      "Number of incoming EDUs from remote servers",
 		},
 	)
+	// TxnCountTotal counts inbound transactions by outcome: "ok" when the
+	// sender was told they were processed, "retry" when they were refused
+	// so the sender sends them again.
+	TxnCountTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "zendrite",
+			Subsystem: "federationapi",
+			Name:      "recv_transactions_total",
+			Help:      "Inbound federation transactions by outcome: ok, or retry when they were refused because an event or EDU could not be queued",
+		},
+		[]string{"outcome"},
+	)
 )
+
+// errQueue marks a failure to hand an event or EDU to the broker. It says
+// nothing about the item itself, so the transaction is refused and its sender
+// retries it, rather than told it was processed while the item was dropped.
+var errQueue = errors.New("could not queue")
+
+// queueFailures collects the queueing failures of one transaction, which the
+// PDU loop and the EDU goroutine record concurrently.
+type queueFailures struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (q *queueFailures) add(what string, err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.errs = append(q.errs, fmt.Errorf("%w %s: %w", errQueue, what, err))
+}
+
+func (q *queueFailures) err() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return errors.Join(q.errs...)
+}
 
 type TxnReq struct {
 	gomatrixserverlib.Transaction
@@ -92,13 +130,23 @@ func NewTxnReq(
 	return t
 }
 
+// ProcessTransaction hands the transaction's events and EDUs to the broker.
+//
+// An event that fails its checks is reported in the per-event results, as the
+// specification requires. An event or a durable EDU that could not be queued,
+// because the broker did not take it, is a failure of this server, not of the
+// item: the whole transaction is refused with HTTP 503 so that the sender
+// retries it. Retrying is safe: the roomserver ignores events it already has,
+// receipts and device updates are idempotent, and to-device messages carry a
+// stable message ID that the stream deduplicates.
 func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *util.JSONResponse) {
+	var failures queueFailures
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if t.producer != nil {
-			t.processEDUs(ctx)
+			t.processEDUs(ctx, &failures)
 		}
 	}()
 
@@ -172,6 +220,20 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 			continue
 		}
 
+		// A kick or ban ending a local user's invite or knock can reach us
+		// for a room we are not in, where it cannot be authorized as usual.
+		if event.Type() == spec.MRoomMember {
+			retracted, retractErr := t.rsAPI.RetractPendingMembership(ctx, &rstypes.HeaderedEvent{PDU: event})
+			if retractErr != nil {
+				util.GetLogger(ctx).WithError(retractErr).Warnf("Transaction: Couldn't retract pending membership for event %q", event.EventID())
+			}
+			if retracted {
+				results[event.EventID()] = fclient.PDUResult{}
+				PDUCountTotal.WithLabelValues("success").Inc()
+				continue
+			}
+		}
+
 		// pass the event to the roomserver which will do auth checks
 		// If the event fail auth checks, gmsl.NotAllowed error will be returned which we be silently
 		// discarded by the caller of this function
@@ -189,6 +251,7 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 			true,
 		); err != nil {
 			util.GetLogger(ctx).WithError(err).Errorf("Transaction: Couldn't submit event %q to input queue: %s", event.EventID(), err)
+			failures.add("event "+event.EventID(), err)
 			results[event.EventID()] = fclient.PDUResult{
 				Error: err.Error(),
 			}
@@ -200,11 +263,30 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 	}
 
 	wg.Wait()
+	if err := failures.err(); err != nil {
+		TxnCountTotal.WithLabelValues("retry").Inc()
+		util.GetLogger(ctx).WithError(err).WithFields(logrus.Fields{
+			"origin": t.Origin,
+			"txn_id": t.TransactionID,
+		}).Warn("Refusing federation transaction for a retry")
+		return nil, &util.JSONResponse{
+			Code: http.StatusServiceUnavailable,
+			JSON: spec.Unknown("The transaction could not be queued; retry it"),
+		}
+	}
+	TxnCountTotal.WithLabelValues("ok").Inc()
 	return &fclient.RespSend{PDUs: results}, nil
 }
 
+// processEDUs queues the transaction's EDUs. Typing notifications and
+// presence are best effort: they expire or are superseded within seconds, so
+// losing one costs less than retrying the transaction. To-device messages,
+// receipts, device list updates and signing key updates are not resent by
+// the sender unless the transaction fails, so failing to queue one is recorded
+// in failures.
+//
 //nolint:gocyclo
-func (t *TxnReq) processEDUs(ctx context.Context) {
+func (t *TxnReq) processEDUs(ctx context.Context, failures *queueFailures) {
 	for _, e := range t.EDUs {
 		EDUCountTotal.Inc()
 		switch e.Type {
@@ -251,7 +333,8 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 			for userID, byUser := range directPayload.Messages {
 				for deviceID, message := range byUser {
 					// TODO: check that the user and the device actually exist here
-					if err := t.producer.SendToDevice(ctx, directPayload.Sender, userID, deviceID, directPayload.Type, message); err != nil {
+					if err := t.producer.SendToDevice(ctx, directPayload.Sender, userID, deviceID, directPayload.Type, directPayload.MessageID, message); err != nil {
+						failures.add("to-device message "+directPayload.MessageID, err)
 						sentry.CaptureException(err)
 						util.GetLogger(ctx).WithError(err).WithFields(logrus.Fields{
 							"sender":    directPayload.Sender,
@@ -263,6 +346,7 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 			}
 		case spec.MDeviceListUpdate:
 			if err := t.producer.SendDeviceListUpdate(ctx, e.Content, t.Origin); err != nil {
+				failures.add("device list update", err)
 				sentry.CaptureException(err)
 				util.GetLogger(ctx).WithError(err).Error("failed to InputDeviceListUpdate")
 			}
@@ -289,7 +373,8 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 					if api.IsServerBannedFromRoom(ctx, t.rsAPI, roomID, domain) {
 						continue
 					}
-					if err := t.processReceiptEvent(ctx, userID, roomID, "m.read", mread.Data.TS, mread.EventIDs); err != nil {
+					if err := t.processReceiptEvent(ctx, userID, roomID, "m.read", mread.Data.ThreadID, mread.Data.TS, mread.EventIDs); err != nil {
+						failures.add("receipt", err)
 						util.GetLogger(ctx).WithError(err).WithFields(logrus.Fields{
 							"sender":  t.Origin,
 							"user_id": userID,
@@ -302,6 +387,7 @@ func (t *TxnReq) processEDUs(ctx context.Context) {
 			}
 		case types.MSigningKeyUpdate:
 			if err := t.producer.SendSigningKeyUpdate(ctx, e.Content, t.Origin); err != nil {
+				failures.add("signing key update", err)
 				sentry.CaptureException(err)
 				logrus.WithError(err).Errorf("Failed to process signing key update")
 			}
@@ -344,7 +430,7 @@ func (t *TxnReq) processPresence(ctx context.Context, e gomatrixserverlib.EDU) e
 
 // processReceiptEvent sends receipt events to JetStream.
 func (t *TxnReq) processReceiptEvent(ctx context.Context,
-	userID, roomID, receiptType string,
+	userID, roomID, receiptType, threadID string,
 	timestamp spec.Timestamp,
 	eventIDs []string,
 ) error {
@@ -357,7 +443,7 @@ func (t *TxnReq) processReceiptEvent(ctx context.Context,
 	}
 	// store every event
 	for _, eventID := range eventIDs {
-		if err := t.producer.SendReceipt(ctx, userID, roomID, eventID, receiptType, timestamp); err != nil {
+		if err := t.producer.SendReceipt(ctx, userID, roomID, eventID, receiptType, threadID, timestamp); err != nil {
 			return fmt.Errorf("unable to set receipt event: %w", err)
 		}
 	}

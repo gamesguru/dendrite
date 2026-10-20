@@ -7,8 +7,8 @@
 package relayapi
 
 import (
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/federationapi/producers"

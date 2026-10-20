@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS userapi_notifications (
 
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_room_id_event_id_idx ON userapi_notifications(localpart, server_name, room_id, event_id);
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_room_id_id_idx ON userapi_notifications(localpart, server_name, room_id, id);
+CREATE INDEX IF NOT EXISTS userapi_notification_room_id_idx ON userapi_notifications(room_id, id);
 CREATE INDEX IF NOT EXISTS userapi_notification_localpart_id_idx ON userapi_notifications(localpart, server_name, id);
 `
 
@@ -62,7 +63,7 @@ const updateNotificationReadSQL = "" +
 const selectNotificationSQL = "" +
 	"SELECT id, room_id, ts_ms, read, notification_json FROM userapi_notifications WHERE localpart = $1 AND server_name = $2 AND id > $3 AND (" +
 	"(($4 & 1) <> 0 AND highlight) OR (($4 & 2) <> 0 AND NOT highlight)" +
-	") AND NOT read ORDER BY localpart, id LIMIT $5"
+	") ORDER BY localpart, id LIMIT $5"
 
 const selectNotificationCountSQL = "" +
 	"SELECT COUNT(*) FROM userapi_notifications WHERE localpart = $1 AND server_name = $2 AND (" +
@@ -77,12 +78,18 @@ const cleanNotificationsSQL = "" +
 	"DELETE FROM userapi_notifications WHERE" +
 	" (highlight = FALSE AND ts_ms < $1) OR (highlight = TRUE AND ts_ms < $2)"
 
-func NewPostgresNotificationTable(db *sql.DB) (tables.NotificationTable, error) {
+func NewPostgresNotificationTable(ctx context.Context, db *sql.DB) (tables.NotificationTable, error) {
 	s := &notificationsStatements{}
 	_, err := db.Exec(notificationSchema)
 	if err != nil {
 		return nil, err
 	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification event threads", Up: tables.CreateNotificationEvents})
+	if err = m.Up(ctx); err != nil {
+		return nil, err
+	}
+
 	return s, sqlutil.StatementList{
 		{&s.insertStmt, insertNotificationSQL},
 		{&s.deleteUpToStmt, deleteNotificationsUpToSQL},

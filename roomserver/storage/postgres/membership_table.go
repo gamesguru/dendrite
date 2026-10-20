@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -160,6 +160,13 @@ const selectAnyLocalMemberNotForgottenSQL = "" +
 	" WHERE room_nid = $1 AND target_local = TRUE AND forgotten = FALSE" +
 	" LIMIT 1"
 
+// selectAnyLocalMembershipSQL finds any local membership row, forgotten or
+// not. A room without one has not yet had a local membership applied.
+const selectAnyLocalMembershipSQL = "" +
+	"SELECT 1 FROM roomserver_membership" +
+	" WHERE room_nid = $1 AND target_local = TRUE" +
+	" LIMIT 1"
+
 type membershipStatements struct {
 	insertMembershipStmt                            *sql.Stmt
 	selectMembershipForUpdateStmt                   *sql.Stmt
@@ -177,6 +184,7 @@ type membershipStatements struct {
 	selectLocalServerInRoomStmt                     *sql.Stmt
 	selectServerInRoomStmt                          *sql.Stmt
 	selectAnyLocalMemberNotForgottenStmt            *sql.Stmt
+	selectAnyLocalMembershipStmt                    *sql.Stmt
 	deleteMembershipStmt                            *sql.Stmt
 	selectJoinedUsersStmt                           *sql.Stmt
 }
@@ -214,6 +222,7 @@ func PrepareMembershipTable(db *sql.DB) (tables.Membership, error) {
 		{&s.selectLocalServerInRoomStmt, selectLocalServerInRoomSQL},
 		{&s.selectServerInRoomStmt, selectServerInRoomSQL},
 		{&s.selectAnyLocalMemberNotForgottenStmt, selectAnyLocalMemberNotForgottenSQL},
+		{&s.selectAnyLocalMembershipStmt, selectAnyLocalMembershipSQL},
 		{&s.deleteMembershipStmt, deleteMembershipSQL},
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 	}.Prepare(db)
@@ -480,6 +489,21 @@ func (s *membershipStatements) SelectAnyLocalMemberNotForgotten(
 ) (bool, error) {
 	var found int
 	stmt := sqlutil.TxStmt(txn, s.selectAnyLocalMemberNotForgottenStmt)
+	err := stmt.QueryRowContext(ctx, roomNID).Scan(&found)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *membershipStatements) SelectAnyLocalMembership(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (bool, error) {
+	var found int
+	stmt := sqlutil.TxStmt(txn, s.selectAnyLocalMembershipStmt)
 	err := stmt.QueryRowContext(ctx, roomNID).Scan(&found)
 	if err != nil {
 		if err == sql.ErrNoRows {

@@ -10,7 +10,7 @@ import (
 	"context"
 	"database/sql"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/mediaapi/types"
 )
@@ -37,4 +37,13 @@ type MediaRepository interface {
 		mediaHash types.Base64Hash, mediaOrigin spec.ServerName,
 	) (*types.MediaMetadata, error)
 	DeleteMedia(ctx context.Context, txn *sql.Tx, mediaID types.MediaID, mediaOrigin spec.ServerName) error
+	// CountPendingMedia counts the user's media IDs that were created but are
+	// neither uploaded nor expired at now.
+	CountPendingMedia(ctx context.Context, txn *sql.Tx, userID types.MatrixUserID, now spec.Timestamp) (int64, error)
+	// UpdatePendingMedia stores the uploaded content's metadata on a pending
+	// media ID created by the same user. It returns false without changing
+	// anything if the media ID is not pending for that user or has expired.
+	UpdatePendingMedia(ctx context.Context, txn *sql.Tx, mediaMetadata *types.MediaMetadata, now spec.Timestamp) (bool, error)
+	// DeleteExpiredPendingMedia deletes pending media IDs that expired at or before now.
+	DeleteExpiredPendingMedia(ctx context.Context, txn *sql.Tx, now spec.Timestamp) (int64, error)
 }
