@@ -740,7 +740,7 @@ const membershipWaitTimeout = 3 * time.Second
 
 // waitForMembershipInTopology polls until the sync API has the given
 // membership event in its topology, or the timeout or context ends. It never
-// fails the request: an event that doesn't arrive just gets the old behaviour.
+// fails the request: an event that doesn't arrive just gets the old behavior.
 func waitForMembershipInTopology(ctx context.Context, db storage.Database, eventID string) {
 	if eventID == "" {
 		return
