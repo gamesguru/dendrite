@@ -453,6 +453,7 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 	}
 	util.GetLogger(ctx).Debugf("Querying %s via %+v", roomID, vias)
 	innerCtx := context.Background()
+	var gotNotFound bool
 	// query more of the spaces graph using these servers
 	for _, serverName := range vias {
 		if serverName == string(querier.Cfg.Global.ServerName) {
@@ -462,6 +463,11 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		if err != nil {
 			var fedErr *fs.FederationClientError
 			if errors.As(err, &fedErr) && fedErr.Code == http.StatusNotFound {
+				// A 404 may mean that the remote server cannot currently
+				// authorize this caller. Membership in a restricted room's
+				// allowed space can change, so don't cache this as a permanent
+				// lookup failure.
+				gotNotFound = true
 				util.GetLogger(ctx).WithError(err).Debugf("room %s not available via server %s", roomIDStr, serverName)
 			} else {
 				util.GetLogger(ctx).WithError(err).Warnf("failed to call RoomHierarchies on server %s", serverName)
@@ -484,8 +490,10 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		return &res
 	}
 	// All vias failed - cache this negative result to avoid repeated failed attempts
-	util.GetLogger(ctx).Debugf("All federation attempts failed for %s, caching negative result", roomID)
-	querier.Cache.StoreRoomHierarchyFailure(roomIDStr)
+	if !gotNotFound {
+		util.GetLogger(ctx).Debugf("All federation attempts failed for %s, caching negative result", roomID)
+		querier.Cache.StoreRoomHierarchyFailure(roomIDStr)
+	}
 	return nil
 }
 

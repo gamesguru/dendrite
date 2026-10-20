@@ -587,11 +587,14 @@ func (r *Inputer) processRoomEvent(
 	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
 	// and memory on federation state lookups for every incoming transaction.
 	if didStateResolution && stateResolutionRoomID != "" {
-		if isRejected {
+		switch {
+		case !isRejected:
+			r.missingStateCooldown.Delete(stateResolutionRoomID)
+		case errors.Is(rejectionErr, errNoValidMissingEvents):
+			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
+		default:
 			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
 			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
-		} else {
-			r.missingStateCooldown.Delete(stateResolutionRoomID)
 		}
 	}
 
