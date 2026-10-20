@@ -142,6 +142,11 @@ func OnIncomingMessagesRequest(
 	backwardOrdering := (dir == "b")
 
 	emptyFromSupplied := fromQuery == ""
+	if emptyFromSupplied && membershipResp.Membership == spec.Join {
+		// The roomserver reports the join before the sync API has stored it,
+		// so a first page requested right after joining would look empty.
+		waitForMembershipInTopology(req.Context(), db, membershipResp.EventID)
+	}
 	if emptyFromSupplied {
 		// If "from" isn't provided, it defaults to either the earliest stream
 		// position (if we're going forward) or to the latest one (if we're
@@ -727,4 +732,39 @@ func backfillEvents(
 	}
 
 	return events, nil
+}
+
+// membershipWaitTimeout bounds how long /messages waits for the sync API to
+// catch up with a membership event the roomserver has already accepted.
+const membershipWaitTimeout = 3 * time.Second
+
+// waitForMembershipInTopology polls until the sync API has the given
+// membership event in its topology, or the timeout or context ends. It never
+// fails the request: an event that doesn't arrive just gets the old behaviour.
+func waitForMembershipInTopology(ctx context.Context, db storage.Database, eventID string) {
+	if eventID == "" {
+		return
+	}
+	deadline := time.NewTimer(membershipWaitTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		if err != nil {
+			return
+		}
+		_, err = snapshot.EventPositionInTopology(ctx, eventID)
+		_ = snapshot.Rollback()
+		if err == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
+		case <-ticker.C:
+		}
+	}
 }
