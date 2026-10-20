@@ -87,7 +87,9 @@ func main() {
 			cfg.Logging[0].Level = "trace"
 			cfg.Logging[0].Type = "std"
 			cfg.UserAPI.BCryptCost = bcrypt.MinCost
-			cfg.Global.JetStream.InMemory = true
+			// Complement restarts servers mid-test and expects queued work (device
+			// list and to-device EDUs) to survive, which in-memory streams lose.
+			cfg.Global.JetStream.InMemory = false
 			cfg.Global.JetStream.StoragePath = config.Path(*dirPath)
 			cfg.ClientAPI.RegistrationDisabled = false
 			cfg.ClientAPI.OpenRegistrationWithoutVerificationEnabled = true
