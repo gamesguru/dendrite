@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"

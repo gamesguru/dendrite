@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )

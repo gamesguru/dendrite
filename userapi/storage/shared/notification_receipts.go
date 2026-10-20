@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // StoreNotificationEvent records ordering and thread identity after notification processing.

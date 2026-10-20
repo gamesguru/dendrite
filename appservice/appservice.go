@@ -10,7 +10,7 @@ import (
 	"context"
 	"sync"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	appserviceAPI "codefloe.com/pat-s/zendrite/appservice/api"

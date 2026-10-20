@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 

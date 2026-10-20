@@ -9,8 +9,8 @@ package types
 import (
 	"unsafe"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // HeaderedEvent is an Event which serializes to the headered form, which includes

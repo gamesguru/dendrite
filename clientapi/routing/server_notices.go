@@ -13,9 +13,9 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"codefloe.com/pat-s/gomatrixserverlib/tokens"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/tokens"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"

@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )

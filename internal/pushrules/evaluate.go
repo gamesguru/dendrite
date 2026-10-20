@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // A RuleSetEvaluator encapsulates context to evaluate an event

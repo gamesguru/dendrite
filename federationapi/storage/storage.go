@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/sqlite3"

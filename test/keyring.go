@@ -9,7 +9,7 @@ package test
 import (
 	"context"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 )
 
 // NopJSONVerifier is a JSONVerifier that verifies nothing and returns no errors.

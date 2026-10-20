@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/setup/config"

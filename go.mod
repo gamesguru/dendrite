@@ -1,7 +1,6 @@
 module codefloe.com/pat-s/zendrite
 
 require (
-	codefloe.com/pat-s/gomatrixserverlib v1.3.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DeRuina/timberjack v1.4.8
 	github.com/altcha-org/altcha-lib-go v1.0.0
@@ -11,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/dgraph-io/ristretto/v2 v2.4.2
+	github.com/gamesguru/gomatrixserverlib v0.0.0-20261020160247-ddb40b3f0307
 	github.com/gen2brain/webp v0.6.4
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2
@@ -180,6 +180,3 @@ require (
 )
 
 go 1.27.0
-
-// Temporary: carries the state-resolution auth-event fix until pat-s releases it.
-replace codefloe.com/pat-s/gomatrixserverlib => github.com/gamesguru/gomatrixserverlib v0.0.0-20261020143045-c7a09534e18d

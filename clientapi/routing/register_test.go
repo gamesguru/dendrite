@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/matrix-org/util"
 	"github.com/stretchr/testify/assert"

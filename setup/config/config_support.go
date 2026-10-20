@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // Support is the response of /.well-known/matrix/support (MSC1929).

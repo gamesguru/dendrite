@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/appservice"

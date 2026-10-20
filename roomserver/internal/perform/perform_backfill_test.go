@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 func TestPrioritiseBackfillFromEventIDsPrefersMostServers(t *testing.T) {

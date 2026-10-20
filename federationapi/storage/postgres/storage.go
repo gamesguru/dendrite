@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/federationapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/zendrite/federationapi/storage/shared"

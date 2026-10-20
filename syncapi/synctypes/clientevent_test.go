@@ -14,8 +14,8 @@ import (
 	"reflect"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {

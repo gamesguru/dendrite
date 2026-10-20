@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
 	"golang.org/x/crypto/bcrypt"
 

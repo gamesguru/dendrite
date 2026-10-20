@@ -1,6 +1,6 @@
 package pushrules
 
-import "codefloe.com/pat-s/gomatrixserverlib/spec"
+import "github.com/gamesguru/gomatrixserverlib/spec"
 
 // DefaultAccountRuleSets is the complete set of default push rules
 // for an account.

@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"

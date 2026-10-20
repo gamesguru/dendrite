@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	// Side effect imports to allow all possible languages.
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
 	"github.com/blevesearch/bleve/v2"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/ar"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/cjk"
@@ -37,6 +36,7 @@ import (
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/sv"
 	_ "github.com/blevesearch/bleve/v2/analysis/lang/tr"
 	"github.com/blevesearch/bleve/v2/mapping"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"

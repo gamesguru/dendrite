@@ -10,7 +10,7 @@ import (
 	"context"
 	"strconv"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/getsentry/sentry-go"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"

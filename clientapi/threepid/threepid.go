@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
 )

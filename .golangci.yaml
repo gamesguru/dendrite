@@ -48,7 +48,7 @@ linters:
         - pattern: ^print.*$
         - pattern: ^log.Fatal().*$
         - pattern: ^spec\.RoomID\.Domain$
-          pkg: ^codefloe\.com/pat-s/gomatrixserverlib/spec$
+          pkg: ^github\.com/gamesguru/gomatrixserverlib/spec$
           msg: panics on the domainless room IDs of room version 12 and later, use eventutil.RoomIDDomain
     godot:
       scope: toplevel

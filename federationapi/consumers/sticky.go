@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/federationapi/types"

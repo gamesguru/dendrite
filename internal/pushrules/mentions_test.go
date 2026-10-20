@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/google/go-cmp/cmp"
 )
 

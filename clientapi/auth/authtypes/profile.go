@@ -9,7 +9,7 @@ package authtypes
 import (
 	"encoding/json"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 )
 
 // Profile field names with their own storage and semantics. Every other field

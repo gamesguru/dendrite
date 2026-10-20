@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"sync"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/syncapi/notifier"

@@ -9,7 +9,7 @@ package routing
 import (
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/matrix-org/util"
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"

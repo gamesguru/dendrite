@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"

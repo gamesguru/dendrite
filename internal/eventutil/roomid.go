@@ -8,7 +8,7 @@ package eventutil
 import (
 	"strings"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // RoomIDDomain returns the server named in a room ID, or "" for the

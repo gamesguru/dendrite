@@ -9,8 +9,8 @@ package federationapi
 import (
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/sirupsen/logrus"
 
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"

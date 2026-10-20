@@ -24,9 +24,9 @@ import (
 	"sync"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
-	"codefloe.com/pat-s/gomatrixserverlib/tokens"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/tokens"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 

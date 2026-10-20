@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/require"
 
 	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"

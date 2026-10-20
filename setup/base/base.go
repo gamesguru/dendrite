@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"

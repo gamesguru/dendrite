@@ -7,8 +7,8 @@
 package caching
 
 import (
-	"codefloe.com/pat-s/gomatrixserverlib"
-	"codefloe.com/pat-s/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/fclient"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )

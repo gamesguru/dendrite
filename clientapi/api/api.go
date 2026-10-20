@@ -6,7 +6,7 @@
 
 package api
 
-import "codefloe.com/pat-s/gomatrixserverlib/fclient"
+import "github.com/gamesguru/gomatrixserverlib/fclient"
 
 // ExtraPublicRoomsProvider provides a way to inject extra published rooms into /publicRooms requests.
 type ExtraPublicRoomsProvider interface {

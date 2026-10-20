@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/userapi/api"

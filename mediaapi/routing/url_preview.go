@@ -23,7 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/html"

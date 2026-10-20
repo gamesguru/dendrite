@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"codefloe.com/pat-s/gomatrixserverlib/spec"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
