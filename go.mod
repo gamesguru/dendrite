@@ -180,3 +180,6 @@ require (
 )
 
 go 1.27.0
+
+// Temporary: carries the state-resolution auth-event fix until pat-s releases it.
+replace codefloe.com/pat-s/gomatrixserverlib => github.com/gamesguru/gomatrixserverlib v0.0.0-20261020143045-c7a09534e18d
