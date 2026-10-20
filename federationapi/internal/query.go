@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -101,6 +102,18 @@ func (a *FederationInternalAPI) QueryServerKeys(
 		res.ServerKeys = serverKeysResponses
 		return nil
 	}
+	// First seen wins (MSC4499): don't serve or store a response that binds a
+	// key ID we already hold to a different key.
+	held, dbErr := a.db.GetNotaryKeys(ctx, req.ServerName, nil)
+	if dbErr == nil {
+		if keyID, collides := collidingKeyID(*serverKeys, held); collides {
+			util.GetLogger(ctx).WithField("server", req.ServerName).Warnf(
+				"notary: server returned a different key for held key ID %s, returning held keys", keyID,
+			)
+			res.ServerKeys = held
+			return nil
+		}
+	}
 	// cache it!
 	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil { //nolint:contextcheck
 		// non-fatal, still return the response
@@ -108,4 +121,29 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	}
 	res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
 	return nil
+}
+
+// collidingKeyID reports a key ID in fetched that held already binds to a
+// different key.
+func collidingKeyID(fetched gomatrixserverlib.ServerKeys, held []gomatrixserverlib.ServerKeys) (gomatrixserverlib.KeyID, bool) {
+	heldKeys := map[gomatrixserverlib.KeyID]spec.Base64Bytes{}
+	for _, sk := range held {
+		for id, vk := range sk.VerifyKeys {
+			heldKeys[id] = vk.Key
+		}
+		for id, vk := range sk.OldVerifyKeys {
+			heldKeys[id] = vk.Key
+		}
+	}
+	for id, vk := range fetched.VerifyKeys {
+		if key, ok := heldKeys[id]; ok && !bytes.Equal(key, vk.Key) {
+			return id, true
+		}
+	}
+	for id, vk := range fetched.OldVerifyKeys {
+		if key, ok := heldKeys[id]; ok && !bytes.Equal(key, vk.Key) {
+			return id, true
+		}
+	}
+	return "", false
 }
