@@ -101,7 +101,7 @@ build-cmd: ## Build binaries under cmd/
 
 .PHONY: install
 install: ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
-	$(GO) build -o dendrite ./cmd/dendrite
+	$(GO) build -o dendrite ./cmd/zendrite
 	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
 
 .PHONY: restart
