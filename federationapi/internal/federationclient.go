@@ -88,6 +88,12 @@ type PartialStateJoinClient struct {
 	LastJoinServersInRoom []string
 }
 
+// resetPartialState forgets what the last partial state join response reported.
+func (p *PartialStateJoinClient) resetPartialState() {
+	p.LastJoinMembersOmitted = false
+	p.LastJoinServersInRoom = nil
+}
+
 // SendJoin calls SendJoinPartialState for MSC3706 faster joins.
 func (p *PartialStateJoinClient) SendJoin(
 	ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU,

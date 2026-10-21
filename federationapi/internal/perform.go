@@ -202,6 +202,9 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		// of an invite-only room. Retry with the full state, which includes it.
 		logrus.WithError(joinErr.Err).WithField("room_id", roomID).Warn(
 			"Partial state join failed the auth check, retrying with full state")
+		// The full-state response is not partial; drop the first attempt's flags
+		// so we neither mark the room partial nor queue a pointless resync.
+		partialStateClient.resetPartialState()
 		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
 	}
 	performJoinDuration := time.Since(performJoinStartTime)

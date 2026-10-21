@@ -256,6 +256,18 @@ func TestPartialStateJoinClientTracking(t *testing.T) {
 	assert.Contains(t, client.LastJoinServersInRoom, "server1.example.com")
 }
 
+func TestPartialStateJoinClientResetPartialState(t *testing.T) {
+	client := &PartialStateJoinClient{
+		LastJoinMembersOmitted: true,
+		LastJoinServersInRoom:  []string{"server1.example.com"},
+	}
+
+	client.resetPartialState()
+
+	assert.False(t, client.LastJoinMembersOmitted, "a full-state retry must not be recorded as partial")
+	assert.Nil(t, client.LastJoinServersInRoom)
+}
+
 func TestShouldRetryJoinWithoutPartialState(t *testing.T) {
 	client := &PartialStateJoinClient{LastJoinMembersOmitted: true}
 	authErr := &gomatrixserverlib.FederationError{
