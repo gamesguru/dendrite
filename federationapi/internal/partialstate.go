@@ -112,10 +112,12 @@ func (w *PartialStateWorker) Start() error {
 	if len(roomNIDs) > 0 {
 		logrus.WithField("count", len(roomNIDs)).Info("Queuing partial state rooms for background resync")
 
-		// Stagger the initial queue to avoid thundering herd
-		offset := time.Second * 5 //nolint:mnd
-		step := time.Second
-		if max := len(roomNIDs); max > 60 { //nolint:mnd
+		// Stagger the initial queue to avoid thundering herd. A user is waiting on each
+		// of these joins, so start soon and keep the gaps short: a backlog of 240 rooms
+		// or fewer is queued within a minute.
+		offset := time.Second
+		step := 250 * time.Millisecond       //nolint:mnd
+		if max := len(roomNIDs); max > 240 { //nolint:mnd
 			step = (time.Second * 60) / time.Duration(max) //nolint:mnd
 		}
 
