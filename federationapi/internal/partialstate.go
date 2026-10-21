@@ -53,9 +53,10 @@ type roomRetryInfo struct {
 // noteFailure starts the give-up timer on a failure to get state from the servers, and
 // resets it on any other failure, which says nothing about them.
 func (i *roomRetryInfo) noteFailure(err error) {
-	var remoteErr *remoteStateError
+	// Only the error as classified by processRoom counts, not a cause inside it.
+	_, remote := err.(*remoteStateError) //nolint:errorlint
 	switch {
-	case !errors.As(err, &remoteErr):
+	case !remote:
 		i.failingSince = time.Time{}
 	case i.failingSince.IsZero():
 		i.failingSince = time.Now()
@@ -481,12 +482,8 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	if remoteOnly {
 		return &remoteStateError{lastErr}
 	}
-	var remoteErr *remoteStateError
-	if errors.As(lastErr, &remoteErr) {
-		// Keep the cause, without the claim that every server failed.
-		return errors.New(lastErr.Error())
-	}
-	return lastErr
+	// Keep the cause, without the claim that every server failed.
+	return fmt.Errorf("partial state resync failed: %w", lastErr)
 }
 
 // getStoredEvent returns an accepted event stored locally.

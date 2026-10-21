@@ -29,7 +29,9 @@ type FederationAPI struct {
 
 	// How long a partial state resync (MSC3706) may keep failing to get usable state from
 	// any server before the join is abandoned: the local users leave the room again.
-	// Failures on our side do not count. 0, the default, retries until it works.
+	// Failures on our side do not count, and neither does a server that gives the IDs of
+	// the state but then does not serve the events themselves. The time is kept in memory,
+	// so a restart starts it again. 0, the default, retries until it works.
 	PartialStateResyncGiveUpAfter time.Duration `yaml:"partial_state_resync_give_up_after"`
 
 	// P2P Feature: Whether relaying to specific nodes should be enabled.

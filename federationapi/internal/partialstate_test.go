@@ -828,8 +828,12 @@ func TestRoomRetryInfoNoteFailure(t *testing.T) {
 	started := info.failingSince
 	assert.False(t, started.IsZero(), "a failure to get state starts the timer")
 
-	info.noteFailure(fmt.Errorf("wrapped: %w", remote))
+	info.noteFailure(remote)
 	assert.Equal(t, started, info.failingSince, "further such failures keep the first time")
+
+	info.noteFailure(fmt.Errorf("resync failed: %w", remote))
+	assert.True(t, info.failingSince.IsZero(), "a failure that is not wholly remote resets the timer, whatever its cause")
+	info.noteFailure(remote)
 
 	info.noteFailure(fmt.Errorf("storing the state failed"))
 	assert.True(t, info.failingSince.IsZero(), "a failure on our side resets the timer")
