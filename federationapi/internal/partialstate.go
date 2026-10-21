@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -320,6 +321,9 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
 		frontier := latestEventIDs[0]
+		// The state at the anchor does not change while the events after it do, so a
+		// retry because the room moved on keeps what was fetched for it.
+		anchorStates := map[string][]string{}
 		for attempt := 0; attempt < 4; attempt++ {
 			anchor, found := stateAnchor{}, false
 			if joinEventID != "" {
@@ -330,7 +334,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 			}
 			stateEventIDs, anchorStateIDs, fetchErr := w.fetchStateViaAnchor(
 				ctx, logger, origin, serverName, roomID, anchor, joinEventID,
-				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
+				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers, anchorStates,
 			)
 			if fetchErr != nil {
 				logger.WithError(fetchErr).Warn("Failed to fetch state from server")
@@ -582,13 +586,19 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 	roomVersion gomatrixserverlib.RoomVersion,
 	bypassBackoff bool,
 	allServers []serverEntry,
+	anchorStates map[string][]string,
 ) (stateIDs, anchorStateIDs []string, err error) {
-	stateIDs, err = w.fetchStateViaStateIDs(
-		ctx, logger, origin, serverName, roomID, anchor.askID,
-		roomVersion, bypassBackoff, allServers,
-	)
-	if err != nil {
-		return nil, nil, err
+	if cached, ok := anchorStates[anchor.askID]; ok {
+		stateIDs = slices.Clone(cached)
+	} else {
+		stateIDs, err = w.fetchStateViaStateIDs(
+			ctx, logger, origin, serverName, roomID, anchor.askID,
+			roomVersion, bypassBackoff, allServers,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		anchorStates[anchor.askID] = slices.Clone(stateIDs)
 	}
 
 	overlays := anchor.chain
