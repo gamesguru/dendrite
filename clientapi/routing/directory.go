@@ -411,7 +411,9 @@ func SetVisibility(
 			JSON: spec.InternalServerError{},
 		}
 	}
-	privileged := isPrivilegedCreator(req.Context(), rsAPI, roomID, *senderID)
+	// A server admin may change the visibility of any room they are in, whatever their
+	// power level there: their own power may be that of a room they only just joined.
+	privileged := dev.AccountType == userapi.AccountTypeAdmin || isPrivilegedCreator(req.Context(), rsAPI, roomID, *senderID)
 
 	// NOTSPEC: Check if the user's power is greater than power required to change m.room.canonical_alias event
 	power, _ := gomatrixserverlib.NewPowerLevelContentFromEvent(queryEventsRes.StateEvents[0].PDU)
