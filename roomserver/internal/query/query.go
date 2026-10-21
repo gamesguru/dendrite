@@ -1059,9 +1059,18 @@ func (r *Queryer) QueryAuthChain(ctx context.Context, req *api.QueryAuthChainReq
 	return nil
 }
 
+// InvitePending reports whether the user has a pending invite to the room. A
+// room this server has never seen cannot have an invite, so that is not an error.
 func (r *Queryer) InvitePending(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (bool, error) {
-	pending, _, inviteRoomID, _, err := helpers.IsInvitePending(ctx, r.DB, roomID.String(), senderID)
-	_ = inviteRoomID
+	info, err := r.DB.RoomInfo(ctx, roomID.String())
+	if err != nil {
+		return false, err
+	}
+	if info == nil {
+		return false, nil
+	}
+	pending, _, inviteEventID, _, err := helpers.IsInvitePending(ctx, r.DB, roomID.String(), senderID)
+	_ = inviteEventID
 	return pending, err
 }
 
