@@ -24,7 +24,6 @@ import (
 	"github.com/tidwall/sjson"
 
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -408,14 +407,14 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 func (a *UserInternalAPI) remoteKeysFromDatabase(
 	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex, domainToDeviceKeys map[string]map[string][]string,
 ) map[string]map[string][]string {
+	tracked := a.trackedDeviceLists(ctx, domainToDeviceKeys)
 	fetchRemote := make(map[string]map[string][]string)
 	for domain, userToDeviceMap := range domainToDeviceKeys {
-		var tracked map[string]struct{}
 		for userID, deviceIDs := range userToDeviceMap {
 			// Keys for specific devices can come from the db when we hold them all. When all
 			// devices are requested we can only do so for users whose device list we track,
 			// as otherwise we don't know if a device has just been added.
-			if len(deviceIDs) > 0 || a.isDeviceListTracked(ctx, domain, userID, &tracked) {
+			if _, isTracked := tracked[userID]; len(deviceIDs) > 0 || isTracked {
 				err := a.populateResponseWithDeviceKeysFromDatabase(ctx, res, respMu, userID, deviceIDs)
 				if err == nil {
 					continue
@@ -432,110 +431,42 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 	return fetchRemote
 }
 
-// isDeviceListTracked reports whether the stored device list of a remote user is
-// complete and current: we still share a room with them, and the list isn't marked
-// stale, so updates are being applied to it as they arrive.
-// The staleCache holds the stale users of the domain, fetched on first use.
-// Any error counts as not tracked.
-func (a *UserInternalAPI) isDeviceListTracked(
-	ctx context.Context, domain, userID string, staleCache *map[string]struct{},
-) bool {
-	if *staleCache == nil {
-		stale, err := a.KeyDatabase.StaleDeviceLists(ctx, []spec.ServerName{spec.ServerName(domain)})
-		if err != nil {
-			util.GetLogger(ctx).WithError(err).Warn("Failed to query stale device lists")
-			return false
-		}
-		*staleCache = make(map[string]struct{}, len(stale))
-		for _, id := range stale {
-			(*staleCache)[id] = struct{}{}
+// trackedDeviceLists returns those of the users whose all devices are asked for whose
+// stored device list is complete and current. It was fetched in full and not marked
+// stale since, and the user is still in a room with a local user, so that changes to
+// it reach us. Any error counts as not tracked.
+func (a *UserInternalAPI) trackedDeviceLists(
+	ctx context.Context, domainToDeviceKeys map[string]map[string][]string,
+) map[string]struct{} {
+	var candidates []string
+	for _, userToDeviceMap := range domainToDeviceKeys {
+		for userID, deviceIDs := range userToDeviceMap {
+			if len(deviceIDs) == 0 {
+				candidates = append(candidates, userID)
+			}
 		}
 	}
-	if _, isStale := (*staleCache)[userID]; isStale {
-		return false
+	if len(candidates) == 0 {
+		return nil
 	}
-	return a.sharesRoomWithLocalUser(ctx, userID)
-}
-
-// partialStateJoinEventQuerier is implemented by the roomserver API, which knows
-// the event that started the partial state join of a room.
-type partialStateJoinEventQuerier interface {
-	GetPartialStateJoinEventID(ctx context.Context, roomNID rstypes.RoomNID) (string, error)
-	QueryRoomInfo(ctx context.Context, roomID spec.RoomID) (*rstypes.RoomInfo, error)
-}
-
-// sharesRoomWithLocalUser reports whether the remote user is joined to a room that
-// a local user is joined to as well, so that we hear of their device list changes.
-// While a room has partial state its members from the /send_join response may not
-// be in it, so there only members who joined after our own join count.
-func (a *UserInternalAPI) sharesRoomWithLocalUser(ctx context.Context, userID string) bool {
-	user, err := spec.NewUserID(userID, true)
+	fresh, err := a.KeyDatabase.FreshDeviceLists(ctx, candidates)
 	if err != nil {
-		return false
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query fresh device lists")
+		return nil
 	}
-	rooms, err := a.RSAPI.QueryRoomsForUser(ctx, *user, spec.Join)
-	if err != nil || len(rooms) == 0 {
-		return false
+	if len(fresh) == 0 {
+		return nil
 	}
-	partialRooms, err := a.RSAPI.GetPartialStateRoomIDs(ctx)
-	if err != nil {
-		util.GetLogger(ctx).WithError(err).Warn("Failed to query rooms with partial state")
-		return false
+	var shared rsapi.QueryUsersSharingRoomWithLocalResponse
+	if err = a.RSAPI.QueryUsersSharingRoomWithLocal(ctx, &rsapi.QueryUsersSharingRoomWithLocalRequest{UserIDs: fresh}, &shared); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query which users share a room with a local user")
+		return nil
 	}
-	isPartial := make(map[string]struct{}, len(partialRooms))
-	for _, roomID := range partialRooms {
-		isPartial[roomID] = struct{}{}
+	tracked := make(map[string]struct{}, len(shared.UserIDs))
+	for _, userID := range shared.UserIDs {
+		tracked[userID] = struct{}{}
 	}
-	for _, room := range rooms {
-		var local rsapi.QueryMembershipsForRoomResponse
-		if err = a.RSAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
-			RoomID: room.String(), JoinedOnly: true, LocalOnly: true,
-		}, &local); err != nil || len(local.JoinEvents) == 0 {
-			continue
-		}
-		if _, partial := isPartial[room.String()]; !partial {
-			return true
-		}
-		if a.joinedAfterPartialJoin(ctx, room, userID) {
-			return true
-		}
-	}
-	return false
-}
-
-// joinedAfterPartialJoin reports whether the user's join to a room with partial
-// state happened after our own join to it began.
-func (a *UserInternalAPI) joinedAfterPartialJoin(ctx context.Context, room spec.RoomID, userID string) bool {
-	querier, ok := a.RSAPI.(partialStateJoinEventQuerier)
-	if !ok {
-		return false
-	}
-	info, err := querier.QueryRoomInfo(ctx, room)
-	if err != nil || info == nil {
-		return false
-	}
-	joinEventID, err := querier.GetPartialStateJoinEventID(ctx, info.RoomNID)
-	if err != nil || joinEventID == "" {
-		return false
-	}
-	var events rsapi.QueryEventsByIDResponse
-	if err = a.RSAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{
-		RoomID: room.String(), EventIDs: []string{joinEventID},
-	}, &events); err != nil || len(events.Events) != 1 {
-		return false
-	}
-	var members rsapi.QueryMembershipsForRoomResponse
-	if err = a.RSAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
-		RoomID: room.String(), JoinedOnly: true,
-	}, &members); err != nil {
-		return false
-	}
-	for _, ev := range members.JoinEvents {
-		if ev.StateKey != nil && *ev.StateKey == userID {
-			return ev.OriginServerTS > events.Events[0].OriginServerTS()
-		}
-	}
-	return false
+	return tracked
 }
 
 func (a *UserInternalAPI) queryRemoteKeys(

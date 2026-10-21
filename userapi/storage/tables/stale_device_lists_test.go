@@ -74,6 +74,21 @@ func TestStaleDeviceLists(t *testing.T) {
 			t.Fatalf("expected stale users %v, got %v", wantStaleUsers, gotStaleUsers)
 		}
 
+		// Only users whose list is marked as not stale are fresh
+		if err = tab.InsertStaleDeviceList(ctx, bob.ID, false); err != nil {
+			t.Fatalf("failed to insert fresh device list: %s", err)
+		}
+		gotFreshUsers, err := tab.SelectUserIDsWithFreshDeviceLists(ctx, []string{alice.ID, bob.ID, "@unknown:test"})
+		if err != nil {
+			t.Fatalf("failed to query fresh device lists: %s", err)
+		}
+		if wantFreshUsers := []string{bob.ID}; !test.UnsortedStringSliceEqual(wantFreshUsers, gotFreshUsers) {
+			t.Fatalf("expected fresh users %v, got %v", wantFreshUsers, gotFreshUsers)
+		}
+		if err = tab.InsertStaleDeviceList(ctx, bob.ID, true); err != nil {
+			t.Fatalf("failed to insert stale device: %s", err)
+		}
+
 		// Delete stale devices
 		deleteUsers := []string{alice.ID, bob.ID}
 		if err = tab.DeleteStaleDeviceLists(ctx, nil, deleteUsers); err != nil {

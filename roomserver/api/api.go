@@ -454,6 +454,7 @@ type FederationRoomserverAPI interface {
 
 type KeyserverRoomserverAPI interface {
 	QueryLeftUsers(ctx context.Context, req *QueryLeftUsersRequest, res *QueryLeftUsersResponse) error
+	QueryUsersSharingRoomWithLocal(ctx context.Context, req *QueryUsersSharingRoomWithLocalRequest, res *QueryUsersSharingRoomWithLocalResponse) error
 	// GetPartialStateRoomIDs returns the rooms this server only has partial state for (MSC3706).
 	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
 	// QueryMembershipsForRoom returns the memberships of a room.

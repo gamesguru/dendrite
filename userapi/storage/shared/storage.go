@@ -1416,6 +1416,11 @@ func (d *KeyDatabase) KeyChanges(ctx context.Context, fromOffset, toOffset int64
 	return d.KeyChangesTable.SelectKeyChanges(ctx, fromOffset, toOffset)
 }
 
+// FreshDeviceLists returns those of the users whose device list was fetched in full and has not been marked stale since.
+func (d *KeyDatabase) FreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error) {
+	return d.StaleDeviceListsTable.SelectUserIDsWithFreshDeviceLists(ctx, userIDs)
+}
+
 // StaleDeviceLists returns a list of user IDs ending with the domains provided who have stale device lists.
 // If no domains are given, all user IDs with stale device lists are returned.
 func (d *KeyDatabase) StaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error) {

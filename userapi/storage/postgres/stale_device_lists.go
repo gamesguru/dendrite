@@ -43,6 +43,9 @@ const selectStaleDeviceListsWithDomainsSQL = "" +
 const selectStaleDeviceListsSQL = "" +
 	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = $1 ORDER BY ts_added_secs DESC"
 
+const selectFreshDeviceListsSQL = "" +
+	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = false AND user_id = ANY($1)"
+
 const deleteStaleDevicesSQL = "" +
 	"DELETE FROM keyserver_stale_device_lists WHERE user_id = ANY($1)"
 
@@ -51,6 +54,7 @@ type staleDeviceListsStatements struct {
 	selectStaleDeviceListsWithDomainsStmt *sql.Stmt
 	selectStaleDeviceListsStmt            *sql.Stmt
 	deleteStaleDeviceListsStmt            *sql.Stmt
+	selectFreshDeviceListsStmt            *sql.Stmt
 }
 
 func NewPostgresStaleDeviceListsTable(db *sql.DB) (tables.StaleDeviceLists, error) {
@@ -64,6 +68,7 @@ func NewPostgresStaleDeviceListsTable(db *sql.DB) (tables.StaleDeviceLists, erro
 		{&s.selectStaleDeviceListsStmt, selectStaleDeviceListsSQL},
 		{&s.selectStaleDeviceListsWithDomainsStmt, selectStaleDeviceListsWithDomainsSQL},
 		{&s.deleteStaleDeviceListsStmt, deleteStaleDevicesSQL},
+		{&s.selectFreshDeviceListsStmt, selectFreshDeviceListsSQL},
 	}.Prepare(db)
 }
 
@@ -98,6 +103,16 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithStaleDeviceLists(ctx conte
 		result = append(result, userIDs...)
 	}
 	return result, nil
+}
+
+// SelectUserIDsWithFreshDeviceLists returns those of the users whose device list was fetched in full
+// and has not been marked stale since.
+func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error) {
+	rows, err := s.selectFreshDeviceListsStmt.QueryContext(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToUserIDs(ctx, rows)
 }
 
 // DeleteStaleDeviceLists removes users from stale device lists.

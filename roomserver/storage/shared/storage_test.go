@@ -124,6 +124,46 @@ func Test_GetLeftUsers(t *testing.T) {
 	})
 }
 
+func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		join := func(roomNID types.RoomNID, userID string, local bool, eventNID types.EventNID, membership tables.MembershipState) {
+			nid, err := db.EventStateKeysTable.InsertEventStateKeyNID(ctx, nil, userID)
+			assert.NoError(t, err)
+			assert.NoError(t, db.MembershipTable.InsertMembership(ctx, nil, roomNID, nid, local))
+			_, err = db.MembershipTable.UpdateMembership(ctx, nil, roomNID, nid, nid, membership, eventNID, false)
+			assert.NoError(t, err)
+		}
+		const joined = tables.MembershipStateJoin
+
+		// Room 1: a local user and remote users, one of whom has left.
+		join(1, "@local:localhost", true, 1, joined)
+		join(1, "@shared:remote", false, 2, joined)
+		join(1, "@left:remote", false, 3, tables.MembershipStateLeaveOrBan)
+		// Room 2: remote users only.
+		join(2, "@alone:remote", false, 4, joined)
+		// Room 3: the local user has left, the remote user is still joined.
+		join(3, "@local:localhost", true, 5, tables.MembershipStateLeaveOrBan)
+		join(3, "@abandoned:remote", false, 6, joined)
+		// Room 4: partial state, our join is event 10. Only members joining after it count.
+		assert.NoError(t, db.PartialStateTable.InsertPartialStateRoom(ctx, nil, 4, 10, "remote", nil, 0))
+		join(4, "@local:localhost", true, 10, joined)
+		join(4, "@preexisting:remote", false, 7, joined)
+		join(4, "@newcomer:remote", false, 20, joined)
+
+		users := []string{
+			"@local:localhost", "@shared:remote", "@left:remote", "@alone:remote",
+			"@abandoned:remote", "@preexisting:remote", "@newcomer:remote", "@unknown:remote",
+		}
+		got, err := db.GetUsersSharingRoomWithLocal(context.Background(), users) //nolint:contextcheck
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"@local:localhost", "@shared:remote", "@newcomer:remote"}, got)
+	})
+}
+
 func TestUserRoomKeys(t *testing.T) {
 	ctx := context.Background()
 	alice := test.NewUser(t)

@@ -1674,6 +1674,75 @@ func (d *Database) JoinedUsersSetInRooms(ctx context.Context, roomIDs, userIDs [
 	return result, nil
 }
 
+// GetUsersSharingRoomWithLocal returns those of the given users who are joined to a room that a
+// local user is joined to as well. The members of a room with partial state that came with the
+// /send_join response may not be in the room, so there only members whose membership event was
+// stored after the event of our own join count, as it is by events we saw arrive.
+func (d *Database) GetUsersSharingRoomWithLocal(ctx context.Context, userIDs []string) ([]string, error) {
+	stateKeyNIDMap, err := d.EventStateKeyNIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	type roomInfo struct {
+		hasLocal     bool
+		partial      bool
+		joinEventNID types.EventNID
+	}
+	rooms := make(map[types.RoomNID]roomInfo)
+	lookup := func(roomNID types.RoomNID) (roomInfo, error) {
+		if info, ok := rooms[roomNID]; ok {
+			return info, nil
+		}
+		var info roomInfo
+		local, localErr := d.MembershipTable.SelectMembershipsFromRoomAndMembership(ctx, nil, roomNID, tables.MembershipStateJoin, true)
+		if localErr != nil {
+			return info, localErr
+		}
+		info.hasLocal = len(local) > 0
+		if info.hasLocal {
+			if info.partial, localErr = d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID); localErr != nil {
+				return info, localErr
+			}
+		}
+		if info.partial {
+			if info.joinEventNID, localErr = d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID); localErr != nil {
+				return info, localErr
+			}
+		}
+		rooms[roomNID] = info
+		return info, nil
+	}
+
+	var sharing []string
+	for userID, userNID := range stateKeyNIDMap {
+		roomNIDs, roomsErr := d.MembershipTable.SelectRoomsWithMembership(ctx, nil, userNID, tables.MembershipStateJoin)
+		if roomsErr != nil {
+			return nil, roomsErr
+		}
+		for _, roomNID := range roomNIDs {
+			info, infoErr := lookup(roomNID)
+			if infoErr != nil {
+				return nil, infoErr
+			}
+			if !info.hasLocal {
+				continue
+			}
+			if info.partial {
+				memberEventNID, _, _, memberErr := d.MembershipTable.SelectMembershipFromRoomAndTarget(ctx, nil, roomNID, userNID)
+				if memberErr != nil {
+					return nil, memberErr
+				}
+				if info.joinEventNID == 0 || memberEventNID <= info.joinEventNID {
+					continue
+				}
+			}
+			sharing = append(sharing, userID)
+			break
+		}
+	}
+	return sharing, nil
+}
+
 // GetLeftUsers calculates users we (the server) don't share a room with anymore.
 func (d *Database) GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error) {
 	// Get the userNID for all users with a stale device list

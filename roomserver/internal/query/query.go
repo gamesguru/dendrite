@@ -1003,6 +1003,12 @@ func (r *Queryer) QueryLeftUsers(ctx context.Context, req *api.QueryLeftUsersReq
 	return err
 }
 
+func (r *Queryer) QueryUsersSharingRoomWithLocal(ctx context.Context, req *api.QueryUsersSharingRoomWithLocalRequest, res *api.QueryUsersSharingRoomWithLocalResponse) error {
+	var err error
+	res.UserIDs, err = r.DB.GetUsersSharingRoomWithLocal(ctx, req.UserIDs)
+	return err
+}
+
 func (r *Queryer) QuerySharedUsers(ctx context.Context, req *api.QuerySharedUsersRequest, res *api.QuerySharedUsersResponse) error {
 	parsedUserID, err := spec.NewUserID(req.UserID, true)
 	if err != nil {

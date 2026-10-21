@@ -287,6 +287,9 @@ type KeyDatabase interface {
 	// If no domains are given, all user IDs with stale device lists are returned.
 	StaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error)
 
+	// FreshDeviceLists returns those of the users whose device list was fetched in full and has not been marked stale since.
+	FreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error)
+
 	// MarkDeviceListStale sets the stale bit for this user to isStale.
 	MarkDeviceListStale(ctx context.Context, userID string, isStale bool) error
 

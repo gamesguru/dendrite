@@ -44,6 +44,9 @@ const selectStaleDeviceListsWithDomainsSQL = "" +
 const selectStaleDeviceListsSQL = "" +
 	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = $1 ORDER BY ts_added_secs DESC"
 
+const selectFreshDeviceListsSQL = "" +
+	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = false AND user_id IN ($1)"
+
 const deleteStaleDevicesSQL = "" +
 	"DELETE FROM keyserver_stale_device_lists WHERE user_id IN ($1)"
 
@@ -102,6 +105,24 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithStaleDeviceLists(ctx conte
 		result = append(result, userIDs...)
 	}
 	return result, nil
+}
+
+// SelectUserIDsWithFreshDeviceLists returns those of the users whose device list was fetched in full
+// and has not been marked stale since.
+func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	qry := strings.Replace(selectFreshDeviceListsSQL, "($1)", sqlutil.QueryVariadic(len(userIDs)), 1)
+	params := make([]any, len(userIDs))
+	for i := range userIDs {
+		params[i] = userIDs[i]
+	}
+	rows, err := s.db.QueryContext(ctx, qry, params...)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToUserIDs(ctx, rows)
 }
 
 // DeleteStaleDeviceLists removes users from stale device lists.

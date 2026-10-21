@@ -180,6 +180,9 @@ type Database interface {
 
 	GetHistoryVisibilityState(ctx context.Context, roomInfo *types.RoomInfo, eventID string, domain string) ([]gomatrixserverlib.PDU, error)
 	GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error)
+	// GetUsersSharingRoomWithLocal returns those of the given users who are joined to a room that a local user is
+	// joined to as well. In a room with partial state only members whose join came after the partial join count.
+	GetUsersSharingRoomWithLocal(ctx context.Context, userIDs []string) ([]string, error)
 	PurgeRoom(ctx context.Context, roomID string) error
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
 

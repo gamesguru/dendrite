@@ -404,6 +404,11 @@ func (m *mockKeyserverRoomserverAPI) QueryLeftUsers(ctx context.Context, req *ro
 	return nil
 }
 
+func (m *mockKeyserverRoomserverAPI) QueryUsersSharingRoomWithLocal(_ context.Context, req *roomserver.QueryUsersSharingRoomWithLocalRequest, res *roomserver.QueryUsersSharingRoomWithLocalResponse) error {
+	res.UserIDs = req.UserIDs
+	return nil
+}
+
 func TestDeviceListUpdater_CleanUp(t *testing.T) {
 	processCtx := process.NewProcessContext()
 
