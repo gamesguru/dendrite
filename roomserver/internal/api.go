@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -71,6 +73,9 @@ type RoomserverInternalAPI struct {
 	defaultRoomVersion     gomatrixserverlib.RoomVersion
 	PartialStateTracker    *PartialStateTracker
 	PurgeTracker           *perform.PurgeTracker
+
+	unPartialStatedHooksMu sync.Mutex
+	unPartialStatedHooks   []func(ctx context.Context, roomID string)
 }
 
 func NewRoomserverAPI(
@@ -507,6 +512,23 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 // resync's state before they go ahead without it.
 const syncCatchUpTimeout = 5 * time.Second
 
+// RegisterUnPartialStatedHook registers a function to call whenever a room finishes its
+// partial state resync.
+func (r *RoomserverInternalAPI) RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string)) {
+	r.unPartialStatedHooksMu.Lock()
+	defer r.unPartialStatedHooksMu.Unlock()
+	r.unPartialStatedHooks = append(r.unPartialStatedHooks, hook)
+}
+
+func (r *RoomserverInternalAPI) runUnPartialStatedHooks(roomID string) {
+	r.unPartialStatedHooksMu.Lock()
+	hooks := slices.Clone(r.unPartialStatedHooks)
+	r.unPartialStatedHooksMu.Unlock()
+	for _, hook := range hooks {
+		hook(r.ProcessContext.Context(), roomID)
+	}
+}
+
 // AckUnPartialStated is called by the sync API once it has taken in the state of a
 // room that finished its resync, releasing the requests waiting for that.
 func (r *RoomserverInternalAPI) AckUnPartialStated(roomID string) {
@@ -586,6 +608,7 @@ func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID s
 // acknowledges that event, or after a timeout, so that what they read next is
 // consistent with the resync. Without an event to wait for they are released at once.
 func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
+	defer r.runUnPartialStatedHooks(roomID)
 	release := func() {
 		if r.PartialStateTracker != nil {
 			r.PartialStateTracker.NotifyUnPartialStated(roomID)

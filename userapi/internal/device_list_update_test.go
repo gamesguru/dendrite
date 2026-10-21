@@ -16,12 +16,15 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	api2 "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
@@ -30,6 +33,7 @@ import (
 	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage"
@@ -367,8 +371,28 @@ func mustCreateKeyserverDB(t *testing.T, dbType test.DBType) (storage.KeyDatabas
 }
 
 type mockKeyserverRoomserverAPI struct {
-	leftUsers []string
+	leftUsers    []string
+	partialRooms []string
+	members      map[string][]string
+	roomsForUser map[string][]spec.RoomID
 }
+
+func (m *mockKeyserverRoomserverAPI) GetPartialStateRoomIDs(context.Context) ([]string, error) {
+	return m.partialRooms, nil
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryMembershipsForRoom(_ context.Context, req *roomserver.QueryMembershipsForRoomRequest, res *roomserver.QueryMembershipsForRoomResponse) error {
+	for _, userID := range m.members[req.RoomID] {
+		res.JoinEvents = append(res.JoinEvents, synctypes.ClientEvent{StateKey: &userID})
+	}
+	return nil
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryRoomsForUser(_ context.Context, userID spec.UserID, _ string) ([]spec.RoomID, error) {
+	return m.roomsForUser[userID.String()], nil
+}
+
+func (m *mockKeyserverRoomserverAPI) RegisterUnPartialStatedHook(func(context.Context, string)) {}
 
 func (m *mockKeyserverRoomserverAPI) QueryLeftUsers(ctx context.Context, req *roomserver.QueryLeftUsersRequest, res *roomserver.QueryLeftUsersResponse) error {
 	res.LeftUsers = m.leftUsers
@@ -532,4 +556,71 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	for server := range unexpectedServers {
 		t.Errorf("unexpected server in result: %s", server)
 	}
+}
+
+// While a room has partial state the updater cannot tell who shares a room with the
+// user, so an update it would otherwise ask the user's server about is held back.
+// Once the room's members are known, those who are in it are marked stale, to be
+// fetched when next needed, and their key change is announced.
+func TestDeviceListUpdaterHoldsUpdatesWhileARoomHasPartialState(t *testing.T) {
+	const (
+		partialRoom = "!partial:test"
+		userID      = "@derek:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{
+		staleUsers:   map[string]bool{},
+		prevIDsExist: func(string, []int64) bool { return false },
+	}
+	producer := &mockKeyChangeProducer{}
+	var requests atomic.Int32
+	fedClient := newFedClient(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, fmt.Errorf("test: the user's server must not be asked")
+	})
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{partialRoom},
+		members:      map[string][]string{partialRoom: {userID}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, fedClient, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	require.NoError(t, updater.Start())
+
+	event := gomatrixserverlib.DeviceListUpdateEvent{DeviceID: "QBUAZIFURK", StreamID: 1, UserID: userID}
+	require.NoError(t, updater.Update(ctx, event))
+	assert.Zero(t, requests.Load(), "no request while the room has partial state")
+	assert.False(t, db.isStale(userID), "the user is not marked stale yet")
+	assert.Empty(t, producer.events, "nobody is told yet")
+
+	// A room that finishes without the user leaves the update waiting.
+	rsAPI.members["!other:test"] = []string{"@someone-else:remote.test"}
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, "!other:test"))
+	assert.False(t, db.isStale(userID))
+	assert.Empty(t, producer.events)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, partialRoom))
+	assert.True(t, db.isStale(userID), "the device list is refreshed when next needed")
+	require.Len(t, producer.events, 1, "the key change is announced")
+	assert.Equal(t, userID, producer.events[0].UserID)
+	assert.Zero(t, requests.Load(), "still no request")
+
+	// The update is not announced a second time.
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, partialRoom))
+	assert.Len(t, producer.events, 1)
+}
+
+// A user already known to be in a fully stated room is handled as usual: no
+// resync will ever say more about them, so holding the update back would lose it.
+func TestDeviceListUpdaterDoesNotHoldUpdatesForKnownUsers(t *testing.T) {
+	const userID = "@derek:remote.test"
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{"!partial:test"},
+		roomsForUser: map[string][]spec.RoomID{userID: {{}}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), &mockDeviceListUpdaterDatabase{}, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	assert.False(t, updater.deferWhilePartialState(ctx, userID))
+
+	rsAPI.roomsForUser = nil
+	assert.True(t, updater.deferWhilePartialState(ctx, userID), "an unknown user's update waits")
+
+	rsAPI.partialRooms = nil
+	assert.False(t, updater.deferWhilePartialState(ctx, "@another:remote.test"), "with no partial room nothing waits")
 }

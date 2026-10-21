@@ -450,4 +450,13 @@ type FederationRoomserverAPI interface {
 
 type KeyserverRoomserverAPI interface {
 	QueryLeftUsers(ctx context.Context, req *QueryLeftUsersRequest, res *QueryLeftUsersResponse) error
+	// GetPartialStateRoomIDs returns the rooms this server only has partial state for (MSC3706).
+	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
+	// QueryMembershipsForRoom returns the memberships of a room.
+	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error
+	// QueryRoomsForUser returns the rooms the user has the given membership in.
+	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
+	// RegisterUnPartialStatedHook registers a function to call whenever a room finishes
+	// its partial state resync, for components that must act once its members are known.
+	RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string))
 }

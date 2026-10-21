@@ -100,6 +100,12 @@ type DeviceListUpdater struct {
 	rsAPI          rsapi.KeyserverRoomserverAPI
 
 	isBlacklistedOrBackingOffFn func(s spec.ServerName) (*statistics.ServerStatistics, error)
+
+	// Users whose device list updates arrived while a room had partial state (MSC3706).
+	// Who shares a room with whom is unknown until the resync finishes, so these wait
+	// for it instead of making a request to the user's server.
+	pendingMu    sync.Mutex
+	pendingUsers map[string]struct{}
 }
 
 // DeviceListUpdaterDatabase is the subset of functionality from storage.Database required for the updater.
@@ -172,6 +178,7 @@ func NewDeviceListUpdater(
 		process:                     process,
 		userIDToMutex:               make(map[string]*sync.Mutex),
 		mu:                          &sync.Mutex{},
+		pendingUsers:                make(map[string]struct{}),
 		db:                          db,
 		api:                         api,
 		producer:                    producer,
@@ -291,6 +298,13 @@ func (u *DeviceListUpdater) update(ctx context.Context, event gomatrixserverlib.
 		"deleted":        event.Deleted,
 	}).Trace("DeviceListUpdater.Update")
 
+	// While a room has partial state we cannot tell who shares a room with the
+	// user, so do not ask their server for the device list: hold the update until
+	// the resync finishes, as Synapse does.
+	if !exists && !event.Deleted && u.deferWhilePartialState(ctx, event.UserID) {
+		return false, nil
+	}
+
 	// if we haven't missed anything update the database and notify users
 	if exists || event.Deleted {
 		k := event.Keys
@@ -347,6 +361,94 @@ func (u *DeviceListUpdater) update(ctx context.Context, event gomatrixserverlib.
 	}
 
 	return true, nil
+}
+
+// deferWhilePartialState records the user's update as pending and returns true if
+// any room has partial state. Failing to find out counts as no.
+func (u *DeviceListUpdater) deferWhilePartialState(ctx context.Context, userID string) bool {
+	if u.rsAPI == nil {
+		return false
+	}
+	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to check for rooms with partial state")
+		return false
+	}
+	if len(rooms) == 0 {
+		return false
+	}
+	// A user known to be in a fully stated room is handled as usual: no resync is
+	// going to say anything more about them.
+	if user, parseErr := spec.NewUserID(userID, true); parseErr == nil {
+		if joined, roomsErr := u.rsAPI.QueryRoomsForUser(ctx, *user, spec.Join); roomsErr == nil && len(joined) > 0 {
+			return false
+		}
+	}
+	u.pendingMu.Lock()
+	defer u.pendingMu.Unlock()
+	u.pendingUsers[userID] = struct{}{}
+	return true
+}
+
+// ListenForUnPartialStatedRooms makes the updater act on the device list updates it
+// held back once the members of a room are known.
+func (u *DeviceListUpdater) ListenForUnPartialStatedRooms() {
+	if u.rsAPI == nil {
+		return
+	}
+	u.rsAPI.RegisterUnPartialStatedHook(u.onRoomUnPartialStated)
+}
+
+func (u *DeviceListUpdater) onRoomUnPartialStated(ctx context.Context, roomID string) {
+	if err := u.HandleRoomUnPartialStated(ctx, roomID); err != nil {
+		util.GetLogger(ctx).WithError(err).WithField("room_id", roomID).Error("Failed to handle held back device list updates")
+	}
+}
+
+// HandleRoomUnPartialStated is called when a room finishes its partial state
+// resync. For each user in it whose device list update was held back, it marks the
+// device list stale, so that it is fetched when next needed, and announces a key
+// change so that the local users who share the room are told the devices changed.
+func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomID string) error {
+	u.pendingMu.Lock()
+	pending := len(u.pendingUsers)
+	u.pendingMu.Unlock()
+	if pending == 0 || u.rsAPI == nil {
+		return nil
+	}
+
+	var res rsapi.QueryMembershipsForRoomResponse
+	if err := u.rsAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, &res); err != nil {
+		return fmt.Errorf("failed to query the members of %s: %w", roomID, err)
+	}
+
+	var changed []string
+	u.pendingMu.Lock()
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		if _, ok := u.pendingUsers[*ev.StateKey]; ok {
+			changed = append(changed, *ev.StateKey)
+			delete(u.pendingUsers, *ev.StateKey)
+		}
+	}
+	u.pendingMu.Unlock()
+
+	for _, userID := range changed {
+		if err := u.db.MarkDeviceListStale(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to mark device list for %s as stale: %w", userID, err)
+		}
+		if err := u.producer.ProduceKeyChanges([]api.DeviceMessage{{
+			Type:       api.TypeDeviceKeyUpdate,
+			DeviceKeys: &api.DeviceKeys{UserID: userID},
+		}}); err != nil {
+			return fmt.Errorf("failed to announce the device list change of %s: %w", userID, err)
+		}
+	}
+	return nil
 }
 
 func (u *DeviceListUpdater) notifyWorkers(userID string) {
