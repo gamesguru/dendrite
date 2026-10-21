@@ -672,8 +672,8 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 // This is called after state events have been stored as outliers via SendStateAsOutliers.
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
-func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, expectedLatestEventIDs []string) error {
-	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs, expectedLatestEventIDs)
+func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) error {
+	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs, anchorStateIDs, expectedLatestEventIDs)
 	if err != nil {
 		return err
 	}

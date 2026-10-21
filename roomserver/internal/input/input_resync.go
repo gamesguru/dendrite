@@ -26,13 +26,15 @@ import (
 // updates the membership table, and notifies downstream components (syncapi).
 //
 // StateEventIDs are the event IDs of the state events that were fetched during resync.
+// AnchorStateIDs, if any, are the state before the join that started the partial
+// state; the events received since then get their stored state recomputed from it.
 //
 // Returns localLeftJoin=true if at least one local user transitioned out of join
 // during this resync. The caller should invoke scheduleAutoPurgeIfEmpty after
 // the transaction has committed (i.e. after this function returns successfully).
 //
 //nolint:gocyclo
-func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs, expectedLatestEventIDs []string) (localLeftJoin bool, roomInfo *types.RoomInfo, err error) {
+func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) (localLeftJoin bool, roomInfo *types.RoomInfo, err error) {
 	logger := logrus.WithFields(logrus.Fields{
 		"room_id":           roomID,
 		"state_event_count": len(stateEventIDs),
@@ -149,6 +151,11 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// so we need to merge it into the new state snapshot. Without this, the local user's
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
+	if len(anchorStateIDs) > 0 {
+		if err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs); err != nil {
+			return false, nil, err
+		}
+	}
 	var oldStateEntries []types.StateEntry
 	oldStateEntries, err = roomState.LoadStateAtSnapshot(ctx, oldStateNID)
 	if err != nil {

@@ -443,9 +443,11 @@ type FederationRoomserverAPI interface {
 	// It creates a new state snapshot from the stored events, calculates the state delta,
 	// updates the membership table, and notifies downstream components (syncapi).
 	// stateEventIDs are the state events fetched during resync. expectedLatestEventIDs
-	// is the frontier from which that state was built; a changed frontier aborts
+	// anchorStateIDs, if not empty, is the state before the join that started the
+	// partial state; the events received since then get the state they would have had
+	// with it. expectedLatestEventIDs is the frontier from which the state was built; a changed frontier aborts
 	// the update so the resync worker can retry from the newer events.
-	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, expectedLatestEventIDs []string) error
+	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) error
 }
 
 type KeyserverRoomserverAPI interface {

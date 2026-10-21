@@ -319,8 +319,8 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		frontier := latestEventIDs[0]
 		for attempt := 0; attempt < 4; attempt++ {
 			anchor := w.findStateAnchor(ctx, roomID, frontier, joinEventID, origin)
-			stateEventIDs, fetchErr := w.fetchStateViaAnchor(
-				ctx, logger, origin, serverName, roomID, anchor,
+			stateEventIDs, anchorStateIDs, fetchErr := w.fetchStateViaAnchor(
+				ctx, logger, origin, serverName, roomID, anchor, joinEventID,
 				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
 			)
 			if fetchErr != nil {
@@ -341,7 +341,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 				frontier = current[0]
 				continue
 			}
-			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, current, resyncStartTime); errors.Is(err, roomserverAPI.ErrResyncFrontierChanged) {
+			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, anchorStateIDs, current, resyncStartTime); errors.Is(err, roomserverAPI.ErrResyncFrontierChanged) {
 				current, _, _, latestErr = w.rsAPI.LatestEventIDs(ctx, roomNID)
 				if latestErr != nil {
 					lastErr = latestErr
@@ -486,16 +486,17 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 	origin, serverName spec.ServerName,
 	roomID string,
 	anchor stateAnchor,
+	joinEventID string,
 	roomVersion gomatrixserverlib.RoomVersion,
 	bypassBackoff bool,
 	allServers []serverEntry,
-) ([]string, error) {
-	stateIDs, err := w.fetchStateViaStateIDs(
+) (stateIDs, anchorStateIDs []string, err error) {
+	stateIDs, err = w.fetchStateViaStateIDs(
 		ctx, logger, origin, serverName, roomID, anchor.askID,
 		roomVersion, bypassBackoff, allServers,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	overlays := anchor.chain
@@ -504,24 +505,24 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		if err != nil {
 			verImpl, verErr := gomatrixserverlib.GetRoomVersion(roomVersion)
 			if verErr != nil {
-				return nil, verErr
+				return nil, nil, verErr
 			}
 			ev = w.fetchSingleEvent(ctx, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
 			if ev == nil {
-				return nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
+				return nil, nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
 			}
 			if ev.EventID() != anchor.askID {
-				return nil, fmt.Errorf("server %s returned event %s for anchor %s", serverName, ev.EventID(), anchor.askID)
+				return nil, nil, fmt.Errorf("server %s returned event %s for anchor %s", serverName, ev.EventID(), anchor.askID)
 			}
 		}
 		if ev.StateKey() != nil {
 			want := map[string]bool{ev.EventID(): true}
 			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(missing) > 0 {
 				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if still := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(still) > 0 {
-					return nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
+					return nil, nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
 				}
 			}
 		}
@@ -540,13 +541,13 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		}
 	}
 	if len(stateOverlays) == 0 {
-		return stateIDs, nil
+		return stateIDs, stateIDsBeforeJoin(stateIDs, anchor, joinEventID), nil
 	}
 	var stored roomserverAPI.QueryEventsByIDResponse
 	if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: stateIDs,
 	}, &stored); err != nil {
-		return nil, fmt.Errorf("query state events: %w", err)
+		return nil, nil, fmt.Errorf("query state events: %w", err)
 	}
 
 	// The events received while the state was partial were accepted without the
@@ -582,11 +583,38 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		"overlays": len(stateOverlays),
 		"skipped":  len(skipped),
 	}).Info("Resynced partial state from an anchor event")
+	// The state before the join is the state at the anchor, which the anchor
+	// event's own change completes.
+	var beforeJoin []string
+	if canRecomputeSinceJoin(anchor, joinEventID) {
+		beforeJoin = stateIDs
+		if len(stateOverlays) > 0 && stateOverlays[0].EventID() == anchor.askID {
+			beforeJoin, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays[:1])
+			if err != nil {
+				return nil, nil, fmt.Errorf("overlay anchor %s: %w", anchor.askID, err)
+			}
+		}
+	}
 	stateIDs, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays)
 	if err != nil {
-		return nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
+		return nil, nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
 	}
-	return stateIDs, nil
+	return stateIDs, beforeJoin, nil
+}
+
+// canRecomputeSinceJoin reports whether the anchor is the parent of the join that
+// started the partial state, so that its state is the one before that join.
+func canRecomputeSinceJoin(anchor stateAnchor, joinEventID string) bool {
+	return joinEventID != "" && anchor.applyAsk && len(anchor.chain) > 0 && anchor.chain[0].EventID() == joinEventID
+}
+
+// stateIDsBeforeJoin returns stateIDs if they are the state before the join that
+// started the partial state, and nil if the anchor is not that join's parent.
+func stateIDsBeforeJoin(stateIDs []string, anchor stateAnchor, joinEventID string) []string {
+	if canRecomputeSinceJoin(anchor, joinEventID) {
+		return stateIDs
+	}
+	return nil
 }
 
 // allowedOverlays returns, in order, the state events that the auth rules allow on top
@@ -1100,14 +1128,14 @@ func (w *PartialStateWorker) applyState(
 	roomID string,
 	roomNID types.RoomNID,
 	_ *types.RoomInfo,
-	stateEventIDs []string,
+	stateEventIDs, anchorStateIDs []string,
 	expectedLatestEventIDs []string,
 	resyncStartTime time.Time,
 ) error {
 	updateStateRegion, _ := internal.StartRegion(ctx, "UpdateCurrentStateAfterResync")
 	updateStateStartTime := time.Now()
 	updateStateRegion.SetTag("state_event_count", len(stateEventIDs))
-	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs, expectedLatestEventIDs); err != nil {
+	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs, anchorStateIDs, expectedLatestEventIDs); err != nil {
 		updateStateRegion.EndRegion()
 		logger.WithError(err).Warn("Failed to update current state after resync")
 		return err
