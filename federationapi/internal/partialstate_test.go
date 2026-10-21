@@ -8,11 +8,13 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -252,6 +254,25 @@ func TestPartialStateJoinClientTracking(t *testing.T) {
 	assert.True(t, client.LastJoinMembersOmitted)
 	assert.Len(t, client.LastJoinServersInRoom, 2)
 	assert.Contains(t, client.LastJoinServersInRoom, "server1.example.com")
+}
+
+func TestShouldRetryJoinWithoutPartialState(t *testing.T) {
+	client := &PartialStateJoinClient{LastJoinMembersOmitted: true}
+	authErr := &gomatrixserverlib.FederationError{
+		Reachable: true,
+		Err:       fmt.Errorf("respSendJoin.Check: %w", &gomatrixserverlib.NotAllowed{Message: "invite missing from state"}),
+	}
+
+	assert.True(t, shouldRetryJoinWithoutPartialState(client, authErr))
+	assert.False(t, shouldRetryJoinWithoutPartialState(&PartialStateJoinClient{}, authErr), "full-state responses do not need retry")
+	assert.False(t, shouldRetryJoinWithoutPartialState(client, &gomatrixserverlib.FederationError{
+		Reachable: true,
+		Err:       fmt.Errorf("transport or parsing failure"),
+	}), "non-auth failures do not need retry")
+	assert.False(t, shouldRetryJoinWithoutPartialState(client, &gomatrixserverlib.FederationError{
+		Reachable: false,
+		Err:       &gomatrixserverlib.NotAllowed{Message: "not reachable"},
+	}), "unreachable servers do not need retry")
 }
 
 // TestPartialStateWorkerConcurrency tests concurrent queue operations.

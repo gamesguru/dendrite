@@ -196,6 +196,14 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	performJoinStartTime := time.Now()
 	partialStateClient := &PartialStateJoinClient{FederationInternalAPI: r}
 	response, joinErr := gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	if shouldRetryJoinWithoutPartialState(partialStateClient, joinErr) {
+		// With omit_members=true the state lacks our own invite membership, so
+		// the state-only auth check treats us as having left and rejects the join
+		// of an invite-only room. Retry with the full state, which includes it.
+		logrus.WithError(joinErr.Err).WithField("room_id", roomID).Warn(
+			"Partial state join failed the auth check, retrying with full state")
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
+	}
 	performJoinDuration := time.Since(performJoinStartTime)
 
 	if joinErr != nil {
@@ -310,6 +318,14 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	}).Debug("Federation join completed")
 
 	return nil
+}
+
+func shouldRetryJoinWithoutPartialState(client *PartialStateJoinClient, joinErr *gomatrixserverlib.FederationError) bool {
+	if client == nil || !client.LastJoinMembersOmitted || joinErr == nil || !joinErr.Reachable || joinErr.Transient {
+		return false
+	}
+	var notAllowed *gomatrixserverlib.NotAllowed
+	return errors.As(joinErr.Err, &notAllowed)
 }
 
 // PerformOutboundPeekRequest implements api.FederationInternalAPI.

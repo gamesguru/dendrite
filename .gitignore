@@ -13,6 +13,8 @@
 *.o
 *.a
 *.so
+/dendrite
+/zendrite
 
 # Folders
 /bin
