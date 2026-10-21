@@ -32,7 +32,16 @@ COMPLEMENT_CGO ?= 0
 COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
-COMPLEMENT_PACKAGES ?= ./tests/...
+# COMPLEMENT_PACKAGES are the test packages to run. With COMPLEMENT_RUN set they are the
+# ones that define a matching top-level test (the part before the first /), as go test
+# -run matches it, so that the other packages are not compiled and started for nothing.
+# It falls back to all of them when nothing matches. Set it to override.
+COMPLEMENT_TOP = $(firstword $(subst /, ,$(COMPLEMENT_RUN)))
+# An opening parenthesis for the pattern below, as make counts the ones in a call.
+COMPLEMENT_OPEN := [(]
+COMPLEMENT_MATCHING = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && grep -rlE '^func [A-Za-z0-9_]*($(COMPLEMENT_TOP))[A-Za-z0-9_]*$(COMPLEMENT_OPEN)' tests --include='*_test.go' | xargs -r -n1 dirname | sort -u | sed 's|^|./|')
+COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHING))),./tests/...)
+# Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
 # COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
 # also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
 COMPLEMENT_RUN ?=
@@ -127,7 +136,7 @@ complement-build: ## Build the Complement Dendrite image
 .PHONY: complement-run
 complement-run: ## Run Complement, building the image first
 	@test -d $(COMPLEMENT_DIR) || (echo "Complement directory not found at $(COMPLEMENT_DIR). Please clone matrix-org/complement." && exit 1)
-	$(MAKE) complement-build
+	$(if $(COMPLEMENT_SKIP_BUILD),@echo 'Reusing $(COMPLEMENT_BASE_IMAGE)',$(MAKE) complement-build)
 	cd $(COMPLEMENT_DIR) && \
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 	go test -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES)
