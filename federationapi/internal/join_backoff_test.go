@@ -8,6 +8,7 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -73,4 +74,54 @@ func TestRefusedJoinDoesNotBackOff(t *testing.T) {
 	}, &res)
 	require.NotNil(t, res.LastError)
 	assert.Nil(t, stats.ForServer("remote").BackoffInfo(), "a refused join must not back off the server")
+}
+
+type invitedRoomserverAPI struct {
+	rsapi.FederationRoomserverAPI
+	senderErr, inviteErr error
+	pending              bool
+}
+
+func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
+	if a.senderErr != nil {
+		return nil, a.senderErr
+	}
+	senderID := spec.SenderID(user.String())
+	return &senderID, nil
+}
+
+func (a invitedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
+	return a.pending, a.inviteErr
+}
+
+// An unknown invite state must be reported as an error, so the join asks for
+// full state instead of risking a rejected partial-state join and a second one.
+func TestInvitePending(t *testing.T) {
+	room, err := spec.NewRoomID("!room:remote")
+	require.NoError(t, err)
+	user, err := spec.NewUserID("@alice:local", true)
+	require.NoError(t, err)
+	lookupErr := errors.New("db down")
+
+	for name, tc := range map[string]struct {
+		rs          invitedRoomserverAPI
+		wantPending bool
+		wantErr     error
+	}{
+		"invited":              {rs: invitedRoomserverAPI{pending: true}, wantPending: true},
+		"not invited":          {rs: invitedRoomserverAPI{}},
+		"sender lookup failed": {rs: invitedRoomserverAPI{senderErr: lookupErr}, wantErr: lookupErr},
+		"invite lookup failed": {rs: invitedRoomserverAPI{inviteErr: lookupErr}, wantErr: lookupErr},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &FederationInternalAPI{rsAPI: tc.rs}
+			pending, err := r.invitePending(context.Background(), room, user)
+			assert.Equal(t, tc.wantPending, pending)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

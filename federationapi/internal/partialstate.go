@@ -299,28 +299,46 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		return fmt.Errorf("no servers available for partial state resync (all blacklisted or backing off, no join server)")
 	}
 
-	anchor := w.findStateAnchor(ctx, roomID, latestEventIDs[0])
-
 	var lastErr error
 	for _, entry := range orderedServers {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
-
-		stateEventIDs, err := w.fetchStateViaAnchor(
-			ctx, logger, origin, serverName, roomID, anchor,
-			roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
-		)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to fetch state from server")
-			lastErr = err
-			continue
+		frontier := latestEventIDs[0]
+		applied := false
+		for attempt := 0; attempt < 4; attempt++ {
+			anchor := w.findStateAnchor(ctx, roomID, frontier)
+			stateEventIDs, fetchErr := w.fetchStateViaAnchor(
+				ctx, logger, origin, serverName, roomID, anchor,
+				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
+			)
+			if fetchErr != nil {
+				logger.WithError(fetchErr).Warn("Failed to fetch state from server")
+				lastErr = fetchErr
+				break
+			}
+			current, _, _, latestErr := w.rsAPI.LatestEventIDs(ctx, roomNID)
+			if latestErr != nil {
+				lastErr = latestErr
+				break
+			}
+			if len(current) == 0 {
+				lastErr = fmt.Errorf("no latest events found for room")
+				break
+			}
+			if current[0] != frontier {
+				frontier = current[0]
+				continue
+			}
+			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, resyncStartTime); err != nil {
+				lastErr = err
+				break
+			}
+			applied = true
+			return nil
 		}
-
-		if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, resyncStartTime); err != nil {
-			lastErr = err
-			continue
+		if !applied && lastErr == nil {
+			lastErr = fmt.Errorf("room state kept changing during partial state resync")
 		}
-		return nil
 	}
 
 	return lastErr
@@ -338,10 +356,6 @@ func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID
 	}
 	return res.Events[0].PDU, nil
 }
-
-// maxStateAnchorWalk bounds how far findStateAnchor follows the local chain of
-// events, so a long-lived partial state room does not load its whole timeline.
-const maxStateAnchorWalk = 256
 
 // stateAnchor says which event to ask /state_ids about and which events to
 // apply on top of the answer to get the state at the latest event.
@@ -365,12 +379,12 @@ type stateAnchor struct {
 func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string) stateAnchor {
 	var chain []gomatrixserverlib.PDU // newest first
 	curID := latestID
-	for range maxStateAnchorWalk {
+	for {
 		cur, err := w.getStoredEvent(ctx, roomID, curID)
 		if err != nil {
 			// Not stored: nothing local to inspect. With no chain, ask about the
 			// latest event as is.
-			return stateAnchor{askID: curID, applyAsk: len(chain) > 0, chain: reversed(chain)}
+			return stateAnchor{askID: curID, applyAsk: true, chain: reversed(chain)}
 		}
 		chain = append(chain, cur)
 		prevs := cur.PrevEventIDs()
@@ -379,9 +393,6 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 		}
 		curID = prevs[0]
 	}
-	// Walk limit: the event after curID in the chain is stored, curID is an
-	// ordinary ancestor that servers can resolve.
-	return stateAnchor{askID: curID, applyAsk: true, chain: reversed(chain)}
 }
 
 func reversed(in []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
@@ -424,6 +435,9 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 			if ev == nil {
 				return nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
 			}
+			if ev.EventID() != anchor.askID {
+				return nil, fmt.Errorf("server %s returned event %s for anchor %s", serverName, ev.EventID(), anchor.askID)
+			}
 		}
 		if ev.StateKey() != nil {
 			want := map[string]bool{ev.EventID(): true}
@@ -435,19 +449,18 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 					return nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
 				}
 			}
-			// Never add a rejected event back into current state. Soft-failed
-			// events do not become forward extremities, so they cannot be the
-			// latest event selected for a resync anchor.
-			if _, err = w.getStoredEvent(ctx, roomID, ev.EventID()); err != nil {
-				return nil, fmt.Errorf("anchor event %s was not accepted locally: %w", ev.EventID(), err)
-			}
 		}
 		overlays = append([]gomatrixserverlib.PDU{ev}, overlays...)
 	}
 
+	// A locally rejected state event does not change the state, so it must not
+	// replace the accepted event for its key; getStoredEvent leaves it out.
 	var stateOverlays []gomatrixserverlib.PDU
 	for _, ev := range overlays {
 		if ev.StateKey() != nil {
+			if _, err := w.getStoredEvent(ctx, roomID, ev.EventID()); err != nil {
+				continue
+			}
 			stateOverlays = append(stateOverlays, ev)
 		}
 	}
@@ -840,6 +853,9 @@ func (w *PartialStateWorker) getEventFromServer(
 	ev, err := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
 	if err != nil {
 		return nil, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
+	}
+	if ev.EventID() != eventID {
+		return nil, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
 	}
 	return ev, nil
 }

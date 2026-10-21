@@ -549,10 +549,10 @@ func TestFindStateAnchor(t *testing.T) {
 		assert.False(t, a.applyAsk)
 		require.Len(t, a.chain, 1)
 	})
-	t.Run("asks about an unknown latest event as is", func(t *testing.T) {
+	t.Run("asks about an unknown latest event and applies it", func(t *testing.T) {
 		a := store().findStateAnchor(ctx, "!r:test", "$unknown")
 		assert.Equal(t, "$unknown", a.askID)
-		assert.False(t, a.applyAsk)
+		assert.True(t, a.applyAsk, "the latest event's own state change must still be applied")
 		assert.Empty(t, a.chain)
 	})
 	t.Run("does not use rejected events as stored anchors", func(t *testing.T) {
@@ -563,7 +563,7 @@ func TestFindStateAnchor(t *testing.T) {
 		}}
 		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID())
 		assert.Equal(t, rejected.EventID(), a.askID)
-		assert.False(t, a.applyAsk)
+		assert.True(t, a.applyAsk)
 		assert.Empty(t, a.chain)
 	})
 }
