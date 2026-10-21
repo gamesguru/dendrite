@@ -195,7 +195,16 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	// Use partial state join client for MSC3706 faster joins
 	performJoinStartTime := time.Now()
 	partialStateClient := &PartialStateJoinClient{FederationInternalAPI: r}
-	response, joinErr := gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	var response *gomatrixserverlib.PerformJoinResponse
+	var joinErr *gomatrixserverlib.FederationError
+	if r.invitePending(ctx, room, user) {
+		// A partial state response omits our own invite membership, which
+		// the join's auth check needs, and retrying after it is rejected would
+		// send a second join. Ask for the full state from the start.
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
+	} else {
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	}
 	if shouldRetryJoinWithoutPartialState(partialStateClient, joinErr) {
 		// With omit_members=true the state lacks our own invite membership, so
 		// the state-only auth check treats us as having left and rejects the join
@@ -321,6 +330,17 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	}).Debug("Federation join completed")
 
 	return nil
+}
+
+// invitePending reports whether the user has a pending invite to the room.
+// Failing to look it up counts as no invite.
+func (r *FederationInternalAPI) invitePending(ctx context.Context, room *spec.RoomID, user *spec.UserID) bool {
+	senderID, err := r.rsAPI.QuerySenderIDForUser(ctx, *room, *user)
+	if err != nil || senderID == nil {
+		return false
+	}
+	pending, err := r.rsAPI.InvitePending(ctx, *room, *senderID)
+	return err == nil && pending
 }
 
 func shouldRetryJoinWithoutPartialState(client *PartialStateJoinClient, joinErr *gomatrixserverlib.FederationError) bool {

@@ -48,6 +48,10 @@ func (f *fedRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spec
 	return spec.NewUserID(string(senderID), true)
 }
 
+func (f *fedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
+	return false, nil
+}
+
 func (f *fedRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
 	senderID := spec.SenderID(userID.String())
 	return &senderID, nil

@@ -19,10 +19,25 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
 )
+
+// noInviteRoomserverAPI reports no pending invite for any user.
+type noInviteRoomserverAPI struct {
+	rsapi.FederationRoomserverAPI
+}
+
+func (noInviteRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
+	senderID := spec.SenderID(user.String())
+	return &senderID, nil
+}
+
+func (noInviteRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
+	return false, nil
+}
 
 type refusingJoinClient struct {
 	fclient.FederationClient
@@ -48,7 +63,7 @@ func TestRefusedJoinDoesNotBackOff(t *testing.T) {
 	fedClient := refusingJoinClient{}
 	stats := statistics.NewStatistics(testDB, FailuresUntilBlacklist, FailuresUntilAssumedOffline, false)
 	queues := queue.NewOutgoingQueues(testDB, process.NewProcessContext(), false, cfg.Matrix.ServerName, fedClient, &stats, nil)
-	fedAPI := NewFederationInternalAPI(testDB, &cfg, nil, fedClient, &stats, nil, queues, nil)
+	fedAPI := NewFederationInternalAPI(testDB, &cfg, noInviteRoomserverAPI{}, fedClient, &stats, nil, queues, nil)
 
 	res := api.PerformJoinResponse{}
 	fedAPI.PerformJoin(context.Background(), &api.PerformJoinRequest{
