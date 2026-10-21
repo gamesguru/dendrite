@@ -34,25 +34,21 @@ func NewPartialStateTracker() *PartialStateTracker {
 	}
 }
 
-// AwaitFullState blocks until the room has full state or the context is canceled.
-// If the room is not in partial state, this returns immediately.
-// Returns an error if the context is canceled or times out.
-func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string) error {
-	// Create a channel to wait on
+// observe registers interest in the room and returns a channel that is closed
+// when it completes its resync, and a function that stops observing.
+func (t *PartialStateTracker) observe(roomID string) (<-chan struct{}, func()) {
 	ch := make(chan struct{})
 
 	t.mu.Lock()
 	t.roomObservers[roomID] = append(t.roomObservers[roomID], ch)
 	t.mu.Unlock()
 
-	// Ensure we clean up on exit
-	defer func() {
+	return ch, func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		observers := t.roomObservers[roomID]
 		for i, observer := range observers {
 			if observer == ch {
-				// Remove this observer
 				t.roomObservers[roomID] = append(observers[:i], observers[i+1:]...)
 				break
 			}
@@ -61,7 +57,15 @@ func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string)
 		if len(t.roomObservers[roomID]) == 0 {
 			delete(t.roomObservers, roomID)
 		}
-	}()
+	}
+}
+
+// AwaitFullState blocks until the room has full state or the context is canceled.
+// If the room is not in partial state, this returns immediately.
+// Returns an error if the context is canceled or times out.
+func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string) error {
+	ch, stop := t.observe(roomID)
+	defer stop()
 
 	logrus.WithField("room_id", roomID).Debug("Awaiting full state for room")
 
@@ -70,6 +74,26 @@ func (t *PartialStateTracker) AwaitFullState(ctx context.Context, roomID string)
 		return ctx.Err()
 	case <-ch:
 		logrus.WithField("room_id", roomID).Debug("Room full state complete")
+		return nil
+	}
+}
+
+// AwaitUnPartialState returns once the room does not have partial state, or the
+// context ends. It starts observing before it checks, so a resync that completes
+// in between still wakes it instead of being missed.
+func (t *PartialStateTracker) AwaitUnPartialState(ctx context.Context, roomID string, isPartial func(context.Context) (bool, error)) error {
+	ch, stop := t.observe(roomID)
+	defer stop()
+
+	partial, err := isPartial(ctx)
+	if err != nil || !partial {
+		return err
+	}
+	logrus.WithField("room_id", roomID).Debug("Awaiting full state for room")
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ch:
 		return nil
 	}
 }

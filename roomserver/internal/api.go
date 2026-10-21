@@ -551,6 +551,19 @@ func (r *RoomserverInternalAPI) GetPartialStateRoomIDs(ctx context.Context) ([]s
 	return roomIDs, nil
 }
 
+// AwaitRoomFullState blocks until the room has full state, which is at once for a
+// room that never had partial state. It returns when the context ends, however
+// long the resync takes.
+func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID string) error {
+	return r.PartialStateTracker.AwaitUnPartialState(ctx, roomID, func(ctx context.Context) (bool, error) {
+		info, err := r.DB.RoomInfo(ctx, roomID)
+		if err != nil || info == nil {
+			return false, err
+		}
+		return r.DB.IsRoomPartialState(ctx, info.RoomNID)
+	})
+}
+
 // NotifyUnPartialStated notifies observers that a room has completed its partial state resync.
 // This wakes up any callers waiting in AwaitFullState for this room and emits an output
 // event to notify downstream components (like syncapi) about the completion.

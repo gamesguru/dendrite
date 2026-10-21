@@ -61,6 +61,16 @@ func GetMemberships(
 		}
 	}
 
+	// A room joined with partial state does not know all its members yet, so
+	// wait for the resync to finish before answering (MSC3706).
+	if err = rsAPI.AwaitRoomFullState(req.Context(), roomID); err != nil {
+		util.GetLogger(req.Context()).WithError(err).Warn("Gave up waiting for the room's state to be resynced")
+		return util.JSONResponse{
+			Code: http.StatusGatewayTimeout,
+			JSON: spec.Unknown("Timed out waiting for the room's state to be resynced"),
+		}
+	}
+
 	db, err := syncDB.NewDatabaseSnapshot(req.Context())
 	if err != nil {
 		return util.JSONResponse{
