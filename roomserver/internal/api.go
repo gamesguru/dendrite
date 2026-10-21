@@ -77,7 +77,7 @@ type RoomserverInternalAPI struct {
 	// joinedDuringPartialState holds, per room, the users who joined after our partial join.
 	joinedDuringPartialState sync.Map
 	unPartialStatedHooksMu   sync.Mutex
-	unPartialStatedHooks   []func(ctx context.Context, roomID string)
+	unPartialStatedHooks     []func(ctx context.Context, roomID string)
 }
 
 func NewRoomserverAPI(
