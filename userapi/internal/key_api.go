@@ -498,6 +498,27 @@ func (a *UserInternalAPI) queryRemoteKeys(
 	}
 }
 
+// queryKeysFromServer sends /keys/query unless the server failed recently.
+// In that case it returns an error at once, so the caller falls back to cached
+// keys and the client does not wait out the timeout again. The request context
+// is the caller's, and its cancellation says nothing about the server. The
+// federation context adds the timeout.
+func (a *UserInternalAPI) queryKeysFromServer(
+	ctx, fedCtx context.Context, serverName string, devKeys map[string][]string,
+) (fclient.RespQueryKeys, error) {
+	if wait := a.keyQueryBackoff.remaining(serverName); wait > 0 {
+		return fclient.RespQueryKeys{}, fmt.Errorf("remote key queries to %s are backing off for another %s", serverName, wait.Round(time.Second))
+	}
+	resp, err := a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
+	switch {
+	case err == nil:
+		a.keyQueryBackoff.success(serverName)
+	case ctx.Err() == nil && isTransientKeyQueryError(err):
+		a.keyQueryBackoff.failure(serverName)
+	}
+	return resp, err
+}
+
 func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	ctx context.Context, serverName string, devKeys map[string][]string, crossSigningKeys map[string]struct{},
 	wg *sync.WaitGroup, respMu *sync.Mutex, timeout time.Duration, resultCh chan<- *fclient.RespQueryKeys,
@@ -564,23 +585,10 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	if len(devKeys) == 0 {
 		return
 	}
-	var err error
-	if wait := a.keyQueryBackoff.remaining(serverName); wait > 0 {
-		// A recent query failed. Skip the request, rather than make the client
-		// wait out the timeout again, and fall back to the cache below.
-		err = fmt.Errorf("remote key queries to %s are backing off for another %s", serverName, wait.Round(time.Second))
-	} else {
-		var queryKeysResp fclient.RespQueryKeys
-		queryKeysResp, err = a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
-		if err == nil {
-			a.keyQueryBackoff.success(serverName)
-			resultCh <- &queryKeysResp
-			return
-		}
-		// A client that gave up cancels the request, which says nothing about the server.
-		if ctx.Err() == nil {
-			a.keyQueryBackoff.failure(serverName)
-		}
+	queryKeysResp, err := a.queryKeysFromServer(ctx, fedCtx, serverName, devKeys)
+	if err == nil {
+		resultCh <- &queryKeysResp
+		return
 	}
 	respMu.Lock()
 	res.Failures[serverName] = map[string]any{
