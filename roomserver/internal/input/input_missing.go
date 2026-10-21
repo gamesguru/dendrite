@@ -81,6 +81,40 @@ type missingStateReq struct {
 	unfindableEventsMu sync.Mutex
 }
 
+// fillGapDuringPartialState closes the gap before e with /get_missing_events and
+// nothing more, for a room whose state is still being fetched. It fails if the
+// gap cannot be closed that way.
+func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion) error {
+	t.log = util.GetLogger(ctx).WithFields(map[string]any{
+		"txn_event":       e.EventID(),
+		"room_id":         e.RoomID().String(),
+		"txn_prev_events": e.PrevEventIDs(),
+	})
+	newEvents, isGapFilled, _, err := t.getMissingEvents(ctx, e, roomVersion)
+	if err != nil {
+		return fmt.Errorf("t.getMissingEvents: %w", err)
+	}
+	if !isGapFilled {
+		return errors.New("the gap before the event was not filled by /get_missing_events")
+	}
+	t.log.Infof("Gap filled by /get_missing_events during partial state, injecting %d new events", len(newEvents))
+	for _, newEvent := range newEvents {
+		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
+			Kind:         api.KindOld,
+			Event:        &types.HeaderedEvent{PDU: newEvent},
+			Origin:       t.origin,
+			SendAsServer: api.DoNotSendToOtherServers,
+		})
+		if err != nil {
+			var rejErr types.RejectedError
+			if !errors.As(err, &rejErr) {
+				return fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // processEventWithMissingState is the entrypoint for a missingStateReq
 // request, as called from processRoomEvent.
 //

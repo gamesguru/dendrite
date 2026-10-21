@@ -401,8 +401,6 @@ func (r *Inputer) processRoomEvent(
 		// future events from being processed.
 		if hasPartialState {
 			logger.Debugf("Skipping state resolution for room %s (partial state active, background worker will handle)", stateResolutionRoomID)
-			isRejected = true
-			rejectionErr = fmt.Errorf("room %s is in partial state, awaiting background state sync", stateResolutionRoomID)
 		}
 
 		// Check if state resolution recently failed for this room. If so, skip
@@ -446,7 +444,21 @@ func (r *Inputer) processRoomEvent(
 				unfindableEvents: map[string]bool{},
 			}
 			var stateSnapshot *parsedRespState
-			if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
+			if hasPartialState {
+				// Looking up the state before the event would ask the remote server for the
+				// room's whole state, which the background resync is already fetching. Close
+				// the gap with the missing events instead: with their prev events known the
+				// state before this one follows from theirs, as it does for any event.
+				if err = missingState.fillGapDuringPartialState(ctx, event, headered.Version()); err != nil {
+					if unavailableHere(ctx, err) {
+						return fmt.Errorf("missingState.fillGapDuringPartialState: %w", err)
+					}
+					isRejected = true
+					rejectionErr = fmt.Errorf("room %s is in partial state and the gap before the event cannot be filled: %w", stateResolutionRoomID, err)
+				} else {
+					missingPrev = false
+				}
+			} else if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
 				// A failure of this server's own database, broker or HA
 				// ownership, as during a PostgreSQL failover, says nothing
 				// about the event. Rejecting it would be permanent, since the
