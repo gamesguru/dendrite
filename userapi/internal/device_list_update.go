@@ -442,9 +442,20 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 
 	// Device lists fetched while the members of the room were not all known were not
 	// kept current by changes from the room, so they are fetched again when next needed.
+	// Those who joined after we did were followed from the start, so only the others
+	// are fetched again. If we cannot tell them apart, all are.
+	joinedLater := map[string]struct{}{}
+	if later, ok := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID); ok {
+		for _, userID := range later {
+			joinedLater[userID] = struct{}{}
+		}
+	}
 	memberIDs := make([]string, 0, len(res.JoinEvents))
 	for _, ev := range res.JoinEvents {
-		if ev.StateKey != nil {
+		if ev.StateKey == nil {
+			continue
+		}
+		if _, ok := joinedLater[*ev.StateKey]; !ok {
 			memberIDs = append(memberIDs, *ev.StateKey)
 		}
 	}

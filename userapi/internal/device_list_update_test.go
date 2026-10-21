@@ -392,6 +392,8 @@ type mockKeyserverRoomserverAPI struct {
 	partialRooms []string
 	members      map[string][]string
 	roomsForUser map[string][]spec.RoomID
+	// joinedDuringPartialState lists the users who joined after our partial join; nil if unknown.
+	joinedDuringPartialState []string
 }
 
 func (m *mockKeyserverRoomserverAPI) GetPartialStateRoomIDs(context.Context) ([]string, error) {
@@ -410,6 +412,10 @@ func (m *mockKeyserverRoomserverAPI) QueryRoomsForUser(_ context.Context, userID
 }
 
 func (m *mockKeyserverRoomserverAPI) RegisterUnPartialStatedHook(func(context.Context, string)) {}
+
+func (m *mockKeyserverRoomserverAPI) TakeMembersJoinedDuringPartialState(string) ([]string, bool) {
+	return m.joinedDuringPartialState, m.joinedDuringPartialState != nil
+}
 
 func (m *mockKeyserverRoomserverAPI) QueryLeftUsers(ctx context.Context, req *roomserver.QueryLeftUsersRequest, res *roomserver.QueryLeftUsersResponse) error {
 	res.LeftUsers = m.leftUsers
@@ -705,4 +711,23 @@ func TestDeviceListUpdater_UnPartialStatedRefetchesFetchedLists(t *testing.T) {
 	assert.True(t, db.staleUsers[fetched], "a list fetched during partial state is fetched again")
 	_, known := db.staleUsers[unknown]
 	assert.False(t, known, "a list that was never fetched is left alone")
+}
+
+func TestDeviceListUpdater_UnPartialStatedKeepsListsOfLaterMembers(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room     = "!partial:test"
+		earlier  = "@derek:remote.test"
+		joinedAt = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{earlier: false, joinedAt: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members:                  map[string][]string{room: {earlier, joinedAt}},
+		joinedDuringPartialState: []string{joinedAt},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.True(t, db.staleUsers[earlier], "a member from the joined state is fetched again")
+	assert.False(t, db.staleUsers[joinedAt], "a member who joined later stays current")
 }

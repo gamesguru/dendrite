@@ -74,7 +74,9 @@ type RoomserverInternalAPI struct {
 	PartialStateTracker    *PartialStateTracker
 	PurgeTracker           *perform.PurgeTracker
 
-	unPartialStatedHooksMu sync.Mutex
+	// joinedDuringPartialState holds, per room, the users who joined after our partial join.
+	joinedDuringPartialState sync.Map
+	unPartialStatedHooksMu   sync.Mutex
 	unPartialStatedHooks   []func(ctx context.Context, roomID string)
 }
 
@@ -504,6 +506,11 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 	// letting them read its stale copy: they are released by NotifyUnPartialStated.
 	if roomID, err := r.DB.RoomIDFromNID(ctx, roomNID); err == nil && roomID != "" {
 		r.PartialStateTracker.MarkSyncPending(roomID, syncCatchUpTimeout)
+		// Once the flag is gone there is no telling who joined after us, which the
+		// hooks need to know, so note it now.
+		if later, laterErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, roomNID); laterErr == nil {
+			r.joinedDuringPartialState.Store(roomID, later)
+		}
 	}
 	return r.DB.ClearRoomPartialState(ctx, roomNID)
 }
@@ -511,6 +518,18 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 // syncCatchUpTimeout bounds how long requests wait for the sync API to take in a
 // resync's state before they go ahead without it.
 const syncCatchUpTimeout = 5 * time.Second
+
+// TakeMembersJoinedDuringPartialState returns the users who joined the room after our
+// partial join, as noted when the room's partial state was cleared. ok is false when that
+// is not known, for instance after a restart.
+func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID string) (userIDs []string, ok bool) {
+	v, ok := r.joinedDuringPartialState.LoadAndDelete(roomID)
+	if !ok {
+		return nil, false
+	}
+	userIDs, _ = v.([]string)
+	return userIDs, true
+}
 
 // RegisterUnPartialStatedHook registers a function to call whenever a room finishes its
 // partial state resync.

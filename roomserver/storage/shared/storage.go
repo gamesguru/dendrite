@@ -2467,6 +2467,43 @@ func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNI
 	})
 }
 
+// GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
+// we did, as opposed to those listed in the state we joined with.
+func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
+	joinEventNID, err := d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID)
+	if err != nil || joinEventNID == 0 {
+		return nil, err
+	}
+	memberNIDs, err := d.MembershipTable.SelectMembershipsFromRoomAndMembership(ctx, nil, roomNID, tables.MembershipStateJoin, false)
+	if err != nil {
+		return nil, err
+	}
+	var later []types.EventNID
+	for _, nid := range memberNIDs {
+		if nid > joinEventNID {
+			later = append(later, nid)
+		}
+	}
+	if len(later) == 0 {
+		return nil, nil
+	}
+	info, err := d.RoomInfoByNID(ctx, roomNID)
+	if err != nil {
+		return nil, err
+	}
+	events, err := d.Events(ctx, info.RoomVersion, later)
+	if err != nil {
+		return nil, err
+	}
+	userIDs := make([]string, 0, len(events))
+	for _, ev := range events {
+		if key := ev.StateKey(); key != nil {
+			userIDs = append(userIDs, *key)
+		}
+	}
+	return userIDs, nil
+}
+
 // ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
 // Returns the device list stream ID that was stored at join time for device list replay.
 func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
