@@ -927,41 +927,24 @@ func (r *Inputer) processStateBefore(
 	// the supplied state in the input request, or from the prev events.
 	// Check whether the event is allowed or not.
 	//
-	// For partial state rooms (MSC3706), we use auth approximation:
-	// state-resolve the local partial state with the event's auth events,
-	// then check auth against the resolved state. This ensures restrictions
-	// like bans are enforced even with incomplete state.
-	var stateForAuth []gomatrixserverlib.PDU
+	// For partial state rooms (MSC3706), the state before the event lacks most
+	// members, so complete it with the auth events the event cites, where it has no
+	// entry of its own. Its own entries stand, so that a ban or a leave still applies.
+	stateForAuth := stateBeforeEvent
 	if isPartialState {
-		// Get the auth events from the incoming event
-		authEventIDs := event.AuthEventIDs()
-		if len(authEventIDs) > 0 {
+		if authEventIDs := event.AuthEventIDs(); len(authEventIDs) > 0 {
 			authStateEvents, authErr := r.DB.EventsFromIDs(ctx, roomInfo, authEventIDs)
 			if authErr != nil {
-				// If we can't get auth events, fall back to local state only
-				stateForAuth = stateBeforeEvent
+				// Without the auth events, use the local state only.
+				logrus.WithError(authErr).WithField("event_id", event.EventID()).Debug("Could not load the auth events of an event in a partial state room")
 			} else {
-				// Convert auth events to PDUs
 				authEventPDUs := make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
 				for _, authEvent := range authStateEvents {
 					authEventPDUs = append(authEventPDUs, authEvent.PDU)
 				}
-
-				// State-resolve the local partial state with the auth events
-				// This follows Synapse's approach per MSC3706
-				resolved, resolveErr := r.resolvePartialStateAuth(ctx, roomInfo, stateBeforeEvent, authEventPDUs)
-				if resolveErr != nil {
-					// If resolution fails, fall back to local state only
-					stateForAuth = stateBeforeEvent
-				} else {
-					stateForAuth = resolved
-				}
+				stateForAuth = mergePartialStateAuth(stateBeforeEvent, authEventPDUs)
 			}
-		} else {
-			stateForAuth = stateBeforeEvent
 		}
-	} else {
-		stateForAuth = stateBeforeEvent
 	}
 
 	var stateBeforeAuth *gomatrixserverlib.AuthEvents
@@ -992,120 +975,40 @@ func (r *Inputer) processStateBefore(
 	return
 }
 
-// resolvePartialStateAuth performs state resolution between local partial state
-// and incoming event's auth events for MSC3706 faster joins.
+// mergePartialStateAuth completes the state before an event with the auth events
+// the event cites, for MSC3706 faster joins.
 //
-// During partial state, we may not have complete room state. When checking auth
-// for incoming events, we state-resolve our local partial state with the event's
-// claimed auth events. This ensures restrictions like bans are enforced even
-// when we don't have the complete state.
-func (r *Inputer) resolvePartialStateAuth(
-	ctx context.Context,
-	roomInfo *types.RoomInfo,
-	localState []gomatrixserverlib.PDU,
-	authEvents []gomatrixserverlib.PDU,
-) ([]gomatrixserverlib.PDU, error) {
-	// Build a map of state key tuples to events for conflict detection
+// During partial state the state before an event lacks most members. The state that
+// there is comes from the event's real prev events, so wherever it has an entry it
+// is what the room looked like, and the entry stays even if the event cites another
+// one: a user the room has banned is banned, whatever membership event they cite.
+// The cited auth events only fill in what the partial state does not have, such as
+// the membership of a sender whose join was left out.
+func mergePartialStateAuth(localState, authEvents []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
 	type stateKey struct {
 		eventType string
 		stateKey  string
 	}
-	stateMap := make(map[stateKey]gomatrixserverlib.PDU)
-	var conflicted []gomatrixserverlib.PDU
-	var unconflicted []gomatrixserverlib.PDU
-
-	// First, add all local state events
+	merged := make(map[stateKey]gomatrixserverlib.PDU, len(localState)+len(authEvents))
 	for _, ev := range localState {
-		if ev.StateKey() == nil {
-			continue // Skip non-state events
-		}
-		key := stateKey{ev.Type(), *ev.StateKey()}
-		stateMap[key] = ev
-	}
-
-	// Then check auth events for conflicts
-	for _, ev := range authEvents {
-		if ev.StateKey() == nil {
-			continue // Skip non-state events
-		}
-		key := stateKey{ev.Type(), *ev.StateKey()}
-		if existing, ok := stateMap[key]; ok {
-			// Conflict: same (type, state_key) but potentially different event
-			if existing.EventID() != ev.EventID() {
-				conflicted = append(conflicted, existing, ev)
-				delete(stateMap, key) // Remove from map, will be resolved
-			}
-		} else {
-			// No conflict, this is new state from auth events
-			stateMap[key] = ev
-		}
-	}
-
-	// Collect unconflicted events
-	for _, ev := range stateMap {
-		unconflicted = append(unconflicted, ev)
-	}
-
-	// If no conflicts, just return all unique state
-	if len(conflicted) == 0 {
-		return unconflicted, nil
-	}
-
-	// Collect all auth events for resolution (from both local and incoming)
-	allAuthEvents := make([]gomatrixserverlib.PDU, 0, len(localState)+len(authEvents))
-	seen := make(map[string]bool)
-	for _, ev := range localState {
-		if !seen[ev.EventID()] {
-			allAuthEvents = append(allAuthEvents, ev)
-			seen[ev.EventID()] = true
+		if ev.StateKey() != nil {
+			merged[stateKey{ev.Type(), *ev.StateKey()}] = ev
 		}
 	}
 	for _, ev := range authEvents {
-		if !seen[ev.EventID()] {
-			allAuthEvents = append(allAuthEvents, ev)
-			seen[ev.EventID()] = true
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		if _, ok := merged[key]; !ok {
+			merged[key] = ev
 		}
 	}
-
-	// A conflicted event is checked against its own cited auth events during
-	// resolution, so they have to be among those given. Without them an event
-	// accepted on the strength of a membership that the partial state does not
-	// show, such as a kick by a user who has since left, would fail there and
-	// lose to the event it should override.
-	var citedIDs []string
-	for _, ev := range conflicted {
-		for _, id := range ev.AuthEventIDs() {
-			if !seen[id] {
-				seen[id] = true
-				citedIDs = append(citedIDs, id)
-			}
-		}
+	result := make([]gomatrixserverlib.PDU, 0, len(merged))
+	for _, ev := range merged {
+		result = append(result, ev)
 	}
-	if len(citedIDs) > 0 && roomInfo != nil {
-		cited, err := r.DB.EventsFromIDs(ctx, roomInfo, citedIDs)
-		if err != nil {
-			return nil, fmt.Errorf("r.DB.EventsFromIDs: %w", err)
-		}
-		for _, ev := range cited {
-			allAuthEvents = append(allAuthEvents, ev.PDU)
-		}
-	}
-
-	// Resolve conflicts using gomatrixserverlib's state resolution
-	resolved := gomatrixserverlib.ResolveStateConflicts(
-		conflicted,
-		allAuthEvents,
-		func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-		},
-	)
-
-	// Combine unconflicted with resolved conflicted events
-	result := make([]gomatrixserverlib.PDU, 0, len(unconflicted)+len(resolved))
-	result = append(result, unconflicted...)
-	result = append(result, resolved...)
-
-	return result, nil
+	return result
 }
 
 // fetchAuthEvents will check to see if any of the
