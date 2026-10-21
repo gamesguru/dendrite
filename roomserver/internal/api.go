@@ -520,8 +520,8 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 const syncCatchUpTimeout = 5 * time.Second
 
 // TakeMembersJoinedDuringPartialState returns the users who joined the room after our
-// partial join, as noted when the room's partial state was cleared. ok is false when that
-// is not known, for instance after a restart.
+// partial join, as noted when the room's partial state was cleared. The result is not ok
+// when that is not known, for instance after a restart.
 func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID string) (userIDs []string, ok bool) {
 	v, ok := r.joinedDuringPartialState.LoadAndDelete(roomID)
 	if !ok {
