@@ -309,7 +309,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		logger := logger.WithField("server", serverName)
 		frontier := latestEventIDs[0]
 		for attempt := 0; attempt < 4; attempt++ {
-			anchor := w.findStateAnchor(ctx, roomID, frontier)
+			anchor := w.findStateAnchor(ctx, roomID, frontier, origin)
 			stateEventIDs, fetchErr := w.fetchStateViaAnchor(
 				ctx, logger, origin, serverName, roomID, anchor,
 				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
@@ -375,11 +375,14 @@ type stateAnchor struct {
 }
 
 // findStateAnchor follows single-parent links back from latestID until it reaches
-// an event that is not stored locally or an event with zero or multiple parents.
-// The returned chain is ordered oldest first. A missing event or lookup error
-// anchors on the queried ID and must be applied on top of its state; an event
-// with zero or multiple parents anchors on itself so the remote resolves its state.
-func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string) stateAnchor {
+// our own join, an event that is not stored locally, or an event with zero or
+// multiple parents. The returned chain is ordered oldest first. Our own join is
+// the join point: its parent is the newest event remote servers are known to
+// have, whatever the resync has stored since, so stopping there keeps the anchor
+// the same on a retry. A missing event or lookup error anchors on the queried ID
+// and must be applied on top of its state; an event with zero or multiple
+// parents anchors on itself so the remote resolves its state.
+func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string, local spec.ServerName) stateAnchor {
 	var chain []gomatrixserverlib.PDU // newest first
 	curID := latestID
 	for {
@@ -394,8 +397,37 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 		if len(prevs) != 1 {
 			return stateAnchor{askID: cur.EventID(), chain: reversed(chain)}
 		}
+		if isLocalJoin(cur, local) && !w.isJoinOfSameUser(ctx, roomID, prevs[0], cur) {
+			return stateAnchor{askID: prevs[0], applyAsk: true, chain: reversed(chain)}
+		}
 		curID = prevs[0]
 	}
+}
+
+// isLocalJoin reports whether ev is a join of a user on this server.
+func isLocalJoin(ev gomatrixserverlib.PDU, local spec.ServerName) bool {
+	if ev.Type() != spec.MRoomMember || ev.StateKey() == nil {
+		return false
+	}
+	if membership, err := ev.Membership(); err != nil || membership != spec.Join {
+		return false
+	}
+	user, err := spec.NewUserID(*ev.StateKey(), true)
+	return err == nil && user.Domain() == local
+}
+
+// isJoinOfSameUser reports whether the stored event prevID is a join of the same
+// user as ev, which makes ev a profile change rather than the join itself.
+func (w *PartialStateWorker) isJoinOfSameUser(ctx context.Context, roomID, prevID string, ev gomatrixserverlib.PDU) bool {
+	prev, err := w.getStoredEvent(ctx, roomID, prevID)
+	if err != nil || prev.Type() != spec.MRoomMember || prev.StateKey() == nil || ev.StateKey() == nil {
+		return false
+	}
+	if *prev.StateKey() != *ev.StateKey() {
+		return false
+	}
+	membership, err := prev.Membership()
+	return err == nil && membership == spec.Join
 }
 
 // reversed returns a new slice with the events in reverse order, leaving the input unchanged.

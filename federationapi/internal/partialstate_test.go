@@ -534,23 +534,61 @@ func TestFindStateAnchor(t *testing.T) {
 		pre := newEvent("pre")
 		join := newEvent("join", pre.EventID())
 		later := newEvent("later", join.EventID())
-		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID())
+		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "local")
 		assert.Equal(t, pre.EventID(), a.askID)
 		assert.True(t, a.applyAsk)
 		require.Len(t, a.chain, 2)
 		assert.Equal(t, join.EventID(), a.chain[0].EventID(), "chain is oldest first")
 		assert.Equal(t, later.EventID(), a.chain[1].EventID())
 	})
+	member := func(user, body string, prevs ...string) *types.HeaderedEvent {
+		prevJSON := "[]"
+		if len(prevs) > 0 {
+			prevJSON = fmt.Sprintf("[%q]", prevs[0])
+		}
+		raw := fmt.Sprintf(`{"type":"m.room.member","state_key":%q,"room_id":"!r:test","sender":%q,"content":{"membership":"join","displayname":%q},"origin_server_ts":1,"depth":1,"prev_events":%s,"auth_events":[]}`, user, user, body, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	t.Run("stops at our own join even when older history is stored", func(t *testing.T) {
+		older := newEvent("older")
+		pre := newEvent("pre", older.EventID())
+		join := member("@alice:local", "alice", pre.EventID())
+		later := newEvent("later", join.EventID())
+		a := store(older, pre, join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID, "outliers stored by an earlier attempt must not move the anchor")
+		assert.True(t, a.applyAsk)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID())
+	})
+	t.Run("a profile change after the join does not move the anchor", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@alice:local", "alice", pre.EventID())
+		rename := member("@alice:local", "alicia", join.EventID())
+		a := store(pre, join, rename).findStateAnchor(ctx, "!r:test", rename.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID())
+		assert.Equal(t, rename.EventID(), a.chain[1].EventID())
+	})
+	t.Run("a remote user's join is not our join point", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@bob:remote", "bob", pre.EventID())
+		a := store(join).findStateAnchor(ctx, "!r:test", join.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID, "walk ends because pre is not stored")
+		assert.True(t, a.applyAsk)
+	})
 	t.Run("asks about an event with several parents directly", func(t *testing.T) {
 		p1, p2 := newEvent("p1"), newEvent("p2")
 		merge := newEvent("merge", p1.EventID(), p2.EventID())
-		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID())
+		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID(), "local")
 		assert.Equal(t, merge.EventID(), a.askID)
 		assert.False(t, a.applyAsk)
 		require.Len(t, a.chain, 1)
 	})
 	t.Run("asks about an unknown latest event and applies it", func(t *testing.T) {
-		a := store().findStateAnchor(ctx, "!r:test", "$unknown")
+		a := store().findStateAnchor(ctx, "!r:test", "$unknown", "local")
 		assert.Equal(t, "$unknown", a.askID)
 		assert.True(t, a.applyAsk, "the latest event's own state change must still be applied")
 		assert.Empty(t, a.chain)
@@ -561,7 +599,7 @@ func TestFindStateAnchor(t *testing.T) {
 			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected},
 			rejectedIDs: map[string]bool{rejected.EventID(): true},
 		}}
-		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID())
+		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID(), "local")
 		assert.Equal(t, rejected.EventID(), a.askID)
 		assert.True(t, a.applyAsk)
 		assert.Empty(t, a.chain)
