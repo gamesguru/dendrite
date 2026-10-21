@@ -33,6 +33,10 @@ COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
 COMPLEMENT_PACKAGES ?= ./tests/...
+# COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
+# also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
+COMPLEMENT_RUN ?=
+COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,dendrite_blacklist)
 # go test's default per-package timeout is 10m; a package that deploys many
 # containers serially (e.g. csapi) can legitimately take longer than that and
 # gets killed mid-test, which looks like a hang but isn't. Give it more room.
@@ -126,7 +130,7 @@ complement-run: ## Run Complement, building the image first
 	$(MAKE) complement-build
 	cd $(COMPLEMENT_DIR) && \
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-	go test -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)
+	go test -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES)
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies
