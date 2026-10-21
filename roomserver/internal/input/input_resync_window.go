@@ -49,41 +49,41 @@ func (r *Inputer) recomputeWindowState(
 	joinEventID string,
 	anchorEntries []types.StateEntry,
 	latestIDs []string,
-) (bool, error) {
+) (done bool, newlyRejected []string, err error) {
 	roomNID := roomInfo.RoomNID
 	joinEvents, err := updater.EventsFromIDs(ctx, roomInfo, []string{joinEventID})
 	if err != nil {
-		return false, fmt.Errorf("updater.EventsFromIDs (join): %w", err)
+		return false, nil, fmt.Errorf("updater.EventsFromIDs (join): %w", err)
 	}
 	if len(joinEvents) != 1 {
-		return false, nil
+		return false, nil, nil
 	}
 	join := joinEvents[0]
 
 	window, reachedJoin, err := r.collectWindow(ctx, updater, roomInfo, join, latestIDs)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if !reachedJoin {
-		return false, nil
+		return false, nil, nil
 	}
 	order := windowOrder(window)
 	if order == nil {
-		return false, nil
+		return false, nil, nil
 	}
 
 	anchorNID, err := updater.AddState(ctx, roomNID, nil, anchorEntries)
 	if err != nil {
-		return false, fmt.Errorf("updater.AddState (anchor): %w", err)
+		return false, nil, fmt.Errorf("updater.AddState (anchor): %w", err)
 	}
 	if err = updater.SetState(ctx, join.EventNID, anchorNID); err != nil {
-		return false, fmt.Errorf("updater.SetState (join): %w", err)
+		return false, nil, fmt.Errorf("updater.SetState (join): %w", err)
 	}
 
 	for _, ev := range order {
 		prevStates, stateErr := updater.StateAtEventIDs(ctx, ev.prevIDs)
 		if stateErr != nil {
-			return false, fmt.Errorf("updater.StateAtEventIDs: %w", stateErr)
+			return false, nil, fmt.Errorf("updater.StateAtEventIDs: %w", stateErr)
 		}
 		if len(prevStates) != len(ev.prevIDs) || hasUnknownState(prevStates) {
 			logrus.WithField("event_id", ev.id).Debug("Keeping the stored state of an event with a prev event of unknown state")
@@ -91,20 +91,24 @@ func (r *Inputer) recomputeWindowState(
 		}
 		stateNID, calcErr := roomState.CalculateAndStoreStateAfterEvents(ctx, prevStates)
 		if calcErr != nil {
-			return false, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", calcErr)
+			return false, nil, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", calcErr)
 		}
-		if err = r.recheckWindowEvent(ctx, updater, roomInfo, roomState, ev, stateNID); err != nil {
-			return false, fmt.Errorf("r.recheckWindowEvent(%s): %w", ev.id, err)
+		becameRejected, recheckErr := r.recheckWindowEvent(ctx, updater, roomInfo, roomState, ev, stateNID)
+		if recheckErr != nil {
+			return false, nil, fmt.Errorf("r.recheckWindowEvent(%s): %w", ev.id, recheckErr)
+		}
+		if becameRejected {
+			newlyRejected = append(newlyRejected, ev.id)
 		}
 		if err = updater.SetState(ctx, ev.nid, stateNID); err != nil {
-			return false, fmt.Errorf("updater.SetState: %w", err)
+			return false, nil, fmt.Errorf("updater.SetState: %w", err)
 		}
 	}
 	logrus.WithFields(logrus.Fields{
 		"room_nid": roomNID,
 		"events":   len(order),
 	}).Info("Recomputed the state of the events received during the partial state")
-	return true, nil
+	return true, newlyRejected, nil
 }
 
 // recheckWindowEvent checks the event against the complete state before it. An
@@ -118,10 +122,10 @@ func (r *Inputer) recheckWindowEvent(
 	roomState *state.StateResolution,
 	ev windowEvent,
 	stateBefore types.StateSnapshotNID,
-) error {
+) (becameRejected bool, err error) {
 	entries, err := roomState.LoadStateAtSnapshot(ctx, stateBefore)
 	if err != nil {
-		return fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
+		return false, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
 	}
 	nids := make([]types.EventNID, 0, len(entries))
 	for _, entry := range entries {
@@ -129,22 +133,22 @@ func (r *Inputer) recheckWindowEvent(
 	}
 	stateEvents, err := updater.Events(ctx, roomInfo.RoomVersion, nids)
 	if err != nil {
-		return fmt.Errorf("updater.Events (state before event): %w", err)
+		return false, fmt.Errorf("updater.Events (state before event): %w", err)
 	}
 	authEvents, err := gomatrixserverlib.NewAuthEvents(gomatrixserverlib.ToPDUs(stateEvents))
 	if err != nil {
-		return fmt.Errorf("gomatrixserverlib.NewAuthEvents: %w", err)
+		return false, fmt.Errorf("gomatrixserverlib.NewAuthEvents: %w", err)
 	}
 	stored, err := updater.EventsFromIDs(ctx, roomInfo, []string{ev.id})
 	if err != nil {
-		return fmt.Errorf("updater.EventsFromIDs (window event): %w", err)
+		return false, fmt.Errorf("updater.EventsFromIDs (window event): %w", err)
 	}
 	if len(stored) != 1 {
-		return fmt.Errorf("window event %s is missing", ev.id)
+		return false, fmt.Errorf("window event %s is missing", ev.id)
 	}
 	wasRejected, err := updater.IsEventRejected(ctx, roomInfo.RoomNID, ev.id)
 	if err != nil {
-		return fmt.Errorf("updater.IsEventRejected: %w", err)
+		return false, fmt.Errorf("updater.IsEventRejected: %w", err)
 	}
 	allowedErr := gomatrixserverlib.Allowed(stored[0].PDU, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
@@ -166,10 +170,10 @@ func (r *Inputer) recheckWindowEvent(
 			"rejected": rejected,
 		}).WithError(allowedErr).Info("Updated event auth result after partial state resync")
 		if err = updater.SetEventRejected(ev.nid, rejected); err != nil {
-			return fmt.Errorf("updater.SetEventRejected: %w", err)
+			return false, fmt.Errorf("updater.SetEventRejected: %w", err)
 		}
 	}
-	return nil
+	return !wasRejected && rejected, nil
 }
 
 func hasUnknownState(states []types.StateAtEvent) bool {
@@ -287,31 +291,31 @@ func (r *Inputer) recomputeStateSinceJoin(
 	roomState *state.StateResolution,
 	roomInfo *types.RoomInfo,
 	anchorStateIDs []string,
-) error {
+) (newlyRejected []string, err error) {
 	logger := logrus.WithField("room_nid", roomInfo.RoomNID)
 	joinEventID, err := r.DB.GetPartialStateJoinEventID(ctx, roomInfo.RoomNID)
 	if err != nil {
-		return fmt.Errorf("r.DB.GetPartialStateJoinEventID: %w", err)
+		return nil, fmt.Errorf("r.DB.GetPartialStateJoinEventID: %w", err)
 	}
 	if joinEventID == "" {
 		logger.Debug("No partial state join on record, keeping the state of the events received since")
-		return nil
+		return nil, nil
 	}
 	anchorEntries, err := r.DB.StateEntriesForEventIDs(ctx, anchorStateIDs, true)
 	if err != nil {
-		return fmt.Errorf("r.DB.StateEntriesForEventIDs (anchor): %w", err)
+		return nil, fmt.Errorf("r.DB.StateEntriesForEventIDs (anchor): %w", err)
 	}
 	anchorEntries = types.DeduplicateStateEntries(anchorEntries)
 	latest := make([]string, 0, len(updater.LatestEvents()))
 	for _, ev := range updater.LatestEvents() {
 		latest = append(latest, ev.EventID)
 	}
-	done, err := r.recomputeWindowState(ctx, updater, roomState, roomInfo, joinEventID, anchorEntries, latest)
+	done, rejected, err := r.recomputeWindowState(ctx, updater, roomState, roomInfo, joinEventID, anchorEntries, latest)
 	if err != nil {
-		return fmt.Errorf("r.recomputeWindowState: %w", err)
+		return nil, fmt.Errorf("r.recomputeWindowState: %w", err)
 	}
 	if !done {
 		logger.Warn("The latest events do not lead back to the partial state join, keeping their stored state")
 	}
-	return nil
+	return rejected, nil
 }

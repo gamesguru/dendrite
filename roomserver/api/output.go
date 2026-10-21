@@ -57,6 +57,8 @@ const (
 	OutputTypePurgeRoom OutputType = "purge_room"
 	// OutputTypeUnPartialStatedRoom indicates a room has completed partial state resync (MSC3706).
 	OutputTypeUnPartialStatedRoom OutputType = "un_partial_stated_room"
+	// OutputTypeRejectedEvents indicates events that were accepted but are rejected on a second look (MSC3706).
+	OutputTypeRejectedEvents OutputType = "rejected_events"
 )
 
 // An OutputEvent is an entry in the roomserver output JetStream stream.
@@ -86,6 +88,8 @@ type OutputEvent struct {
 	PurgeRoom *OutputPurgeRoom `json:"purge_room,omitempty"`
 	// The content of the event with type OutputTypeUnPartialStatedRoom
 	UnPartialStatedRoom *OutputUnPartialStatedRoom `json:"un_partial_stated_room,omitempty"`
+	// The content of the event with type OutputTypeRejectedEvents
+	RejectedEvents *OutputRejectedEvents `json:"rejected_events,omitempty"`
 }
 
 // Type of the OutputNewRoomEvent.
@@ -293,4 +297,12 @@ type OutputUnPartialStatedRoom struct {
 	// The local user IDs who were joined to the room during partial state
 	// These users should see the room as "newly joined" in their next sync
 	JoinedUserIDs []string `json:"joined_user_ids"`
+}
+
+// OutputRejectedEvents lists events that were accepted while a room's state was
+// partial and turned out to be rejected once the full state was known. Consumers
+// that hold copies of them should drop those.
+type OutputRejectedEvents struct {
+	RoomID   string   `json:"room_id"`
+	EventIDs []string `json:"event_ids"`
 }

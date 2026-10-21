@@ -151,8 +151,10 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// so we need to merge it into the new state snapshot. Without this, the local user's
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
+	var newlyRejected []string
 	if len(anchorStateIDs) > 0 {
-		if err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs); err != nil {
+		newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
+		if err != nil {
 			return false, nil, err
 		}
 	}
@@ -324,6 +326,14 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	}
 
 	logger.WithField("resync_state_nid", newStateNID).Debug("Recorded resync state NID to prevent state regressions")
+
+	// Events that the full state showed to be rejected have to leave the views downstream
+	if len(newlyRejected) > 0 {
+		outputEvents = append(outputEvents, api.OutputEvent{
+			Type:           api.OutputTypeRejectedEvents,
+			RejectedEvents: &api.OutputRejectedEvents{RoomID: roomID, EventIDs: newlyRejected},
+		})
+	}
 
 	// Emit output events to notify downstream components about membership changes
 	if len(outputEvents) > 0 {

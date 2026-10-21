@@ -987,10 +987,10 @@ func (r *Inputer) processStateBefore(
 // when we don't have the complete state.
 func (r *Inputer) resolvePartialStateAuth(
 	ctx context.Context,
-	_ *types.RoomInfo, // unused but kept for potential future use
+	roomInfo *types.RoomInfo,
 	localState []gomatrixserverlib.PDU,
 	authEvents []gomatrixserverlib.PDU,
-) ([]gomatrixserverlib.PDU, error) { //nolint:unparam // error kept for interface compatibility
+) ([]gomatrixserverlib.PDU, error) {
 	// Build a map of state key tuples to events for conflict detection
 	type stateKey struct {
 		eventType string
@@ -1050,6 +1050,30 @@ func (r *Inputer) resolvePartialStateAuth(
 		if !seen[ev.EventID()] {
 			allAuthEvents = append(allAuthEvents, ev)
 			seen[ev.EventID()] = true
+		}
+	}
+
+	// A conflicted event is checked against its own cited auth events during
+	// resolution, so they have to be among those given. Without them an event
+	// accepted on the strength of a membership that the partial state does not
+	// show, such as a kick by a user who has since left, would fail there and
+	// lose to the event it should override.
+	var citedIDs []string
+	for _, ev := range conflicted {
+		for _, id := range ev.AuthEventIDs() {
+			if !seen[id] {
+				seen[id] = true
+				citedIDs = append(citedIDs, id)
+			}
+		}
+	}
+	if len(citedIDs) > 0 && roomInfo != nil {
+		cited, err := r.DB.EventsFromIDs(ctx, roomInfo, citedIDs)
+		if err != nil {
+			return nil, fmt.Errorf("r.DB.EventsFromIDs: %w", err)
+		}
+		for _, ev := range cited {
+			allAuthEvents = append(allAuthEvents, ev.PDU)
 		}
 	}
 

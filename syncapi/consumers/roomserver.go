@@ -196,6 +196,8 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 	case api.OutputTypeUnPartialStatedRoom:
 		err = s.onUnPartialStatedRoom(s.ctx, *output.UnPartialStatedRoom) //nolint:contextcheck
+	case api.OutputTypeRejectedEvents:
+		err = s.db.DeleteRejectedEvents(s.ctx, output.RejectedEvents.EventIDs) //nolint:contextcheck
 	default:
 		log.WithField("type", output.Type).Debug(
 			"roomserver output log: ignoring unknown output type",
