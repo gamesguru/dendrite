@@ -406,7 +406,6 @@ func TestPartialStateConstants(t *testing.T) {
 	assert.Equal(t, 4, partialStateWorkerCount, "Worker count should be 4")
 	assert.Equal(t, time.Minute*1, partialStateMinBackoff, "Min backoff should be 1 minute")
 	assert.Equal(t, time.Hour*1, partialStateMaxBackoff, "Max backoff should be 1 hour")
-	assert.Equal(t, 16, partialStateMaxRetries, "Max retries should be 16")
 }
 
 // TestPartialStateWorkerContextCancellation tests that workers respect context cancellation.

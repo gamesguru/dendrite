@@ -34,8 +34,6 @@ const (
 	partialStateMinBackoff = time.Minute * 1
 	// Maximum backoff delay (cap).
 	partialStateMaxBackoff = time.Hour * 1
-	// Maximum number of retries before giving up on a room.
-	partialStateMaxRetries = 16
 	// How often rooms waiting to be retried are looked at.
 	retryTickInterval = time.Second
 	// Jitter bounds for backoff calculation.
@@ -207,15 +205,6 @@ func (w *PartialStateWorker) worker(workerID int) {
 					w.retryMap[roomNID] = &roomRetryInfo{retryCount: info.retryCount, retryAt: time.Now().Add(w.backoffDuration(0)), failingSince: info.failingSince}
 					w.retryMu.Unlock()
 				}
-				continue
-			}
-
-			// Check if we've exceeded max retries
-			if info.retryCount >= partialStateMaxRetries {
-				logger.WithError(err).Error("Giving up on partial state resync after max retries")
-				// Remove from retry map - we're giving up
-				delete(w.retryMap, roomNID)
-				w.retryMu.Unlock()
 				continue
 			}
 
@@ -410,7 +399,10 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		joinEventID = ""
 	}
 
+	// Only failures to get usable state from the servers count towards giving the join up,
+	// not ones in applying it or in the room changing under us.
 	var lastErr error
+	remoteOnly := true
 	for _, entry := range orderedServers {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
@@ -435,6 +427,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 				lastErr = fetchErr
 				break
 			}
+			remoteOnly = false // from here on, failures are on our side
 			current, _, _, latestErr := w.rsAPI.LatestEventIDs(ctx, roomNID)
 			if latestErr != nil {
 				lastErr = latestErr
@@ -467,11 +460,15 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 			return nil
 		}
 		if lastErr == nil {
+			remoteOnly = false
 			lastErr = fmt.Errorf("room state kept changing during partial state resync")
 		}
 	}
 
-	return &remoteStateError{lastErr}
+	if remoteOnly {
+		return &remoteStateError{lastErr}
+	}
+	return lastErr
 }
 
 // getStoredEvent returns an accepted event stored locally.
