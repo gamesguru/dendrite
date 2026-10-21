@@ -426,9 +426,13 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 			}
 		}
 		if ev.StateKey() != nil {
-			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, map[string]bool{ev.EventID(): true}, false); len(missing) > 0 {
+			want := map[string]bool{ev.EventID(): true}
+			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(missing) > 0 {
 				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
 					return nil, err
+				}
+				if still := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(still) > 0 {
+					return nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
 				}
 			}
 		}
