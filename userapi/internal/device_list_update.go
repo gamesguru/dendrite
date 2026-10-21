@@ -442,21 +442,34 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 
 	// Device lists fetched while the members of the room were not all known were not
 	// kept current by changes from the room, so they are fetched again when next needed.
-	// Those who joined after we did were followed from the start, so only the others
-	// are fetched again. If we cannot tell them apart, all are.
-	joinedLater := map[string]struct{}{}
-	if later, ok := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID); ok {
-		for _, userID := range later {
-			joinedLater[userID] = struct{}{}
+	// Those who joined after we did, and are still joined, were followed from the start, so
+	// only the others are fetched again. That includes those who were believed joined until
+	// the resync, and if we cannot tell who is who, everyone.
+	stillJoined := make(map[string]struct{}, len(res.JoinEvents))
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey != nil {
+			stillJoined[*ev.StateKey] = struct{}{}
 		}
 	}
-	memberIDs := make([]string, 0, len(res.JoinEvents))
-	for _, ev := range res.JoinEvents {
-		if ev.StateKey == nil {
-			continue
+	keep := map[string]struct{}{}
+	candidates := make(map[string]struct{}, len(stillJoined))
+	for userID := range stillJoined {
+		candidates[userID] = struct{}{}
+	}
+	if members, ok := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID); ok {
+		for _, userID := range members.Joined {
+			candidates[userID] = struct{}{}
 		}
-		if _, ok := joinedLater[*ev.StateKey]; !ok {
-			memberIDs = append(memberIDs, *ev.StateKey)
+		for _, userID := range members.Later {
+			if _, joined := stillJoined[userID]; joined {
+				keep[userID] = struct{}{}
+			}
+		}
+	}
+	memberIDs := make([]string, 0, len(candidates))
+	for userID := range candidates {
+		if _, ok := keep[userID]; !ok {
+			memberIDs = append(memberIDs, userID)
 		}
 	}
 	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)

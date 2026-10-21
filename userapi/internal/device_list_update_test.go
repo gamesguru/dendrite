@@ -397,8 +397,8 @@ type mockKeyserverRoomserverAPI struct {
 	partialRooms []string
 	members      map[string][]string
 	roomsForUser map[string][]spec.RoomID
-	// joinedDuringPartialState lists the users who joined after our partial join; nil if unknown.
-	joinedDuringPartialState []string
+	// joinedDuringPartialState says who was joined before the resync state was applied; nil if unknown.
+	joinedDuringPartialState *roomserver.PartialStateMembers
 }
 
 func (m *mockKeyserverRoomserverAPI) GetPartialStateRoomIDs(context.Context) ([]string, error) {
@@ -418,8 +418,11 @@ func (m *mockKeyserverRoomserverAPI) QueryRoomsForUser(_ context.Context, userID
 
 func (m *mockKeyserverRoomserverAPI) RegisterUnPartialStatedHook(func(context.Context, string)) {}
 
-func (m *mockKeyserverRoomserverAPI) TakeMembersJoinedDuringPartialState(string) ([]string, bool) {
-	return m.joinedDuringPartialState, m.joinedDuringPartialState != nil
+func (m *mockKeyserverRoomserverAPI) TakeMembersJoinedDuringPartialState(string) (roomserver.PartialStateMembers, bool) {
+	if m.joinedDuringPartialState == nil {
+		return roomserver.PartialStateMembers{}, false
+	}
+	return *m.joinedDuringPartialState, true
 }
 
 func (m *mockKeyserverRoomserverAPI) QueryLeftUsers(ctx context.Context, req *roomserver.QueryLeftUsersRequest, res *roomserver.QueryLeftUsersResponse) error {
@@ -729,7 +732,7 @@ func TestDeviceListUpdater_UnPartialStatedKeepsListsOfLaterMembers(t *testing.T)
 	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{earlier: false, joinedAt: false}}
 	rsAPI := &mockKeyserverRoomserverAPI{
 		members:                  map[string][]string{room: {earlier, joinedAt}},
-		joinedDuringPartialState: []string{joinedAt},
+		joinedDuringPartialState: &roomserver.PartialStateMembers{Later: []string{joinedAt}, Joined: []string{earlier, joinedAt}},
 	}
 	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
@@ -737,4 +740,27 @@ func TestDeviceListUpdater_UnPartialStatedKeepsListsOfLaterMembers(t *testing.T)
 	_, stillFetched := db.staleUsers[earlier]
 	assert.False(t, stillFetched, "a member from the joined state is fetched again")
 	assert.False(t, db.staleUsers[joinedAt], "a member who joined later stays current")
+}
+
+func TestDeviceListUpdater_UnPartialStatedDropsListsOfThoseNoLongerJoined(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room     = "!partial:test"
+		stayer   = "@derek:remote.test"
+		believed = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{stayer: false, believed: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members: map[string][]string{room: {stayer}},
+		joinedDuringPartialState: &roomserver.PartialStateMembers{
+			Later:  []string{stayer, believed},
+			Joined: []string{stayer, believed},
+		},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	_, dropped := db.staleUsers[believed]
+	assert.False(t, dropped, "a user who turned out not to be in the room is fetched again")
+	assert.False(t, db.staleUsers[stayer], "a later joiner who is still joined stays current")
 }

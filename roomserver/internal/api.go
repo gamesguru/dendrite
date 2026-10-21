@@ -74,7 +74,7 @@ type RoomserverInternalAPI struct {
 	PartialStateTracker    *PartialStateTracker
 	PurgeTracker           *perform.PurgeTracker
 
-	// joinedDuringPartialState holds, per room, the users who joined after our partial join.
+	// joinedDuringPartialState holds, per room, who was joined before its resync state was applied.
 	joinedDuringPartialState sync.Map
 	unPartialStatedHooksMu   sync.Mutex
 	unPartialStatedHooks     []func(ctx context.Context, roomID string)
@@ -514,7 +514,8 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 // resync's state before they go ahead without it.
 const syncCatchUpTimeout = 5 * time.Second
 
-// noteMembersJoinedDuringPartialState records who joined the room after our partial join.
+// noteMembersJoinedDuringPartialState records who was joined to the room, and who of them joined
+// after our partial join.
 // It has to run before the resync's state is applied: that adds the memberships it found
 // in the complete state, which are newer in the database yet not later joiners.
 func (r *RoomserverInternalAPI) noteMembersJoinedDuringPartialState(ctx context.Context, roomID string) {
@@ -525,21 +526,21 @@ func (r *RoomserverInternalAPI) noteMembersJoinedDuringPartialState(ctx context.
 	if err != nil || info == nil {
 		return
 	}
-	if later, laterErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, info.RoomNID); laterErr == nil {
-		r.joinedDuringPartialState.Store(roomID, later)
+	if later, joined, membersErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, info.RoomNID); membersErr == nil {
+		r.joinedDuringPartialState.Store(roomID, api.PartialStateMembers{Later: later, Joined: joined})
 	}
 }
 
-// TakeMembersJoinedDuringPartialState returns the users who joined the room after our
-// partial join, as noted when the room's partial state was cleared. The result is not ok
+// TakeMembersJoinedDuringPartialState returns who was joined to the room before its resync
+// state was applied, as noted before the resync state was applied. The result is not ok
 // when that is not known, for instance after a restart.
-func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID string) (userIDs []string, ok bool) {
+func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID string) (members api.PartialStateMembers, ok bool) {
 	v, ok := r.joinedDuringPartialState.LoadAndDelete(roomID)
 	if !ok {
-		return nil, false
+		return api.PartialStateMembers{}, false
 	}
-	userIDs, _ = v.([]string)
-	return userIDs, true
+	members, _ = v.(api.PartialStateMembers)
+	return members, true
 }
 
 // RegisterUnPartialStatedHook registers a function to call whenever a room finishes its

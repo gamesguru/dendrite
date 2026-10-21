@@ -629,3 +629,12 @@ func (s RoomSet) Copy() RoomSet {
 	}
 	return copied
 }
+
+// PartialStateMembers describes who was joined to a room before the state of its
+// partial state resync was applied.
+type PartialStateMembers struct {
+	// Later are those who joined after our partial join.
+	Later []string
+	// Joined are all those that were joined.
+	Joined []string
+}

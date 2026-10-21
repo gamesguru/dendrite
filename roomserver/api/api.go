@@ -464,7 +464,7 @@ type KeyserverRoomserverAPI interface {
 	// RegisterUnPartialStatedHook registers a function to call whenever a room finishes
 	// its partial state resync, for components that must act once its members are known.
 	RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string))
-	// TakeMembersJoinedDuringPartialState returns the users who joined the room after our
-	// partial join, once it completed. The result is not ok when that is not known.
-	TakeMembersJoinedDuringPartialState(roomID string) (userIDs []string, ok bool)
+	// TakeMembersJoinedDuringPartialState returns who was joined to the room before its
+	// resync state was applied, once it completed. The result is not ok when that is not known.
+	TakeMembersJoinedDuringPartialState(roomID string) (members PartialStateMembers, ok bool)
 }

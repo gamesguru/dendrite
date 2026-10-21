@@ -238,8 +238,9 @@ type Database interface {
 	// deviceListStreamID is the current device list stream position at join time (for device list replay)
 	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
 	// GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
-	// we did, as opposed to those listed in the state we joined with.
-	GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) ([]string, error)
+	// we did, as opposed to those listed in the state we joined with, and all the users
+	// currently joined to it.
+	GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) (later, joined []string, err error)
 	// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
 	// Returns the device list stream ID that was stored at join time for device list replay
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
