@@ -107,6 +107,9 @@ type DeviceListUpdater struct {
 	// for it instead of making a request to the user's server.
 	pendingMu    sync.Mutex
 	pendingUsers map[string]struct{}
+	// Local users whose device lists changed while a room had partial state: the
+	// room's servers were only partly known, so some of them missed the change.
+	pendingLocalLists map[string]struct{}
 }
 
 // DeviceListUpdaterDatabase is the subset of functionality from storage.Database required for the updater.
@@ -183,6 +186,7 @@ func NewDeviceListUpdater(
 		userIDToMutex:               make(map[string]*sync.Mutex),
 		mu:                          &sync.Mutex{},
 		pendingUsers:                make(map[string]struct{}),
+		pendingLocalLists:           make(map[string]struct{}),
 		db:                          db,
 		api:                         api,
 		producer:                    producer,
@@ -425,10 +429,10 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		return fmt.Errorf("failed to query the members of %s: %w", roomID, err)
 	}
 
-	// The servers in the room were only partly known until now, so the device list
-	// updates of our users reached only some of them. Announce the lists again, to
-	// all the servers that are in the room now.
-	if err := u.replayLocalDeviceLists(ctx, res.JoinEvents); err != nil {
+	// The servers in the room were only partly known until now, so a device list
+	// change of one of our users may have missed some of them. Announce the lists
+	// again, to all the servers that are in the room now.
+	if err := u.replayLocalDeviceLists(ctx, roomID, res.JoinEvents); err != nil {
 		return err
 	}
 
@@ -459,27 +463,69 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	return nil
 }
 
+// NoteLocalDeviceChange records that the device list of a local user changed, if
+// that happened while a room had partial state, to announce it again once the
+// servers of the room are all known.
+func (u *DeviceListUpdater) NoteLocalDeviceChange(ctx context.Context, userID string) {
+	if u.rsAPI == nil {
+		return
+	}
+	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil || len(rooms) == 0 {
+		return
+	}
+	u.pendingMu.Lock()
+	defer u.pendingMu.Unlock()
+	u.pendingLocalLists[userID] = struct{}{}
+}
+
 // replayLocalDeviceLists announces the device lists of the local users among the
-// given joins, as the federation sender sends them to the servers of their rooms.
-func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, joins []synctypes.ClientEvent) error {
+// given joins that changed while some room had partial state, so that the
+// federation sender sends them to the servers of their rooms again.
+func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, roomID string, joins []synctypes.ClientEvent) error {
+	var users []string
+	u.pendingMu.Lock()
 	for _, ev := range joins {
 		if ev.StateKey == nil {
 			continue
 		}
-		user, err := spec.NewUserID(*ev.StateKey, true)
-		if err != nil || user.Domain() != u.thisServer {
-			continue
+		if _, ok := u.pendingLocalLists[*ev.StateKey]; ok {
+			users = append(users, *ev.StateKey)
 		}
-		msgs, err := u.db.DeviceKeysForUser(ctx, user.String(), nil, true)
+	}
+	u.pendingMu.Unlock()
+
+	for _, userID := range users {
+		msgs, err := u.db.DeviceKeysForUser(ctx, userID, nil, true)
 		if err != nil {
-			return fmt.Errorf("failed to load the device lists of %s: %w", user.String(), err)
+			return fmt.Errorf("failed to load the device lists of %s: %w", userID, err)
 		}
-		if len(msgs) == 0 {
-			continue
+		if len(msgs) > 0 {
+			if err = u.producer.ProduceKeyChanges(msgs); err != nil {
+				return fmt.Errorf("failed to announce the device lists of %s: %w", userID, err)
+			}
 		}
-		if err = u.producer.ProduceKeyChanges(msgs); err != nil {
-			return fmt.Errorf("failed to announce the device lists of %s: %w", user.String(), err)
+	}
+
+	// A user stays pending while another room still has partial state, whose servers
+	// have not been told yet.
+	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		return nil //nolint:nilerr // the users stay pending
+	}
+	var stillPartial bool
+	for _, partialRoom := range rooms {
+		if partialRoom != roomID {
+			stillPartial = true
+			break
 		}
+	}
+	if !stillPartial {
+		u.pendingMu.Lock()
+		for _, userID := range users {
+			delete(u.pendingLocalLists, userID)
+		}
+		u.pendingMu.Unlock()
 	}
 	return nil
 }

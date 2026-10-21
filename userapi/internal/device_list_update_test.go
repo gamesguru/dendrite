@@ -630,27 +630,43 @@ func TestDeviceListUpdaterDoesNotHoldUpdatesForKnownUsers(t *testing.T) {
 	assert.False(t, updater.deferWhilePartialState(ctx, "@another:remote.test"), "with no partial room nothing waits")
 }
 
-// The servers of a room are only partly known while it has partial state, so the
-// device list updates of local users reach only some of them. Once the room is
-// fully stated they are announced again.
+// The servers of a room are only partly known while it has partial state, so a
+// device list change of a local user reaches only some of them. Once the room is
+// fully stated the change is announced again, and only that one.
 func TestDeviceListUpdaterAnnouncesLocalDeviceListsAfterResync(t *testing.T) {
 	const (
-		room   = "!partial:test"
-		local  = "@alice:local.test"
-		remote = "@derek:remote.test"
+		room    = "!partial:test"
+		changed = "@alice:local.test"
+		quiet   = "@bob:local.test"
+		remote  = "@derek:remote.test"
 	)
 	db := &mockDeviceListUpdaterDatabase{
 		localKeys: map[string][]api.DeviceMessage{
-			local:  {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: local, DeviceID: "A"}, StreamID: 3}},
-			remote: {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: remote, DeviceID: "B"}, StreamID: 5}},
+			changed: {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: changed, DeviceID: "A"}, StreamID: 3}},
+			quiet:   {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: quiet, DeviceID: "B"}, StreamID: 4}},
+			remote:  {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: remote, DeviceID: "C"}, StreamID: 5}},
 		},
 	}
 	producer := &mockKeyChangeProducer{}
-	rsAPI := &mockKeyserverRoomserverAPI{members: map[string][]string{room: {local, remote}}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{room},
+		members:      map[string][]string{room: {changed, quiet, remote}},
+	}
 	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
+	updater.NoteLocalDeviceChange(ctx, changed)
+	rsAPI.partialRooms = nil
 	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
-	require.Len(t, producer.events, 1, "only the local user's devices are announced")
-	assert.Equal(t, local, producer.events[0].UserID)
+	require.Len(t, producer.events, 1, "only the local user whose list changed is announced")
+	assert.Equal(t, changed, producer.events[0].UserID)
 	assert.EqualValues(t, 3, producer.events[0].StreamID)
+
+	// It is announced once.
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.Len(t, producer.events, 1)
+
+	// A change made while no room has partial state is not noted.
+	updater.NoteLocalDeviceChange(ctx, quiet)
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.Len(t, producer.events, 1)
 }

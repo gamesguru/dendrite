@@ -771,6 +771,9 @@ func (a *UserInternalAPI) uploadLocalDeviceKeys(ctx context.Context, req *api.Pe
 		if err != nil {
 			util.GetLogger(ctx).Errorf("Failed to emitDeviceKeyChanges: %s", err)
 		}
+		if a.Updater != nil {
+			a.Updater.NoteLocalDeviceChange(ctx, req.UserID)
+		}
 	}
 }
 
