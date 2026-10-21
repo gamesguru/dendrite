@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -453,12 +454,88 @@ func (a *UserInternalAPI) isDeviceListTracked(
 	if _, isStale := (*staleCache)[userID]; isStale {
 		return false
 	}
-	var left rsapi.QueryLeftUsersResponse
-	if err := a.RSAPI.QueryLeftUsers(ctx, &rsapi.QueryLeftUsersRequest{StaleDeviceListUsers: []string{userID}}, &left); err != nil {
-		util.GetLogger(ctx).WithError(err).Warn("Failed to query whether a user is still in a shared room")
+	return a.sharesRoomWithLocalUser(ctx, userID)
+}
+
+// partialStateJoinEventQuerier is implemented by the roomserver API, which knows
+// the event that started the partial state join of a room.
+type partialStateJoinEventQuerier interface {
+	GetPartialStateJoinEventID(ctx context.Context, roomNID rstypes.RoomNID) (string, error)
+	QueryRoomInfo(ctx context.Context, roomID spec.RoomID) (*rstypes.RoomInfo, error)
+}
+
+// sharesRoomWithLocalUser reports whether the remote user is joined to a room that
+// a local user is joined to as well, so that we hear of their device list changes.
+// While a room has partial state its members from the /send_join response may not
+// be in it, so there only members who joined after our own join count.
+func (a *UserInternalAPI) sharesRoomWithLocalUser(ctx context.Context, userID string) bool {
+	user, err := spec.NewUserID(userID, true)
+	if err != nil {
 		return false
 	}
-	return len(left.LeftUsers) == 0
+	rooms, err := a.RSAPI.QueryRoomsForUser(ctx, *user, spec.Join)
+	if err != nil || len(rooms) == 0 {
+		return false
+	}
+	partialRooms, err := a.RSAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query rooms with partial state")
+		return false
+	}
+	isPartial := make(map[string]struct{}, len(partialRooms))
+	for _, roomID := range partialRooms {
+		isPartial[roomID] = struct{}{}
+	}
+	for _, room := range rooms {
+		var local rsapi.QueryMembershipsForRoomResponse
+		if err = a.RSAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
+			RoomID: room.String(), JoinedOnly: true, LocalOnly: true,
+		}, &local); err != nil || len(local.JoinEvents) == 0 {
+			continue
+		}
+		if _, partial := isPartial[room.String()]; !partial {
+			return true
+		}
+		if a.joinedAfterPartialJoin(ctx, room, userID) {
+			return true
+		}
+	}
+	return false
+}
+
+// joinedAfterPartialJoin reports whether the user's join to a room with partial
+// state happened after our own join to it began.
+func (a *UserInternalAPI) joinedAfterPartialJoin(ctx context.Context, room spec.RoomID, userID string) bool {
+	querier, ok := a.RSAPI.(partialStateJoinEventQuerier)
+	if !ok {
+		return false
+	}
+	info, err := querier.QueryRoomInfo(ctx, room)
+	if err != nil || info == nil {
+		return false
+	}
+	joinEventID, err := querier.GetPartialStateJoinEventID(ctx, info.RoomNID)
+	if err != nil || joinEventID == "" {
+		return false
+	}
+	var events rsapi.QueryEventsByIDResponse
+	if err = a.RSAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{
+		RoomID: room.String(), EventIDs: []string{joinEventID},
+	}, &events); err != nil || len(events.Events) != 1 {
+		return false
+	}
+	var members rsapi.QueryMembershipsForRoomResponse
+	if err = a.RSAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
+		RoomID: room.String(), JoinedOnly: true,
+	}, &members); err != nil {
+		return false
+	}
+	for _, ev := range members.JoinEvents {
+		if ev.StateKey != nil && *ev.StateKey == userID {
+			return ev.OriginServerTS > events.Events[0].OriginServerTS()
+		}
+	}
+	return false
 }
 
 func (a *UserInternalAPI) queryRemoteKeys(
