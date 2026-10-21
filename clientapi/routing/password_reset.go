@@ -152,7 +152,7 @@ func PasswordReset(req *http.Request, userAPI api.ClientUserAPI, cfg *config.Cli
 	if creds.IDServer != "" && creds.IDServer != cfg.EmailValidationServer {
 		return challenge(spec.ErrorThreePIDAuthFailed, "Only sessions from this homeserver's requestToken endpoint are accepted")
 	}
-	if err := internal.ValidatePassword(r.NewPassword); err != nil {
+	if err := internal.ValidatePasswordWithMinimum(r.NewPassword, cfg.MinPasswordLength); err != nil {
 		return *internal.PasswordResponse(err)
 	}
 

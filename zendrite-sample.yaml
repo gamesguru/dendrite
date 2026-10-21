@@ -233,6 +233,10 @@ client_api:
   # using the registration shared secret below.
   registration_disabled: true
 
+  # The shortest password accepted when registering or changing a password. The
+  # default is 8 characters. Shorter ones are rejected with M_WEAK_PASSWORD.
+  # min_password_length: 8
+
   # Prevents new guest accounts from being created. Guest registration is also
   # disabled implicitly by setting 'registration_disabled' above.
   guests_disabled: true

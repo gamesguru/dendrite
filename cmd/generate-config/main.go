@@ -73,6 +73,8 @@ func main() {
 		if *defaultsForCI {
 			cfg.AppServiceAPI.DisableTLSValidation = true
 			cfg.ClientAPI.RateLimiting.Enabled = false
+			// Test suites register users with passwords such as "secret".
+			cfg.ClientAPI.MinPasswordLength = 1
 			cfg.FederationAPI.DisableTLSValidation = false
 			cfg.FederationAPI.DisableHTTPKeepalives = true
 			// Complement restarts servers and expects delivery to resume

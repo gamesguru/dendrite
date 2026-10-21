@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -14,6 +15,10 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
+func weakPasswordError(minLength int) error {
+	return fmt.Errorf("%w: min %d characters", ErrPasswordWeak, minLength)
+}
+
 func Test_validatePassword(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -25,8 +30,8 @@ func Test_validatePassword(t *testing.T) {
 		{
 			name:      "password too short",
 			password:  "shortpw",
-			wantError: ErrPasswordWeak,
-			wantJSON:  &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.WeakPassword(ErrPasswordWeak.Error())},
+			wantError: weakPasswordError(DefaultMinPasswordLength),
+			wantJSON:  &util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.WeakPassword(weakPasswordError(DefaultMinPasswordLength).Error())},
 		},
 		{
 			name:      "password too long",
@@ -50,6 +55,39 @@ func Test_validatePassword(t *testing.T) {
 
 			if got := PasswordResponse(gotErr); !reflect.DeepEqual(got, tt.wantJSON) {
 				t.Errorf("validatePassword() = %v, wantJSON %v", got, tt.wantJSON)
+			}
+		})
+	}
+}
+
+func Test_validatePasswordWithMinimum(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		password   string
+		minLength  int
+		wantWeak   bool
+		wantLength int
+	}{
+		"default applies when unset":         {password: "secret", minLength: 0, wantWeak: true, wantLength: DefaultMinPasswordLength},
+		"a short password allowed by config": {password: "secret", minLength: 1},
+		"configured minimum is enforced":     {password: "secret", minLength: 10, wantWeak: true, wantLength: 10},
+		"an empty password is not weak":      {password: "", minLength: 10},
+		"a negative minimum means default":   {password: "secret", minLength: -1, wantWeak: true, wantLength: DefaultMinPasswordLength},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidatePasswordWithMinimum(tc.password, tc.minLength)
+			if !tc.wantWeak {
+				if err != nil {
+					t.Fatalf("got %v, want no error", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrPasswordWeak) {
+				t.Fatalf("got %v, want a weak password error", err)
+			}
+			if want := weakPasswordError(tc.wantLength).Error(); err.Error() != want {
+				t.Errorf("message %q, want %q", err.Error(), want)
 			}
 		})
 	}

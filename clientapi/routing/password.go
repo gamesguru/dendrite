@@ -83,7 +83,7 @@ func Password(
 	sessions.addCompletedSessionStage(sessionID, authtypes.LoginTypePassword)
 
 	// Check the new password strength.
-	if err := internal.ValidatePassword(r.NewPassword); err != nil {
+	if err := internal.ValidatePasswordWithMinimum(r.NewPassword, cfg.MinPasswordLength); err != nil {
 		return *internal.PasswordResponse(err)
 	}
 
