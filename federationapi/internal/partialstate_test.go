@@ -435,3 +435,31 @@ func TestPartialStateWorkerContextCancellation(t *testing.T) {
 		t.Fatal("Worker did not exit on context cancellation")
 	}
 }
+
+func TestOverlayStateEvent(t *testing.T) {
+	roomVer := gomatrixserverlib.RoomVersionV10
+	verImpl := gomatrixserverlib.MustGetRoomVersion(roomVer)
+	newEvent := func(eventType, stateKey, body string) *types.HeaderedEvent {
+		raw := fmt.Sprintf(`{"type":%q,"state_key":%q,"room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`, eventType, stateKey, body)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+
+	oldName := newEvent("m.room.name", "", "old")
+	topic := newEvent("m.room.topic", "", "topic")
+	newName := newEvent("m.room.name", "", "new")
+	member := newEvent("m.room.member", "@b:test", "member")
+
+	ids := []string{oldName.EventID(), topic.EventID()}
+	stored := []*types.HeaderedEvent{oldName, topic}
+
+	t.Run("replaces the entry with the same type and state key", func(t *testing.T) {
+		out := overlayStateEvent(ids, stored, newName.PDU)
+		assert.ElementsMatch(t, []string{topic.EventID(), newName.EventID()}, out)
+	})
+	t.Run("adds the event when the key is new", func(t *testing.T) {
+		out := overlayStateEvent(ids, stored, member.PDU)
+		assert.ElementsMatch(t, []string{oldName.EventID(), topic.EventID(), member.EventID()}, out)
+	})
+}

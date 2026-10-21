@@ -309,6 +309,16 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 			roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
 		)
 		if err != nil {
+			// The server may not know our latest event, for example when it has
+			// not yet processed our join. Ask for the state at its parents instead.
+			if fallbackIDs, fallbackErr := w.fetchStateViaParents(
+				ctx, logger, origin, serverName, roomID, latestEventIDs[0],
+				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
+			); fallbackErr == nil {
+				stateEventIDs, err = fallbackIDs, nil
+			}
+		}
+		if err != nil {
 			logger.WithError(err).Warn("Failed to fetch state from server")
 			lastErr = err
 			// If this was the join server and it failed, don't give up — try others.
@@ -456,6 +466,94 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	}
 
 	return wantIDs, nil
+}
+
+// fetchStateViaParents fetches the room state through the parents of eventID.
+// /state_ids returns the state before the requested event, so the state at a
+// parent leaves out the parent's own state change. That change is applied on
+// top of the response, so the result is the state before eventID.
+func (w *PartialStateWorker) fetchStateViaParents(
+	ctx context.Context,
+	logger *logrus.Entry,
+	origin, serverName spec.ServerName,
+	roomID, eventID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	bypassBackoff bool,
+	allServers []serverEntry,
+) ([]string, error) {
+	var res roomserverAPI.QueryEventsByIDResponse
+	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{eventID},
+	}, &res); err != nil {
+		return nil, fmt.Errorf("QueryEventsByID %s: %w", eventID, err)
+	}
+	if len(res.Events) == 0 {
+		return nil, fmt.Errorf("event %s not found locally", eventID)
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	var lastErr error
+	for _, parentID := range res.Events[0].PrevEventIDs() {
+		stateIDs, err := w.fetchStateViaStateIDs(
+			ctx, logger, origin, serverName, roomID, parentID,
+			roomVersion, bypassBackoff, allServers,
+		)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		parent := w.fetchSingleEvent(ctx, origin, roomID, parentID, verImpl, bypassBackoff, serverName, allServers)
+		if parent == nil {
+			lastErr = fmt.Errorf("could not fetch parent %s", parentID)
+			continue
+		}
+		if parent.StateKey() != nil {
+			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, map[string]bool{parentID: true}, false); len(missing) > 0 {
+				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
+					lastErr = err
+					continue
+				}
+			}
+			var stored roomserverAPI.QueryEventsByIDResponse
+			if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+				RoomID: roomID, EventIDs: stateIDs,
+			}, &stored); err != nil {
+				lastErr = err
+				continue
+			}
+			stateIDs = overlayStateEvent(stateIDs, stored.Events, parent)
+		}
+		logger.WithField("parent", parentID).Info("Resynced partial state via a parent of the latest event")
+		return stateIDs, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("event %s has no parents", eventID)
+	}
+	return nil, lastErr
+}
+
+// overlayStateEvent returns stateIDs with the entry for ev's type and state key
+// replaced by ev, or ev added if that key is not present.
+func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) []string {
+	type key struct{ eventType, stateKey string }
+	want := key{ev.Type(), *ev.StateKey()}
+	byID := make(map[string]key, len(events))
+	for _, e := range events {
+		if e.StateKey() != nil {
+			byID[e.EventID()] = key{e.Type(), *e.StateKey()}
+		}
+	}
+	out := make([]string, 0, len(stateIDs)+1)
+	for _, id := range stateIDs {
+		if k, ok := byID[id]; ok && k == want {
+			continue
+		}
+		out = append(out, id)
+	}
+	return append(out, ev.EventID())
 }
 
 // findMissingEvents checks which of the wanted event IDs are not yet stored
