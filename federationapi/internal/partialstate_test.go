@@ -819,3 +819,21 @@ func TestPartialStateWorkerShouldGiveUp(t *testing.T) {
 	cfg.PartialStateResyncGiveUpAfter = 0
 	assert.False(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now().Add(-2 * time.Minute)}), "0 never gives up")
 }
+
+func TestRoomRetryInfoNoteFailure(t *testing.T) {
+	info := &roomRetryInfo{}
+	remote := &remoteStateError{fmt.Errorf("LookupStateIDs: 500")}
+
+	info.noteFailure(remote)
+	started := info.failingSince
+	assert.False(t, started.IsZero(), "a failure to get state starts the timer")
+
+	info.noteFailure(fmt.Errorf("wrapped: %w", remote))
+	assert.Equal(t, started, info.failingSince, "further such failures keep the first time")
+
+	info.noteFailure(fmt.Errorf("storing the state failed"))
+	assert.True(t, info.failingSince.IsZero(), "a failure on our side resets the timer")
+
+	info.noteFailure(roomserverAPI.ErrResyncFrontierChanged)
+	assert.True(t, info.failingSince.IsZero(), "the room changing says nothing about the servers")
+}

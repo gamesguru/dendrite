@@ -50,6 +50,18 @@ type roomRetryInfo struct {
 	failingSince time.Time
 }
 
+// noteFailure starts the give-up timer on a failure to get state from the servers, and
+// resets it on any other failure, which says nothing about them.
+func (i *roomRetryInfo) noteFailure(err error) {
+	var remoteErr *remoteStateError
+	switch {
+	case !errors.As(err, &remoteErr):
+		i.failingSince = time.Time{}
+	case i.failingSince.IsZero():
+		i.failingSince = time.Now()
+	}
+}
+
 // remoteStateError is a resync failure because no server gave usable state, as opposed to
 // one on our side. Only these count towards giving up on a room.
 type remoteStateError struct{ err error }
@@ -181,12 +193,7 @@ func (w *PartialStateWorker) worker(workerID int) {
 				info = &roomRetryInfo{retryCount: 0}
 			}
 			info.retryCount++
-			var remoteErr *remoteStateError
-			if !errors.As(err, &remoteErr) {
-				info.failingSince = time.Time{}
-			} else if info.failingSince.IsZero() {
-				info.failingSince = time.Now()
-			}
+			info.noteFailure(err)
 
 			logger := logrus.WithFields(logrus.Fields{
 				"room_nid":    roomNID,
@@ -425,6 +432,12 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 			if fetchErr != nil {
 				logger.WithError(fetchErr).Warn("Failed to fetch state from server")
 				lastErr = fetchErr
+				// Only a server failing to answer counts; the helper can also fail on our side,
+				// for instance loading what it stored.
+				var remoteErr *remoteStateError
+				if !errors.As(fetchErr, &remoteErr) {
+					remoteOnly = false
+				}
 				break
 			}
 			remoteOnly = false // from here on, failures are on our side
@@ -467,6 +480,11 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 
 	if remoteOnly {
 		return &remoteStateError{lastErr}
+	}
+	var remoteErr *remoteStateError
+	if errors.As(lastErr, &remoteErr) {
+		// Keep the cause, without the claim that every server failed.
+		return errors.New(lastErr.Error())
 	}
 	return lastErr
 }
@@ -934,7 +952,7 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		stateIDs, err = w.fedAPI.LookupStateIDs(ctx, origin, serverName, roomID, eventID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("LookupStateIDs from %s: %w", serverName, err)
+		return nil, &remoteStateError{fmt.Errorf("LookupStateIDs from %s: %w", serverName, err)}
 	}
 
 	wantIDs := stateIDs.GetStateEventIDs()
@@ -942,7 +960,7 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	if len(wantIDs) == 0 {
 		// A room's state is never empty, it has at least the create event. Try
 		// another server instead of treating every event as missing.
-		return nil, fmt.Errorf("LookupStateIDs from %s: the response has no state events", serverName)
+		return nil, &remoteStateError{fmt.Errorf("LookupStateIDs from %s: the response has no state events", serverName)}
 	}
 	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs)+1)
 	for _, id := range wantIDs {
@@ -1142,7 +1160,7 @@ func (w *PartialStateWorker) fetchMissingViaState(
 	logger.WithField("missing", len(missing)).Info("Fetching missing state events via /state")
 	state, err := w.fedAPI.LookupState(ctx, origin, serverName, roomID, eventID, roomVersion)
 	if err != nil {
-		return fmt.Errorf("LookupState from %s: %w", serverName, err)
+		return &remoteStateError{fmt.Errorf("LookupState from %s: %w", serverName, err)}
 	}
 
 	missingSet := idSet(missing)
