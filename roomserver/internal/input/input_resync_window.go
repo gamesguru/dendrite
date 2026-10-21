@@ -7,6 +7,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -83,6 +84,12 @@ func (r *Inputer) recomputeWindowState(
 	for _, ev := range order {
 		prevStates, stateErr := updater.StateAtEventIDs(ctx, ev.prevIDs)
 		if stateErr != nil {
+			var missingEvent types.MissingEventError
+			var missingState types.MissingStateError
+			if errors.As(stateErr, &missingEvent) || errors.As(stateErr, &missingState) {
+				logrus.WithError(stateErr).WithField("event_id", ev.id).Debug("Keeping the stored state of an event with a prev event of unknown state")
+				continue
+			}
 			return false, nil, fmt.Errorf("updater.StateAtEventIDs: %w", stateErr)
 		}
 		if len(prevStates) != len(ev.prevIDs) || hasUnknownState(prevStates) {
