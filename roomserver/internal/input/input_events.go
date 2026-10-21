@@ -332,7 +332,15 @@ func (r *Inputer) processRoomEvent(
 	var rejectionErr error
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
-	} else if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
+	} else if err = r.fetchAuthEvents(
+		ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
+		// An event with missing prev events is looked at again once they are in, and
+		// the state looked up for them brings in its senders' memberships along the
+		// way. The room is only partly known meanwhile, so do not ask for the auth
+		// chain of the event too: it is accepted provisionally and checked after the
+		// resync.
+		!hasPartialState || !missingPrev || input.Kind != api.KindNew,
+	); err != nil {
 		if input.Kind != api.KindOutlier {
 			return fmt.Errorf("r.fetchAuthEvents: %w", err)
 		}
@@ -1106,7 +1114,8 @@ func (r *Inputer) resolvePartialStateAuth(
 // store them in the database. By the time this function ends, either
 // we've failed to retrieve the auth chain altogether (in which case
 // an error is returned) or we've successfully retrieved them all and
-// they are now in the database.
+// they are now in the database. If fetchUnknown is false the unknown ones
+// are left alone and only those already known are loaded.
 //
 //nolint:gocyclo
 func (r *Inputer) fetchAuthEvents(
@@ -1118,6 +1127,7 @@ func (r *Inputer) fetchAuthEvents(
 	auth *gomatrixserverlib.AuthEvents,
 	known map[string]*types.Event,
 	servers []spec.ServerName,
+	fetchUnknown bool,
 ) error {
 	trace, ctx := internal.StartRegion(ctx, "fetchAuthEvents")
 	defer trace.EndRegion()
@@ -1152,7 +1162,7 @@ func (r *Inputer) fetchAuthEvents(
 
 	// If there are no missing auth events then there is nothing more
 	// to do — we've loaded everything that we need.
-	if len(unknown) == 0 {
+	if len(unknown) == 0 || !fetchUnknown {
 		return nil
 	}
 
