@@ -506,7 +506,8 @@ func (a *UserInternalAPI) queryRemoteKeys(
 func (a *UserInternalAPI) queryKeysFromServer(
 	ctx, fedCtx context.Context, serverName string, devKeys map[string][]string,
 ) (fclient.RespQueryKeys, error) {
-	if wait := a.keyQueryBackoff.remaining(serverName); wait > 0 {
+	wait, ok := a.keyQueryBackoff.acquire(serverName)
+	if !ok {
 		return fclient.RespQueryKeys{}, fmt.Errorf("remote key queries to %s are backing off for another %s", serverName, wait.Round(time.Second))
 	}
 	resp, err := a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
@@ -515,6 +516,8 @@ func (a *UserInternalAPI) queryKeysFromServer(
 		a.keyQueryBackoff.success(serverName)
 	case ctx.Err() == nil && isTransientKeyQueryError(err):
 		a.keyQueryBackoff.failure(serverName)
+	default:
+		a.keyQueryBackoff.release(serverName)
 	}
 	return resp, err
 }

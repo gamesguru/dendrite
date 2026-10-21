@@ -169,3 +169,48 @@ func TestQueryKeysFromServerConcurrentFailuresBackOffOnce(t *testing.T) {
 	wg.Wait()
 	assert.LessOrEqual(t, api.keyQueryBackoff.remaining("dead"), keyQueryBackoffBase, "one burst of failures is one backoff step")
 }
+
+type blockingKeyClient struct {
+	fedsenderapi.KeyserverFederationAPI
+	calls   atomic.Int32
+	release chan struct{}
+	err     error
+}
+
+func (c *blockingKeyClient) QueryKeys(context.Context, spec.ServerName, spec.ServerName, map[string][]string) (fclient.RespQueryKeys, error) {
+	c.calls.Add(1)
+	<-c.release
+	return fclient.RespQueryKeys{}, c.err
+}
+
+// Once the wait is over, a crowd of syncs must not all go back to a server that
+// may still be down: one query probes it and the rest use the cache.
+func TestQueryKeysFromServerSendsOneProbeAfterBackoff(t *testing.T) {
+	now := time.Unix(1000, 0)
+	client := &blockingKeyClient{release: make(chan struct{}), err: context.DeadlineExceeded}
+	api := &UserInternalAPI{
+		FedClient:       client,
+		Config:          &config.UserAPI{Matrix: &config.Global{}},
+		keyQueryBackoff: remoteKeyBackoff{now: func() time.Time { return now }},
+	}
+	api.keyQueryBackoff.failure("dead")
+	now = now.Add(keyQueryBackoffBase + time.Second)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = api.queryKeysFromServer(context.Background(), context.Background(), "dead", nil)
+		}()
+	}
+	// Wait for the probe to be in flight and the others to have been turned away.
+	require.Eventually(t, func() bool { return client.calls.Load() == 1 }, time.Second, time.Millisecond)
+	_, ok := api.keyQueryBackoff.acquire("dead")
+	assert.False(t, ok, "a second query must not probe while the first is in flight")
+	close(client.release)
+	wg.Wait()
+
+	assert.EqualValues(t, 1, client.calls.Load(), "only one of the concurrent queries may reach the server")
+	assert.Greater(t, api.keyQueryBackoff.remaining("dead"), keyQueryBackoffBase, "a failed probe lengthens the wait")
+}
