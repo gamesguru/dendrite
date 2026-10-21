@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
@@ -80,6 +81,9 @@ func main() {
 			// Complement restarts servers and expects delivery to resume
 			// within seconds, as Synapse's Complement config does.
 			cfg.FederationAPI.FederationMinRetryExponent = 0
+			// Complement joins rooms whose servers all fail to give state, and expects the
+			// join to be abandoned within seconds.
+			cfg.FederationAPI.PartialStateResyncGiveUpAfter = 5 * time.Second //nolint:mnd
 			// Allow allow networks when running in CI, as otherwise connections
 			// to other servers might be blocked when running Complement/Sytest.
 			cfg.FederationAPI.DenyNetworkCIDRs = []string{}

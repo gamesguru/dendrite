@@ -36,6 +36,8 @@ const (
 	partialStateMaxBackoff = time.Hour * 1
 	// Maximum number of retries before giving up on a room.
 	partialStateMaxRetries = 16
+	// How often rooms waiting to be retried are looked at.
+	retryTickInterval = time.Second
 	// Jitter bounds for backoff calculation.
 	maxJitterMultiplier = 1.4
 	minJitterMultiplier = 0.8
@@ -45,7 +47,17 @@ const (
 type roomRetryInfo struct {
 	retryAt    time.Time
 	retryCount uint32
+	// failingSince is when servers began to fail to give usable state; zero when the
+	// last failure was on our side.
+	failingSince time.Time
 }
+
+// remoteStateError is a resync failure because no server gave usable state, as opposed to
+// one on our side. Only these count towards giving up on a room.
+type remoteStateError struct{ err error }
+
+func (e *remoteStateError) Error() string { return e.err.Error() }
+func (e *remoteStateError) Unwrap() error { return e.err }
 
 // PartialStateWorker handles background resync of rooms with partial state from MSC3706 faster joins.
 // After a partial state join, this worker fetches the full room state in the background.
@@ -171,12 +183,32 @@ func (w *PartialStateWorker) worker(workerID int) {
 				info = &roomRetryInfo{retryCount: 0}
 			}
 			info.retryCount++
+			var remoteErr *remoteStateError
+			if !errors.As(err, &remoteErr) {
+				info.failingSince = time.Time{}
+			} else if info.failingSince.IsZero() {
+				info.failingSince = time.Now()
+			}
 
 			logger := logrus.WithFields(logrus.Fields{
 				"room_nid":    roomNID,
 				"worker_id":   workerID,
 				"retry_count": info.retryCount,
 			})
+
+			// The join is abandoned once the resync has been failing for too long.
+			if w.shouldGiveUp(info) {
+				delete(w.retryMap, roomNID)
+				w.retryMu.Unlock()
+				logger.WithError(err).Error("Giving up on partial state resync, leaving the room")
+				if abandonErr := w.abandonJoin(roomNID); abandonErr != nil {
+					logger.WithError(abandonErr).Error("Failed to abandon the partial state join, will retry")
+					w.retryMu.Lock()
+					w.retryMap[roomNID] = &roomRetryInfo{retryCount: info.retryCount, retryAt: time.Now().Add(w.backoffDuration(0)), failingSince: info.failingSince}
+					w.retryMu.Unlock()
+				}
+				continue
+			}
 
 			// Check if we've exceeded max retries
 			if info.retryCount >= partialStateMaxRetries {
@@ -189,6 +221,13 @@ func (w *PartialStateWorker) worker(workerID int) {
 
 			// Schedule retry with exponential backoff
 			backoff := w.backoffDuration(info.retryCount)
+			// Try again when the limit is reached, to give up then rather than a backoff later.
+			if w.fedAPI != nil && w.fedAPI.cfg != nil && w.fedAPI.cfg.PartialStateResyncGiveUpAfter > 0 && !info.failingSince.IsZero() {
+				untilGiveUp := time.Until(info.failingSince.Add(w.fedAPI.cfg.PartialStateResyncGiveUpAfter))
+				if untilGiveUp < backoff {
+					backoff = max(untilGiveUp, time.Second)
+				}
+			}
 			info.retryAt = time.Now().Add(backoff)
 			w.retryMap[roomNID] = info
 			w.retryMu.Unlock()
@@ -203,9 +242,63 @@ func (w *PartialStateWorker) worker(workerID int) {
 	}
 }
 
+// shouldGiveUp reports whether servers have been failing to give usable state for a room
+// for longer than the configured limit.
+func (w *PartialStateWorker) shouldGiveUp(info *roomRetryInfo) bool {
+	if w.fedAPI == nil || w.fedAPI.cfg == nil || info.failingSince.IsZero() {
+		return false
+	}
+	giveUpAfter := w.fedAPI.cfg.PartialStateResyncGiveUpAfter
+	return giveUpAfter > 0 && time.Since(info.failingSince) >= giveUpAfter
+}
+
+// abandonJoin makes the local users leave a room whose partial state could not be
+// resynced, through the usual leave, and ends its partial state. It may be repeated: only
+// those still joined leave, and a room that is no longer partial is left alone.
+func (w *PartialStateWorker) abandonJoin(roomNID types.RoomNID) error {
+	ctx := w.process.Context()
+	partial, err := w.rsAPI.IsRoomPartialState(ctx, roomNID)
+	if err != nil || !partial {
+		return err
+	}
+	roomID, err := w.rsAPI.RoomIDFromNID(ctx, roomNID)
+	if err != nil {
+		return err
+	}
+
+	var members roomserverAPI.QueryMembershipsForRoomResponse
+	if err = w.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true, LocalOnly: true,
+	}, &members); err != nil {
+		return fmt.Errorf("failed to query the local members of %s: %w", roomID, err)
+	}
+	for _, ev := range members.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		userID, idErr := spec.NewUserID(*ev.StateKey, true)
+		if idErr != nil {
+			continue
+		}
+		if err = w.rsAPI.PerformLeave(ctx, &roomserverAPI.PerformLeaveRequest{
+			RoomID: roomID,
+			Leaver: *userID,
+			Reason: "The room's state could not be fetched, so the join was abandoned",
+		}, &roomserverAPI.PerformLeaveResponse{}); err != nil {
+			return fmt.Errorf("%s failed to leave %s: %w", userID.String(), roomID, err)
+		}
+	}
+
+	if _, err = w.rsAPI.ClearRoomPartialState(ctx, roomNID); err != nil {
+		return err
+	}
+	w.rsAPI.NotifyUnPartialStated(roomID)
+	return nil
+}
+
 // retryLoop periodically retries failed rooms.
 func (w *PartialStateWorker) retryLoop() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(retryTickInterval)
 	defer ticker.Stop()
 
 	for {
@@ -378,7 +471,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		}
 	}
 
-	return lastErr
+	return &remoteStateError{lastErr}
 }
 
 // getStoredEvent returns an accepted event stored locally.

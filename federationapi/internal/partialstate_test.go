@@ -22,6 +22,7 @@ import (
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
 )
@@ -806,4 +807,16 @@ func TestFindWindowAnchor(t *testing.T) {
 		_, ok := store(pre, other, twoParents).findWindowAnchor(ctx, "!r:test", twoParents.EventID(), twoParents.EventID())
 		assert.False(t, ok)
 	})
+}
+
+func TestPartialStateWorkerShouldGiveUp(t *testing.T) {
+	cfg := &config.FederationAPI{PartialStateResyncGiveUpAfter: time.Minute}
+	w := &PartialStateWorker{fedAPI: &FederationInternalAPI{cfg: cfg}}
+
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{}), "failures on our side never count")
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now()}), "too soon")
+	assert.True(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now().Add(-2 * time.Minute)}))
+
+	cfg.PartialStateResyncGiveUpAfter = 0
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now().Add(-2 * time.Minute)}), "0 never gives up")
 }

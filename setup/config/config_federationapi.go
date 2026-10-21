@@ -1,6 +1,8 @@
 package config
 
 import (
+	"time"
+
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 )
@@ -24,6 +26,11 @@ type FederationAPI struct {
 	// further failure. The default 8 gives ~4 minutes. Lower it only for tests,
 	// which restart servers and expect delivery to resume quickly.
 	FederationMinRetryExponent uint32 `yaml:"send_min_retry_exponent"`
+
+	// How long a partial state resync (MSC3706) may keep failing to get usable state from
+	// any server before the join is abandoned: the local users leave the room again.
+	// Failures on our side do not count. 0, the default, retries until it works.
+	PartialStateResyncGiveUpAfter time.Duration `yaml:"partial_state_resync_give_up_after"`
 
 	// P2P Feature: Whether relaying to specific nodes should be enabled.
 	// Defaults to false.
