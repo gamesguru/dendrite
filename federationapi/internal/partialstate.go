@@ -299,32 +299,20 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		return fmt.Errorf("no servers available for partial state resync (all blacklisted or backing off, no join server)")
 	}
 
+	anchor := w.findStateAnchor(ctx, roomID, latestEventIDs[0])
+
 	var lastErr error
-	for i, entry := range orderedServers {
+	for _, entry := range orderedServers {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
 
-		stateEventIDs, err := w.fetchStateViaStateIDs(
-			ctx, logger, origin, serverName, roomID, latestEventIDs[0],
+		stateEventIDs, err := w.fetchStateViaAnchor(
+			ctx, logger, origin, serverName, roomID, anchor,
 			roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
 		)
 		if err != nil {
-			// The server may not know our latest event, for example when it has
-			// not yet processed our join. Ask for the state at its parents instead.
-			if fallbackIDs, fallbackErr := w.fetchStateViaParents(
-				ctx, logger, origin, serverName, roomID, latestEventIDs[0],
-				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
-			); fallbackErr == nil {
-				stateEventIDs, err = fallbackIDs, nil
-			}
-		}
-		if err != nil {
 			logger.WithError(err).Warn("Failed to fetch state from server")
 			lastErr = err
-			// If this was the join server and it failed, don't give up — try others.
-			if i == 0 && len(orderedServers) > 1 {
-				continue
-			}
 			continue
 		}
 
@@ -336,6 +324,137 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	}
 
 	return lastErr
+}
+
+func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID string) (gomatrixserverlib.PDU, error) {
+	var res roomserverAPI.QueryEventsByIDResponse
+	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{eventID},
+	}, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Events) == 0 {
+		return nil, fmt.Errorf("event %s not found locally", eventID)
+	}
+	return res.Events[0].PDU, nil
+}
+
+// maxStateAnchorWalk bounds how far findStateAnchor follows the local chain of
+// events, so a long-lived partial state room does not load its whole timeline.
+const maxStateAnchorWalk = 256
+
+// stateAnchor says which event to ask /state_ids about and which events to
+// apply on top of the answer to get the state at the latest event.
+type stateAnchor struct {
+	// askID is the event passed to /state_ids, which returns the state before it.
+	askID string
+	// applyAsk is set when askID's own state change is not covered by chain
+	// and must be applied too (askID is not a locally stored event).
+	applyAsk bool
+	// chain holds locally stored events, oldest first, whose state changes are
+	// applied on top of the response.
+	chain []gomatrixserverlib.PDU
+}
+
+// findStateAnchor follows single-parent links from the latest event back to
+// the oldest locally stored ancestor, then anchors on that ancestor's parent:
+// the newest event the remote servers are certain to know, as it predates our
+// join. A server may not know our join, or events sent after it, yet. For an
+// event with several parents the state before it is not derivable from any one
+// parent, so that event is the anchor and the remote resolves the state itself.
+func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string) stateAnchor {
+	var chain []gomatrixserverlib.PDU // newest first
+	curID := latestID
+	for range maxStateAnchorWalk {
+		cur, err := w.getStoredEvent(ctx, roomID, curID)
+		if err != nil {
+			// Not stored: nothing local to inspect. With no chain, ask about the
+			// latest event as is.
+			return stateAnchor{askID: curID, applyAsk: len(chain) > 0, chain: reversed(chain)}
+		}
+		chain = append(chain, cur)
+		prevs := cur.PrevEventIDs()
+		if len(prevs) != 1 {
+			return stateAnchor{askID: cur.EventID(), chain: reversed(chain)}
+		}
+		curID = prevs[0]
+	}
+	// Walk limit: the event after curID in the chain is stored, curID is an
+	// ordinary ancestor that servers can resolve.
+	return stateAnchor{askID: curID, applyAsk: true, chain: reversed(chain)}
+}
+
+func reversed(in []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+	out := make([]gomatrixserverlib.PDU, len(in))
+	for i, ev := range in {
+		out[len(in)-1-i] = ev
+	}
+	return out
+}
+
+// fetchStateViaAnchor returns the state IDs at the latest event: /state_ids at
+// the anchor, plus the state changes of the anchor and the events after it.
+func (w *PartialStateWorker) fetchStateViaAnchor(
+	ctx context.Context,
+	logger *logrus.Entry,
+	origin, serverName spec.ServerName,
+	roomID string,
+	anchor stateAnchor,
+	roomVersion gomatrixserverlib.RoomVersion,
+	bypassBackoff bool,
+	allServers []serverEntry,
+) ([]string, error) {
+	stateIDs, err := w.fetchStateViaStateIDs(
+		ctx, logger, origin, serverName, roomID, anchor.askID,
+		roomVersion, bypassBackoff, allServers,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	overlays := anchor.chain
+	if anchor.applyAsk {
+		ev, err := w.getStoredEvent(ctx, roomID, anchor.askID)
+		if err != nil {
+			verImpl, verErr := gomatrixserverlib.GetRoomVersion(roomVersion)
+			if verErr != nil {
+				return nil, verErr
+			}
+			ev = w.fetchSingleEvent(ctx, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
+			if ev == nil {
+				return nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
+			}
+		}
+		if ev.StateKey() != nil {
+			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, map[string]bool{ev.EventID(): true}, false); len(missing) > 0 {
+				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
+					return nil, err
+				}
+			}
+		}
+		overlays = append([]gomatrixserverlib.PDU{ev}, overlays...)
+	}
+
+	var stateOverlays []gomatrixserverlib.PDU
+	for _, ev := range overlays {
+		if ev.StateKey() != nil {
+			stateOverlays = append(stateOverlays, ev)
+		}
+	}
+	if len(stateOverlays) == 0 {
+		return stateIDs, nil
+	}
+	var stored roomserverAPI.QueryEventsByIDResponse
+	if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: stateIDs,
+	}, &stored); err != nil {
+		return nil, fmt.Errorf("query state events: %w", err)
+	}
+	logger.WithFields(logrus.Fields{
+		"anchor":   anchor.askID,
+		"overlays": len(stateOverlays),
+	}).Info("Resynced partial state from an anchor event")
+	return overlayStateEvents(stateIDs, stored.Events, stateOverlays), nil
 }
 
 type serverEntry struct {
@@ -468,92 +587,37 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	return wantIDs, nil
 }
 
-// fetchStateViaParents fetches the room state through the parents of eventID.
-// /state_ids returns the state before the requested event, so the state at a
-// parent leaves out the parent's own state change. That change is applied on
-// top of the response, so the result is the state before eventID.
-func (w *PartialStateWorker) fetchStateViaParents(
-	ctx context.Context,
-	logger *logrus.Entry,
-	origin, serverName spec.ServerName,
-	roomID, eventID string,
-	roomVersion gomatrixserverlib.RoomVersion,
-	bypassBackoff bool,
-	allServers []serverEntry,
-) ([]string, error) {
-	var res roomserverAPI.QueryEventsByIDResponse
-	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
-		RoomID: roomID, EventIDs: []string{eventID},
-	}, &res); err != nil {
-		return nil, fmt.Errorf("QueryEventsByID %s: %w", eventID, err)
-	}
-	if len(res.Events) == 0 {
-		return nil, fmt.Errorf("event %s not found locally", eventID)
-	}
-	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	var lastErr error
-	for _, parentID := range res.Events[0].PrevEventIDs() {
-		stateIDs, err := w.fetchStateViaStateIDs(
-			ctx, logger, origin, serverName, roomID, parentID,
-			roomVersion, bypassBackoff, allServers,
-		)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		parent := w.fetchSingleEvent(ctx, origin, roomID, parentID, verImpl, bypassBackoff, serverName, allServers)
-		if parent == nil {
-			lastErr = fmt.Errorf("could not fetch parent %s", parentID)
-			continue
-		}
-		if parent.StateKey() != nil {
-			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, map[string]bool{parentID: true}, false); len(missing) > 0 {
-				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
-					lastErr = err
-					continue
-				}
-			}
-			var stored roomserverAPI.QueryEventsByIDResponse
-			if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
-				RoomID: roomID, EventIDs: stateIDs,
-			}, &stored); err != nil {
-				lastErr = err
-				continue
-			}
-			stateIDs = overlayStateEvent(stateIDs, stored.Events, parent)
-		}
-		logger.WithField("parent", parentID).Info("Resynced partial state via a parent of the latest event")
-		return stateIDs, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("event %s has no parents", eventID)
-	}
-	return nil, lastErr
-}
-
 // overlayStateEvent returns stateIDs with the entry for ev's type and state key
 // replaced by ev, or ev added if that key is not present.
 func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) []string {
+	return overlayStateEvents(stateIDs, events, []gomatrixserverlib.PDU{ev})
+}
+
+// overlayStateEvents applies state events in order, each replacing the entry
+// with the same type and state key. events must hold the stored events behind
+// stateIDs so their keys can be found.
+func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) []string {
 	type key struct{ eventType, stateKey string }
-	want := key{ev.Type(), *ev.StateKey()}
-	byID := make(map[string]key, len(events))
+	keyOf := make(map[string]key, len(events)+len(overlays))
 	for _, e := range events {
 		if e.StateKey() != nil {
-			byID[e.EventID()] = key{e.Type(), *e.StateKey()}
+			keyOf[e.EventID()] = key{e.Type(), *e.StateKey()}
 		}
 	}
-	out := make([]string, 0, len(stateIDs)+1)
-	for _, id := range stateIDs {
-		if k, ok := byID[id]; ok && k == want {
-			continue
+	out := append(make([]string, 0, len(stateIDs)+len(overlays)), stateIDs...)
+	for _, ev := range overlays {
+		want := key{ev.Type(), *ev.StateKey()}
+		kept := out[:0]
+		for _, id := range out {
+			if k, ok := keyOf[id]; ok && k == want {
+				continue
+			}
+			kept = append(kept, id)
 		}
-		out = append(out, id)
+		out = append(kept, ev.EventID())
+		keyOf[ev.EventID()] = want
 	}
-	return append(out, ev.EventID())
+	return out
 }
 
 // findMissingEvents checks which of the wanted event IDs are not yet stored

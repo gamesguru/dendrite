@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
 )
@@ -461,5 +462,85 @@ func TestOverlayStateEvent(t *testing.T) {
 	t.Run("adds the event when the key is new", func(t *testing.T) {
 		out := overlayStateEvent(ids, stored, member.PDU)
 		assert.ElementsMatch(t, []string{oldName.EventID(), topic.EventID(), member.EventID()}, out)
+	})
+}
+
+func TestOverlayStateEventsAppliesInOrder(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newName := func(body string) *types.HeaderedEvent {
+		raw := fmt.Sprintf(`{"type":"m.room.name","state_key":"","room_id":"!r:test","sender":"@a:test","content":{"name":%q},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`, body)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	first, second, third := newName("1"), newName("2"), newName("3")
+
+	out := overlayStateEvents([]string{first.EventID()}, []*types.HeaderedEvent{first}, []gomatrixserverlib.PDU{second.PDU, third.PDU})
+	assert.Equal(t, []string{third.EventID()}, out, "a later overlay replaces an earlier one")
+}
+
+type anchorRoomserverAPI struct {
+	roomserverAPI.FederationRoomserverAPI
+	events map[string]*types.HeaderedEvent
+}
+
+func (a anchorRoomserverAPI) QueryEventsByID(_ context.Context, req *roomserverAPI.QueryEventsByIDRequest, res *roomserverAPI.QueryEventsByIDResponse) error {
+	for _, id := range req.EventIDs {
+		if ev, ok := a.events[id]; ok {
+			res.Events = append(res.Events, ev)
+		}
+	}
+	return nil
+}
+
+func TestFindStateAnchor(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string, prevs ...string) *types.HeaderedEvent {
+		prevJSON := "[]"
+		if len(prevs) > 0 {
+			prevJSON = fmt.Sprintf("[%q", prevs[0])
+			for _, p := range prevs[1:] {
+				prevJSON += fmt.Sprintf(",%q", p)
+			}
+			prevJSON += "]"
+		}
+		raw := fmt.Sprintf(`{"type":"m.room.message","room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":1,"prev_events":%s,"auth_events":[]}`, body, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	store := func(evs ...*types.HeaderedEvent) *PartialStateWorker {
+		m := map[string]*types.HeaderedEvent{}
+		for _, ev := range evs {
+			m[ev.EventID()] = ev
+		}
+		return &PartialStateWorker{rsAPI: anchorRoomserverAPI{events: m}}
+	}
+	ctx := context.Background()
+
+	t.Run("anchors on the parent of the oldest stored ancestor", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := newEvent("join", pre.EventID())
+		later := newEvent("later", join.EventID())
+		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID())
+		assert.Equal(t, pre.EventID(), a.askID)
+		assert.True(t, a.applyAsk)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID(), "chain is oldest first")
+		assert.Equal(t, later.EventID(), a.chain[1].EventID())
+	})
+	t.Run("asks about an event with several parents directly", func(t *testing.T) {
+		p1, p2 := newEvent("p1"), newEvent("p2")
+		merge := newEvent("merge", p1.EventID(), p2.EventID())
+		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID())
+		assert.Equal(t, merge.EventID(), a.askID)
+		assert.False(t, a.applyAsk)
+		require.Len(t, a.chain, 1)
+	})
+	t.Run("asks about an unknown latest event as is", func(t *testing.T) {
+		a := store().findStateAnchor(ctx, "!r:test", "$unknown")
+		assert.Equal(t, "$unknown", a.askID)
+		assert.False(t, a.applyAsk)
+		assert.Empty(t, a.chain)
 	})
 }
