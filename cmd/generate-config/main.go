@@ -50,6 +50,9 @@ func main() {
 				} else {
 					db.ConnectionString = uri
 				}
+				// A CI server's disk is shared and busy, where a commit that
+				// fsyncs several times makes request timeouts a gamble.
+				db.SQLiteWAL = *defaultsForCI
 			}
 		} else {
 			cfg.Global.DatabaseOptions.ConnectionString = uri

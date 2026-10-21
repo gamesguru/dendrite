@@ -51,7 +51,7 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer, options ...Connec
 		if err != nil {
 			return nil, fmt.Errorf("ParseFileURI: %w", err)
 		}
-		dsn = sqliteDSNExtension(dsn)
+		dsn = sqliteDSNExtension(dsn, dbProperties.SQLiteWAL)
 	case dbProperties.ConnectionString.IsPostgres():
 		driverName = "pgx"
 		dsn = string(dbProperties.ConnectionString)
