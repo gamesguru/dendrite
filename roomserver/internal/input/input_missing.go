@@ -94,7 +94,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 	if err != nil {
 		return fmt.Errorf("t.getMissingEvents: %w", err)
 	}
-	if !isGapFilled {
+	if !isGapFilled && !t.reachesKnownEvents(ctx, newEvents) {
 		return errors.New("the gap before the event was not filled by /get_missing_events")
 	}
 	t.log.Infof("Gap filled by /get_missing_events during partial state, injecting %d new events", len(newEvents))
@@ -113,6 +113,27 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 		}
 	}
 	return nil
+}
+
+// reachesKnownEvents reports whether the earliest of the events, which are in
+// topological order, builds on events that we already know the state at. The
+// events then close the gap, even though we don't know the state at the earliest
+// one itself yet.
+func (t *missingStateReq) reachesKnownEvents(ctx context.Context, newEvents []gomatrixserverlib.PDU) bool {
+	if len(newEvents) == 0 {
+		return false
+	}
+	prevIDs := newEvents[0].PrevEventIDs()
+	state, err := t.db.StateAtEventIDs(ctx, prevIDs)
+	if err != nil || len(prevIDs) == 0 || len(state) != len(prevIDs) {
+		return false
+	}
+	for _, stateAtEvent := range state {
+		if stateAtEvent.BeforeStateSnapshotNID == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // processEventWithMissingState is the entrypoint for a missingStateReq
