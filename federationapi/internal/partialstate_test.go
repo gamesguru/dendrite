@@ -456,12 +456,19 @@ func TestOverlayStateEvent(t *testing.T) {
 	stored := []*types.HeaderedEvent{oldName, topic}
 
 	t.Run("replaces the entry with the same type and state key", func(t *testing.T) {
-		out := overlayStateEvent(ids, stored, newName.PDU)
+		out, err := overlayStateEvent(ids, stored, newName.PDU)
+		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{topic.EventID(), newName.EventID()}, out)
 	})
 	t.Run("adds the event when the key is new", func(t *testing.T) {
-		out := overlayStateEvent(ids, stored, member.PDU)
+		out, err := overlayStateEvent(ids, stored, member.PDU)
+		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{oldName.EventID(), topic.EventID(), member.EventID()}, out)
+	})
+	t.Run("fails if an old state event is not stored", func(t *testing.T) {
+		out, err := overlayStateEvent(ids, []*types.HeaderedEvent{topic}, newName.PDU)
+		require.ErrorContains(t, err, oldName.EventID())
+		assert.Nil(t, out, "must not return a state set with both versions of the key")
 	})
 }
 
@@ -475,17 +482,22 @@ func TestOverlayStateEventsAppliesInOrder(t *testing.T) {
 	}
 	first, second, third := newName("1"), newName("2"), newName("3")
 
-	out := overlayStateEvents([]string{first.EventID()}, []*types.HeaderedEvent{first}, []gomatrixserverlib.PDU{second.PDU, third.PDU})
+	out, err := overlayStateEvents([]string{first.EventID()}, []*types.HeaderedEvent{first}, []gomatrixserverlib.PDU{second.PDU, third.PDU})
+	require.NoError(t, err)
 	assert.Equal(t, []string{third.EventID()}, out, "a later overlay replaces an earlier one")
 }
 
 type anchorRoomserverAPI struct {
 	roomserverAPI.FederationRoomserverAPI
-	events map[string]*types.HeaderedEvent
+	events      map[string]*types.HeaderedEvent
+	rejectedIDs map[string]bool
 }
 
 func (a anchorRoomserverAPI) QueryEventsByID(_ context.Context, req *roomserverAPI.QueryEventsByIDRequest, res *roomserverAPI.QueryEventsByIDResponse) error {
 	for _, id := range req.EventIDs {
+		if req.ExcludeRejected && a.rejectedIDs[id] {
+			continue
+		}
 		if ev, ok := a.events[id]; ok {
 			res.Events = append(res.Events, ev)
 		}
@@ -540,6 +552,17 @@ func TestFindStateAnchor(t *testing.T) {
 	t.Run("asks about an unknown latest event as is", func(t *testing.T) {
 		a := store().findStateAnchor(ctx, "!r:test", "$unknown")
 		assert.Equal(t, "$unknown", a.askID)
+		assert.False(t, a.applyAsk)
+		assert.Empty(t, a.chain)
+	})
+	t.Run("does not use rejected events as stored anchors", func(t *testing.T) {
+		rejected := newEvent("rejected")
+		worker := &PartialStateWorker{rsAPI: anchorRoomserverAPI{
+			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected},
+			rejectedIDs: map[string]bool{rejected.EventID(): true},
+		}}
+		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID())
+		assert.Equal(t, rejected.EventID(), a.askID)
 		assert.False(t, a.applyAsk)
 		assert.Empty(t, a.chain)
 	})

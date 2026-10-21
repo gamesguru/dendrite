@@ -329,7 +329,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID string) (gomatrixserverlib.PDU, error) {
 	var res roomserverAPI.QueryEventsByIDResponse
 	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
-		RoomID: roomID, EventIDs: []string{eventID},
+		RoomID: roomID, EventIDs: []string{eventID}, ExcludeRejected: true,
 	}, &res); err != nil {
 		return nil, err
 	}
@@ -435,6 +435,12 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 					return nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
 				}
 			}
+			// Never add a rejected event back into current state. Soft-failed
+			// events do not become forward extremities, so they cannot be the
+			// latest event selected for a resync anchor.
+			if _, err = w.getStoredEvent(ctx, roomID, ev.EventID()); err != nil {
+				return nil, fmt.Errorf("anchor event %s was not accepted locally: %w", ev.EventID(), err)
+			}
 		}
 		overlays = append([]gomatrixserverlib.PDU{ev}, overlays...)
 	}
@@ -458,7 +464,11 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		"anchor":   anchor.askID,
 		"overlays": len(stateOverlays),
 	}).Info("Resynced partial state from an anchor event")
-	return overlayStateEvents(stateIDs, stored.Events, stateOverlays), nil
+	stateIDs, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays)
+	if err != nil {
+		return nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
+	}
+	return stateIDs, nil
 }
 
 type serverEntry struct {
@@ -593,14 +603,14 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 
 // overlayStateEvent returns stateIDs with the entry for ev's type and state key
 // replaced by ev, or ev added if that key is not present.
-func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) []string {
+func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) ([]string, error) {
 	return overlayStateEvents(stateIDs, events, []gomatrixserverlib.PDU{ev})
 }
 
 // overlayStateEvents applies state events in order, each replacing the entry
 // with the same type and state key. events must hold the stored events behind
 // stateIDs so their keys can be found.
-func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) []string {
+func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) ([]string, error) {
 	type key struct{ eventType, stateKey string }
 	keyOf := make(map[string]key, len(events)+len(overlays))
 	for _, e := range events {
@@ -608,8 +618,16 @@ func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overla
 			keyOf[e.EventID()] = key{e.Type(), *e.StateKey()}
 		}
 	}
+	for _, id := range stateIDs {
+		if _, ok := keyOf[id]; !ok {
+			return nil, fmt.Errorf("state event %s is not available for state-key resolution", id)
+		}
+	}
 	out := append(make([]string, 0, len(stateIDs)+len(overlays)), stateIDs...)
 	for _, ev := range overlays {
+		if ev.StateKey() == nil {
+			return nil, fmt.Errorf("cannot overlay non-state event %s", ev.EventID())
+		}
 		want := key{ev.Type(), *ev.StateKey()}
 		kept := out[:0]
 		for _, id := range out {
@@ -621,7 +639,7 @@ func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overla
 		out = append(kept, ev.EventID())
 		keyOf[ev.EventID()] = want
 	}
-	return out
+	return out, nil
 }
 
 // findMissingEvents checks which of the wanted event IDs are not yet stored
