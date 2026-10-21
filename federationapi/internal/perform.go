@@ -127,6 +127,15 @@ func (r *FederationInternalAPI) PerformJoin(
 	)
 }
 
+// performJoinUsingServer joins the user to the room through serverName, updates
+// joined hosts, and submits the returned state and join event to the roomserver.
+// A known pending invite requests full state immediately; other joins request
+// partial state first and may retry with full state after an authorization failure.
+// Successfully recorded partial state is queued for resync if a worker is available.
+// It returns errors for invalid IDs, unavailable direct federation, failed joins
+// or missing join responses, joined-host derivation, database updates, and
+// roomserver submission. Invite lookup and partial-state tracking failures do not
+// fail the join.
 func (r *FederationInternalAPI) performJoinUsingServer(
 	ctx context.Context,
 	roomID, userID string,

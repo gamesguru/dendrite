@@ -231,7 +231,11 @@ func (w *PartialStateWorker) retryLoop() {
 	}
 }
 
-// processRoom fetches the full state for a room with partial state.
+// processRoom fetches and applies full room state, clears the partial-state flag,
+// and notifies waiters. It skips rooms that are no longer partial. If the room ID
+// lookup fails or room info is absent, it only attempts to clear the flag.
+// Other roomserver errors propagate; missing latest events or usable servers
+// cause an error. If all servers fail, it returns the last fetch or apply error.
 func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	trace, ctx := internal.StartTask(w.process.Context(), "PartialStateWorker.processRoom")
 	defer trace.EndTask()
@@ -326,6 +330,8 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	return lastErr
 }
 
+// getStoredEvent returns a locally stored event, including rejected events.
+// It propagates roomserver query errors and returns an error if no event is found.
 func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID string) (gomatrixserverlib.PDU, error) {
 	var res roomserverAPI.QueryEventsByIDResponse
 	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
@@ -356,12 +362,12 @@ type stateAnchor struct {
 	chain []gomatrixserverlib.PDU
 }
 
-// findStateAnchor follows single-parent links from the latest event back to
-// the oldest locally stored ancestor, then anchors on that ancestor's parent:
-// the newest event the remote servers are certain to know, as it predates our
-// join. A server may not know our join, or events sent after it, yet. For an
-// event with several parents the state before it is not derivable from any one
-// parent, so that event is the anchor and the remote resolves the state itself.
+// findStateAnchor chooses an event for /state_ids by following at most
+// maxStateAnchorWalk locally stored events back from latestID along single-parent
+// links. The returned chain is ordered oldest first. A missing event or lookup
+// error anchors on the queried ID; an event with zero or multiple parents anchors
+// on itself so the remote resolves its state. At the walk limit, the next parent
+// is the anchor. applyAsk is set when the anchor is outside a nonempty chain.
 func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string) stateAnchor {
 	var chain []gomatrixserverlib.PDU // newest first
 	curID := latestID
@@ -384,6 +390,7 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 	return stateAnchor{askID: curID, applyAsk: true, chain: reversed(chain)}
 }
 
+// reversed returns a new slice with the events in reverse order, leaving in unchanged.
 func reversed(in []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
 	out := make([]gomatrixserverlib.PDU, len(in))
 	for i, ev := range in {
@@ -394,6 +401,11 @@ func reversed(in []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
 
 // fetchStateViaAnchor returns the state IDs at the latest event: /state_ids at
 // the anchor, plus the state changes of the anchor and the events after it.
+// It may fetch and store missing events as outliers. bypassBackoff applies to
+// serverName; allServers supplies fallback event sources. A failed local anchor
+// lookup falls back to federation. State lookup, room-version, batch-fetch, and
+// stored-state query errors are returned, as are errors for an unavailable anchor
+// or an anchor state event still missing after fetching.
 func (w *PartialStateWorker) fetchStateViaAnchor(
 	ctx context.Context,
 	logger *logrus.Entry,
@@ -593,6 +605,8 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 
 // overlayStateEvent returns stateIDs with the entry for ev's type and state key
 // replaced by ev, or ev added if that key is not present.
+// ev must have a non-nil state key; events must contain the events behind stateIDs
+// so matching keys can be identified.
 func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) []string {
 	return overlayStateEvents(stateIDs, events, []gomatrixserverlib.PDU{ev})
 }
@@ -600,6 +614,8 @@ func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev goma
 // overlayStateEvents applies state events in order, each replacing the entry
 // with the same type and state key. events must hold the stored events behind
 // stateIDs so their keys can be found.
+// Each overlay must have a non-nil state key. The returned IDs are in a new slice;
+// stateIDs is unchanged.
 func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) []string {
 	type key struct{ eventType, stateKey string }
 	keyOf := make(map[string]key, len(events)+len(overlays))
