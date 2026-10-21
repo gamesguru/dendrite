@@ -98,12 +98,6 @@ func (s *StreamIDStatements) nextRelationID(ctx context.Context, txn *sql.Tx) (p
 	return
 }
 
-func (s *StreamIDStatements) nextUnPartialStatedID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
-	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	err = increaseStmt.QueryRowContext(ctx, "unpartialstated").Scan(&pos)
-	return
-}
-
 func (s *StreamIDStatements) nextStickyID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
 	err = increaseStmt.QueryRowContext(ctx, "sticky").Scan(&pos)

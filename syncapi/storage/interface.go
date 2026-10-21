@@ -49,6 +49,9 @@ type DatabaseTransaction interface {
 	CurrentState(ctx context.Context, roomID string, stateFilterPart *synctypes.StateFilter, excludeEventIDs []string) ([]*rstypes.HeaderedEvent, error)
 	GetStateDeltasForFullStateSync(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
 	GetStateDeltas(ctx context.Context, device *userapi.Device, r types.Range, userID string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, []string, error)
+	// FullStateDeltas returns, for each room, a delta with the room's whole current
+	// state as if the user had just joined it. Rooms without current state are left out.
+	FullStateDeltas(ctx context.Context, device *userapi.Device, roomIDs []string, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]types.StateDelta, error)
 	// RoomStateDelta returns the state events of one room added within the
 	// range that are still part of its state at the end of the range.
 	RoomStateDelta(ctx context.Context, device *userapi.Device, roomID string, r types.Range, stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)

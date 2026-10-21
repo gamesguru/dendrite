@@ -78,7 +78,10 @@ func NewSqliteUnPartialStatedRoomsTable(db *sql.DB, streamID *StreamIDStatements
 func (s *unPartialStatedRoomsStatements) InsertUnPartialStatedRoom(
 	ctx context.Context, txn *sql.Tx, roomID, userID string,
 ) (pos types.StreamPosition, err error) {
-	pos, err = s.streamIDStatements.nextUnPartialStatedID(ctx, txn)
+	// The marker takes a position in the PDU stream, like the events of the room,
+	// so that a sync whose token is before it covers it and a long poll is woken
+	// to a position past its start.
+	pos, err = s.streamIDStatements.nextPDUID(ctx, txn)
 	if err != nil {
 		return
 	}

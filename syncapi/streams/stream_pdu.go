@@ -227,6 +227,17 @@ func (p *PDUStreamProvider) IncrementalSync(
 		}
 	}
 
+	// MSC3706: a client that does not lazy load members was not sent a room while it
+	// had partial state. Once the resync finishes, send it as a newly joined room.
+	if !stateFilter.LazyLoadMembers && !r.Backwards {
+		if stateDeltas, syncJoinedRooms, err = p.addUnPartialStatedRooms(ctx, snapshot, req, r, &stateFilter, stateDeltas, syncJoinedRooms); err != nil {
+			// Stay at from: a position past the marker would tell the client it has
+			// seen a room it was never sent.
+			logAbandoned(req, err, "", "incremental")
+			return from
+		}
+	}
+
 	// MSC3706: Filter out partial state rooms for non-lazy syncs
 	if !stateFilter.LazyLoadMembers && len(stateDeltas) > 0 {
 		partialStateRoomIDs, partialErr := p.rsAPI.GetPartialStateRoomIDs(ctx)
@@ -322,6 +333,58 @@ func (p *PDUStreamProvider) IncrementalSync(
 	}
 
 	return newPos
+}
+
+// addUnPartialStatedRooms adds a delta with the whole current state for each room
+// whose partial state resync finished in the range, replacing any delta the range
+// already holds for it. The resync changes no state of its own, so a client whose
+// token is already past its join would otherwise never be sent the room.
+func (p *PDUStreamProvider) addUnPartialStatedRooms(
+	ctx context.Context, snapshot storage.DatabaseTransaction, req *types.SyncRequest, r types.Range,
+	stateFilter *synctypes.StateFilter, stateDeltas []types.StateDelta, syncJoinedRooms []string,
+) ([]types.StateDelta, []string, error) {
+	roomIDs, err := snapshot.UnPartialStatedRoomsInRange(ctx, req.Device.UserID, r)
+	if err != nil {
+		if abandonsSync(err) {
+			return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", err)
+		}
+		req.Log.WithError(err).Warn("Failed to get un-partial-stated rooms")
+		return stateDeltas, syncJoinedRooms, nil
+	}
+	if len(roomIDs) == 0 {
+		return stateDeltas, syncJoinedRooms, nil
+	}
+	fullDeltas, err := snapshot.FullStateDeltas(ctx, req.Device, roomIDs, stateFilter, p.rsAPI)
+	if err != nil {
+		if abandonsSync(err) {
+			return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.FullStateDeltas: %w", err)
+		}
+		req.Log.WithError(err).Warn("Failed to get the state of un-partial-stated rooms")
+		return stateDeltas, syncJoinedRooms, nil
+	}
+
+	replaced := make(map[string]bool, len(fullDeltas))
+	for _, delta := range fullDeltas {
+		replaced[delta.RoomID] = true
+	}
+	merged := make([]types.StateDelta, 0, len(stateDeltas)+len(fullDeltas))
+	for _, delta := range stateDeltas {
+		if !replaced[delta.RoomID] {
+			merged = append(merged, delta)
+		}
+	}
+	merged = append(merged, fullDeltas...)
+
+	joined := make(map[string]bool, len(syncJoinedRooms))
+	for _, roomID := range syncJoinedRooms {
+		joined[roomID] = true
+	}
+	for roomID := range replaced {
+		if !joined[roomID] {
+			syncJoinedRooms = append(syncJoinedRooms, roomID)
+		}
+	}
+	return merged, syncJoinedRooms, nil
 }
 
 func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []types.StateDelta, r types.Range, eventFilter synctypes.RoomEventFilter, snapshot storage.DatabaseTransaction) (map[string]types.RecentEvents, error) {

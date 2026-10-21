@@ -904,6 +904,31 @@ func (d *DatabaseTransaction) RelationsFor(ctx context.Context, roomID, eventID,
 	return events, prevBatch, nextBatch, nil
 }
 
+// FullStateDeltas returns, for each room, a delta with the room's whole current
+// state as if the user had just joined it. Rooms without current state are left out.
+func (d *DatabaseTransaction) FullStateDeltas(
+	ctx context.Context, device *userapi.Device, roomIDs []string,
+	stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI,
+) ([]types.StateDelta, error) {
+	deltas := make([]types.StateDelta, 0, len(roomIDs))
+	for _, roomID := range roomIDs {
+		s, err := d.currentStateStreamEventsForRoom(ctx, roomID, stateFilter)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		deltas = append(deltas, types.StateDelta{
+			Membership:  spec.Join,
+			NewlyJoined: true,
+			StateEvents: d.StreamEventsToEvents(ctx, device, s, rsAPI),
+			RoomID:      roomID,
+		})
+	}
+	return deltas, nil
+}
+
 // UnPartialStatedRoomsInRange returns room IDs that became fully-stated (completed
 // partial state resync) for a user in the given range. This is used by MSC3706 faster
 // joins to force room summary updates when partial state resync completes.

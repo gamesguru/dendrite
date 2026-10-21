@@ -1129,3 +1129,40 @@ func TestRedaction(t *testing.T) {
 		}
 	})
 }
+
+// The marker for a room that finished its partial state resync takes a position in
+// the PDU stream. A sync whose token is before it then covers it, and a long poll
+// is woken to a position past the one it started from.
+func TestUnPartialStatedMarkerUsesPDUPositions(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		positions := MustWriteEvents(t, db, r.Events())
+		lastEventPos := positions[len(positions)-1]
+
+		markerPos, err := db.InsertUnPartialStatedRoom(ctx, r.ID, alice.ID)
+		if err != nil {
+			t.Fatalf("InsertUnPartialStatedRoom: %v", err)
+		}
+		if markerPos <= lastEventPos {
+			t.Fatalf("the marker position %d is not after the room's last event at %d", markerPos, lastEventPos)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			rooms, err := snapshot.UnPartialStatedRoomsInRange(ctx, alice.ID, types.Range{From: lastEventPos, To: markerPos})
+			if err != nil {
+				t.Fatalf("UnPartialStatedRoomsInRange: %v", err)
+			}
+			assert.Equal(t, []string{r.ID}, rooms, "a sync from just before the marker covers it")
+
+			rooms, err = snapshot.UnPartialStatedRoomsInRange(ctx, alice.ID, types.Range{From: 0, To: lastEventPos})
+			if err != nil {
+				t.Fatalf("UnPartialStatedRoomsInRange: %v", err)
+			}
+			assert.Empty(t, rooms, "a sync that ended before the marker does not")
+		})
+	})
+}
