@@ -65,6 +65,10 @@ jobs:
           key: ${{ runner.os }}-go-sytest-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-sytest-
+      - name: Link cmd/dendrite for Sytest
+        # Sytest's dendrite_sytest.sh builds ./cmd/dendrite, which is cmd/zendrite here.
+        run: ln -sfn zendrite cmd/dendrite
+        working-directory: /src
       - name: Run Sytest
         run: /bootstrap.sh dendrite
         working-directory: /src
