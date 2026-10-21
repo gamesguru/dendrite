@@ -548,15 +548,89 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 	}, &stored); err != nil {
 		return nil, fmt.Errorf("query state events: %w", err)
 	}
+
+	// The events received while the state was partial were accepted without the
+	// room's members to check them against. Apply each one to the state only if the
+	// auth rules allow it there, as the full state can now show that it is not: a
+	// kick by someone who had left, say, must not remove its target.
+	state := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(stored.Events))
+	for _, he := range stored.Events {
+		if he.StateKey() != nil {
+			state[gomatrixserverlib.StateKeyTuple{EventType: he.Type(), StateKey: *he.StateKey()}] = he.PDU
+		}
+	}
+	userIDQuerier := func(room spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return w.rsAPI.QueryUserIDForSender(ctx, room, senderID)
+	}
+	// This server's own events are trusted, as is the anchor: it predates our join,
+	// and the server that gave it to us had accepted it.
+	trusted := func(ev gomatrixserverlib.PDU) bool {
+		if ev.EventID() == anchor.askID {
+			return true
+		}
+		user, queryErr := w.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
+		return queryErr == nil && user != nil && w.fedAPI.cfg.Matrix.IsLocalServerName(user.Domain())
+	}
+	allowed, skipped := allowedOverlays(state, stateOverlays, trusted, userIDQuerier)
+	for _, ev := range skipped {
+		logger.WithField("event_id", ev.EventID()).Warn("Not applying an event received during the partial join: the room's full state does not allow it")
+	}
+	stateOverlays = allowed
+
 	logger.WithFields(logrus.Fields{
 		"anchor":   anchor.askID,
 		"overlays": len(stateOverlays),
+		"skipped":  len(skipped),
 	}).Info("Resynced partial state from an anchor event")
 	stateIDs, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays)
 	if err != nil {
 		return nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
 	}
 	return stateIDs, nil
+}
+
+// allowedOverlays returns, in order, the state events that the auth rules allow on top
+// of state, and those they do not. Each event allowed is added to the state the
+// next is checked against. Trusted events, such as this server's own, are applied
+// without a check. An event that cannot be checked is applied, so that a
+// failure here cannot leave the room without state it should have.
+func allowedOverlays(
+	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU,
+	overlays []gomatrixserverlib.PDU,
+	trusted func(gomatrixserverlib.PDU) bool,
+	userIDQuerier spec.UserIDForSender,
+) (allowed, skipped []gomatrixserverlib.PDU) {
+	current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(state))
+	for tuple, ev := range state {
+		current[tuple] = ev
+	}
+	for _, ev := range overlays {
+		if !trusted(ev) && !allowedByState(current, ev, userIDQuerier) {
+			skipped = append(skipped, ev)
+			continue
+		}
+		allowed = append(allowed, ev)
+		current[gomatrixserverlib.StateKeyTuple{EventType: ev.Type(), StateKey: *ev.StateKey()}] = ev
+	}
+	return allowed, skipped
+}
+
+// allowedByState reports whether the auth rules allow ev given the state it follows.
+func allowedByState(
+	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, ev gomatrixserverlib.PDU,
+	userIDQuerier spec.UserIDForSender,
+) bool {
+	var authEvents []gomatrixserverlib.PDU
+	for _, tuple := range gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{ev}).Tuples() {
+		if authEvent, ok := state[tuple]; ok {
+			authEvents = append(authEvents, authEvent)
+		}
+	}
+	provider, err := gomatrixserverlib.NewAuthEvents(authEvents)
+	if err != nil {
+		return true
+	}
+	return gomatrixserverlib.Allowed(ev, provider, userIDQuerier) == nil
 }
 
 type serverEntry struct {

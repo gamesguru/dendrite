@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 // TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing.
@@ -646,5 +648,72 @@ func TestFindStateAnchor(t *testing.T) {
 		assert.Error(t, err, "a rejected event is not an accepted stored event")
 		_, err = worker.getStoredEvent(ctx, "!r:test", later.EventID())
 		assert.NoError(t, err)
+	})
+}
+
+func TestAllowedOverlays(t *testing.T) {
+	alice, bob := test.NewUser(t), test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	userIDs := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID(string(senderID), true)
+	}
+	nobodyIsLocal := func(gomatrixserverlib.PDU) bool { return false }
+	ids := func(evs ...gomatrixserverlib.PDU) []string {
+		out := make([]string, len(evs))
+		for i, ev := range evs {
+			out[i] = ev.EventID()
+		}
+		return out
+	}
+	tupleOf := func(ev gomatrixserverlib.PDU) gomatrixserverlib.StateKeyTuple {
+		return gomatrixserverlib.StateKeyTuple{EventType: ev.Type(), StateKey: *ev.StateKey()}
+	}
+	stateOf := func(events []*types.HeaderedEvent) map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU {
+		state := map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU{}
+		for _, ev := range events {
+			if ev.StateKey() != nil {
+				state[tupleOf(ev.PDU)] = ev.PDU
+			}
+		}
+		return state
+	}
+	state := stateOf(room.Events())
+
+	bobJoin := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+	topic := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "a topic"}, test.WithStateKey(""))
+	leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+
+	t.Run("events the state allows are all applied", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(state, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU, topic.PDU), ids(allowed...))
+		assert.Empty(t, skipped)
+	})
+
+	// The full state shows Alice had already left, though her topic cites her join.
+	left := stateOf(room.Events())
+	delete(left, tupleOf(leave.PDU))
+	t.Run("an event the full state does not allow is left out", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU), ids(allowed...))
+		assert.Equal(t, ids(topic.PDU), ids(skipped...))
+	})
+
+	t.Run("events of this server are trusted", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{topic.PDU}, func(gomatrixserverlib.PDU) bool { return true }, userIDs)
+		assert.Equal(t, ids(topic.PDU), ids(allowed...))
+		assert.Empty(t, skipped)
+	})
+
+	t.Run("each event is checked against the ones applied before it", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(state, []gomatrixserverlib.PDU{leave.PDU, topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(leave.PDU), ids(allowed...))
+		assert.Equal(t, ids(topic.PDU), ids(skipped...), "Alice has left by then")
+	})
+
+	t.Run("the state given is not changed", func(t *testing.T) {
+		before := len(state)
+		allowedOverlays(state, []gomatrixserverlib.PDU{topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Len(t, state, before)
+		assert.NotContains(t, state, tupleOf(topic.PDU))
 	})
 }
