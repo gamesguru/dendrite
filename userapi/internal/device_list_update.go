@@ -120,6 +120,9 @@ type DeviceListUpdaterDatabase interface {
 	// If no domains are given, all user IDs with stale device lists are returned.
 	StaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error)
 
+	// FreshDeviceLists returns those of the users whose device list was fetched in full and has not been marked stale since.
+	FreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error)
+
 	// MarkDeviceListStale sets the stale bit for this user to isStale.
 	MarkDeviceListStale(ctx context.Context, userID string, isStale bool) error
 
@@ -435,6 +438,24 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	// again, to all the servers that are in the room now.
 	if err := u.replayLocalDeviceLists(ctx, roomID, res.JoinEvents); err != nil {
 		return err
+	}
+
+	// Device lists fetched while the members of the room were not all known were not
+	// kept current by changes from the room, so they are fetched again when next needed.
+	memberIDs := make([]string, 0, len(res.JoinEvents))
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey != nil {
+			memberIDs = append(memberIDs, *ev.StateKey)
+		}
+	}
+	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)
+	if err != nil {
+		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
+	}
+	for _, userID := range fresh {
+		if err = u.db.MarkDeviceListStale(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to mark device list for %s as stale: %w", userID, err)
+		}
 	}
 
 	var changed []string

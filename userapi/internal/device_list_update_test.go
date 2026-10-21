@@ -62,6 +62,18 @@ func (d *mockDeviceListUpdaterDatabase) DeviceKeysForUser(_ context.Context, use
 	return d.localKeys[userID], nil
 }
 
+func (d *mockDeviceListUpdaterDatabase) FreshDeviceLists(_ context.Context, userIDs []string) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var fresh []string
+	for _, userID := range userIDs {
+		if isStale, known := d.staleUsers[userID]; known && !isStale {
+			fresh = append(fresh, userID)
+		}
+	}
+	return fresh, nil
+}
+
 func (d *mockDeviceListUpdaterDatabase) DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error {
 	return nil
 }
@@ -674,4 +686,23 @@ func TestDeviceListUpdaterAnnouncesLocalDeviceListsAfterResync(t *testing.T) {
 	updater.NoteLocalDeviceChange(ctx, quiet)
 	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
 	assert.Len(t, producer.events, 1)
+}
+
+func TestDeviceListUpdater_UnPartialStatedRefetchesFetchedLists(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room    = "!partial:test"
+		fetched = "@derek:remote.test"
+		unknown = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{fetched: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members: map[string][]string{room: {fetched, unknown}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.True(t, db.staleUsers[fetched], "a list fetched during partial state is fetched again")
+	_, known := db.staleUsers[unknown]
+	assert.False(t, known, "a list that was never fetched is left alone")
 }
