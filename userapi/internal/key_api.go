@@ -433,8 +433,9 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 
 // isDeviceListTracked reports whether the stored device list of a remote user is
 // complete and current: we still share a room with them, and the list isn't marked
-// stale, so updates are being applied to it as they arrive. staleCache holds the
-// stale users of the domain, fetched on first use. Any error counts as not tracked.
+// stale, so updates are being applied to it as they arrive.
+// The staleCache holds the stale users of the domain, fetched on first use.
+// Any error counts as not tracked.
 func (a *UserInternalAPI) isDeviceListTracked(
 	ctx context.Context, domain, userID string, staleCache *map[string]struct{},
 ) bool {

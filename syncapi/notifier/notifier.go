@@ -250,7 +250,7 @@ func (n *Notifier) OnNewNotificationData(
 }
 
 func (n *Notifier) OnNewPresence(
-	posUpdate types.StreamingToken, userID string,
+	ctx context.Context, posUpdate types.StreamingToken, userID string,
 ) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
@@ -258,7 +258,7 @@ func (n *Notifier) OnNewPresence(
 	n.currPos.ApplyUpdates(posUpdate)
 	sharedUsers := n._sharedUsers(userID)
 	sharedUsers = append(sharedUsers, userID)
-	sharedUsers = append(sharedUsers, n._partialStateSharedUsers(userID)...)
+	sharedUsers = append(sharedUsers, n._partialStateSharedUsers(ctx, userID)...)
 
 	n._wakeupUsers(sharedUsers, nil, n.currPos)
 }
@@ -287,7 +287,7 @@ func (n *Notifier) _sharedUsers(userID string) []string {
 	return sharedUsers
 }
 
-func (n *Notifier) IsSharedUser(userA, userB string) bool {
+func (n *Notifier) IsSharedUser(ctx context.Context, userA, userB string) bool {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
 	var okA, okB bool
@@ -301,7 +301,7 @@ func (n *Notifier) IsSharedUser(userA, userB string) bool {
 			return true
 		}
 	}
-	return n._sharesPartialStateRoom(userA, userB)
+	return n._sharesPartialStateRoom(ctx, userA, userB)
 }
 
 // partialStateServerQuerier is implemented by the roomserver API, which can tell
@@ -314,12 +314,11 @@ type partialStateServerQuerier interface {
 // _partialStateRoomServers returns the servers known to be in each room which still
 // has partial state, keyed by room ID. Its members are not all known yet, so
 // users of those servers are taken to share the room with its known members.
-func (n *Notifier) _partialStateRoomServers() map[string][]string {
+func (n *Notifier) _partialStateRoomServers(ctx context.Context) map[string][]string {
 	querier, ok := n.rsAPI.(partialStateServerQuerier)
 	if !ok {
 		return nil
 	}
-	ctx := context.Background()
 	roomIDs, err := n.rsAPI.GetPartialStateRoomIDs(ctx)
 	if err != nil || len(roomIDs) == 0 {
 		return nil
@@ -345,12 +344,12 @@ func (n *Notifier) _partialStateRoomServers() map[string][]string {
 
 // _sharesPartialStateRoom reports whether userA is in a room with partial state
 // in which a server of userB is known to be.
-func (n *Notifier) _sharesPartialStateRoom(userA, userB string) bool {
+func (n *Notifier) _sharesPartialStateRoom(ctx context.Context, userA, userB string) bool {
 	_, domain, err := gomatrixserverlib.SplitID('@', userB)
 	if err != nil {
 		return false
 	}
-	for roomID, servers := range n._partialStateRoomServers() {
+	for roomID, servers := range n._partialStateRoomServers(ctx) {
 		users, ok := n.roomIDToJoinedUsers[roomID]
 		if ok && users.isIn(userA) && slices.Contains(servers, string(domain)) {
 			return true
@@ -361,13 +360,13 @@ func (n *Notifier) _sharesPartialStateRoom(userA, userB string) bool {
 
 // _partialStateSharedUsers returns the users who are in a room with partial state
 // in which a server of the given user is known to be.
-func (n *Notifier) _partialStateSharedUsers(userID string) []string {
+func (n *Notifier) _partialStateSharedUsers(ctx context.Context, userID string) []string {
 	_, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		return nil
 	}
 	var users []string
-	for roomID, servers := range n._partialStateRoomServers() {
+	for roomID, servers := range n._partialStateRoomServers(ctx) {
 		if slices.Contains(servers, string(domain)) {
 			users = append(users, n._joinedUsers(roomID)...)
 		}

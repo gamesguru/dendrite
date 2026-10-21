@@ -91,7 +91,7 @@ func (p *PresenceStreamProvider) IncrementalSync(
 			continue
 		}
 		// Ignore users we don't share a room with
-		if req.Device.UserID != presence.UserID && !p.notifier.IsSharedUser(req.Device.UserID, presence.UserID) {
+		if req.Device.UserID != presence.UserID && !p.notifier.IsSharedUser(ctx, req.Device.UserID, presence.UserID) {
 			continue
 		}
 		cacheKey := req.Device.UserID + req.Device.ID + presence.UserID
