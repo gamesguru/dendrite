@@ -705,15 +705,24 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 		}
 	}
 	succeeded = true
+	return keyChangesResponse(syncReq.Response.DeviceLists.Changed, syncReq.Response.DeviceLists.Left)
+}
+
+// keyChangesResponse builds the /keys/changes response. Both lists are required
+// by the spec, so an empty one is an empty array and not null.
+func keyChangesResponse(changed, left []string) util.JSONResponse {
+	if changed == nil {
+		changed = []string{}
+	}
+	if left == nil {
+		left = []string{}
+	}
 	return util.JSONResponse{
 		Code: 200, //nolint:mnd
 		JSON: struct {
 			Changed []string `json:"changed"`
 			Left    []string `json:"left"`
-		}{
-			Changed: syncReq.Response.DeviceLists.Changed,
-			Left:    syncReq.Response.DeviceLists.Left,
-		},
+		}{Changed: changed, Left: left},
 	}
 }
 
