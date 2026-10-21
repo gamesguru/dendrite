@@ -46,8 +46,11 @@ CREATE TABLE IF NOT EXISTS roomserver_partial_state_rooms_servers (
 );
 `
 
+// A room that is still partial keeps the record of the join that made it so. A
+// later join, such as a rejoin before the resync finished, continues the same
+// resync, which started from the first join.
 const insertPartialStateRoomSQL = "" +
-	"INSERT OR REPLACE INTO roomserver_partial_state_rooms (room_nid, join_event_nid, joined_via, created_at, device_lists_stream_id)" +
+	"INSERT OR IGNORE INTO roomserver_partial_state_rooms (room_nid, join_event_nid, joined_via, created_at, device_lists_stream_id)" +
 	" VALUES ($1, $2, $3, strftime('%s', 'now'), $4)"
 
 const insertPartialStateRoomServerSQL = "" +
