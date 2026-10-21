@@ -901,6 +901,9 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	}
 	trace.SetTag("notified_position", lastPos)
 
+	// Requests that waited for this resync can now read the state it produced.
+	s.rsAPI.AckUnPartialStated(msg.RoomID)
+
 	logger.Info("Successfully processed un-partial-stated room event")
 	return nil
 }

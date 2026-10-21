@@ -61,3 +61,45 @@ func TestAwaitUnPartialState(t *testing.T) {
 		assert.False(t, tracker.HasObservers(roomID))
 	})
 }
+
+// Clearing the partial flag is not the end of a resync for a request that reads the
+// sync API's copy of the room: it must wait until that has caught up.
+func TestAwaitUnPartialStateHoldsForTheSyncAPI(t *testing.T) {
+	const roomID = "!room:test"
+	notPartial := func(context.Context) (bool, error) { return false, nil }
+
+	t.Run("waits after the flag is cleared until the sync API acknowledges", func(t *testing.T) {
+		tracker := NewPartialStateTracker()
+		tracker.MarkSyncPending(roomID, time.Minute)
+
+		done := make(chan error, 1)
+		go func() { done <- tracker.AwaitUnPartialState(context.Background(), roomID, notPartial) }()
+		require.Eventually(t, func() bool { return tracker.HasObservers(roomID) }, time.Second, time.Millisecond)
+		select {
+		case err := <-done:
+			t.Fatalf("returned before the sync API caught up: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		tracker.NotifyUnPartialStated(roomID)
+		require.NoError(t, <-done)
+		assert.False(t, tracker.isSyncPending(roomID), "the acknowledgement ends the hold")
+	})
+
+	t.Run("a sync API that never answers does not hold requests for good", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		tracker := NewPartialStateTracker()
+		tracker.now = func() time.Time { return now }
+		tracker.MarkSyncPending(roomID, 5*time.Second)
+		assert.True(t, tracker.isSyncPending(roomID))
+
+		now = now.Add(5 * time.Second)
+		assert.False(t, tracker.isSyncPending(roomID), "the hold expires")
+		require.NoError(t, tracker.AwaitUnPartialState(context.Background(), roomID, notPartial))
+	})
+
+	t.Run("a room that never resynced is not held", func(t *testing.T) {
+		tracker := NewPartialStateTracker()
+		require.NoError(t, tracker.AwaitUnPartialState(context.Background(), roomID, notPartial))
+	})
+}

@@ -351,6 +351,9 @@ func Setup(
 	v1fedmux.Handle("/make_join/{roomID}/{userID}", MakeFedAPI(
 		"federation_make_join", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if resp := rejectPartialStateRoom(httpReq.Context(), rsAPI, vars["roomID"]); resp != nil {
+				return *resp
+			}
 			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
 				return util.JSONResponse{
 					Code: http.StatusForbidden,
@@ -397,6 +400,9 @@ func Setup(
 	v1fedmux.Handle("/send_join/{roomID}/{eventID}", MakeFedAPI(
 		"federation_send_join", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if resp := rejectPartialStateRoom(httpReq.Context(), rsAPI, vars["roomID"]); resp != nil {
+				return *resp
+			}
 			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
 				return util.JSONResponse{
 					Code: http.StatusForbidden,
@@ -436,6 +442,9 @@ func Setup(
 	v2fedmux.Handle("/send_join/{roomID}/{eventID}", MakeFedAPI(
 		"federation_send_join", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if resp := rejectPartialStateRoom(httpReq.Context(), rsAPI, vars["roomID"]); resp != nil {
+				return *resp
+			}
 			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
 				return util.JSONResponse{
 					Code: http.StatusForbidden,
@@ -460,6 +469,9 @@ func Setup(
 	v1fedmux.Handle("/make_knock/{roomID}/{userID}", MakeFedAPI(
 		"federation_make_knock", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if resp := rejectPartialStateRoom(httpReq.Context(), rsAPI, vars["roomID"]); resp != nil {
+				return *resp
+			}
 			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
 				return util.JSONResponse{
 					Code: http.StatusForbidden,
@@ -495,6 +507,9 @@ func Setup(
 	v1fedmux.Handle("/send_knock/{roomID}/{eventID}", MakeFedAPI(
 		"federation_send_knock", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
 		func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+			if resp := rejectPartialStateRoom(httpReq.Context(), rsAPI, vars["roomID"]); resp != nil {
+				return *resp
+			}
 			if roomserverAPI.IsServerBannedFromRoom(httpReq.Context(), rsAPI, vars["roomID"], request.Origin()) {
 				return util.JSONResponse{
 					Code: http.StatusForbidden,

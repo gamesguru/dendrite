@@ -24,14 +24,48 @@ type PartialStateTracker struct {
 	// roomObservers tracks waiting channels for each room
 	// map[roomID][]chan struct{}
 	roomObservers map[string][]chan struct{}
-	mu            sync.Mutex
+	// syncPending holds, per room, the time until which waiters are kept waiting
+	// after the resync, for the sync API to catch up (see MarkSyncPending).
+	syncPending map[string]time.Time
+	mu          sync.Mutex
+	now         func() time.Time
 }
 
 // NewPartialStateTracker creates a new PartialStateTracker.
 func NewPartialStateTracker() *PartialStateTracker {
 	return &PartialStateTracker{
 		roomObservers: make(map[string][]chan struct{}),
+		syncPending:   make(map[string]time.Time),
 	}
+}
+
+func (t *PartialStateTracker) time() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
+}
+
+// MarkSyncPending records that the room's resync is finishing and the sync API has
+// yet to take in the resulting state. Waiters keep waiting, though the room no
+// longer has the partial flag, until NotifyUnPartialStated, or until the timeout
+// so that a sync API that never answers cannot hold them up for good.
+func (t *PartialStateTracker) MarkSyncPending(roomID string, timeout time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.syncPending[roomID] = t.time().Add(timeout)
+}
+
+// isSyncPending reports whether the sync API is still taking in the room's state.
+func (t *PartialStateTracker) isSyncPending(roomID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	deadline, ok := t.syncPending[roomID]
+	if ok && !t.time().Before(deadline) {
+		delete(t.syncPending, roomID)
+		return false
+	}
+	return ok
 }
 
 // observe registers interest in the room and returns a channel that is closed
@@ -86,8 +120,11 @@ func (t *PartialStateTracker) AwaitUnPartialState(ctx context.Context, roomID st
 	defer stop()
 
 	partial, err := isPartial(ctx)
-	if err != nil || !partial {
+	if err != nil {
 		return err
+	}
+	if !partial && !t.isSyncPending(roomID) {
+		return nil
 	}
 	logrus.WithField("room_id", roomID).Debug("Awaiting full state for room")
 	select {
@@ -110,6 +147,7 @@ func (t *PartialStateTracker) AwaitFullStateWithTimeout(ctx context.Context, roo
 func (t *PartialStateTracker) NotifyUnPartialStated(roomID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	delete(t.syncPending, roomID)
 
 	observers, ok := t.roomObservers[roomID]
 	if !ok || len(observers) == 0 {
