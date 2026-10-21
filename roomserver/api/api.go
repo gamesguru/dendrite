@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -14,6 +15,10 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// ErrResyncFrontierChanged is returned when the room's latest events changed
+// before a partial-state resync could atomically replace current state.
+var ErrResyncFrontierChanged = errors.New("room frontier changed during partial state resync")
 
 // ErrInvalidID is an error returned if the userID is invalid.
 type ErrInvalidID struct {
@@ -425,8 +430,10 @@ type FederationRoomserverAPI interface {
 	// This is called after state events have been stored as outliers via SendStateAsOutliers.
 	// It creates a new state snapshot from the stored events, calculates the state delta,
 	// updates the membership table, and notifies downstream components (syncapi).
-	// stateEventIDs are the event IDs of the state events that were fetched during resync.
-	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error
+	// stateEventIDs are the state events fetched during resync. expectedLatestEventIDs
+	// is the frontier from which that state was built; a changed frontier aborts
+	// the update so the resync worker can retry from the newer events.
+	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, expectedLatestEventIDs []string) error
 }
 
 type KeyserverRoomserverAPI interface {

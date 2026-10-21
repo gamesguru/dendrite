@@ -10,8 +10,10 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
@@ -122,6 +124,87 @@ func TestInvitePending(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+// joinRecordingClient answers make_join and records which kind of send_join the
+// join asks for, then fails it so that no room is joined.
+type joinRecordingClient struct {
+	fclient.FederationClient
+	mu    sync.Mutex
+	sends []string
+}
+
+func (c *joinRecordingClient) MakeJoin(_ context.Context, _, _ spec.ServerName, roomID, userID string) (fclient.RespMakeJoin, error) {
+	stateKey := userID
+	return fclient.RespMakeJoin{
+		RoomVersion: gomatrixserverlib.RoomVersionV10,
+		JoinEvent: gomatrixserverlib.ProtoEvent{
+			RoomID:     roomID,
+			SenderID:   userID,
+			Type:       spec.MRoomMember,
+			StateKey:   &stateKey,
+			Content:    []byte(`{"membership":"join"}`),
+			PrevEvents: []string{"$prev:remote"},
+			Depth:      1,
+		},
+	}, nil
+}
+
+func (c *joinRecordingClient) record(kind string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sends = append(c.sends, kind)
+}
+
+func (c *joinRecordingClient) SendJoin(context.Context, spec.ServerName, spec.ServerName, gomatrixserverlib.PDU) (fclient.RespSendJoin, error) {
+	c.record("full")
+	return fclient.RespSendJoin{}, errors.New("send_join stopped by the test")
+}
+
+func (c *joinRecordingClient) SendJoinPartialState(context.Context, spec.ServerName, spec.ServerName, gomatrixserverlib.PDU) (fclient.RespSendJoin, error) {
+	c.record("partial")
+	return fclient.RespSendJoin{}, errors.New("send_join stopped by the test")
+}
+
+// A user with a pending invite must ask for full state at once, since partial
+// state omits the invite membership the join needs, and must send exactly one
+// join. Retrying after a rejected partial join would send a second one.
+func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
+	lookupErr := errors.New("db down")
+	for name, tc := range map[string]struct {
+		rs   invitedRoomserverAPI
+		want []string
+	}{
+		"invited asks for full state once":               {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
+		"unknown invite state asks for full state once":  {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
+		"no invite uses partial state":                   {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"sender lookup failure asks for full state once": {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			testDB := test.NewInMemoryFederationDatabase()
+			_, key, err := ed25519.GenerateKey(nil)
+			require.NoError(t, err)
+			cfg := config.FederationAPI{Matrix: &config.Global{
+				SigningIdentity: fclient.SigningIdentity{ServerName: "local", KeyID: "ed25519:1", PrivateKey: key},
+			}}
+			processCtx := process.NewProcessContext()
+			defer processCtx.ShutdownZendrite()
+			client := &joinRecordingClient{}
+			stats := statistics.NewStatistics(testDB, FailuresUntilBlacklist, FailuresUntilAssumedOffline, false)
+			queues := queue.NewOutgoingQueues(testDB, processCtx, false, cfg.Matrix.ServerName, client, &stats, nil)
+			fedAPI := NewFederationInternalAPI(testDB, &cfg, tc.rs, client, &stats, nil, queues, nil)
+
+			res := api.PerformJoinResponse{}
+			fedAPI.PerformJoin(context.Background(), &api.PerformJoinRequest{
+				RoomID:      "!room:remote",
+				UserID:      "@alice:local",
+				ServerNames: []spec.ServerName{"remote"},
+			}, &res)
+
+			require.NotNil(t, res.LastError, "the stubbed send_join fails the join")
+			assert.Equal(t, tc.want, client.sends)
 		})
 	}
 }

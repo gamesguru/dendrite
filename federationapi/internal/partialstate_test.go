@@ -566,6 +566,20 @@ func TestFindStateAnchor(t *testing.T) {
 		require.Len(t, a.chain, 2)
 		assert.Equal(t, join.EventID(), a.chain[0].EventID())
 	})
+	t.Run("walks past more than 256 events to the recorded join", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@alice:local", "alice", pre.EventID())
+		stored := []*types.HeaderedEvent{pre, join}
+		latest := join.PDU
+		for i := range 300 {
+			latest = newEvent(fmt.Sprintf("after join %d", i), latest.EventID()).PDU
+			stored = append(stored, &types.HeaderedEvent{PDU: latest})
+		}
+		a := store(stored...).findStateAnchor(ctx, "!r:test", latest.EventID(), join.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID)
+		assert.True(t, a.applyAsk)
+		assert.Len(t, a.chain, 301)
+	})
 	t.Run("a second local join during the resync does not move the recorded anchor", func(t *testing.T) {
 		pre := newEvent("pre")
 		first := member("@alice:local", "alice", pre.EventID())
@@ -612,15 +626,25 @@ func TestFindStateAnchor(t *testing.T) {
 		assert.True(t, a.applyAsk, "the latest event's own state change must still be applied")
 		assert.Empty(t, a.chain)
 	})
-	t.Run("does not use rejected events as stored anchors", func(t *testing.T) {
-		rejected := newEvent("rejected")
+	t.Run("walks through a rejected event without applying its change", func(t *testing.T) {
+		pre := newEvent("pre")
+		rejected := newEvent("rejected", pre.EventID())
+		later := newEvent("later", rejected.EventID())
 		worker := &PartialStateWorker{rsAPI: anchorRoomserverAPI{
-			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected},
+			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected, later.EventID(): later},
 			rejectedIDs: map[string]bool{rejected.EventID(): true},
 		}}
-		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID(), "", "local")
-		assert.Equal(t, rejected.EventID(), a.askID)
+		a := worker.findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID, "the walk continues past the rejected event")
 		assert.True(t, a.applyAsk)
-		assert.Empty(t, a.chain)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, rejected.EventID(), a.chain[0].EventID())
+
+		// The overlay step looks each event up again as an accepted one, so the
+		// rejected event's state change is left out.
+		_, err := worker.getStoredEvent(ctx, "!r:test", rejected.EventID())
+		assert.Error(t, err, "a rejected event is not an accepted stored event")
+		_, err = worker.getStoredEvent(ctx, "!r:test", later.EventID())
+		assert.NoError(t, err)
 	})
 }

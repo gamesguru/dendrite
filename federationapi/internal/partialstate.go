@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -340,7 +341,19 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 				frontier = current[0]
 				continue
 			}
-			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, resyncStartTime); err != nil {
+			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, current, resyncStartTime); errors.Is(err, roomserverAPI.ErrResyncFrontierChanged) {
+				current, _, _, latestErr = w.rsAPI.LatestEventIDs(ctx, roomNID)
+				if latestErr != nil {
+					lastErr = latestErr
+					break
+				}
+				if len(current) == 0 {
+					lastErr = fmt.Errorf("no latest events found for room")
+					break
+				}
+				frontier = current[0]
+				continue
+			} else if err != nil {
 				lastErr = err
 				break
 			}
@@ -354,12 +367,17 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	return lastErr
 }
 
-// getStoredEvent returns a locally stored event, including rejected events.
-// It propagates roomserver query errors and returns an error if no event is found.
+// getStoredEvent returns an accepted event stored locally.
+// A rejected event is reported as not found, so its state change is never applied.
 func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID string) (gomatrixserverlib.PDU, error) {
+	return w.queryStoredEvent(ctx, roomID, eventID, true)
+}
+
+// queryStoredEvent returns an event stored locally, optionally leaving out rejected ones.
+func (w *PartialStateWorker) queryStoredEvent(ctx context.Context, roomID, eventID string, excludeRejected bool) (gomatrixserverlib.PDU, error) {
 	var res roomserverAPI.QueryEventsByIDResponse
 	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
-		RoomID: roomID, EventIDs: []string{eventID}, ExcludeRejected: true,
+		RoomID: roomID, EventIDs: []string{eventID}, ExcludeRejected: excludeRejected,
 	}, &res); err != nil {
 		return nil, err
 	}
@@ -396,7 +414,9 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 	var chain []gomatrixserverlib.PDU // newest first
 	curID := latestID
 	for {
-		cur, err := w.getStoredEvent(ctx, roomID, curID)
+		// A rejected event is walked through: it changes no state, and its parent
+		// is as good a way back as any. The overlay step leaves its change out.
+		cur, err := w.queryStoredEvent(ctx, roomID, curID, false)
 		if err != nil {
 			// Not stored: nothing local to inspect. With no chain, ask about the
 			// latest event as is.
@@ -1007,12 +1027,13 @@ func (w *PartialStateWorker) applyState(
 	roomNID types.RoomNID,
 	_ *types.RoomInfo,
 	stateEventIDs []string,
+	expectedLatestEventIDs []string,
 	resyncStartTime time.Time,
 ) error {
 	updateStateRegion, _ := internal.StartRegion(ctx, "UpdateCurrentStateAfterResync")
 	updateStateStartTime := time.Now()
 	updateStateRegion.SetTag("state_event_count", len(stateEventIDs))
-	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs); err != nil {
+	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs, expectedLatestEventIDs); err != nil {
 		updateStateRegion.EndRegion()
 		logger.WithError(err).Warn("Failed to update current state after resync")
 		return err

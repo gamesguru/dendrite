@@ -32,7 +32,7 @@ import (
 // the transaction has committed (i.e. after this function returns successfully).
 //
 //nolint:gocyclo
-func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) (localLeftJoin bool, roomInfo *types.RoomInfo, err error) {
+func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, stateEventIDs, expectedLatestEventIDs []string) (localLeftJoin bool, roomInfo *types.RoomInfo, err error) {
 	logger := logrus.WithFields(logrus.Fields{
 		"room_id":           roomID,
 		"state_event_count": len(stateEventIDs),
@@ -138,6 +138,9 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 
 	// Get current state snapshot NID
 	oldStateNID := updater.CurrentStateSnapshotNID()
+	if !sameEventIDs(expectedLatestEventIDs, latestEventIDsFromUpdater(updater.LatestEvents())) {
+		return false, roomInfo, api.ErrResyncFrontierChanged
+	}
 
 	logger.WithField("old_state_nid", oldStateNID).Debug("Got old state snapshot NID")
 
@@ -333,6 +336,31 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	}).Info("Successfully updated current state after partial state resync")
 
 	return localLeftJoin, roomInfo, nil
+}
+
+func latestEventIDsFromUpdater(latest []types.StateAtEventAndReference) []string {
+	ids := make([]string, len(latest))
+	for i := range latest {
+		ids[i] = latest[i].EventID
+	}
+	return ids
+}
+
+func sameEventIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, id := range a {
+		seen[id]++
+	}
+	for _, id := range b {
+		if seen[id] == 0 {
+			return false
+		}
+		seen[id]--
+	}
+	return true
 }
 
 // resyncStateIncomplete reports whether the state entries loaded for a resync
