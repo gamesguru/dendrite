@@ -29,6 +29,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -128,6 +129,9 @@ type DeviceListUpdaterDatabase interface {
 
 	// DeviceKeysJSON populates the KeyJSON for the given keys. If any proided `keys` have a `KeyJSON` or `StreamID` already then it will be replaced.
 	DeviceKeysJSON(ctx context.Context, keys []api.DeviceMessage) error
+
+	// DeviceKeysForUser returns the device keys for the device IDs given. If the length of deviceIDs is 0, all devices are selected.
+	DeviceKeysForUser(ctx context.Context, userID string, deviceIDs []string, includeEmpty bool) ([]api.DeviceMessage, error)
 
 	DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error
 }
@@ -410,10 +414,7 @@ func (u *DeviceListUpdater) onRoomUnPartialStated(ctx context.Context, roomID st
 // device list stale, so that it is fetched when next needed, and announces a key
 // change so that the local users who share the room are told the devices changed.
 func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomID string) error {
-	u.pendingMu.Lock()
-	pending := len(u.pendingUsers)
-	u.pendingMu.Unlock()
-	if pending == 0 || u.rsAPI == nil {
+	if u.rsAPI == nil {
 		return nil
 	}
 
@@ -422,6 +423,13 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		RoomID: roomID, JoinedOnly: true,
 	}, &res); err != nil {
 		return fmt.Errorf("failed to query the members of %s: %w", roomID, err)
+	}
+
+	// The servers in the room were only partly known until now, so the device list
+	// updates of our users reached only some of them. Announce the lists again, to
+	// all the servers that are in the room now.
+	if err := u.replayLocalDeviceLists(ctx, res.JoinEvents); err != nil {
+		return err
 	}
 
 	var changed []string
@@ -446,6 +454,31 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 			DeviceKeys: &api.DeviceKeys{UserID: userID},
 		}}); err != nil {
 			return fmt.Errorf("failed to announce the device list change of %s: %w", userID, err)
+		}
+	}
+	return nil
+}
+
+// replayLocalDeviceLists announces the device lists of the local users among the
+// given joins, as the federation sender sends them to the servers of their rooms.
+func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, joins []synctypes.ClientEvent) error {
+	for _, ev := range joins {
+		if ev.StateKey == nil {
+			continue
+		}
+		user, err := spec.NewUserID(*ev.StateKey, true)
+		if err != nil || user.Domain() != u.thisServer {
+			continue
+		}
+		msgs, err := u.db.DeviceKeysForUser(ctx, user.String(), nil, true)
+		if err != nil {
+			return fmt.Errorf("failed to load the device lists of %s: %w", user.String(), err)
+		}
+		if len(msgs) == 0 {
+			continue
+		}
+		if err = u.producer.ProduceKeyChanges(msgs); err != nil {
+			return fmt.Errorf("failed to announce the device lists of %s: %w", user.String(), err)
 		}
 	}
 	return nil

@@ -52,9 +52,14 @@ func (p *mockKeyChangeProducer) ProduceKeyChanges(keys []api.DeviceMessage) erro
 
 type mockDeviceListUpdaterDatabase struct {
 	staleUsers   map[string]bool
+	localKeys    map[string][]api.DeviceMessage
 	prevIDsExist func(string, []int64) bool
 	storedKeys   []api.DeviceMessage
 	mu           sync.Mutex // protect staleUsers
+}
+
+func (d *mockDeviceListUpdaterDatabase) DeviceKeysForUser(_ context.Context, userID string, _ []string, _ bool) ([]api.DeviceMessage, error) {
+	return d.localKeys[userID], nil
 }
 
 func (d *mockDeviceListUpdaterDatabase) DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error {
@@ -623,4 +628,29 @@ func TestDeviceListUpdaterDoesNotHoldUpdatesForKnownUsers(t *testing.T) {
 
 	rsAPI.partialRooms = nil
 	assert.False(t, updater.deferWhilePartialState(ctx, "@another:remote.test"), "with no partial room nothing waits")
+}
+
+// The servers of a room are only partly known while it has partial state, so the
+// device list updates of local users reach only some of them. Once the room is
+// fully stated they are announced again.
+func TestDeviceListUpdaterAnnouncesLocalDeviceListsAfterResync(t *testing.T) {
+	const (
+		room   = "!partial:test"
+		local  = "@alice:local.test"
+		remote = "@derek:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{
+		localKeys: map[string][]api.DeviceMessage{
+			local:  {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: local, DeviceID: "A"}, StreamID: 3}},
+			remote: {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: remote, DeviceID: "B"}, StreamID: 5}},
+		},
+	}
+	producer := &mockKeyChangeProducer{}
+	rsAPI := &mockKeyserverRoomserverAPI{members: map[string][]string{room: {local, remote}}}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	require.Len(t, producer.events, 1, "only the local user's devices are announced")
+	assert.Equal(t, local, producer.events[0].UserID)
+	assert.EqualValues(t, 3, producer.events[0].StreamID)
 }
