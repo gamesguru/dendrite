@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -318,7 +319,13 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		logger := logger.WithField("server", serverName)
 		frontier := latestEventIDs[0]
 		for attempt := 0; attempt < 4; attempt++ {
-			anchor := w.findStateAnchor(ctx, roomID, frontier, joinEventID, origin)
+			anchor, found := stateAnchor{}, false
+			if joinEventID != "" {
+				anchor, found = w.findWindowAnchor(ctx, roomID, frontier, joinEventID)
+			}
+			if !found {
+				anchor = w.findStateAnchor(ctx, roomID, frontier, joinEventID, origin)
+			}
 			stateEventIDs, anchorStateIDs, fetchErr := w.fetchStateViaAnchor(
 				ctx, logger, origin, serverName, roomID, anchor, joinEventID,
 				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
@@ -436,6 +443,89 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 		}
 		curID = prevs[0]
 	}
+}
+
+// findWindowAnchor anchors on the parent of the recorded join, whatever shape the
+// events received since then make: a branch, or an event that merges two, leaves
+// no single chain back to the join. The chain is the join and every stored event
+// leading from it to latestID, each after its prev events. It reports false if
+// the events do not lead back to a join that has a single parent, in which case
+// findStateAnchor is the way to go.
+func (w *PartialStateWorker) findWindowAnchor(ctx context.Context, roomID, latestID, joinEventID string) (stateAnchor, bool) {
+	join, err := w.queryStoredEvent(ctx, roomID, joinEventID, false)
+	if err != nil || len(join.PrevEventIDs()) != 1 {
+		return stateAnchor{}, false
+	}
+	window := map[string]gomatrixserverlib.PDU{}
+	reachedJoin := false
+	queue := []string{latestID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == joinEventID {
+			reachedJoin = true
+			continue
+		}
+		if _, seen := window[id]; seen {
+			continue
+		}
+		ev, queryErr := w.queryStoredEvent(ctx, roomID, id, false)
+		if queryErr != nil || ev.Depth() < join.Depth() {
+			continue
+		}
+		window[id] = ev
+		queue = append(queue, ev.PrevEventIDs()...)
+	}
+	if !reachedJoin {
+		return stateAnchor{}, false
+	}
+	return stateAnchor{
+		askID:    join.PrevEventIDs()[0],
+		applyAsk: true,
+		chain:    append([]gomatrixserverlib.PDU{join}, orderByPrevEvents(window)...),
+	}, true
+}
+
+// orderByPrevEvents returns the events with each after those of its prev events
+// that are among them. Depth, then event ID, picks between events that are both
+// ready; it is advisory otherwise. Events in a cycle are left out.
+func orderByPrevEvents(events map[string]gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+	waiting := make(map[string]int, len(events))
+	children := make(map[string][]string, len(events))
+	for id, ev := range events {
+		waiting[id] += 0
+		for _, prev := range ev.PrevEventIDs() {
+			if _, ok := events[prev]; ok {
+				waiting[id]++
+				children[prev] = append(children[prev], id)
+			}
+		}
+	}
+	var ready []gomatrixserverlib.PDU
+	for id, n := range waiting {
+		if n == 0 {
+			ready = append(ready, events[id])
+		}
+	}
+	order := make([]gomatrixserverlib.PDU, 0, len(events))
+	for len(ready) > 0 {
+		sort.Slice(ready, func(i, j int) bool {
+			if ready[i].Depth() != ready[j].Depth() {
+				return ready[i].Depth() < ready[j].Depth()
+			}
+			return ready[i].EventID() < ready[j].EventID()
+		})
+		ev := ready[0]
+		ready = ready[1:]
+		order = append(order, ev)
+		for _, child := range children[ev.EventID()] {
+			waiting[child]--
+			if waiting[child] == 0 {
+				ready = append(ready, events[child])
+			}
+		}
+	}
+	return order
 }
 
 // isLocalJoin reports whether ev is a join of a user on this server.

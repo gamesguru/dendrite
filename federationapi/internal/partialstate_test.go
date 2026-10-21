@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -715,5 +716,72 @@ func TestAllowedOverlays(t *testing.T) {
 		allowedOverlays(state, []gomatrixserverlib.PDU{topic.PDU}, nobodyIsLocal, userIDs)
 		assert.Len(t, state, before)
 		assert.NotContains(t, state, tupleOf(topic.PDU))
+	})
+}
+
+func TestFindWindowAnchor(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string, depth int, prevs ...string) *types.HeaderedEvent {
+		prevJSON, err := json.Marshal(prevs)
+		require.NoError(t, err)
+		raw := fmt.Sprintf(`{"type":"m.room.message","room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":%d,"prev_events":%s,"auth_events":[]}`, body, depth, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	store := func(evs ...*types.HeaderedEvent) *PartialStateWorker {
+		m := map[string]*types.HeaderedEvent{}
+		for _, ev := range evs {
+			m[ev.EventID()] = ev
+		}
+		return &PartialStateWorker{rsAPI: anchorRoomserverAPI{events: m}}
+	}
+	ctx := context.Background()
+	ids := func(chain []gomatrixserverlib.PDU) []string {
+		var out []string
+		for _, ev := range chain {
+			out = append(out, ev.EventID())
+		}
+		return out
+	}
+
+	pre := newEvent("pre", 1)
+	join := newEvent("join", 2, pre.EventID())
+
+	t.Run("an event with two prev events anchors on the join's parent", func(t *testing.T) {
+		a := newEvent("a", 3, join.EventID())
+		b := newEvent("b", 4, a.EventID(), join.EventID())
+		anchor, ok := store(pre, join, a, b).findWindowAnchor(ctx, "!r:test", b.EventID(), join.EventID())
+		require.True(t, ok)
+		assert.Equal(t, pre.EventID(), anchor.askID)
+		assert.True(t, anchor.applyAsk)
+		assert.Equal(t, []string{join.EventID(), a.EventID(), b.EventID()}, ids(anchor.chain))
+	})
+
+	t.Run("a fork and merge puts the merge last", func(t *testing.T) {
+		a := newEvent("a", 3, join.EventID())
+		b := newEvent("b", 4, a.EventID())
+		c := newEvent("c", 5, a.EventID())
+		d := newEvent("d", 6, b.EventID(), c.EventID())
+		anchor, ok := store(pre, join, a, b, c, d).findWindowAnchor(ctx, "!r:test", d.EventID(), join.EventID())
+		require.True(t, ok)
+		got := ids(anchor.chain)
+		require.Len(t, got, 5)
+		assert.Equal(t, join.EventID(), got[0])
+		assert.Equal(t, a.EventID(), got[1])
+		assert.Equal(t, d.EventID(), got[4])
+	})
+
+	t.Run("an event that does not lead back to the join is not anchored", func(t *testing.T) {
+		other := newEvent("other", 3, pre.EventID())
+		_, ok := store(pre, join, other).findWindowAnchor(ctx, "!r:test", other.EventID(), join.EventID())
+		assert.False(t, ok)
+	})
+
+	t.Run("a join with two parents is not anchored", func(t *testing.T) {
+		other := newEvent("other", 1)
+		twoParents := newEvent("join2", 2, pre.EventID(), other.EventID())
+		_, ok := store(pre, other, twoParents).findWindowAnchor(ctx, "!r:test", twoParents.EventID(), twoParents.EventID())
+		assert.False(t, ok)
 	})
 }
