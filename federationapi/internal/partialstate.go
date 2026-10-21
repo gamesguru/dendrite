@@ -607,13 +607,17 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 
 	wantIDs := stateIDs.GetStateEventIDs()
 	authIDs := stateIDs.GetAuthEventIDs()
-	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs))
+	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs)+1)
 	for _, id := range wantIDs {
 		allIDs[id] = true
 	}
 	for _, id := range authIDs {
 		allIDs[id] = true
 	}
+	// The response is the state before the event, which leaves out the event's
+	// own change. It is needed to build the state after it, so fetch it too, as
+	// Synapse does.
+	allIDs[eventID] = true
 
 	logger.WithFields(logrus.Fields{
 		"state_events": len(wantIDs),
@@ -635,7 +639,22 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		return wantIDs, nil
 	}
 
-	// Step 3: Fetch missing events in parallel from multiple servers.
+	// Step 3: Fetch the missing events. When a tenth or more of them are missing,
+	// one /state request for the whole state is cheaper than a request per event,
+	// and it is what servers expect to be asked for: it needs no /event route.
+	// This is Synapse's heuristic. Events it leaves out are fetched one by one.
+	if len(missing)*10 >= len(allIDs) {
+		if err := w.fetchMissingViaState(ctx, logger, origin, serverName, roomID, eventID, roomVersion, allIDs, missing); err != nil {
+			logger.WithError(err).Warn("Fetching missing state events via /state failed, fetching them individually")
+		} else {
+			missing = w.findMissingEvents(ctx, logger, roomID, roomVersion, idSet(missing), true)
+		}
+	}
+	if len(missing) == 0 {
+		return wantIDs, nil
+	}
+
+	// Fetch the rest in parallel from multiple servers.
 	if err := w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
 		return nil, fmt.Errorf("fetchMissingEventsParallel: %w", err)
 	}
@@ -754,6 +773,68 @@ func (w *PartialStateWorker) findMissingEvents(
 		}
 	}
 	return missing
+}
+
+// idSet returns the IDs as a set.
+func idSet(ids []string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
+// fetchMissingViaState asks the server for the whole state at eventID with a
+// single /state request, and stores the missing events from the state and auth
+// chain it returns as outliers. Events the response was not asked about are
+// ignored, so a server cannot slip extra events in. Events it leaves out remain
+// missing and are for the caller to find by another route.
+func (w *PartialStateWorker) fetchMissingViaState(
+	ctx context.Context,
+	logger *logrus.Entry,
+	origin, serverName spec.ServerName,
+	roomID, eventID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	wanted map[string]bool,
+	missing []string,
+) error {
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
+	if err != nil {
+		return fmt.Errorf("GetRoomVersion: %w", err)
+	}
+	logger.WithField("missing", len(missing)).Info("Fetching missing state events via /state")
+	state, err := w.fedAPI.LookupState(ctx, origin, serverName, roomID, eventID, roomVersion)
+	if err != nil {
+		return fmt.Errorf("LookupState from %s: %w", serverName, err)
+	}
+
+	missingSet := idSet(missing)
+	var inputs []roomserverAPI.InputRoomEvent
+	for _, raw := range append(append(gomatrixserverlib.EventJSONs{}, state.GetStateEvents()...), state.GetAuthEvents()...) {
+		ev, evErr := verImpl.NewEventFromUntrustedJSON(raw)
+		if evErr != nil {
+			logger.WithError(evErr).Warn("Ignoring an unparseable event in /state")
+			continue
+		}
+		if !missingSet[ev.EventID()] || !wanted[ev.EventID()] || ev.RoomID().String() != roomID {
+			continue
+		}
+		delete(missingSet, ev.EventID())
+		inputs = append(inputs, roomserverAPI.InputRoomEvent{
+			Kind:   roomserverAPI.KindOutlier,
+			Event:  &types.HeaderedEvent{PDU: ev},
+			Origin: origin,
+		})
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	var ires roomserverAPI.InputRoomEventsResponse
+	w.rsAPI.InputRoomEvents(ctx, &roomserverAPI.InputRoomEventsRequest{InputRoomEvents: inputs}, &ires)
+	if ires.ErrMsg != "" {
+		return fmt.Errorf("store events from /state: %s", ires.ErrMsg)
+	}
+	return nil
 }
 
 // fetchMissingEventsParallel fetches missing events using parallel workers.
