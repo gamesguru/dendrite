@@ -303,13 +303,21 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		return fmt.Errorf("no servers available for partial state resync (all blacklisted or backing off, no join server)")
 	}
 
+	// The join that started the partial state is the anchor's reference point.
+	// Rows from before it was recorded return "", and the walk falls back.
+	joinEventID, err := w.rsAPI.GetPartialStateJoinEventID(ctx, roomNID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to look up the partial state join event")
+		joinEventID = ""
+	}
+
 	var lastErr error
 	for _, entry := range orderedServers {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
 		frontier := latestEventIDs[0]
 		for attempt := 0; attempt < 4; attempt++ {
-			anchor := w.findStateAnchor(ctx, roomID, frontier, origin)
+			anchor := w.findStateAnchor(ctx, roomID, frontier, joinEventID, origin)
 			stateEventIDs, fetchErr := w.fetchStateViaAnchor(
 				ctx, logger, origin, serverName, roomID, anchor,
 				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
@@ -375,14 +383,16 @@ type stateAnchor struct {
 }
 
 // findStateAnchor follows single-parent links back from latestID until it reaches
-// our own join, an event that is not stored locally, or an event with zero or
-// multiple parents. The returned chain is ordered oldest first. Our own join is
-// the join point: its parent is the newest event remote servers are known to
-// have, whatever the resync has stored since, so stopping there keeps the anchor
-// the same on a retry. A missing event or lookup error anchors on the queried ID
-// and must be applied on top of its state; an event with zero or multiple
-// parents anchors on itself so the remote resolves its state.
-func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID string, local spec.ServerName) stateAnchor {
+// the join that started the partial state, an event that is not stored locally,
+// or an event with zero or multiple parents. The returned chain is ordered oldest
+// first. The join is the join point: its parent is the newest event remote
+// servers are known to have, whatever the resync has stored since, so stopping
+// there keeps the anchor the same on a retry. Rooms without a recorded join
+// event fall back to the first join of a user on this server. A missing event or
+// lookup error anchors on the queried ID and must be applied on top of its state.
+// An event with zero or multiple parents anchors on itself so the remote
+// resolves its state.
+func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID, joinEventID string, local spec.ServerName) stateAnchor {
 	var chain []gomatrixserverlib.PDU // newest first
 	curID := latestID
 	for {
@@ -397,7 +407,11 @@ func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latest
 		if len(prevs) != 1 {
 			return stateAnchor{askID: cur.EventID(), chain: reversed(chain)}
 		}
-		if isLocalJoin(cur, local) && !w.isJoinOfSameUser(ctx, roomID, prevs[0], cur) {
+		isJoinPoint := cur.EventID() == joinEventID
+		if joinEventID == "" {
+			isJoinPoint = isLocalJoin(cur, local) && !w.isJoinOfSameUser(ctx, roomID, prevs[0], cur)
+		}
+		if isJoinPoint {
 			return stateAnchor{askID: prevs[0], applyAsk: true, chain: reversed(chain)}
 		}
 		curID = prevs[0]

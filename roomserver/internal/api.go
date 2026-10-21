@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -468,8 +469,21 @@ func (r *RoomserverInternalAPI) QueryAdminRoomReports(
 // MSC3706 Partial State Join methods.
 
 // SetRoomPartialState marks a room as having partial state after a faster join.
-func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
+func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventID string, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
+	var joinEventNID types.EventNID
+	if joinEventID != "" {
+		nids, err := r.DB.EventNIDs(ctx, []string{joinEventID})
+		if err != nil {
+			return fmt.Errorf("look up join event %s: %w", joinEventID, err)
+		}
+		joinEventNID = nids[joinEventID].EventNID
+	}
 	return r.DB.SetRoomPartialState(ctx, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
+}
+
+// GetPartialStateJoinEventID returns the join event that started the partial state.
+func (r *RoomserverInternalAPI) GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	return r.DB.GetPartialStateJoinEventID(ctx, roomNID)
 }
 
 // IsRoomPartialState returns true if the room has partial state.

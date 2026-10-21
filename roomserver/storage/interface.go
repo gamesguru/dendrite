@@ -229,6 +229,8 @@ type Database interface {
 	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started a partial state room, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// SetRoomPartialState marks a room as having partial state after a faster join
 	// deviceListStreamID is the current device list stream position at join time (for device list replay)
 	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
@@ -288,6 +290,8 @@ type RoomDatabase interface {
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started a partial state room, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// ClientTransactionEventID returns the event a client transaction produced,
 	// or "" if the transaction is unknown.
 	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)

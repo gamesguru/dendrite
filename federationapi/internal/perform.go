@@ -316,11 +316,10 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		if err != nil {
 			logrus.WithError(err).WithField("room_id", roomID).Error("Failed to get room NID for partial state tracking")
 		} else {
-			// We don't have the join event NID here, so pass 0 for now
-			// The resync worker will handle this properly
+			// The join event is recorded so the resync can anchor on its parent.
 			// Pass 0 for deviceListStreamID for now - this will be populated when we have
 			// access to the userapi to get the current device list stream position
-			if err := r.rsAPI.SetRoomPartialState(ctx, roomNID, 0, string(serverName), serversInRoom, 0); err != nil {
+			if err := r.rsAPI.SetRoomPartialState(ctx, roomNID, response.JoinEvent.EventID(), string(serverName), serversInRoom, 0); err != nil {
 				logrus.WithError(err).WithField("room_id", roomID).Error("Failed to store partial state info")
 			} else {
 				traceLogger.WithFields(logrus.Fields{

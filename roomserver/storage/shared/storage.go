@@ -2377,6 +2377,20 @@ func (d *Database) GetPartialStateJoinServer(ctx context.Context, roomNID types.
 	return d.PartialStateTable.SelectPartialStateJoinedVia(ctx, nil, roomNID)
 }
 
+// GetPartialStateJoinEventID returns the join event that started a partial state room.
+// It returns "" when the room has no record or the event was not recorded.
+func (d *Database) GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	eventNID, err := d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID)
+	if err != nil || eventNID == 0 {
+		return "", err
+	}
+	ids, err := d.EventIDs(ctx, []types.EventNID{eventNID})
+	if err != nil {
+		return "", err
+	}
+	return ids[eventNID], nil
+}
+
 // SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {

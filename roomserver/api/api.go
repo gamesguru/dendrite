@@ -395,7 +395,8 @@ type FederationRoomserverAPI interface {
 	// MSC3706 Partial State Join methods
 	// SetRoomPartialState marks a room as having partial state after a faster join
 	// deviceListStreamID is the current device list stream position at join time (for device list replay)
-	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// joinEventID is the join event that started the partial state, which must already be stored.
+	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventID string, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
 	// IsRoomPartialState returns true if the room has partial state
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// ClearRoomPartialState removes the partial state flag from a room
@@ -405,6 +406,8 @@ type FederationRoomserverAPI interface {
 	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started the partial state, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
 	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
 	// GetAllPartialStateRooms returns all rooms with partial state

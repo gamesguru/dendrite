@@ -336,6 +336,15 @@ func TestPurgeRoom(t *testing.T) {
 		if partial, perr := db.IsRoomPartialState(ctx, existingRoomInfo.RoomNID); perr != nil || !partial {
 			t.Fatalf("room should be partial-stated before purge (partial=%v, err=%v)", partial, perr)
 		}
+		// The join event that started the partial state is recorded and resolves
+		// back to the event ID.
+		wantJoinID, err := db.EventIDs(ctx, []types.EventNID{1})
+		if err != nil || wantJoinID[1] == "" {
+			t.Fatalf("event NID 1 should exist (ids=%v, err=%v)", wantJoinID, err)
+		}
+		if gotJoinID, gerr := db.GetPartialStateJoinEventID(ctx, existingRoomInfo.RoomNID); gerr != nil || gotJoinID != wantJoinID[1] {
+			t.Fatalf("expected join event %q, got %q (err=%v)", wantJoinID[1], gotJoinID, gerr)
+		}
 
 		// validate there is an invite for bob
 		nids, err := db.EventStateKeyNIDs(ctx, []string{bob.ID})

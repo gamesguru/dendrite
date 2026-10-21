@@ -62,6 +62,9 @@ const selectPartialStateServersSQL = "" +
 const selectAllPartialStateRoomsSQL = "" +
 	"SELECT room_nid FROM roomserver_partial_state_rooms ORDER BY created_at ASC"
 
+const selectPartialStateJoinEventNIDSQL = "" +
+	"SELECT join_event_nid FROM roomserver_partial_state_rooms WHERE room_nid = $1"
+
 const selectPartialStateJoinedViaSQL = "" +
 	"SELECT joined_via FROM roomserver_partial_state_rooms WHERE room_nid = $1"
 
@@ -72,14 +75,15 @@ const deletePartialStateRoomSQL = "" +
 	"DELETE FROM roomserver_partial_state_rooms WHERE room_nid = $1 RETURNING device_lists_stream_id"
 
 type partialStateStatements struct {
-	insertPartialStateRoomStmt        *sql.Stmt
-	insertPartialStateRoomServersStmt *sql.Stmt
-	selectPartialStateRoomStmt        *sql.Stmt
-	selectPartialStateServersStmt     *sql.Stmt
-	selectPartialStateJoinedViaStmt   *sql.Stmt
-	selectAllPartialStateRoomsStmt    *sql.Stmt
-	selectDeviceListStreamIDStmt      *sql.Stmt
-	deletePartialStateRoomStmt        *sql.Stmt
+	insertPartialStateRoomStmt         *sql.Stmt
+	insertPartialStateRoomServersStmt  *sql.Stmt
+	selectPartialStateRoomStmt         *sql.Stmt
+	selectPartialStateServersStmt      *sql.Stmt
+	selectPartialStateJoinedViaStmt    *sql.Stmt
+	selectPartialStateJoinEventNIDStmt *sql.Stmt
+	selectAllPartialStateRoomsStmt     *sql.Stmt
+	selectDeviceListStreamIDStmt       *sql.Stmt
+	deletePartialStateRoomStmt         *sql.Stmt
 }
 
 func CreatePartialStateTable(db *sql.DB) error {
@@ -104,6 +108,7 @@ func PreparePartialStateTable(db *sql.DB) (tables.PartialState, error) {
 		{&s.selectPartialStateRoomStmt, selectPartialStateRoomSQL},
 		{&s.selectPartialStateServersStmt, selectPartialStateServersSQL},
 		{&s.selectPartialStateJoinedViaStmt, selectPartialStateJoinedViaSQL},
+		{&s.selectPartialStateJoinEventNIDStmt, selectPartialStateJoinEventNIDSQL},
 		{&s.selectAllPartialStateRoomsStmt, selectAllPartialStateRoomsSQL},
 		{&s.selectDeviceListStreamIDStmt, selectDeviceListStreamIDSQL},
 		{&s.deletePartialStateRoomStmt, deletePartialStateRoomSQL},
@@ -183,6 +188,18 @@ func (s *partialStateStatements) SelectPartialStateJoinedVia(
 		return "", err
 	}
 	return joinedVia, nil
+}
+
+func (s *partialStateStatements) SelectPartialStateJoinEventNID(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) (types.EventNID, error) {
+	var eventNID types.EventNID
+	stmt := sqlutil.TxStmt(txn, s.selectPartialStateJoinEventNIDStmt)
+	err := stmt.QueryRowContext(ctx, roomNID).Scan(&eventNID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return eventNID, err
 }
 
 func (s *partialStateStatements) SelectAllPartialStateRooms(

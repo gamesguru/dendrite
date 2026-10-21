@@ -181,6 +181,10 @@ func (m *mockPartialStateRoomserverAPI) GetPartialStateServers(ctx context.Conte
 	return m.partialServers[roomNID], nil
 }
 
+func (m *mockPartialStateRoomserverAPI) GetPartialStateJoinEventID(context.Context, types.RoomNID) (string, error) {
+	return "", nil
+}
+
 func (m *mockPartialStateRoomserverAPI) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
 	return "", nil
 }
@@ -534,7 +538,7 @@ func TestFindStateAnchor(t *testing.T) {
 		pre := newEvent("pre")
 		join := newEvent("join", pre.EventID())
 		later := newEvent("later", join.EventID())
-		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "local")
+		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
 		assert.Equal(t, pre.EventID(), a.askID)
 		assert.True(t, a.applyAsk)
 		require.Len(t, a.chain, 2)
@@ -556,17 +560,32 @@ func TestFindStateAnchor(t *testing.T) {
 		pre := newEvent("pre", older.EventID())
 		join := member("@alice:local", "alice", pre.EventID())
 		later := newEvent("later", join.EventID())
-		a := store(older, pre, join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "local")
+		a := store(older, pre, join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
 		assert.Equal(t, pre.EventID(), a.askID, "outliers stored by an earlier attempt must not move the anchor")
 		assert.True(t, a.applyAsk)
 		require.Len(t, a.chain, 2)
 		assert.Equal(t, join.EventID(), a.chain[0].EventID())
 	})
+	t.Run("a second local join during the resync does not move the recorded anchor", func(t *testing.T) {
+		pre := newEvent("pre")
+		first := member("@alice:local", "alice", pre.EventID())
+		second := member("@bob:local", "bob", first.EventID())
+		later := newEvent("later", second.EventID())
+		w := store(pre, first, second, later)
+
+		a := w.findStateAnchor(ctx, "!r:test", later.EventID(), first.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID, "the join that started the partial state is the join point")
+		require.Len(t, a.chain, 3)
+		assert.Equal(t, first.EventID(), a.chain[0].EventID())
+
+		a = w.findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, first.EventID(), a.askID, "without a recorded join the fallback takes the newest local join")
+	})
 	t.Run("a profile change after the join does not move the anchor", func(t *testing.T) {
 		pre := newEvent("pre")
 		join := member("@alice:local", "alice", pre.EventID())
 		rename := member("@alice:local", "alicia", join.EventID())
-		a := store(pre, join, rename).findStateAnchor(ctx, "!r:test", rename.EventID(), "local")
+		a := store(pre, join, rename).findStateAnchor(ctx, "!r:test", rename.EventID(), "", "local")
 		assert.Equal(t, pre.EventID(), a.askID)
 		require.Len(t, a.chain, 2)
 		assert.Equal(t, join.EventID(), a.chain[0].EventID())
@@ -575,20 +594,20 @@ func TestFindStateAnchor(t *testing.T) {
 	t.Run("a remote user's join is not our join point", func(t *testing.T) {
 		pre := newEvent("pre")
 		join := member("@bob:remote", "bob", pre.EventID())
-		a := store(join).findStateAnchor(ctx, "!r:test", join.EventID(), "local")
+		a := store(join).findStateAnchor(ctx, "!r:test", join.EventID(), "", "local")
 		assert.Equal(t, pre.EventID(), a.askID, "walk ends because pre is not stored")
 		assert.True(t, a.applyAsk)
 	})
 	t.Run("asks about an event with several parents directly", func(t *testing.T) {
 		p1, p2 := newEvent("p1"), newEvent("p2")
 		merge := newEvent("merge", p1.EventID(), p2.EventID())
-		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID(), "local")
+		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID(), "", "local")
 		assert.Equal(t, merge.EventID(), a.askID)
 		assert.False(t, a.applyAsk)
 		require.Len(t, a.chain, 1)
 	})
 	t.Run("asks about an unknown latest event and applies it", func(t *testing.T) {
-		a := store().findStateAnchor(ctx, "!r:test", "$unknown", "local")
+		a := store().findStateAnchor(ctx, "!r:test", "$unknown", "", "local")
 		assert.Equal(t, "$unknown", a.askID)
 		assert.True(t, a.applyAsk, "the latest event's own state change must still be applied")
 		assert.Empty(t, a.chain)
@@ -599,7 +618,7 @@ func TestFindStateAnchor(t *testing.T) {
 			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected},
 			rejectedIDs: map[string]bool{rejected.EventID(): true},
 		}}
-		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID(), "local")
+		a := worker.findStateAnchor(ctx, "!r:test", rejected.EventID(), "", "local")
 		assert.Equal(t, rejected.EventID(), a.askID)
 		assert.True(t, a.applyAsk)
 		assert.Empty(t, a.chain)
