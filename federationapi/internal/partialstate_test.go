@@ -719,6 +719,28 @@ func TestAllowedOverlays(t *testing.T) {
 	})
 }
 
+func TestCachedAnchorStateIDs(t *testing.T) {
+	cache := make(map[string][]string)
+	calls := 0
+	fetch := func() ([]string, error) {
+		calls++
+		return []string{"$create", "$member"}, nil
+	}
+
+	first, err := cachedAnchorStateIDs(cache, "$anchor", fetch)
+	require.NoError(t, err)
+	first[0] = "$mutated"
+
+	second, err := cachedAnchorStateIDs(cache, "$anchor", fetch)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"$create", "$member"}, second)
+	assert.Equal(t, 1, calls, "a retry at the same anchor reuses its successful state lookup")
+
+	_, err = cachedAnchorStateIDs(cache, "$new-anchor", fetch)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "a different anchor requires a new state lookup")
+}
+
 func TestFindWindowAnchor(t *testing.T) {
 	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	newEvent := func(body string, depth int, prevs ...string) *types.HeaderedEvent {

@@ -588,17 +588,14 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 	allServers []serverEntry,
 	anchorStates map[string][]string,
 ) (stateIDs, anchorStateIDs []string, err error) {
-	if cached, ok := anchorStates[anchor.askID]; ok {
-		stateIDs = slices.Clone(cached)
-	} else {
-		stateIDs, err = w.fetchStateViaStateIDs(
+	stateIDs, err = cachedAnchorStateIDs(anchorStates, anchor.askID, func() ([]string, error) {
+		return w.fetchStateViaStateIDs(
 			ctx, logger, origin, serverName, roomID, anchor.askID,
 			roomVersion, bypassBackoff, allServers,
 		)
-		if err != nil {
-			return nil, nil, err
-		}
-		anchorStates[anchor.askID] = slices.Clone(stateIDs)
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	overlays := anchor.chain
@@ -645,6 +642,7 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 	if len(stateOverlays) == 0 {
 		return stateIDs, stateIDsBeforeJoin(stateIDs, anchor, joinEventID), nil
 	}
+
 	var stored roomserverAPI.QueryEventsByIDResponse
 	if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: stateIDs,
@@ -702,6 +700,25 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		return nil, nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
 	}
 	return stateIDs, beforeJoin, nil
+}
+
+// cachedAnchorStateIDs reuses a successful state lookup for an anchor across
+// retries. Events may advance the room while federation is in flight, but the
+// state before the same anchor remains valid.
+func cachedAnchorStateIDs(
+	cache map[string][]string,
+	anchorID string,
+	fetch func() ([]string, error),
+) ([]string, error) {
+	if stateIDs, ok := cache[anchorID]; ok {
+		return slices.Clone(stateIDs), nil
+	}
+	stateIDs, err := fetch()
+	if err != nil {
+		return nil, err
+	}
+	cache[anchorID] = slices.Clone(stateIDs)
+	return stateIDs, nil
 }
 
 // canRecomputeSinceJoin reports whether the anchor is the parent of the join that
