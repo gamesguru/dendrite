@@ -302,15 +302,17 @@ func (r *Joiner) performJoinRoomByID(
 		}
 	}
 
-	// MSC3706: Force federated join if room is in partial state and user is not already joined.
-	// This ensures authorization happens with complete state on the remote server.
+	// MSC3706: Force federated join if room is in partial state and user is not already joined,
+	// so that authorization happens with complete state on the remote server. A public room is
+	// the exception: its join rule is part of the partial state, and with no one else's
+	// membership to weigh, this server can let the user in itself without waiting for the resync.
 	if info != nil && !forceFederatedJoin && len(req.ServerNames) > 0 {
 		isPartialState, partialStateErr := r.DB.IsRoomPartialState(ctx, info.RoomNID)
 		if partialStateErr == nil && isPartialState {
 			// Check if the user is already joined - if so, they can proceed with local operations
 			membershipRes := &rsAPI.QueryMembershipForUserResponse{}
 			_ = r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, membershipRes)
-			if !membershipRes.IsInRoom {
+			if !membershipRes.IsInRoom && !r.roomIsPublic(ctx, req.RoomIDOrAlias) {
 				logrus.WithFields(logrus.Fields{
 					"room_id": req.RoomIDOrAlias,
 					"user_id": req.UserID,
@@ -559,4 +561,23 @@ func (r *Joiner) otherServersInRoom(ctx context.Context, roomID string) []spec.S
 		return nil
 	}
 	return res.ServerNames
+}
+
+// roomIsPublic reports whether anyone may join the room, as far as this server's
+// current state says. A room whose join rule cannot be read is not public.
+func (r *Joiner) roomIsPublic(ctx context.Context, roomID string) bool {
+	joinRules, err := r.DB.GetStateEvent(ctx, roomID, spec.MRoomJoinRules, "")
+	if err != nil || joinRules == nil {
+		return false
+	}
+	joinRule, err := joinRules.JoinRule()
+	return err == nil && joinRulePermitsLocalJoinDuringResync(joinRule)
+}
+
+// joinRulePermitsLocalJoinDuringResync reports whether a join rule lets this server
+// authorize a join itself while it only has the room's partial state. Only a public
+// room does: every other rule turns on invites, knocks or the membership of other
+// rooms, which the partial state may not hold.
+func joinRulePermitsLocalJoinDuringResync(joinRule string) bool {
+	return joinRule == spec.Public
 }
