@@ -107,9 +107,10 @@ type DeviceListUpdater struct {
 	// for it instead of making a request to the user's server.
 	pendingMu    sync.Mutex
 	pendingUsers map[string]struct{}
-	// Local users whose device lists changed while a room had partial state: the
-	// room's servers were only partly known, so some of them missed the change.
-	pendingLocalLists map[string]struct{}
+	// Local users whose device lists changed while each room had partial state:
+	// that room's servers were only partly known, so some may have missed it.
+	pendingLocalLists      map[string]map[string]uint64
+	pendingLocalGeneration uint64
 }
 
 // DeviceListUpdaterDatabase is the subset of functionality from storage.Database required for the updater.
@@ -186,7 +187,7 @@ func NewDeviceListUpdater(
 		userIDToMutex:               make(map[string]*sync.Mutex),
 		mu:                          &sync.Mutex{},
 		pendingUsers:                make(map[string]struct{}),
-		pendingLocalLists:           make(map[string]struct{}),
+		pendingLocalLists:           make(map[string]map[string]uint64),
 		db:                          db,
 		api:                         api,
 		producer:                    producer,
@@ -470,32 +471,44 @@ func (u *DeviceListUpdater) NoteLocalDeviceChange(ctx context.Context, userID st
 	if u.rsAPI == nil {
 		return
 	}
+	u.pendingMu.Lock()
+	defer u.pendingMu.Unlock()
 	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
 	if err != nil || len(rooms) == 0 {
 		return
 	}
-	u.pendingMu.Lock()
-	defer u.pendingMu.Unlock()
-	u.pendingLocalLists[userID] = struct{}{}
+	u.pendingLocalGeneration++
+	generation := u.pendingLocalGeneration
+	for _, roomID := range rooms {
+		if u.pendingLocalLists[roomID] == nil {
+			u.pendingLocalLists[roomID] = make(map[string]uint64)
+		}
+		u.pendingLocalLists[roomID][userID] = generation
+	}
 }
 
 // replayLocalDeviceLists announces the device lists of the local users among the
 // given joins that changed while some room had partial state, so that the
 // federation sender sends them to the servers of their rooms again.
 func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, roomID string, joins []synctypes.ClientEvent) error {
-	var users []string
+	users := make(map[string]uint64)
 	u.pendingMu.Lock()
+	pending := u.pendingLocalLists[roomID]
+	pendingAtStart := make(map[string]uint64, len(pending))
+	for userID, generation := range pending {
+		pendingAtStart[userID] = generation
+	}
 	for _, ev := range joins {
 		if ev.StateKey == nil {
 			continue
 		}
-		if _, ok := u.pendingLocalLists[*ev.StateKey]; ok {
-			users = append(users, *ev.StateKey)
+		if generation, ok := pending[*ev.StateKey]; ok {
+			users[*ev.StateKey] = generation
 		}
 	}
 	u.pendingMu.Unlock()
 
-	for _, userID := range users {
+	for userID := range users {
 		msgs, err := u.db.DeviceKeysForUser(ctx, userID, nil, true)
 		if err != nil {
 			return fmt.Errorf("failed to load the device lists of %s: %w", userID, err)
@@ -507,26 +520,19 @@ func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, roomID s
 		}
 	}
 
-	// A user stays pending while another room still has partial state, whose servers
-	// have not been told yet.
-	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
-	if err != nil {
-		return nil //nolint:nilerr // the users stay pending
-	}
-	var stillPartial bool
-	for _, partialRoom := range rooms {
-		if partialRoom != roomID {
-			stillPartial = true
-			break
+	// This room is complete. Drop the changes we replayed, but keep any newer
+	// change recorded while the replay was in progress. Users who were not members
+	// need no replay for this room.
+	u.pendingMu.Lock()
+	for userID, generation := range pendingAtStart {
+		if u.pendingLocalLists[roomID][userID] == generation {
+			delete(u.pendingLocalLists[roomID], userID)
 		}
 	}
-	if !stillPartial {
-		u.pendingMu.Lock()
-		for _, userID := range users {
-			delete(u.pendingLocalLists, userID)
-		}
-		u.pendingMu.Unlock()
+	if len(u.pendingLocalLists[roomID]) == 0 {
+		delete(u.pendingLocalLists, roomID)
 	}
+	u.pendingMu.Unlock()
 	return nil
 }
 

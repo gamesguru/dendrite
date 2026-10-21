@@ -767,12 +767,12 @@ func (a *UserInternalAPI) uploadLocalDeviceKeys(ctx context.Context, req *api.Pe
 	// inform downstream components. However, we're fine with just creating the
 	// database entries above in other cases.
 	if !req.FromRegistration {
+		if a.Updater != nil {
+			a.Updater.NoteLocalDeviceChange(ctx, req.UserID)
+		}
 		err = emitDeviceKeyChanges(a.KeyChangeProducer, existingKeys, keysToStore, req.OnlyDisplayNameUpdates)
 		if err != nil {
 			util.GetLogger(ctx).Errorf("Failed to emitDeviceKeyChanges: %s", err)
-		}
-		if a.Updater != nil {
-			a.Updater.NoteLocalDeviceChange(ctx, req.UserID)
 		}
 	}
 }
