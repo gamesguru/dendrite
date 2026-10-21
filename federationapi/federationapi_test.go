@@ -75,6 +75,11 @@ func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.Us
 	return f.queryRoomsForUser(ctx, userID, desiredMembership)
 }
 
+// QueryRoomInfo is called by the keychange consumer to see whether a room has partial state.
+func (f *fedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return nil, nil
+}
+
 // GetAllPartialStateRooms is called by PartialStateWorker.
 func (f *fedRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	return []types.RoomNID{}, nil
