@@ -1566,7 +1566,6 @@ func Setup(
 				userDirectoryProvider,
 				postContent.SearchString,
 				postContent.Limit,
-				federation,
 				cfg.Matrix.ServerName,
 			)
 		}),
