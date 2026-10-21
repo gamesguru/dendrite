@@ -8,9 +8,11 @@ package notifier
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
@@ -256,6 +258,7 @@ func (n *Notifier) OnNewPresence(
 	n.currPos.ApplyUpdates(posUpdate)
 	sharedUsers := n._sharedUsers(userID)
 	sharedUsers = append(sharedUsers, userID)
+	sharedUsers = append(sharedUsers, n._partialStateSharedUsers(userID)...)
 
 	n._wakeupUsers(sharedUsers, nil, n.currPos)
 }
@@ -298,7 +301,78 @@ func (n *Notifier) IsSharedUser(userA, userB string) bool {
 			return true
 		}
 	}
+	return n._sharesPartialStateRoom(userA, userB)
+}
+
+// partialStateServerQuerier is implemented by the roomserver API, which can tell
+// which servers are known to be in a room that only has partial state.
+type partialStateServerQuerier interface {
+	QueryRoomInfo(ctx context.Context, roomID spec.RoomID) (*rstypes.RoomInfo, error)
+	GetPartialStateServers(ctx context.Context, roomNID rstypes.RoomNID) ([]string, error)
+}
+
+// _partialStateRoomServers returns the servers known to be in each room which still
+// has partial state, keyed by room ID. Its members are not all known yet, so
+// users of those servers are taken to share the room with its known members.
+func (n *Notifier) _partialStateRoomServers() map[string][]string {
+	querier, ok := n.rsAPI.(partialStateServerQuerier)
+	if !ok {
+		return nil
+	}
+	ctx := context.Background()
+	roomIDs, err := n.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil || len(roomIDs) == 0 {
+		return nil
+	}
+	rooms := make(map[string][]string, len(roomIDs))
+	for _, roomID := range roomIDs {
+		parsed, err := spec.NewRoomID(roomID)
+		if err != nil {
+			continue
+		}
+		info, err := querier.QueryRoomInfo(ctx, *parsed)
+		if err != nil || info == nil {
+			continue
+		}
+		servers, err := querier.GetPartialStateServers(ctx, info.RoomNID)
+		if err != nil {
+			continue
+		}
+		rooms[roomID] = servers
+	}
+	return rooms
+}
+
+// _sharesPartialStateRoom reports whether userA is in a room with partial state
+// in which a server of userB is known to be.
+func (n *Notifier) _sharesPartialStateRoom(userA, userB string) bool {
+	_, domain, err := gomatrixserverlib.SplitID('@', userB)
+	if err != nil {
+		return false
+	}
+	for roomID, servers := range n._partialStateRoomServers() {
+		users, ok := n.roomIDToJoinedUsers[roomID]
+		if ok && users.isIn(userA) && slices.Contains(servers, string(domain)) {
+			return true
+		}
+	}
 	return false
+}
+
+// _partialStateSharedUsers returns the users who are in a room with partial state
+// in which a server of the given user is known to be.
+func (n *Notifier) _partialStateSharedUsers(userID string) []string {
+	_, domain, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil {
+		return nil
+	}
+	var users []string
+	for roomID, servers := range n._partialStateRoomServers() {
+		if slices.Contains(servers, string(domain)) {
+			users = append(users, n._joinedUsers(roomID)...)
+		}
+	}
+	return users
 }
 
 // GetListener returns a UserStreamListener that can be used to wait for

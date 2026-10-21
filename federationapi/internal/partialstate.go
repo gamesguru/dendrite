@@ -21,6 +21,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
+	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -1285,6 +1286,13 @@ func (w *PartialStateWorker) applyState(
 		"total_resync_ms":       time.Since(resyncStartTime).Milliseconds(),
 	}).Debug("Successfully completed partial state resync")
 
+	// The joined hosts only held the servers of the partial /send_join response, so
+	// rebuild them from the complete state before anything is sent to the room again,
+	// such as the device list updates replayed by the hooks NotifyUnPartialStated runs.
+	if err = w.refreshJoinedHosts(ctx, roomID); err != nil {
+		logger.WithError(err).Warn("Failed to refresh the joined hosts after resync")
+	}
+
 	w.rsAPI.NotifyUnPartialStated(roomID)
 
 	// TODO(MSC3902): Implement full device list replay
@@ -1292,5 +1300,31 @@ func (w *PartialStateWorker) applyState(
 		logger.Debug("Device list replay would use changes since stream position (not yet implemented)")
 	}
 
+	return nil
+}
+
+// refreshJoinedHosts replaces the joined hosts of a room with the servers of its
+// joined members, as known from the room's current state.
+func (w *PartialStateWorker) refreshJoinedHosts(ctx context.Context, roomID string) error {
+	var res roomserverAPI.QueryMembershipsForRoomResponse
+	if err := w.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, &res); err != nil {
+		return fmt.Errorf("QueryMembershipsForRoom: %w", err)
+	}
+	hosts := make([]federationTypes.JoinedHost, 0, len(res.JoinEvents))
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		_, domain, err := gomatrixserverlib.SplitID('@', *ev.StateKey)
+		if err != nil {
+			continue
+		}
+		hosts = append(hosts, federationTypes.JoinedHost{MemberEventID: ev.EventID, ServerName: domain})
+	}
+	if _, err := w.fedAPI.db.UpdateRoom(ctx, roomID, hosts, nil, true); err != nil {
+		return fmt.Errorf("UpdateRoom: %w", err)
+	}
 	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -408,10 +409,12 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 ) map[string]map[string][]string {
 	fetchRemote := make(map[string]map[string][]string)
 	for domain, userToDeviceMap := range domainToDeviceKeys {
+		var tracked map[string]struct{}
 		for userID, deviceIDs := range userToDeviceMap {
-			// we can't safely return keys from the db when all devices are requested as we don't
-			// know if one has just been added.
-			if len(deviceIDs) > 0 {
+			// Keys for specific devices can come from the db when we hold them all. When all
+			// devices are requested we can only do so for users whose device list we track,
+			// as otherwise we don't know if a device has just been added.
+			if len(deviceIDs) > 0 || a.isDeviceListTracked(ctx, domain, userID, &tracked) {
 				err := a.populateResponseWithDeviceKeysFromDatabase(ctx, res, respMu, userID, deviceIDs)
 				if err == nil {
 					continue
@@ -426,6 +429,35 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 		}
 	}
 	return fetchRemote
+}
+
+// isDeviceListTracked reports whether the stored device list of a remote user is
+// complete and current: we still share a room with them, and the list isn't marked
+// stale, so updates are being applied to it as they arrive. staleCache holds the
+// stale users of the domain, fetched on first use. Any error counts as not tracked.
+func (a *UserInternalAPI) isDeviceListTracked(
+	ctx context.Context, domain, userID string, staleCache *map[string]struct{},
+) bool {
+	if *staleCache == nil {
+		stale, err := a.KeyDatabase.StaleDeviceLists(ctx, []spec.ServerName{spec.ServerName(domain)})
+		if err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("Failed to query stale device lists")
+			return false
+		}
+		*staleCache = make(map[string]struct{}, len(stale))
+		for _, id := range stale {
+			(*staleCache)[id] = struct{}{}
+		}
+	}
+	if _, isStale := (*staleCache)[userID]; isStale {
+		return false
+	}
+	var left rsapi.QueryLeftUsersResponse
+	if err := a.RSAPI.QueryLeftUsers(ctx, &rsapi.QueryLeftUsersRequest{StaleDeviceListUsers: []string{userID}}, &left); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query whether a user is still in a shared room")
+		return false
+	}
+	return len(left.LeftUsers) == 0
 }
 
 func (a *UserInternalAPI) queryRemoteKeys(
