@@ -88,15 +88,13 @@ knownUsersLoop:
 					}
 				}
 			}
-		} else {
+		} else if strings.Contains(localpart, searchString) {
 			// Search remote users by ID only. Fetching profiles here creates one
 			// federation request per known user, and the response isn't cached.
-			if strings.Contains(localpart, searchString) {
-				results[userID] = profile
-				if len(results) == limit {
-					response.Limited = true
-					break knownUsersLoop
-				}
+			results[userID] = profile
+			if len(results) == limit {
+				response.Limited = true
+				break knownUsersLoop
 			}
 		}
 	}
