@@ -819,6 +819,11 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 
 	wantIDs := stateIDs.GetStateEventIDs()
 	authIDs := stateIDs.GetAuthEventIDs()
+	if len(wantIDs) == 0 {
+		// A room's state is never empty, it has at least the create event. Try
+		// another server instead of treating every event as missing.
+		return nil, fmt.Errorf("LookupStateIDs from %s: the response has no state events", serverName)
+	}
 	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs)+1)
 	for _, id := range wantIDs {
 		allIDs[id] = true
