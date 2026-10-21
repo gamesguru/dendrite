@@ -75,6 +75,11 @@ func (d *mockDeviceListUpdaterDatabase) FreshDeviceLists(_ context.Context, user
 }
 
 func (d *mockDeviceListUpdaterDatabase) DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, userID := range userIDs {
+		delete(d.staleUsers, userID)
+	}
 	return nil
 }
 
@@ -708,7 +713,8 @@ func TestDeviceListUpdater_UnPartialStatedRefetchesFetchedLists(t *testing.T) {
 	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
-	assert.True(t, db.staleUsers[fetched], "a list fetched during partial state is fetched again")
+	_, stillFetched := db.staleUsers[fetched]
+	assert.False(t, stillFetched, "a list fetched during partial state is fetched again, when next asked for")
 	_, known := db.staleUsers[unknown]
 	assert.False(t, known, "a list that was never fetched is left alone")
 }
@@ -728,6 +734,7 @@ func TestDeviceListUpdater_UnPartialStatedKeepsListsOfLaterMembers(t *testing.T)
 	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
 
 	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
-	assert.True(t, db.staleUsers[earlier], "a member from the joined state is fetched again")
+	_, stillFetched := db.staleUsers[earlier]
+	assert.False(t, stillFetched, "a member from the joined state is fetched again")
 	assert.False(t, db.staleUsers[joinedAt], "a member who joined later stays current")
 }

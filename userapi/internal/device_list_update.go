@@ -463,9 +463,11 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	if err != nil {
 		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
 	}
-	for _, userID := range fresh {
-		if err = u.db.MarkDeviceListStale(ctx, userID, true); err != nil {
-			return fmt.Errorf("failed to mark device list for %s as stale: %w", userID, err)
+	// Forget that they were fetched, rather than marking them stale, which would make
+	// the updater fetch all of them at once instead of when a client next asks.
+	if len(fresh) > 0 {
+		if err = u.db.DeleteStaleDeviceLists(ctx, fresh); err != nil {
+			return fmt.Errorf("failed to forget the fetched device lists of %s: %w", roomID, err)
 		}
 	}
 
