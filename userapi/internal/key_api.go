@@ -564,10 +564,23 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	if len(devKeys) == 0 {
 		return
 	}
-	queryKeysResp, err := a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
-	if err == nil {
-		resultCh <- &queryKeysResp
-		return
+	var err error
+	if wait := a.keyQueryBackoff.remaining(serverName); wait > 0 {
+		// A recent query failed. Skip the request, rather than make the client
+		// wait out the timeout again, and fall back to the cache below.
+		err = fmt.Errorf("remote key queries to %s are backing off for another %s", serverName, wait.Round(time.Second))
+	} else {
+		var queryKeysResp fclient.RespQueryKeys
+		queryKeysResp, err = a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
+		if err == nil {
+			a.keyQueryBackoff.success(serverName)
+			resultCh <- &queryKeysResp
+			return
+		}
+		// A client that gave up cancels the request, which says nothing about the server.
+		if ctx.Err() == nil {
+			a.keyQueryBackoff.failure(serverName)
+		}
 	}
 	respMu.Lock()
 	res.Failures[serverName] = map[string]any{
