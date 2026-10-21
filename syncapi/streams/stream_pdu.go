@@ -1003,6 +1003,10 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	if err != nil {
 		return stateEvents, err
 	}
+	// A room whose state is still partial has no membership for most of its remote
+	// senders. The events they sent cite their membership as an auth event, which
+	// is what Synapse falls back on.
+	memberships = append(memberships, p.membershipsFromAuthEvents(ctx, validRoomID, wantUsers, memberships, timelineEvents)...)
 	// cache the membership events
 	for _, membership := range memberships {
 		p.lazyLoadCache.StoreLazyLoadedUser(device, roomID, *membership.StateKey(), caching.LazyLoadedMember{EventID: membership.EventID(), SentAt: int64(sentAt)})
@@ -1011,6 +1015,52 @@ func (p *PDUStreamProvider) lazyLoadMembers(
 	stateEvents = append(stateEvents, newStateEvents...)
 	stateEvents = append(stateEvents, memberships...)
 	return stateEvents, nil
+}
+
+// membershipsFromAuthEvents returns the membership of each wanted user that is not
+// among found, taken from the auth events of the timeline events they sent.
+func (p *PDUStreamProvider) membershipsFromAuthEvents(
+	ctx context.Context, roomID *spec.RoomID, wantUsers []string,
+	found, timelineEvents []*rstypes.HeaderedEvent,
+) []*rstypes.HeaderedEvent {
+	missing := make(map[string]struct{}, len(wantUsers))
+	for _, userID := range wantUsers {
+		missing[userID] = struct{}{}
+	}
+	for _, membership := range found {
+		delete(missing, *membership.StateKey())
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	var authIDs []string
+	for _, event := range timelineEvents {
+		if _, ok := missing[string(event.SenderID())]; ok {
+			authIDs = append(authIDs, event.AuthEventIDs()...)
+		}
+	}
+	if len(authIDs) == 0 {
+		return nil
+	}
+	var res roomserverAPI.QueryEventsByIDResponse
+	if err := p.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID.String(), EventIDs: authIDs, ExcludeRejected: true,
+	}, &res); err != nil {
+		logrus.WithError(err).Warn("Failed to look up the memberships cited by timeline events")
+		return nil
+	}
+	var out []*rstypes.HeaderedEvent
+	for _, event := range res.Events {
+		if event.Type() != spec.MRoomMember || event.StateKey() == nil {
+			continue
+		}
+		if _, ok := missing[*event.StateKey()]; !ok {
+			continue
+		}
+		delete(missing, *event.StateKey())
+		out = append(out, event)
+	}
+	return out
 }
 
 // addIgnoredUsersToFilter adds ignored users to the eventfilter and
