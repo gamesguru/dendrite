@@ -506,11 +506,6 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 	// letting them read its stale copy: they are released by NotifyUnPartialStated.
 	if roomID, err := r.DB.RoomIDFromNID(ctx, roomNID); err == nil && roomID != "" {
 		r.PartialStateTracker.MarkSyncPending(roomID, syncCatchUpTimeout)
-		// Once the flag is gone there is no telling who joined after us, which the
-		// hooks need to know, so note it now.
-		if later, laterErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, roomNID); laterErr == nil {
-			r.joinedDuringPartialState.Store(roomID, later)
-		}
 	}
 	return r.DB.ClearRoomPartialState(ctx, roomNID)
 }
@@ -518,6 +513,22 @@ func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomN
 // syncCatchUpTimeout bounds how long requests wait for the sync API to take in a
 // resync's state before they go ahead without it.
 const syncCatchUpTimeout = 5 * time.Second
+
+// noteMembersJoinedDuringPartialState records who joined the room after our partial join.
+// It has to run before the resync's state is applied: that adds the memberships it found
+// in the complete state, which are newer in the database yet not later joiners.
+func (r *RoomserverInternalAPI) noteMembersJoinedDuringPartialState(ctx context.Context, roomID string) {
+	if _, noted := r.joinedDuringPartialState.Load(roomID); noted {
+		return
+	}
+	info, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil || info == nil {
+		return
+	}
+	if later, laterErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, info.RoomNID); laterErr == nil {
+		r.joinedDuringPartialState.Store(roomID, later)
+	}
+}
 
 // TakeMembersJoinedDuringPartialState returns the users who joined the room after our
 // partial join, as noted when the room's partial state was cleared. The result is not ok
@@ -692,6 +703,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
 func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) error {
+	r.noteMembersJoinedDuringPartialState(ctx, roomID)
 	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs, anchorStateIDs, expectedLatestEventIDs)
 	if err != nil {
 		return err
