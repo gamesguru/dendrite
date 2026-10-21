@@ -74,6 +74,10 @@ type directoryRoomserver struct {
 	roomserverAPI.ClientRoomserverAPI
 }
 
+func (directoryRoomserver) GetPartialStateRoomIDs(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (directoryRoomserver) QueryPublishedRooms(_ context.Context, _ *roomserverAPI.QueryPublishedRoomsRequest, res *roomserverAPI.QueryPublishedRoomsResponse) error {
 	res.RoomIDs = []string{"!plain:test", "!space:test", "!custom:test", "!empty:test"}
 	return nil
@@ -240,4 +244,52 @@ func TestPublicRoomsRemoteRoomTypes(t *testing.T) {
 		require.True(t, fed.called)
 		require.Equal(t, http.StatusInternalServerError, res.Code)
 	})
+}
+
+// partialDirectoryRoomserver lists the members of rooms, and which of them have partial state.
+type partialDirectoryRoomserver struct {
+	roomserverAPI.ClientRoomserverAPI
+	partial []string
+	members map[string][]string
+}
+
+func (p partialDirectoryRoomserver) GetPartialStateRoomIDs(context.Context) ([]string, error) {
+	return p.partial, nil
+}
+
+func (p partialDirectoryRoomserver) QueryBulkStateContent(_ context.Context, req *roomserverAPI.QueryBulkStateContentRequest, res *roomserverAPI.QueryBulkStateContentResponse) error {
+	res.Rooms = make(map[string]map[gomatrixserverlib.StateKeyTuple]string)
+	for _, roomID := range req.RoomIDs {
+		state := make(map[gomatrixserverlib.StateKeyTuple]string)
+		for _, userID := range p.members[roomID] {
+			state[gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomMember, StateKey: userID}] = spec.Join
+		}
+		res.Rooms[roomID] = state
+	}
+	return nil
+}
+
+// A room that has partial state only counts the members that are surely all there
+// are on this server, as the others turn up as the resync fetches them.
+func TestLimitPartialStateMemberCounts(t *testing.T) {
+	isLocal := func(name spec.ServerName) bool { return name == "local.test" }
+	rsAPI := partialDirectoryRoomserver{
+		partial: []string{"!partial:test"},
+		members: map[string][]string{
+			"!partial:test": {"@terry:local.test", "@charlie:remote.test", "@derek:remote.test"},
+		},
+	}
+	rooms := []roomserverAPI.PublicRoom{
+		{PublicRoom: fclient.PublicRoom{RoomID: "!partial:test", JoinedMembersCount: 3}},
+		{PublicRoom: fclient.PublicRoom{RoomID: "!full:test", JoinedMembersCount: 7}},
+	}
+	got := limitPartialStateMemberCounts(context.Background(), rsAPI, rooms, isLocal)
+	require.Equal(t, 1, got[0].JoinedMembersCount, "only the local member of the partial room")
+	require.Equal(t, 7, got[1].JoinedMembersCount, "a room with its full state keeps its count")
+
+	// With no partial room nothing is asked or changed.
+	rsAPI.partial = nil
+	rooms[0].JoinedMembersCount = 3
+	got = limitPartialStateMemberCounts(context.Background(), rsAPI, rooms, isLocal)
+	require.Equal(t, 3, got[0].JoinedMembersCount)
 }

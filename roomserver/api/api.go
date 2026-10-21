@@ -190,9 +190,10 @@ type QueryMembershipAPI interface {
 	) (map[string]*types.HeaderedEvent, error)
 }
 
-// API functions required by the syncapi.
 // PartialStateAwaiterAPI lets a request wait for a room's partial state resync (MSC3706).
 type PartialStateAwaiterAPI interface {
+	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state.
+	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
 	// AwaitRoomFullState blocks until the room has full state or the context ends.
 	// A room that is not partial returns at once.
 	AwaitRoomFullState(ctx context.Context, roomID string) error
@@ -201,6 +202,7 @@ type PartialStateAwaiterAPI interface {
 	AckUnPartialStated(roomID string)
 }
 
+// API functions required by the syncapi.
 type SyncRoomserverAPI interface {
 	PartialStateAwaiterAPI
 	QueryLatestEventsAndStateAPI
