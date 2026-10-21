@@ -81,9 +81,12 @@ type missingStateReq struct {
 	unfindableEventsMu sync.Mutex
 }
 
+// errGapNotFilled says that /get_missing_events did not close the gap before an event.
+var errGapNotFilled = errors.New("the gap before the event was not filled by /get_missing_events")
+
 // fillGapDuringPartialState closes the gap before e with /get_missing_events and
-// nothing more, for a room whose state is still being fetched. It fails if the
-// gap cannot be closed that way.
+// nothing more, for a room whose state is still being fetched. It returns
+// errGapNotFilled if the gap cannot be closed that way.
 func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion) error {
 	t.log = util.GetLogger(ctx).WithFields(map[string]any{
 		"txn_event":       e.EventID(),
@@ -95,7 +98,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 		return fmt.Errorf("t.getMissingEvents: %w", err)
 	}
 	if !isGapFilled && !t.reachesKnownEvents(ctx, newEvents) {
-		return errors.New("the gap before the event was not filled by /get_missing_events")
+		return errGapNotFilled
 	}
 	t.log.Infof("Gap filled by /get_missing_events during partial state, injecting %d new events", len(newEvents))
 	for _, newEvent := range newEvents {
