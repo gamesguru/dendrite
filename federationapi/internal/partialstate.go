@@ -304,7 +304,6 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
 		frontier := latestEventIDs[0]
-		applied := false
 		for attempt := 0; attempt < 4; attempt++ {
 			anchor := w.findStateAnchor(ctx, roomID, frontier)
 			stateEventIDs, fetchErr := w.fetchStateViaAnchor(
@@ -333,10 +332,9 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 				lastErr = err
 				break
 			}
-			applied = true
 			return nil
 		}
-		if !applied && lastErr == nil {
+		if lastErr == nil {
 			lastErr = fmt.Errorf("room state kept changing during partial state resync")
 		}
 	}
@@ -614,15 +612,15 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	return wantIDs, nil
 }
 
-// overlayStateEvent returns stateIDs with the entry for ev's type and state key
+// This helper returns stateIDs with the entry for ev's type and state key
 // replaced by ev, or ev added if that key is not present.
 func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) ([]string, error) {
 	return overlayStateEvents(stateIDs, events, []gomatrixserverlib.PDU{ev})
 }
 
-// overlayStateEvents applies state events in order, each replacing the entry
-// with the same type and state key. events must hold the stored events behind
-// stateIDs so their keys can be found.
+// This helper applies state events in order, each replacing the entry with the
+// same type and state key. The events argument must hold the stored events
+// behind stateIDs so their keys can be found.
 func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) ([]string, error) {
 	type key struct{ eventType, stateKey string }
 	keyOf := make(map[string]key, len(events)+len(overlays))
@@ -649,7 +647,8 @@ func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overla
 			}
 			kept = append(kept, id)
 		}
-		out = append(kept, ev.EventID())
+		out = kept
+		out = append(out, ev.EventID())
 		keyOf[ev.EventID()] = want
 	}
 	return out, nil
@@ -829,6 +828,8 @@ func (w *PartialStateWorker) fetchSingleEvent(
 	return nil
 }
 
+const eventFetchTimeout = 30 * time.Second
+
 func (w *PartialStateWorker) getEventFromServer(
 	ctx context.Context,
 	origin, serverName spec.ServerName,
@@ -836,7 +837,7 @@ func (w *PartialStateWorker) getEventFromServer(
 	verImpl gomatrixserverlib.IRoomVersion,
 	bypassBackoff bool,
 ) (gomatrixserverlib.PDU, error) {
-	reqctx, cancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd
+	reqctx, cancel := context.WithTimeout(ctx, eventFetchTimeout)
 	defer cancel()
 
 	var txn gomatrixserverlib.Transaction
