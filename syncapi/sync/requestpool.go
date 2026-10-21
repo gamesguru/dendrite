@@ -692,6 +692,10 @@ func (rp *RequestPool) OnIncomingKeyChangeRequest(req *http.Request, device *use
 	}
 	var succeeded bool
 	defer sqlutil.EndTransactionWithCheck(snapshot, &succeeded, &err)
+	// Only the memberships in the range matter here. A request that does not lazy
+	// load members is not told about a room whose state is still partial, which
+	// would leave out the users who joined it.
+	syncReq.Filter.Room.State.LazyLoadMembers = true
 	rp.streams.PDUStreamProvider.IncrementalSync(req.Context(), snapshot, syncReq, fromToken.PDUPosition, toToken.PDUPosition)
 	_, _, err = internal.DeviceListCatchup(
 		req.Context(), snapshot, rp.userAPI, rp.rsAPI, syncReq.Device.UserID,
