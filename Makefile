@@ -32,6 +32,7 @@ COMPLEMENT_CGO ?= 0
 COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
+COMPLEMENT_RESULTS ?= $(CURDIR)/results.json
 # COMPLEMENT_PACKAGES are the test packages to run. With COMPLEMENT_RUN set they are the
 # ones that define a matching top-level test (the part before the first /), as go test
 # -run matches it, so that the other packages are not compiled and started for nothing.
@@ -137,9 +138,9 @@ complement-build: ## Build the Complement Dendrite image
 complement-run: ## Run Complement, building the image first
 	@test -d $(COMPLEMENT_DIR) || (echo "Complement directory not found at $(COMPLEMENT_DIR). Please clone matrix-org/complement." && exit 1)
 	$(if $(COMPLEMENT_SKIP_BUILD),@echo 'Reusing $(COMPLEMENT_BASE_IMAGE)',$(MAKE) complement-build)
-	cd $(COMPLEMENT_DIR) && \
+	cd $(COMPLEMENT_DIR) && set -o pipefail && \
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-	go test -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES)
+	go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES) | tee "$(COMPLEMENT_RESULTS)"
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies
