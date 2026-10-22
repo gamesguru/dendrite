@@ -2,7 +2,6 @@
 {"Action":"skip","Test":"TestMSC4308ThreadSubscriptionsSlidingSync"}
 {"Action":"skip","Test":"TestThreadSubscriptions"}
 {"Action":"pass","Test":"TestMSC3967"}
-{"Action":"fail","Test":"TestMSC3389RedactionPreservesRelation"}
 {"Action":"skip","Test":"TestSync/parallel/Initial_sync_with_lazy-loading_room_members_->_public_room_`state_after`_includes_all_members_from_timeline"}
 {"Action":"skip","Test":"TestSync/parallel/Initial_sync_with_lazy-loading_room_members_->_private_room_`state_after`_includes_all_members_from_timeline"}
 {"Action":"pass","Test":"TestSync/parallel"}
@@ -19,7 +18,6 @@
 {"Action":"pass","Test":"TestAddAccountData/Can_add_room_account_data"}
 {"Action":"pass","Test":"TestAddAccountData"}
 {"Action":"pass","Test":"TestIsDirectFlagLocal"}
-{"Action":"fail","Test":"TestMSC3389RedactionPreservesPlainRelation"}
 {"Action":"pass","Test":"TestDeactivateAccount/Password_flow_is_available"}
 {"Action":"pass","Test":"TestDeactivateAccount/Can't_deactivate_account_with_wrong_password"}
 {"Action":"pass","Test":"TestDeactivateAccount/Can_deactivate_account"}
@@ -75,15 +73,6 @@
 {"Action":"pass","Test":"TestProfileDisplayName/PUT_/profile/:user_id/displayname_sets_my_name"}
 {"Action":"pass","Test":"TestProfileDisplayName/GET_/profile/:user_id/displayname_publicly_accessible"}
 {"Action":"pass","Test":"TestProfileDisplayName"}
-{"Action":"pass","Test":"TestMSC4500State/StateHashes/Match"}
-{"Action":"fail","Test":"TestMSC4500State/StateHashes/PrimaryMismatch"}
-{"Action":"fail","Test":"TestMSC4500State/StateHashes/RedactionOnlyMismatch"}
-{"Action":"pass","Test":"TestMSC4500State/StateHashes/Limited"}
-{"Action":"pass","Test":"TestMSC4500State/StateHashes/MalformedEntryDeferred"}
-{"Action":"pass","Test":"TestMSC4500State/StateHashes/UnknownAlgorithmDeferred"}
-{"Action":"fail","Test":"TestMSC4500State/StateHashes"}
-{"Action":"fail","Test":"TestMSC4500State/Outbound"}
-{"Action":"fail","Test":"TestMSC4500State"}
 {"Action":"skip","Test":"TestRegistration/parallel/POST_/register_rejects_if_user_already_exists"}
 {"Action":"pass","Test":"TestRegistration/parallel/POST_/register_allows_registration_of_usernames_with_/q"}
 {"Action":"pass","Test":"TestRegistration/parallel/POST_/register_allows_registration_of_usernames_with_/3"}
