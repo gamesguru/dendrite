@@ -90,7 +90,7 @@ func (p *PresenceStreamProvider) IncrementalSync(
 			presenceUsers = append(presenceUsers, userID)
 		}
 	}
-	sharedUsers := p.notifier.SharedUsersWithPartialState(ctx, req.Device.UserID, presenceUsers)
+	sharedUsers := p.notifier.SharedUsersForCandidates(req.Device.UserID, presenceUsers)
 
 	lastPos := from
 	for _, presence := range presences {
