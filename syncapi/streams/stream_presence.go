@@ -86,7 +86,7 @@ func (p *PresenceStreamProvider) IncrementalSync(
 	}
 	presenceUsers := make([]string, 0, len(presences))
 	for userID, presence := range presences {
-		if presence != nil {
+		if presence != nil && userID != req.Device.UserID {
 			presenceUsers = append(presenceUsers, userID)
 		}
 	}

@@ -300,6 +300,9 @@ func (n *Notifier) IsSharedUser(ctx context.Context, userA, userB string) bool {
 // has joined. The partial-room lookup is batched across candidates so callers
 // handling a presence response do not query the roomserver once per user.
 func (n *Notifier) SharedUsersWithPartialState(ctx context.Context, userA string, candidates []string) map[string]struct{} {
+	if len(candidates) == 0 {
+		return nil
+	}
 	partialRooms := n.partialStateRoomServers(ctx)
 	domains := make(map[string]string, len(candidates))
 	for _, userID := range candidates {
