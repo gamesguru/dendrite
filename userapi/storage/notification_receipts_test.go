@@ -167,6 +167,13 @@ func TestDeleteNotificationsForEvent(t *testing.T) {
 		users, err := db.DeleteNotificationsForEvent(ctx, "!room:test", "$rejected")
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{"@alice:localhost", "@bob:localhost"}, users)
+		pending, err := db.PendingNotificationRefreshes(ctx, "!room:test")
+		require.NoError(t, err)
+		require.ElementsMatch(t, users, pending)
+		require.NoError(t, db.CompleteNotificationRefresh(ctx, "!room:test", "@alice:localhost"))
+		pending, err = db.PendingNotificationRefreshes(ctx, "!room:test")
+		require.NoError(t, err)
+		require.Equal(t, []string{"@bob:localhost"}, pending)
 
 		total, highlights, err := db.GetRoomNotificationCounts(ctx, "alice", "localhost", "!room:test")
 		require.NoError(t, err)

@@ -1153,6 +1153,17 @@ func (d *Database) DeleteNotificationsForEvent(ctx context.Context, roomID, even
 		if err = rows.Close(); err != nil {
 			return err
 		}
+		for _, userID := range users {
+			localpart, serverName, splitErr := gomatrixserverlib.SplitID('@', userID)
+			if splitErr != nil {
+				return splitErr
+			}
+			if _, err = txn.ExecContext(ctx, `INSERT INTO userapi_pending_notification_refreshes
+				(room_id, localpart, server_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+				roomID, localpart, serverName); err != nil {
+				return err
+			}
+		}
 		if _, err = txn.ExecContext(ctx, `DELETE FROM userapi_notifications
 			WHERE room_id = $1 AND event_id = $2`, roomID, eventID); err != nil {
 			return err
@@ -1166,6 +1177,38 @@ func (d *Database) DeleteNotificationsForEvent(ctx context.Context, roomID, even
 		return err
 	})
 	return users, err
+}
+
+// PendingNotificationRefreshes returns users whose room notification counts
+// still need to be published after rejected-event cleanup.
+func (d *Database) PendingNotificationRefreshes(ctx context.Context, roomID string) ([]string, error) {
+	rows, err := d.DB.QueryContext(ctx, `SELECT localpart, server_name
+		FROM userapi_pending_notification_refreshes WHERE room_id = $1`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "PendingNotificationRefreshes: rows.close() failed")
+	var users []string
+	for rows.Next() {
+		var localpart, serverName string
+		if err = rows.Scan(&localpart, &serverName); err != nil {
+			return nil, err
+		}
+		users = append(users, "@"+localpart+":"+serverName)
+	}
+	return users, rows.Err()
+}
+
+// CompleteNotificationRefresh removes a pending count refresh after it has
+// been successfully published.
+func (d *Database) CompleteNotificationRefresh(ctx context.Context, roomID, userID string) error {
+	localpart, serverName, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil {
+		return err
+	}
+	_, err = d.DB.ExecContext(ctx, `DELETE FROM userapi_pending_notification_refreshes
+		WHERE room_id = $1 AND localpart = $2 AND server_name = $3`, roomID, localpart, serverName)
+	return err
 }
 
 func (d *Database) DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error) {

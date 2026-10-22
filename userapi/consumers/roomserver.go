@@ -184,31 +184,24 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 // onRejectedEvents drops notifications for events the roomserver rejected after
 // accepting them, and refreshes the room counts for every affected user.
 func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg rsapi.OutputRejectedEvents) error {
-	affected := make(map[string]struct{})
-	var deleteErr error
 	for _, eventID := range msg.EventIDs {
-		users, err := s.db.DeleteNotificationsForEvent(ctx, msg.RoomID, eventID)
-		if err != nil {
-			// Users from earlier deletions are already unrecoverable, so refresh
-			// them before reporting the failure.
-			deleteErr = fmt.Errorf("s.db.DeleteNotificationsForEvent: %w", err)
-			break
-		}
-		for _, userID := range users {
-			affected[userID] = struct{}{}
+		if _, err := s.db.DeleteNotificationsForEvent(ctx, msg.RoomID, eventID); err != nil {
+			return fmt.Errorf("s.db.DeleteNotificationsForEvent: %w", err)
 		}
 	}
-	for userID := range affected {
+	users, err := s.db.PendingNotificationRefreshes(ctx, msg.RoomID)
+	if err != nil {
+		return fmt.Errorf("s.db.PendingNotificationRefreshes: %w", err)
+	}
+	for _, userID := range users {
 		if err := s.syncProducer.GetAndSendNotificationData(ctx, userID, msg.RoomID); err != nil {
-			// The notifications are already gone, so a retry of this message
-			// would no longer know whom to refresh. Log and keep the cleanup.
-			log.WithError(err).WithFields(log.Fields{
-				"user_id": userID,
-				"room_id": msg.RoomID,
-			}).Error("Failed to publish notification counts after rejecting events")
+			return fmt.Errorf("publish notification counts for %s in %s: %w", userID, msg.RoomID, err)
+		}
+		if err := s.db.CompleteNotificationRefresh(ctx, msg.RoomID, userID); err != nil {
+			return fmt.Errorf("s.db.CompleteNotificationRefresh: %w", err)
 		}
 	}
-	return deleteErr
+	return nil
 }
 
 // cancelDelayedStateEvents cancels other users' MSC4140 delayed events for

@@ -462,6 +462,9 @@ column userapi_pending_notification_receipts | localpart | text | NO |
 column userapi_pending_notification_receipts | room_id | text | NO |
 column userapi_pending_notification_receipts | server_name | text | NO |
 column userapi_pending_notification_receipts | thread_id | text | NO |
+column userapi_pending_notification_refreshes | localpart | text | NO |
+column userapi_pending_notification_refreshes | room_id | text | NO |
+column userapi_pending_notification_refreshes | server_name | text | NO |
 column userapi_profile_fields | field_name | text | NO |
 column userapi_profile_fields | field_value | text | NO |
 column userapi_profile_fields | localpart | text | NO |
@@ -692,6 +695,7 @@ index userapi_notifications | userapi_notification_room_id_idx | CREATE INDEX us
 index userapi_notifications | userapi_notifications_pkey | CREATE UNIQUE INDEX userapi_notifications_pkey ON public.userapi_notifications USING btree (id)
 index userapi_openid_tokens | userapi_openid_tokens_pkey | CREATE UNIQUE INDEX userapi_openid_tokens_pkey ON public.userapi_openid_tokens USING btree (token)
 index userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | CREATE UNIQUE INDEX userapi_pending_notification_receipts_pkey ON public.userapi_pending_notification_receipts USING btree (room_id, event_id, localpart, server_name, thread_id)
+index userapi_pending_notification_refreshes | userapi_pending_notification_refreshes_pkey | CREATE UNIQUE INDEX userapi_pending_notification_refreshes_pkey ON public.userapi_pending_notification_refreshes USING btree (room_id, localpart, server_name)
 index userapi_profile_fields | userapi_profile_fields_pkey | CREATE UNIQUE INDEX userapi_profile_fields_pkey ON public.userapi_profile_fields USING btree (localpart, server_name, field_name)
 index userapi_profiles | userapi_profiles_idx | CREATE UNIQUE INDEX userapi_profiles_idx ON public.userapi_profiles USING btree (localpart, server_name)
 index userapi_pushers | userapi_pusher_app_id_pushkey_idx | CREATE INDEX userapi_pusher_app_id_pushkey_idx ON public.userapi_pushers USING btree (app_id, pushkey)
@@ -806,6 +810,7 @@ constraint userapi_notification_receipt_locks | userapi_notification_receipt_loc
 constraint userapi_notifications | userapi_notifications_pkey | PRIMARY KEY (id)
 constraint userapi_openid_tokens | userapi_openid_tokens_pkey | PRIMARY KEY (token)
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | PRIMARY KEY (room_id, event_id, localpart, server_name, thread_id)
+constraint userapi_pending_notification_refreshes | userapi_pending_notification_refreshes_pkey | PRIMARY KEY (room_id, localpart, server_name)
 constraint userapi_profile_fields | userapi_profile_fields_pkey | PRIMARY KEY (localpart, server_name, field_name)
 constraint userapi_pushers | userapi_pushers_pkey | PRIMARY KEY (id)
 constraint userapi_registration_tokens | userapi_registration_tokens_pkey | PRIMARY KEY (token)
@@ -879,6 +884,7 @@ migration userapi: add last_seen_ts
 migration userapi: add refresh tokens
 migration userapi: case-fold email 3PIDs
 migration userapi: notification event threads
+migration userapi: pending notification refreshes
 migration userapi: rename tables
 migration userapi: server names
 migration userapi: server names populate
