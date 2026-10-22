@@ -114,6 +114,9 @@ const selectSearchSQL = "SELECT id, event_id, headered_event_json FROM syncapi_o
 const purgeEventsSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE room_id = $1"
 
+const deleteEventSQL = "" +
+	"DELETE FROM syncapi_output_room_events WHERE event_id = $1"
+
 const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
 FROM syncapi_output_room_events
 WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) >= $2
@@ -139,6 +142,7 @@ type outputRoomEventsStatements struct {
 	selectContextBeforeEventStmt *sql.Stmt
 	selectContextAfterEventStmt  *sql.Stmt
 	purgeEventsStmt              *sql.Stmt
+	deleteEventStmt              *sql.Stmt
 	// selectSearchStmt             *sql.Stmt - prepared at runtime
 }
 
@@ -179,6 +183,7 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 		{&s.selectContextBeforeEventStmt, selectContextBeforeEventSQL},
 		{&s.selectContextAfterEventStmt, selectContextAfterEventSQL},
 		{&s.purgeEventsStmt, purgeEventsSQL},
+		{&s.deleteEventStmt, deleteEventSQL},
 		// {&s.selectSearchStmt, selectSearchSQL}, - prepared at runtime
 	}.Prepare(db)
 }
@@ -724,6 +729,14 @@ func (s *outputRoomEventsStatements) PurgeEvents(
 ) error {
 	purgeEventsStmt := sqlutil.TxStmt(txn, s.purgeEventsStmt)
 	_, err := purgeEventsStmt.ExecContext(ctx, roomID)
+	return err
+}
+
+func (s *outputRoomEventsStatements) DeleteEvent(
+	ctx context.Context, txn *sql.Tx, eventID string,
+) error {
+	deleteEventStmt := sqlutil.TxStmt(txn, s.deleteEventStmt)
+	_, err := deleteEventStmt.ExecContext(ctx, eventID)
 	return err
 }
 

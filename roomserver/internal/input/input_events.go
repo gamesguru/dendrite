@@ -332,7 +332,15 @@ func (r *Inputer) processRoomEvent(
 	var rejectionErr error
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
-	} else if err = r.fetchAuthEvents(ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames); err != nil {
+	} else if err = r.fetchAuthEvents(
+		ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
+		// An event with missing prev events is looked at again once they are in, and
+		// the state looked up for them brings in its senders' memberships along the
+		// way. The room is only partly known meanwhile, so do not ask for the auth
+		// chain of the event too: it is accepted provisionally and checked after the
+		// resync.
+		!hasPartialState || !missingPrev || input.Kind != api.KindNew,
+	); err != nil {
 		if input.Kind != api.KindOutlier {
 			return fmt.Errorf("r.fetchAuthEvents: %w", err)
 		}
@@ -401,8 +409,6 @@ func (r *Inputer) processRoomEvent(
 		// future events from being processed.
 		if hasPartialState {
 			logger.Debugf("Skipping state resolution for room %s (partial state active, background worker will handle)", stateResolutionRoomID)
-			isRejected = true
-			rejectionErr = fmt.Errorf("room %s is in partial state, awaiting background state sync", stateResolutionRoomID)
 		}
 
 		// Check if state resolution recently failed for this room. If so, skip
@@ -446,7 +452,27 @@ func (r *Inputer) processRoomEvent(
 				unfindableEvents: map[string]bool{},
 			}
 			var stateSnapshot *parsedRespState
-			if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
+			gapFilled := false
+			if hasPartialState {
+				// Try to close the gap with the missing events first: with their prev events
+				// known the state before this event follows from theirs, as it does for any
+				// event. If they don't close it, look up the state before the event they lead
+				// to, as Synapse does.
+				fillErr := missingState.fillGapDuringPartialState(ctx, event, headered.Version())
+				switch {
+				case fillErr == nil:
+					gapFilled = true
+					missingPrev = false
+				case unavailableHere(ctx, fillErr):
+					return fmt.Errorf("missingState.fillGapDuringPartialState: %w", fillErr)
+				default:
+					// The gap is not closed, or the missing events could not be had: look up
+					// the state before the event, which rejects it if that fails too.
+				}
+			}
+			if gapFilled {
+				// The gap is closed, so there is nothing more to do.
+			} else if stateSnapshot, err = missingState.processEventWithMissingState(ctx, event, headered.Version()); err != nil {
 				// A failure of this server's own database, broker or HA
 				// ownership, as during a PostgreSQL failover, says nothing
 				// about the event. Rejecting it would be permanent, since the
@@ -901,41 +927,24 @@ func (r *Inputer) processStateBefore(
 	// the supplied state in the input request, or from the prev events.
 	// Check whether the event is allowed or not.
 	//
-	// For partial state rooms (MSC3706), we use auth approximation:
-	// state-resolve the local partial state with the event's auth events,
-	// then check auth against the resolved state. This ensures restrictions
-	// like bans are enforced even with incomplete state.
-	var stateForAuth []gomatrixserverlib.PDU
+	// For partial state rooms (MSC3706), the state before the event lacks most
+	// members, so complete it with the auth events the event cites, where it has no
+	// entry of its own. Its own entries stand, so that a ban or a leave still applies.
+	stateForAuth := stateBeforeEvent
 	if isPartialState {
-		// Get the auth events from the incoming event
-		authEventIDs := event.AuthEventIDs()
-		if len(authEventIDs) > 0 {
+		if authEventIDs := event.AuthEventIDs(); len(authEventIDs) > 0 {
 			authStateEvents, authErr := r.DB.EventsFromIDs(ctx, roomInfo, authEventIDs)
 			if authErr != nil {
-				// If we can't get auth events, fall back to local state only
-				stateForAuth = stateBeforeEvent
+				// Without the auth events, use the local state only.
+				logrus.WithError(authErr).WithField("event_id", event.EventID()).Debug("Could not load the auth events of an event in a partial state room")
 			} else {
-				// Convert auth events to PDUs
 				authEventPDUs := make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
 				for _, authEvent := range authStateEvents {
 					authEventPDUs = append(authEventPDUs, authEvent.PDU)
 				}
-
-				// State-resolve the local partial state with the auth events
-				// This follows Synapse's approach per MSC3706
-				resolved, resolveErr := r.resolvePartialStateAuth(ctx, roomInfo, stateBeforeEvent, authEventPDUs)
-				if resolveErr != nil {
-					// If resolution fails, fall back to local state only
-					stateForAuth = stateBeforeEvent
-				} else {
-					stateForAuth = resolved
-				}
+				stateForAuth = mergePartialStateAuth(stateBeforeEvent, authEventPDUs)
 			}
-		} else {
-			stateForAuth = stateBeforeEvent
 		}
-	} else {
-		stateForAuth = stateBeforeEvent
 	}
 
 	var stateBeforeAuth *gomatrixserverlib.AuthEvents
@@ -966,96 +975,40 @@ func (r *Inputer) processStateBefore(
 	return
 }
 
-// resolvePartialStateAuth performs state resolution between local partial state
-// and incoming event's auth events for MSC3706 faster joins.
+// mergePartialStateAuth completes the state before an event with the auth events
+// the event cites, for MSC3706 faster joins.
 //
-// During partial state, we may not have complete room state. When checking auth
-// for incoming events, we state-resolve our local partial state with the event's
-// claimed auth events. This ensures restrictions like bans are enforced even
-// when we don't have the complete state.
-func (r *Inputer) resolvePartialStateAuth(
-	ctx context.Context,
-	_ *types.RoomInfo, // unused but kept for potential future use
-	localState []gomatrixserverlib.PDU,
-	authEvents []gomatrixserverlib.PDU,
-) ([]gomatrixserverlib.PDU, error) { //nolint:unparam // error kept for interface compatibility
-	// Build a map of state key tuples to events for conflict detection
+// During partial state the state before an event lacks most members. The state that
+// there is comes from the event's real prev events, so wherever it has an entry it
+// is what the room looked like, and the entry stays even if the event cites another
+// one: a user the room has banned is banned, whatever membership event they cite.
+// The cited auth events only fill in what the partial state does not have, such as
+// the membership of a sender whose join was left out.
+func mergePartialStateAuth(localState, authEvents []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
 	type stateKey struct {
 		eventType string
 		stateKey  string
 	}
-	stateMap := make(map[stateKey]gomatrixserverlib.PDU)
-	var conflicted []gomatrixserverlib.PDU
-	var unconflicted []gomatrixserverlib.PDU
-
-	// First, add all local state events
+	merged := make(map[stateKey]gomatrixserverlib.PDU, len(localState)+len(authEvents))
 	for _, ev := range localState {
-		if ev.StateKey() == nil {
-			continue // Skip non-state events
-		}
-		key := stateKey{ev.Type(), *ev.StateKey()}
-		stateMap[key] = ev
-	}
-
-	// Then check auth events for conflicts
-	for _, ev := range authEvents {
-		if ev.StateKey() == nil {
-			continue // Skip non-state events
-		}
-		key := stateKey{ev.Type(), *ev.StateKey()}
-		if existing, ok := stateMap[key]; ok {
-			// Conflict: same (type, state_key) but potentially different event
-			if existing.EventID() != ev.EventID() {
-				conflicted = append(conflicted, existing, ev)
-				delete(stateMap, key) // Remove from map, will be resolved
-			}
-		} else {
-			// No conflict, this is new state from auth events
-			stateMap[key] = ev
-		}
-	}
-
-	// Collect unconflicted events
-	for _, ev := range stateMap {
-		unconflicted = append(unconflicted, ev)
-	}
-
-	// If no conflicts, just return all unique state
-	if len(conflicted) == 0 {
-		return unconflicted, nil
-	}
-
-	// Collect all auth events for resolution (from both local and incoming)
-	allAuthEvents := make([]gomatrixserverlib.PDU, 0, len(localState)+len(authEvents))
-	seen := make(map[string]bool)
-	for _, ev := range localState {
-		if !seen[ev.EventID()] {
-			allAuthEvents = append(allAuthEvents, ev)
-			seen[ev.EventID()] = true
+		if ev.StateKey() != nil {
+			merged[stateKey{ev.Type(), *ev.StateKey()}] = ev
 		}
 	}
 	for _, ev := range authEvents {
-		if !seen[ev.EventID()] {
-			allAuthEvents = append(allAuthEvents, ev)
-			seen[ev.EventID()] = true
+		if ev.StateKey() == nil {
+			continue
+		}
+		key := stateKey{ev.Type(), *ev.StateKey()}
+		if _, ok := merged[key]; !ok {
+			merged[key] = ev
 		}
 	}
-
-	// Resolve conflicts using gomatrixserverlib's state resolution
-	resolved := gomatrixserverlib.ResolveStateConflicts(
-		conflicted,
-		allAuthEvents,
-		func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-		},
-	)
-
-	// Combine unconflicted with resolved conflicted events
-	result := make([]gomatrixserverlib.PDU, 0, len(unconflicted)+len(resolved))
-	result = append(result, unconflicted...)
-	result = append(result, resolved...)
-
-	return result, nil
+	result := make([]gomatrixserverlib.PDU, 0, len(merged))
+	for _, ev := range merged {
+		result = append(result, ev)
+	}
+	return result
 }
 
 // fetchAuthEvents will check to see if any of the
@@ -1064,7 +1017,8 @@ func (r *Inputer) resolvePartialStateAuth(
 // store them in the database. By the time this function ends, either
 // we've failed to retrieve the auth chain altogether (in which case
 // an error is returned) or we've successfully retrieved them all and
-// they are now in the database.
+// they are now in the database. If fetchUnknown is false the unknown ones
+// are left alone and only those already known are loaded.
 //
 //nolint:gocyclo
 func (r *Inputer) fetchAuthEvents(
@@ -1076,6 +1030,7 @@ func (r *Inputer) fetchAuthEvents(
 	auth *gomatrixserverlib.AuthEvents,
 	known map[string]*types.Event,
 	servers []spec.ServerName,
+	fetchUnknown bool,
 ) error {
 	trace, ctx := internal.StartRegion(ctx, "fetchAuthEvents")
 	defer trace.EndRegion()
@@ -1110,7 +1065,7 @@ func (r *Inputer) fetchAuthEvents(
 
 	// If there are no missing auth events then there is nothing more
 	// to do — we've loaded everything that we need.
-	if len(unknown) == 0 {
+	if len(unknown) == 0 || !fetchUnknown {
 		return nil
 	}
 

@@ -250,6 +250,8 @@ type KeyChanges interface {
 type StaleDeviceLists interface {
 	InsertStaleDeviceList(ctx context.Context, userID string, isStale bool) error
 	SelectUserIDsWithStaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error)
+	// SelectUserIDsWithFreshDeviceLists returns the users whose device list was fetched in full and is not stale.
+	SelectUserIDsWithFreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error)
 	DeleteStaleDeviceLists(ctx context.Context, txn *sql.Tx, userIDs []string) error
 }
 

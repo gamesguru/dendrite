@@ -22,6 +22,10 @@ type ClientAPI struct {
 	// command line parameter as it is not recommended.
 	OpenRegistrationWithoutVerificationEnabled bool `yaml:"-"`
 
+	// MinPasswordLength is the shortest password accepted when registering or
+	// changing a password. Zero means the default of 8 characters.
+	MinPasswordLength int `yaml:"min_password_length,omitempty"`
+
 	// RegistrationTerms are policy documents, such as terms of service and
 	// a privacy policy, that new users must accept (MSC1692). Each one adds
 	// the m.login.terms stage to every registration flow.

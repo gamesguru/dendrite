@@ -8,9 +8,11 @@ package notifier
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	log "github.com/sirupsen/logrus"
 
@@ -248,14 +250,18 @@ func (n *Notifier) OnNewNotificationData(
 }
 
 func (n *Notifier) OnNewPresence(
-	posUpdate types.StreamingToken, userID string,
+	ctx context.Context, posUpdate types.StreamingToken, userID string,
 ) {
+	// Query the roomserver before taking the lock.
+	partialRooms := n.partialStateRoomServers(ctx)
+
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	n.currPos.ApplyUpdates(posUpdate)
 	sharedUsers := n._sharedUsers(userID)
 	sharedUsers = append(sharedUsers, userID)
+	sharedUsers = append(sharedUsers, n._partialStateSharedUsers(partialRooms, userID)...)
 
 	n._wakeupUsers(sharedUsers, nil, n.currPos)
 }
@@ -284,21 +290,91 @@ func (n *Notifier) _sharedUsers(userID string) []string {
 	return sharedUsers
 }
 
-func (n *Notifier) IsSharedUser(userA, userB string) bool {
+func (n *Notifier) IsSharedUser(_ context.Context, userA, userB string) bool {
+	_, ok := n.SharedUsersForCandidates(userA, []string{userB})[userB]
+	return ok
+}
+
+// SharedUsersForCandidates returns the candidates who share a known joined room
+// with userA. A partial-state room does not list its remote members, so a
+// candidate's server being known to be in that room is not enough to treat the
+// candidate as a member. The batched lookup avoids one roomserver query per
+// candidate when handling a presence response.
+func (n *Notifier) SharedUsersForCandidates(userA string, candidates []string) map[string]struct{} {
+	if len(candidates) == 0 {
+		return nil
+	}
+
 	n.lock.RLock()
 	defer n.lock.RUnlock()
-	var okA, okB bool
+	shared := make(map[string]struct{})
 	for _, users := range n.roomIDToJoinedUsers {
-		okA = users.isIn(userA)
-		if !okA {
+		if !users.isIn(userA) {
 			continue
 		}
-		okB = users.isIn(userB)
-		if okA && okB {
-			return true
+		for _, userID := range candidates {
+			if users.isIn(userID) {
+				shared[userID] = struct{}{}
+			}
 		}
 	}
-	return false
+	return shared
+}
+
+// partialStateServerQuerier is implemented by the roomserver API, which can tell
+// which servers are known to be in a room that only has partial state.
+type partialStateServerQuerier interface {
+	QueryRoomInfo(ctx context.Context, roomID spec.RoomID) (*rstypes.RoomInfo, error)
+	GetPartialStateServers(ctx context.Context, roomNID rstypes.RoomNID) ([]string, error)
+}
+
+// partialStateRoomServers returns the servers known to be in each room which still
+// has partial state, keyed by room ID. It queries the roomserver, so must not be
+// called with the notifier lock held. OnNewPresence uses these servers to wake
+// streams that may need to recheck presence after the room's members are known.
+func (n *Notifier) partialStateRoomServers(ctx context.Context) map[string][]string {
+	querier, ok := n.rsAPI.(partialStateServerQuerier)
+	if !ok {
+		return nil
+	}
+	roomIDs, err := n.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil || len(roomIDs) == 0 {
+		return nil
+	}
+	rooms := make(map[string][]string, len(roomIDs))
+	for _, roomID := range roomIDs {
+		parsed, err := spec.NewRoomID(roomID)
+		if err != nil {
+			continue
+		}
+		info, err := querier.QueryRoomInfo(ctx, *parsed)
+		if err != nil || info == nil {
+			continue
+		}
+		servers, err := querier.GetPartialStateServers(ctx, info.RoomNID)
+		if err != nil {
+			continue
+		}
+		rooms[roomID] = servers
+	}
+	return rooms
+}
+
+// _partialStateSharedUsers returns the users who are in a room with partial state
+// in which a server of the given user is known to be. This is used only to wake
+// their sync streams; presence responses still require known shared membership.
+func (n *Notifier) _partialStateSharedUsers(partialRooms map[string][]string, userID string) []string {
+	_, domain, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil {
+		return nil
+	}
+	var users []string
+	for roomID, servers := range partialRooms {
+		if slices.Contains(servers, string(domain)) {
+			users = append(users, n._joinedUsers(roomID)...)
+		}
+	}
+	return users
 }
 
 // GetListener returns a UserStreamListener that can be used to wait for

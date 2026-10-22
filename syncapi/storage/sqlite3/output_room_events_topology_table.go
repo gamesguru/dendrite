@@ -64,6 +64,9 @@ const selectStreamToTopologicalPositionDescSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+const deleteEventFromTopologySQL = "" +
+	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
+
 type outputRoomEventsTopologyStatements struct {
 	db                                        *sql.DB
 	insertEventInTopologyStmt                 *sql.Stmt
@@ -73,6 +76,7 @@ type outputRoomEventsTopologyStatements struct {
 	selectStreamToTopologicalPositionAscStmt  *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt *sql.Stmt
 	purgeEventsTopologyStmt                   *sql.Stmt
+	deleteEventFromTopologyStmt               *sql.Stmt
 }
 
 func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
@@ -91,6 +95,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
 		{&s.purgeEventsTopologyStmt, purgeEventsTopologySQL},
+		{&s.deleteEventFromTopologyStmt, deleteEventFromTopologySQL},
 	}.Prepare(db)
 }
 
@@ -186,5 +191,13 @@ func (s *outputRoomEventsTopologyStatements) PurgeEventsTopology(
 ) error {
 	purgeEventsTopologyStmt := sqlutil.TxStmt(txn, s.purgeEventsTopologyStmt)
 	_, err := purgeEventsTopologyStmt.ExecContext(ctx, roomID)
+	return err
+}
+
+func (s *outputRoomEventsTopologyStatements) DeleteEventFromTopology(
+	ctx context.Context, txn *sql.Tx, eventID string,
+) error {
+	deleteEventFromTopologyStmt := sqlutil.TxStmt(txn, s.deleteEventFromTopologyStmt)
+	_, err := deleteEventFromTopologyStmt.ExecContext(ctx, eventID)
 	return err
 }

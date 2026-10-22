@@ -1,29 +1,60 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
 root = true
 
 [*]
+charset = utf-8
+end_of_line = lf
+tab_width = 4
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+max_line_length = 120
+
+[*.toml]
+indent_style = space
+indent_size = 4
+
+[*.rst]
 indent_style = space
 indent_size = 2
-tab_width = 2
-end_of_line = lf
-charset = utf-8
-trim_trailing_whitespace = true
-insert_final_newline = true
+max_line_length = 79
 
-[stepBuilder_test.go, network_test.go, container_test.go, matrix_test.go, linter_test.go param_test.go common_test.go network_test.go parse_test.go]
+[*.{md,txt}]
 indent_style = space
+indent_size = 4
+max_line_length = 80
+
+[*.nix]
+indent_size = 2
+
+[*.rs]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+max_line_length = 98
 
 [*.go]
 indent_style = tab
+indent_size = 4
+tab_width = 4
 
-[go.mod]
+[*.{sh,bash}]
 indent_style = tab
 
-[*.md]
-trim_trailing_whitespace = false
-indent_size = 1
+[*.{yml,yaml}]
+indent_size = 2
+indent_style = space
+
+[*.json]
+indent_size = 4
+indent_style = space
 
 [Makefile]
 indent_style = tab
 
-[{Justfile,justfile}]
+[*.git*]
 indent_style = tab
+
+[{COMMIT_EDITMSG,MERGE_MSG,SQUASH_MSG,TAG_EDITMSG,git-rebase-todo}]
+max_line_length = 72

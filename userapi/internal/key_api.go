@@ -23,6 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -406,12 +407,14 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 func (a *UserInternalAPI) remoteKeysFromDatabase(
 	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex, domainToDeviceKeys map[string]map[string][]string,
 ) map[string]map[string][]string {
+	tracked := a.trackedDeviceLists(ctx, domainToDeviceKeys)
 	fetchRemote := make(map[string]map[string][]string)
 	for domain, userToDeviceMap := range domainToDeviceKeys {
 		for userID, deviceIDs := range userToDeviceMap {
-			// we can't safely return keys from the db when all devices are requested as we don't
-			// know if one has just been added.
-			if len(deviceIDs) > 0 {
+			// Keys for specific devices can come from the db when we hold them all. When all
+			// devices are requested we can only do so for users whose device list we track,
+			// as otherwise we don't know if a device has just been added.
+			if _, isTracked := tracked[userID]; len(deviceIDs) > 0 || isTracked {
 				err := a.populateResponseWithDeviceKeysFromDatabase(ctx, res, respMu, userID, deviceIDs)
 				if err == nil {
 					continue
@@ -426,6 +429,44 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 		}
 	}
 	return fetchRemote
+}
+
+// trackedDeviceLists returns those of the users whose all devices are asked for whose
+// stored device list is complete and current. It was fetched in full and not marked
+// stale since, and the user is still in a room with a local user, so that changes to
+// it reach us. Any error counts as not tracked.
+func (a *UserInternalAPI) trackedDeviceLists(
+	ctx context.Context, domainToDeviceKeys map[string]map[string][]string,
+) map[string]struct{} {
+	var candidates []string
+	for _, userToDeviceMap := range domainToDeviceKeys {
+		for userID, deviceIDs := range userToDeviceMap {
+			if len(deviceIDs) == 0 {
+				candidates = append(candidates, userID)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	fresh, err := a.KeyDatabase.FreshDeviceLists(ctx, candidates)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query fresh device lists")
+		return nil
+	}
+	if len(fresh) == 0 {
+		return nil
+	}
+	var shared rsapi.QueryUsersSharingRoomWithLocalResponse
+	if err = a.RSAPI.QueryUsersSharingRoomWithLocal(ctx, &rsapi.QueryUsersSharingRoomWithLocalRequest{UserIDs: fresh}, &shared); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to query which users share a room with a local user")
+		return nil
+	}
+	tracked := make(map[string]struct{}, len(shared.UserIDs))
+	for _, userID := range shared.UserIDs {
+		tracked[userID] = struct{}{}
+	}
+	return tracked
 }
 
 func (a *UserInternalAPI) queryRemoteKeys(
@@ -498,6 +539,30 @@ func (a *UserInternalAPI) queryRemoteKeys(
 	}
 }
 
+// queryKeysFromServer sends /keys/query unless the server failed recently.
+// In that case it returns an error at once, so the caller falls back to cached
+// keys and the client does not wait out the timeout again. The request context
+// is the caller's, and its cancellation says nothing about the server. The
+// federation context adds the timeout.
+func (a *UserInternalAPI) queryKeysFromServer(
+	ctx, fedCtx context.Context, serverName string, devKeys map[string][]string,
+) (fclient.RespQueryKeys, error) {
+	wait, ok := a.keyQueryBackoff.acquire(serverName)
+	if !ok {
+		return fclient.RespQueryKeys{}, fmt.Errorf("remote key queries to %s are backing off for another %s", serverName, wait.Round(time.Second))
+	}
+	resp, err := a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
+	switch {
+	case err == nil:
+		a.keyQueryBackoff.success(serverName)
+	case ctx.Err() == nil && isTransientKeyQueryError(err):
+		a.keyQueryBackoff.failure(serverName)
+	default:
+		a.keyQueryBackoff.release(serverName)
+	}
+	return resp, err
+}
+
 func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	ctx context.Context, serverName string, devKeys map[string][]string, crossSigningKeys map[string]struct{},
 	wg *sync.WaitGroup, respMu *sync.Mutex, timeout time.Duration, resultCh chan<- *fclient.RespQueryKeys,
@@ -564,7 +629,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	if len(devKeys) == 0 {
 		return
 	}
-	queryKeysResp, err := a.FedClient.QueryKeys(fedCtx, a.Config.Matrix.ServerName, spec.ServerName(serverName), devKeys)
+	queryKeysResp, err := a.queryKeysFromServer(ctx, fedCtx, serverName, devKeys)
 	if err == nil {
 		resultCh <- &queryKeysResp
 		return
@@ -743,6 +808,9 @@ func (a *UserInternalAPI) uploadLocalDeviceKeys(ctx context.Context, req *api.Pe
 	// inform downstream components. However, we're fine with just creating the
 	// database entries above in other cases.
 	if !req.FromRegistration {
+		if a.Updater != nil {
+			a.Updater.NoteLocalDeviceChange(ctx, req.UserID)
+		}
 		err = emitDeviceKeyChanges(a.KeyChangeProducer, existingKeys, keysToStore, req.OnlyDisplayNameUpdates)
 		if err != nil {
 			util.GetLogger(ctx).Errorf("Failed to emitDeviceKeyChanges: %s", err)

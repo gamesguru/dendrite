@@ -57,6 +57,7 @@ type Events interface {
 	// If we do not have the state for any of the requested events it returns a types.MissingEventError.
 	BulkSelectStateAtEventByID(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StateAtEvent, error)
 	UpdateEventState(ctx context.Context, txn *sql.Tx, eventNID types.EventNID, stateNID types.StateSnapshotNID) error
+	UpdateEventRejected(ctx context.Context, txn *sql.Tx, eventNID types.EventNID, rejected bool) error
 	SelectEventSentToOutput(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) (sentToOutput bool, err error)
 	UpdateEventSentToOutput(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) error
 	SelectEventID(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) (eventID string, err error)
@@ -283,6 +284,8 @@ type PartialState interface {
 	SelectDeviceListStreamID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
 	// SelectPartialStateJoinedVia returns the server we joined through for a partial state room
 	SelectPartialStateJoinedVia(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (string, error)
+	// SelectPartialStateJoinEventNID returns the join event that started a partial state room, or 0 if unknown
+	SelectPartialStateJoinEventNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (types.EventNID, error)
 	// DeletePartialStateRoom removes a room from partial state tracking and returns the stored device list stream ID
 	DeletePartialStateRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (int64, error)
 }

@@ -42,10 +42,16 @@ type fedRoomserverAPI struct {
 	rsapi.FederationRoomserverAPI
 	inputRoomEvents   func(ctx context.Context, req *rsapi.InputRoomEventsRequest, res *rsapi.InputRoomEventsResponse)
 	queryRoomsForUser func(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
+	pendingInvite     bool
+	partialStateSets  int
 }
 
 func (f *fedRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 	return spec.NewUserID(string(senderID), true)
+}
+
+func (f *fedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
+	return f.pendingInvite, nil
 }
 
 func (f *fedRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
@@ -69,9 +75,23 @@ func (f *fedRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.Us
 	return f.queryRoomsForUser(ctx, userID, desiredMembership)
 }
 
+// QueryRoomInfo is called by the keychange consumer to see whether a room has partial state.
+func (f *fedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return nil, nil
+}
+
 // GetAllPartialStateRooms is called by PartialStateWorker.
 func (f *fedRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]types.RoomNID, error) {
 	return []types.RoomNID{}, nil
+}
+
+func (f *fedRoomserverAPI) AssignRoomNID(context.Context, spec.RoomID, gomatrixserverlib.RoomVersion) (types.RoomNID, error) {
+	return 1, nil
+}
+
+func (f *fedRoomserverAPI) SetRoomPartialState(context.Context, types.RoomNID, string, string, []string, int64) error {
+	f.partialStateSets++
+	return nil
 }
 
 // TODO: This struct isn't generic, only works for TestFederationAPIJoinThenKeyUpdate
@@ -83,8 +103,10 @@ type fedClient struct {
 		key   ed25519.PrivateKey
 		keyID gomatrixserverlib.KeyID
 	}
-	t       *testing.T
-	sentTxn bool
+	t                *testing.T
+	sentTxn          bool
+	fullJoinSends    int
+	partialJoinSends int
 }
 
 func (f *fedClient) GetServerKeys(ctx context.Context, matrixServer spec.ServerName) (gomatrixserverlib.ServerKeys, error) {
@@ -162,6 +184,7 @@ func (f *fedClient) MakeJoin(ctx context.Context, origin, s spec.ServerName, roo
 func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
 	f.fedClientMutex.Lock()
 	defer f.fedClientMutex.Unlock()
+	f.fullJoinSends++
 	for _, r := range f.allowJoins {
 		if r.ID == event.RoomID().String() {
 			r.InsertEvent(f.t, &types.HeaderedEvent{PDU: event})
@@ -175,6 +198,9 @@ func (f *fedClient) SendJoin(ctx context.Context, origin, s spec.ServerName, eve
 
 func (f *fedClient) SendJoinPartialState(ctx context.Context, origin, s spec.ServerName, event gomatrixserverlib.PDU) (res fclient.RespSendJoin, err error) {
 	// Delegate to SendJoin - partial state join uses the same response format
+	f.fedClientMutex.Lock()
+	f.partialJoinSends++
+	f.fedClientMutex.Unlock()
 	return f.SendJoin(ctx, origin, s, event)
 }
 
@@ -227,6 +253,7 @@ func testFederationAPIJoinThenKeyUpdate(t *testing.T, dbType test.DBType) {
 	}
 
 	rsapi := &fedRoomserverAPI{
+		pendingInvite: true,
 		inputRoomEvents: func(ctx context.Context, req *rsapi.InputRoomEventsRequest, res *rsapi.InputRoomEventsResponse) {
 			if req.Asynchronous {
 				t.Errorf("InputRoomEvents from PerformJoin MUST be synchronous")
@@ -269,6 +296,15 @@ func testFederationAPIJoinThenKeyUpdate(t *testing.T, dbType test.DBType) {
 	}
 	if resp.LastError != nil {
 		t.Fatalf("PerformJoin: returned error: %+v", *resp.LastError)
+	}
+	fc.fedClientMutex.Lock()
+	fullJoinSends, partialJoinSends := fc.fullJoinSends, fc.partialJoinSends
+	fc.fedClientMutex.Unlock()
+	if fullJoinSends != 1 || partialJoinSends != 0 {
+		t.Fatalf("PerformJoin send_join calls: full=%d partial=%d, want full=1 partial=0", fullJoinSends, partialJoinSends)
+	}
+	if rsapi.partialStateSets != 0 {
+		t.Fatalf("SetRoomPartialState called %d times for an invited join, want 0", rsapi.partialStateSets)
 	}
 
 	// Inject a keyserver key change event and ensure we try to send it out. If we don't, then the

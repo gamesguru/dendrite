@@ -112,6 +112,9 @@ const bulkSelectStateAtEventByIDSQL = "" +
 const updateEventStateSQL = "" +
 	"UPDATE roomserver_events SET state_snapshot_nid = $2 WHERE event_nid = $1"
 
+const updateEventRejectedSQL = "" +
+	"UPDATE roomserver_events SET is_rejected = $2 WHERE event_nid = $1"
+
 const selectEventSentToOutputSQL = "" +
 	"SELECT sent_to_output FROM roomserver_events WHERE event_nid = $1"
 
@@ -154,6 +157,7 @@ type eventStatements struct {
 	bulkSelectStateEventByNIDStmt                 *sql.Stmt
 	bulkSelectStateAtEventByIDStmt                *sql.Stmt
 	updateEventStateStmt                          *sql.Stmt
+	updateEventRejectedStmt                       *sql.Stmt
 	selectEventSentToOutputStmt                   *sql.Stmt
 	updateEventSentToOutputStmt                   *sql.Stmt
 	selectEventIDStmt                             *sql.Stmt
@@ -195,6 +199,7 @@ func PrepareEventsTable(db *sql.DB) (tables.Events, error) {
 		{&s.bulkSelectStateEventByNIDStmt, bulkSelectStateEventByNIDSQL},
 		{&s.bulkSelectStateAtEventByIDStmt, bulkSelectStateAtEventByIDSQL},
 		{&s.updateEventStateStmt, updateEventStateSQL},
+		{&s.updateEventRejectedStmt, updateEventRejectedSQL},
 		{&s.updateEventSentToOutputStmt, updateEventSentToOutputSQL},
 		{&s.selectEventSentToOutputStmt, selectEventSentToOutputSQL},
 		{&s.selectEventIDStmt, selectEventIDSQL},
@@ -400,6 +405,14 @@ func (s *eventStatements) UpdateEventState(
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateEventStateStmt)
 	_, err := stmt.ExecContext(ctx, int64(eventNID), int64(stateNID))
+	return err
+}
+
+func (s *eventStatements) UpdateEventRejected(
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, rejected bool,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.updateEventRejectedStmt)
+	_, err := stmt.ExecContext(ctx, int64(eventNID), rejected)
 	return err
 }
 

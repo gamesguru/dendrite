@@ -16,7 +16,9 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
-func mustCreateMembershipTable(t *testing.T, dbType test.DBType) (tab tables.Membership, stateKeyTab tables.EventStateKeys, close func()) {
+func mustCreateMembershipTable(
+	t *testing.T, dbType test.DBType,
+) (tab tables.Membership, stateKeyTab tables.EventStateKeys, partialStateTab tables.PartialState, close func()) {
 	t.Helper()
 	connStr, close := test.PrepareDBConnectionString(t, dbType)
 	db, err := sqlutil.Open(&config.DatabaseOptions{
@@ -29,27 +31,35 @@ func mustCreateMembershipTable(t *testing.T, dbType test.DBType) (tab tables.Mem
 		assert.NoError(t, err)
 		err = postgres.CreateMembershipTable(db)
 		assert.NoError(t, err)
+		err = postgres.CreatePartialStateTable(db)
+		assert.NoError(t, err)
 		tab, err = postgres.PrepareMembershipTable(db)
 		assert.NoError(t, err)
 		stateKeyTab, err = postgres.PrepareEventStateKeysTable(db)
+		assert.NoError(t, err)
+		partialStateTab, err = postgres.PreparePartialStateTable(db)
 	case test.DBTypeSQLite:
 		err = sqlite3.CreateEventStateKeysTable(db)
 		assert.NoError(t, err)
 		err = sqlite3.CreateMembershipTable(db)
 		assert.NoError(t, err)
+		err = sqlite3.CreatePartialStateTable(db)
+		assert.NoError(t, err)
 		tab, err = sqlite3.PrepareMembershipTable(db)
 		assert.NoError(t, err)
 		stateKeyTab, err = sqlite3.PrepareEventStateKeysTable(db)
+		assert.NoError(t, err)
+		partialStateTab, err = sqlite3.PreparePartialStateTable(db)
 	}
 	assert.NoError(t, err)
 
-	return tab, stateKeyTab, close
+	return tab, stateKeyTab, partialStateTab, close
 }
 
 func TestMembershipTable(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, stateKeyTab, close := mustCreateMembershipTable(t, dbType) //nolint:contextcheck
+		tab, stateKeyTab, _, close := mustCreateMembershipTable(t, dbType) //nolint:contextcheck
 		defer close()
 		_ = close
 
@@ -136,5 +146,44 @@ func TestMembershipTable(t *testing.T) {
 		assert.NoError(t, err)
 		// Only userNIDs[0] is actually joined, so we only expect this userNID
 		assert.Equal(t, userNIDs[:1], joinedUsers)
+	})
+}
+
+func TestKnownUsersDuringPartialState(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		membershipTab, stateKeyTab, partialStateTab, close := mustCreateMembershipTable(t, dbType) //nolint:contextcheck
+		defer close()
+
+		const roomNID = types.RoomNID(1)
+		userIDs := []string{"@searcher:local.test", "@alice:local.test", "@remote:remote.test"}
+		userNIDs := make([]types.EventStateKeyNID, len(userIDs))
+		for i, userID := range userIDs {
+			nid, err := stateKeyTab.InsertEventStateKeyNID(ctx, nil, userID)
+			assert.NoError(t, err)
+			userNIDs[i] = nid
+
+			local := i < 2
+			assert.NoError(t, membershipTab.InsertMembership(ctx, nil, roomNID, nid, local))
+			_, err = membershipTab.UpdateMembership(
+				ctx, nil, roomNID, nid, userNIDs[0], tables.MembershipStateJoin, types.EventNID(i+1), false,
+			)
+			assert.NoError(t, err)
+		}
+
+		assert.NoError(t, partialStateTab.InsertPartialStateRoom(
+			ctx, nil, roomNID, types.EventNID(1), "remote.test", []string{"remote.test"}, 0,
+		))
+
+		knownUsers, err := membershipTab.SelectKnownUsers(ctx, nil, userNIDs[0], "", 10)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, userIDs[:2], knownUsers)
+
+		_, err = partialStateTab.DeletePartialStateRoom(ctx, nil, roomNID)
+		assert.NoError(t, err)
+
+		knownUsers, err = membershipTab.SelectKnownUsers(ctx, nil, userNIDs[0], "", 10)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, userIDs, knownUsers)
 	})
 }

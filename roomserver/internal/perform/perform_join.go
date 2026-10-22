@@ -302,8 +302,19 @@ func (r *Joiner) performJoinRoomByID(
 		}
 	}
 
-	// MSC3706: Force federated join if room is in partial state and user is not already joined.
-	// This ensures authorization happens with complete state on the remote server.
+	// A user the room bans cannot rejoin it, so refuse at once rather than ask another
+	// server, which may not yet know of the ban (a partial state join in particular).
+	if info != nil && senderID != "" {
+		var banRes rsAPI.QueryMembershipForUserResponse
+		if banErr := r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, &banRes); banErr == nil && banRes.Membership == spec.Ban {
+			return "", "", rsAPI.ErrNotAllowed{Err: fmt.Errorf("user %s is banned from the room", req.UserID)}
+		}
+	}
+
+	// MSC3706: Force federated join if room is in partial state and user is not already joined,
+	// so that authorization happens with complete state on the remote server. Even a public
+	// room needs this: the partial state may omit a ban of the user, which only a server
+	// that knows their membership can enforce.
 	if info != nil && !forceFederatedJoin && len(req.ServerNames) > 0 {
 		isPartialState, partialStateErr := r.DB.IsRoomPartialState(ctx, info.RoomNID)
 		if partialStateErr == nil && isPartialState {

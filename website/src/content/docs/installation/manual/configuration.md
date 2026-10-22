@@ -115,6 +115,12 @@ global:
     conn_max_lifetime: -1
 ```
 
+For SQLite databases, `sqlite_wal: true` switches to a write-ahead log with
+`synchronous=NORMAL`. Commits then append to the log instead of fsyncing several
+times, which is much faster on a busy or slow disk. A power loss or system crash
+can lose the most recent transactions but never corrupts the database. It is off
+by default.
+
 See also [Connection strings](/installation/manual/database/#connection-strings)
 
 It's possible to configure per-component `database` sections in other areas of the configuration file, e.g. under the `app_service_api`, `federation_api`, `key_server`, `media_api`, `mscs`, `relay_api`, `room_server`, `sync_api` and `user_api` blocks, these will override the `global` database configuration.

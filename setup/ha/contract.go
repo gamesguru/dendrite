@@ -45,7 +45,7 @@ type Contract struct {
 // fields. Raise UpgradeFrom when this build cannot take over from an older
 // one, and RollbackTo when an older build cannot take over from this one;
 // either turns the transition into an offline upgrade.
-var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, RollbackTo: 1}
+var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, RollbackTo: releaseLevel}
 
 // releaseLevel is the current shared-state surface level. Level 2 stores
 // per-thread notification counts, level 3 custom profile fields, level 4
@@ -55,9 +55,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 // level 9 stores the sticky duration of delayed events, level 10 indexes
 // annotations (MSC2677) and reserves media IDs for asynchronous uploads
 // (MSC2246), level 11 records erased users (MSC4025), level 12 locks
-// accounts (MSC3939), and level 13 suspends accounts (MSC3823) and stores room
-// reports (MSC4151).
-const releaseLevel = 13
+// accounts (MSC3939), level 13 suspends accounts (MSC3823) and stores room
+// reports (MSC4151), and level 14 adds the pending notification refresh outbox.
+const releaseLevel = 14
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

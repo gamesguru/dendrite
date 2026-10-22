@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -40,6 +41,10 @@ const redactionsArePermanent = true
 type Database struct {
 	DB *sql.DB
 	EventDatabase
+	// roomNIDCacheLock serializes cache-populating room lookups with cache
+	// invalidation after a room is purged. Without it, a lookup can read the
+	// room before the purge commits, then repopulate its old NID after invalidation.
+	roomNIDCacheLock   sync.RWMutex
 	Cache              caching.RoomServerCaches
 	Writer             sqlutil.Writer
 	RoomsTable         tables.Rooms
@@ -258,6 +263,9 @@ func (d *Database) RoomInfo(ctx context.Context, roomID string) (*types.RoomInfo
 }
 
 func (d *Database) roomInfo(ctx context.Context, txn *sql.Tx, roomID string) (*types.RoomInfo, error) {
+	d.roomNIDCacheLock.RLock()
+	defer d.roomNIDCacheLock.RUnlock()
+
 	roomInfo, err := d.RoomsTable.SelectRoomInfo(ctx, txn, roomID)
 	if err != nil {
 		return nil, err
@@ -724,6 +732,19 @@ func (d *Database) GetOrCreateRoomInfo(ctx context.Context, event gomatrixserver
 		if err != nil {
 			return err
 		}
+		if roomVersion == "" {
+			// Non-create events do not carry the room version. The Ristretto
+			// cache writes asynchronously, so the room NID may be visible before
+			// its version; load the persisted version rather than caching an
+			// empty value over the immutable room-version entry.
+			info, err := d.RoomsTable.SelectRoomInfo(ctx, txn, event.RoomID().String())
+			if err != nil {
+				return err
+			}
+			if info != nil {
+				roomVersion = info.RoomVersion
+			}
+		}
 		return nil
 	})
 	if roomVersion != "" {
@@ -896,6 +917,9 @@ func (d *Database) MissingAuthPrevEvents(
 func (d *Database) assignRoomNID(
 	ctx context.Context, txn *sql.Tx, roomID string, roomVersion gomatrixserverlib.RoomVersion,
 ) (types.RoomNID, error) {
+	d.roomNIDCacheLock.RLock()
+	defer d.roomNIDCacheLock.RUnlock()
+
 	roomNID, ok := d.Cache.GetRoomServerRoomNID(roomID)
 	if ok {
 		return roomNID, nil
@@ -914,7 +938,9 @@ func (d *Database) assignRoomNID(
 		return 0, err
 	}
 	d.Cache.StoreRoomServerRoomID(roomNID, roomID)
-	d.Cache.StoreRoomVersion(roomID, roomVersion)
+	if roomVersion != "" {
+		d.Cache.StoreRoomVersion(roomID, roomVersion)
+	}
 	return roomNID, nil
 }
 
@@ -1674,6 +1700,75 @@ func (d *Database) JoinedUsersSetInRooms(ctx context.Context, roomIDs, userIDs [
 	return result, nil
 }
 
+// GetUsersSharingRoomWithLocal returns those of the given users who are joined to a room that a
+// local user is joined to as well. The members of a room with partial state that came with the
+// /send_join response may not be in the room, so there only members whose membership event was
+// stored after the event of our own join count, as it is by events we saw arrive.
+func (d *Database) GetUsersSharingRoomWithLocal(ctx context.Context, userIDs []string) ([]string, error) {
+	stateKeyNIDMap, err := d.EventStateKeyNIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	type roomInfo struct {
+		hasLocal     bool
+		partial      bool
+		joinEventNID types.EventNID
+	}
+	rooms := make(map[types.RoomNID]roomInfo)
+	lookup := func(roomNID types.RoomNID) (roomInfo, error) {
+		if info, ok := rooms[roomNID]; ok {
+			return info, nil
+		}
+		var info roomInfo
+		local, localErr := d.MembershipTable.SelectMembershipsFromRoomAndMembership(ctx, nil, roomNID, tables.MembershipStateJoin, true)
+		if localErr != nil {
+			return info, localErr
+		}
+		info.hasLocal = len(local) > 0
+		if info.hasLocal {
+			if info.partial, localErr = d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID); localErr != nil {
+				return info, localErr
+			}
+		}
+		if info.partial {
+			if info.joinEventNID, localErr = d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID); localErr != nil {
+				return info, localErr
+			}
+		}
+		rooms[roomNID] = info
+		return info, nil
+	}
+
+	var sharing []string
+	for userID, userNID := range stateKeyNIDMap {
+		roomNIDs, roomsErr := d.MembershipTable.SelectRoomsWithMembership(ctx, nil, userNID, tables.MembershipStateJoin)
+		if roomsErr != nil {
+			return nil, roomsErr
+		}
+		for _, roomNID := range roomNIDs {
+			info, infoErr := lookup(roomNID)
+			if infoErr != nil {
+				return nil, infoErr
+			}
+			if !info.hasLocal {
+				continue
+			}
+			if info.partial {
+				memberEventNID, _, _, memberErr := d.MembershipTable.SelectMembershipFromRoomAndTarget(ctx, nil, roomNID, userNID)
+				if memberErr != nil {
+					return nil, memberErr
+				}
+				if info.joinEventNID == 0 || memberEventNID <= info.joinEventNID {
+					continue
+				}
+			}
+			sharing = append(sharing, userID)
+			break
+		}
+	}
+	return sharing, nil
+}
+
 // GetLeftUsers calculates users we (the server) don't share a room with anymore.
 func (d *Database) GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error) {
 	// Get the userNID for all users with a stale device list
@@ -1893,6 +1988,11 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	if err != nil {
 		return err
 	}
+	// The transaction is committed before taking the write lock. Cache
+	// populators hold the read lock through their database read and cache store,
+	// so any lookup that saw the pre-purge row finishes before this invalidation.
+	d.roomNIDCacheLock.Lock()
+	defer d.roomNIDCacheLock.Unlock()
 	d.Cache.InvalidateRoom(roomID)
 	return nil
 }
@@ -2377,11 +2477,58 @@ func (d *Database) GetPartialStateJoinServer(ctx context.Context, roomNID types.
 	return d.PartialStateTable.SelectPartialStateJoinedVia(ctx, nil, roomNID)
 }
 
+// GetPartialStateJoinEventID returns the join event that started a partial state room.
+// It returns "" when the room has no record or the event was not recorded.
+func (d *Database) GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	eventNID, err := d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID)
+	if err != nil || eventNID == 0 {
+		return "", err
+	}
+	ids, err := d.EventIDs(ctx, []types.EventNID{eventNID})
+	if err != nil {
+		return "", err
+	}
+	return ids[eventNID], nil
+}
+
 // SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.PartialStateTable.InsertPartialStateRoom(ctx, txn, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
 	})
+}
+
+// GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
+// we did, as opposed to those listed in the state we joined with, and all the users
+// currently joined to it.
+func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) (later, joined []string, err error) {
+	joinEventNID, err := d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID)
+	if err != nil || joinEventNID == 0 {
+		return nil, nil, err
+	}
+	memberNIDs, err := d.MembershipTable.SelectMembershipsFromRoomAndMembership(ctx, nil, roomNID, tables.MembershipStateJoin, false)
+	if err != nil || len(memberNIDs) == 0 {
+		return nil, nil, err
+	}
+	info, err := d.RoomInfoByNID(ctx, roomNID)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := d.Events(ctx, info.RoomVersion, memberNIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ev := range events {
+		key := ev.StateKey()
+		if key == nil {
+			continue
+		}
+		joined = append(joined, *key)
+		if ev.EventNID > joinEventNID {
+			later = append(later, *key)
+		}
+	}
+	return later, joined, nil
 }
 
 // ClearRoomPartialState removes the partial state flag from a room after state has been fully synced

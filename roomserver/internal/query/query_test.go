@@ -200,3 +200,22 @@ func TestCurrentEventIsNil(t *testing.T) {
 		}
 	})
 }
+
+// A join to a room this server has never seen must not look like a failed invite
+// lookup, or every partial-state join would fall back to full state.
+func TestInvitePendingUnknownRoom(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateDatabase(t, dbType)
+		defer close()
+		querier := Queryer{DB: db}
+
+		roomID, _ := spec.NewRoomID("!unknown:server")
+		pending, err := querier.InvitePending(context.Background(), *roomID, "@user:server")
+		if err != nil {
+			t.Fatalf("an unknown room is not a lookup error, got %v", err)
+		}
+		if pending {
+			t.Fatal("an unknown room cannot have a pending invite")
+		}
+	})
+}

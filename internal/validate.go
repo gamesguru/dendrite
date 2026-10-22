@@ -23,13 +23,14 @@ import (
 const (
 	maxUsernameLength = 254 // https://spec.matrix.org/v1.7/appendices/#user-identifiers TODO account for domain
 
-	minPasswordLength = 8   // http://matrix.org/docs/spec/client_server/r0.2.0.html#password-based
-	maxPasswordLength = 512 // https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/rest/client/v2_alpha/register.py#L161
+	// DefaultMinPasswordLength is the shortest password accepted unless configured otherwise.
+	DefaultMinPasswordLength = 8   // http://matrix.org/docs/spec/client_server/r0.2.0.html#password-based
+	maxPasswordLength        = 512 // https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/rest/client/v2_alpha/register.py#L161
 )
 
 var (
 	ErrPasswordTooLong    = fmt.Errorf("password too long: max %d characters", maxPasswordLength)
-	ErrPasswordWeak       = fmt.Errorf("password too weak: min %d characters", minPasswordLength)
+	ErrPasswordWeak       = errors.New("password too weak")
 	ErrUsernameTooLong    = fmt.Errorf("username exceeds the maximum length of %d characters", maxUsernameLength)
 	ErrUsernameInvalid    = errors.New("username can only contain characters a-z, 0-9, or '_+-./='")
 	ErrUsernameUnderscore = errors.New("username cannot start with a '_'")
@@ -38,11 +39,20 @@ var (
 
 // ValidatePassword returns an error if the password is invalid.
 func ValidatePassword(password string) error {
+	return ValidatePasswordWithMinimum(password, DefaultMinPasswordLength)
+}
+
+// ValidatePasswordWithMinimum is ValidatePassword with a configured shortest
+// length. Zero means the default.
+func ValidatePasswordWithMinimum(password string, minLength int) error {
+	if minLength <= 0 {
+		minLength = DefaultMinPasswordLength
+	}
 	// https://github.com/matrix-org/synapse/blob/v0.20.0/synapse/rest/client/v2_alpha/register.py#L161
 	if len(password) > maxPasswordLength {
 		return ErrPasswordTooLong
-	} else if len(password) > 0 && len(password) < minPasswordLength {
-		return ErrPasswordWeak
+	} else if len(password) > 0 && len(password) < minLength {
+		return fmt.Errorf("%w: min %d characters", ErrPasswordWeak, minLength)
 	}
 	return nil
 }
@@ -52,7 +62,7 @@ func PasswordResponse(err error) *util.JSONResponse {
 	if errors.Is(err, ErrPasswordWeak) {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.WeakPassword(ErrPasswordWeak.Error()),
+			JSON: spec.WeakPassword(err.Error()),
 		}
 	}
 	if errors.Is(err, ErrPasswordTooLong) {

@@ -441,6 +441,18 @@ func (r *QueryCurrentStateResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// QueryUsersSharingRoomWithLocalRequest asks which of the given users are joined to a room
+// that a local user is joined to as well. Members of a room with partial state count only
+// if their join came after our own join to the room began.
+type QueryUsersSharingRoomWithLocalRequest struct {
+	UserIDs []string `json:"user_ids"`
+}
+
+// QueryUsersSharingRoomWithLocalResponse is the response to QueryUsersSharingRoomWithLocalRequest.
+type QueryUsersSharingRoomWithLocalResponse struct {
+	UserIDs []string `json:"user_ids"`
+}
+
 // QueryLeftUsersRequest is a request to calculate users that we (the server) don't share a
 // a room with anymore. This is used to cleanup stale device list entries, where we would
 // otherwise keep on trying to get device lists.
@@ -616,4 +628,17 @@ func (s RoomSet) Copy() RoomSet {
 		copied.Add(k)
 	}
 	return copied
+}
+
+// PartialStateMembers describes who was joined to a room before the state of its
+// partial state resync was applied.
+type PartialStateMembers struct {
+	// Later are those who joined after our partial join.
+	Later []string
+	// Joined are all those that were joined.
+	Joined []string
+	// Interrupted are those whose membership was changed by an event that the resync
+	// accepted or rejected after all, so they were out of the room for a while that we
+	// did not know of.
+	Interrupted []string
 }

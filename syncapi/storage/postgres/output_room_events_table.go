@@ -189,6 +189,9 @@ const selectRoomsWithEventsSinceSQL = "" +
 const purgeEventsSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE room_id = $1"
 
+const deleteEventSQL = "" +
+	"DELETE FROM syncapi_output_room_events WHERE event_id = $1"
+
 const selectSearchSQL = "SELECT id, event_id, headered_event_json FROM syncapi_output_room_events WHERE id > $1 AND type = ANY($2) ORDER BY id ASC LIMIT $3"
 
 // selectMaxStreamPositionsForRoomsSQL gets the maximum stream position (latest "bump" event) for each room
@@ -229,6 +232,7 @@ type outputRoomEventsStatements struct {
 	selectContextAfterEventStmt          *sql.Stmt
 	selectRoomsWithEventsSinceStmt       *sql.Stmt
 	purgeEventsStmt                      *sql.Stmt
+	deleteEventStmt                      *sql.Stmt
 	selectSearchStmt                     *sql.Stmt
 	selectMaxStreamPositionsForRoomsStmt *sql.Stmt
 }
@@ -297,6 +301,7 @@ func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, err
 		{&s.selectContextAfterEventStmt, selectContextAfterEventSQL},
 		{&s.selectRoomsWithEventsSinceStmt, selectRoomsWithEventsSinceSQL},
 		{&s.purgeEventsStmt, purgeEventsSQL},
+		{&s.deleteEventStmt, deleteEventSQL},
 		{&s.selectSearchStmt, selectSearchSQL},
 		{&s.selectMaxStreamPositionsForRoomsStmt, selectMaxStreamPositionsForRoomsSQL},
 	}.Prepare(db)
@@ -789,6 +794,14 @@ func (s *outputRoomEventsStatements) PurgeEvents(
 ) error {
 	purgeEventsStmt := sqlutil.TxStmt(txn, s.purgeEventsStmt)
 	_, err := purgeEventsStmt.ExecContext(ctx, roomID)
+	return err
+}
+
+func (s *outputRoomEventsStatements) DeleteEvent(
+	ctx context.Context, txn *sql.Tx, eventID string,
+) error {
+	deleteEventStmt := sqlutil.TxStmt(txn, s.deleteEventStmt)
+	_, err := deleteEventStmt.ExecContext(ctx, eventID)
 	return err
 }
 

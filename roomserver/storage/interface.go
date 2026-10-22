@@ -180,6 +180,9 @@ type Database interface {
 
 	GetHistoryVisibilityState(ctx context.Context, roomInfo *types.RoomInfo, eventID string, domain string) ([]gomatrixserverlib.PDU, error)
 	GetLeftUsers(ctx context.Context, userIDs []string) ([]string, error)
+	// GetUsersSharingRoomWithLocal returns those of the given users who are joined to a room that a local user is
+	// joined to as well. In a room with partial state only members whose join came after the partial join count.
+	GetUsersSharingRoomWithLocal(ctx context.Context, userIDs []string) ([]string, error)
 	PurgeRoom(ctx context.Context, roomID string) error
 	UpgradeRoom(ctx context.Context, oldRoomID, newRoomID, eventSender string) error
 
@@ -229,9 +232,15 @@ type Database interface {
 	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started a partial state room, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// SetRoomPartialState marks a room as having partial state after a faster join
 	// deviceListStreamID is the current device list stream position at join time (for device list replay)
 	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
+	// we did, as opposed to those listed in the state we joined with, and all the users
+	// currently joined to it.
+	GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) (later, joined []string, err error)
 	// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
 	// Returns the device list stream ID that was stored at join time for device list replay
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
@@ -288,6 +297,8 @@ type RoomDatabase interface {
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started a partial state room, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// ClientTransactionEventID returns the event a client transaction produced,
 	// or "" if the transaction is unknown.
 	ClientTransactionEventID(ctx context.Context, roomID, senderID string, sessionID int64, transactionID string) (string, error)

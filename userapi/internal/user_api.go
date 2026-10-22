@@ -60,6 +60,8 @@ type UserInternalAPI struct {
 	FedClient   fedsenderapi.KeyserverFederationAPI
 	Updater     *DeviceListUpdater
 
+	keyQueryBackoff remoteKeyBackoff
+
 	RegisteredUsersGauge prometheus.Gauge
 }
 

@@ -178,15 +178,16 @@ func sharedSurface(t *testing.T) string {
 		require.NoError(t, rows.Err())
 	}
 	describe("column", `SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default, '')
-		FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name, column_name`)
+		FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name COLLATE "C", column_name COLLATE "C"`)
 	describe("index", `SELECT tablename, indexname, indexdef FROM pg_indexes
-		WHERE schemaname = current_schema() ORDER BY tablename, indexname`)
+		WHERE schemaname = current_schema() ORDER BY tablename COLLATE "C", indexname COLLATE "C"`)
+	// Ordering is by byte value, as the database's collation would otherwise decide it.
 	// PostgreSQL 18 lists NOT NULL in pg_constraint, older majors do not. The column
 	// rows above already record nullability, so leave these out to stay portable.
 	describe("constraint", `SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint
-		WHERE connamespace = current_schema()::regnamespace AND contype <> 'n' ORDER BY 1, 2`)
+		WHERE connamespace = current_schema()::regnamespace AND contype <> 'n' ORDER BY conrelid::regclass::text COLLATE "C", conname COLLATE "C"`)
 	describe("sequence", `SELECT sequence_name, data_type, increment FROM information_schema.sequences
-		WHERE sequence_schema = current_schema() ORDER BY sequence_name`)
+		WHERE sequence_schema = current_schema() ORDER BY sequence_name COLLATE "C"`)
 	describe("migration", `SELECT version FROM db_migrations ORDER BY version`)
 	for _, stream := range jetstream.StreamDefinitions() {
 		encoded, err := json.Marshal(stream)

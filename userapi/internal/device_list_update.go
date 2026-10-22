@@ -29,6 +29,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -100,6 +101,16 @@ type DeviceListUpdater struct {
 	rsAPI          rsapi.KeyserverRoomserverAPI
 
 	isBlacklistedOrBackingOffFn func(s spec.ServerName) (*statistics.ServerStatistics, error)
+
+	// Users whose device list updates arrived while a room had partial state (MSC3706).
+	// Who shares a room with whom is unknown until the resync finishes, so these wait
+	// for it instead of making a request to the user's server.
+	pendingMu    sync.Mutex
+	pendingUsers map[string]struct{}
+	// Local users whose device lists changed while each room had partial state:
+	// that room's servers were only partly known, so some may have missed it.
+	pendingLocalLists      map[string]map[string]uint64
+	pendingLocalGeneration uint64
 }
 
 // DeviceListUpdaterDatabase is the subset of functionality from storage.Database required for the updater.
@@ -108,6 +119,9 @@ type DeviceListUpdaterDatabase interface {
 	// StaleDeviceLists returns a list of user IDs ending with the domains provided who have stale device lists.
 	// If no domains are given, all user IDs with stale device lists are returned.
 	StaleDeviceLists(ctx context.Context, domains []spec.ServerName) ([]string, error)
+
+	// FreshDeviceLists returns those of the users whose device list was fetched in full and has not been marked stale since.
+	FreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error)
 
 	// MarkDeviceListStale sets the stale bit for this user to isStale.
 	MarkDeviceListStale(ctx context.Context, userID string, isStale bool) error
@@ -122,6 +136,9 @@ type DeviceListUpdaterDatabase interface {
 
 	// DeviceKeysJSON populates the KeyJSON for the given keys. If any proided `keys` have a `KeyJSON` or `StreamID` already then it will be replaced.
 	DeviceKeysJSON(ctx context.Context, keys []api.DeviceMessage) error
+
+	// DeviceKeysForUser returns the device keys for the device IDs given. If the length of deviceIDs is 0, all devices are selected.
+	DeviceKeysForUser(ctx context.Context, userID string, deviceIDs []string, includeEmpty bool) ([]api.DeviceMessage, error)
 
 	DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error
 }
@@ -172,6 +189,8 @@ func NewDeviceListUpdater(
 		process:                     process,
 		userIDToMutex:               make(map[string]*sync.Mutex),
 		mu:                          &sync.Mutex{},
+		pendingUsers:                make(map[string]struct{}),
+		pendingLocalLists:           make(map[string]map[string]uint64),
 		db:                          db,
 		api:                         api,
 		producer:                    producer,
@@ -291,6 +310,13 @@ func (u *DeviceListUpdater) update(ctx context.Context, event gomatrixserverlib.
 		"deleted":        event.Deleted,
 	}).Trace("DeviceListUpdater.Update")
 
+	// While a room has partial state we cannot tell who shares a room with the
+	// user, so do not ask their server for the device list: hold the update until
+	// the resync finishes, as Synapse does.
+	if !exists && !event.Deleted && u.deferWhilePartialState(ctx, event.UserID) {
+		return false, nil
+	}
+
 	// if we haven't missed anything update the database and notify users
 	if exists || event.Deleted {
 		k := event.Keys
@@ -347,6 +373,239 @@ func (u *DeviceListUpdater) update(ctx context.Context, event gomatrixserverlib.
 	}
 
 	return true, nil
+}
+
+// deferWhilePartialState records the user's update as pending and returns true if
+// any room has partial state. Failing to find out counts as no.
+func (u *DeviceListUpdater) deferWhilePartialState(ctx context.Context, userID string) bool {
+	if u.rsAPI == nil {
+		return false
+	}
+	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to check for rooms with partial state")
+		return false
+	}
+	if len(rooms) == 0 {
+		return false
+	}
+	// A user known to be in a fully stated room is handled as usual: no resync is
+	// going to say anything more about them.
+	if user, parseErr := spec.NewUserID(userID, true); parseErr == nil {
+		if joined, roomsErr := u.rsAPI.QueryRoomsForUser(ctx, *user, spec.Join); roomsErr == nil && len(joined) > 0 {
+			return false
+		}
+	}
+	u.pendingMu.Lock()
+	defer u.pendingMu.Unlock()
+	u.pendingUsers[userID] = struct{}{}
+	return true
+}
+
+// ListenForUnPartialStatedRooms makes the updater act on the device list updates it
+// held back once the members of a room are known.
+func (u *DeviceListUpdater) ListenForUnPartialStatedRooms() {
+	if u.rsAPI == nil {
+		return
+	}
+	u.rsAPI.RegisterUnPartialStatedHook(u.onRoomUnPartialStated)
+}
+
+func (u *DeviceListUpdater) onRoomUnPartialStated(ctx context.Context, roomID string) {
+	if err := u.HandleRoomUnPartialStated(ctx, roomID); err != nil {
+		util.GetLogger(ctx).WithError(err).WithField("room_id", roomID).Error("Failed to handle held back device list updates")
+	}
+}
+
+// HandleRoomUnPartialStated is called when a room finishes its partial state
+// resync. For each user in it whose device list update was held back, it marks the
+// device list stale, so that it is fetched when next needed, and announces a key
+// change so that the local users who share the room are told the devices changed.
+func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomID string) error {
+	if u.rsAPI == nil {
+		return nil
+	}
+
+	var res rsapi.QueryMembershipsForRoomResponse
+	if err := u.rsAPI.QueryMembershipsForRoom(ctx, &rsapi.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, &res); err != nil {
+		return fmt.Errorf("failed to query the members of %s: %w", roomID, err)
+	}
+
+	// The servers in the room were only partly known until now, so a device list
+	// change of one of our users may have missed some of them. Announce the lists
+	// again, to all the servers that are in the room now.
+	if err := u.replayLocalDeviceLists(ctx, roomID, res.JoinEvents); err != nil {
+		return err
+	}
+
+	// Device lists fetched while the members of the room were not all known were not
+	// kept current by changes from the room, so they are fetched again when next needed.
+	// Those who joined after we did, and are still joined, were followed from the start, so
+	// only the others are fetched again. That includes those who were believed joined until
+	// the resync, and if we cannot tell who is who, everyone.
+	stillJoined := make(map[string]struct{}, len(res.JoinEvents))
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey != nil {
+			stillJoined[*ev.StateKey] = struct{}{}
+		}
+	}
+	keep := map[string]struct{}{}
+	candidates := make(map[string]struct{}, len(stillJoined))
+	for userID := range stillJoined {
+		candidates[userID] = struct{}{}
+	}
+	members, snapshotKnown := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID)
+	if snapshotKnown {
+		for _, userID := range members.Joined {
+			candidates[userID] = struct{}{}
+		}
+		interrupted := make(map[string]struct{}, len(members.Interrupted))
+		for _, userID := range members.Interrupted {
+			interrupted[userID] = struct{}{}
+		}
+		for _, userID := range members.Later {
+			_, joined := stillJoined[userID]
+			if _, gap := interrupted[userID]; joined && !gap {
+				keep[userID] = struct{}{}
+			}
+		}
+	}
+	memberIDs := make([]string, 0, len(candidates))
+	for userID := range candidates {
+		if _, ok := keep[userID]; !ok {
+			memberIDs = append(memberIDs, userID)
+		}
+	}
+	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)
+	logger := util.GetLogger(ctx)
+	logger.WithFields(logrus.Fields{
+		"room_id":     roomID,
+		"snapshot":    snapshotKnown,
+		"candidates":  len(memberIDs),
+		"kept":        len(keep),
+		"fetched":     len(fresh),
+		"later":       len(members.Later),
+		"joined":      len(members.Joined),
+		"interrupted": len(members.Interrupted),
+		"now_joined":  len(stillJoined),
+	}).Info("Forgetting the device lists fetched while the room had partial state")
+	logger.WithFields(logrus.Fields{
+		"room_id":     roomID,
+		"fresh":       fresh,
+		"later":       members.Later,
+		"joined":      members.Joined,
+		"interrupted": members.Interrupted,
+	}).Debug("Device lists fetched while the room had partial state")
+	if err != nil {
+		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
+	}
+	// Forget that they were fetched, rather than marking them stale, which would make
+	// the updater fetch all of them at once instead of when a client next asks.
+	if len(fresh) > 0 {
+		if err = u.db.DeleteStaleDeviceLists(ctx, fresh); err != nil {
+			return fmt.Errorf("failed to forget the fetched device lists of %s: %w", roomID, err)
+		}
+	}
+
+	var changed []string
+	u.pendingMu.Lock()
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		if _, ok := u.pendingUsers[*ev.StateKey]; ok {
+			changed = append(changed, *ev.StateKey)
+			delete(u.pendingUsers, *ev.StateKey)
+		}
+	}
+	u.pendingMu.Unlock()
+
+	for _, userID := range changed {
+		if err := u.db.MarkDeviceListStale(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to mark device list for %s as stale: %w", userID, err)
+		}
+		if err := u.producer.ProduceKeyChanges([]api.DeviceMessage{{
+			Type:       api.TypeDeviceKeyUpdate,
+			DeviceKeys: &api.DeviceKeys{UserID: userID},
+		}}); err != nil {
+			return fmt.Errorf("failed to announce the device list change of %s: %w", userID, err)
+		}
+	}
+	return nil
+}
+
+// NoteLocalDeviceChange records that the device list of a local user changed, if
+// that happened while a room had partial state, to announce it again once the
+// servers of the room are all known.
+func (u *DeviceListUpdater) NoteLocalDeviceChange(ctx context.Context, userID string) {
+	if u.rsAPI == nil {
+		return
+	}
+	u.pendingMu.Lock()
+	defer u.pendingMu.Unlock()
+	rooms, err := u.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil || len(rooms) == 0 {
+		return
+	}
+	u.pendingLocalGeneration++
+	generation := u.pendingLocalGeneration
+	for _, roomID := range rooms {
+		if u.pendingLocalLists[roomID] == nil {
+			u.pendingLocalLists[roomID] = make(map[string]uint64)
+		}
+		u.pendingLocalLists[roomID][userID] = generation
+	}
+}
+
+// replayLocalDeviceLists announces the device lists of the local users among the
+// given joins that changed while some room had partial state, so that the
+// federation sender sends them to the servers of their rooms again.
+func (u *DeviceListUpdater) replayLocalDeviceLists(ctx context.Context, roomID string, joins []synctypes.ClientEvent) error {
+	users := make(map[string]uint64)
+	u.pendingMu.Lock()
+	pending := u.pendingLocalLists[roomID]
+	pendingAtStart := make(map[string]uint64, len(pending))
+	for userID, generation := range pending {
+		pendingAtStart[userID] = generation
+	}
+	for _, ev := range joins {
+		if ev.StateKey == nil {
+			continue
+		}
+		if generation, ok := pending[*ev.StateKey]; ok {
+			users[*ev.StateKey] = generation
+		}
+	}
+	u.pendingMu.Unlock()
+
+	for userID := range users {
+		msgs, err := u.db.DeviceKeysForUser(ctx, userID, nil, true)
+		if err != nil {
+			return fmt.Errorf("failed to load the device lists of %s: %w", userID, err)
+		}
+		if len(msgs) > 0 {
+			if err = u.producer.ProduceKeyChanges(msgs); err != nil {
+				return fmt.Errorf("failed to announce the device lists of %s: %w", userID, err)
+			}
+		}
+	}
+
+	// This room is complete. Drop the changes we replayed, but keep any newer
+	// change recorded while the replay was in progress. Users who were not members
+	// need no replay for this room.
+	u.pendingMu.Lock()
+	for userID, generation := range pendingAtStart {
+		if u.pendingLocalLists[roomID][userID] == generation {
+			delete(u.pendingLocalLists[roomID], userID)
+		}
+	}
+	if len(u.pendingLocalLists[roomID]) == 0 {
+		delete(u.pendingLocalLists, roomID)
+	}
+	u.pendingMu.Unlock()
+	return nil
 }
 
 func (u *DeviceListUpdater) notifyWorkers(userID string) {

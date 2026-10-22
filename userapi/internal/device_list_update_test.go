@@ -16,12 +16,15 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	api2 "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
@@ -30,6 +33,7 @@ import (
 	roomserver "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	"codefloe.com/pat-s/zendrite/userapi/storage"
@@ -48,12 +52,34 @@ func (p *mockKeyChangeProducer) ProduceKeyChanges(keys []api.DeviceMessage) erro
 
 type mockDeviceListUpdaterDatabase struct {
 	staleUsers   map[string]bool
+	localKeys    map[string][]api.DeviceMessage
 	prevIDsExist func(string, []int64) bool
 	storedKeys   []api.DeviceMessage
 	mu           sync.Mutex // protect staleUsers
 }
 
+func (d *mockDeviceListUpdaterDatabase) DeviceKeysForUser(_ context.Context, userID string, _ []string, _ bool) ([]api.DeviceMessage, error) {
+	return d.localKeys[userID], nil
+}
+
+func (d *mockDeviceListUpdaterDatabase) FreshDeviceLists(_ context.Context, userIDs []string) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var fresh []string
+	for _, userID := range userIDs {
+		if isStale, known := d.staleUsers[userID]; known && !isStale {
+			fresh = append(fresh, userID)
+		}
+	}
+	return fresh, nil
+}
+
 func (d *mockDeviceListUpdaterDatabase) DeleteStaleDeviceLists(ctx context.Context, userIDs []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, userID := range userIDs {
+		delete(d.staleUsers, userID)
+	}
 	return nil
 }
 
@@ -367,11 +393,45 @@ func mustCreateKeyserverDB(t *testing.T, dbType test.DBType) (storage.KeyDatabas
 }
 
 type mockKeyserverRoomserverAPI struct {
-	leftUsers []string
+	leftUsers    []string
+	partialRooms []string
+	members      map[string][]string
+	roomsForUser map[string][]spec.RoomID
+	// joinedDuringPartialState says who was joined before the resync state was applied; nil if unknown.
+	joinedDuringPartialState *roomserver.PartialStateMembers
+}
+
+func (m *mockKeyserverRoomserverAPI) GetPartialStateRoomIDs(context.Context) ([]string, error) {
+	return m.partialRooms, nil
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryMembershipsForRoom(_ context.Context, req *roomserver.QueryMembershipsForRoomRequest, res *roomserver.QueryMembershipsForRoomResponse) error {
+	for _, userID := range m.members[req.RoomID] {
+		res.JoinEvents = append(res.JoinEvents, synctypes.ClientEvent{StateKey: &userID})
+	}
+	return nil
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryRoomsForUser(_ context.Context, userID spec.UserID, _ string) ([]spec.RoomID, error) {
+	return m.roomsForUser[userID.String()], nil
+}
+
+func (m *mockKeyserverRoomserverAPI) RegisterUnPartialStatedHook(func(context.Context, string)) {}
+
+func (m *mockKeyserverRoomserverAPI) TakeMembersJoinedDuringPartialState(string) (roomserver.PartialStateMembers, bool) {
+	if m.joinedDuringPartialState == nil {
+		return roomserver.PartialStateMembers{}, false
+	}
+	return *m.joinedDuringPartialState, true
 }
 
 func (m *mockKeyserverRoomserverAPI) QueryLeftUsers(ctx context.Context, req *roomserver.QueryLeftUsersRequest, res *roomserver.QueryLeftUsersResponse) error {
 	res.LeftUsers = m.leftUsers
+	return nil
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryUsersSharingRoomWithLocal(_ context.Context, req *roomserver.QueryUsersSharingRoomWithLocalRequest, res *roomserver.QueryUsersSharingRoomWithLocalResponse) error {
+	res.UserIDs = req.UserIDs
 	return nil
 }
 
@@ -532,4 +592,175 @@ func TestDeviceListUpdaterIgnoreBlacklisted(t *testing.T) {
 	for server := range unexpectedServers {
 		t.Errorf("unexpected server in result: %s", server)
 	}
+}
+
+// While a room has partial state the updater cannot tell who shares a room with the
+// user, so an update it would otherwise ask the user's server about is held back.
+// Once the room's members are known, those who are in it are marked stale, to be
+// fetched when next needed, and their key change is announced.
+func TestDeviceListUpdaterHoldsUpdatesWhileARoomHasPartialState(t *testing.T) {
+	const (
+		partialRoom = "!partial:test"
+		userID      = "@derek:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{
+		staleUsers:   map[string]bool{},
+		prevIDsExist: func(string, []int64) bool { return false },
+	}
+	producer := &mockKeyChangeProducer{}
+	var requests atomic.Int32
+	fedClient := newFedClient(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, fmt.Errorf("test: the user's server must not be asked")
+	})
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{partialRoom},
+		members:      map[string][]string{partialRoom: {userID}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, fedClient, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	require.NoError(t, updater.Start())
+
+	event := gomatrixserverlib.DeviceListUpdateEvent{DeviceID: "QBUAZIFURK", StreamID: 1, UserID: userID}
+	require.NoError(t, updater.Update(ctx, event))
+	assert.Zero(t, requests.Load(), "no request while the room has partial state")
+	assert.False(t, db.isStale(userID), "the user is not marked stale yet")
+	assert.Empty(t, producer.events, "nobody is told yet")
+
+	// A room that finishes without the user leaves the update waiting.
+	rsAPI.members["!other:test"] = []string{"@someone-else:remote.test"}
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, "!other:test"))
+	assert.False(t, db.isStale(userID))
+	assert.Empty(t, producer.events)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, partialRoom))
+	assert.True(t, db.isStale(userID), "the device list is refreshed when next needed")
+	require.Len(t, producer.events, 1, "the key change is announced")
+	assert.Equal(t, userID, producer.events[0].UserID)
+	assert.Zero(t, requests.Load(), "still no request")
+
+	// The update is not announced a second time.
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, partialRoom))
+	assert.Len(t, producer.events, 1)
+}
+
+// A user already known to be in a fully stated room is handled as usual: no
+// resync will ever say more about them, so holding the update back would lose it.
+func TestDeviceListUpdaterDoesNotHoldUpdatesForKnownUsers(t *testing.T) {
+	const userID = "@derek:remote.test"
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{"!partial:test"},
+		roomsForUser: map[string][]spec.RoomID{userID: {{}}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), &mockDeviceListUpdaterDatabase{}, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	assert.False(t, updater.deferWhilePartialState(ctx, userID))
+
+	rsAPI.roomsForUser = nil
+	assert.True(t, updater.deferWhilePartialState(ctx, userID), "an unknown user's update waits")
+
+	rsAPI.partialRooms = nil
+	assert.False(t, updater.deferWhilePartialState(ctx, "@another:remote.test"), "with no partial room nothing waits")
+}
+
+// The servers of a room are only partly known while it has partial state, so a
+// device list change of a local user reaches only some of them. Once the room is
+// fully stated the change is announced again, and only that one.
+func TestDeviceListUpdaterAnnouncesLocalDeviceListsAfterResync(t *testing.T) {
+	const (
+		room    = "!partial:test"
+		changed = "@alice:local.test"
+		quiet   = "@bob:local.test"
+		remote  = "@derek:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{
+		localKeys: map[string][]api.DeviceMessage{
+			changed: {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: changed, DeviceID: "A"}, StreamID: 3}},
+			quiet:   {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: quiet, DeviceID: "B"}, StreamID: 4}},
+			remote:  {{Type: api.TypeDeviceKeyUpdate, DeviceKeys: &api.DeviceKeys{UserID: remote, DeviceID: "C"}, StreamID: 5}},
+		},
+	}
+	producer := &mockKeyChangeProducer{}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{room},
+		members:      map[string][]string{room: {changed, quiet, remote}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	updater.NoteLocalDeviceChange(ctx, changed)
+	rsAPI.partialRooms = nil
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	require.Len(t, producer.events, 1, "only the local user whose list changed is announced")
+	assert.Equal(t, changed, producer.events[0].UserID)
+	assert.EqualValues(t, 3, producer.events[0].StreamID)
+
+	// It is announced once.
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.Len(t, producer.events, 1)
+
+	// A change made while no room has partial state is not noted.
+	updater.NoteLocalDeviceChange(ctx, quiet)
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	assert.Len(t, producer.events, 1)
+}
+
+func TestDeviceListUpdater_UnPartialStatedRefetchesFetchedLists(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room    = "!partial:test"
+		fetched = "@derek:remote.test"
+		unknown = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{fetched: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members: map[string][]string{room: {fetched, unknown}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	_, stillFetched := db.staleUsers[fetched]
+	assert.False(t, stillFetched, "a list fetched during partial state is fetched again, when next asked for")
+	_, known := db.staleUsers[unknown]
+	assert.False(t, known, "a list that was never fetched is left alone")
+}
+
+func TestDeviceListUpdater_UnPartialStatedKeepsListsOfLaterMembers(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room     = "!partial:test"
+		earlier  = "@derek:remote.test"
+		joinedAt = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{earlier: false, joinedAt: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members:                  map[string][]string{room: {earlier, joinedAt}},
+		joinedDuringPartialState: &roomserver.PartialStateMembers{Later: []string{joinedAt}, Joined: []string{earlier, joinedAt}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	_, stillFetched := db.staleUsers[earlier]
+	assert.False(t, stillFetched, "a member from the joined state is fetched again")
+	assert.False(t, db.staleUsers[joinedAt], "a member who joined later stays current")
+}
+
+func TestDeviceListUpdater_UnPartialStatedDropsListsOfThoseNoLongerJoined(t *testing.T) {
+	ctx := context.Background()
+	const (
+		room     = "!partial:test"
+		stayer   = "@derek:remote.test"
+		believed = "@elsie:remote.test"
+	)
+	db := &mockDeviceListUpdaterDatabase{staleUsers: map[string]bool{stayer: false, believed: false}}
+	rsAPI := &mockKeyserverRoomserverAPI{
+		members: map[string][]string{room: {stayer}},
+		joinedDuringPartialState: &roomserver.PartialStateMembers{
+			Later:  []string{stayer, believed},
+			Joined: []string{stayer, believed},
+		},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+
+	require.NoError(t, updater.HandleRoomUnPartialStated(ctx, room))
+	_, dropped := db.staleUsers[believed]
+	assert.False(t, dropped, "a user who turned out not to be in the room is fetched again")
+	assert.False(t, db.staleUsers[stayer], "a later joiner who is still joined stays current")
 }

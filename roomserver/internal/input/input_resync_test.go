@@ -34,6 +34,27 @@ func memberNIDForKey(entries []types.StateEntry, stateKey types.EventStateKeyNID
 	return 0
 }
 
+func TestSameEventIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+		want bool
+	}{
+		{name: "same frontier", a: []string{"$a", "$b"}, b: []string{"$a", "$b"}, want: true},
+		{name: "order does not matter", a: []string{"$a", "$b"}, b: []string{"$b", "$a"}, want: true},
+		{name: "new event", a: []string{"$a"}, b: []string{"$a", "$b"}, want: false},
+		{name: "different event", a: []string{"$a"}, b: []string{"$b"}, want: false},
+		{name: "duplicate differs", a: []string{"$a", "$a"}, b: []string{"$a", "$b"}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameEventIDs(tc.a, tc.b); got != tc.want {
+				t.Fatalf("sameEventIDs(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
 const (
 	localKey  types.EventStateKeyNID = 65536
 	remoteKey types.EventStateKeyNID = 170655

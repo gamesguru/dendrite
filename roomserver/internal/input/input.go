@@ -90,6 +90,37 @@ type Inputer struct {
 	// This prevents a broken room from burning CPU and memory on every incoming
 	// transaction by repeatedly loading and discarding thousands of state events.
 	missingStateCooldown sync.Map // room ID (string) -> time.Time
+
+	// resyncInterrupted holds, per room, the users whose membership turned out to have
+	// been interrupted while the room had partial state: an event that was wrongly
+	// accepted or rejected then changed their membership.
+	resyncInterrupted   map[string]map[string]struct{}
+	resyncInterruptedMu sync.Mutex
+}
+
+// noteResyncInterrupted records that the membership of the user was interrupted.
+func (r *Inputer) noteResyncInterrupted(roomID, userID string) {
+	r.resyncInterruptedMu.Lock()
+	defer r.resyncInterruptedMu.Unlock()
+	if r.resyncInterrupted == nil {
+		r.resyncInterrupted = map[string]map[string]struct{}{}
+	}
+	if r.resyncInterrupted[roomID] == nil {
+		r.resyncInterrupted[roomID] = map[string]struct{}{}
+	}
+	r.resyncInterrupted[roomID][userID] = struct{}{}
+}
+
+// TakeResyncInterrupted returns, and forgets, the users noted by noteResyncInterrupted.
+func (r *Inputer) TakeResyncInterrupted(roomID string) []string {
+	r.resyncInterruptedMu.Lock()
+	defer r.resyncInterruptedMu.Unlock()
+	users := make([]string, 0, len(r.resyncInterrupted[roomID]))
+	for userID := range r.resyncInterrupted[roomID] {
+		users = append(users, userID)
+	}
+	delete(r.resyncInterrupted, roomID)
+	return users
 }
 
 // missingStateCooldownDuration is how long we skip expensive federation state

@@ -147,3 +147,48 @@ func TestRoomPurged(t *testing.T) {
 		}
 	})
 }
+
+func TestKeyChangePartialStateServers(t *testing.T) {
+	room, err := spec.NewRoomID("!room:example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("a room with partial state adds the servers reported for it", func(t *testing.T) {
+		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{
+			roomNID: 1, partialState: true, servers: []string{"a.example.com", "b.example.com"},
+		}}
+		got, err := consumer.partialStateServers([]spec.RoomID{*room})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []spec.ServerName{"a.example.com", "b.example.com"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a room with its full state adds nothing", func(t *testing.T) {
+		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{
+			roomNID: 1, servers: []string{"a.example.com"},
+		}}
+		got, err := consumer.partialStateServers([]spec.RoomID{*room})
+		if err != nil || len(got) != 0 {
+			t.Fatalf("got %v, %v, want none", got, err)
+		}
+	})
+
+	t.Run("an unknown room adds nothing", func(t *testing.T) {
+		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{roomInfoNil: true}}
+		got, err := consumer.partialStateServers([]spec.RoomID{*room})
+		if err != nil || len(got) != 0 {
+			t.Fatalf("got %v, %v, want none", got, err)
+		}
+	})
+
+	t.Run("a failed lookup is an error", func(t *testing.T) {
+		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{queryRoomInfoErr: errors.New("boom")}}
+		if _, err := consumer.partialStateServers([]spec.RoomID{*room}); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}

@@ -8,9 +8,12 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
+	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -30,8 +34,8 @@ const (
 	partialStateMinBackoff = time.Minute * 1
 	// Maximum backoff delay (cap).
 	partialStateMaxBackoff = time.Hour * 1
-	// Maximum number of retries before giving up on a room.
-	partialStateMaxRetries = 16
+	// How often rooms waiting to be retried are looked at.
+	retryTickInterval = time.Second
 	// Jitter bounds for backoff calculation.
 	maxJitterMultiplier = 1.4
 	minJitterMultiplier = 0.8
@@ -41,7 +45,30 @@ const (
 type roomRetryInfo struct {
 	retryAt    time.Time
 	retryCount uint32
+	// failingSince is when servers began to fail to give usable state; zero when the
+	// last failure was on our side.
+	failingSince time.Time
 }
+
+// noteFailure starts the give-up timer on a failure to get state from the servers, and
+// resets it on any other failure, which says nothing about them.
+func (i *roomRetryInfo) noteFailure(err error) {
+	// Only the error as classified by processRoom counts, not a cause inside it.
+	_, remote := err.(*remoteStateError) //nolint:errorlint
+	switch {
+	case !remote:
+		i.failingSince = time.Time{}
+	case i.failingSince.IsZero():
+		i.failingSince = time.Now()
+	}
+}
+
+// remoteStateError is a resync failure because no server gave usable state, as opposed to
+// one on our side. Only these count towards giving up on a room.
+type remoteStateError struct{ err error }
+
+func (e *remoteStateError) Error() string { return e.err.Error() }
+func (e *remoteStateError) Unwrap() error { return e.err }
 
 // PartialStateWorker handles background resync of rooms with partial state from MSC3706 faster joins.
 // After a partial state join, this worker fetches the full room state in the background.
@@ -110,10 +137,12 @@ func (w *PartialStateWorker) Start() error {
 	if len(roomNIDs) > 0 {
 		logrus.WithField("count", len(roomNIDs)).Info("Queuing partial state rooms for background resync")
 
-		// Stagger the initial queue to avoid thundering herd
-		offset := time.Second * 5 //nolint:mnd
-		step := time.Second
-		if max := len(roomNIDs); max > 60 { //nolint:mnd
+		// Stagger the initial queue to avoid thundering herd. A user is waiting on each
+		// of these joins, so start soon and keep the gaps short: a backlog of 240 rooms
+		// or fewer is queued within a minute.
+		offset := time.Second
+		step := 250 * time.Millisecond       //nolint:mnd
+		if max := len(roomNIDs); max > 240 { //nolint:mnd
 			step = (time.Second * 60) / time.Duration(max) //nolint:mnd
 		}
 
@@ -165,6 +194,7 @@ func (w *PartialStateWorker) worker(workerID int) {
 				info = &roomRetryInfo{retryCount: 0}
 			}
 			info.retryCount++
+			info.noteFailure(err)
 
 			logger := logrus.WithFields(logrus.Fields{
 				"room_nid":    roomNID,
@@ -172,17 +202,29 @@ func (w *PartialStateWorker) worker(workerID int) {
 				"retry_count": info.retryCount,
 			})
 
-			// Check if we've exceeded max retries
-			if info.retryCount >= partialStateMaxRetries {
-				logger.WithError(err).Error("Giving up on partial state resync after max retries")
-				// Remove from retry map - we're giving up
+			// The join is abandoned once the resync has been failing for too long.
+			if w.shouldGiveUp(info) {
 				delete(w.retryMap, roomNID)
 				w.retryMu.Unlock()
+				logger.WithError(err).Error("Giving up on partial state resync, leaving the room")
+				if abandonErr := w.abandonJoin(roomNID); abandonErr != nil {
+					logger.WithError(abandonErr).Error("Failed to abandon the partial state join, will retry")
+					w.retryMu.Lock()
+					w.retryMap[roomNID] = &roomRetryInfo{retryCount: info.retryCount, retryAt: time.Now().Add(w.backoffDuration(0)), failingSince: info.failingSince}
+					w.retryMu.Unlock()
+				}
 				continue
 			}
 
 			// Schedule retry with exponential backoff
 			backoff := w.backoffDuration(info.retryCount)
+			// Try again when the limit is reached, to give up then rather than a backoff later.
+			if w.fedAPI != nil && w.fedAPI.cfg != nil && w.fedAPI.cfg.PartialStateResyncGiveUpAfter > 0 && !info.failingSince.IsZero() {
+				untilGiveUp := time.Until(info.failingSince.Add(w.fedAPI.cfg.PartialStateResyncGiveUpAfter))
+				if untilGiveUp < backoff {
+					backoff = max(untilGiveUp, time.Second)
+				}
+			}
 			info.retryAt = time.Now().Add(backoff)
 			w.retryMap[roomNID] = info
 			w.retryMu.Unlock()
@@ -197,9 +239,63 @@ func (w *PartialStateWorker) worker(workerID int) {
 	}
 }
 
+// shouldGiveUp reports whether servers have been failing to give usable state for a room
+// for longer than the configured limit.
+func (w *PartialStateWorker) shouldGiveUp(info *roomRetryInfo) bool {
+	if w.fedAPI == nil || w.fedAPI.cfg == nil || info.failingSince.IsZero() {
+		return false
+	}
+	giveUpAfter := w.fedAPI.cfg.PartialStateResyncGiveUpAfter
+	return giveUpAfter > 0 && time.Since(info.failingSince) >= giveUpAfter
+}
+
+// abandonJoin makes the local users leave a room whose partial state could not be
+// resynced, through the usual leave, and ends its partial state. It may be repeated: only
+// those still joined leave, and a room that is no longer partial is left alone.
+func (w *PartialStateWorker) abandonJoin(roomNID types.RoomNID) error {
+	ctx := w.process.Context()
+	partial, err := w.rsAPI.IsRoomPartialState(ctx, roomNID)
+	if err != nil || !partial {
+		return err
+	}
+	roomID, err := w.rsAPI.RoomIDFromNID(ctx, roomNID)
+	if err != nil {
+		return err
+	}
+
+	var members roomserverAPI.QueryMembershipsForRoomResponse
+	if err = w.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true, LocalOnly: true,
+	}, &members); err != nil {
+		return fmt.Errorf("failed to query the local members of %s: %w", roomID, err)
+	}
+	for _, ev := range members.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		userID, idErr := spec.NewUserID(*ev.StateKey, true)
+		if idErr != nil {
+			continue
+		}
+		if err = w.rsAPI.PerformLeave(ctx, &roomserverAPI.PerformLeaveRequest{
+			RoomID: roomID,
+			Leaver: *userID,
+			Reason: "The room's state could not be fetched, so the join was abandoned",
+		}, &roomserverAPI.PerformLeaveResponse{}); err != nil {
+			return fmt.Errorf("%s failed to leave %s: %w", userID.String(), roomID, err)
+		}
+	}
+
+	if _, err = w.rsAPI.ClearRoomPartialState(ctx, roomNID); err != nil {
+		return err
+	}
+	w.rsAPI.NotifyUnPartialStated(roomID)
+	return nil
+}
+
 // retryLoop periodically retries failed rooms.
 func (w *PartialStateWorker) retryLoop() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(retryTickInterval)
 	defer ticker.Stop()
 
 	for {
@@ -231,7 +327,11 @@ func (w *PartialStateWorker) retryLoop() {
 	}
 }
 
-// processRoom fetches the full state for a room with partial state.
+// processRoom fetches and applies full room state, clears the partial-state flag,
+// and notifies waiters. It skips rooms that are no longer partial. If the room ID
+// lookup fails or room info is absent, it only attempts to clear the flag.
+// Other roomserver errors propagate; missing latest events or usable servers
+// cause an error. If all servers fail, it returns the last fetch or apply error.
 func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	trace, ctx := internal.StartTask(w.process.Context(), "PartialStateWorker.processRoom")
 	defer trace.EndTask()
@@ -299,33 +399,617 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 		return fmt.Errorf("no servers available for partial state resync (all blacklisted or backing off, no join server)")
 	}
 
-	var lastErr error
-	for i, entry := range orderedServers {
-		serverName := entry.name
-		logger := logger.WithField("server", serverName)
-
-		stateEventIDs, err := w.fetchStateViaStateIDs(
-			ctx, logger, origin, serverName, roomID, latestEventIDs[0],
-			roomInfo.RoomVersion, entry.bypassBackoff, orderedServers,
-		)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to fetch state from server")
-			lastErr = err
-			// If this was the join server and it failed, don't give up — try others.
-			if i == 0 && len(orderedServers) > 1 {
-				continue
-			}
-			continue
-		}
-
-		if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, resyncStartTime); err != nil {
-			lastErr = err
-			continue
-		}
-		return nil
+	// The join that started the partial state is the anchor's reference point.
+	// Rows from before it was recorded return "", and the walk falls back.
+	joinEventID, err := w.rsAPI.GetPartialStateJoinEventID(ctx, roomNID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to look up the partial state join event")
+		joinEventID = ""
 	}
 
-	return lastErr
+	// Only failures to get usable state from the servers count towards giving the join up,
+	// not ones in applying it or in the room changing under us.
+	var lastErr error
+	remoteOnly := true
+	for _, entry := range orderedServers {
+		serverName := entry.name
+		logger := logger.WithField("server", serverName)
+		frontier := slices.Clone(latestEventIDs)
+		// The state at the anchor does not change while the events after it do, so a
+		// retry because the room moved on keeps what was fetched for it.
+		anchorStates := map[string][]string{}
+		for attempt := 0; attempt < 4; attempt++ {
+			anchors := w.findFrontierAnchors(ctx, roomID, frontier, joinEventID, origin)
+			var stateEventIDs, anchorStateIDs []string
+			seenStateIDs := make(map[string]struct{})
+			var fetchErr error
+			for _, anchor := range anchors {
+				ids, beforeJoin, err := w.fetchStateViaAnchor(
+					ctx, logger, origin, serverName, roomID, anchor, joinEventID,
+					roomInfo.RoomVersion, entry.bypassBackoff, orderedServers, anchorStates,
+				)
+				if err != nil {
+					fetchErr = err
+					break
+				}
+				for _, id := range ids {
+					if _, seen := seenStateIDs[id]; !seen {
+						seenStateIDs[id] = struct{}{}
+						stateEventIDs = append(stateEventIDs, id)
+					}
+				}
+				// Every branch that reaches the join has the same pre-join state.
+				// Refuse to guess if they disagree, so a retry can resolve it.
+				if len(beforeJoin) > 0 {
+					if anchorStateIDs == nil {
+						anchorStateIDs = beforeJoin
+					} else if !sameFrontier(anchorStateIDs, beforeJoin) {
+						fetchErr = fmt.Errorf("forward extremities disagree on the state before the partial state join")
+						break
+					}
+				}
+			}
+			if fetchErr != nil {
+				logger.WithError(fetchErr).Warn("Failed to fetch state from server")
+				lastErr = fetchErr
+				// Only a server failing to answer counts; the helper can also fail on our side,
+				// for instance loading what it stored.
+				var remoteErr *remoteStateError
+				if !errors.As(fetchErr, &remoteErr) {
+					remoteOnly = false
+				}
+				break
+			}
+			remoteOnly = false // from here on, failures are on our side
+			current, _, _, latestErr := w.rsAPI.LatestEventIDs(ctx, roomNID)
+			if latestErr != nil {
+				lastErr = latestErr
+				break
+			}
+			if len(current) == 0 {
+				lastErr = fmt.Errorf("no latest events found for room")
+				break
+			}
+			if !sameFrontier(current, frontier) {
+				frontier = slices.Clone(current)
+				continue
+			}
+			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, anchorStateIDs, current, resyncStartTime); errors.Is(err, roomserverAPI.ErrResyncFrontierChanged) {
+				current, _, _, latestErr = w.rsAPI.LatestEventIDs(ctx, roomNID)
+				if latestErr != nil {
+					lastErr = latestErr
+					break
+				}
+				if len(current) == 0 {
+					lastErr = fmt.Errorf("no latest events found for room")
+					break
+				}
+				frontier = slices.Clone(current)
+				continue
+			} else if err != nil {
+				lastErr = err
+				break
+			}
+			return nil
+		}
+		if lastErr == nil {
+			remoteOnly = false
+			lastErr = fmt.Errorf("room state kept changing during partial state resync")
+		}
+	}
+
+	if remoteOnly {
+		return &remoteStateError{lastErr}
+	}
+	// Keep the cause, without the claim that every server failed.
+	return fmt.Errorf("partial state resync failed: %w", lastErr)
+}
+
+// getStoredEvent returns an accepted event stored locally.
+// A rejected event is reported as not found, so its state change is never applied.
+func (w *PartialStateWorker) getStoredEvent(ctx context.Context, roomID, eventID string) (gomatrixserverlib.PDU, error) {
+	return w.queryStoredEvent(ctx, roomID, eventID, true)
+}
+
+// queryStoredEvent returns an event stored locally, optionally leaving out rejected ones.
+func (w *PartialStateWorker) queryStoredEvent(ctx context.Context, roomID, eventID string, excludeRejected bool) (gomatrixserverlib.PDU, error) {
+	var res roomserverAPI.QueryEventsByIDResponse
+	if err := w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{eventID}, ExcludeRejected: excludeRejected,
+	}, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Events) == 0 {
+		return nil, fmt.Errorf("event %s not found locally", eventID)
+	}
+	return res.Events[0].PDU, nil
+}
+
+// stateAnchor says which event to ask /state_ids about and which events to
+// apply on top of the answer to get the state at the latest event.
+type stateAnchor struct {
+	// askID is the event passed to /state_ids, which returns the state before it.
+	askID string
+	// applyAsk is set when askID's own state change is not covered by chain
+	// and must be applied too (askID is not a locally stored event).
+	applyAsk bool
+	// chain holds locally stored events, oldest first, whose state changes are
+	// applied on top of the response.
+	chain []gomatrixserverlib.PDU
+}
+
+// findFrontierAnchors returns one anchor per distinct anchor request, covering
+// every forward extremity. Branches that share an anchor request (the usual case:
+// they all lead back to the parent of the partial-state join) have their chains
+// merged and ordered together, so the fetched state includes the events of every
+// branch rather than only the first extremity's.
+func (w *PartialStateWorker) findFrontierAnchors(
+	ctx context.Context, roomID string, frontier []string, joinEventID string, local spec.ServerName,
+) []stateAnchor {
+	type groupKey struct {
+		askID    string
+		applyAsk bool
+	}
+	groups := make(map[groupKey]map[string]gomatrixserverlib.PDU)
+	var order []groupKey
+	for _, latestID := range frontier {
+		anchor, found := stateAnchor{}, false
+		if joinEventID != "" {
+			anchor, found = w.findWindowAnchor(ctx, roomID, latestID, joinEventID)
+		}
+		if !found {
+			anchor = w.findStateAnchor(ctx, roomID, latestID, joinEventID, local)
+		}
+		key := groupKey{askID: anchor.askID, applyAsk: anchor.applyAsk}
+		events, ok := groups[key]
+		if !ok {
+			events = make(map[string]gomatrixserverlib.PDU)
+			groups[key] = events
+			order = append(order, key)
+		}
+		for _, ev := range anchor.chain {
+			events[ev.EventID()] = ev
+		}
+	}
+
+	anchors := make([]stateAnchor, 0, len(order))
+	for _, key := range order {
+		anchors = append(anchors, stateAnchor{
+			askID:    key.askID,
+			applyAsk: key.applyAsk,
+			chain:    orderByPrevEvents(groups[key]),
+		})
+	}
+	return anchors
+}
+
+// sameFrontier reports whether two sets of latest event IDs are equal, regardless
+// of the order the roomserver returned them in.
+func sameFrontier(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, id := range a {
+		seen[id]++
+	}
+	for _, id := range b {
+		if seen[id] == 0 {
+			return false
+		}
+		seen[id]--
+	}
+	return true
+}
+
+// findStateAnchor follows single-parent links back from latestID until it reaches
+// the join that started the partial state, an event that is not stored locally,
+// or an event with zero or multiple parents. The returned chain is ordered oldest
+// first. The join is the join point: its parent is the newest event remote
+// servers are known to have, whatever the resync has stored since, so stopping
+// there keeps the anchor the same on a retry. Rooms without a recorded join
+// event fall back to the first join of a user on this server. A missing event or
+// lookup error anchors on the queried ID and must be applied on top of its state.
+// An event with zero or multiple parents anchors on itself so the remote
+// resolves its state.
+func (w *PartialStateWorker) findStateAnchor(ctx context.Context, roomID, latestID, joinEventID string, local spec.ServerName) stateAnchor {
+	var chain []gomatrixserverlib.PDU // newest first
+	curID := latestID
+	for {
+		// A rejected event is walked through: it changes no state, and its parent
+		// is as good a way back as any. The overlay step leaves its change out.
+		cur, err := w.queryStoredEvent(ctx, roomID, curID, false)
+		if err != nil {
+			// Not stored: nothing local to inspect. With no chain, ask about the
+			// latest event as is.
+			return stateAnchor{askID: curID, applyAsk: true, chain: reversed(chain)}
+		}
+		chain = append(chain, cur)
+		prevs := cur.PrevEventIDs()
+		if len(prevs) != 1 {
+			return stateAnchor{askID: cur.EventID(), chain: reversed(chain)}
+		}
+		isJoinPoint := cur.EventID() == joinEventID
+		if joinEventID == "" {
+			isJoinPoint = isLocalJoin(cur, local) && !w.isJoinOfSameUser(ctx, roomID, prevs[0], cur)
+		}
+		if isJoinPoint {
+			return stateAnchor{askID: prevs[0], applyAsk: true, chain: reversed(chain)}
+		}
+		curID = prevs[0]
+	}
+}
+
+// findWindowAnchor anchors on the parent of the recorded join, whatever shape the
+// events received since then make: a branch, or an event that merges two, leaves
+// no single chain back to the join. The chain is the join and every stored event
+// leading from it to latestID, each after its prev events. It reports false if
+// the events do not lead back to a join that has a single parent, in which case
+// findStateAnchor is the way to go.
+func (w *PartialStateWorker) findWindowAnchor(ctx context.Context, roomID, latestID, joinEventID string) (stateAnchor, bool) {
+	join, err := w.queryStoredEvent(ctx, roomID, joinEventID, false)
+	if err != nil || len(join.PrevEventIDs()) != 1 {
+		return stateAnchor{}, false
+	}
+	window := map[string]gomatrixserverlib.PDU{}
+	reachedJoin := false
+	queue := []string{latestID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == joinEventID {
+			reachedJoin = true
+			continue
+		}
+		if _, seen := window[id]; seen {
+			continue
+		}
+		ev, queryErr := w.queryStoredEvent(ctx, roomID, id, false)
+		if queryErr != nil || ev.Depth() < join.Depth() {
+			continue
+		}
+		window[id] = ev
+		queue = append(queue, ev.PrevEventIDs()...)
+	}
+	if !reachedJoin {
+		return stateAnchor{}, false
+	}
+	return stateAnchor{
+		askID:    join.PrevEventIDs()[0],
+		applyAsk: true,
+		chain:    append([]gomatrixserverlib.PDU{join}, orderByPrevEvents(window)...),
+	}, true
+}
+
+// orderByPrevEvents returns the events with each after those of its prev events
+// that are among them. Depth, then event ID, picks between events that are both
+// ready; it is advisory otherwise. Events in a cycle are left out.
+func orderByPrevEvents(events map[string]gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+	waiting := make(map[string]int, len(events))
+	children := make(map[string][]string, len(events))
+	for id, ev := range events {
+		waiting[id] += 0
+		for _, prev := range ev.PrevEventIDs() {
+			if _, ok := events[prev]; ok {
+				waiting[id]++
+				children[prev] = append(children[prev], id)
+			}
+		}
+	}
+	var ready []gomatrixserverlib.PDU
+	for id, n := range waiting {
+		if n == 0 {
+			ready = append(ready, events[id])
+		}
+	}
+	order := make([]gomatrixserverlib.PDU, 0, len(events))
+	for len(ready) > 0 {
+		sort.Slice(ready, func(i, j int) bool {
+			if ready[i].Depth() != ready[j].Depth() {
+				return ready[i].Depth() < ready[j].Depth()
+			}
+			return ready[i].EventID() < ready[j].EventID()
+		})
+		ev := ready[0]
+		ready = ready[1:]
+		order = append(order, ev)
+		for _, child := range children[ev.EventID()] {
+			waiting[child]--
+			if waiting[child] == 0 {
+				ready = append(ready, events[child])
+			}
+		}
+	}
+	return order
+}
+
+// isLocalJoin reports whether ev is a join of a user on this server.
+func isLocalJoin(ev gomatrixserverlib.PDU, local spec.ServerName) bool {
+	if ev.Type() != spec.MRoomMember || ev.StateKey() == nil {
+		return false
+	}
+	if membership, err := ev.Membership(); err != nil || membership != spec.Join {
+		return false
+	}
+	user, err := spec.NewUserID(*ev.StateKey(), true)
+	return err == nil && user.Domain() == local
+}
+
+// isJoinOfSameUser reports whether the stored event prevID is a join of the same
+// user as ev, which makes ev a profile change rather than the join itself.
+func (w *PartialStateWorker) isJoinOfSameUser(ctx context.Context, roomID, prevID string, ev gomatrixserverlib.PDU) bool {
+	prev, err := w.getStoredEvent(ctx, roomID, prevID)
+	if err != nil || prev.Type() != spec.MRoomMember || prev.StateKey() == nil || ev.StateKey() == nil {
+		return false
+	}
+	if *prev.StateKey() != *ev.StateKey() {
+		return false
+	}
+	membership, err := prev.Membership()
+	return err == nil && membership == spec.Join
+}
+
+// reversed returns a new slice with the events in reverse order, leaving the input unchanged.
+func reversed(in []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+	out := make([]gomatrixserverlib.PDU, len(in))
+	for i, ev := range in {
+		out[len(in)-1-i] = ev
+	}
+	return out
+}
+
+// fetchStateViaAnchor returns the state IDs at the latest event: /state_ids at
+// the anchor, plus the state changes of the anchor and the events after it.
+// It may fetch and store missing events as outliers. BypassBackoff applies to
+// serverName; allServers supplies fallback event sources. A failed local anchor
+// lookup falls back to federation. State lookup, room-version, batch-fetch, and
+// stored-state query errors are returned, as are errors for an unavailable anchor
+// or an anchor state event still missing after fetching.
+func (w *PartialStateWorker) fetchStateViaAnchor(
+	ctx context.Context,
+	logger *logrus.Entry,
+	origin, serverName spec.ServerName,
+	roomID string,
+	anchor stateAnchor,
+	joinEventID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	bypassBackoff bool,
+	allServers []serverEntry,
+	anchorStates map[string][]string,
+) (stateIDs, anchorStateIDs []string, err error) {
+	stateIDs, err = cachedAnchorStateIDs(anchorStates, anchor.askID, func() ([]string, error) {
+		return w.fetchStateViaStateIDs(
+			ctx, logger, origin, serverName, roomID, anchor.askID,
+			roomVersion, bypassBackoff, allServers,
+		)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	overlays := anchor.chain
+	if anchor.applyAsk {
+		ev, err := w.getStoredEvent(ctx, roomID, anchor.askID)
+		if err != nil {
+			verImpl, verErr := gomatrixserverlib.GetRoomVersion(roomVersion)
+			if verErr != nil {
+				return nil, nil, verErr
+			}
+			ev = w.fetchSingleEvent(ctx, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
+			if ev == nil {
+				return nil, nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
+			}
+			if ev.EventID() != anchor.askID {
+				return nil, nil, fmt.Errorf("server %s returned event %s for anchor %s", serverName, ev.EventID(), anchor.askID)
+			}
+		}
+		if ev.StateKey() != nil {
+			want := map[string]bool{ev.EventID(): true}
+			if missing := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(missing) > 0 {
+				if err = w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
+					return nil, nil, err
+				}
+				if still := w.findMissingEvents(ctx, logger, roomID, roomVersion, want, false); len(still) > 0 {
+					return nil, nil, fmt.Errorf("anchor event %s still missing after fetch", ev.EventID())
+				}
+			}
+		}
+		overlays = append([]gomatrixserverlib.PDU{ev}, overlays...)
+	}
+
+	// A locally rejected state event does not change the state, so it must not
+	// replace the accepted event for its key; getStoredEvent leaves it out.
+	var stateOverlays []gomatrixserverlib.PDU
+	for _, ev := range overlays {
+		if ev.StateKey() != nil {
+			if _, err := w.getStoredEvent(ctx, roomID, ev.EventID()); err != nil {
+				continue
+			}
+			stateOverlays = append(stateOverlays, ev)
+		}
+	}
+	if len(stateOverlays) == 0 {
+		return stateIDs, stateIDsBeforeJoin(stateIDs, anchor, joinEventID), nil
+	}
+
+	var stored roomserverAPI.QueryEventsByIDResponse
+	if err = w.rsAPI.QueryEventsByID(ctx, &roomserverAPI.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: stateIDs,
+	}, &stored); err != nil {
+		return nil, nil, fmt.Errorf("query state events: %w", err)
+	}
+
+	// The events received while the state was partial were accepted without the
+	// room's members to check them against. Apply each one to the state only if the
+	// auth rules allow it there, as the full state can now show that it is not: a
+	// kick by someone who had left, say, must not remove its target.
+	state := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(stored.Events))
+	for _, he := range stored.Events {
+		if he.StateKey() != nil {
+			state[gomatrixserverlib.StateKeyTuple{EventType: he.Type(), StateKey: *he.StateKey()}] = he.PDU
+		}
+	}
+	userIDQuerier := func(room spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return w.rsAPI.QueryUserIDForSender(ctx, room, senderID)
+	}
+	// This server's own events are trusted, as is the anchor: it predates our join,
+	// and the server that gave it to us had accepted it.
+	trusted := func(ev gomatrixserverlib.PDU) bool {
+		if ev.EventID() == anchor.askID {
+			return true
+		}
+		user, queryErr := w.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
+		return queryErr == nil && user != nil && w.fedAPI.cfg.Matrix.IsLocalServerName(user.Domain())
+	}
+	allowed, skipped := allowedOverlays(state, stateOverlays, overlays, trusted, userIDQuerier)
+	for _, ev := range skipped {
+		logger.WithField("event_id", ev.EventID()).Warn("Not applying an event received during the partial join: the room's full state does not allow it")
+	}
+	stateOverlays = allowed
+
+	logger.WithFields(logrus.Fields{
+		"anchor":   anchor.askID,
+		"overlays": len(stateOverlays),
+		"skipped":  len(skipped),
+	}).Info("Resynced partial state from an anchor event")
+	// The state before the join is the state at the anchor, which the anchor
+	// event's own change completes.
+	var beforeJoin []string
+	if canRecomputeSinceJoin(anchor, joinEventID) {
+		beforeJoin = stateIDs
+		if len(stateOverlays) > 0 && stateOverlays[0].EventID() == anchor.askID {
+			beforeJoin, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays[:1])
+			if err != nil {
+				return nil, nil, fmt.Errorf("overlay anchor %s: %w", anchor.askID, err)
+			}
+		}
+	}
+	stateIDs, err = overlayStateEvents(stateIDs, stored.Events, stateOverlays)
+	if err != nil {
+		return nil, nil, fmt.Errorf("overlay state changes on anchor %s: %w", anchor.askID, err)
+	}
+	return stateIDs, beforeJoin, nil
+}
+
+// cachedAnchorStateIDs reuses a successful state lookup for an anchor across
+// retries. Events may advance the room while federation is in flight, but the
+// state before the same anchor remains valid.
+func cachedAnchorStateIDs(
+	cache map[string][]string,
+	anchorID string,
+	fetch func() ([]string, error),
+) ([]string, error) {
+	if stateIDs, ok := cache[anchorID]; ok {
+		return slices.Clone(stateIDs), nil
+	}
+	stateIDs, err := fetch()
+	if err != nil {
+		return nil, err
+	}
+	cache[anchorID] = slices.Clone(stateIDs)
+	return stateIDs, nil
+}
+
+// canRecomputeSinceJoin reports whether the anchor is the parent of the join that
+// started the partial state, so that its state is the one before that join.
+func canRecomputeSinceJoin(anchor stateAnchor, joinEventID string) bool {
+	return joinEventID != "" && anchor.applyAsk && len(anchor.chain) > 0 && anchor.chain[0].EventID() == joinEventID
+}
+
+// stateIDsBeforeJoin returns stateIDs if they are the state before the join that
+// started the partial state, and nil if the anchor is not that join's parent.
+func stateIDsBeforeJoin(stateIDs []string, anchor stateAnchor, joinEventID string) []string {
+	if canRecomputeSinceJoin(anchor, joinEventID) {
+		return stateIDs
+	}
+	return nil
+}
+
+// allowedOverlays returns, in order, the state events that the auth rules allow on top
+// of state, and those they do not. Each event is checked against state plus the
+// allowed events among its own ancestors, so an event is not judged by changes made
+// on a concurrent branch: a leave and a topic change sharing a parent do not
+// affect each other. Ancestry is followed through graph, which holds every event of
+// the chain including those that do not change state, and through the overlays.
+// Trusted events, such as this server's own, are applied without a check. An event
+// that cannot be checked is applied, so that a failure here cannot leave the room
+// without state it should have.
+func allowedOverlays(
+	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU,
+	overlays []gomatrixserverlib.PDU,
+	graph []gomatrixserverlib.PDU,
+	trusted func(gomatrixserverlib.PDU) bool,
+	userIDQuerier spec.UserIDForSender,
+) (allowed, skipped []gomatrixserverlib.PDU) {
+	byID := make(map[string]gomatrixserverlib.PDU, len(graph)+len(overlays))
+	for _, ev := range graph {
+		byID[ev.EventID()] = ev
+	}
+	for _, ev := range overlays {
+		byID[ev.EventID()] = ev
+	}
+	ancestorsOf := func(ev gomatrixserverlib.PDU) map[string]bool {
+		seen := map[string]bool{}
+		queue := slices.Clone(ev.PrevEventIDs())
+		for len(queue) > 0 {
+			id := queue[0]
+			queue = queue[1:]
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if parent, ok := byID[id]; ok {
+				queue = append(queue, parent.PrevEventIDs()...)
+			}
+		}
+		return seen
+	}
+
+	for _, ev := range overlays {
+		ancestors := ancestorsOf(ev)
+		needed := gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{ev}).Tuples()
+		neededSet := make(map[gomatrixserverlib.StateKeyTuple]struct{}, len(needed))
+		current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(needed))
+		for _, tuple := range needed {
+			neededSet[tuple] = struct{}{}
+			if e, ok := state[tuple]; ok {
+				current[tuple] = e
+			}
+		}
+		for _, prior := range allowed {
+			if !ancestors[prior.EventID()] {
+				continue
+			}
+			tuple := gomatrixserverlib.StateKeyTuple{EventType: prior.Type(), StateKey: *prior.StateKey()}
+			if _, needed := neededSet[tuple]; needed {
+				current[tuple] = prior
+			}
+		}
+		if !trusted(ev) && !allowedByState(current, needed, ev, userIDQuerier) {
+			skipped = append(skipped, ev)
+			continue
+		}
+		allowed = append(allowed, ev)
+	}
+	return allowed, skipped
+}
+
+// allowedByState reports whether the auth rules allow ev given the state it follows.
+func allowedByState(
+	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, needed []gomatrixserverlib.StateKeyTuple,
+	ev gomatrixserverlib.PDU, userIDQuerier spec.UserIDForSender,
+) bool {
+	var authEvents []gomatrixserverlib.PDU
+	for _, tuple := range needed {
+		if authEvent, ok := state[tuple]; ok {
+			authEvents = append(authEvents, authEvent)
+		}
+	}
+	provider, err := gomatrixserverlib.NewAuthEvents(authEvents)
+	if err != nil {
+		return true
+	}
+	return gomatrixserverlib.Allowed(ev, provider, userIDQuerier) == nil
 }
 
 type serverEntry struct {
@@ -391,18 +1075,27 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		stateIDs, err = w.fedAPI.LookupStateIDs(ctx, origin, serverName, roomID, eventID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("LookupStateIDs from %s: %w", serverName, err)
+		return nil, &remoteStateError{fmt.Errorf("LookupStateIDs from %s: %w", serverName, err)}
 	}
 
 	wantIDs := stateIDs.GetStateEventIDs()
 	authIDs := stateIDs.GetAuthEventIDs()
-	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs))
+	if len(wantIDs) == 0 {
+		// A room's state is never empty, it has at least the create event. Try
+		// another server instead of treating every event as missing.
+		return nil, &remoteStateError{fmt.Errorf("LookupStateIDs from %s: the response has no state events", serverName)}
+	}
+	allIDs := make(map[string]bool, len(wantIDs)+len(authIDs)+1)
 	for _, id := range wantIDs {
 		allIDs[id] = true
 	}
 	for _, id := range authIDs {
 		allIDs[id] = true
 	}
+	// The response is the state before the event, which leaves out the event's
+	// own change. It is needed to build the state after it, so fetch it too, as
+	// Synapse does.
+	allIDs[eventID] = true
 
 	logger.WithFields(logrus.Fields{
 		"state_events": len(wantIDs),
@@ -424,7 +1117,22 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 		return wantIDs, nil
 	}
 
-	// Step 3: Fetch missing events in parallel from multiple servers.
+	// Step 3: Fetch the missing events. When a tenth or more of them are missing,
+	// one /state request for the whole state is cheaper than a request per event,
+	// and it is what servers expect to be asked for: it needs no /event route.
+	// This is Synapse's heuristic. Events it leaves out are fetched one by one.
+	if len(missing)*10 >= len(allIDs) {
+		if err := w.fetchMissingViaState(ctx, logger, origin, serverName, roomID, eventID, roomVersion, allIDs, missing); err != nil {
+			logger.WithError(err).Warn("Fetching missing state events via /state failed, fetching them individually")
+		} else {
+			missing = w.findMissingEvents(ctx, logger, roomID, roomVersion, idSet(missing), true)
+		}
+	}
+	if len(missing) == 0 {
+		return wantIDs, nil
+	}
+
+	// Fetch the rest in parallel from multiple servers.
 	if err := w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
 		return nil, fmt.Errorf("fetchMissingEventsParallel: %w", err)
 	}
@@ -456,6 +1164,48 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	}
 
 	return wantIDs, nil
+}
+
+// This helper returns stateIDs with the entry for ev's type and state key
+// replaced by ev, or ev added if that key is not present.
+func overlayStateEvent(stateIDs []string, events []*types.HeaderedEvent, ev gomatrixserverlib.PDU) ([]string, error) {
+	return overlayStateEvents(stateIDs, events, []gomatrixserverlib.PDU{ev})
+}
+
+// This helper applies state events in order, each replacing the entry with the
+// same type and state key. The events argument must hold the stored events
+// behind stateIDs so their keys can be found.
+func overlayStateEvents(stateIDs []string, events []*types.HeaderedEvent, overlays []gomatrixserverlib.PDU) ([]string, error) {
+	type key struct{ eventType, stateKey string }
+	keyOf := make(map[string]key, len(events)+len(overlays))
+	for _, e := range events {
+		if e.StateKey() != nil {
+			keyOf[e.EventID()] = key{e.Type(), *e.StateKey()}
+		}
+	}
+	for _, id := range stateIDs {
+		if _, ok := keyOf[id]; !ok {
+			return nil, fmt.Errorf("state event %s is not available for state-key resolution", id)
+		}
+	}
+	out := append(make([]string, 0, len(stateIDs)+len(overlays)), stateIDs...)
+	for _, ev := range overlays {
+		if ev.StateKey() == nil {
+			return nil, fmt.Errorf("cannot overlay non-state event %s", ev.EventID())
+		}
+		want := key{ev.Type(), *ev.StateKey()}
+		kept := out[:0]
+		for _, id := range out {
+			if k, ok := keyOf[id]; ok && k == want {
+				continue
+			}
+			kept = append(kept, id)
+		}
+		out = kept
+		out = append(out, ev.EventID())
+		keyOf[ev.EventID()] = want
+	}
+	return out, nil
 }
 
 // findMissingEvents checks which of the wanted event IDs are not yet stored
@@ -501,6 +1251,68 @@ func (w *PartialStateWorker) findMissingEvents(
 		}
 	}
 	return missing
+}
+
+// idSet returns the IDs as a set.
+func idSet(ids []string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
+// fetchMissingViaState asks the server for the whole state at eventID with a
+// single /state request, and stores the missing events from the state and auth
+// chain it returns as outliers. Events the response was not asked about are
+// ignored, so a server cannot slip extra events in. Events it leaves out remain
+// missing and are for the caller to find by another route.
+func (w *PartialStateWorker) fetchMissingViaState(
+	ctx context.Context,
+	logger *logrus.Entry,
+	origin, serverName spec.ServerName,
+	roomID, eventID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	wanted map[string]bool,
+	missing []string,
+) error {
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
+	if err != nil {
+		return fmt.Errorf("GetRoomVersion: %w", err)
+	}
+	logger.WithField("missing", len(missing)).Info("Fetching missing state events via /state")
+	state, err := w.fedAPI.LookupState(ctx, origin, serverName, roomID, eventID, roomVersion)
+	if err != nil {
+		return &remoteStateError{fmt.Errorf("LookupState from %s: %w", serverName, err)}
+	}
+
+	missingSet := idSet(missing)
+	var inputs []roomserverAPI.InputRoomEvent
+	for _, raw := range append(append(gomatrixserverlib.EventJSONs{}, state.GetStateEvents()...), state.GetAuthEvents()...) {
+		ev, evErr := verImpl.NewEventFromUntrustedJSON(raw)
+		if evErr != nil {
+			logger.WithError(evErr).Warn("Ignoring an unparseable event in /state")
+			continue
+		}
+		if !missingSet[ev.EventID()] || !wanted[ev.EventID()] || ev.RoomID().String() != roomID {
+			continue
+		}
+		delete(missingSet, ev.EventID())
+		inputs = append(inputs, roomserverAPI.InputRoomEvent{
+			Kind:   roomserverAPI.KindOutlier,
+			Event:  &types.HeaderedEvent{PDU: ev},
+			Origin: origin,
+		})
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	var ires roomserverAPI.InputRoomEventsResponse
+	w.rsAPI.InputRoomEvents(ctx, &roomserverAPI.InputRoomEventsRequest{InputRoomEvents: inputs}, &ires)
+	if ires.ErrMsg != "" {
+		return fmt.Errorf("store events from /state: %s", ires.ErrMsg)
+	}
+	return nil
 }
 
 // fetchMissingEventsParallel fetches missing events using parallel workers.
@@ -632,6 +1444,8 @@ func (w *PartialStateWorker) fetchSingleEvent(
 	return nil
 }
 
+const eventFetchTimeout = 30 * time.Second
+
 func (w *PartialStateWorker) getEventFromServer(
 	ctx context.Context,
 	origin, serverName spec.ServerName,
@@ -639,7 +1453,7 @@ func (w *PartialStateWorker) getEventFromServer(
 	verImpl gomatrixserverlib.IRoomVersion,
 	bypassBackoff bool,
 ) (gomatrixserverlib.PDU, error) {
-	reqctx, cancel := context.WithTimeout(ctx, 30*time.Second) //nolint:mnd
+	reqctx, cancel := context.WithTimeout(ctx, eventFetchTimeout)
 	defer cancel()
 
 	var txn gomatrixserverlib.Transaction
@@ -657,6 +1471,9 @@ func (w *PartialStateWorker) getEventFromServer(
 	if err != nil {
 		return nil, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
 	}
+	if ev.EventID() != eventID {
+		return nil, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
+	}
 	return ev, nil
 }
 
@@ -667,13 +1484,14 @@ func (w *PartialStateWorker) applyState(
 	roomID string,
 	roomNID types.RoomNID,
 	_ *types.RoomInfo,
-	stateEventIDs []string,
+	stateEventIDs, anchorStateIDs []string,
+	expectedLatestEventIDs []string,
 	resyncStartTime time.Time,
 ) error {
 	updateStateRegion, _ := internal.StartRegion(ctx, "UpdateCurrentStateAfterResync")
 	updateStateStartTime := time.Now()
 	updateStateRegion.SetTag("state_event_count", len(stateEventIDs))
-	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs); err != nil {
+	if err := w.rsAPI.UpdateCurrentStateAfterResync(ctx, roomID, stateEventIDs, anchorStateIDs, expectedLatestEventIDs); err != nil {
 		updateStateRegion.EndRegion()
 		logger.WithError(err).Warn("Failed to update current state after resync")
 		return err
@@ -683,6 +1501,16 @@ func (w *PartialStateWorker) applyState(
 		"update_state_ms":   time.Since(updateStateStartTime).Milliseconds(),
 		"state_event_count": len(stateEventIDs),
 	}).Debug("UpdateCurrentStateAfterResync completed")
+
+	// The joined hosts only held the servers of the partial /send_join response, so
+	// rebuild them from the complete state. This happens before the partial flag is
+	// cleared, so a failure is retried with the room still marked partial, and before
+	// anything is sent to the room again, such as the device list updates replayed by
+	// the hooks NotifyUnPartialStated runs.
+	if err := w.refreshJoinedHosts(ctx, roomID); err != nil {
+		logger.WithError(err).Warn("Failed to refresh the joined hosts after resync")
+		return err
+	}
 
 	clearStateRegion, _ := internal.StartRegion(ctx, "ClearRoomPartialState")
 	clearStateStartTime := time.Now()
@@ -706,5 +1534,31 @@ func (w *PartialStateWorker) applyState(
 		logger.Debug("Device list replay would use changes since stream position (not yet implemented)")
 	}
 
+	return nil
+}
+
+// refreshJoinedHosts replaces the joined hosts of a room with the servers of its
+// joined members, as known from the room's current state.
+func (w *PartialStateWorker) refreshJoinedHosts(ctx context.Context, roomID string) error {
+	var res roomserverAPI.QueryMembershipsForRoomResponse
+	if err := w.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, &res); err != nil {
+		return fmt.Errorf("QueryMembershipsForRoom: %w", err)
+	}
+	hosts := make([]federationTypes.JoinedHost, 0, len(res.JoinEvents))
+	for _, ev := range res.JoinEvents {
+		if ev.StateKey == nil {
+			continue
+		}
+		_, domain, err := gomatrixserverlib.SplitID('@', *ev.StateKey)
+		if err != nil {
+			continue
+		}
+		hosts = append(hosts, federationTypes.JoinedHost{MemberEventID: ev.EventID, ServerName: domain})
+	}
+	if _, err := w.fedAPI.db.UpdateRoom(ctx, roomID, hosts, nil, true); err != nil {
+		return fmt.Errorf("UpdateRoom: %w", err)
+	}
 	return nil
 }

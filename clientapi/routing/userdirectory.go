@@ -15,9 +15,7 @@ import (
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib"
-	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
-	"github.com/matrix-org/gomatrix"
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/clientapi/auth/authtypes"
@@ -37,7 +35,6 @@ func SearchUserDirectory(
 	provider userapi.QuerySearchProfilesAPI,
 	searchString string,
 	limit int,
-	federation fclient.FederationClient,
 	localServerName spec.ServerName,
 ) util.JSONResponse {
 	if limit < 10 { //nolint:mnd
@@ -52,8 +49,9 @@ func SearchUserDirectory(
 
 	// Get users we share a room with
 	knownUsersReq := &api.QueryKnownUsersRequest{
-		UserID: device.UserID,
-		Limit:  limit,
+		UserID:       device.UserID,
+		SearchString: searchString,
+		Limit:        limit,
 	}
 	knownUsersRes := &api.QueryKnownUsersResponse{}
 	if err := rsAPI.QueryKnownUsers(ctx, knownUsersReq, knownUsersRes); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -80,7 +78,8 @@ knownUsersLoop:
 			}
 			for _, p := range userRes.Profiles {
 				if strings.Contains(p.DisplayName, searchString) ||
-					strings.Contains(p.Localpart, searchString) {
+					strings.Contains(p.Localpart, searchString) ||
+					strings.Contains(userID, searchString) {
 					profile.DisplayName = p.DisplayName
 					profile.AvatarURL = p.AvatarURL
 					results[userID] = profile
@@ -90,35 +89,13 @@ knownUsersLoop:
 					}
 				}
 			}
-		} else {
-			// If the username already contains the search string, don't bother hitting federation.
-			// This will result in missing avatars and displaynames, but saves the federation roundtrip.
-			if strings.Contains(localpart, searchString) {
-				results[userID] = profile
-				if len(results) == limit {
-					response.Limited = true
-					break knownUsersLoop
-				}
-				continue
-			}
-			// TODO: We should probably cache/store this
-			fedProfile, fedErr := federation.LookupProfile(ctx, localServerName, serverName, userID, "")
-			if fedErr != nil {
-				var x gomatrix.HTTPError
-				if errors.As(fedErr, &x) {
-					if x.Code == http.StatusNotFound {
-						continue
-					}
-				}
-			}
-			if strings.Contains(fedProfile.DisplayName, searchString) {
-				profile.DisplayName = fedProfile.DisplayName
-				profile.AvatarURL = fedProfile.AvatarURL
-				results[userID] = profile
-				if len(results) == limit {
-					response.Limited = true
-					break knownUsersLoop
-				}
+		} else if strings.Contains(localpart, searchString) {
+			// Search remote users by ID only. Fetching profiles here creates one
+			// federation request per known user, and the response isn't cached.
+			results[userID] = profile
+			if len(results) == limit {
+				response.Limited = true
+				break knownUsersLoop
 			}
 		}
 	}

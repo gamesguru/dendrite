@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -22,15 +23,22 @@ type departingClientSnapshot struct {
 	failoverSnapshot
 	t      *testing.T
 	cancel context.CancelCauseFunc
+	gone   *atomic.Bool
 }
 
 func (s departingClientSnapshot) StreamEventsToEvents(ctx context.Context, device *userapi.Device, in []types.StreamEvent, rsAPI roomserverAPI.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
+	s.gone.Store(true)
 	s.cancel(context.Canceled)
 	return s.failoverSnapshot.StreamEventsToEvents(ctx, device, in, rsAPI)
 }
 
+// UnPartialStatedRoomsInRange is asked once before any room is built, to find the
+// rooms that finished a resync, and again while a room is built. Only the latter,
+// after the client has gone, is wrong.
 func (s departingClientSnapshot) UnPartialStatedRoomsInRange(context.Context, string, types.Range) ([]string, error) {
-	s.t.Error("kept building the room after the client went away")
+	if s.gone.Load() {
+		s.t.Error("kept building the room after the client went away")
+	}
 	return nil, nil
 }
 
@@ -46,6 +54,7 @@ func TestIncrementalSyncStopsBuildingARoomOnceTheClientLeaves(t *testing.T) {
 		failoverSnapshot: failoverSnapshot{roomID: room.ID, events: []*rstypes.HeaderedEvent{message}},
 		t:                t,
 		cancel:           cancel,
+		gone:             &atomic.Bool{},
 	}
 	provider := &PDUStreamProvider{rsAPI: noPartialStateRooms{}}
 	req := &types.SyncRequest{

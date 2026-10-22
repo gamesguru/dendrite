@@ -723,6 +723,28 @@ func (d *DatabaseTransaction) MaxStreamPositionForPresence(ctx context.Context) 
 	return d.Presence.GetMaxPresenceID(ctx, d.txn)
 }
 
+// DeleteRejectedEvents drops events that the roomserver found to be rejected after it
+// had accepted them, from the timeline, the current state, the topology and the relations.
+func (d *Database) DeleteRejectedEvents(ctx context.Context, roomID string, eventIDs []string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.CurrentRoomState.DeleteRoomStateByEventIDs(ctx, txn, eventIDs); err != nil {
+			return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventIDs: %w", err)
+		}
+		for _, eventID := range eventIDs {
+			if err := d.Relations.DeleteRelation(ctx, txn, roomID, eventID); err != nil {
+				return fmt.Errorf("d.Relations.DeleteRelation: %w", err)
+			}
+			if err := d.OutputEvents.DeleteEvent(ctx, txn, eventID); err != nil {
+				return fmt.Errorf("d.OutputEvents.DeleteEvent: %w", err)
+			}
+			if err := d.Topology.DeleteEventFromTopology(ctx, txn, eventID); err != nil {
+				return fmt.Errorf("d.Topology.DeleteEventFromTopology: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		if err := d.BackwardExtremities.PurgeBackwardExtremities(ctx, txn, roomID); err != nil {
@@ -902,6 +924,31 @@ func (d *DatabaseTransaction) RelationsFor(ctx context.Context, roomID, eventID,
 	}
 
 	return events, prevBatch, nextBatch, nil
+}
+
+// FullStateDeltas returns, for each room, a delta with the room's whole current
+// state as if the user had just joined it. Rooms without current state are left out.
+func (d *DatabaseTransaction) FullStateDeltas(
+	ctx context.Context, device *userapi.Device, roomIDs []string,
+	stateFilter *synctypes.StateFilter, rsAPI api.SyncRoomserverAPI,
+) ([]types.StateDelta, error) {
+	deltas := make([]types.StateDelta, 0, len(roomIDs))
+	for _, roomID := range roomIDs {
+		s, err := d.currentStateStreamEventsForRoom(ctx, roomID, stateFilter)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		deltas = append(deltas, types.StateDelta{
+			Membership:  spec.Join,
+			NewlyJoined: true,
+			StateEvents: d.StreamEventsToEvents(ctx, device, s, rsAPI),
+			RoomID:      roomID,
+		})
+	}
+	return deltas, nil
 }
 
 // UnPartialStatedRoomsInRange returns room IDs that became fully-stated (completed
