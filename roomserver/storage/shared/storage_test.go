@@ -3,6 +3,8 @@ package shared_test
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 	var stateKeyTable tables.EventStateKeys
 	var userRoomKeys tables.UserRoomKeys
 	var roomsTable tables.Rooms
+	var partialStateTable tables.PartialState
 	switch dbType {
 	case test.DBTypePostgres:
 		err = postgres.CreateRoomsTable(db)
@@ -52,6 +55,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		membershipTable, err = postgres.PrepareMembershipTable(db)
 		assert.NoError(t, err)
 		stateKeyTable, err = postgres.PrepareEventStateKeysTable(db)
+		assert.NoError(t, err)
+		partialStateTable, err = postgres.PreparePartialStateTable(db)
 		assert.NoError(t, err)
 		userRoomKeys, err = postgres.PrepareUserRoomKeysTable(db)
 	case test.DBTypeSQLite:
@@ -71,6 +76,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		assert.NoError(t, err)
 		stateKeyTable, err = sqlite3.PrepareEventStateKeysTable(db)
 		assert.NoError(t, err)
+		partialStateTable, err = sqlite3.PreparePartialStateTable(db)
+		assert.NoError(t, err)
 		userRoomKeys, err = sqlite3.PrepareUserRoomKeysTable(db)
 	}
 	assert.NoError(t, err)
@@ -80,13 +87,14 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 	evDb := shared.EventDatabase{EventStateKeysTable: stateKeyTable, Cache: cache, Writer: writer}
 
 	database := &shared.Database{
-		DB:               db,
-		EventDatabase:    evDb,
-		MembershipTable:  membershipTable,
-		UserRoomKeyTable: userRoomKeys,
-		RoomsTable:       roomsTable,
-		Writer:           writer,
-		Cache:            cache,
+		DB:                db,
+		EventDatabase:     evDb,
+		MembershipTable:   membershipTable,
+		UserRoomKeyTable:  userRoomKeys,
+		RoomsTable:        roomsTable,
+		PartialStateTable: partialStateTable,
+		Writer:            writer,
+		Cache:             cache,
 	}
 	return database, func() {
 		clearDB()
@@ -135,7 +143,11 @@ func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
 		defer close()
 
 		join := func(roomNID types.RoomNID, userID string, local bool, eventNID types.EventNID, membership tables.MembershipState) {
-			nid, err := db.EventStateKeysTable.InsertEventStateKeyNID(ctx, nil, userID)
+			// A user who is in several rooms already has a state key NID.
+			nid, err := db.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, userID)
+			if errors.Is(err, sql.ErrNoRows) {
+				nid, err = db.EventStateKeysTable.InsertEventStateKeyNID(ctx, nil, userID)
+			}
 			assert.NoError(t, err)
 			assert.NoError(t, db.MembershipTable.InsertMembership(ctx, nil, roomNID, nid, local))
 			_, err = db.MembershipTable.UpdateMembership(ctx, nil, roomNID, nid, nid, membership, eventNID, false)
