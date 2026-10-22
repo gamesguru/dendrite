@@ -291,25 +291,14 @@ func (n *Notifier) _sharedUsers(userID string) []string {
 }
 
 func (n *Notifier) IsSharedUser(ctx context.Context, userA, userB string) bool {
-	// Query the roomserver before taking the lock. A partial-state room only
-	// knows the servers present, not every user, so treat the servers' users as
-	// shared for waking presence.
-	partialRooms := n.partialStateRoomServers(ctx)
-
 	n.lock.RLock()
 	defer n.lock.RUnlock()
-	var okA, okB bool
 	for _, users := range n.roomIDToJoinedUsers {
-		okA = users.isIn(userA)
-		if !okA {
-			continue
-		}
-		okB = users.isIn(userB)
-		if okA && okB {
+		if users.isIn(userA) && users.isIn(userB) {
 			return true
 		}
 	}
-	return n._sharesPartialStateRoom(partialRooms, userA, userB)
+	return false
 }
 
 // partialStateServerQuerier is implemented by the roomserver API, which can tell
@@ -320,9 +309,9 @@ type partialStateServerQuerier interface {
 }
 
 // partialStateRoomServers returns the servers known to be in each room which still
-// has partial state, keyed by room ID. It queries the roomserver, so must not be called with the
-// notifier lock held. Its members are not all known yet, so
-// users of those servers are taken to share the room with its known members.
+// has partial state, keyed by room ID. It queries the roomserver, so must not be
+// called with the notifier lock held. OnNewPresence uses these servers to wake
+// streams that may need to recheck presence after the room's members are known.
 func (n *Notifier) partialStateRoomServers(ctx context.Context) map[string][]string {
 	querier, ok := n.rsAPI.(partialStateServerQuerier)
 	if !ok {
@@ -351,25 +340,9 @@ func (n *Notifier) partialStateRoomServers(ctx context.Context) map[string][]str
 	return rooms
 }
 
-// _sharesPartialStateRoom reports whether userA is in a room with partial state
-// in which a server of userB is known to be. The room's members are not all known
-// until the resync finishes, so a user of such a server is taken to share the room.
-func (n *Notifier) _sharesPartialStateRoom(partialRooms map[string][]string, userA, userB string) bool {
-	_, domain, err := gomatrixserverlib.SplitID('@', userB)
-	if err != nil {
-		return false
-	}
-	for roomID, servers := range partialRooms {
-		users, ok := n.roomIDToJoinedUsers[roomID]
-		if ok && users.isIn(userA) && slices.Contains(servers, string(domain)) {
-			return true
-		}
-	}
-	return false
-}
-
 // _partialStateSharedUsers returns the users who are in a room with partial state
-// in which a server of the given user is known to be.
+// in which a server of the given user is known to be. This is used only to wake
+// their sync streams; presence responses still require known shared membership.
 func (n *Notifier) _partialStateSharedUsers(partialRooms map[string][]string, userID string) []string {
 	_, domain, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
