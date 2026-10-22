@@ -22,7 +22,24 @@ const membershipWaitTimeout = 3 * time.Second
 // event in its topology, or the timeout or context ends. It never fails the
 // request: an event that doesn't arrive just gets the old behaviour.
 func WaitForMembershipInTopology(ctx context.Context, db storage.Database, eventID string) {
-	if eventID == "" || db == nil {
+	if db == nil {
+		return
+	}
+	WaitForTopologyEvent(ctx, eventID, func(ctx context.Context, eventID string) error {
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		defer snapshot.Rollback() // nolint:errcheck
+		_, err = snapshot.EventPositionInTopology(ctx, eventID)
+		return err
+	})
+}
+
+// WaitForTopologyEvent is WaitForMembershipInTopology with the lookup supplied
+// by the caller. The lookup returns sql.ErrNoRows while the event is missing.
+func WaitForTopologyEvent(ctx context.Context, eventID string, lookup func(context.Context, string) error) {
+	if eventID == "" {
 		return
 	}
 	deadline := time.NewTimer(membershipWaitTimeout)
@@ -30,13 +47,7 @@ func WaitForMembershipInTopology(ctx context.Context, db storage.Database, event
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		snapshot, err := db.NewDatabaseSnapshot(ctx)
-		if err != nil {
-			return
-		}
-		_, err = snapshot.EventPositionInTopology(ctx, eventID)
-		_ = snapshot.Rollback()
-		if !errors.Is(err, sql.ErrNoRows) {
+		if err := lookup(ctx, eventID); !errors.Is(err, sql.ErrNoRows) {
 			return
 		}
 		select {

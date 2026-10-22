@@ -17,6 +17,8 @@ type DeviceListStreamProvider struct {
 	DefaultStreamProvider
 	rsAPI   api.SyncRoomserverAPI
 	userAPI userapi.SyncKeyAPI
+	// topologyLookup replaces the database lookup in tests.
+	topologyLookup func(ctx context.Context, eventID string) error
 }
 
 func (p *DeviceListStreamProvider) CompleteSync(
@@ -71,7 +73,11 @@ func (p *DeviceListStreamProvider) waitForPendingPartialJoins(ctx context.Contex
 			"room_id":  roomID,
 			"event_id": res.EventID,
 		}).Debug("Waiting for a partial state join to reach the sync API")
-		internal.WaitForMembershipInTopology(ctx, p.DB, res.EventID)
+		if p.topologyLookup != nil {
+			internal.WaitForTopologyEvent(ctx, res.EventID, p.topologyLookup)
+		} else {
+			internal.WaitForMembershipInTopology(ctx, p.DB, res.EventID)
+		}
 	}
 }
 

@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -41,43 +40,23 @@ func (r *partialJoinRSAPI) QueryMembershipForUser(
 	return nil
 }
 
-type topologyDB struct {
-	storage.Database
-	present atomic.Bool
-}
-
-func (d *topologyDB) NewDatabaseSnapshot(context.Context) (storage.DatabaseTransaction, error) {
-	return topologySnapshot{DatabaseTransaction: d.Database, present: &d.present}, nil
-}
-
-type topologySnapshot struct {
-	storage.DatabaseTransaction
-	present *atomic.Bool
-}
-
-func (s topologySnapshot) EventPositionInTopology(context.Context, string) (types.TopologyToken, error) {
-	if !s.present.Load() {
-		return types.TopologyToken{}, sql.ErrNoRows
-	}
-	return types.TopologyToken{}, nil
-}
-
-func (s topologySnapshot) Rollback() error {
-	return nil
-}
-
 // A complete sync must not take its token until a partial-state join has
 // reached the sync API, otherwise the next sync treats the room as newly joined.
 func TestCompleteSyncWaitsForPartialStateJoin(t *testing.T) {
-	db := &topologyDB{}
+	var present atomic.Bool
 	rsAPI := &partialJoinRSAPI{
 		roomID:  "!room:test",
 		eventID: "$join",
 		queried: make(chan struct{}),
 	}
 	provider := &DeviceListStreamProvider{
-		DefaultStreamProvider: DefaultStreamProvider{DB: db},
-		rsAPI:                 rsAPI,
+		rsAPI: rsAPI,
+		topologyLookup: func(context.Context, string) error {
+			if !present.Load() {
+				return sql.ErrNoRows
+			}
+			return nil
+		},
 	}
 	req := &types.SyncRequest{
 		Context: t.Context(),
@@ -98,11 +77,11 @@ func TestCompleteSyncWaitsForPartialStateJoin(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	db.present.Store(true)
+	present.Store(true)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("complete sync did not notice the join")
 	}
-	require.True(t, db.present.Load())
+	require.True(t, present.Load())
 }
