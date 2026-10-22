@@ -363,30 +363,17 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 		return stateDeltas, syncJoinedRooms, nil
 	}
 
-	// A room may already have a delta in this range, for instance the leave or
-	// ban that took the user out of it. Only a join delta may be replaced by the
-	// full state: replacing a leave or ban would hide the membership change.
-	existing := make(map[string]types.StateDelta, len(stateDeltas))
-	for _, delta := range stateDeltas {
-		existing[delta.RoomID] = delta
-	}
 	replaced := make(map[string]bool, len(fullDeltas))
-	replacedDeltas := make([]types.StateDelta, 0, len(fullDeltas))
 	for _, delta := range fullDeltas {
-		current, ok := existing[delta.RoomID]
-		if ok && current.Membership != spec.Join {
-			continue
-		}
 		replaced[delta.RoomID] = true
-		replacedDeltas = append(replacedDeltas, delta)
 	}
-	merged := make([]types.StateDelta, 0, len(stateDeltas)+len(replacedDeltas))
+	merged := make([]types.StateDelta, 0, len(stateDeltas)+len(fullDeltas))
 	for _, delta := range stateDeltas {
 		if !replaced[delta.RoomID] {
 			merged = append(merged, delta)
 		}
 	}
-	merged = append(merged, replacedDeltas...)
+	merged = append(merged, fullDeltas...)
 
 	joined := make(map[string]bool, len(syncJoinedRooms))
 	for _, roomID := range syncJoinedRooms {

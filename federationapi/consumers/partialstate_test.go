@@ -24,7 +24,6 @@ type fakePartialStateRoomserverAPI struct {
 	roomNID          rstypes.RoomNID
 	partialState     bool
 	partialStateErr  error
-	allRoomsErr      error
 	servers          []string
 	serversErr       error
 	roomInfoNil      bool
@@ -39,16 +38,6 @@ func (f *fakePartialStateRoomserverAPI) QueryRoomInfo(ctx context.Context, roomI
 		return nil, nil
 	}
 	return &rstypes.RoomInfo{RoomNID: f.roomNID}, nil
-}
-
-func (f *fakePartialStateRoomserverAPI) GetAllPartialStateRooms(ctx context.Context) ([]rstypes.RoomNID, error) {
-	if f.allRoomsErr != nil {
-		return nil, f.allRoomsErr
-	}
-	if f.partialState {
-		return []rstypes.RoomNID{f.roomNID}, f.partialStateErr
-	}
-	return nil, f.partialStateErr
 }
 
 func (f *fakePartialStateRoomserverAPI) IsRoomPartialState(ctx context.Context, roomNID rstypes.RoomNID) (bool, error) {
@@ -197,30 +186,9 @@ func TestKeyChangePartialStateServers(t *testing.T) {
 	})
 
 	t.Run("a failed lookup is an error", func(t *testing.T) {
-		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{
-			partialState: true, queryRoomInfoErr: errors.New("boom"),
-		}}
+		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{queryRoomInfoErr: errors.New("boom")}}
 		if _, err := consumer.partialStateServers([]spec.RoomID{*room}); err == nil {
 			t.Fatal("expected an error")
-		}
-	})
-
-	t.Run("a failed partial state room lookup is an error", func(t *testing.T) {
-		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{
-			allRoomsErr: errors.New("boom"),
-		}}
-		if _, err := consumer.partialStateServers([]spec.RoomID{*room}); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-
-	t.Run("no partial state rooms skips the room lookup", func(t *testing.T) {
-		consumer := &KeyChangeConsumer{ctx: context.Background(), rsAPI: &fakePartialStateRoomserverAPI{
-			roomInfoNil: true,
-		}}
-		got, err := consumer.partialStateServers([]spec.RoomID{*room})
-		if err != nil || len(got) != 0 {
-			t.Fatalf("got %v, %v, want none", got, err)
 		}
 	})
 }

@@ -21,7 +21,6 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
 	"codefloe.com/pat-s/zendrite/federationapi/types"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
-	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -186,18 +185,6 @@ func (t *KeyChangeConsumer) onDeviceKeyMessage(m api.DeviceMessage) bool {
 // partialStateServers returns the servers known to be in those of the rooms whose
 // state is still partial.
 func (t *KeyChangeConsumer) partialStateServers(roomIDs []spec.RoomID) ([]spec.ServerName, error) {
-	partialRoomNIDs, err := t.rsAPI.GetAllPartialStateRooms(t.ctx)
-	if err != nil {
-		return nil, err
-	}
-	if len(partialRoomNIDs) == 0 {
-		return nil, nil
-	}
-	partial := make(map[rstypes.RoomNID]struct{}, len(partialRoomNIDs))
-	for _, roomNID := range partialRoomNIDs {
-		partial[roomNID] = struct{}{}
-	}
-
 	var servers []spec.ServerName
 	for _, roomID := range roomIDs {
 		roomInfo, err := t.rsAPI.QueryRoomInfo(t.ctx, roomID)
@@ -207,7 +194,11 @@ func (t *KeyChangeConsumer) partialStateServers(roomIDs []spec.RoomID) ([]spec.S
 		if roomInfo == nil {
 			continue
 		}
-		if _, ok := partial[roomInfo.RoomNID]; !ok {
+		partial, err := t.rsAPI.IsRoomPartialState(t.ctx, roomInfo.RoomNID)
+		if err != nil {
+			return nil, err
+		}
+		if !partial {
 			continue
 		}
 		known, err := t.rsAPI.GetPartialStateServers(t.ctx, roomInfo.RoomNID)
