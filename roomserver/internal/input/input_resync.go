@@ -432,6 +432,9 @@ func (r *Inputer) logResyncStateMemberships(
 	roomInfo *types.RoomInfo,
 	stateNID types.StateSnapshotNID,
 ) {
+	if !logger.Logger.IsLevelEnabled(logrus.DebugLevel) {
+		return
+	}
 	entries, err := roomState.LoadStateAtSnapshot(ctx, stateNID)
 	if err != nil {
 		logger.WithError(err).Warn("Could not load the new state snapshot to log its memberships")
@@ -476,7 +479,7 @@ func (r *Inputer) logResyncStateMemberships(
 			"event_id":   ev.EventID(),
 			"event_nid":  entry.EventNID,
 			"membership": membership,
-		}).Info("Membership in the state snapshot after partial state resync")
+		}).Debug("Membership in the state snapshot after partial state resync")
 	}
 }
 

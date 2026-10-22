@@ -60,13 +60,13 @@ func DeviceListCatchup(
 		res.DeviceLists.Left = left
 		hasNew = len(changed) > 0 || len(left) > 0
 		util.GetLogger(ctx).WithFields(logrus.Fields{
-			"user_id":       userID,
-			"from":          from,
-			"to":            to,
-			"newly_joined":  newlyJoinedRooms,
-			"newly_left":    newlyLeftRooms,
-			"tracked_users": changed,
-		}).Info("Device lists changed by newly joined or left rooms")
+			"user_id":             userID,
+			"from":                from,
+			"to":                  to,
+			"newly_joined_count":  len(newlyJoinedRooms),
+			"newly_left_count":    len(newlyLeftRooms),
+			"tracked_users_count": len(changed),
+		}).Debug("Device lists changed by newly joined or left rooms")
 	}
 
 	// now also track users who we already share rooms with but who have updated their devices between the two tokens
@@ -93,12 +93,12 @@ func DeviceListCatchup(
 	}
 
 	util.GetLogger(ctx).WithFields(logrus.Fields{
-		"user_id":         userID,
-		"from":            offset,
-		"to":              toOffset,
-		"response_offset": queryRes.Offset,
-		"key_change_ids":  queryRes.UserIDs,
-	}).Info("Raw key changes read for device list catch-up")
+		"user_id":          userID,
+		"from":             offset,
+		"to":               toOffset,
+		"response_offset":  queryRes.Offset,
+		"key_change_count": len(queryRes.UserIDs),
+	}).Debug("Raw key changes read for device list catch-up")
 
 	// Work out which user IDs we care about — that includes those in the original request,
 	// the response from QueryKeyChanges (which includes ALL users who have changed keys)
@@ -142,7 +142,9 @@ func DeviceListCatchup(
 		"from":            offset,
 		"to":              toOffset,
 		"response_offset": queryRes.Offset,
-	}).Tracef("QueryKeyChanges request result: %+v", res.DeviceLists)
+		"changed_count":   len(res.DeviceLists.Changed),
+		"left_count":      len(res.DeviceLists.Left),
+	}).Trace("QueryKeyChanges request result")
 
 	return types.StreamPosition(queryRes.Offset), hasNew, nil
 }

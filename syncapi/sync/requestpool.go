@@ -653,7 +653,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 				"complete":      syncReq.Since.IsEmpty(),
 				"next_batch":    syncReq.Response.NextBatch.String(),
 				"join_room_ids": joinRoomIDs,
-			}).Info("Sync response joined rooms")
+			}).Debug("Sync response joined rooms")
 		}
 
 		return util.JSONResponse{

@@ -87,22 +87,14 @@ func (p *DeviceListStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) types.StreamPosition {
-	joinRoomIDs := make([]string, 0, len(req.Response.Rooms.Join))
-	for roomID := range req.Response.Rooms.Join {
-		joinRoomIDs = append(joinRoomIDs, roomID)
-	}
-	newlyJoined := make([]string, 0, len(req.NewlyJoinedRooms))
-	for roomID := range req.NewlyJoinedRooms {
-		newlyJoined = append(newlyJoined, roomID)
-	}
 	req.Log.WithFields(logrus.Fields{
 		"since_pdu_position":         req.Since.PDUPosition,
 		"since_device_list_position": req.Since.DeviceListPosition,
 		"from":                       from,
 		"to":                         to,
-		"join_room_ids":              joinRoomIDs,
-		"request_newly_joined":       newlyJoined,
-	}).Info("Device list catch-up for an incremental sync")
+		"joined_room_count":          len(req.Response.Rooms.Join),
+		"newly_joined_count":         len(req.NewlyJoinedRooms),
+	}).Debug("Device list catch-up for an incremental sync")
 
 	var err error
 	to, _, err = internal.DeviceListCatchup(ctx, snapshot, p.userAPI, p.rsAPI, req.Device.UserID, req.Response, from, to)

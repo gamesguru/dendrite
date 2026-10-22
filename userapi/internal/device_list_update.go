@@ -479,18 +479,25 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		}
 	}
 	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)
-	util.GetLogger(ctx).WithFields(logrus.Fields{
+	logger := util.GetLogger(ctx)
+	logger.WithFields(logrus.Fields{
 		"room_id":     roomID,
 		"snapshot":    snapshotKnown,
 		"candidates":  len(memberIDs),
 		"kept":        len(keep),
 		"fetched":     len(fresh),
+		"later":       len(members.Later),
+		"joined":      len(members.Joined),
+		"interrupted": len(members.Interrupted),
+		"now_joined":  len(stillJoined),
+	}).Info("Forgetting the device lists fetched while the room had partial state")
+	logger.WithFields(logrus.Fields{
+		"room_id":     roomID,
 		"fresh":       fresh,
 		"later":       members.Later,
 		"joined":      members.Joined,
 		"interrupted": members.Interrupted,
-		"now_joined":  len(stillJoined),
-	}).Info("Forgetting the device lists fetched while the room had partial state")
+	}).Debug("Device lists fetched while the room had partial state")
 	if err != nil {
 		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
 	}
