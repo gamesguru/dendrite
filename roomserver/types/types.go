@@ -67,8 +67,7 @@ func (a EventNIDs) Hash() []byte {
 	return h[:]
 }
 
-// StateBlockNIDs is used to dedupe state block NIDs while preserving the order
-// in which the state blocks are applied.
+// StateBlockNIDs is used to sort and dedupe state block NIDs.
 type StateBlockNIDs []StateBlockNID
 
 func (a StateBlockNIDs) Len() int           { return len(a) }
@@ -82,29 +81,6 @@ func (a StateBlockNIDs) Hash() []byte {
 	}
 	h := blake2b.Sum256(j)
 	return h[:]
-}
-
-// Unique removes duplicate state block NIDs while preserving their order. The
-// order matters: the state block list is applied in order, so a reused block
-// has to stay where it was put even if its NID is lower than the blocks around
-// it. Keeping the last occurrence preserves the last application of a block.
-func (a StateBlockNIDs) Unique() StateBlockNIDs {
-	if len(a) < 2 {
-		return a
-	}
-	seen := make(map[StateBlockNID]struct{}, len(a))
-	out := make(StateBlockNIDs, 0, len(a))
-	for i := len(a) - 1; i >= 0; i-- {
-		if _, ok := seen[a[i]]; ok {
-			continue
-		}
-		seen[a[i]] = struct{}{}
-		out = append(out, a[i])
-	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out
 }
 
 // A StateKeyTuple is a pair of a numeric event type and a numeric state key.

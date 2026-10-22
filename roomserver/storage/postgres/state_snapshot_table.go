@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -130,7 +131,7 @@ func PrepareStateSnapshotTable(db *sql.DB) (*stateSnapshotStatements, error) {
 func (s *stateSnapshotStatements) InsertState(
 	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, nids types.StateBlockNIDs,
 ) (stateNID types.StateSnapshotNID, err error) {
-	nids = nids.Unique()
+	nids = nids[:util.SortAndUnique(nids)]
 	err = sqlutil.TxStmt(txn, s.insertStateStmt).QueryRowContext(ctx, nids.Hash(), int64(roomNID), stateBlockNIDsAsArray(nids)).Scan(&stateNID)
 	if err != nil {
 		return 0, err
