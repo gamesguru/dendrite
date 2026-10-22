@@ -73,6 +73,9 @@ func main() {
 		}
 		if *defaultsForCI {
 			cfg.AppServiceAPI.DisableTLSValidation = true
+			// Complement mounts one registration file per application service
+			// into this directory.
+			cfg.AppServiceAPI.ConfigFiles = []string{"/complement/appservice/"}
 			cfg.ClientAPI.RateLimiting.Enabled = false
 			// Test suites register users with passwords such as "secret".
 			cfg.ClientAPI.MinPasswordLength = 1

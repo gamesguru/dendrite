@@ -266,6 +266,14 @@ func Context(
 		response.End = end.String()
 		response.Start = start.String()
 	}
+	if response.End == "" {
+		// There is no event after the context event, but clients still need a
+		// token positioned after it (for example to paginate backwards and
+		// include the context event itself).
+		if end, err = snapshot.EventPositionInTopology(ctx, eventID); err == nil {
+			response.End = end.String()
+		}
+	}
 	succeeded = true
 	return util.JSONResponse{
 		Code: http.StatusOK,

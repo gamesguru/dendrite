@@ -199,7 +199,37 @@ func (a *ApplicationService) IsInterestedInRoomAlias(
 // loadAppServices iterates through all application service config files
 // and loads their data into the config object for later access.
 func loadAppServices(config *AppServiceAPI, derived *Derived) error {
+	configFiles := make([]string, 0, len(config.ConfigFiles))
 	for _, configPath := range config.ConfigFiles {
+		info, err := os.Stat(configPath)
+		if err != nil {
+			// A directory that is only populated for homeservers with
+			// application services may not exist at all.
+			if os.IsNotExist(err) && strings.HasSuffix(configPath, string(os.PathSeparator)) {
+				continue
+			}
+			configFiles = append(configFiles, configPath)
+			continue
+		}
+		if !info.IsDir() {
+			configFiles = append(configFiles, configPath)
+			continue
+		}
+		entries, err := os.ReadDir(configPath)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			switch strings.ToLower(filepath.Ext(entry.Name())) {
+			case ".yaml", ".yml":
+				configFiles = append(configFiles, filepath.Join(configPath, entry.Name()))
+			}
+		}
+	}
+	for _, configPath := range configFiles {
 		// Create a new application service with default options
 		appservice := &ApplicationService{
 			RateLimited: true,

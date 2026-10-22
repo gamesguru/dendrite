@@ -68,12 +68,6 @@ func (s *StreamIDStatements) nextReceiptID(ctx context.Context, txn *sql.Tx) (po
 	return
 }
 
-func (s *StreamIDStatements) nextInviteID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
-	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	err = increaseStmt.QueryRowContext(ctx, "invite").Scan(&pos)
-	return
-}
-
 func (s *StreamIDStatements) nextAccountDataID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
 	err = increaseStmt.QueryRowContext(ctx, "accountdata").Scan(&pos)
