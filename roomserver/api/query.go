@@ -637,4 +637,8 @@ type PartialStateMembers struct {
 	Later []string
 	// Joined are all those that were joined.
 	Joined []string
+	// Interrupted are those whose membership was changed by an event that the resync
+	// accepted or rejected after all, so they were out of the room for a while that we
+	// did not know of.
+	Interrupted []string
 }

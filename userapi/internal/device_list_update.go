@@ -461,8 +461,13 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		for _, userID := range members.Joined {
 			candidates[userID] = struct{}{}
 		}
+		interrupted := make(map[string]struct{}, len(members.Interrupted))
+		for _, userID := range members.Interrupted {
+			interrupted[userID] = struct{}{}
+		}
 		for _, userID := range members.Later {
-			if _, joined := stillJoined[userID]; joined {
+			_, joined := stillJoined[userID]
+			if _, gap := interrupted[userID]; joined && !gap {
 				keep[userID] = struct{}{}
 			}
 		}
@@ -475,15 +480,16 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	}
 	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)
 	util.GetLogger(ctx).WithFields(logrus.Fields{
-		"room_id":    roomID,
-		"snapshot":   snapshotKnown,
-		"candidates": len(memberIDs),
-		"kept":       len(keep),
-		"fetched":    len(fresh),
-		"fresh":      fresh,
-		"later":      members.Later,
-		"joined":     members.Joined,
-		"now_joined": len(stillJoined),
+		"room_id":     roomID,
+		"snapshot":    snapshotKnown,
+		"candidates":  len(memberIDs),
+		"kept":        len(keep),
+		"fetched":     len(fresh),
+		"fresh":       fresh,
+		"later":       members.Later,
+		"joined":      members.Joined,
+		"interrupted": members.Interrupted,
+		"now_joined":  len(stillJoined),
 	}).Info("Forgetting the device lists fetched while the room had partial state")
 	if err != nil {
 		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)

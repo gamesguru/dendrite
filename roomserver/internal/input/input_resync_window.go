@@ -182,6 +182,11 @@ func (r *Inputer) recheckWindowEvent(
 		if err = updater.SetEventRejected(ev.nid, rejected); err != nil {
 			return false, fmt.Errorf("updater.SetEventRejected: %w", err)
 		}
+		if stored[0].Type() == spec.MRoomMember && stored[0].StateKey() != nil {
+			// Whoever it concerns was in or out of the room for a while without us
+			// knowing, so what we learned of them in the meantime cannot be trusted.
+			r.noteResyncInterrupted(stored[0].RoomID().String(), *stored[0].StateKey())
+		}
 	}
 	return !wasRejected && rejected, nil
 }

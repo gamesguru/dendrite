@@ -540,6 +540,7 @@ func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID strin
 		return api.PartialStateMembers{}, false
 	}
 	members, _ = v.(api.PartialStateMembers)
+	members.Interrupted = r.TakeResyncInterrupted(roomID)
 	return members, true
 }
 
