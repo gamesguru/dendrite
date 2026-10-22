@@ -428,6 +428,13 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 
 		if syncReq.Since.IsEmpty() {
 			// Complete sync
+			// Wait for a just-joined partial-state room to reach the sync API before
+			// any snapshot is open, as the wait takes snapshots of its own.
+			if waiter, ok := rp.streams.DeviceListStreamProvider.(interface {
+				WaitForPendingPartialJoins(context.Context, *types.SyncRequest)
+			}); ok {
+				waiter.WaitForPendingPartialJoins(syncReq.Context, syncReq)
+			}
 			syncReq.Response.NextBatch = types.StreamingToken{
 				// Get the current DeviceListPosition first, as the currentPosition
 				// might advance while processing other streams, resulting in flakey

@@ -42,7 +42,7 @@ func (r *partialJoinRSAPI) QueryMembershipForUser(
 
 // A complete sync must not take its token until a partial-state join has
 // reached the sync API, otherwise the next sync treats the room as newly joined.
-func TestCompleteSyncWaitsForPartialStateJoin(t *testing.T) {
+func TestWaitForPendingPartialJoins(t *testing.T) {
 	var present atomic.Bool
 	rsAPI := &partialJoinRSAPI{
 		roomID:  "!room:test",
@@ -66,7 +66,7 @@ func TestCompleteSyncWaitsForPartialStateJoin(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		provider.CompleteSync(t.Context(), nil, req)
+		provider.WaitForPendingPartialJoins(t.Context(), req)
 		close(done)
 	}()
 

@@ -967,16 +967,25 @@ func allowedOverlays(
 
 	for _, ev := range overlays {
 		ancestors := ancestorsOf(ev)
-		current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(state))
-		for tuple, e := range state {
-			current[tuple] = e
-		}
-		for _, prior := range allowed {
-			if ancestors[prior.EventID()] {
-				current[gomatrixserverlib.StateKeyTuple{EventType: prior.Type(), StateKey: *prior.StateKey()}] = prior
+		needed := gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{ev}).Tuples()
+		neededSet := make(map[gomatrixserverlib.StateKeyTuple]struct{}, len(needed))
+		current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(needed))
+		for _, tuple := range needed {
+			neededSet[tuple] = struct{}{}
+			if e, ok := state[tuple]; ok {
+				current[tuple] = e
 			}
 		}
-		if !trusted(ev) && !allowedByState(current, ev, userIDQuerier) {
+		for _, prior := range allowed {
+			if !ancestors[prior.EventID()] {
+				continue
+			}
+			tuple := gomatrixserverlib.StateKeyTuple{EventType: prior.Type(), StateKey: *prior.StateKey()}
+			if _, needed := neededSet[tuple]; needed {
+				current[tuple] = prior
+			}
+		}
+		if !trusted(ev) && !allowedByState(current, needed, ev, userIDQuerier) {
 			skipped = append(skipped, ev)
 			continue
 		}
@@ -987,11 +996,11 @@ func allowedOverlays(
 
 // allowedByState reports whether the auth rules allow ev given the state it follows.
 func allowedByState(
-	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, ev gomatrixserverlib.PDU,
-	userIDQuerier spec.UserIDForSender,
+	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, needed []gomatrixserverlib.StateKeyTuple,
+	ev gomatrixserverlib.PDU, userIDQuerier spec.UserIDForSender,
 ) bool {
 	var authEvents []gomatrixserverlib.PDU
-	for _, tuple := range gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{ev}).Tuples() {
+	for _, tuple := range needed {
 		if authEvent, ok := state[tuple]; ok {
 			authEvents = append(authEvents, authEvent)
 		}

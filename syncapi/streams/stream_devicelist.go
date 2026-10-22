@@ -26,22 +26,24 @@ func (p *DeviceListStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	// A complete sync issues the token before the PDU provider takes its
-	// position. Wait for a just-joined partial-state room to reach the sync API
-	// first, so the token covers the join and the next sync does not mistake it
-	// for a room that was joined and left in the same gap.
-	p.waitForPendingPartialJoins(ctx, req)
 	return p.LatestPosition(ctx)
 }
 
-// waitForPendingPartialJoins waits for the syncing user's membership in rooms
+// WaitForPendingPartialJoins waits for the syncing user's membership in rooms
 // that are still doing a partial-state resync to reach the sync API. Those
 // joins come from the roomserver before its output reaches the sync consumer,
 // so without the wait a complete sync can take a token from before the join.
 // This is deliberately limited to partial-state rooms: the PDU position alone
 // is not a reliable barrier for ordinary joins until the output consumers share
 // a position with the sync API.
-func (p *DeviceListStreamProvider) waitForPendingPartialJoins(ctx context.Context, req *types.SyncRequest) {
+//
+// A complete sync issues the token before the PDU provider takes its position,
+// so the caller waits here first, so the token covers the join and the next sync
+// does not mistake it for a room that was joined and left in the same gap. It
+// must be called before the caller opens a database snapshot: the wait takes
+// snapshots of its own, and holding one while waiting for another can exhaust
+// the connection pool.
+func (p *DeviceListStreamProvider) WaitForPendingPartialJoins(ctx context.Context, req *types.SyncRequest) {
 	if p.rsAPI == nil {
 		return
 	}

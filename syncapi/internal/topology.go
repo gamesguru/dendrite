@@ -42,8 +42,10 @@ func WaitForTopologyEvent(ctx context.Context, eventID string, lookup func(conte
 	if eventID == "" {
 		return
 	}
-	deadline := time.NewTimer(membershipWaitTimeout)
-	defer deadline.Stop()
+	// Bound the lookups as well as the waits between them, as a lookup can itself
+	// block, for instance on a busy connection pool.
+	ctx, cancel := context.WithTimeout(ctx, membershipWaitTimeout)
+	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -52,8 +54,6 @@ func WaitForTopologyEvent(ctx context.Context, eventID string, lookup func(conte
 		}
 		select {
 		case <-ctx.Done():
-			return
-		case <-deadline.C:
 			return
 		case <-ticker.C:
 		}

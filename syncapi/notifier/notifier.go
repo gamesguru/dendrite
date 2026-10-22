@@ -291,14 +291,39 @@ func (n *Notifier) _sharedUsers(userID string) []string {
 }
 
 func (n *Notifier) IsSharedUser(ctx context.Context, userA, userB string) bool {
-	n.lock.RLock()
-	defer n.lock.RUnlock()
-	for _, users := range n.roomIDToJoinedUsers {
-		if users.isIn(userA) && users.isIn(userB) {
-			return true
+	_, ok := n.SharedUsersWithPartialState(ctx, userA, []string{userB})[userB]
+	return ok
+}
+
+// SharedUsersWithPartialState returns the candidates who share a known joined
+// room with userA, or whose server is known to be in a partial-state room userA
+// has joined. The partial-room lookup is batched across candidates so callers
+// handling a presence response do not query the roomserver once per user.
+func (n *Notifier) SharedUsersWithPartialState(ctx context.Context, userA string, candidates []string) map[string]struct{} {
+	partialRooms := n.partialStateRoomServers(ctx)
+	domains := make(map[string]string, len(candidates))
+	for _, userID := range candidates {
+		_, domain, err := gomatrixserverlib.SplitID('@', userID)
+		if err == nil {
+			domains[userID] = string(domain)
 		}
 	}
-	return false
+
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+	shared := make(map[string]struct{})
+	for roomID, users := range n.roomIDToJoinedUsers {
+		if !users.isIn(userA) {
+			continue
+		}
+		servers, partial := partialRooms[roomID]
+		for userID, domain := range domains {
+			if users.isIn(userID) || (partial && slices.Contains(servers, domain)) {
+				shared[userID] = struct{}{}
+			}
+		}
+	}
+	return shared
 }
 
 // partialStateServerQuerier is implemented by the roomserver API, which can tell
