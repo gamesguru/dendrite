@@ -724,13 +724,16 @@ func (d *DatabaseTransaction) MaxStreamPositionForPresence(ctx context.Context) 
 }
 
 // DeleteRejectedEvents drops events that the roomserver found to be rejected after it
-// had accepted them, from the timeline and the current state.
-func (d *Database) DeleteRejectedEvents(ctx context.Context, eventIDs []string) error {
+// had accepted them, from the timeline, the current state, the topology and the relations.
+func (d *Database) DeleteRejectedEvents(ctx context.Context, roomID string, eventIDs []string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		if err := d.CurrentRoomState.DeleteRoomStateByEventIDs(ctx, txn, eventIDs); err != nil {
 			return fmt.Errorf("d.CurrentRoomState.DeleteRoomStateByEventIDs: %w", err)
 		}
 		for _, eventID := range eventIDs {
+			if err := d.Relations.DeleteRelation(ctx, txn, roomID, eventID); err != nil {
+				return fmt.Errorf("d.Relations.DeleteRelation: %w", err)
+			}
 			if err := d.OutputEvents.DeleteEvent(ctx, txn, eventID); err != nil {
 				return fmt.Errorf("d.OutputEvents.DeleteEvent: %w", err)
 			}
