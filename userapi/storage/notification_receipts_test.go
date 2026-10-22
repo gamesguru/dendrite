@@ -159,8 +159,10 @@ func TestDeleteNotificationsForEvent(t *testing.T) {
 		insert("bob", "!room:test", "$rejected", 1, false)
 		insert("alice", "!room:test", "$kept", 2, false)
 		insert("alice", "!other:test", "$rejected", 1, true)
-		require.NoError(t, db.StoreNotificationEvent(ctx, "!room:test", "$rejected", "$thread", 1))
-		require.NoError(t, db.StoreNotificationEvent(ctx, "!room:test", "$kept", "main", 2))
+		_, err := db.StoreNotificationEvent(ctx, "!room:test", "$rejected", "$thread", 1)
+		require.NoError(t, err)
+		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$kept", "main", 2)
+		require.NoError(t, err)
 
 		users, err := db.DeleteNotificationsForEvent(ctx, "!room:test", "$rejected")
 		require.NoError(t, err)
