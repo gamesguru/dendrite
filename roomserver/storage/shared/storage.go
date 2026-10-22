@@ -732,6 +732,19 @@ func (d *Database) GetOrCreateRoomInfo(ctx context.Context, event gomatrixserver
 		if err != nil {
 			return err
 		}
+		if roomVersion == "" {
+			// Non-create events do not carry the room version. The Ristretto
+			// cache writes asynchronously, so the room NID may be visible before
+			// its version; load the persisted version rather than caching an
+			// empty value over the immutable room-version entry.
+			info, err := d.RoomsTable.SelectRoomInfo(ctx, txn, event.RoomID().String())
+			if err != nil {
+				return err
+			}
+			if info != nil {
+				roomVersion = info.RoomVersion
+			}
+		}
 		return nil
 	})
 	if roomVersion != "" {
@@ -925,7 +938,9 @@ func (d *Database) assignRoomNID(
 		return 0, err
 	}
 	d.Cache.StoreRoomServerRoomID(roomNID, roomID)
-	d.Cache.StoreRoomVersion(roomID, roomVersion)
+	if roomVersion != "" {
+		d.Cache.StoreRoomVersion(roomID, roomVersion)
+	}
 	return roomNID, nil
 }
 

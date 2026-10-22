@@ -136,6 +136,32 @@ func Test_GetLeftUsers(t *testing.T) {
 	})
 }
 
+func TestGetOrCreateRoomInfoWithPartiallyPopulatedCache(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV9))
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		_, err := db.RoomsTable.InsertRoomNID(ctx, nil, room.ID, room.Version)
+		assert.NoError(t, err)
+		db.Cache.StoreRoomVersion(room.ID, room.Version)
+		assert.Eventually(t, func() bool {
+			version, ok := db.Cache.GetRoomVersion(room.ID)
+			return ok && version == room.Version
+		}, time.Second, time.Millisecond)
+
+		event := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		info, err := db.GetOrCreateRoomInfo(ctx, event.PDU)
+		assert.NoError(t, err)
+		if assert.NotNil(t, info) {
+			assert.Equal(t, room.Version, info.RoomVersion)
+		}
+	})
+}
+
 func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
