@@ -703,7 +703,7 @@ func TestAllowedOverlays(t *testing.T) {
 
 	bobJoin := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
 	topic := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "a topic"}, test.WithStateKey(""))
-	leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+	leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID), test.WithPrevEvents(bobJoin.EventID()))
 
 	t.Run("events the state allows are all applied", func(t *testing.T) {
 		allowed, skipped := allowedOverlays(state, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
@@ -714,6 +714,7 @@ func TestAllowedOverlays(t *testing.T) {
 	// The full state shows Alice had already left, though her topic cites her join.
 	left := stateOf(room.Events())
 	delete(left, tupleOf(leave.PDU))
+	topicAfterLeave := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "after leaving"}, test.WithStateKey(""), test.WithPrevEvents(leave.EventID()))
 	t.Run("an event the full state does not allow is left out", func(t *testing.T) {
 		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
 		assert.Equal(t, ids(bobJoin.PDU), ids(allowed...))
@@ -727,11 +728,19 @@ func TestAllowedOverlays(t *testing.T) {
 	})
 
 	t.Run("an event on a concurrent branch is not judged by the other branch", func(t *testing.T) {
-		// topic was sent before the leave and does not descend from it.
-		overlays := []gomatrixserverlib.PDU{leave.PDU, topic.PDU}
+		// topic and leave share bobJoin as their parent.
+		overlays := []gomatrixserverlib.PDU{bobJoin.PDU, leave.PDU, topic.PDU}
 		allowed, skipped := allowedOverlays(state, overlays, overlays, nobodyIsLocal, userIDs)
-		assert.Equal(t, ids(leave.PDU, topic.PDU), ids(allowed...))
+		assert.Equal(t, ids(bobJoin.PDU, leave.PDU, topic.PDU), ids(allowed...))
 		assert.Empty(t, skipped)
+	})
+
+	t.Run("an event descending from an earlier overlay is checked against it", func(t *testing.T) {
+		// topicAfterLeave has leave as its prev_event, so Alice has left on its branch.
+		overlays := []gomatrixserverlib.PDU{bobJoin.PDU, leave.PDU, topicAfterLeave.PDU}
+		allowed, skipped := allowedOverlays(state, overlays, overlays, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU, leave.PDU), ids(allowed...))
+		assert.Equal(t, ids(topicAfterLeave.PDU), ids(skipped...))
 	})
 
 	t.Run("the state given is not changed", func(t *testing.T) {

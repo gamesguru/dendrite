@@ -106,3 +106,21 @@ func TestStaleDeviceLists(t *testing.T) {
 		}
 	})
 }
+
+func TestSQLiteDeleteStaleDeviceListsBatches(t *testing.T) {
+	tab, closeDB := mustCreateTable(t, test.DBTypeSQLite)
+	defer closeDB()
+
+	ctx := context.Background()
+	if err := tab.DeleteStaleDeviceLists(ctx, nil, nil); err != nil {
+		t.Fatalf("deleting an empty set of stale device lists failed: %s", err)
+	}
+
+	userIDs := make([]string, 1000)
+	for i := range userIDs {
+		userIDs[i] = "@user:test"
+	}
+	if err := tab.DeleteStaleDeviceLists(ctx, nil, userIDs); err != nil {
+		t.Fatalf("deleting stale device lists in batches failed: %s", err)
+	}
+}
