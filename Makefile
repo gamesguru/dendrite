@@ -32,7 +32,8 @@ COMPLEMENT_CGO ?= 0
 COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
-COMPLEMENT_RESULTS ?= $(CURDIR)/results.json
+COMPLEMENT_RESULTS ?= $(CURDIR)/.complement/results.json
+COMPLEMENT_LOGS ?= $(CURDIR)/.complement/logs.jsonl
 # COMPLEMENT_PACKAGES are the test packages to run. With COMPLEMENT_RUN set they are the
 # ones that define a matching top-level test (the part before the first /), as go test
 # -run matches it, so that the other packages are not compiled and started for nothing.
@@ -138,9 +139,34 @@ complement-build: ## Build the Complement Dendrite image
 complement-run: ## Run Complement, building the image first
 	@test -d $(COMPLEMENT_DIR) || (echo "Complement directory not found at $(COMPLEMENT_DIR). Please clone matrix-org/complement." && exit 1)
 	$(if $(COMPLEMENT_SKIP_BUILD),@echo 'Reusing $(COMPLEMENT_BASE_IMAGE)',$(MAKE) complement-build)
-	cd $(COMPLEMENT_DIR) && set -o pipefail && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-	go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES) | tee "$(COMPLEMENT_RESULTS)"
+	@set -o pipefail; \
+	results="$(abspath $(COMPLEMENT_RESULTS))"; logs="$(abspath $(COMPLEMENT_LOGS))"; \
+	mkdir -p "$$(dirname "$$results")" "$$(dirname "$$logs")" || exit $$?; \
+	run_results=$$(mktemp "$$(dirname "$$results")/.results.XXXXXX") || exit $$?; \
+	run_logs=$$(mktemp "$$(dirname "$$logs")/.logs.XXXXXX") || exit $$?; \
+	merged_results=$$(mktemp "$$(dirname "$$results")/.merged.XXXXXX") || exit $$?; \
+	go_status=0; \
+	(cd $(COMPLEMENT_DIR) && COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
+		go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES)) \
+		| tee "$$run_logs" \
+		| jq -c 'select((.Action == "pass" or .Action == "fail" or .Action == "skip") and .Test != null) | {Action, Test}' > "$$run_results"; \
+	go_status=$$?; \
+	if [ "$(if $(COMPLEMENT_RUN),filtered,full)" = filtered ] && [ -f "$$results" ]; then \
+		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$results" "$$run_results" > "$$merged_results"; \
+	else \
+		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$run_results" > "$$merged_results"; \
+	fi; \
+	result_status=$$?; \
+	if [ $$result_status -eq 0 ]; then mv "$$merged_results" "$$results"; else rm -f "$$merged_results"; fi; \
+	mv "$$run_logs" "$$logs"; \
+	if [ $$result_status -ne 0 ]; then echo "Failed to process Complement results" >&2; exit $$result_status; fi; \
+	failed_records=$$(jq -sc '[.[] | select(.Action == "fail" and (.Test | type == "string"))] | length' "$$run_results"); \
+	failed_leaves=$$(jq -sc '([.[] | select(.Action == "fail" and (.Test | type == "string"))]) as $$f | [$$f[] as $$x | select([$$f[] | select(.Test | startswith($$x.Test + "/"))] | length == 0)] | length' "$$run_results"); \
+	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$run_logs"); \
+	echo "Complement: $$failed_leaves failed leaf tests ($$failed_records failing test records, $$failed_packages failed packages)"; \
+	echo "Results: $$results"; echo "Full log: $$logs"; \
+	rm -f "$$run_results"; \
+	exit $$go_status
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies
