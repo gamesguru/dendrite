@@ -198,6 +198,11 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		err = s.onUnPartialStatedRoom(s.ctx, *output.UnPartialStatedRoom) //nolint:contextcheck
 	case api.OutputTypeRejectedEvents:
 		err = s.onRejectedEvents(s.ctx, *output.RejectedEvents) //nolint:contextcheck
+		if err == nil {
+			// userapi keeps its own per-event notification rows, so it has to
+			// see the rejection too. Publish only after syncapi has committed.
+			err = s.producePushEvent(msg)
+		}
 	default:
 		log.WithField("type", output.Type).Debug(
 			"roomserver output log: ignoring unknown output type",

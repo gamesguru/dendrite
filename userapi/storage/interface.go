@@ -186,6 +186,9 @@ type ExternalID interface {
 
 type Notification interface {
 	InsertNotification(ctx context.Context, localpart string, serverName spec.ServerName, eventID string, pos uint64, tweaks map[string]any, n *api.Notification) error
+	// DeleteNotificationsForEvent removes notifications for one event and returns
+	// the local user IDs that had notifications for it.
+	DeleteNotificationsForEvent(ctx context.Context, roomID, eventID string) ([]string, error)
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
 	StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64) (users []string, err error)
 	SetNotificationsReadForReceipt(ctx context.Context, localpart string, serverName spec.ServerName, roomID, eventID, threadID string) (affected bool, err error)

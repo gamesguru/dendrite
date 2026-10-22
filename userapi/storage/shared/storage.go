@@ -1127,6 +1127,47 @@ func (d *Database) InsertNotification(ctx context.Context, localpart string, ser
 	})
 }
 
+// DeleteNotificationsForEvent removes every local user's notification for one
+// event, along with its receipt bookkeeping, and returns those users so their
+// room counts can be republished to the sync API.
+func (d *Database) DeleteNotificationsForEvent(ctx context.Context, roomID, eventID string) (users []string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		rows, err := txn.QueryContext(ctx, `SELECT DISTINCT localpart, server_name FROM userapi_notifications
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var localpart string
+			var serverName spec.ServerName
+			if err = rows.Scan(&localpart, &serverName); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			users = append(users, "@"+localpart+":"+string(serverName))
+		}
+		if err = rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err = rows.Close(); err != nil {
+			return err
+		}
+		if _, err = txn.ExecContext(ctx, `DELETE FROM userapi_notifications
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID); err != nil {
+			return err
+		}
+		if _, err = txn.ExecContext(ctx, `DELETE FROM userapi_notification_events
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID); err != nil {
+			return err
+		}
+		_, err = txn.ExecContext(ctx, `DELETE FROM userapi_pending_notification_receipts
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		return err
+	})
+	return users, err
+}
+
 func (d *Database) DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		affected, err = d.Notifications.DeleteUpTo(ctx, txn, localpart, serverName, roomID, pos)
