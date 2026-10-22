@@ -439,8 +439,14 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 					}
 				}
 				// Every branch that reaches the join has the same pre-join state.
+				// Refuse to guess if they disagree, so a retry can resolve it.
 				if len(beforeJoin) > 0 {
-					anchorStateIDs = beforeJoin
+					if anchorStateIDs == nil {
+						anchorStateIDs = beforeJoin
+					} else if !sameFrontier(anchorStateIDs, beforeJoin) {
+						fetchErr = fmt.Errorf("forward extremities disagree on the state before the partial state join")
+						break
+					}
 				}
 			}
 			if fetchErr != nil {

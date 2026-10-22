@@ -154,9 +154,18 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	var newlyRejected []string
 	recomputed := false
 	if len(anchorStateIDs) > 0 {
-		recomputed, newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
+		var skipped []string
+		recomputed, skipped, newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
 		if err != nil {
 			return false, nil, err
+		}
+		if len(skipped) > 0 {
+			// Applying the latest states now would use the incomplete state some
+			// events kept. Let the worker retry instead of persisting that.
+			logger.WithField("skipped_events", skipped).Error("Could not recompute the state of every event received during the partial state")
+			return false, nil, fmt.Errorf(
+				"resync could not recompute the state of %d events received during the partial state", len(skipped),
+			)
 		}
 	}
 	var oldStateEntries []types.StateEntry
@@ -216,7 +225,20 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 			}
 			computedFromLatest = true
 		} else {
-			logger.Warn("Not every latest event has a known state after recomputing; falling back to the fetched state")
+			unknown := make([]string, 0, len(expectedLatestEventIDs))
+			for i, state := range latestStates {
+				if i < len(expectedLatestEventIDs) && state.BeforeStateSnapshotNID == 0 {
+					unknown = append(unknown, expectedLatestEventIDs[i])
+				}
+			}
+			if len(latestStates) < len(expectedLatestEventIDs) {
+				unknown = append(unknown, expectedLatestEventIDs[len(latestStates):]...)
+			}
+			logger.WithFields(logrus.Fields{
+				"latest_events":   expectedLatestEventIDs,
+				"unknown_states":  unknown,
+				"computed_length": len(latestStates),
+			}).Error("Not every latest event has a known state after recomputing; falling back to the fetched state")
 		}
 	}
 	if !computedFromLatest {
@@ -226,7 +248,13 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		}
 	}
 
-	logger.WithField("new_state_nid", newStateNID).Debug("Created new state snapshot")
+	logger.WithFields(logrus.Fields{
+		"computed_from_latest":  computedFromLatest,
+		"recomputed_since_join": recomputed,
+		"new_state_nid":         newStateNID,
+		"latest_event_count":    len(expectedLatestEventIDs),
+	}).Info("Created new state snapshot for partial state resync")
+	r.logResyncStateMemberships(ctx, logger, &roomState, roomInfo, newStateNID)
 
 	// Calculate the state delta between old and new snapshots
 	// Note: roomState was already created above for LoadStateAtSnapshot
@@ -375,6 +403,64 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	}).Info("Successfully updated current state after partial state resync")
 
 	return localLeftJoin, roomInfo, nil
+}
+
+// logResyncStateMemberships reports the membership events in the new current
+// state for local users. Together with the membership-row log in updateMemberships
+// it tells a wrong state snapshot apart from a wrong membership table update.
+func (r *Inputer) logResyncStateMemberships(
+	ctx context.Context,
+	logger *logrus.Entry,
+	roomState *state.StateResolution,
+	roomInfo *types.RoomInfo,
+	stateNID types.StateSnapshotNID,
+) {
+	entries, err := roomState.LoadStateAtSnapshot(ctx, stateNID)
+	if err != nil {
+		logger.WithError(err).Warn("Could not load the new state snapshot to log its memberships")
+		return
+	}
+	var members []types.StateEntry
+	var eventNIDs []types.EventNID
+	var stateKeyNIDs []types.EventStateKeyNID
+	for _, entry := range entries {
+		if entry.EventTypeNID != types.MRoomMemberNID {
+			continue
+		}
+		members = append(members, entry)
+		eventNIDs = append(eventNIDs, entry.EventNID)
+		stateKeyNIDs = append(stateKeyNIDs, entry.EventStateKeyNID)
+	}
+	if len(members) == 0 {
+		return
+	}
+	stateKeys, err := r.DB.EventStateKeys(ctx, stateKeyNIDs)
+	if err != nil {
+		logger.WithError(err).Warn("Could not resolve state keys in the new state snapshot")
+		return
+	}
+	events, err := r.DB.Events(ctx, roomInfo.RoomVersion, eventNIDs)
+	if err != nil {
+		logger.WithError(err).Warn("Could not load the membership events in the new state snapshot")
+		return
+	}
+	eventMap := helpers.EventMap(events)
+	for _, entry := range members {
+		ev, ok := eventMap.Lookup(entry.EventNID)
+		if !ok || !r.isLocalTarget(ctx, ev) {
+			continue
+		}
+		membership, membershipErr := ev.Membership()
+		if membershipErr != nil {
+			continue
+		}
+		logger.WithFields(logrus.Fields{
+			"user":       stateKeys[entry.EventStateKeyNID],
+			"event_id":   ev.EventID(),
+			"event_nid":  entry.EventNID,
+			"membership": membership,
+		}).Info("Local membership in the state snapshot after partial state resync")
+	}
 }
 
 func latestEventIDsFromUpdater(latest []types.StateAtEventAndReference) []string {
