@@ -703,7 +703,10 @@ func TestAllowedOverlays(t *testing.T) {
 
 	bobJoin := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
 	topic := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "a topic"}, test.WithStateKey(""))
-	leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID), test.WithPrevEvents(bobJoin.EventID()))
+	leave := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID), test.WithPrevEvents(bobJoin.EventID()))
+	// Built before the leave is inserted, as the room refuses events from a user who has left.
+	topicAfterLeave := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]any{"topic": "after leaving"}, test.WithStateKey(""), test.WithPrevEvents(leave.EventID()))
+	room.InsertEvent(t, leave)
 
 	t.Run("events the state allows are all applied", func(t *testing.T) {
 		allowed, skipped := allowedOverlays(state, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
@@ -714,7 +717,6 @@ func TestAllowedOverlays(t *testing.T) {
 	// The full state shows Alice had already left, though her topic cites her join.
 	left := stateOf(room.Events())
 	delete(left, tupleOf(leave.PDU))
-	topicAfterLeave := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "after leaving"}, test.WithStateKey(""), test.WithPrevEvents(leave.EventID()))
 	t.Run("an event the full state does not allow is left out", func(t *testing.T) {
 		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
 		assert.Equal(t, ids(bobJoin.PDU), ids(allowed...))
