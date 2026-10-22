@@ -44,6 +44,7 @@ COMPLEMENT_OPEN := [(]
 COMPLEMENT_MATCHING = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && grep -rlE '^func [A-Za-z0-9_]*($(COMPLEMENT_TOP))[A-Za-z0-9_]*$(COMPLEMENT_OPEN)' tests --include='*_test.go' | xargs -r -n1 dirname | sort -u | sed 's|^|./|')
 COMPLEMENT_ALL_PACKAGES = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && go list ./tests/... | grep -vE '(^|/)msc(3389|4500)$$')
 COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHING))),$(COMPLEMENT_ALL_PACKAGES))
+COMPLEMENT_PARTIAL_RUN = $(if $(COMPLEMENT_RUN),1,$(if $(filter-out $(COMPLEMENT_ALL_PACKAGES),$(COMPLEMENT_PACKAGES)),1,0))
 # Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
 # COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
 # also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
@@ -148,11 +149,19 @@ complement-run: ## Run Complement, building the image first
 	merged_results=$$(mktemp "$$(dirname "$$results")/.merged.XXXXXX") || exit $$?; \
 	go_status=0; \
 	(cd $(COMPLEMENT_DIR) && COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-		go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES)) \
+		go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES); \
+		test_status=$$?; \
+		if [ "$(COMPLEMENT_PARTIAL_RUN)" = 0 ]; then \
+			COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) -run '^TestMSC3389RedactionStripsRelationInOlderVersions$$' ./tests/msc3389; \
+			target_status=$$?; \
+			if [ $$test_status -ne 0 ]; then exit $$test_status; fi; \
+			exit $$target_status; \
+		fi; \
+		exit $$test_status) \
 		| tee "$$run_logs" \
 		| jq -c 'select((.Action == "pass" or .Action == "fail" or .Action == "skip") and .Test != null) | {Action, Test}' > "$$run_results"; \
 	go_status=$$?; \
-	if [ "$(if $(COMPLEMENT_RUN),filtered,full)" = filtered ] && [ -f "$$results" ]; then \
+	if [ "$(COMPLEMENT_PARTIAL_RUN)" = 1 ] && [ -f "$$results" ]; then \
 		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$results" "$$run_results" > "$$merged_results"; \
 	else \
 		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$run_results" > "$$merged_results"; \
