@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -40,6 +41,10 @@ const redactionsArePermanent = true
 type Database struct {
 	DB *sql.DB
 	EventDatabase
+	// roomNIDCacheLock serializes cache-populating room lookups with cache
+	// invalidation after a room is purged. Without it, a lookup can read the
+	// room before the purge commits, then repopulate its old NID after invalidation.
+	roomNIDCacheLock   sync.RWMutex
 	Cache              caching.RoomServerCaches
 	Writer             sqlutil.Writer
 	RoomsTable         tables.Rooms
@@ -258,6 +263,9 @@ func (d *Database) RoomInfo(ctx context.Context, roomID string) (*types.RoomInfo
 }
 
 func (d *Database) roomInfo(ctx context.Context, txn *sql.Tx, roomID string) (*types.RoomInfo, error) {
+	d.roomNIDCacheLock.RLock()
+	defer d.roomNIDCacheLock.RUnlock()
+
 	roomInfo, err := d.RoomsTable.SelectRoomInfo(ctx, txn, roomID)
 	if err != nil {
 		return nil, err
@@ -896,6 +904,9 @@ func (d *Database) MissingAuthPrevEvents(
 func (d *Database) assignRoomNID(
 	ctx context.Context, txn *sql.Tx, roomID string, roomVersion gomatrixserverlib.RoomVersion,
 ) (types.RoomNID, error) {
+	d.roomNIDCacheLock.RLock()
+	defer d.roomNIDCacheLock.RUnlock()
+
 	roomNID, ok := d.Cache.GetRoomServerRoomNID(roomID)
 	if ok {
 		return roomNID, nil
@@ -1962,6 +1973,11 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	if err != nil {
 		return err
 	}
+	// The transaction is committed before taking the write lock. Cache
+	// populators hold the read lock through their database read and cache store,
+	// so any lookup that saw the pre-purge row finishes before this invalidation.
+	d.roomNIDCacheLock.Lock()
+	defer d.roomNIDCacheLock.Unlock()
 	d.Cache.InvalidateRoom(roomID)
 	return nil
 }
