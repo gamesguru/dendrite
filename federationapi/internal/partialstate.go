@@ -414,22 +414,35 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 	for _, entry := range orderedServers {
 		serverName := entry.name
 		logger := logger.WithField("server", serverName)
-		frontier := latestEventIDs[0]
+		frontier := slices.Clone(latestEventIDs)
 		// The state at the anchor does not change while the events after it do, so a
 		// retry because the room moved on keeps what was fetched for it.
 		anchorStates := map[string][]string{}
 		for attempt := 0; attempt < 4; attempt++ {
-			anchor, found := stateAnchor{}, false
-			if joinEventID != "" {
-				anchor, found = w.findWindowAnchor(ctx, roomID, frontier, joinEventID)
+			anchors := w.findFrontierAnchors(ctx, roomID, frontier, joinEventID, origin)
+			var stateEventIDs, anchorStateIDs []string
+			seenStateIDs := make(map[string]struct{})
+			var fetchErr error
+			for _, anchor := range anchors {
+				ids, beforeJoin, err := w.fetchStateViaAnchor(
+					ctx, logger, origin, serverName, roomID, anchor, joinEventID,
+					roomInfo.RoomVersion, entry.bypassBackoff, orderedServers, anchorStates,
+				)
+				if err != nil {
+					fetchErr = err
+					break
+				}
+				for _, id := range ids {
+					if _, seen := seenStateIDs[id]; !seen {
+						seenStateIDs[id] = struct{}{}
+						stateEventIDs = append(stateEventIDs, id)
+					}
+				}
+				// Every branch that reaches the join has the same pre-join state.
+				if len(beforeJoin) > 0 {
+					anchorStateIDs = beforeJoin
+				}
 			}
-			if !found {
-				anchor = w.findStateAnchor(ctx, roomID, frontier, joinEventID, origin)
-			}
-			stateEventIDs, anchorStateIDs, fetchErr := w.fetchStateViaAnchor(
-				ctx, logger, origin, serverName, roomID, anchor, joinEventID,
-				roomInfo.RoomVersion, entry.bypassBackoff, orderedServers, anchorStates,
-			)
 			if fetchErr != nil {
 				logger.WithError(fetchErr).Warn("Failed to fetch state from server")
 				lastErr = fetchErr
@@ -451,8 +464,8 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 				lastErr = fmt.Errorf("no latest events found for room")
 				break
 			}
-			if current[0] != frontier {
-				frontier = current[0]
+			if !sameFrontier(current, frontier) {
+				frontier = slices.Clone(current)
 				continue
 			}
 			if err = w.applyState(ctx, logger, roomID, roomNID, roomInfo, stateEventIDs, anchorStateIDs, current, resyncStartTime); errors.Is(err, roomserverAPI.ErrResyncFrontierChanged) {
@@ -465,7 +478,7 @@ func (w *PartialStateWorker) processRoom(roomNID types.RoomNID) error {
 					lastErr = fmt.Errorf("no latest events found for room")
 					break
 				}
-				frontier = current[0]
+				frontier = slices.Clone(current)
 				continue
 			} else if err != nil {
 				lastErr = err
@@ -517,6 +530,70 @@ type stateAnchor struct {
 	// chain holds locally stored events, oldest first, whose state changes are
 	// applied on top of the response.
 	chain []gomatrixserverlib.PDU
+}
+
+// findFrontierAnchors returns one anchor per distinct anchor request, covering
+// every forward extremity. Branches that share an anchor request (the usual case:
+// they all lead back to the parent of the partial-state join) have their chains
+// merged and ordered together, so the fetched state includes the events of every
+// branch rather than only the first extremity's.
+func (w *PartialStateWorker) findFrontierAnchors(
+	ctx context.Context, roomID string, frontier []string, joinEventID string, local spec.ServerName,
+) []stateAnchor {
+	type groupKey struct {
+		askID    string
+		applyAsk bool
+	}
+	groups := make(map[groupKey]map[string]gomatrixserverlib.PDU)
+	var order []groupKey
+	for _, latestID := range frontier {
+		anchor, found := stateAnchor{}, false
+		if joinEventID != "" {
+			anchor, found = w.findWindowAnchor(ctx, roomID, latestID, joinEventID)
+		}
+		if !found {
+			anchor = w.findStateAnchor(ctx, roomID, latestID, joinEventID, local)
+		}
+		key := groupKey{askID: anchor.askID, applyAsk: anchor.applyAsk}
+		events, ok := groups[key]
+		if !ok {
+			events = make(map[string]gomatrixserverlib.PDU)
+			groups[key] = events
+			order = append(order, key)
+		}
+		for _, ev := range anchor.chain {
+			events[ev.EventID()] = ev
+		}
+	}
+
+	anchors := make([]stateAnchor, 0, len(order))
+	for _, key := range order {
+		anchors = append(anchors, stateAnchor{
+			askID:    key.askID,
+			applyAsk: key.applyAsk,
+			chain:    orderByPrevEvents(groups[key]),
+		})
+	}
+	return anchors
+}
+
+// sameFrontier reports whether two sets of latest event IDs are equal, regardless
+// of the order the roomserver returned them in.
+func sameFrontier(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, id := range a {
+		seen[id]++
+	}
+	for _, id := range b {
+		if seen[id] == 0 {
+			return false
+		}
+		seen[id]--
+	}
+	return true
 }
 
 // findStateAnchor follows single-parent links back from latestID until it reaches

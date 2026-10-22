@@ -298,19 +298,19 @@ func (r *Inputer) recomputeStateSinceJoin(
 	roomState *state.StateResolution,
 	roomInfo *types.RoomInfo,
 	anchorStateIDs []string,
-) (newlyRejected []string, err error) {
+) (done bool, newlyRejected []string, err error) {
 	logger := logrus.WithField("room_nid", roomInfo.RoomNID)
 	joinEventID, err := r.DB.GetPartialStateJoinEventID(ctx, roomInfo.RoomNID)
 	if err != nil {
-		return nil, fmt.Errorf("r.DB.GetPartialStateJoinEventID: %w", err)
+		return false, nil, fmt.Errorf("r.DB.GetPartialStateJoinEventID: %w", err)
 	}
 	if joinEventID == "" {
 		logger.Debug("No partial state join on record, keeping the state of the events received since")
-		return nil, nil
+		return false, nil, nil
 	}
 	anchorEntries, err := r.DB.StateEntriesForEventIDs(ctx, anchorStateIDs, true)
 	if err != nil {
-		return nil, fmt.Errorf("r.DB.StateEntriesForEventIDs (anchor): %w", err)
+		return false, nil, fmt.Errorf("r.DB.StateEntriesForEventIDs (anchor): %w", err)
 	}
 	anchorEntries = types.DeduplicateStateEntries(anchorEntries)
 	latest := make([]string, 0, len(updater.LatestEvents()))
@@ -319,10 +319,10 @@ func (r *Inputer) recomputeStateSinceJoin(
 	}
 	done, rejected, err := r.recomputeWindowState(ctx, updater, roomState, roomInfo, joinEventID, anchorEntries, latest)
 	if err != nil {
-		return nil, fmt.Errorf("r.recomputeWindowState: %w", err)
+		return false, nil, fmt.Errorf("r.recomputeWindowState: %w", err)
 	}
 	if !done {
 		logger.Warn("The latest events do not lead back to the partial state join, keeping their stored state")
 	}
-	return rejected, nil
+	return done, rejected, nil
 }

@@ -152,8 +152,9 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
 	var newlyRejected []string
+	recomputed := false
 	if len(anchorStateIDs) > 0 {
-		newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
+		recomputed, newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
 		if err != nil {
 			return false, nil, err
 		}
@@ -199,9 +200,30 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 
 	// Create a new state snapshot from the merged state entries
 	var newStateNID types.StateSnapshotNID
-	newStateNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, stateEntries)
-	if err != nil {
-		return false, nil, fmt.Errorf("updater.AddState: %w", err)
+	computedFromLatest := false
+	if recomputed {
+		// recomputeStateSinceJoin gave every latest event the state it would have
+		// with the full room state, so resolving across all forward extremities
+		// gives the room's current state without losing a branch.
+		latestStates, stateErr := updater.StateAtEventIDs(ctx, expectedLatestEventIDs)
+		if stateErr != nil {
+			return false, nil, fmt.Errorf("updater.StateAtEventIDs: %w", stateErr)
+		}
+		if len(latestStates) == len(expectedLatestEventIDs) && !hasUnknownState(latestStates) {
+			newStateNID, err = roomState.CalculateAndStoreStateAfterEvents(ctx, latestStates)
+			if err != nil {
+				return false, nil, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", err)
+			}
+			computedFromLatest = true
+		} else {
+			logger.Warn("Not every latest event has a known state after recomputing; falling back to the fetched state")
+		}
+	}
+	if !computedFromLatest {
+		newStateNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, stateEntries)
+		if err != nil {
+			return false, nil, fmt.Errorf("updater.AddState: %w", err)
+		}
 	}
 
 	logger.WithField("new_state_nid", newStateNID).Debug("Created new state snapshot")

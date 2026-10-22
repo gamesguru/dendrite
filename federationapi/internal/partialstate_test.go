@@ -27,6 +27,27 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
+// TestSameFrontier checks that retries compare the whole set of forward
+// extremities, not just the first one.
+func TestSameFrontier(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+		want bool
+	}{
+		{name: "same frontier", a: []string{"$a", "$b"}, b: []string{"$a", "$b"}, want: true},
+		{name: "order does not matter", a: []string{"$a", "$b"}, b: []string{"$b", "$a"}, want: true},
+		{name: "a later extremity appears", a: []string{"$a"}, b: []string{"$a", "$b"}, want: false},
+		{name: "a later extremity changes", a: []string{"$a", "$b"}, b: []string{"$a", "$c"}, want: false},
+		{name: "an extremity disappears", a: []string{"$a", "$b"}, b: []string{"$a"}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sameFrontier(tc.a, tc.b), "sameFrontier(%v, %v)", tc.a, tc.b)
+		})
+	}
+}
+
 // TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing.
 func TestPartialStateWorkerQueueRoom(t *testing.T) {
 	processCtx := process.NewProcessContext()

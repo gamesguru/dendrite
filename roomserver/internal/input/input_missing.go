@@ -115,6 +115,11 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 			}
 		}
 	}
+	// The injected events may have provided the state before e. If they did not,
+	// the gap is still not filled for our purposes.
+	if !t.isPrevStateKnown(ctx, e) {
+		return errGapNotFilled
+	}
 	return nil
 }
 

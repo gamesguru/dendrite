@@ -34,10 +34,15 @@ indent_size = 4
 tab_width = 4
 max_line_length = 98
 
-[[bash]]
+[*.go]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
+[*.{sh,bash}]
 indent_style = tab
 
-[*.yml]
+[*.{yml,yaml}]
 indent_size = 2
 indent_style = space
 
@@ -47,9 +52,6 @@ indent_style = space
 
 [Makefile]
 indent_style = tab
-
-[[bash]]
-indent_style=tab
 
 [*.git*]
 indent_style = tab

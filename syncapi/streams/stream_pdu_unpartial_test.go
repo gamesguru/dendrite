@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,17 @@ func (s unPartialSnapshot) MaxStreamPositionForRelations(context.Context) (types
 	return 0, nil
 }
 
+// unPartialMembershipSnapshot serves a fixed full delta for the room, to check
+// which delta addUnPartialStatedRooms keeps.
+type unPartialMembershipSnapshot struct {
+	unPartialSnapshot
+	full types.StateDelta
+}
+
+func (s unPartialMembershipSnapshot) FullStateDeltas(context.Context, *userapi.Device, []string, *synctypes.StateFilter, roomserverAPI.SyncRoomserverAPI) ([]types.StateDelta, error) {
+	return []types.StateDelta{s.full}, nil
+}
+
 func newUnPartialRequest(t *testing.T, userID string, lazyLoad bool) *types.SyncRequest {
 	filter := synctypes.DefaultFilter()
 	filter.Room.State.LazyLoadMembers = lazyLoad
@@ -104,4 +116,67 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 		provider.IncrementalSync(t.Context(), snapshot, req, 10, 20)
 		assert.NotContains(t, req.Response.Rooms.Join, room.ID, "it saw the room during the resync")
 	})
+}
+
+// TestAddUnPartialStatedRoomsKeepsMembershipChanges checks that the whole-state
+// delta added when a resync finishes does not replace a leave or ban the range
+// already carries, nor mark that room as joined.
+func TestAddUnPartialStatedRoomsKeepsMembershipChanges(t *testing.T) {
+	const roomID = "!room:example.com"
+	full := types.StateDelta{RoomID: roomID, Membership: spec.Join, NewlyJoined: true}
+
+	tests := []struct {
+		name        string
+		existing    []types.StateDelta
+		wantMembers string
+		wantFull    bool
+		wantJoined  bool
+	}{
+		{
+			name:        "no existing delta is replaced by the full state",
+			wantMembers: spec.Join,
+			wantFull:    true,
+			wantJoined:  true,
+		},
+		{
+			name:        "an existing join delta is replaced by the full state",
+			existing:    []types.StateDelta{{RoomID: roomID, Membership: spec.Join}},
+			wantMembers: spec.Join,
+			wantFull:    true,
+			wantJoined:  true,
+		},
+		{
+			name:        "a leave delta is kept",
+			existing:    []types.StateDelta{{RoomID: roomID, Membership: spec.Leave}},
+			wantMembers: spec.Leave,
+		},
+		{
+			name:        "a ban delta is kept",
+			existing:    []types.StateDelta{{RoomID: roomID, Membership: spec.Ban}},
+			wantMembers: spec.Ban,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := unPartialMembershipSnapshot{
+				unPartialSnapshot: unPartialSnapshot{
+					failoverSnapshot: failoverSnapshot{roomID: roomID},
+				},
+				full: full,
+			}
+			req := newUnPartialRequest(t, "@alice:example.com", false)
+			provider := &PDUStreamProvider{}
+
+			merged, joined, err := provider.addUnPartialStatedRooms(
+				t.Context(), snapshot, req, types.Range{From: 10, To: 20},
+				&synctypes.StateFilter{}, tc.existing, nil,
+			)
+			require.NoError(t, err)
+			require.Len(t, merged, 1)
+			assert.Equal(t, tc.wantMembers, merged[0].Membership)
+			assert.Equal(t, tc.wantFull, merged[0].NewlyJoined, "whether the full-state delta was used")
+			assert.Equal(t, tc.wantJoined, len(joined) == 1, "whether the room is marked joined")
+		})
+	}
 }
