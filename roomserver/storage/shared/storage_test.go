@@ -3,6 +3,8 @@ package shared_test
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 	var stateKeyTable tables.EventStateKeys
 	var userRoomKeys tables.UserRoomKeys
 	var roomsTable tables.Rooms
+	var partialStateTable tables.PartialState
 	switch dbType {
 	case test.DBTypePostgres:
 		err = postgres.CreateRoomsTable(db)
@@ -42,6 +45,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		err = postgres.CreateEventStateKeysTable(db)
 		assert.NoError(t, err)
 		err = postgres.CreateMembershipTable(db)
+		assert.NoError(t, err)
+		err = postgres.CreatePartialStateTable(db)
 		assert.NoError(t, err)
 		err = postgres.CreateUserRoomKeysTable(db)
 		assert.NoError(t, err)
@@ -51,6 +56,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		assert.NoError(t, err)
 		stateKeyTable, err = postgres.PrepareEventStateKeysTable(db)
 		assert.NoError(t, err)
+		partialStateTable, err = postgres.PreparePartialStateTable(db)
+		assert.NoError(t, err)
 		userRoomKeys, err = postgres.PrepareUserRoomKeysTable(db)
 	case test.DBTypeSQLite:
 		err = sqlite3.CreateRoomsTable(db)
@@ -59,6 +66,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		assert.NoError(t, err)
 		err = sqlite3.CreateMembershipTable(db)
 		assert.NoError(t, err)
+		err = sqlite3.CreatePartialStateTable(db)
+		assert.NoError(t, err)
 		err = sqlite3.CreateUserRoomKeysTable(db)
 		assert.NoError(t, err)
 		roomsTable, err = sqlite3.PrepareRoomsTable(db)
@@ -66,6 +75,8 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 		membershipTable, err = sqlite3.PrepareMembershipTable(db)
 		assert.NoError(t, err)
 		stateKeyTable, err = sqlite3.PrepareEventStateKeysTable(db)
+		assert.NoError(t, err)
+		partialStateTable, err = sqlite3.PreparePartialStateTable(db)
 		assert.NoError(t, err)
 		userRoomKeys, err = sqlite3.PrepareUserRoomKeysTable(db)
 	}
@@ -76,13 +87,14 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 	evDb := shared.EventDatabase{EventStateKeysTable: stateKeyTable, Cache: cache, Writer: writer}
 
 	database := &shared.Database{
-		DB:               db,
-		EventDatabase:    evDb,
-		MembershipTable:  membershipTable,
-		UserRoomKeyTable: userRoomKeys,
-		RoomsTable:       roomsTable,
-		Writer:           writer,
-		Cache:            cache,
+		DB:                db,
+		EventDatabase:     evDb,
+		MembershipTable:   membershipTable,
+		UserRoomKeyTable:  userRoomKeys,
+		RoomsTable:        roomsTable,
+		PartialStateTable: partialStateTable,
+		Writer:            writer,
+		Cache:             cache,
 	}
 	return database, func() {
 		clearDB()
@@ -121,6 +133,76 @@ func Test_GetLeftUsers(t *testing.T) {
 		leftUsers, err := db.GetLeftUsers(context.Background(), []string{alice.ID, bob.ID, charlie.ID}) //nolint:contextcheck
 		assert.NoError(t, err)
 		assert.ElementsMatch(t, expectedUserIDs, leftUsers)
+	})
+}
+
+func TestGetOrCreateRoomInfoWithPartiallyPopulatedCache(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice, test.RoomVersion(gomatrixserverlib.RoomVersionV9))
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		_, err := db.RoomsTable.InsertRoomNID(ctx, nil, room.ID, room.Version)
+		assert.NoError(t, err)
+		db.Cache.StoreRoomVersion(room.ID, room.Version)
+		assert.Eventually(t, func() bool {
+			version, ok := db.Cache.GetRoomVersion(room.ID)
+			return ok && version == room.Version
+		}, time.Second, time.Millisecond)
+
+		event := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hello"})
+		info, err := db.GetOrCreateRoomInfo(ctx, event.PDU)
+		assert.NoError(t, err)
+		if assert.NotNil(t, info) {
+			assert.Equal(t, room.Version, info.RoomVersion)
+		}
+	})
+}
+
+func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		join := func(roomNID types.RoomNID, userID string, local bool, eventNID types.EventNID, membership tables.MembershipState) {
+			// A user who is in several rooms already has a state key NID.
+			nid, err := db.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, userID)
+			if errors.Is(err, sql.ErrNoRows) {
+				nid, err = db.EventStateKeysTable.InsertEventStateKeyNID(ctx, nil, userID)
+			}
+			assert.NoError(t, err)
+			assert.NoError(t, db.MembershipTable.InsertMembership(ctx, nil, roomNID, nid, local))
+			_, err = db.MembershipTable.UpdateMembership(ctx, nil, roomNID, nid, nid, membership, eventNID, false)
+			assert.NoError(t, err)
+		}
+		const joined = tables.MembershipStateJoin
+
+		// Room 1: a local user and remote users, one of whom has left.
+		join(1, "@local:localhost", true, 1, joined)
+		join(1, "@shared:remote", false, 2, joined)
+		join(1, "@left:remote", false, 3, tables.MembershipStateLeaveOrBan)
+		// Room 2: remote users only.
+		join(2, "@alone:remote", false, 4, joined)
+		// Room 3: the local user has left, the remote user is still joined.
+		join(3, "@local:localhost", true, 5, tables.MembershipStateLeaveOrBan)
+		join(3, "@abandoned:remote", false, 6, joined)
+		// Room 4: partial state, our join is event 10. Only members joining after it count.
+		assert.NoError(t, db.PartialStateTable.InsertPartialStateRoom(ctx, nil, 4, 10, "remote", nil, 0))
+		join(4, "@local:localhost", true, 10, joined)
+		join(4, "@preexisting:remote", false, 7, joined)
+		join(4, "@newcomer:remote", false, 20, joined)
+
+		users := []string{
+			"@local:localhost", "@shared:remote", "@left:remote", "@alone:remote",
+			"@abandoned:remote", "@preexisting:remote", "@newcomer:remote", "@unknown:remote",
+		}
+		got, err := db.GetUsersSharingRoomWithLocal(context.Background(), users) //nolint:contextcheck
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"@local:localhost", "@shared:remote", "@newcomer:remote"}, got)
 	})
 }
 

@@ -74,6 +74,21 @@ func TestStaleDeviceLists(t *testing.T) {
 			t.Fatalf("expected stale users %v, got %v", wantStaleUsers, gotStaleUsers)
 		}
 
+		// Only users whose list is marked as not stale are fresh
+		if err = tab.InsertStaleDeviceList(ctx, bob.ID, false); err != nil {
+			t.Fatalf("failed to insert fresh device list: %s", err)
+		}
+		gotFreshUsers, err := tab.SelectUserIDsWithFreshDeviceLists(ctx, []string{alice.ID, bob.ID, "@unknown:test"})
+		if err != nil {
+			t.Fatalf("failed to query fresh device lists: %s", err)
+		}
+		if wantFreshUsers := []string{bob.ID}; !test.UnsortedStringSliceEqual(wantFreshUsers, gotFreshUsers) {
+			t.Fatalf("expected fresh users %v, got %v", wantFreshUsers, gotFreshUsers)
+		}
+		if err = tab.InsertStaleDeviceList(ctx, bob.ID, true); err != nil {
+			t.Fatalf("failed to insert stale device: %s", err)
+		}
+
 		// Delete stale devices
 		deleteUsers := []string{alice.ID, bob.ID}
 		if err = tab.DeleteStaleDeviceLists(ctx, nil, deleteUsers); err != nil {
@@ -90,4 +105,22 @@ func TestStaleDeviceLists(t *testing.T) {
 			t.Fatalf("expected no stale users, got %d", gotCount)
 		}
 	})
+}
+
+func TestSQLiteDeleteStaleDeviceListsBatches(t *testing.T) {
+	tab, closeDB := mustCreateTable(t, test.DBTypeSQLite)
+	defer closeDB()
+
+	ctx := context.Background()
+	if err := tab.DeleteStaleDeviceLists(ctx, nil, nil); err != nil {
+		t.Fatalf("deleting an empty set of stale device lists failed: %s", err)
+	}
+
+	userIDs := make([]string, 1000)
+	for i := range userIDs {
+		userIDs[i] = "@user:test"
+	}
+	if err := tab.DeleteStaleDeviceLists(ctx, nil, userIDs); err != nil {
+		t.Fatalf("deleting stale device lists in batches failed: %s", err)
+	}
 }

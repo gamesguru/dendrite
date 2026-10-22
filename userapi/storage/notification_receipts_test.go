@@ -148,6 +148,56 @@ func TestNotificationReceiptConcurrentEvent(t *testing.T) {
 	})
 }
 
+func TestDeleteNotificationsForEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, backend)
+		defer cleanup()
+		insert := func(localpart, roomID, eventID string, pos int, highlight bool) {
+			require.NoError(t, db.InsertNotification(ctx, localpart, "localhost", eventID, uint64(pos), map[string]any{"highlight": highlight}, &api.Notification{RoomID: roomID, Event: synctypes.ClientEvent{Content: []byte(`{}`)}}))
+		}
+		insert("alice", "!room:test", "$rejected", 1, true)
+		insert("bob", "!room:test", "$rejected", 1, false)
+		insert("alice", "!room:test", "$kept", 2, false)
+		insert("alice", "!other:test", "$rejected", 1, true)
+		_, err := db.StoreNotificationEvent(ctx, "!room:test", "$rejected", "$thread", 1)
+		require.NoError(t, err)
+		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$kept", "main", 2)
+		require.NoError(t, err)
+
+		users, err := db.DeleteNotificationsForEvent(ctx, "!room:test", "$rejected")
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"@alice:localhost", "@bob:localhost"}, users)
+		pending, err := db.PendingNotificationRefreshes(ctx, "!room:test")
+		require.NoError(t, err)
+		require.ElementsMatch(t, users, pending)
+		require.NoError(t, db.CompleteNotificationRefresh(ctx, "!room:test", "@alice:localhost"))
+		pending, err = db.PendingNotificationRefreshes(ctx, "!room:test")
+		require.NoError(t, err)
+		require.Equal(t, []string{"@bob:localhost"}, pending)
+
+		total, highlights, err := db.GetRoomNotificationCounts(ctx, "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Equal(t, int64(1), total)
+		require.Zero(t, highlights)
+		counts, err := db.GetRoomThreadNotificationCounts(ctx, "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Equal(t, map[string]eventutil.ThreadNotificationCounts{
+			"main": {UnreadNotificationCount: 1},
+		}, counts)
+
+		total, highlights, err = db.GetRoomNotificationCounts(ctx, "bob", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Zero(t, total)
+		require.Zero(t, highlights)
+
+		// The same event ID in another room is unaffected.
+		total, highlights, err = db.GetRoomNotificationCounts(ctx, "alice", "localhost", "!other:test")
+		require.NoError(t, err)
+		require.Equal(t, int64(1), total)
+		require.Equal(t, int64(1), highlights)
+	})
+}
+
 func TestRoomThreadNotificationCounts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
 		db, cleanup := mustCreateUserDatabase(t, backend)

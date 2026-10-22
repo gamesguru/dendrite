@@ -127,6 +127,15 @@ func (r *FederationInternalAPI) PerformJoin(
 	)
 }
 
+// performJoinUsingServer joins the user to the room through serverName, updates
+// joined hosts, and submits the returned state and join event to the roomserver.
+// A known pending invite requests full state immediately; other joins request
+// partial state first and may retry with full state after an authorization failure.
+// Successfully recorded partial state is queued for resync if a worker is available.
+// It returns errors for invalid IDs, unavailable direct federation, failed joins
+// or missing join responses, joined-host derivation, database updates, and
+// roomserver submission. Invite lookup and partial-state tracking failures do not
+// fail the join.
 func (r *FederationInternalAPI) performJoinUsingServer(
 	ctx context.Context,
 	roomID, userID string,
@@ -195,7 +204,33 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	// Use partial state join client for MSC3706 faster joins
 	performJoinStartTime := time.Now()
 	partialStateClient := &PartialStateJoinClient{FederationInternalAPI: r}
-	response, joinErr := gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	var response *gomatrixserverlib.PerformJoinResponse
+	var joinErr *gomatrixserverlib.FederationError
+	invitePending, inviteErr := r.invitePending(ctx, room, user)
+	if inviteErr != nil {
+		// An unknown invite state must use full state: partial state omits the
+		// membership needed to authorize an invited join.
+		logrus.WithError(inviteErr).WithField("room_id", roomID).Warn("Failed to check pending invite; using full state for join")
+	}
+	if invitePending || inviteErr != nil {
+		// A partial state response omits our own invite membership, which
+		// the join's auth check needs, and retrying after it is rejected would
+		// send a second join. Ask for the full state from the start.
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
+	} else {
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
+	}
+	if shouldRetryJoinWithoutPartialState(partialStateClient, joinErr) {
+		// With omit_members=true the state lacks our own invite membership, so
+		// the state-only auth check treats us as having left and rejects the join
+		// of an invite-only room. Retry with the full state, which includes it.
+		logrus.WithError(joinErr.Err).WithField("room_id", roomID).Warn(
+			"Partial state join failed the auth check, retrying with full state")
+		// The full-state response is not partial; drop the first attempt's flags
+		// so we neither mark the room partial nor queue a pointless resync.
+		partialStateClient.resetPartialState()
+		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
+	}
 	performJoinDuration := time.Since(performJoinStartTime)
 
 	if joinErr != nil {
@@ -255,6 +290,38 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		"update_room_ms": time.Since(updateRoomStartTime).Milliseconds(),
 	}).Debug("UpdateRoom completed")
 
+	// A partial-state response may omit local members, including a user who was
+	// already in the room before this join. Keep the local member events that
+	// the response does not mention, so this join does not drop them from the
+	// current state.
+	var extraStateEventIDs []string
+	if isPartialState {
+		remoteMemberKeys := make(map[string]bool)
+		for _, ev := range response.StateSnapshot.GetStateEvents().UntrustedEvents(response.JoinEvent.Version()) {
+			if ev.Type() == spec.MRoomMember && ev.StateKey() != nil {
+				remoteMemberKeys[*ev.StateKey()] = true
+			}
+		}
+		for _, ev := range response.StateSnapshot.GetAuthEvents().UntrustedEvents(response.JoinEvent.Version()) {
+			if ev.Type() == spec.MRoomMember && ev.StateKey() != nil {
+				remoteMemberKeys[*ev.StateKey()] = true
+			}
+		}
+		var members roomserverAPI.QueryMembershipsForRoomResponse
+		if err = r.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+			RoomID: roomID, JoinedOnly: true, LocalOnly: true,
+		}, &members); err != nil {
+			traceLogger.WithError(err).Warn("Failed to query local members before a partial-state join")
+		} else {
+			for _, ev := range members.JoinEvents {
+				if ev.StateKey == nil || ev.EventID == "" || remoteMemberKeys[*ev.StateKey] {
+					continue
+				}
+				extraStateEventIDs = append(extraStateEventIDs, ev.EventID)
+			}
+		}
+	}
+
 	// TODO: Can I change this to not take respState but instead just take an opaque list of events?
 	sendEventStartTime := time.Now()
 	if err = roomserverAPI.SendEventWithState( //nolint:contextcheck
@@ -267,6 +334,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		serverName,
 		nil,
 		false,
+		extraStateEventIDs...,
 	); err != nil {
 		return fmt.Errorf("roomserverAPI.SendEventWithState: %w", err)
 	}
@@ -281,11 +349,10 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		if err != nil {
 			logrus.WithError(err).WithField("room_id", roomID).Error("Failed to get room NID for partial state tracking")
 		} else {
-			// We don't have the join event NID here, so pass 0 for now
-			// The resync worker will handle this properly
+			// The join event is recorded so the resync can anchor on its parent.
 			// Pass 0 for deviceListStreamID for now - this will be populated when we have
 			// access to the userapi to get the current device list stream position
-			if err := r.rsAPI.SetRoomPartialState(ctx, roomNID, 0, string(serverName), serversInRoom, 0); err != nil {
+			if err := r.rsAPI.SetRoomPartialState(ctx, roomNID, response.JoinEvent.EventID(), string(serverName), serversInRoom, 0); err != nil {
 				logrus.WithError(err).WithField("room_id", roomID).Error("Failed to store partial state info")
 			} else {
 				traceLogger.WithFields(logrus.Fields{
@@ -310,6 +377,27 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	}).Debug("Federation join completed")
 
 	return nil
+}
+
+// invitePending reports whether the user has a pending invite to the room.
+func (r *FederationInternalAPI) invitePending(ctx context.Context, room *spec.RoomID, user *spec.UserID) (bool, error) {
+	senderID, err := r.rsAPI.QuerySenderIDForUser(ctx, *room, *user)
+	if err != nil {
+		return false, err
+	}
+	if senderID == nil {
+		return false, nil
+	}
+	pending, err := r.rsAPI.InvitePending(ctx, *room, *senderID)
+	return pending, err
+}
+
+func shouldRetryJoinWithoutPartialState(client *PartialStateJoinClient, joinErr *gomatrixserverlib.FederationError) bool {
+	if client == nil || !client.LastJoinMembersOmitted || joinErr == nil || !joinErr.Reachable || joinErr.Transient {
+		return false
+	}
+	var notAllowed *gomatrixserverlib.NotAllowed
+	return errors.As(joinErr.Err, &notAllowed)
 }
 
 // PerformOutboundPeekRequest implements api.FederationInternalAPI.

@@ -9,6 +9,7 @@ package consumers
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -139,6 +140,20 @@ func (t *KeyChangeConsumer) onDeviceKeyMessage(m api.DeviceMessage) bool {
 		return false
 	}
 
+	// While a room has partial state its joined hosts are only some of the servers in
+	// it, so the servers the resident server reported are sent the update too.
+	extra, err := t.partialStateServers(roomIDs)
+	if err != nil {
+		sentry.CaptureException(err)
+		logger.WithError(err).Error("failed to look up the servers of rooms with partial state")
+		return false
+	}
+	for _, server := range extra {
+		if !slices.Contains(destinations, server) && !t.isLocalServerName(server) {
+			destinations = append(destinations, server)
+		}
+	}
+
 	if len(destinations) == 0 {
 		return true
 	}
@@ -165,6 +180,36 @@ func (t *KeyChangeConsumer) onDeviceKeyMessage(m api.DeviceMessage) bool {
 	logger.Debugf("Sending device list update message to %q", destinations)
 	err = t.queues.SendEDU(edu, originServerName, destinations)
 	return err == nil
+}
+
+// partialStateServers returns the servers known to be in those of the rooms whose
+// state is still partial.
+func (t *KeyChangeConsumer) partialStateServers(roomIDs []spec.RoomID) ([]spec.ServerName, error) {
+	var servers []spec.ServerName
+	for _, roomID := range roomIDs {
+		roomInfo, err := t.rsAPI.QueryRoomInfo(t.ctx, roomID)
+		if err != nil {
+			return nil, err
+		}
+		if roomInfo == nil {
+			continue
+		}
+		partial, err := t.rsAPI.IsRoomPartialState(t.ctx, roomInfo.RoomNID)
+		if err != nil {
+			return nil, err
+		}
+		if !partial {
+			continue
+		}
+		known, err := t.rsAPI.GetPartialStateServers(t.ctx, roomInfo.RoomNID)
+		if err != nil {
+			return nil, err
+		}
+		for _, server := range known {
+			servers = append(servers, spec.ServerName(server))
+		}
+	}
+	return servers, nil
 }
 
 func (t *KeyChangeConsumer) onCrossSigningMessage(m api.DeviceMessage) bool {

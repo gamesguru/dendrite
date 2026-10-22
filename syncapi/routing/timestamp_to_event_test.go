@@ -46,6 +46,15 @@ func (s *timestampRoomserver) QuerySenderIDForUser(_ context.Context, _ spec.Roo
 	return &sender, nil
 }
 
+func (s *timestampRoomserver) QueryMembershipForUser(_ context.Context, req *api.QueryMembershipForUserRequest, res *api.QueryMembershipForUserResponse) error {
+	res.RoomExists = req.RoomID != "!unknown:example.com"
+	res.Membership = spec.Leave
+	if req.UserID.String() == s.userID {
+		res.Membership = spec.Join
+	}
+	return nil
+}
+
 func (s *timestampRoomserver) QueryMembershipAtEvent(_ context.Context, _ spec.RoomID, eventIDs []string, _ spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
 	result := make(map[string]*rstypes.HeaderedEvent)
 	for _, id := range eventIDs {
@@ -97,7 +106,7 @@ func TestTimestampToEvent(t *testing.T) {
 		earlier := write(room, 1000, true, true, gomatrixserverlib.HistoryVisibilityJoined)
 		write(room, 2000, false, false, gomatrixserverlib.HistoryVisibilityJoined)
 		publicRoom := test.NewRoom(t, alice)
-		public := write(publicRoom, 2000, false, false, gomatrixserverlib.HistoryVisibilityWorldReadable)
+		write(publicRoom, 2000, false, false, gomatrixserverlib.HistoryVisibilityWorldReadable)
 
 		// Simulate upgrading a database whose event rows predate the timestamp index.
 		_, err = sqlDB.ExecContext(t.Context(), "DROP INDEX syncapi_output_room_events_timestamp_idx")
@@ -127,8 +136,9 @@ func TestTimestampToEvent(t *testing.T) {
 			{name: "no forward result", query: "ts=3001&dir=f", status: http.StatusNotFound},
 			{name: "no backward result", query: "ts=999&dir=b", status: http.StatusNotFound},
 			{name: "unknown room", query: "ts=0&dir=f", roomID: "!unknown:example.com", status: http.StatusNotFound},
-			{name: "inaccessible", query: "ts=0&dir=f", userID: bob.ID, status: http.StatusNotFound},
-			{name: "world readable", query: "ts=0&dir=f", roomID: publicRoom.ID, userID: bob.ID, want: public},
+			{name: "inaccessible", query: "ts=0&dir=f", userID: bob.ID, status: http.StatusForbidden},
+			// Membership is required even when the room is world-readable.
+			{name: "world readable but not joined", query: "ts=0&dir=f", roomID: publicRoom.ID, userID: bob.ID, status: http.StatusForbidden},
 			{name: "invalid room", query: "ts=0&dir=f", roomID: "invalid", status: http.StatusBadRequest},
 		}
 		for _, query := range []string{"dir=f", "ts=1000", "ts=&dir=f", "ts=x&dir=f", "ts=1.5&dir=f", "ts=9223372036854775808&dir=f", "ts=0&dir=", "ts=0&dir=x", "ts=0&dir=forward", "ts=0&ts=1&dir=f", "ts=0&dir=b&dir=f"} {
@@ -362,7 +372,7 @@ func TestTimestampToEventRemote(t *testing.T) {
 			stranger := userapi.Device{UserID: test.NewUser(t).ID, ID: "device"}
 			req := httptest.NewRequest(http.MethodGet, "/?ts=1900&dir=f", nil)
 			res := TimestampToEvent(req, &stranger, room.ID, db, rs, cfg, federation)
-			require.Equal(t, http.StatusNotFound, res.Code)
+			require.Equal(t, http.StatusForbidden, res.Code)
 			require.Empty(t, federation.requests)
 		})
 		t.Run("an exact local match asks no server", func(t *testing.T) {

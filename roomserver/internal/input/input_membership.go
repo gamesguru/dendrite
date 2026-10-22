@@ -57,6 +57,15 @@ func (r *Inputer) updateMemberships(
 		return nil, false, err
 	}
 
+	stateKeyNIDs := make([]types.EventStateKeyNID, 0, len(changes))
+	for _, change := range changes {
+		stateKeyNIDs = append(stateKeyNIDs, change.EventStateKeyNID)
+	}
+	stateKeys, keyErr := r.DB.EventStateKeys(ctx, stateKeyNIDs)
+	if keyErr != nil {
+		logrus.WithError(keyErr).Debug("Failed to resolve membership state keys for logging")
+	}
+
 	var updates []api.OutputEvent
 	localLeftJoin := false
 
@@ -76,6 +85,38 @@ func (r *Inputer) updateMemberships(
 		if !localLeftJoin && r.isLocalLeavingJoin(ctx, re, ae) {
 			localLeftJoin = true
 		}
+
+		// Log the row this change leaves behind, so a resync that keeps a user
+		// joined can be traced to either the state snapshot or this update.
+		resultEventID, resultMembership := "", "deleted"
+		if ae != nil {
+			resultEventID = ae.EventID()
+			resultMembership = string(spec.Leave)
+			if membership, mErr := ae.Membership(); mErr == nil {
+				resultMembership = membership
+			}
+		}
+		removedEventID := ""
+		if re != nil {
+			removedEventID = re.EventID()
+		}
+		logEntry := logrus.WithFields(logrus.Fields{
+			"target_user":       stateKeys[targetUserNID],
+			"target_user_nid":   targetUserNID,
+			"removed_event_id":  removedEventID,
+			"result_event_id":   resultEventID,
+			"result_membership": resultMembership,
+			"local_left_join":   localLeftJoin,
+		})
+		level := logrus.DebugLevel
+		localTarget := ae != nil && r.isLocalTarget(ctx, ae)
+		if !localTarget && re != nil {
+			localTarget = r.isLocalTarget(ctx, re)
+		}
+		if localTarget {
+			level = logrus.InfoLevel
+		}
+		logEntry.Log(level, "Updated membership row after room state change")
 	}
 
 	return updates, localLeftJoin, nil

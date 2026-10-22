@@ -393,7 +393,12 @@ func configureStream(process *process.ProcessContext, cfg *config.JetStream, js 
 		return fmt.Errorf("stream %s did not establish requested storage and replication", desired.Name)
 	}
 	if ha {
-		return waitForReplicas(process.Context(), js, desired.Name, desired.Replicas, *establishReplication)
+		if err = waitForReplicas(process.Context(), js, desired.Name, desired.Replicas, *establishReplication); err != nil {
+			return err
+		}
+		if *establishReplication {
+			return waitForConsumerReplicas(process.Context(), js, desired.Name, desired.Replicas)
+		}
 	}
 	return nil
 }
@@ -574,6 +579,54 @@ func waitForReplicas(ctx context.Context, js natsclient.JetStreamContext, name s
 		case <-ticker.C:
 		}
 	}
+}
+
+// waitForConsumerReplicas waits until every consumer of a stream has all its
+// replicas current. Resizing a stream resizes its consumers too, and
+// each consumer replicates in its own Raft group. Until its new replicas have
+// caught up, losing the leader leaves the consumer without a quorum to elect a
+// successor, so queued work would be unavailable even though the stream is fine.
+func waitForConsumerReplicas(ctx context.Context, js natsclient.JetStreamContext, stream string, replicas int) error {
+	const replicationTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, replicationTimeout)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		behind, err := consumersBehind(ctx, js, stream, replicas)
+		if err != nil {
+			return fmt.Errorf("inspect consumers of %s: %w", stream, err)
+		}
+		if behind == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("consumer %s of %s replication is not ready: %w", behind, stream, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// consumersBehind returns the name of a consumer that does not yet have every
+// replica current, or an empty string if every consumer is fully replicated.
+// A consumer that has not yet grown to the stream's replica count, which happens
+// just after a resize, counts as behind.
+func consumersBehind(ctx context.Context, js natsclient.JetStreamContext, stream string, replicas int) (string, error) {
+	for info := range js.ConsumersInfo(stream, natsclient.Context(ctx)) {
+		if replicas <= 1 {
+			continue
+		}
+		if info.Cluster == nil || info.Cluster.Leader == "" || len(info.Cluster.Replicas) != replicas-1 {
+			return info.Name, nil
+		}
+		for _, replica := range info.Cluster.Replicas {
+			if !replica.Current || replica.Offline {
+				return info.Name, nil
+			}
+		}
+	}
+	return "", ctx.Err()
 }
 
 func validateConsumers(ctx context.Context, js natsjs.JetStream, streamName string, cfg *config.JetStream) error {

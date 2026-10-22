@@ -3,6 +3,9 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -70,6 +73,11 @@ type RoomserverInternalAPI struct {
 	defaultRoomVersion     gomatrixserverlib.RoomVersion
 	PartialStateTracker    *PartialStateTracker
 	PurgeTracker           *perform.PurgeTracker
+
+	// joinedDuringPartialState holds, per room, who was joined before its resync state was applied.
+	joinedDuringPartialState sync.Map
+	unPartialStatedHooksMu   sync.Mutex
+	unPartialStatedHooks     []func(ctx context.Context, roomID string)
 }
 
 func NewRoomserverAPI(
@@ -468,8 +476,21 @@ func (r *RoomserverInternalAPI) QueryAdminRoomReports(
 // MSC3706 Partial State Join methods.
 
 // SetRoomPartialState marks a room as having partial state after a faster join.
-func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
+func (r *RoomserverInternalAPI) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventID string, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
+	var joinEventNID types.EventNID
+	if joinEventID != "" {
+		nids, err := r.DB.EventNIDs(ctx, []string{joinEventID})
+		if err != nil {
+			return fmt.Errorf("look up join event %s: %w", joinEventID, err)
+		}
+		joinEventNID = nids[joinEventID].EventNID
+	}
 	return r.DB.SetRoomPartialState(ctx, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
+}
+
+// GetPartialStateJoinEventID returns the join event that started the partial state.
+func (r *RoomserverInternalAPI) GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error) {
+	return r.DB.GetPartialStateJoinEventID(ctx, roomNID)
 }
 
 // IsRoomPartialState returns true if the room has partial state.
@@ -480,7 +501,70 @@ func (r *RoomserverInternalAPI) IsRoomPartialState(ctx context.Context, roomNID 
 // ClearRoomPartialState removes the partial state flag from a room
 // Returns the device list stream ID that was stored at join time for device list replay.
 func (r *RoomserverInternalAPI) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
+	// The sync API learns of the resync's state through the output stream, a little
+	// after the flag is cleared. Keep waiters waiting until it has, instead of
+	// letting them read its stale copy: they are released by NotifyUnPartialStated.
+	if roomID, err := r.DB.RoomIDFromNID(ctx, roomNID); err == nil && roomID != "" {
+		r.PartialStateTracker.MarkSyncPending(roomID, syncCatchUpTimeout)
+	}
 	return r.DB.ClearRoomPartialState(ctx, roomNID)
+}
+
+// syncCatchUpTimeout bounds how long requests wait for the sync API to take in a
+// resync's state before they go ahead without it.
+const syncCatchUpTimeout = 5 * time.Second
+
+// noteMembersJoinedDuringPartialState records who was joined to the room, and who of them joined
+// after our partial join.
+// It has to run before the resync's state is applied: that adds the memberships it found
+// in the complete state, which are newer in the database yet not later joiners.
+func (r *RoomserverInternalAPI) noteMembersJoinedDuringPartialState(ctx context.Context, roomID string) {
+	if _, noted := r.joinedDuringPartialState.Load(roomID); noted {
+		return
+	}
+	info, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil || info == nil {
+		return
+	}
+	if later, joined, membersErr := r.DB.GetMembersJoinedAfterPartialJoin(ctx, info.RoomNID); membersErr == nil {
+		r.joinedDuringPartialState.Store(roomID, api.PartialStateMembers{Later: later, Joined: joined})
+	}
+}
+
+// TakeMembersJoinedDuringPartialState returns who was joined to the room before its resync
+// state was applied, as noted before the resync state was applied. The result is not ok
+// when that is not known, for instance after a restart.
+func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID string) (members api.PartialStateMembers, ok bool) {
+	v, ok := r.joinedDuringPartialState.LoadAndDelete(roomID)
+	if !ok {
+		return api.PartialStateMembers{}, false
+	}
+	members, _ = v.(api.PartialStateMembers)
+	members.Interrupted = r.TakeResyncInterrupted(roomID)
+	return members, true
+}
+
+// RegisterUnPartialStatedHook registers a function to call whenever a room finishes its
+// partial state resync.
+func (r *RoomserverInternalAPI) RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string)) {
+	r.unPartialStatedHooksMu.Lock()
+	defer r.unPartialStatedHooksMu.Unlock()
+	r.unPartialStatedHooks = append(r.unPartialStatedHooks, hook)
+}
+
+func (r *RoomserverInternalAPI) runUnPartialStatedHooks(roomID string) {
+	r.unPartialStatedHooksMu.Lock()
+	hooks := slices.Clone(r.unPartialStatedHooks)
+	r.unPartialStatedHooksMu.Unlock()
+	for _, hook := range hooks {
+		hook(r.ProcessContext.Context(), roomID)
+	}
+}
+
+// AckUnPartialStated is called by the sync API once it has taken in the state of a
+// room that finished its resync, releasing the requests waiting for that.
+func (r *RoomserverInternalAPI) AckUnPartialStated(roomID string) {
+	r.PartialStateTracker.NotifyUnPartialStated(roomID)
 }
 
 // GetPartialStateServers returns servers known to be in a partial state room.
@@ -537,13 +621,32 @@ func (r *RoomserverInternalAPI) GetPartialStateRoomIDs(ctx context.Context) ([]s
 	return roomIDs, nil
 }
 
+// AwaitRoomFullState blocks until the room has full state, which is at once for a
+// room that never had partial state. It returns when the context ends, however
+// long the resync takes.
+func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID string) error {
+	return r.PartialStateTracker.AwaitUnPartialState(ctx, roomID, func(ctx context.Context) (bool, error) {
+		info, err := r.DB.RoomInfo(ctx, roomID)
+		if err != nil || info == nil {
+			return false, err
+		}
+		return r.DB.IsRoomPartialState(ctx, info.RoomNID)
+	})
+}
+
 // NotifyUnPartialStated notifies observers that a room has completed its partial state resync.
-// This wakes up any callers waiting in AwaitFullState for this room and emits an output
-// event to notify downstream components (like syncapi) about the completion.
+// It emits an output event for downstream components (like syncapi) to take in the
+// resynced state. Callers waiting for full state are released when the sync API
+// acknowledges that event, or after a timeout, so that what they read next is
+// consistent with the resync. Without an event to wait for they are released at once.
+// The hooks run first, so that what they change, such as which device lists are cached,
+// is in place by the time anything waiting is released.
 func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
-	// Wake up any callers waiting for full state
-	if r.PartialStateTracker != nil {
-		r.PartialStateTracker.NotifyUnPartialStated(roomID)
+	r.runUnPartialStatedHooks(roomID)
+	release := func() {
+		if r.PartialStateTracker != nil {
+			r.PartialStateTracker.NotifyUnPartialStated(roomID)
+		}
 	}
 
 	// Query local joined members to notify downstream components
@@ -556,6 +659,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 	membershipsRes := &api.QueryMembershipsForRoomResponse{}
 	if err := r.QueryMembershipsForRoom(ctx, membershipsReq, membershipsRes); err != nil {
 		logrus.WithError(err).WithField("room_id", roomID).Error("Failed to query memberships for un-partial-stated room")
+		release()
 		return
 	}
 
@@ -569,6 +673,7 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 
 	if len(joinedUserIDs) == 0 {
 		logrus.WithField("room_id", roomID).Debug("No local members in un-partial-stated room, skipping output event")
+		release()
 		return
 	}
 
@@ -583,8 +688,13 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 
 	if err := r.OutputProducer.ProduceRoomEvents(roomID, []api.OutputEvent{outputEvent}); err != nil {
 		logrus.WithError(err).WithField("room_id", roomID).Error("Failed to produce un-partial-stated room event")
+		release()
 		return
 	}
+
+	// The sync API acknowledges the event when it has taken the state in. Do not
+	// hold waiters for good if it never does.
+	time.AfterFunc(syncCatchUpTimeout, release)
 
 	logrus.WithFields(logrus.Fields{
 		"room_id":    roomID,
@@ -596,8 +706,9 @@ func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
 // This is called after state events have been stored as outliers via SendStateAsOutliers.
 // It creates a new state snapshot from the stored events, calculates the state delta,
 // updates the membership table, and notifies downstream components (syncapi).
-func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error {
-	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs)
+func (r *RoomserverInternalAPI) UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) error {
+	r.noteMembersJoinedDuringPartialState(ctx, roomID)
+	localLeftJoin, roomInfo, err := r.UpdateStateAfterResync(ctx, roomID, stateEventIDs, anchorStateIDs, expectedLatestEventIDs)
 	if err != nil {
 		return err
 	}

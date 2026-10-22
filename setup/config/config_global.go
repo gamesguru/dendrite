@@ -417,6 +417,12 @@ type DatabaseOptions struct {
 	MaxIdleConnections int `yaml:"max_idle_conns"`
 	// maximum amount of time (in seconds) a connection may be reused (<= 0 means unlimited)
 	ConnMaxLifetimeSeconds int `yaml:"conn_max_lifetime"`
+	// SQLiteWAL makes SQLite use a write-ahead log and synchronous=NORMAL, which
+	// turns a commit from several fsyncs into an append (SQLite only). It is much
+	// faster on a loaded disk. A power loss or system crash can lose the most
+	// recent transactions, but never corrupts the database; an application crash
+	// loses nothing.
+	SQLiteWAL bool `yaml:"sqlite_wal,omitempty"`
 }
 
 func (c *DatabaseOptions) Defaults(conns int) {

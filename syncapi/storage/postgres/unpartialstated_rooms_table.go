@@ -19,6 +19,7 @@ import (
 
 const unPartialStatedRoomsSchema = `
 CREATE SEQUENCE IF NOT EXISTS syncapi_unpartialstated_rooms_id;
+CREATE SEQUENCE IF NOT EXISTS syncapi_stream_id;
 
 -- Tracks rooms that have completed their partial state resync (MSC3706).
 -- When a room completes its partial state resync, we insert a row for each
@@ -37,9 +38,12 @@ CREATE INDEX IF NOT EXISTS syncapi_unpartialstated_rooms_user_id ON syncapi_unpa
 CREATE INDEX IF NOT EXISTS syncapi_unpartialstated_rooms_room_id ON syncapi_unpartialstated_rooms(room_id);
 `
 
+// The marker takes a position in the PDU stream, like the events of the room, so
+// that a sync whose token is before it covers it and a long poll is woken to a
+// position past its start.
 const insertUnPartialStatedRoomSQL = "" +
-	"INSERT INTO syncapi_unpartialstated_rooms (room_id, user_id)" +
-	" VALUES ($1, $2)" +
+	"INSERT INTO syncapi_unpartialstated_rooms (id, room_id, user_id)" +
+	" VALUES (nextval('syncapi_stream_id'), $1, $2)" +
 	" RETURNING id"
 
 const selectUnPartialStatedRoomsInRangeSQL = "" +

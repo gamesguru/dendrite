@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -38,8 +39,19 @@ const insertInviteEventSQL = "" +
 	" (id, room_id, event_id, target_user_id, headered_event_json, deleted)" +
 	" VALUES ($1, $2, $3, $4, $5, false)"
 
+// selectActiveInviteEventIDSQL returns the stream position of an invite that is
+// still active. Redelivered invites must reuse it rather than insert a second
+// row: retiring the invite later updates every row with the event ID to the
+// same new position, which would violate the primary key.
+const selectActiveInviteEventIDSQL = "" +
+	"SELECT id FROM syncapi_invite_events WHERE event_id = $1 AND deleted = false LIMIT 1"
+
 const deleteInviteEventSQL = "" +
 	"UPDATE syncapi_invite_events SET deleted=true, id=$1 WHERE event_id = $2 AND deleted=false"
+
+const nextInviteIDSQL = `UPDATE syncapi_stream_id
+	SET stream_id = MAX(stream_id, COALESCE((SELECT MAX(id) FROM syncapi_invite_events), 0)) + 1
+	WHERE stream_name = 'invite' RETURNING stream_id`
 
 const selectInviteEventsInRangeSQL = "" +
 	"SELECT id, room_id, headered_event_json, deleted FROM syncapi_invite_events" +
@@ -54,18 +66,18 @@ const purgeInvitesSQL = "" +
 
 type inviteEventsStatements struct {
 	db                            *sql.DB
-	streamIDStatements            *StreamIDStatements
 	insertInviteEventStmt         *sql.Stmt
+	selectActiveInviteEventIDStmt *sql.Stmt
 	selectInviteEventsInRangeStmt *sql.Stmt
 	deleteInviteEventStmt         *sql.Stmt
+	nextInviteIDStmt              *sql.Stmt
 	selectMaxInviteIDStmt         *sql.Stmt
 	purgeInvitesStmt              *sql.Stmt
 }
 
-func NewSqliteInvitesTable(db *sql.DB, streamID *StreamIDStatements) (tables.Invites, error) {
+func NewSqliteInvitesTable(db *sql.DB, _ *StreamIDStatements) (tables.Invites, error) {
 	s := &inviteEventsStatements{
-		db:                 db,
-		streamIDStatements: streamID,
+		db: db,
 	}
 	_, err := db.Exec(inviteEventsSchema)
 	if err != nil {
@@ -73,8 +85,10 @@ func NewSqliteInvitesTable(db *sql.DB, streamID *StreamIDStatements) (tables.Inv
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertInviteEventStmt, insertInviteEventSQL},
+		{&s.selectActiveInviteEventIDStmt, selectActiveInviteEventIDSQL},
 		{&s.selectInviteEventsInRangeStmt, selectInviteEventsInRangeSQL},
 		{&s.deleteInviteEventStmt, deleteInviteEventSQL},
+		{&s.nextInviteIDStmt, nextInviteIDSQL},
 		{&s.selectMaxInviteIDStmt, selectMaxInviteIDSQL},
 		{&s.purgeInvitesStmt, purgeInvitesSQL},
 	}.Prepare(db)
@@ -83,7 +97,16 @@ func NewSqliteInvitesTable(db *sql.DB, streamID *StreamIDStatements) (tables.Inv
 func (s *inviteEventsStatements) InsertInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent,
 ) (streamPos types.StreamPosition, err error) {
-	streamPos, err = s.streamIDStatements.nextInviteID(ctx, txn)
+	// A redelivered invite must not add a second active row for the same event.
+	err = sqlutil.TxStmt(txn, s.selectActiveInviteEventIDStmt).QueryRowContext(ctx, inviteEvent.EventID()).Scan(&streamPos)
+	if err == nil {
+		return streamPos, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+
+	err = sqlutil.TxStmt(txn, s.nextInviteIDStmt).QueryRowContext(ctx).Scan(&streamPos)
 	if err != nil {
 		return
 	}
@@ -109,7 +132,8 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 func (s *inviteEventsStatements) DeleteInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEventID string,
 ) (types.StreamPosition, error) {
-	streamPos, err := s.streamIDStatements.nextInviteID(ctx, txn)
+	var streamPos types.StreamPosition
+	err := sqlutil.TxStmt(txn, s.nextInviteIDStmt).QueryRowContext(ctx).Scan(&streamPos)
 	if err != nil {
 		return streamPos, err
 	}

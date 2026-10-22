@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -113,7 +114,7 @@ func GetPostPublicRooms(
 
 	// Local pagination tokens carry a T prefix; remote tokens remain opaque.
 	request.Since = strings.TrimPrefix(request.Since, "T")
-	response, err := publicRooms(req.Context(), request, rsAPI, extRoomsProvider)
+	response, err := publicRooms(req.Context(), request, rsAPI, extRoomsProvider, cfg.Matrix.IsLocalServerName)
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Errorf("failed to work out public rooms")
 		return util.JSONResponse{
@@ -129,6 +130,7 @@ func GetPostPublicRooms(
 
 func publicRooms(
 	ctx context.Context, request PublicRoomReq, rsAPI roomserverAPI.ClientRoomserverAPI, extRoomsProvider api.ExtraPublicRoomsProvider,
+	isLocalServerName func(spec.ServerName) bool,
 ) (*publicRoomsResponse, error) {
 	response := publicRoomsResponse{
 		Chunk: []roomserverAPI.PublicRoom{},
@@ -150,7 +152,7 @@ func publicRooms(
 
 	var rooms []roomserverAPI.PublicRoom
 	if request.Since == "" {
-		rooms = refreshPublicRoomCache(ctx, rsAPI, extRoomsProvider, request)
+		rooms = refreshPublicRoomCache(ctx, rsAPI, extRoomsProvider, request, isLocalServerName)
 	} else {
 		rooms = getPublicRoomsFromCache()
 	}
@@ -245,7 +247,7 @@ func sliceInto(slice []roomserverAPI.PublicRoom, since int64, limit int64) (subs
 
 func refreshPublicRoomCache(
 	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, extRoomsProvider api.ExtraPublicRoomsProvider,
-	request PublicRoomReq,
+	request PublicRoomReq, isLocalServerName func(spec.ServerName) bool,
 ) []roomserverAPI.PublicRoom {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
@@ -280,6 +282,7 @@ func refreshPublicRoomCache(
 		util.GetLogger(ctx).WithError(err).Error("PopulatePublicRooms failed")
 		return publicRoomsCache
 	}
+	pubRooms = limitPartialStateMemberCounts(ctx, rsAPI, pubRooms, isLocalServerName)
 	publicRoomsCache = []roomserverAPI.PublicRoom{}
 	publicRoomsCache = append(publicRoomsCache, pubRooms...)
 	publicRoomsCache = append(publicRoomsCache, extraRooms...)
@@ -290,6 +293,62 @@ func refreshPublicRoomCache(
 		return publicRoomsCache[i].JoinedMembersCount > publicRoomsCache[j].JoinedMembersCount
 	})
 	return publicRoomsCache
+}
+
+// limitPartialStateMemberCounts counts only the local members of a room whose state
+// is still partial. Its remote members are not all known until the resync finishes,
+// so the full count would be a number that grows as they turn up. The count is the
+// full one once the room has its state.
+func limitPartialStateMemberCounts(
+	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, rooms []roomserverAPI.PublicRoom,
+	isLocalServerName func(spec.ServerName) bool,
+) []roomserverAPI.PublicRoom {
+	partialIDs, err := rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil || len(partialIDs) == 0 {
+		if err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("Failed to get the rooms with partial state for the room directory")
+		}
+		return rooms
+	}
+	partial := make(map[string]bool, len(partialIDs))
+	for _, id := range partialIDs {
+		partial[id] = true
+	}
+	var wanted []string
+	for _, room := range rooms {
+		if partial[room.RoomID] {
+			wanted = append(wanted, room.RoomID)
+		}
+	}
+	if len(wanted) == 0 {
+		return rooms
+	}
+	var res roomserverAPI.QueryBulkStateContentResponse
+	if err = rsAPI.QueryBulkStateContent(ctx, &roomserverAPI.QueryBulkStateContentRequest{
+		RoomIDs:        wanted,
+		AllowWildcards: true,
+		StateTuples:    []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomMember, StateKey: "*"}},
+	}, &res); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to count the local members of rooms with partial state")
+		return rooms
+	}
+	for i := range rooms {
+		state, ok := res.Rooms[rooms[i].RoomID]
+		if !ok {
+			continue
+		}
+		local := 0
+		for tuple, membership := range state {
+			if membership != spec.Join {
+				continue
+			}
+			if user, userErr := spec.NewUserID(tuple.StateKey, true); userErr == nil && isLocalServerName(user.Domain()) {
+				local++
+			}
+		}
+		rooms[i].JoinedMembersCount = local
+	}
+	return rooms
 }
 
 func getPublicRoomsFromCache() []roomserverAPI.PublicRoom {

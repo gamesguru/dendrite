@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/dgraph-io/ristretto/v2 v2.4.2
-	github.com/gamesguru/gomatrixserverlib v0.0.0-20261020160247-ddb40b3f0307
+	github.com/gamesguru/gomatrixserverlib v0.0.0-20261021202137-1bbfa9b0bb37
 	github.com/gen2brain/webp v0.6.4
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2

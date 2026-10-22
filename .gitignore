@@ -13,6 +13,8 @@
 *.o
 *.a
 *.so
+/dendrite
+/zendrite
 
 # Folders
 /bin
@@ -59,6 +61,8 @@ dendrite.yaml
 
 # Log files
 *.log*
+/pr.*.md
+/*.txt
 
 # Generated code
 cmd/dendrite-demo-yggdrasil/embed/fs*.go

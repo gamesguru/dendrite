@@ -32,7 +32,24 @@ COMPLEMENT_CGO ?= 0
 COMPLEMENT_TAG ?= $(COMPLEMENT_POSTGRES)$(COMPLEMENT_CGO)
 COMPLEMENT_BASE_IMAGE ?= $(COMPLEMENT_IMAGE):$(COMPLEMENT_TAG)
 COMPLEMENT_DIR ?= complement
-COMPLEMENT_PACKAGES ?= ./tests/...
+COMPLEMENT_RESULTS ?= $(CURDIR)/.complement/results.json
+COMPLEMENT_LOGS ?= $(CURDIR)/.complement/logs.jsonl
+# COMPLEMENT_PACKAGES are the test packages to run. With COMPLEMENT_RUN set they are the
+# ones that define a matching top-level test (the part before the first /), as go test
+# -run matches it, so that the other packages are not compiled and started for nothing.
+# It falls back to all of them when nothing matches. Set it to override.
+COMPLEMENT_TOP = $(firstword $(subst /, ,$(COMPLEMENT_RUN)))
+# An opening parenthesis for the pattern below, as make counts the ones in a call.
+COMPLEMENT_OPEN := [(]
+COMPLEMENT_MATCHING = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && grep -rlE '^func [A-Za-z0-9_]*($(COMPLEMENT_TOP))[A-Za-z0-9_]*$(COMPLEMENT_OPEN)' tests --include='*_test.go' | xargs -r -n1 dirname | sort -u | sed 's|^|./|')
+COMPLEMENT_ALL_PACKAGES = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$$')
+COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHING))),$(COMPLEMENT_ALL_PACKAGES))
+COMPLEMENT_PARTIAL_RUN = $(if $(COMPLEMENT_RUN),1,$(if $(filter-out $(COMPLEMENT_ALL_PACKAGES),$(COMPLEMENT_PACKAGES)),1,0))
+# Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
+# COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
+# also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
+COMPLEMENT_RUN ?=
+COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,dendrite_blacklist)
 # go test's default per-package timeout is 10m; a package that deploys many
 # containers serially (e.g. csapi) can legitimately take longer than that and
 # gets killed mid-test, which looks like a hang but isn't. Give it more room.
@@ -72,7 +89,7 @@ cov: ## Run library package tests with coverage and print a summary
 
 .PHONY: lint
 lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for changed packages only
-	@set -euo pipefail; \
+	set -euo pipefail; \
 	if [ -n "$(strip $(diff))" ]; then \
 		dirs="$$(git diff --name-only $(DIFF_BASE) -- '*.go' \
 			| xargs -r dirname \
@@ -101,7 +118,7 @@ build-cmd: ## Build binaries under cmd/
 
 .PHONY: install
 install: ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
-	$(GO) build -o dendrite ./cmd/dendrite
+	$(GO) build -o dendrite ./cmd/zendrite
 	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
 
 .PHONY: restart
@@ -123,10 +140,43 @@ complement-build: ## Build the Complement Dendrite image
 .PHONY: complement-run
 complement-run: ## Run Complement, building the image first
 	@test -d $(COMPLEMENT_DIR) || (echo "Complement directory not found at $(COMPLEMENT_DIR). Please clone matrix-org/complement." && exit 1)
-	$(MAKE) complement-build
-	cd $(COMPLEMENT_DIR) && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
-	go test -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) -tags dendrite_blacklist $(COMPLEMENT_PACKAGES)
+	$(if $(COMPLEMENT_SKIP_BUILD),@echo 'Reusing $(COMPLEMENT_BASE_IMAGE)',$(MAKE) complement-build)
+	@set -o pipefail; \
+	results="$(abspath $(COMPLEMENT_RESULTS))"; logs="$(abspath $(COMPLEMENT_LOGS))"; \
+	mkdir -p "$$(dirname "$$results")" "$$(dirname "$$logs")" || exit $$?; \
+	run_results=$$(mktemp "$$(dirname "$$results")/.results.XXXXXX") || exit $$?; \
+	run_logs=$$(mktemp "$$(dirname "$$logs")/.logs.XXXXXX") || exit $$?; \
+	merged_results=$$(mktemp "$$(dirname "$$results")/.merged.XXXXXX") || exit $$?; \
+	go_status=0; \
+	(cd $(COMPLEMENT_DIR) && COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
+		go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) $(if $(COMPLEMENT_RUN),-run '$(COMPLEMENT_RUN)') $(COMPLEMENT_PACKAGES); \
+		test_status=$$?; \
+		if [ "$(COMPLEMENT_PARTIAL_RUN)" = 0 ]; then \
+			COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) go test -json -v -count=1 -timeout=$(COMPLEMENT_TIMEOUT) $(if $(COMPLEMENT_TAGS),-tags $(COMPLEMENT_TAGS)) -run '^TestMSC3389RedactionStripsRelationInOlderVersions$$' ./tests/msc3389; \
+			target_status=$$?; \
+			if [ $$test_status -ne 0 ]; then exit $$test_status; fi; \
+			exit $$target_status; \
+		fi; \
+		exit $$test_status) \
+		| tee "$$run_logs" \
+		| jq -c 'select((.Action == "pass" or .Action == "fail" or .Action == "skip") and .Test != null) | {Action, Test}' > "$$run_results"; \
+	go_status=$$?; \
+	if [ "$(COMPLEMENT_PARTIAL_RUN)" = 1 ] && [ -f "$$results" ]; then \
+		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$results" "$$run_results" > "$$merged_results"; \
+	else \
+		jq -sc 'reduce .[] as $$r ({}; .[$$r.Test] = $$r) | [.[]] | sort_by(.Test)[]' "$$run_results" > "$$merged_results"; \
+	fi; \
+	result_status=$$?; \
+	if [ $$result_status -eq 0 ]; then mv "$$merged_results" "$$results"; else rm -f "$$merged_results"; fi; \
+	mv "$$run_logs" "$$logs"; \
+	if [ $$result_status -ne 0 ]; then echo "Failed to process Complement results" >&2; exit $$result_status; fi; \
+	failed_records=$$(jq -sc '[.[] | select(.Action == "fail" and (.Test | type == "string"))] | length' "$$run_results"); \
+	failed_leaves=$$(jq -sc '([.[] | select(.Action == "fail" and (.Test | type == "string"))]) as $$f | [$$f[] as $$x | select([$$f[] | select(.Test | startswith($$x.Test + "/"))] | length == 0)] | length' "$$run_results"); \
+	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$run_logs"); \
+	echo "Complement: $$failed_leaves failed leaf tests ($$failed_records failing test records, $$failed_packages failed packages)"; \
+	echo "Results: $$results"; echo "Full log: $$logs"; \
+	rm -f "$$run_results"; \
+	exit $$go_status
 
 .PHONY: tidy
 tidy: ## Tidy module dependencies

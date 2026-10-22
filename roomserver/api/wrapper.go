@@ -116,6 +116,7 @@ func SendEventWithState(
 	virtualHost spec.ServerName, kind Kind,
 	state gomatrixserverlib.StateResponse, event *types.HeaderedEvent,
 	origin spec.ServerName, haveEventIDs map[string]bool, async bool,
+	extraStateEventIDs ...string,
 ) error {
 	outliers := gomatrixserverlib.LineariseStateResponse(event.Version(), state)
 	ires := make([]InputRoomEvent, 0, len(outliers))
@@ -145,6 +146,11 @@ func SendEventWithState(
 		if ev.StateKey() != nil && ev.Type() == spec.MRoomMember {
 			stateEventIDSet[ev.EventID()] = true
 		}
+	}
+	// Partial-state responses may omit local members. The caller can supply
+	// their events so the state snapshot does not drop them.
+	for _, id := range extraStateEventIDs {
+		stateEventIDSet[id] = true
 	}
 	stateEventIDs := make([]string, 0, len(stateEventIDSet))
 	for id := range stateEventIDSet {

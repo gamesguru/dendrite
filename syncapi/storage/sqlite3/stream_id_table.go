@@ -68,12 +68,6 @@ func (s *StreamIDStatements) nextReceiptID(ctx context.Context, txn *sql.Tx) (po
 	return
 }
 
-func (s *StreamIDStatements) nextInviteID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
-	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	err = increaseStmt.QueryRowContext(ctx, "invite").Scan(&pos)
-	return
-}
-
 func (s *StreamIDStatements) nextAccountDataID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
 	err = increaseStmt.QueryRowContext(ctx, "accountdata").Scan(&pos)
@@ -95,12 +89,6 @@ func (s *StreamIDStatements) nextNotificationID(ctx context.Context, txn *sql.Tx
 func (s *StreamIDStatements) nextRelationID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
 	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
 	err = increaseStmt.QueryRowContext(ctx, "relation").Scan(&pos)
-	return
-}
-
-func (s *StreamIDStatements) nextUnPartialStatedID(ctx context.Context, txn *sql.Tx) (pos types.StreamPosition, err error) {
-	increaseStmt := sqlutil.TxStmt(txn, s.increaseStreamIDStmt)
-	err = increaseStmt.QueryRowContext(ctx, "unpartialstated").Scan(&pos)
 	return
 }
 

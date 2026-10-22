@@ -81,3 +81,12 @@ func CreateNotificationEvents(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
+
+// CreatePendingNotificationRefreshes creates an outbox for notification count
+// updates which must be published after notification rows have been deleted.
+func CreatePendingNotificationRefreshes(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `CREATE TABLE userapi_pending_notification_refreshes (
+	room_id TEXT NOT NULL, localpart TEXT NOT NULL, server_name TEXT NOT NULL,
+	PRIMARY KEY (room_id, localpart, server_name));`)
+	return err
+}

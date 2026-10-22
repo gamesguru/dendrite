@@ -167,5 +167,5 @@ func (s *PresenceConsumer) EmitPresence(ctx context.Context, userID string, pres
 		return
 	}
 	s.stream.Advance(pos)
-	s.notifier.OnNewPresence(types.StreamingToken{PresencePosition: pos}, userID)
+	s.notifier.OnNewPresence(ctx, types.StreamingToken{PresencePosition: pos}, userID)
 }

@@ -154,6 +154,13 @@ func (u *RoomUpdater) SetState(
 	})
 }
 
+// SetEventRejected updates the auth rejection status of a previously stored event.
+func (u *RoomUpdater) SetEventRejected(eventNID types.EventNID, rejected bool) error {
+	return u.d.Writer.Do(u.d.DB, u.txn, func(txn *sql.Tx) error {
+		return u.d.EventsTable.UpdateEventRejected(u.ctx, txn, eventNID, rejected)
+	})
+}
+
 // SetCurrentStateSnapshotNID updates the room's current state pointer without
 // changing its latest events.
 func (u *RoomUpdater) SetCurrentStateSnapshotNID(stateSnapshotNID types.StateSnapshotNID) error {
@@ -270,7 +277,7 @@ func (u *RoomUpdater) MembershipUpdater(targetUserNID types.EventStateKeyNID, ta
 }
 
 func (u *RoomUpdater) IsEventRejected(ctx context.Context, roomNID types.RoomNID, eventID string) (bool, error) {
-	return u.d.IsEventRejected(ctx, roomNID, eventID)
+	return u.d.EventsTable.SelectEventRejected(ctx, u.txn, roomNID, eventID)
 }
 
 // UpdateResyncStateNID records the state snapshot NID after a partial state resync completes.

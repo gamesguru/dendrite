@@ -9,6 +9,7 @@ package sqlite3
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,8 +45,14 @@ const selectStaleDeviceListsWithDomainsSQL = "" +
 const selectStaleDeviceListsSQL = "" +
 	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = $1 ORDER BY ts_added_secs DESC"
 
+const selectFreshDeviceListsSQL = "" +
+	"SELECT user_id FROM keyserver_stale_device_lists WHERE is_stale = false AND user_id IN ($1)"
+
 const deleteStaleDevicesSQL = "" +
 	"DELETE FROM keyserver_stale_device_lists WHERE user_id IN ($1)"
+
+// staleDeviceListsBatchSize keeps each query below SQLite's 999-variable limit.
+const staleDeviceListsBatchSize = 999
 
 type staleDeviceListsStatements struct {
 	db                                    *sql.DB
@@ -104,25 +111,53 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithStaleDeviceLists(ctx conte
 	return result, nil
 }
 
+// SelectUserIDsWithFreshDeviceLists returns those of the users whose device list was fetched in full
+// and has not been marked stale since.
+func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	var result []string
+	for batch := range slices.Chunk(userIDs, staleDeviceListsBatchSize) {
+		qry := strings.Replace(selectFreshDeviceListsSQL, "($1)", sqlutil.QueryVariadic(len(batch)), 1)
+		params := make([]any, len(batch))
+		for i := range batch {
+			params[i] = batch[i]
+		}
+		rows, err := s.db.QueryContext(ctx, qry, params...)
+		if err != nil {
+			return nil, err
+		}
+		found, err := rowsToUserIDs(ctx, rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, found...)
+	}
+	return result, nil
+}
+
 // DeleteStaleDeviceLists removes users from stale device lists.
 func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 	ctx context.Context, txn *sql.Tx, userIDs []string,
 ) error {
-	qry := strings.Replace(deleteStaleDevicesSQL, "($1)", sqlutil.QueryVariadic(len(userIDs)), 1)
-	stmt, err := s.db.Prepare(qry)
-	if err != nil {
-		return err
+	for batch := range slices.Chunk(userIDs, staleDeviceListsBatchSize) {
+		qry := strings.Replace(deleteStaleDevicesSQL, "($1)", sqlutil.QueryVariadic(len(batch)), 1)
+		stmt, err := s.db.Prepare(qry)
+		if err != nil {
+			return err
+		}
+		params := make([]any, len(batch))
+		for i := range batch {
+			params[i] = batch[i]
+		}
+		_, err = sqlutil.TxStmt(txn, stmt).ExecContext(ctx, params...)
+		internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
+		if err != nil {
+			return err
+		}
 	}
-	defer internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
-	stmt = sqlutil.TxStmt(txn, stmt)
-
-	params := make([]any, len(userIDs))
-	for i := range userIDs {
-		params[i] = userIDs[i]
-	}
-
-	_, err = stmt.ExecContext(ctx, params...)
-	return err
+	return nil
 }
 
 func rowsToUserIDs(ctx context.Context, rows *sql.Rows) (result []string, err error) {

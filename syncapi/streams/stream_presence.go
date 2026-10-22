@@ -84,6 +84,13 @@ func (p *PresenceStreamProvider) IncrementalSync(
 	for _, presence := range dbPresences {
 		presences[presence.UserID] = presence
 	}
+	presenceUsers := make([]string, 0, len(presences))
+	for userID, presence := range presences {
+		if presence != nil && userID != req.Device.UserID {
+			presenceUsers = append(presenceUsers, userID)
+		}
+	}
+	sharedUsers := p.notifier.SharedUsersForCandidates(req.Device.UserID, presenceUsers)
 
 	lastPos := from
 	for _, presence := range presences {
@@ -91,8 +98,10 @@ func (p *PresenceStreamProvider) IncrementalSync(
 			continue
 		}
 		// Ignore users we don't share a room with
-		if req.Device.UserID != presence.UserID && !p.notifier.IsSharedUser(req.Device.UserID, presence.UserID) {
-			continue
+		if req.Device.UserID != presence.UserID {
+			if _, shared := sharedUsers[presence.UserID]; !shared {
+				continue
+			}
 		}
 		cacheKey := req.Device.UserID + req.Device.ID + presence.UserID
 		pres, ok := p.cache.Load(cacheKey)

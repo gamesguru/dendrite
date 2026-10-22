@@ -117,6 +117,7 @@ func NewInternalAPI(
 
 	updater := internal.NewDeviceListUpdater(processContext, keyDB, userAPI, keyChangeProducer, fedClient, zendriteCfg.UserAPI.WorkerCount, rsAPI, zendriteCfg.Global.ServerName, enableMetrics, blacklistedOrBackingOffFn)
 	userAPI.Updater = updater
+	updater.ListenForUnPartialStatedRooms()
 	// Remove users which we don't share a room with anymore
 	if err := updater.CleanUp(); err != nil {
 		logrus.WithError(err).Error("failed to cleanup stale device lists")

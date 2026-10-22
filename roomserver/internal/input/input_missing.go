@@ -81,6 +81,64 @@ type missingStateReq struct {
 	unfindableEventsMu sync.Mutex
 }
 
+// errGapNotFilled says that /get_missing_events did not close the gap before an event.
+var errGapNotFilled = errors.New("the gap before the event was not filled by /get_missing_events")
+
+// fillGapDuringPartialState closes the gap before e with /get_missing_events and
+// nothing more, for a room whose state is still being fetched. It returns
+// errGapNotFilled if the gap cannot be closed that way.
+func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion) error {
+	t.log = util.GetLogger(ctx).WithFields(map[string]any{
+		"txn_event":       e.EventID(),
+		"room_id":         e.RoomID().String(),
+		"txn_prev_events": e.PrevEventIDs(),
+	})
+	newEvents, isGapFilled, _, err := t.getMissingEvents(ctx, e, roomVersion)
+	if err != nil {
+		return fmt.Errorf("t.getMissingEvents: %w", err)
+	}
+	if !isGapFilled && !t.reachesKnownEvents(ctx, newEvents) {
+		return errGapNotFilled
+	}
+	t.log.Infof("Gap filled by /get_missing_events during partial state, injecting %d new events", len(newEvents))
+	for _, newEvent := range newEvents {
+		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
+			Kind:         api.KindOld,
+			Event:        &types.HeaderedEvent{PDU: newEvent},
+			Origin:       t.origin,
+			SendAsServer: api.DoNotSendToOtherServers,
+		})
+		if err != nil {
+			var rejErr types.RejectedError
+			if !errors.As(err, &rejErr) {
+				return fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// reachesKnownEvents reports whether the earliest of the events, which are in
+// topological order, builds on events that we already know the state at. The
+// events then close the gap, even though we don't know the state at the earliest
+// one itself yet.
+func (t *missingStateReq) reachesKnownEvents(ctx context.Context, newEvents []gomatrixserverlib.PDU) bool {
+	if len(newEvents) == 0 {
+		return false
+	}
+	prevIDs := newEvents[0].PrevEventIDs()
+	state, err := t.db.StateAtEventIDs(ctx, prevIDs)
+	if err != nil || len(prevIDs) == 0 || len(state) != len(prevIDs) {
+		return false
+	}
+	for _, stateAtEvent := range state {
+		if stateAtEvent.BeforeStateSnapshotNID == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // processEventWithMissingState is the entrypoint for a missingStateReq
 // request, as called from processRoomEvent.
 //

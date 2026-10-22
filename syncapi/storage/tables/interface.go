@@ -79,6 +79,8 @@ type Events interface {
 	SelectContextAfterEvent(ctx context.Context, txn *sql.Tx, id int, roomID string, filter *synctypes.RoomEventFilter) (int, []*rstypes.HeaderedEvent, error)
 
 	PurgeEvents(ctx context.Context, txn *sql.Tx, roomID string) error
+	// DeleteEvent removes a single event.
+	DeleteEvent(ctx context.Context, txn *sql.Tx, eventID string) error
 	ReIndex(ctx context.Context, txn *sql.Tx, limit, offset int64, types []string) (map[int64]rstypes.HeaderedEvent, error)
 	// SelectMaxStreamPositionsForRooms returns the maximum stream position (latest event) for each room.
 	// This is used by sliding sync to sort rooms by activity (bump_stamp).
@@ -102,6 +104,8 @@ type Topology interface {
 	// SelectStreamToTopologicalPosition converts a stream position to a topological position by finding the nearest topological position in the room.
 	SelectStreamToTopologicalPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition, forward bool) (topoPos types.StreamPosition, err error)
 	PurgeEventsTopology(ctx context.Context, txn *sql.Tx, roomID string) error
+	// DeleteEventFromTopology removes a single event.
+	DeleteEventFromTopology(ctx context.Context, txn *sql.Tx, eventID string) error
 }
 
 type CurrentRoomState interface {

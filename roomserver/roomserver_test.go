@@ -336,6 +336,27 @@ func TestPurgeRoom(t *testing.T) {
 		if partial, perr := db.IsRoomPartialState(ctx, existingRoomInfo.RoomNID); perr != nil || !partial {
 			t.Fatalf("room should be partial-stated before purge (partial=%v, err=%v)", partial, perr)
 		}
+		// A second join before the resync finishes does not replace the record of
+		// the first, which is the join the resync starts from. It adds its servers.
+		if err = db.SetRoomPartialState(ctx, existingRoomInfo.RoomNID, types.EventNID(2), "other.example.com", []string{"other.example.com"}, 7); err != nil {
+			t.Fatal(err)
+		}
+		if via, verr := db.GetPartialStateJoinServer(ctx, existingRoomInfo.RoomNID); verr != nil || via != "example.com" {
+			t.Fatalf("expected the first join server to be kept, got %q (err=%v)", via, verr)
+		}
+		if servers, serr := db.GetPartialStateServers(ctx, existingRoomInfo.RoomNID); serr != nil || len(servers) != 2 {
+			t.Fatalf("expected both servers, got %v (err=%v)", servers, serr)
+		}
+
+		// The join event that started the partial state is recorded and resolves
+		// back to the event ID.
+		wantJoinID, err := db.EventIDs(ctx, []types.EventNID{1})
+		if err != nil || wantJoinID[1] == "" {
+			t.Fatalf("event NID 1 should exist (ids=%v, err=%v)", wantJoinID, err)
+		}
+		if gotJoinID, gerr := db.GetPartialStateJoinEventID(ctx, existingRoomInfo.RoomNID); gerr != nil || gotJoinID != wantJoinID[1] {
+			t.Fatalf("expected join event %q, got %q (err=%v)", wantJoinID[1], gotJoinID, gerr)
+		}
 
 		// validate there is an invite for bob
 		nids, err := db.EventStateKeyNIDs(ctx, []string{bob.ID})

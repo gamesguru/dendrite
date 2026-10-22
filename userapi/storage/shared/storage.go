@@ -1127,6 +1127,90 @@ func (d *Database) InsertNotification(ctx context.Context, localpart string, ser
 	})
 }
 
+// DeleteNotificationsForEvent removes every local user's notification for one
+// event, along with its receipt bookkeeping, and returns those users so their
+// room counts can be republished to the sync API.
+func (d *Database) DeleteNotificationsForEvent(ctx context.Context, roomID, eventID string) (users []string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		rows, err := txn.QueryContext(ctx, `SELECT DISTINCT localpart, server_name FROM userapi_notifications
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var localpart string
+			var serverName spec.ServerName
+			if err = rows.Scan(&localpart, &serverName); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			users = append(users, "@"+localpart+":"+string(serverName))
+		}
+		if err = rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err = rows.Close(); err != nil {
+			return err
+		}
+		for _, userID := range users {
+			localpart, serverName, splitErr := gomatrixserverlib.SplitID('@', userID)
+			if splitErr != nil {
+				return splitErr
+			}
+			if _, err = txn.ExecContext(ctx, `INSERT INTO userapi_pending_notification_refreshes
+				(room_id, localpart, server_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+				roomID, localpart, serverName); err != nil {
+				return err
+			}
+		}
+		if _, err = txn.ExecContext(ctx, `DELETE FROM userapi_notifications
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID); err != nil {
+			return err
+		}
+		if _, err = txn.ExecContext(ctx, `DELETE FROM userapi_notification_events
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID); err != nil {
+			return err
+		}
+		_, err = txn.ExecContext(ctx, `DELETE FROM userapi_pending_notification_receipts
+			WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		return err
+	})
+	return users, err
+}
+
+// PendingNotificationRefreshes returns users whose room notification counts
+// still need to be published after rejected-event cleanup.
+func (d *Database) PendingNotificationRefreshes(ctx context.Context, roomID string) ([]string, error) {
+	rows, err := d.DB.QueryContext(ctx, `SELECT localpart, server_name
+		FROM userapi_pending_notification_refreshes WHERE room_id = $1`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "PendingNotificationRefreshes: rows.close() failed")
+	var users []string
+	for rows.Next() {
+		var localpart, serverName string
+		if err = rows.Scan(&localpart, &serverName); err != nil {
+			return nil, err
+		}
+		users = append(users, "@"+localpart+":"+serverName)
+	}
+	return users, rows.Err()
+}
+
+// CompleteNotificationRefresh removes a pending count refresh after it has
+// been successfully published.
+func (d *Database) CompleteNotificationRefresh(ctx context.Context, roomID, userID string) error {
+	localpart, serverName, err := gomatrixserverlib.SplitID('@', userID)
+	if err != nil {
+		return err
+	}
+	_, err = d.DB.ExecContext(ctx, `DELETE FROM userapi_pending_notification_refreshes
+		WHERE room_id = $1 AND localpart = $2 AND server_name = $3`, roomID, localpart, serverName)
+	return err
+}
+
 func (d *Database) DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		affected, err = d.Notifications.DeleteUpTo(ctx, txn, localpart, serverName, roomID, pos)
@@ -1414,6 +1498,11 @@ func (d *KeyDatabase) StoreKeyChange(ctx context.Context, userID string) (id int
 
 func (d *KeyDatabase) KeyChanges(ctx context.Context, fromOffset, toOffset int64) (userIDs []string, latestOffset int64, err error) {
 	return d.KeyChangesTable.SelectKeyChanges(ctx, fromOffset, toOffset)
+}
+
+// FreshDeviceLists returns those of the users whose device list was fetched in full and has not been marked stale since.
+func (d *KeyDatabase) FreshDeviceLists(ctx context.Context, userIDs []string) ([]string, error) {
+	return d.StaleDeviceListsTable.SelectUserIDsWithFreshDeviceLists(ctx, userIDs)
 }
 
 // StaleDeviceLists returns a list of user IDs ending with the domains provided who have stale device lists.

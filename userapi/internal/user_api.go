@@ -60,6 +60,8 @@ type UserInternalAPI struct {
 	FedClient   fedsenderapi.KeyserverFederationAPI
 	Updater     *DeviceListUpdater
 
+	keyQueryBackoff remoteKeyBackoff
+
 	RegisteredUsersGauge prometheus.Gauge
 }
 
@@ -615,18 +617,16 @@ func (a *UserInternalAPI) QueryAccessToken(ctx context.Context, req *api.QueryAc
 	if a.Config.MSCs != nil && a.Config.MSCs.Enabled("msc3861") {
 		return a.queryAccessTokenMSC3861(ctx, req, res)
 	}
-	if req.AppServiceUserID != "" {
-		appServiceDevice, err := a.queryAppServiceToken(ctx, req.AccessToken, req.AppServiceUserID)
-		if err != nil || appServiceDevice != nil {
-			if err != nil {
-				res.Err = err.Error()
-			}
-			res.Device = appServiceDevice
-
-			return nil
+	appServiceDevice, err := a.queryAppServiceToken(ctx, req.AccessToken, req.AppServiceUserID)
+	if err != nil || appServiceDevice != nil {
+		if err != nil {
+			res.Err = err.Error()
 		}
-		// If the provided token wasn't an as_token (both err and appServiceDevice are nil), continue with normal auth.
+		res.Device = appServiceDevice
+
+		return nil
 	}
+	// If the provided token wasn't an as_token (both err and appServiceDevice are nil), continue with normal auth.
 	device, err := a.DB.GetDeviceByAccessToken(ctx, req.AccessToken)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -709,6 +709,12 @@ func (a *UserInternalAPI) queryAppServiceToken(ctx context.Context, token, appSe
 		AccessToken:  token,
 		AppserviceID: appService.ID,
 		AccountType:  api.AccountTypeAppService,
+	}
+
+	if appServiceUserID == "" {
+		// No user_id was supplied, so the token acts as the sender_localpart.
+		dev.UserID = fmt.Sprintf("@%s:%s", appService.SenderLocalpart, a.Config.Matrix.ServerName)
+		return &dev, nil
 	}
 
 	localpart, domain, err := userutil.ParseUsernameParam(appServiceUserID, a.Config.Matrix)

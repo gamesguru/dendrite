@@ -8,17 +8,45 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	"codefloe.com/pat-s/zendrite/test"
 )
+
+// TestSameFrontier checks that retries compare the whole set of forward
+// extremities, not just the first one.
+func TestSameFrontier(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+		want bool
+	}{
+		{name: "same frontier", a: []string{"$a", "$b"}, b: []string{"$a", "$b"}, want: true},
+		{name: "order does not matter", a: []string{"$a", "$b"}, b: []string{"$b", "$a"}, want: true},
+		{name: "a later extremity appears", a: []string{"$a"}, b: []string{"$a", "$b"}, want: false},
+		{name: "a later extremity changes", a: []string{"$a", "$b"}, b: []string{"$a", "$c"}, want: false},
+		{name: "an extremity disappears", a: []string{"$a", "$b"}, b: []string{"$a"}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sameFrontier(tc.a, tc.b), "sameFrontier(%v, %v)", tc.a, tc.b)
+		})
+	}
+}
 
 // TestPartialStateWorkerQueueRoom tests that rooms can be queued for processing.
 func TestPartialStateWorkerQueueRoom(t *testing.T) {
@@ -178,6 +206,10 @@ func (m *mockPartialStateRoomserverAPI) GetPartialStateServers(ctx context.Conte
 	return m.partialServers[roomNID], nil
 }
 
+func (m *mockPartialStateRoomserverAPI) GetPartialStateJoinEventID(context.Context, types.RoomNID) (string, error) {
+	return "", nil
+}
+
 func (m *mockPartialStateRoomserverAPI) GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error) {
 	return "", nil
 }
@@ -252,6 +284,37 @@ func TestPartialStateJoinClientTracking(t *testing.T) {
 	assert.True(t, client.LastJoinMembersOmitted)
 	assert.Len(t, client.LastJoinServersInRoom, 2)
 	assert.Contains(t, client.LastJoinServersInRoom, "server1.example.com")
+}
+
+func TestPartialStateJoinClientResetPartialState(t *testing.T) {
+	client := &PartialStateJoinClient{
+		LastJoinMembersOmitted: true,
+		LastJoinServersInRoom:  []string{"server1.example.com"},
+	}
+
+	client.resetPartialState()
+
+	assert.False(t, client.LastJoinMembersOmitted, "a full-state retry must not be recorded as partial")
+	assert.Nil(t, client.LastJoinServersInRoom)
+}
+
+func TestShouldRetryJoinWithoutPartialState(t *testing.T) {
+	client := &PartialStateJoinClient{LastJoinMembersOmitted: true}
+	authErr := &gomatrixserverlib.FederationError{
+		Reachable: true,
+		Err:       fmt.Errorf("respSendJoin.Check: %w", &gomatrixserverlib.NotAllowed{Message: "invite missing from state"}),
+	}
+
+	assert.True(t, shouldRetryJoinWithoutPartialState(client, authErr))
+	assert.False(t, shouldRetryJoinWithoutPartialState(&PartialStateJoinClient{}, authErr), "full-state responses do not need retry")
+	assert.False(t, shouldRetryJoinWithoutPartialState(client, &gomatrixserverlib.FederationError{
+		Reachable: true,
+		Err:       fmt.Errorf("transport or parsing failure"),
+	}), "non-auth failures do not need retry")
+	assert.False(t, shouldRetryJoinWithoutPartialState(client, &gomatrixserverlib.FederationError{
+		Reachable: false,
+		Err:       &gomatrixserverlib.NotAllowed{Message: "not reachable"},
+	}), "unreachable servers do not need retry")
 }
 
 // TestPartialStateWorkerConcurrency tests concurrent queue operations.
@@ -364,7 +427,6 @@ func TestPartialStateConstants(t *testing.T) {
 	assert.Equal(t, 4, partialStateWorkerCount, "Worker count should be 4")
 	assert.Equal(t, time.Minute*1, partialStateMinBackoff, "Min backoff should be 1 minute")
 	assert.Equal(t, time.Hour*1, partialStateMaxBackoff, "Max backoff should be 1 hour")
-	assert.Equal(t, 16, partialStateMaxRetries, "Max retries should be 16")
 }
 
 // TestPartialStateWorkerContextCancellation tests that workers respect context cancellation.
@@ -401,4 +463,415 @@ func TestPartialStateWorkerContextCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Worker did not exit on context cancellation")
 	}
+}
+
+func TestOverlayStateEvent(t *testing.T) {
+	roomVer := gomatrixserverlib.RoomVersionV10
+	verImpl := gomatrixserverlib.MustGetRoomVersion(roomVer)
+	newEvent := func(eventType, stateKey, body string) *types.HeaderedEvent {
+		raw := fmt.Sprintf(`{"type":%q,"state_key":%q,"room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`, eventType, stateKey, body)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+
+	oldName := newEvent("m.room.name", "", "old")
+	topic := newEvent("m.room.topic", "", "topic")
+	newName := newEvent("m.room.name", "", "new")
+	member := newEvent("m.room.member", "@b:test", "member")
+
+	ids := []string{oldName.EventID(), topic.EventID()}
+	stored := []*types.HeaderedEvent{oldName, topic}
+
+	t.Run("replaces the entry with the same type and state key", func(t *testing.T) {
+		out, err := overlayStateEvent(ids, stored, newName.PDU)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{topic.EventID(), newName.EventID()}, out)
+	})
+	t.Run("adds the event when the key is new", func(t *testing.T) {
+		out, err := overlayStateEvent(ids, stored, member.PDU)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{oldName.EventID(), topic.EventID(), member.EventID()}, out)
+	})
+	t.Run("fails if an old state event is not stored", func(t *testing.T) {
+		out, err := overlayStateEvent(ids, []*types.HeaderedEvent{topic}, newName.PDU)
+		require.ErrorContains(t, err, oldName.EventID())
+		assert.Nil(t, out, "must not return a state set with both versions of the key")
+	})
+}
+
+func TestOverlayStateEventsAppliesInOrder(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newName := func(body string) *types.HeaderedEvent {
+		raw := fmt.Sprintf(`{"type":"m.room.name","state_key":"","room_id":"!r:test","sender":"@a:test","content":{"name":%q},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`, body)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	first, second, third := newName("1"), newName("2"), newName("3")
+
+	out, err := overlayStateEvents([]string{first.EventID()}, []*types.HeaderedEvent{first}, []gomatrixserverlib.PDU{second.PDU, third.PDU})
+	require.NoError(t, err)
+	assert.Equal(t, []string{third.EventID()}, out, "a later overlay replaces an earlier one")
+}
+
+type anchorRoomserverAPI struct {
+	roomserverAPI.FederationRoomserverAPI
+	events      map[string]*types.HeaderedEvent
+	rejectedIDs map[string]bool
+}
+
+func (a anchorRoomserverAPI) QueryEventsByID(_ context.Context, req *roomserverAPI.QueryEventsByIDRequest, res *roomserverAPI.QueryEventsByIDResponse) error {
+	for _, id := range req.EventIDs {
+		if req.ExcludeRejected && a.rejectedIDs[id] {
+			continue
+		}
+		if ev, ok := a.events[id]; ok {
+			res.Events = append(res.Events, ev)
+		}
+	}
+	return nil
+}
+
+func TestFindStateAnchor(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string, prevs ...string) *types.HeaderedEvent {
+		prevJSON := "[]"
+		if len(prevs) > 0 {
+			prevJSON = fmt.Sprintf("[%q", prevs[0])
+			for _, p := range prevs[1:] {
+				prevJSON += fmt.Sprintf(",%q", p)
+			}
+			prevJSON += "]"
+		}
+		raw := fmt.Sprintf(`{"type":"m.room.message","room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":1,"prev_events":%s,"auth_events":[]}`, body, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	store := func(evs ...*types.HeaderedEvent) *PartialStateWorker {
+		m := map[string]*types.HeaderedEvent{}
+		for _, ev := range evs {
+			m[ev.EventID()] = ev
+		}
+		return &PartialStateWorker{rsAPI: anchorRoomserverAPI{events: m}}
+	}
+	ctx := context.Background()
+
+	t.Run("anchors on the parent of the oldest stored ancestor", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := newEvent("join", pre.EventID())
+		later := newEvent("later", join.EventID())
+		a := store(join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID)
+		assert.True(t, a.applyAsk)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID(), "chain is oldest first")
+		assert.Equal(t, later.EventID(), a.chain[1].EventID())
+	})
+	member := func(user, body string, prevs ...string) *types.HeaderedEvent {
+		prevJSON := "[]"
+		if len(prevs) > 0 {
+			prevJSON = fmt.Sprintf("[%q]", prevs[0])
+		}
+		raw := fmt.Sprintf(`{"type":"m.room.member","state_key":%q,"room_id":"!r:test","sender":%q,"content":{"membership":"join","displayname":%q},"origin_server_ts":1,"depth":1,"prev_events":%s,"auth_events":[]}`, user, user, body, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	t.Run("stops at our own join even when older history is stored", func(t *testing.T) {
+		older := newEvent("older")
+		pre := newEvent("pre", older.EventID())
+		join := member("@alice:local", "alice", pre.EventID())
+		later := newEvent("later", join.EventID())
+		a := store(older, pre, join, later).findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID, "outliers stored by an earlier attempt must not move the anchor")
+		assert.True(t, a.applyAsk)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID())
+	})
+	t.Run("walks past more than 256 events to the recorded join", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@alice:local", "alice", pre.EventID())
+		stored := []*types.HeaderedEvent{pre, join}
+		latest := join.PDU
+		for i := range 300 {
+			latest = newEvent(fmt.Sprintf("after join %d", i), latest.EventID()).PDU
+			stored = append(stored, &types.HeaderedEvent{PDU: latest})
+		}
+		a := store(stored...).findStateAnchor(ctx, "!r:test", latest.EventID(), join.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID)
+		assert.True(t, a.applyAsk)
+		assert.Len(t, a.chain, 301)
+	})
+	t.Run("a second local join during the resync does not move the recorded anchor", func(t *testing.T) {
+		pre := newEvent("pre")
+		first := member("@alice:local", "alice", pre.EventID())
+		second := member("@bob:local", "bob", first.EventID())
+		later := newEvent("later", second.EventID())
+		w := store(pre, first, second, later)
+
+		a := w.findStateAnchor(ctx, "!r:test", later.EventID(), first.EventID(), "local")
+		assert.Equal(t, pre.EventID(), a.askID, "the join that started the partial state is the join point")
+		require.Len(t, a.chain, 3)
+		assert.Equal(t, first.EventID(), a.chain[0].EventID())
+
+		a = w.findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, first.EventID(), a.askID, "without a recorded join the fallback takes the newest local join")
+	})
+	t.Run("a profile change after the join does not move the anchor", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@alice:local", "alice", pre.EventID())
+		rename := member("@alice:local", "alicia", join.EventID())
+		a := store(pre, join, rename).findStateAnchor(ctx, "!r:test", rename.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, join.EventID(), a.chain[0].EventID())
+		assert.Equal(t, rename.EventID(), a.chain[1].EventID())
+	})
+	t.Run("a remote user's join is not our join point", func(t *testing.T) {
+		pre := newEvent("pre")
+		join := member("@bob:remote", "bob", pre.EventID())
+		a := store(join).findStateAnchor(ctx, "!r:test", join.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID, "walk ends because pre is not stored")
+		assert.True(t, a.applyAsk)
+	})
+	t.Run("asks about an event with several parents directly", func(t *testing.T) {
+		p1, p2 := newEvent("p1"), newEvent("p2")
+		merge := newEvent("merge", p1.EventID(), p2.EventID())
+		a := store(merge).findStateAnchor(ctx, "!r:test", merge.EventID(), "", "local")
+		assert.Equal(t, merge.EventID(), a.askID)
+		assert.False(t, a.applyAsk)
+		require.Len(t, a.chain, 1)
+	})
+	t.Run("asks about an unknown latest event and applies it", func(t *testing.T) {
+		a := store().findStateAnchor(ctx, "!r:test", "$unknown", "", "local")
+		assert.Equal(t, "$unknown", a.askID)
+		assert.True(t, a.applyAsk, "the latest event's own state change must still be applied")
+		assert.Empty(t, a.chain)
+	})
+	t.Run("walks through a rejected event without applying its change", func(t *testing.T) {
+		pre := newEvent("pre")
+		rejected := newEvent("rejected", pre.EventID())
+		later := newEvent("later", rejected.EventID())
+		worker := &PartialStateWorker{rsAPI: anchorRoomserverAPI{
+			events:      map[string]*types.HeaderedEvent{rejected.EventID(): rejected, later.EventID(): later},
+			rejectedIDs: map[string]bool{rejected.EventID(): true},
+		}}
+		a := worker.findStateAnchor(ctx, "!r:test", later.EventID(), "", "local")
+		assert.Equal(t, pre.EventID(), a.askID, "the walk continues past the rejected event")
+		assert.True(t, a.applyAsk)
+		require.Len(t, a.chain, 2)
+		assert.Equal(t, rejected.EventID(), a.chain[0].EventID())
+
+		// The overlay step looks each event up again as an accepted one, so the
+		// rejected event's state change is left out.
+		_, err := worker.getStoredEvent(ctx, "!r:test", rejected.EventID())
+		assert.Error(t, err, "a rejected event is not an accepted stored event")
+		_, err = worker.getStoredEvent(ctx, "!r:test", later.EventID())
+		assert.NoError(t, err)
+	})
+}
+
+func TestAllowedOverlays(t *testing.T) {
+	alice, bob := test.NewUser(t), test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	userIDs := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID(string(senderID), true)
+	}
+	nobodyIsLocal := func(gomatrixserverlib.PDU) bool { return false }
+	ids := func(evs ...gomatrixserverlib.PDU) []string {
+		out := make([]string, len(evs))
+		for i, ev := range evs {
+			out[i] = ev.EventID()
+		}
+		return out
+	}
+	tupleOf := func(ev gomatrixserverlib.PDU) gomatrixserverlib.StateKeyTuple {
+		return gomatrixserverlib.StateKeyTuple{EventType: ev.Type(), StateKey: *ev.StateKey()}
+	}
+	stateOf := func(events []*types.HeaderedEvent) map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU {
+		state := map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU{}
+		for _, ev := range events {
+			if ev.StateKey() != nil {
+				state[tupleOf(ev.PDU)] = ev.PDU
+			}
+		}
+		return state
+	}
+	state := stateOf(room.Events())
+
+	bobJoin := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+	topic := room.CreateAndInsert(t, alice, spec.MRoomTopic, map[string]any{"topic": "a topic"}, test.WithStateKey(""))
+	leave := room.CreateEvent(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID), test.WithPrevEvents(bobJoin.EventID()))
+	// Built before the leave is inserted, as the room refuses events from a user who has left.
+	topicAfterLeave := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]any{"topic": "after leaving"}, test.WithStateKey(""), test.WithPrevEvents(leave.EventID()))
+	room.InsertEvent(t, leave)
+
+	t.Run("events the state allows are all applied", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(state, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU, topic.PDU), ids(allowed...))
+		assert.Empty(t, skipped)
+	})
+
+	// The full state shows Alice had already left, though her topic cites her join.
+	left := stateOf(room.Events())
+	delete(left, tupleOf(leave.PDU))
+	t.Run("an event the full state does not allow is left out", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, []gomatrixserverlib.PDU{bobJoin.PDU, topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU), ids(allowed...))
+		assert.Equal(t, ids(topic.PDU), ids(skipped...))
+	})
+
+	t.Run("events of this server are trusted", func(t *testing.T) {
+		allowed, skipped := allowedOverlays(left, []gomatrixserverlib.PDU{topic.PDU}, []gomatrixserverlib.PDU{topic.PDU}, func(gomatrixserverlib.PDU) bool { return true }, userIDs)
+		assert.Equal(t, ids(topic.PDU), ids(allowed...))
+		assert.Empty(t, skipped)
+	})
+
+	t.Run("an event on a concurrent branch is not judged by the other branch", func(t *testing.T) {
+		// topic and leave share bobJoin as their parent.
+		overlays := []gomatrixserverlib.PDU{bobJoin.PDU, leave.PDU, topic.PDU}
+		allowed, skipped := allowedOverlays(state, overlays, overlays, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU, leave.PDU, topic.PDU), ids(allowed...))
+		assert.Empty(t, skipped)
+	})
+
+	t.Run("an event descending from an earlier overlay is checked against it", func(t *testing.T) {
+		// topicAfterLeave has leave as its prev_event, so Alice has left on its branch.
+		overlays := []gomatrixserverlib.PDU{bobJoin.PDU, leave.PDU, topicAfterLeave.PDU}
+		allowed, skipped := allowedOverlays(state, overlays, overlays, nobodyIsLocal, userIDs)
+		assert.Equal(t, ids(bobJoin.PDU, leave.PDU), ids(allowed...))
+		assert.Equal(t, ids(topicAfterLeave.PDU), ids(skipped...))
+	})
+
+	t.Run("the state given is not changed", func(t *testing.T) {
+		before := len(state)
+		allowedOverlays(state, []gomatrixserverlib.PDU{topic.PDU}, []gomatrixserverlib.PDU{topic.PDU}, nobodyIsLocal, userIDs)
+		assert.Len(t, state, before)
+		assert.NotContains(t, state, tupleOf(topic.PDU))
+	})
+}
+
+func TestCachedAnchorStateIDs(t *testing.T) {
+	cache := make(map[string][]string)
+	calls := 0
+	fetch := func() ([]string, error) {
+		calls++
+		return []string{"$create", "$member"}, nil
+	}
+
+	first, err := cachedAnchorStateIDs(cache, "$anchor", fetch)
+	require.NoError(t, err)
+	first[0] = "$mutated"
+
+	second, err := cachedAnchorStateIDs(cache, "$anchor", fetch)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"$create", "$member"}, second)
+	assert.Equal(t, 1, calls, "a retry at the same anchor reuses its successful state lookup")
+
+	_, err = cachedAnchorStateIDs(cache, "$new-anchor", fetch)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "a different anchor requires a new state lookup")
+}
+
+func TestFindWindowAnchor(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string, depth int, prevs ...string) *types.HeaderedEvent {
+		prevJSON, err := json.Marshal(prevs)
+		require.NoError(t, err)
+		raw := fmt.Sprintf(`{"type":"m.room.message","room_id":"!r:test","sender":"@a:test","content":{"body":%q},"origin_server_ts":1,"depth":%d,"prev_events":%s,"auth_events":[]}`, body, depth, prevJSON)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	store := func(evs ...*types.HeaderedEvent) *PartialStateWorker {
+		m := map[string]*types.HeaderedEvent{}
+		for _, ev := range evs {
+			m[ev.EventID()] = ev
+		}
+		return &PartialStateWorker{rsAPI: anchorRoomserverAPI{events: m}}
+	}
+	ctx := context.Background()
+	ids := func(chain []gomatrixserverlib.PDU) []string {
+		var out []string
+		for _, ev := range chain {
+			out = append(out, ev.EventID())
+		}
+		return out
+	}
+
+	pre := newEvent("pre", 1)
+	join := newEvent("join", 2, pre.EventID())
+
+	t.Run("an event with two prev events anchors on the join's parent", func(t *testing.T) {
+		a := newEvent("a", 3, join.EventID())
+		b := newEvent("b", 4, a.EventID(), join.EventID())
+		anchor, ok := store(pre, join, a, b).findWindowAnchor(ctx, "!r:test", b.EventID(), join.EventID())
+		require.True(t, ok)
+		assert.Equal(t, pre.EventID(), anchor.askID)
+		assert.True(t, anchor.applyAsk)
+		assert.Equal(t, []string{join.EventID(), a.EventID(), b.EventID()}, ids(anchor.chain))
+	})
+
+	t.Run("a fork and merge puts the merge last", func(t *testing.T) {
+		a := newEvent("a", 3, join.EventID())
+		b := newEvent("b", 4, a.EventID())
+		c := newEvent("c", 5, a.EventID())
+		d := newEvent("d", 6, b.EventID(), c.EventID())
+		anchor, ok := store(pre, join, a, b, c, d).findWindowAnchor(ctx, "!r:test", d.EventID(), join.EventID())
+		require.True(t, ok)
+		got := ids(anchor.chain)
+		require.Len(t, got, 5)
+		assert.Equal(t, join.EventID(), got[0])
+		assert.Equal(t, a.EventID(), got[1])
+		assert.Equal(t, d.EventID(), got[4])
+	})
+
+	t.Run("an event that does not lead back to the join is not anchored", func(t *testing.T) {
+		other := newEvent("other", 3, pre.EventID())
+		_, ok := store(pre, join, other).findWindowAnchor(ctx, "!r:test", other.EventID(), join.EventID())
+		assert.False(t, ok)
+	})
+
+	t.Run("a join with two parents is not anchored", func(t *testing.T) {
+		other := newEvent("other", 1)
+		twoParents := newEvent("join2", 2, pre.EventID(), other.EventID())
+		_, ok := store(pre, other, twoParents).findWindowAnchor(ctx, "!r:test", twoParents.EventID(), twoParents.EventID())
+		assert.False(t, ok)
+	})
+}
+
+func TestPartialStateWorkerShouldGiveUp(t *testing.T) {
+	cfg := &config.FederationAPI{PartialStateResyncGiveUpAfter: time.Minute}
+	w := &PartialStateWorker{fedAPI: &FederationInternalAPI{cfg: cfg}}
+
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{}), "failures on our side never count")
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now()}), "too soon")
+	assert.True(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now().Add(-2 * time.Minute)}))
+
+	cfg.PartialStateResyncGiveUpAfter = 0
+	assert.False(t, w.shouldGiveUp(&roomRetryInfo{failingSince: time.Now().Add(-2 * time.Minute)}), "0 never gives up")
+}
+
+func TestRoomRetryInfoNoteFailure(t *testing.T) {
+	info := &roomRetryInfo{}
+	remote := &remoteStateError{fmt.Errorf("LookupStateIDs: 500")}
+
+	info.noteFailure(remote)
+	started := info.failingSince
+	assert.False(t, started.IsZero(), "a failure to get state starts the timer")
+
+	info.noteFailure(remote)
+	assert.Equal(t, started, info.failingSince, "further such failures keep the first time")
+
+	info.noteFailure(fmt.Errorf("resync failed: %w", remote))
+	assert.True(t, info.failingSince.IsZero(), "a failure that is not wholly remote resets the timer, whatever its cause")
+	info.noteFailure(remote)
+
+	info.noteFailure(fmt.Errorf("storing the state failed"))
+	assert.True(t, info.failingSince.IsZero(), "a failure on our side resets the timer")
+
+	info.noteFailure(roomserverAPI.ErrResyncFrontierChanged)
+	assert.True(t, info.failingSince.IsZero(), "the room changing says nothing about the servers")
 }

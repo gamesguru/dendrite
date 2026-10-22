@@ -144,6 +144,21 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 			"event_id":   event.EventID(),
 			"event_type": event.Type(),
 		}).Tracef("Received message from roomserver: %#v", output)
+	case rsapi.OutputTypeRejectedEvents:
+		var output rsapi.OutputEvent
+		if err := json.Unmarshal(msg.Data, &output); err != nil {
+			log.WithError(err).Errorf("roomserver output log: message parse failure")
+			return true
+		}
+		if output.RejectedEvents == nil {
+			return true
+		}
+		if err := s.onRejectedEvents(ctx, *output.RejectedEvents); err != nil {
+			log.WithError(err).WithField("room_id", output.RejectedEvents.RoomID).
+				Error("userapi consumer: failed to clean up rejected events")
+			return false
+		}
+		return true
 	default:
 		return true
 	}
@@ -164,6 +179,29 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// onRejectedEvents drops notifications for events the roomserver rejected after
+// accepting them, and refreshes the room counts for every affected user.
+func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg rsapi.OutputRejectedEvents) error {
+	for _, eventID := range msg.EventIDs {
+		if _, err := s.db.DeleteNotificationsForEvent(ctx, msg.RoomID, eventID); err != nil {
+			return fmt.Errorf("s.db.DeleteNotificationsForEvent: %w", err)
+		}
+	}
+	users, err := s.db.PendingNotificationRefreshes(ctx, msg.RoomID)
+	if err != nil {
+		return fmt.Errorf("s.db.PendingNotificationRefreshes: %w", err)
+	}
+	for _, userID := range users {
+		if err := s.syncProducer.GetAndSendNotificationData(ctx, userID, msg.RoomID); err != nil {
+			return fmt.Errorf("publish notification counts for %s in %s: %w", userID, msg.RoomID, err)
+		}
+		if err := s.db.CompleteNotificationRefresh(ctx, msg.RoomID, userID); err != nil {
+			return fmt.Errorf("s.db.CompleteNotificationRefresh: %w", err)
+		}
+	}
+	return nil
 }
 
 // cancelDelayedStateEvents cancels other users' MSC4140 delayed events for

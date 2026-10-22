@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -14,6 +15,10 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// ErrResyncFrontierChanged is returned when the room's latest events changed
+// before a partial-state resync could atomically replace current state.
+var ErrResyncFrontierChanged = errors.New("room frontier changed during partial state resync")
 
 // ErrInvalidID is an error returned if the userID is invalid.
 type ErrInvalidID struct {
@@ -185,8 +190,21 @@ type QueryMembershipAPI interface {
 	) (map[string]*types.HeaderedEvent, error)
 }
 
+// PartialStateAwaiterAPI lets a request wait for a room's partial state resync (MSC3706).
+type PartialStateAwaiterAPI interface {
+	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state.
+	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
+	// AwaitRoomFullState blocks until the room has full state or the context ends.
+	// A room that is not partial returns at once.
+	AwaitRoomFullState(ctx context.Context, roomID string) error
+	// AckUnPartialStated tells the roomserver that the sync API has taken in the state
+	// of a room that finished its resync, which releases the requests waiting for it.
+	AckUnPartialStated(roomID string)
+}
+
 // API functions required by the syncapi.
 type SyncRoomserverAPI interface {
+	PartialStateAwaiterAPI
 	QueryLatestEventsAndStateAPI
 	QueryBulkStateContentAPI
 	QuerySenderIDAPI
@@ -255,6 +273,7 @@ type AppserviceRoomserverAPI interface {
 }
 
 type ClientRoomserverAPI interface {
+	PartialStateAwaiterAPI
 	InputRoomEventsAPI
 	QueryLatestEventsAndStateAPI
 	QueryBulkStateContentAPI
@@ -395,7 +414,8 @@ type FederationRoomserverAPI interface {
 	// MSC3706 Partial State Join methods
 	// SetRoomPartialState marks a room as having partial state after a faster join
 	// deviceListStreamID is the current device list stream position at join time (for device list replay)
-	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
+	// joinEventID is the join event that started the partial state, which must already be stored.
+	SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventID string, joinedVia string, serversInRoom []string, deviceListStreamID int64) error
 	// IsRoomPartialState returns true if the room has partial state
 	IsRoomPartialState(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// ClearRoomPartialState removes the partial state flag from a room
@@ -403,8 +423,12 @@ type FederationRoomserverAPI interface {
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
 	// GetPartialStateServers returns servers known to be in a partial state room
 	GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error)
+	// PerformLeave makes a local user leave a room
+	PerformLeave(ctx context.Context, req *PerformLeaveRequest, res *PerformLeaveResponse) error
 	// GetPartialStateJoinServer returns the server we joined through for a partial state room
 	GetPartialStateJoinServer(ctx context.Context, roomNID types.RoomNID) (string, error)
+	// GetPartialStateJoinEventID returns the join event that started the partial state, or "" if unknown
+	GetPartialStateJoinEventID(ctx context.Context, roomNID types.RoomNID) (string, error)
 	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
 	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
 	// GetAllPartialStateRooms returns all rooms with partial state
@@ -422,10 +446,27 @@ type FederationRoomserverAPI interface {
 	// This is called after state events have been stored as outliers via SendStateAsOutliers.
 	// It creates a new state snapshot from the stored events, calculates the state delta,
 	// updates the membership table, and notifies downstream components (syncapi).
-	// stateEventIDs are the event IDs of the state events that were fetched during resync.
-	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs []string) error
+	// stateEventIDs are the state events fetched during resync. expectedLatestEventIDs
+	// anchorStateIDs, if not empty, is the state before the join that started the
+	// partial state; the events received since then get the state they would have had
+	// with it. expectedLatestEventIDs is the frontier from which the state was built; a changed frontier aborts
+	// the update so the resync worker can retry from the newer events.
+	UpdateCurrentStateAfterResync(ctx context.Context, roomID string, stateEventIDs, anchorStateIDs, expectedLatestEventIDs []string) error
 }
 
 type KeyserverRoomserverAPI interface {
 	QueryLeftUsers(ctx context.Context, req *QueryLeftUsersRequest, res *QueryLeftUsersResponse) error
+	QueryUsersSharingRoomWithLocal(ctx context.Context, req *QueryUsersSharingRoomWithLocalRequest, res *QueryUsersSharingRoomWithLocalResponse) error
+	// GetPartialStateRoomIDs returns the rooms this server only has partial state for (MSC3706).
+	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
+	// QueryMembershipsForRoom returns the memberships of a room.
+	QueryMembershipsForRoom(ctx context.Context, req *QueryMembershipsForRoomRequest, res *QueryMembershipsForRoomResponse) error
+	// QueryRoomsForUser returns the rooms the user has the given membership in.
+	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
+	// RegisterUnPartialStatedHook registers a function to call whenever a room finishes
+	// its partial state resync, for components that must act once its members are known.
+	RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string))
+	// TakeMembersJoinedDuringPartialState returns who was joined to the room before its
+	// resync state was applied, once it completed. The result is not ok when that is not known.
+	TakeMembersJoinedDuringPartialState(roomID string) (members PartialStateMembers, ok bool)
 }

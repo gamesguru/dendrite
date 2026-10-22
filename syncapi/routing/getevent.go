@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -76,32 +77,44 @@ func GetEvent(
 		}
 	}
 
-	// The roomserver accepts a redaction before the sync consumer has
-	// necessarily applied it to its event copy. Prefer the roomserver's
-	// redacted event in that short window so /event does not expose the old
-	// content after the redaction request has completed.
-	if !events[0].Redacted() {
-		var roomEvents api.QueryEventsByIDResponse
-		if err = rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
-			RoomID:   rawRoomID,
-			EventIDs: []string{eventID},
-		}, &roomEvents); err != nil {
-			logger.WithError(err).Error("GetEvent: rsAPI.QueryEventsByID failed")
-			return util.JSONResponse{
-				Code: http.StatusInternalServerError,
-				JSON: spec.InternalServerError{},
-			}
+	// The roomserver is the authority on an event's verdict, and it can change after
+	// the sync API stored the event: one accepted while a room had partial state may
+	// be rejected once the full state is known. It also accepts a redaction before
+	// the sync consumer has necessarily applied it to its event copy, so prefer its
+	// redacted event in that short window and /event does not expose the old content
+	// after the redaction request has completed.
+	var roomEvents api.QueryEventsByIDResponse
+	if err = rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID:          rawRoomID,
+		EventIDs:        []string{eventID},
+		ExcludeRejected: true,
+	}, &roomEvents); err != nil {
+		logger.WithError(err).Error("GetEvent: rsAPI.QueryEventsByID failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.InternalServerError{},
 		}
-		for _, roomEvent := range roomEvents.Events {
-			if roomEvent.EventID() == eventID && roomEvent.Redacted() {
-				// Keep the sync copy's history visibility, which the
-				// roomserver's event does not carry.
-				copied := *events[0]
-				copied.PDU = roomEvent.PDU
-				events[0] = &copied
-				break
-			}
+	}
+	var roomEvent *rstypes.HeaderedEvent
+	for _, candidate := range roomEvents.Events {
+		if candidate.EventID() == eventID {
+			roomEvent = candidate
+			break
 		}
+	}
+	if roomEvent == nil {
+		logger.Debugf("GetEvent: the roomserver has rejected the requested event or does not have it")
+		return util.JSONResponse{
+			Code: http.StatusNotFound,
+			JSON: spec.NotFound("The event was not found or you do not have permission to read this event"),
+		}
+	}
+	if !events[0].Redacted() && roomEvent.Redacted() {
+		// Keep the sync copy's history visibility, which the
+		// roomserver's event does not carry.
+		copied := *events[0]
+		copied.PDU = roomEvent.PDU
+		events[0] = &copied
 	}
 
 	// If the request is coming from an appservice, get the user from the request

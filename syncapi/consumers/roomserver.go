@@ -196,6 +196,13 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		}
 	case api.OutputTypeUnPartialStatedRoom:
 		err = s.onUnPartialStatedRoom(s.ctx, *output.UnPartialStatedRoom) //nolint:contextcheck
+	case api.OutputTypeRejectedEvents:
+		err = s.onRejectedEvents(s.ctx, *output.RejectedEvents) //nolint:contextcheck
+		if err == nil {
+			// userapi keeps its own per-event notification rows, so it has to
+			// see the rejection too. Publish only after syncapi has committed.
+			err = s.producePushEvent(msg)
+		}
 	default:
 		log.WithField("type", output.Type).Debug(
 			"roomserver output log: ignoring unknown output type",
@@ -901,6 +908,9 @@ func (s *OutputRoomEventConsumer) onUnPartialStatedRoom(
 	}
 	trace.SetTag("notified_position", lastPos)
 
+	// Requests that waited for this resync can now read the state it produced.
+	s.rsAPI.AckUnPartialStated(msg.RoomID)
+
 	logger.Info("Successfully processed un-partial-stated room event")
 	return nil
 }
@@ -1090,4 +1100,21 @@ func (s *OutputRoomEventConsumer) queueRoomMetadataUpdate(ev *rstypes.HeaderedEv
 	if ev.Type() != spec.MRoomMember {
 		s.metadataQueuer.QueueRoom(ev.RoomID().String())
 	}
+}
+
+// onRejectedEvents drops events the roomserver rejected after accepting them, and
+// removes them from the fulltext index so searches do not return them.
+func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.OutputRejectedEvents) error {
+	if err := s.db.DeleteRejectedEvents(ctx, msg.RoomID, msg.EventIDs); err != nil {
+		return err
+	}
+	if s.fts == nil {
+		return nil
+	}
+	for _, eventID := range msg.EventIDs {
+		if err := s.fts.Delete(eventID); err != nil {
+			log.WithError(err).WithField("event_id", eventID).Warn("Failed to delete rejected event from the fulltext index")
+		}
+	}
+	return nil
 }

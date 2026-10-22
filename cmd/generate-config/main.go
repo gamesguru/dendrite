@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/goccy/go-yaml"
@@ -50,6 +51,9 @@ func main() {
 				} else {
 					db.ConnectionString = uri
 				}
+				// A CI server's disk is shared and busy, where a commit that
+				// fsyncs several times makes request timeouts a gamble.
+				db.SQLiteWAL = *defaultsForCI
 			}
 		} else {
 			cfg.Global.DatabaseOptions.ConnectionString = uri
@@ -69,12 +73,20 @@ func main() {
 		}
 		if *defaultsForCI {
 			cfg.AppServiceAPI.DisableTLSValidation = true
+			// Complement mounts one registration file per application service
+			// into this directory.
+			cfg.AppServiceAPI.ConfigFiles = []string{"/complement/appservice/"}
 			cfg.ClientAPI.RateLimiting.Enabled = false
+			// Test suites register users with passwords such as "secret".
+			cfg.ClientAPI.MinPasswordLength = 1
 			cfg.FederationAPI.DisableTLSValidation = false
 			cfg.FederationAPI.DisableHTTPKeepalives = true
 			// Complement restarts servers and expects delivery to resume
 			// within seconds, as Synapse's Complement config does.
 			cfg.FederationAPI.FederationMinRetryExponent = 0
+			// Complement joins rooms whose servers all fail to give state, and expects the
+			// join to be abandoned within seconds.
+			cfg.FederationAPI.PartialStateResyncGiveUpAfter = 5 * time.Second //nolint:mnd
 			// Allow allow networks when running in CI, as otherwise connections
 			// to other servers might be blocked when running Complement/Sytest.
 			cfg.FederationAPI.DenyNetworkCIDRs = []string{}

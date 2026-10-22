@@ -59,6 +59,11 @@ global:
     max_open_conns: 90
     max_idle_conns: 5
     conn_max_lifetime: -1
+    # SQLite only: use a write-ahead log with synchronous=NORMAL. A commit then
+    # appends to the log instead of fsyncing several times, which is much faster
+    # on a busy or slow disk. A power loss or system crash can lose the most
+    # recent transactions, but never corrupts the database. Off by default.
+    # sqlite_wal: true
 
   # Configuration for in-memory caches. Caches can often improve performance by
   # keeping frequently accessed items (like events, identifiers etc.) in memory
@@ -227,6 +232,10 @@ client_api:
   # Prevents new users from being able to register on this homeserver, except when
   # using the registration shared secret below.
   registration_disabled: true
+
+  # The shortest password accepted when registering or changing a password. The
+  # default is 8 characters. Shorter ones are rejected with M_WEAK_PASSWORD.
+  # min_password_length: 8
 
   # Prevents new guest accounts from being created. Guest registration is also
   # disabled implicitly by setting 'registration_disabled' above.
