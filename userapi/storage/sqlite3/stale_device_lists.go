@@ -51,8 +51,8 @@ const selectFreshDeviceListsSQL = "" +
 const deleteStaleDevicesSQL = "" +
 	"DELETE FROM keyserver_stale_device_lists WHERE user_id IN ($1)"
 
-// freshDeviceListsBatchSize keeps each query below SQLite's bind variable limit.
-const freshDeviceListsBatchSize = 1000
+// staleDeviceListsBatchSize keeps each query below SQLite's 999-variable limit.
+const staleDeviceListsBatchSize = 999
 
 type staleDeviceListsStatements struct {
 	db                                    *sql.DB
@@ -118,7 +118,7 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx conte
 		return nil, nil
 	}
 	var result []string
-	for batch := range slices.Chunk(userIDs, freshDeviceListsBatchSize) {
+	for batch := range slices.Chunk(userIDs, staleDeviceListsBatchSize) {
 		qry := strings.Replace(selectFreshDeviceListsSQL, "($1)", sqlutil.QueryVariadic(len(batch)), 1)
 		params := make([]any, len(batch))
 		for i := range batch {
@@ -141,21 +141,23 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx conte
 func (s *staleDeviceListsStatements) DeleteStaleDeviceLists(
 	ctx context.Context, txn *sql.Tx, userIDs []string,
 ) error {
-	qry := strings.Replace(deleteStaleDevicesSQL, "($1)", sqlutil.QueryVariadic(len(userIDs)), 1)
-	stmt, err := s.db.Prepare(qry)
-	if err != nil {
-		return err
+	for batch := range slices.Chunk(userIDs, staleDeviceListsBatchSize) {
+		qry := strings.Replace(deleteStaleDevicesSQL, "($1)", sqlutil.QueryVariadic(len(batch)), 1)
+		stmt, err := s.db.Prepare(qry)
+		if err != nil {
+			return err
+		}
+		params := make([]any, len(batch))
+		for i := range batch {
+			params[i] = batch[i]
+		}
+		_, err = sqlutil.TxStmt(txn, stmt).ExecContext(ctx, params...)
+		internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
+		if err != nil {
+			return err
+		}
 	}
-	defer internal.CloseAndLogIfError(ctx, stmt, "DeleteStaleDeviceLists: stmt.Close failed")
-	stmt = sqlutil.TxStmt(txn, stmt)
-
-	params := make([]any, len(userIDs))
-	for i := range userIDs {
-		params[i] = userIDs[i]
-	}
-
-	_, err = stmt.ExecContext(ctx, params...)
-	return err
+	return nil
 }
 
 func rowsToUserIDs(ctx context.Context, rows *sql.Rows) (result []string, err error) {
