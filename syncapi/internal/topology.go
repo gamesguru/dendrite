@@ -20,7 +20,7 @@ const membershipWaitTimeout = 3 * time.Second
 
 // WaitForMembershipInTopology polls until the sync API has the given membership
 // event in its topology, or the timeout or context ends. It never fails the
-// request: an event that doesn't arrive just gets the old behaviour.
+// request: an event that doesn't arrive just gets the old behavior.
 func WaitForMembershipInTopology(ctx context.Context, db storage.Database, eventID string) {
 	if db == nil {
 		return
@@ -30,7 +30,7 @@ func WaitForMembershipInTopology(ctx context.Context, db storage.Database, event
 		if err != nil {
 			return err
 		}
-		defer snapshot.Rollback() // nolint:errcheck
+		defer snapshot.Rollback() //nolint:errcheck
 		_, err = snapshot.EventPositionInTopology(ctx, eventID)
 		return err
 	})
