@@ -337,7 +337,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 
 // addUnPartialStatedRooms adds a delta with the whole current state for each room
 // whose partial state resync finished in the range, replacing any delta the range
-// already holds for it. The resync changes no state of its own, so a client whose
+// already holds for it, unless the user has left or been banned since. The resync changes no state of its own, so a client whose
 // token is already past its join would otherwise never be sent the room.
 func (p *PDUStreamProvider) addUnPartialStatedRooms(
 	ctx context.Context, snapshot storage.DatabaseTransaction, req *types.SyncRequest, r types.Range,
@@ -354,7 +354,34 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 	if len(roomIDs) == 0 {
 		return stateDeltas, syncJoinedRooms, nil
 	}
-	fullDeltas, err := snapshot.FullStateDeltas(ctx, req.Device, roomIDs, stateFilter, p.rsAPI)
+	// Only rooms the user is still joined to are sent in full; a leave or ban
+	// delta stays as it is, so the client is not shown state from after its access ended.
+	left := make(map[string]bool)
+	for _, delta := range stateDeltas {
+		if delta.Membership != spec.Join {
+			left[delta.RoomID] = true
+		}
+	}
+	joinedIDs := make([]string, 0, len(roomIDs))
+	for _, roomID := range roomIDs {
+		if left[roomID] {
+			continue
+		}
+		membership, _, memErr := snapshot.SelectMembershipForUser(ctx, roomID, req.Device.UserID, int64(r.To))
+		if memErr != nil {
+			if abandonsSync(memErr) {
+				return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.SelectMembershipForUser: %w", memErr)
+			}
+			continue
+		}
+		if membership == spec.Join {
+			joinedIDs = append(joinedIDs, roomID)
+		}
+	}
+	if len(joinedIDs) == 0 {
+		return stateDeltas, syncJoinedRooms, nil
+	}
+	fullDeltas, err := snapshot.FullStateDeltas(ctx, req.Device, joinedIDs, stateFilter, p.rsAPI)
 	if err != nil {
 		if abandonsSync(err) {
 			return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.FullStateDeltas: %w", err)

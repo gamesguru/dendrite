@@ -27,10 +27,21 @@ import (
 type unPartialSnapshot struct {
 	failoverSnapshot
 	state []*rstypes.HeaderedEvent
+	// membership is the user's membership when the range ends; empty means join.
+	membership string
+	// deltas are the state deltas the range already holds.
+	deltas []types.StateDelta
+}
+
+func (s unPartialSnapshot) SelectMembershipForUser(context.Context, string, string, int64) (string, int64, error) {
+	if s.membership == "" {
+		return "join", 0, nil
+	}
+	return s.membership, 0, nil
 }
 
 func (s unPartialSnapshot) GetStateDeltas(context.Context, *userapi.Device, types.Range, string, *synctypes.StateFilter, roomserverAPI.SyncRoomserverAPI) ([]types.StateDelta, []string, error) {
-	return nil, nil, nil
+	return s.deltas, nil, nil
 }
 
 func (s unPartialSnapshot) RecentEvents(context.Context, []string, types.Range, *synctypes.RoomEventFilter, bool, bool) (map[string]types.RecentEvents, error) {
@@ -103,5 +114,24 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 		req := newUnPartialRequest(t, alice.ID, true)
 		provider.IncrementalSync(t.Context(), snapshot, req, 10, 20)
 		assert.NotContains(t, req.Response.Rooms.Join, room.ID, "it saw the room during the resync")
+	})
+
+	t.Run("a room the user has left is not sent as joined", func(t *testing.T) {
+		left := snapshot
+		left.membership = "leave"
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), left, req, 10, 20)
+		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
+		assert.NotContains(t, req.NewlyJoinedRooms, room.ID)
+	})
+
+	t.Run("a leave delta is kept", func(t *testing.T) {
+		left := snapshot
+		left.membership = "leave"
+		left.deltas = []types.StateDelta{{RoomID: room.ID, Membership: "leave"}}
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), left, req, 10, 20)
+		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
+		assert.Contains(t, req.Response.Rooms.Leave, room.ID)
 	})
 }

@@ -9,6 +9,7 @@ package sqlite3
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +50,9 @@ const selectFreshDeviceListsSQL = "" +
 
 const deleteStaleDevicesSQL = "" +
 	"DELETE FROM keyserver_stale_device_lists WHERE user_id IN ($1)"
+
+// freshDeviceListsBatchSize keeps each query below SQLite's bind variable limit.
+const freshDeviceListsBatchSize = 1000
 
 type staleDeviceListsStatements struct {
 	db                                    *sql.DB
@@ -113,16 +117,24 @@ func (s *staleDeviceListsStatements) SelectUserIDsWithFreshDeviceLists(ctx conte
 	if len(userIDs) == 0 {
 		return nil, nil
 	}
-	qry := strings.Replace(selectFreshDeviceListsSQL, "($1)", sqlutil.QueryVariadic(len(userIDs)), 1)
-	params := make([]any, len(userIDs))
-	for i := range userIDs {
-		params[i] = userIDs[i]
+	var result []string
+	for batch := range slices.Chunk(userIDs, freshDeviceListsBatchSize) {
+		qry := strings.Replace(selectFreshDeviceListsSQL, "($1)", sqlutil.QueryVariadic(len(batch)), 1)
+		params := make([]any, len(batch))
+		for i := range batch {
+			params[i] = batch[i]
+		}
+		rows, err := s.db.QueryContext(ctx, qry, params...)
+		if err != nil {
+			return nil, err
+		}
+		found, err := rowsToUserIDs(ctx, rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, found...)
 	}
-	rows, err := s.db.QueryContext(ctx, qry, params...)
-	if err != nil {
-		return nil, err
-	}
-	return rowsToUserIDs(ctx, rows)
+	return result, nil
 }
 
 // DeleteStaleDeviceLists removes users from stale device lists.

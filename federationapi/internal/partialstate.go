@@ -861,7 +861,7 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 		user, queryErr := w.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
 		return queryErr == nil && user != nil && w.fedAPI.cfg.Matrix.IsLocalServerName(user.Domain())
 	}
-	allowed, skipped := allowedOverlays(state, stateOverlays, trusted, userIDQuerier)
+	allowed, skipped := allowedOverlays(state, stateOverlays, overlays, trusted, userIDQuerier)
 	for _, ev := range skipped {
 		logger.WithField("event_id", ev.EventID()).Warn("Not applying an event received during the partial join: the room's full state does not allow it")
 	}
@@ -926,27 +926,61 @@ func stateIDsBeforeJoin(stateIDs []string, anchor stateAnchor, joinEventID strin
 }
 
 // allowedOverlays returns, in order, the state events that the auth rules allow on top
-// of state, and those they do not. Each event allowed is added to the state the
-// next is checked against. Trusted events, such as this server's own, are applied
-// without a check. An event that cannot be checked is applied, so that a
-// failure here cannot leave the room without state it should have.
+// of state, and those they do not. Each event is checked against state plus the
+// allowed events among its own ancestors, so an event is not judged by changes made
+// on a concurrent branch: a leave and a topic change sharing a parent do not
+// affect each other. Ancestry is followed through graph, which holds every event of
+// the chain including those that do not change state, and through the overlays.
+// Trusted events, such as this server's own, are applied without a check. An event
+// that cannot be checked is applied, so that a failure here cannot leave the room
+// without state it should have.
 func allowedOverlays(
 	state map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU,
 	overlays []gomatrixserverlib.PDU,
+	graph []gomatrixserverlib.PDU,
 	trusted func(gomatrixserverlib.PDU) bool,
 	userIDQuerier spec.UserIDForSender,
 ) (allowed, skipped []gomatrixserverlib.PDU) {
-	current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(state))
-	for tuple, ev := range state {
-		current[tuple] = ev
+	byID := make(map[string]gomatrixserverlib.PDU, len(graph)+len(overlays))
+	for _, ev := range graph {
+		byID[ev.EventID()] = ev
 	}
 	for _, ev := range overlays {
+		byID[ev.EventID()] = ev
+	}
+	ancestorsOf := func(ev gomatrixserverlib.PDU) map[string]bool {
+		seen := map[string]bool{}
+		queue := slices.Clone(ev.PrevEventIDs())
+		for len(queue) > 0 {
+			id := queue[0]
+			queue = queue[1:]
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if parent, ok := byID[id]; ok {
+				queue = append(queue, parent.PrevEventIDs()...)
+			}
+		}
+		return seen
+	}
+
+	for _, ev := range overlays {
+		ancestors := ancestorsOf(ev)
+		current := make(map[gomatrixserverlib.StateKeyTuple]gomatrixserverlib.PDU, len(state))
+		for tuple, e := range state {
+			current[tuple] = e
+		}
+		for _, prior := range allowed {
+			if ancestors[prior.EventID()] {
+				current[gomatrixserverlib.StateKeyTuple{EventType: prior.Type(), StateKey: *prior.StateKey()}] = prior
+			}
+		}
 		if !trusted(ev) && !allowedByState(current, ev, userIDQuerier) {
 			skipped = append(skipped, ev)
 			continue
 		}
 		allowed = append(allowed, ev)
-		current[gomatrixserverlib.StateKeyTuple{EventType: ev.Type(), StateKey: *ev.StateKey()}] = ev
 	}
 	return allowed, skipped
 }
@@ -1459,6 +1493,16 @@ func (w *PartialStateWorker) applyState(
 		"state_event_count": len(stateEventIDs),
 	}).Debug("UpdateCurrentStateAfterResync completed")
 
+	// The joined hosts only held the servers of the partial /send_join response, so
+	// rebuild them from the complete state. This happens before the partial flag is
+	// cleared, so a failure is retried with the room still marked partial, and before
+	// anything is sent to the room again, such as the device list updates replayed by
+	// the hooks NotifyUnPartialStated runs.
+	if err := w.refreshJoinedHosts(ctx, roomID); err != nil {
+		logger.WithError(err).Warn("Failed to refresh the joined hosts after resync")
+		return err
+	}
+
 	clearStateRegion, _ := internal.StartRegion(ctx, "ClearRoomPartialState")
 	clearStateStartTime := time.Now()
 	deviceListStreamID, err := w.rsAPI.ClearRoomPartialState(ctx, roomNID)
@@ -1473,13 +1517,6 @@ func (w *PartialStateWorker) applyState(
 		"clear_state_ms":        time.Since(clearStateStartTime).Milliseconds(),
 		"total_resync_ms":       time.Since(resyncStartTime).Milliseconds(),
 	}).Debug("Successfully completed partial state resync")
-
-	// The joined hosts only held the servers of the partial /send_join response, so
-	// rebuild them from the complete state before anything is sent to the room again,
-	// such as the device list updates replayed by the hooks NotifyUnPartialStated runs.
-	if err = w.refreshJoinedHosts(ctx, roomID); err != nil {
-		logger.WithError(err).Warn("Failed to refresh the joined hosts after resync")
-	}
 
 	w.rsAPI.NotifyUnPartialStated(roomID)
 
