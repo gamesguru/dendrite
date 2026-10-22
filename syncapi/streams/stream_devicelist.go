@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -23,7 +24,55 @@ func (p *DeviceListStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
+	// A complete sync issues the token before the PDU provider takes its
+	// position. Wait for a just-joined partial-state room to reach the sync API
+	// first, so the token covers the join and the next sync does not mistake it
+	// for a room that was joined and left in the same gap.
+	p.waitForPendingPartialJoins(ctx, req)
 	return p.LatestPosition(ctx)
+}
+
+// waitForPendingPartialJoins waits for the syncing user's membership in rooms
+// that are still doing a partial-state resync to reach the sync API. Those
+// joins come from the roomserver before its output reaches the sync consumer,
+// so without the wait a complete sync can take a token from before the join.
+// This is deliberately limited to partial-state rooms: the PDU position alone
+// is not a reliable barrier for ordinary joins until the output consumers share
+// a position with the sync API.
+func (p *DeviceListStreamProvider) waitForPendingPartialJoins(ctx context.Context, req *types.SyncRequest) {
+	if p.rsAPI == nil {
+		return
+	}
+	roomIDs, err := p.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		req.Log.WithError(err).Warn("Failed to get partial state rooms")
+		return
+	}
+	if len(roomIDs) == 0 {
+		return
+	}
+	userID, err := spec.NewUserID(req.Device.UserID, true)
+	if err != nil {
+		return
+	}
+	for _, roomID := range roomIDs {
+		var res api.QueryMembershipForUserResponse
+		if err := p.rsAPI.QueryMembershipForUser(ctx, &api.QueryMembershipForUserRequest{
+			RoomID: roomID,
+			UserID: *userID,
+		}, &res); err != nil {
+			req.Log.WithError(err).WithField("room_id", roomID).Debug("Failed to query membership for a partial state room")
+			continue
+		}
+		if !res.IsInRoom || res.EventID == "" {
+			continue
+		}
+		req.Log.WithFields(logrus.Fields{
+			"room_id":  roomID,
+			"event_id": res.EventID,
+		}).Debug("Waiting for a partial state join to reach the sync API")
+		internal.WaitForMembershipInTopology(ctx, p.DB, res.EventID)
+	}
 }
 
 func (p *DeviceListStreamProvider) IncrementalSync(

@@ -7,8 +7,6 @@ package routing
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -109,7 +107,7 @@ func OnIncomingMessagesRequest(
 	// before the request transaction below is opened, so no connection is held
 	// while we poll.
 	if req.URL.Query().Get("from") == "" && membershipResp.Membership == spec.Join {
-		waitForMembershipInTopology(req.Context(), db, membershipResp.EventID)
+		internal.WaitForMembershipInTopology(req.Context(), db, membershipResp.EventID)
 	}
 
 	// NewDatabaseTransaction is used here instead of NewDatabaseSnapshot as we
@@ -737,39 +735,4 @@ func backfillEvents(
 	}
 
 	return events, nil
-}
-
-// membershipWaitTimeout bounds how long /messages waits for the sync API to
-// catch up with a membership event the roomserver has already accepted.
-const membershipWaitTimeout = 3 * time.Second
-
-// waitForMembershipInTopology polls until the sync API has the given
-// membership event in its topology, or the timeout or context ends. It never
-// fails the request: an event that doesn't arrive just gets the old behavior.
-func waitForMembershipInTopology(ctx context.Context, db storage.Database, eventID string) {
-	if eventID == "" {
-		return
-	}
-	deadline := time.NewTimer(membershipWaitTimeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		snapshot, err := db.NewDatabaseSnapshot(ctx)
-		if err != nil {
-			return
-		}
-		_, err = snapshot.EventPositionInTopology(ctx, eventID)
-		_ = snapshot.Rollback()
-		if !errors.Is(err, sql.ErrNoRows) {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-deadline.C:
-			return
-		case <-ticker.C:
-		}
-	}
 }
