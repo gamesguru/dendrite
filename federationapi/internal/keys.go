@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"fmt"
@@ -209,8 +210,30 @@ func (s *FederationInternalAPI) handleFetcherKeys(
 	// might end up trying to rewrite database entries.
 	storeResults := map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult{}
 
+	// First seen wins (MSC4499): a key ID we already hold is never rebound to
+	// a different key. The cache withholds live keys outside the event's
+	// validity window, so ask for the held keys at timestamp zero.
+	held := make(map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp, len(fetcherResults))
+	for req := range fetcherResults {
+		held[req] = 0
+	}
+	heldKeys, err := s.keyRing.KeyDatabase.FetchKeys(ctx, held)
+	if err != nil {
+		return fmt.Errorf("failed to look up held keys: %w", err)
+	}
+
 	// Now let's look at the results that we got from this fetcher.
 	for req, res := range fetcherResults {
+		if heldKey, ok := heldKeys[req]; ok && !bytes.Equal(heldKey.Key, res.Key) {
+			logrus.WithFields(logrus.Fields{
+				"fetcher_name": fetcher.FetcherName(),
+				"server_name":  req.ServerName,
+				"key_id":       req.KeyID,
+			}).Warn("Ignoring a different key for a key ID we already hold")
+			results[req] = heldKey
+			delete(requests, req)
+			continue
+		}
 		if prev, ok := results[req]; ok {
 			// We've already got a previous entry for this request
 			// so let's see if the newly retrieved one contains a more
