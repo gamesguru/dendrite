@@ -222,13 +222,8 @@ func (d *Database) stateEntriesForTuples(
 	stateBlockNIDs []types.StateBlockNID,
 	stateKeyTuples []types.StateKeyTuple,
 ) ([]types.StateEntryList, error) {
-	// The query returns rows ordered by block NID, so sort a copy of the input
-	// to keep the block NID and its entries paired. Snapshot block order is not
-	// necessarily by NID: a state block may be reused and appended later.
-	sortedBlockNIDs := append(types.StateBlockNIDs(nil), stateBlockNIDs...)
-	sort.Sort(sortedBlockNIDs)
 	entries, err := d.StateBlockTable.BulkSelectStateBlockEntries(
-		ctx, txn, sortedBlockNIDs,
+		ctx, txn, stateBlockNIDs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("d.StateBlockTable.BulkSelectStateBlockEntries: %w", err)
@@ -240,7 +235,7 @@ func (d *Database) stateEntriesForTuples(
 			return nil, fmt.Errorf("d.EventsTable.BulkSelectStateEventByNID: %w", err)
 		}
 		lists = append(lists, types.StateEntryList{
-			StateBlockNID: sortedBlockNIDs[i],
+			StateBlockNID: stateBlockNIDs[i],
 			StateEntries:  entries,
 		})
 	}
@@ -464,13 +459,8 @@ func (d *Database) StateEntries(
 func (d *Database) stateEntries(
 	ctx context.Context, txn *sql.Tx, stateBlockNIDs []types.StateBlockNID,
 ) ([]types.StateEntryList, error) {
-	// The query returns rows ordered by block NID, so sort a copy of the input
-	// to keep the block NID and its entries paired. Snapshot block order is not
-	// necessarily by NID: a state block may be reused and appended later.
-	sortedBlockNIDs := append(types.StateBlockNIDs(nil), stateBlockNIDs...)
-	sort.Sort(sortedBlockNIDs)
 	entries, err := d.StateBlockTable.BulkSelectStateBlockEntries(
-		ctx, txn, sortedBlockNIDs,
+		ctx, txn, stateBlockNIDs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("d.StateBlockTable.BulkSelectStateBlockEntries: %w", err)
@@ -482,7 +472,7 @@ func (d *Database) stateEntries(
 			return nil, fmt.Errorf("d.EventsTable.BulkSelectStateEventByNID: %w", err)
 		}
 		lists = append(lists, types.StateEntryList{
-			StateBlockNID: sortedBlockNIDs[i],
+			StateBlockNID: stateBlockNIDs[i],
 			StateEntries:  eventNIDs,
 		})
 	}
