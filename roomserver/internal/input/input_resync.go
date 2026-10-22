@@ -219,6 +219,14 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 			return false, nil, fmt.Errorf("updater.StateAtEventIDs: %w", stateErr)
 		}
 		if len(latestStates) == len(expectedLatestEventIDs) && !hasUnknownState(latestStates) {
+			for i := range latestStates {
+				logger.WithFields(logrus.Fields{
+					"event_nid":        latestStates[i].EventNID,
+					"before_state_nid": latestStates[i].BeforeStateSnapshotNID,
+					"state_key_nid":    latestStates[i].EventStateKeyNID,
+					"rejected":         latestStates[i].IsRejected,
+				}).Info("Latest event state used to build the snapshot after partial state resync")
+			}
 			newStateNID, err = roomState.CalculateAndStoreStateAfterEvents(ctx, latestStates)
 			if err != nil {
 				return false, nil, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", err)
@@ -456,7 +464,7 @@ func (r *Inputer) logResyncStateMemberships(
 	eventMap := helpers.EventMap(events)
 	for _, entry := range members {
 		ev, ok := eventMap.Lookup(entry.EventNID)
-		if !ok || !r.isLocalTarget(ctx, ev) {
+		if !ok {
 			continue
 		}
 		membership, membershipErr := ev.Membership()
@@ -468,7 +476,7 @@ func (r *Inputer) logResyncStateMemberships(
 			"event_id":   ev.EventID(),
 			"event_nid":  entry.EventNID,
 			"membership": membership,
-		}).Info("Local membership in the state snapshot after partial state resync")
+		}).Info("Membership in the state snapshot after partial state resync")
 	}
 }
 
