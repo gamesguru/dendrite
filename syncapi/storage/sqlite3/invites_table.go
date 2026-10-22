@@ -83,6 +83,9 @@ type inviteEventsStatements struct {
 	purgeInvitesStmt                *sql.Stmt
 }
 
+// NewSqliteInvitesTable creates the invites table if needed, applies the
+// migration that deduplicates event IDs, and prepares its statements. Schema,
+// migration, and statement preparation errors are returned.
 func NewSqliteInvitesTable(ctx context.Context, db *sql.DB, _ *StreamIDStatements) (tables.Invites, error) {
 	s := &inviteEventsStatements{
 		db: db,
@@ -111,6 +114,10 @@ func NewSqliteInvitesTable(ctx context.Context, db *sql.DB, _ *StreamIDStatement
 	}.Prepare(db)
 }
 
+// InsertInviteEvent stores an invite for inviteEvent.UserID and returns its
+// stream position. An existing event ID reuses its stored position without
+// updating the row, including when it is retired. A nil txn uses the database
+// directly. Serialization and database errors are returned.
 func (s *inviteEventsStatements) InsertInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent,
 ) (streamPos types.StreamPosition, err error) {
@@ -157,6 +164,10 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 	return streamPos, err
 }
 
+// DeleteInviteEvent marks an invite as retired and returns its retirement
+// stream position. An already retired invite reuses its stored position;
+// an unknown event ID returns sql.ErrNoRows. A nil txn uses the database
+// directly. Other database errors are propagated.
 func (s *inviteEventsStatements) DeleteInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEventID string,
 ) (types.StreamPosition, error) {
@@ -192,6 +203,9 @@ func (s *inviteEventsStatements) DeleteInviteEvent(
 	return newPos, nil
 }
 
+// nextInviteID runs the invite counter statement, allocating a position above
+// both the counter and all stored invite positions. A nil txn runs it outside
+// a transaction. Query and scan errors are returned.
 func nextInviteID(ctx context.Context, txn *sql.Tx, stmt *sql.Stmt) (types.StreamPosition, error) {
 	var streamPos types.StreamPosition
 	err := sqlutil.TxStmt(txn, stmt).QueryRowContext(ctx).Scan(&streamPos)
