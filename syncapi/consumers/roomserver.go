@@ -113,6 +113,9 @@ func (s *OutputRoomEventConsumer) SetMetadataQueuer(queuer internal.RoomMetadata
 // onMessage is called when the sync server receives a new event from the room server output log.
 // It is not safe for this function to be called from multiple goroutines, or else the
 // sync stream position may race and be incorrectly calculated.
+// It expects a nonempty batch and processes its first message. The return value
+// tells the consumer whether to acknowledge it; false requests redelivery,
+// including after an invite write, push publication, or retirement fails.
 func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	// Parse out the event JSON
@@ -706,6 +709,12 @@ func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 // stored; otherwise a later invite redelivery could resurrect the invite.
 var errInviteNotStored = errors.New("invite not stored yet")
 
+// onRetireInviteEvent retires an invite and, unless it was accepted, advances
+// the invite stream and notifies the local target. Retries reuse the stored
+// retirement position. A missing invite for a local target returns
+// errInviteNotStored; a missing invite with no resolved local target is ignored.
+// Database and sender lookup errors are returned for retry, even when the
+// retirement has already been stored.
 func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 	ctx context.Context, msg api.OutputRetireInviteEvent,
 ) error {
@@ -769,7 +778,8 @@ func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 }
 
 // inviteTargetUserID resolves the target sender of a retire output event to a
-// user ID. An invalid room ID is logged and treated as having no target.
+// user ID. An invalid room ID or an unresolved sender returns nil, nil.
+// Sender lookup errors are propagated to the caller.
 func (s *OutputRoomEventConsumer) inviteTargetUserID(
 	ctx context.Context, msg api.OutputRetireInviteEvent,
 ) (*spec.UserID, error) {

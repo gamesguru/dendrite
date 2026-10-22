@@ -77,6 +77,9 @@ type inviteEventsStatements struct {
 	purgeInvitesStmt                *sql.Stmt
 }
 
+// NewPostgresInvitesTable creates the invites table if needed, applies the
+// migration that deduplicates event IDs, and prepares its statements. Schema,
+// migration, and statement preparation errors are returned.
 func NewPostgresInvitesTable(ctx context.Context, db *sql.DB) (tables.Invites, error) {
 	s := &inviteEventsStatements{}
 	_, err := db.Exec(inviteEventsSchema)
@@ -102,6 +105,10 @@ func NewPostgresInvitesTable(ctx context.Context, db *sql.DB) (tables.Invites, e
 	}.Prepare(db)
 }
 
+// InsertInviteEvent stores an invite for inviteEvent.UserID and returns its
+// stream position. An existing event ID reuses its stored position without
+// updating the row, including when it is retired. A nil txn uses the database
+// directly. Serialization and database errors are returned.
 func (s *inviteEventsStatements) InsertInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent,
 ) (streamPos types.StreamPosition, active bool, err error) {
@@ -136,6 +143,10 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 	return streamPos, err == nil, err
 }
 
+// DeleteInviteEvent marks an invite as retired and returns its retirement
+// stream position. An already retired invite reuses its stored position;
+// an unknown event ID returns sql.ErrNoRows. A nil txn uses the database
+// directly. Other database errors are propagated.
 func (s *inviteEventsStatements) DeleteInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEventID string,
 ) (sp types.StreamPosition, err error) {

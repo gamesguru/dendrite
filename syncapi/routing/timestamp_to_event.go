@@ -330,7 +330,9 @@ func remoteTimestampServersFromRoomserver(
 	return servers[:min(len(servers), remoteTimestampServers)], nil
 }
 
-// waitForSyncMembership waits until the sync API has observed the user's join.
+// waitForSyncMembership polls for the user's join until it is observed or the
+// five-second wait expires; either case returns nil. Database errors and
+// context cancellation while waiting are returned.
 // The roomserver processes membership events before the sync API consumer, so
 // an immediate timestamp query after a join can otherwise see the old state.
 func waitForSyncMembership(ctx context.Context, syncDB storage.Database, roomID, userID string) error {
@@ -446,7 +448,10 @@ func (l *remoteTimestampLookup) query(ctx context.Context, server spec.ServerNam
 }
 
 // fetch returns the event from the sync API, backfilling it and the events
-// before it first when it is unknown.
+// before it first when it is unknown. Only events belonging to l.roomID are
+// returned. After backfilling, it polls for persistence for five seconds; if
+// the event is still unavailable, it returns nil, nil. Database and backfill
+// errors, and context cancellation while waiting, are returned.
 func (l *remoteTimestampLookup) fetch(ctx context.Context, eventID string) (*rstypes.HeaderedEvent, error) {
 	find := func() (*rstypes.HeaderedEvent, error) {
 		db, err := l.syncDB.NewDatabaseSnapshot(ctx)

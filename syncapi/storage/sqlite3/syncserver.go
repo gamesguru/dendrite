@@ -56,6 +56,9 @@ func (d *SyncServerDatasource) NewDatabaseTransaction(ctx context.Context) (*sha
 	}, nil
 }
 
+// prepare initializes the stream counters and tables, applies pending
+// migrations, and configures the shared database on success. Setup errors are
+// returned; earlier schema changes may already have been applied.
 func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err = d.streamID.Prepare(d.db); err != nil {
 		return err
