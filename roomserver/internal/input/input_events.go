@@ -352,6 +352,18 @@ func (r *Inputer) processRoomEvent(
 		logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
 	}
 
+	// An event whose auth events include a rejected event is rejected as a
+	// side effect, even if the remaining auth events would allow it.
+	if !isRejected {
+		for _, knownEvent := range knownEvents {
+			if knownEvent.Rejected {
+				isRejected = true
+				rejectionErr = fmt.Errorf("auth event %s was rejected", knownEvent.EventID())
+				break
+			}
+		}
+	}
+
 	// Check if the event is allowed by its auth events. If it isn't then
 	// we consider the event to be "rejected" — it will still be persisted.
 	// Skip this check for admin operations that set SkipEventAuth.
@@ -1104,10 +1116,14 @@ nextAuthEvent:
 		// If we already know about this event from the database then we don't
 		// need to store it again or do anything further with it, so just skip
 		// over it rather than wasting cycles.
-		if ev, ok := known[authEvent.EventID()]; ok && ev != nil && !ev.Rejected {
-			// Need to add to the auth set for the next event being processed.
-			if err := auth.AddEvent(authEvent); err != nil {
-				return fmt.Errorf("auth.AddEvent: %w", err)
+		if ev, ok := known[authEvent.EventID()]; ok && ev != nil {
+			// Rejected auth events are known, but must not be added to the
+			// authorization set. Reprocessing them here can fail because their
+			// own auth chain was deliberately rejected or is no longer available.
+			if !ev.Rejected {
+				if err := auth.AddEvent(authEvent); err != nil {
+					return fmt.Errorf("auth.AddEvent: %w", err)
+				}
 			}
 			continue nextAuthEvent
 		}
@@ -1127,7 +1143,23 @@ nextAuthEvent:
 		for _, eventID := range authEvent.AuthEventIDs() {
 			knownEvent, ok := known[eventID]
 			if !ok {
-				return fmt.Errorf("auth event ID %s not known but should be", eventID)
+				// The remote auth response may not include the full auth chain
+				// of every event it returns. The event may still be known to
+				// us, for example a previously rejected event. Load it rather
+				// than failing the whole auth fetch.
+				events, err := r.DB.EventsFromIDs(ctx, roomInfo, []string{eventID})
+				if err != nil || len(events) == 0 || events[0].PDU == nil {
+					return fmt.Errorf("auth event ID %s not known but should be", eventID)
+				}
+				ev := events[0]
+				if roomInfo != nil {
+					ev.Rejected, err = r.DB.IsEventRejected(ctx, roomInfo.RoomNID, eventID)
+					if err != nil && !errors.Is(err, sql.ErrNoRows) {
+						return fmt.Errorf("r.DB.IsEventRejected failed: %w", err)
+					}
+				}
+				knownEvent = &ev
+				known[eventID] = knownEvent
 			}
 			authEventNIDs = append(authEventNIDs, knownEvent.EventNID)
 		}

@@ -145,7 +145,7 @@ func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Dev
 func (d *Database) AddInviteEvent(
 	ctx context.Context, inviteEvent *rstypes.HeaderedEvent,
 ) (sp types.StreamPosition, err error) {
-	_ = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		sp, err = d.Invites.InsertInviteEvent(ctx, txn, inviteEvent)
 		return err
 	})
@@ -157,7 +157,7 @@ func (d *Database) AddInviteEvent(
 func (d *Database) RetireInviteEvent(
 	ctx context.Context, inviteEventID string,
 ) (sp types.StreamPosition, err error) {
-	_ = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		sp, err = d.Invites.DeleteInviteEvent(ctx, txn, inviteEventID)
 		return err
 	})

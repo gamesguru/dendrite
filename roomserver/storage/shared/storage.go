@@ -19,6 +19,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -1824,13 +1825,87 @@ func (d *Database) GetServerInRoom(ctx context.Context, roomNID types.RoomNID, s
 	return d.MembershipTable.SelectServerInRoom(ctx, nil, roomNID, serverName)
 }
 
-// GetKnownUsers searches all users that userID knows about.
+// GetKnownUsers searches all users that userID knows about, either because
+// they share a room or because they are joined to a public room. Public rooms
+// are visible to every local user, even when the searcher has not joined one.
 func (d *Database) GetKnownUsers(ctx context.Context, userID, searchString string, limit int) ([]string, error) {
 	stateKeyNID, err := d.EventStateKeysTable.SelectEventStateKeyNID(ctx, nil, userID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	var users []string
+	if err == nil {
+		users, err = d.MembershipTable.SelectKnownUsers(ctx, nil, stateKeyNID, searchString, limit)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(users) >= limit {
+		return users, nil
+	}
+
+	publicRooms, err := d.publicRoomIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return d.MembershipTable.SelectKnownUsers(ctx, nil, stateKeyNID, searchString, limit)
+	if len(publicRooms) == 0 {
+		return users, nil
+	}
+	joined, err := d.JoinedUsersSetInRooms(ctx, publicRooms, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(users)+len(joined))
+	for _, user := range users {
+		seen[user] = struct{}{}
+	}
+	for known := range joined {
+		if known == userID {
+			continue
+		}
+		if _, ok := seen[known]; ok {
+			continue
+		}
+		users = append(users, known)
+		if len(users) >= limit {
+			break
+		}
+	}
+	return users, nil
+}
+
+// publicRoomIDs returns the IDs of rooms whose current join rule is public.
+// User directory searches are infrequent compared with room traffic, so this
+// walks the rooms rather than maintaining a separate public-room index.
+func (d *Database) publicRoomIDs(ctx context.Context) ([]string, error) {
+	rows, err := d.DB.QueryContext(ctx, "SELECT room_id FROM roomserver_rooms WHERE state_snapshot_nid != 0")
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "publicRoomIDs: rows.close() failed")
+
+	var roomIDs []string
+	for rows.Next() {
+		var roomID string
+		if err := rows.Scan(&roomID); err != nil {
+			return nil, err
+		}
+		events, err := d.GetStateEventsWithEventType(ctx, roomID, spec.MRoomJoinRules)
+		if err != nil {
+			continue
+		}
+		for _, event := range events {
+			var content gomatrixserverlib.JoinRuleContent
+			if err := json.Unmarshal(event.Content(), &content); err != nil {
+				continue
+			}
+			if content.JoinRule == spec.Public {
+				roomIDs = append(roomIDs, roomID)
+				break
+			}
+		}
+	}
+	return roomIDs, rows.Err()
 }
 
 func (d *Database) RoomsWithACLs(ctx context.Context) ([]string, error) {

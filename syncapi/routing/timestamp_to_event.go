@@ -3,6 +3,7 @@ package routing
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -123,6 +124,21 @@ func TimestampToEvent(
 		return util.ErrorResponse(err)
 	}
 	ctx := req.Context()
+
+	// Only current members may use the endpoint. An existing room the user has
+	// not joined is forbidden; a room we do not know is not found.
+	var membership api.QueryMembershipForUserResponse
+	if err = rsAPI.QueryMembershipForUser(ctx, &api.QueryMembershipForUserRequest{
+		RoomID: roomID, UserID: *userID,
+	}, &membership); err != nil {
+		return util.ErrorResponse(fmt.Errorf("rsAPI.QueryMembershipForUser: %w", err))
+	}
+	if !membership.RoomExists {
+		return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room does not exist")}
+	}
+	if membership.Membership != spec.Join {
+		return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("User is not a member of the room")}
+	}
 	visibleTo := func(db storage.DatabaseTransaction) func([]*rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
 		return func(events []*rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
 			visible, err := internal.ApplyHistoryVisibilityFilter(ctx, db, rsAPI, events, nil, *userID, "timestamp_to_event")
@@ -140,6 +156,7 @@ func TimestampToEvent(
 	local, err := closestVisibleEvent(ctx, db, roomID, timestamp, backwards, 0, visibleTo(db))
 	var gapServers []spec.ServerName
 	var successor *rstypes.HeaderedEvent
+	successorID := ""
 	if err == nil && federation != nil {
 		gapServers, successor, err = remoteTimestampServersForGap(ctx, db, cfg, roomID, timestamp, backwards, local)
 	}
@@ -150,6 +167,21 @@ func TimestampToEvent(
 		if visible, err = visibleTo(db)([]*rstypes.HeaderedEvent{successor}); visible == nil {
 			gapServers = nil
 		}
+		successorID = successor.EventID()
+	}
+	if err == nil && federation != nil && len(gapServers) == 0 && local == nil && membership.EventID != "" {
+		// The sync API may not have caught up with a join yet. The roomserver
+		// already knows the membership and the room's servers, so use those to
+		// ask for history the sync API has not received.
+		gapServers, err = remoteTimestampServersFromRoomserver(ctx, rsAPI, cfg, roomID)
+		if len(gapServers) > 0 {
+			successorID = membership.EventID
+			// Visibility filtering reads membership from the sync API; wait for
+			// the join to arrive there before checking the remote event.
+			if err = waitForSyncMembership(ctx, syncDB, roomID, userID.String()); err != nil {
+				return util.ErrorResponse(err)
+			}
+		}
 	}
 	_ = db.Rollback()
 	if err != nil {
@@ -159,7 +191,7 @@ func TimestampToEvent(
 	if len(gapServers) > 0 {
 		lookup := remoteTimestampLookup{
 			cfg: cfg, federation: federation, syncDB: syncDB, rsAPI: rsAPI,
-			virtualHost: device.UserDomain(), roomID: roomID, successor: successor.EventID(),
+			virtualHost: device.UserDomain(), roomID: roomID, successor: successorID,
 		}
 		if remote := lookup.closest(ctx, gapServers, timestamp, backwards, local, visibleTo); remote != nil {
 			return util.JSONResponse{Code: http.StatusOK, JSON: timestampToEventResponse{EventID: remote.EventID(), OriginServerTS: remote.OriginServerTS()}}
@@ -189,16 +221,35 @@ func remoteTimestampServersForGap(
 		return nil, nil, nil
 	}
 	extremities, err := db.BackwardExtremitiesForRoom(ctx, roomID)
-	if err != nil || len(extremities) == 0 {
-		return nil, nil, err
-	}
-	successorIDs := make([]string, 0, len(extremities))
-	for eventID := range extremities {
-		successorIDs = append(successorIDs, eventID)
-	}
-	successors, err := db.Events(ctx, successorIDs)
 	if err != nil {
 		return nil, nil, err
+	}
+	var successors []*rstypes.HeaderedEvent
+	if len(extremities) > 0 {
+		successorIDs := make([]string, 0, len(extremities))
+		for eventID := range extremities {
+			successorIDs = append(successorIDs, eventID)
+		}
+		successors, err = db.Events(ctx, successorIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		// A server that joined with full state may have the pre-join events as
+		// outliers instead of a recorded backward extremity. When there is no
+		// local result either, use the latest local event as the successor so
+		// the room's other servers can still answer for history we do not have.
+		if local != nil {
+			return nil, nil, nil
+		}
+		latest, latestErr := db.EventsByTimestamp(ctx, roomID, math.MaxInt64, 0, true, 1)
+		if latestErr != nil {
+			return nil, nil, latestErr
+		}
+		if len(latest) == 0 {
+			return nil, nil, nil
+		}
+		successors = []*rstypes.HeaderedEvent{latest[0].HeaderedEvent}
 	}
 	bound := timestamp
 	if backwards {
@@ -215,7 +266,14 @@ func remoteTimestampServersForGap(
 		}
 	}
 	if successor == nil {
-		return nil, nil, nil
+		// The recorded extremities may all fall on the other side of the
+		// bound. Fall back to the latest local event so the room's servers are
+		// still asked for history that we may not have.
+		latest, latestErr := db.EventsByTimestamp(ctx, roomID, math.MaxInt64, 0, true, 1)
+		if latestErr != nil || len(latest) == 0 {
+			return nil, nil, latestErr
+		}
+		successor = latest[0].HeaderedEvent
 	}
 
 	joined, err := db.AllJoinedUsersInRoom(ctx, []string{roomID})
@@ -238,6 +296,62 @@ func remoteTimestampServersForGap(
 		return cmp.Or(members[b]-members[a], cmp.Compare(a, b))
 	})
 	return servers[:min(len(servers), remoteTimestampServers)], successor, nil
+}
+
+// remoteTimestampServersFromRoomserver lists the other servers joined to the
+// room according to the roomserver. It is used when the sync API has not yet
+// caught up with a membership change and therefore has no local event from
+// which to derive the room's servers.
+func remoteTimestampServersFromRoomserver(
+	ctx context.Context, rsAPI api.SyncRoomserverAPI, cfg *config.SyncAPI, roomID string,
+) ([]spec.ServerName, error) {
+	var res api.QueryMembershipsForRoomResponse
+	if err := rsAPI.QueryMembershipsForRoom(ctx, &api.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, &res); err != nil {
+		return nil, err
+	}
+	members := map[spec.ServerName]int{}
+	for _, event := range res.JoinEvents {
+		_, domain, err := gomatrixserverlib.SplitID('@', event.Sender)
+		if err == nil && !cfg.Matrix.IsLocalServerName(domain) {
+			members[domain]++
+		}
+	}
+	servers := make([]spec.ServerName, 0, len(members))
+	for server := range members {
+		servers = append(servers, server)
+	}
+	slices.SortFunc(servers, func(a, b spec.ServerName) int {
+		return cmp.Or(members[b]-members[a], cmp.Compare(a, b))
+	})
+	return servers[:min(len(servers), remoteTimestampServers)], nil
+}
+
+// waitForSyncMembership waits until the sync API has observed the user's join.
+// The roomserver processes membership events before the sync API consumer, so
+// an immediate timestamp query after a join can otherwise see the old state.
+func waitForSyncMembership(ctx context.Context, syncDB storage.Database, roomID, userID string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		db, err := syncDB.NewDatabaseSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		membership, _, membershipErr := db.SelectMembershipForUser(ctx, roomID, userID, math.MaxInt64)
+		_ = db.Rollback()
+		if membershipErr != nil {
+			return membershipErr
+		}
+		if membership == spec.Join || time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 type remoteTimestampLookup struct {
@@ -353,7 +467,20 @@ func (l *remoteTimestampLookup) fetch(ctx context.Context, eventID string) (*rst
 	if _, err := backfillEvents(ctx, l.rsAPI, l.syncDB, l.cfg.Matrix.ServerName, l.virtualHost, l.roomID, extremities, remoteTimestampBackfillLimit); err != nil {
 		return nil, err
 	}
-	return find()
+	// Backfilled events are persisted by the roomserver consumer
+	// asynchronously, so wait briefly for the requested event to arrive.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		event, err := find()
+		if err != nil || event != nil || time.Now().After(deadline) {
+			return event, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func absDiff(a, b int64) uint64 {

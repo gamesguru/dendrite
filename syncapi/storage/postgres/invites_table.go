@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -43,6 +44,13 @@ const insertInviteEventSQL = "" +
 	" room_id, event_id, target_user_id, headered_event_json, deleted" +
 	") VALUES ($1, $2, $3, $4, FALSE) RETURNING id"
 
+// selectActiveInviteEventIDSQL returns the stream position of an invite that is
+// still active. Redelivered invites must reuse it rather than insert a second
+// row: retiring the invite later updates every row with the event ID to the
+// same new position, which would violate the primary key.
+const selectActiveInviteEventIDSQL = "" +
+	"SELECT id FROM syncapi_invite_events WHERE event_id = $1 AND deleted = FALSE LIMIT 1"
+
 const deleteInviteEventSQL = "" +
 	"UPDATE syncapi_invite_events SET deleted=TRUE, id=nextval('syncapi_stream_id') WHERE event_id = $1 AND deleted=FALSE RETURNING id"
 
@@ -63,6 +71,7 @@ const purgeInvitesSQL = "" +
 
 type inviteEventsStatements struct {
 	insertInviteEventStmt           *sql.Stmt
+	selectActiveInviteEventIDStmt   *sql.Stmt
 	selectInviteEventsInRangeStmt   *sql.Stmt
 	deleteInviteEventStmt           *sql.Stmt
 	selectMaxInviteIDStmt           *sql.Stmt
@@ -78,6 +87,7 @@ func NewPostgresInvitesTable(db *sql.DB) (tables.Invites, error) {
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertInviteEventStmt, insertInviteEventSQL},
+		{&s.selectActiveInviteEventIDStmt, selectActiveInviteEventIDSQL},
 		{&s.selectInviteEventsInRangeStmt, selectInviteEventsInRangeSQL},
 		{&s.deleteInviteEventStmt, deleteInviteEventSQL},
 		{&s.selectMaxInviteIDStmt, selectMaxInviteIDSQL},
@@ -89,6 +99,15 @@ func NewPostgresInvitesTable(db *sql.DB) (tables.Invites, error) {
 func (s *inviteEventsStatements) InsertInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent,
 ) (streamPos types.StreamPosition, err error) {
+	// A redelivered invite must not add a second active row for the same event.
+	err = sqlutil.TxStmt(txn, s.selectActiveInviteEventIDStmt).QueryRowContext(ctx, inviteEvent.EventID()).Scan(&streamPos)
+	if err == nil {
+		return streamPos, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+
 	var headeredJSON []byte
 	headeredJSON, err = json.Marshal(inviteEvent)
 	if err != nil {

@@ -133,6 +133,16 @@ func createRoom(
 	asAPI appserviceAPI.AppServiceInternalAPI,
 	evTime time.Time,
 ) util.JSONResponse {
+	// As in Synapse, the preset follows the requested visibility when the
+	// client does not send one explicitly. This keeps a "public" room public
+	// for the room directory and the user directory.
+	if createRequest.Preset == "" {
+		if createRequest.Visibility == spec.Public {
+			createRequest.Preset = spec.PresetPublicChat
+		} else {
+			createRequest.Preset = spec.PresetPrivateChat
+		}
+	}
 	userID, err := spec.NewUserID(device.UserID, true)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Error("invalid userID")

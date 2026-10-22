@@ -97,11 +97,9 @@ func (p *InviteStreamProvider) IncrementalSync(
 		req.Response.Rooms.Invite[roomID] = ir
 	}
 
-	// When doing an initial sync, we don't want to add retired invites, as this
-	// can add rooms we were invited to, but already left.
-	if from == 0 {
-		return to
-	}
+	// Add retired invites as leaves too. An initial sync can happen after an
+	// invite was already rescinded (for example a client that just received
+	// the invite and then reconnects), so skipping them here loses the leave.
 	for roomID := range retiredInvites {
 		membership, _, err := snapshot.SelectMembershipForUser(ctx, roomID, req.Device.UserID, math.MaxInt64)
 		// Skip if the user is an existing member of the room.

@@ -62,6 +62,7 @@ dendrite.yaml
 # Log files
 *.log*
 /pr.*.md
+/*.txt
 
 # Generated code
 cmd/dendrite-demo-yggdrasil/embed/fs*.go

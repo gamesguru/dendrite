@@ -206,13 +206,13 @@ const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, ses
 FROM syncapi_output_room_events
 WHERE room_id = $1 AND origin_server_ts >= $2
 AND ($3 = 0 OR origin_server_ts > $2 OR (origin_server_ts = $2 AND id > $3))
-ORDER BY origin_server_ts ASC, id ASC LIMIT $4`
+ORDER BY origin_server_ts ASC, COALESCE((substring(headered_event_json from '"depth"[[:space:]]*:[[:space:]]*([0-9]+)'))::bigint, 0) ASC, id ASC LIMIT $4`
 
 const selectTimestampBackwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
 FROM syncapi_output_room_events
 WHERE room_id = $1 AND origin_server_ts <= $2
 AND ($3 = 0 OR origin_server_ts < $2 OR (origin_server_ts = $2 AND id < $3))
-ORDER BY origin_server_ts DESC, id DESC LIMIT $4`
+ORDER BY origin_server_ts DESC, COALESCE((substring(headered_event_json from '"depth"[[:space:]]*:[[:space:]]*([0-9]+)'))::bigint, 0) DESC, id DESC LIMIT $4`
 
 type outputRoomEventsStatements struct {
 	selectTimestampForwardStmt           *sql.Stmt
