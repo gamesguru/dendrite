@@ -16,6 +16,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
@@ -37,14 +38,20 @@ CREATE INDEX IF NOT EXISTS syncapi_invites_event_id_idx ON syncapi_invite_events
 const insertInviteEventSQL = "" +
 	"INSERT INTO syncapi_invite_events" +
 	" (id, room_id, event_id, target_user_id, headered_event_json, deleted)" +
-	" VALUES ($1, $2, $3, $4, $5, false)"
+	" VALUES ($1, $2, $3, $4, $5, false)" +
+	" ON CONFLICT(event_id) DO NOTHING"
 
-// selectActiveInviteEventIDSQL returns the stream position of an invite that is
-// still active. Redelivered invites must reuse it rather than insert a second
-// row: retiring the invite later updates every row with the event ID to the
-// same new position, which would violate the primary key.
-const selectActiveInviteEventIDSQL = "" +
-	"SELECT id FROM syncapi_invite_events WHERE event_id = $1 AND deleted = false LIMIT 1"
+// selectInviteEventIDSQL returns the stream position of an invite, whether it
+// is still active or has already been retired. Redelivered invites must reuse
+// it rather than insert a second row: retiring the invite later updates every
+// active row with the event ID to the same new position, which would violate
+// the primary key. Reusing a retired row also stops a redelivery from
+// resurrecting an invite that has already been rescinded.
+const selectInviteEventIDSQL = "" +
+	"SELECT id FROM syncapi_invite_events WHERE event_id = $1 ORDER BY id DESC LIMIT 1"
+
+const selectInviteEventRetirementSQL = "" +
+	"SELECT id, deleted FROM syncapi_invite_events WHERE event_id = $1 ORDER BY id DESC LIMIT 1"
 
 const deleteInviteEventSQL = "" +
 	"UPDATE syncapi_invite_events SET deleted=true, id=$1 WHERE event_id = $2 AND deleted=false"
@@ -65,17 +72,18 @@ const purgeInvitesSQL = "" +
 	"DELETE FROM syncapi_invite_events WHERE room_id = $1"
 
 type inviteEventsStatements struct {
-	db                            *sql.DB
-	insertInviteEventStmt         *sql.Stmt
-	selectActiveInviteEventIDStmt *sql.Stmt
-	selectInviteEventsInRangeStmt *sql.Stmt
-	deleteInviteEventStmt         *sql.Stmt
-	nextInviteIDStmt              *sql.Stmt
-	selectMaxInviteIDStmt         *sql.Stmt
-	purgeInvitesStmt              *sql.Stmt
+	db                              *sql.DB
+	insertInviteEventStmt           *sql.Stmt
+	selectInviteEventIDStmt         *sql.Stmt
+	selectInviteEventRetirementStmt *sql.Stmt
+	selectInviteEventsInRangeStmt   *sql.Stmt
+	deleteInviteEventStmt           *sql.Stmt
+	nextInviteIDStmt                *sql.Stmt
+	selectMaxInviteIDStmt           *sql.Stmt
+	purgeInvitesStmt                *sql.Stmt
 }
 
-func NewSqliteInvitesTable(db *sql.DB, _ *StreamIDStatements) (tables.Invites, error) {
+func NewSqliteInvitesTable(ctx context.Context, db *sql.DB, _ *StreamIDStatements) (tables.Invites, error) {
 	s := &inviteEventsStatements{
 		db: db,
 	}
@@ -83,9 +91,18 @@ func NewSqliteInvitesTable(db *sql.DB, _ *StreamIDStatements) (tables.Invites, e
 	if err != nil {
 		return nil, err
 	}
+	m := sqlutil.NewMigrator(db)
+	m.AddMigrations(sqlutil.Migration{
+		Version: "syncapi: unique invite event IDs",
+		Up:      deltas.UpUniqueInviteEventIDs,
+	})
+	if err = m.Up(ctx); err != nil {
+		return nil, err
+	}
 	return s, sqlutil.StatementList{
 		{&s.insertInviteEventStmt, insertInviteEventSQL},
-		{&s.selectActiveInviteEventIDStmt, selectActiveInviteEventIDSQL},
+		{&s.selectInviteEventIDStmt, selectInviteEventIDSQL},
+		{&s.selectInviteEventRetirementStmt, selectInviteEventRetirementSQL},
 		{&s.selectInviteEventsInRangeStmt, selectInviteEventsInRangeSQL},
 		{&s.deleteInviteEventStmt, deleteInviteEventSQL},
 		{&s.nextInviteIDStmt, nextInviteIDSQL},
@@ -97,8 +114,8 @@ func NewSqliteInvitesTable(db *sql.DB, _ *StreamIDStatements) (tables.Invites, e
 func (s *inviteEventsStatements) InsertInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent,
 ) (streamPos types.StreamPosition, err error) {
-	// A redelivered invite must not add a second active row for the same event.
-	err = sqlutil.TxStmt(txn, s.selectActiveInviteEventIDStmt).QueryRowContext(ctx, inviteEvent.EventID()).Scan(&streamPos)
+	// A redelivered invite must not add a second row for the same event.
+	err = sqlutil.TxStmt(txn, s.selectInviteEventIDStmt).QueryRowContext(ctx, inviteEvent.EventID()).Scan(&streamPos)
 	if err == nil {
 		return streamPos, nil
 	}
@@ -106,19 +123,19 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 		return 0, err
 	}
 
-	err = sqlutil.TxStmt(txn, s.nextInviteIDStmt).QueryRowContext(ctx).Scan(&streamPos)
+	streamPos, err = nextInviteID(ctx, txn, s.nextInviteIDStmt)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	var headeredJSON []byte
 	headeredJSON, err = json.Marshal(inviteEvent)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	stmt := sqlutil.TxStmt(txn, s.insertInviteEventStmt)
-	_, err = stmt.ExecContext(
+	result, err := stmt.ExecContext(
 		ctx,
 		streamPos,
 		inviteEvent.RoomID().String(),
@@ -126,19 +143,58 @@ func (s *inviteEventsStatements) InsertInviteEvent(
 		inviteEvent.UserID.String(),
 		headeredJSON,
 	)
-	return
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		// Another writer inserted the same event first; reuse its row.
+		err = sqlutil.TxStmt(txn, s.selectInviteEventIDStmt).QueryRowContext(ctx, inviteEvent.EventID()).Scan(&streamPos)
+	}
+	return streamPos, err
 }
 
 func (s *inviteEventsStatements) DeleteInviteEvent(
 	ctx context.Context, txn *sql.Tx, inviteEventID string,
 ) (types.StreamPosition, error) {
 	var streamPos types.StreamPosition
-	err := sqlutil.TxStmt(txn, s.nextInviteIDStmt).QueryRowContext(ctx).Scan(&streamPos)
+	var deleted bool
+	err := sqlutil.TxStmt(txn, s.selectInviteEventRetirementStmt).
+		QueryRowContext(ctx, inviteEventID).Scan(&streamPos, &deleted)
 	if err != nil {
+		return 0, err
+	}
+	if deleted {
+		return streamPos, nil
+	}
+
+	newPos, err := nextInviteID(ctx, txn, s.nextInviteIDStmt)
+	if err != nil {
+		return 0, err
+	}
+	result, err := sqlutil.TxStmt(txn, s.deleteInviteEventStmt).ExecContext(ctx, newPos, inviteEventID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		// Another writer retired it first; return the position it persisted.
+		err = sqlutil.TxStmt(txn, s.selectInviteEventRetirementStmt).
+			QueryRowContext(ctx, inviteEventID).Scan(&streamPos, &deleted)
 		return streamPos, err
 	}
-	stmt := sqlutil.TxStmt(txn, s.deleteInviteEventStmt)
-	_, err = stmt.ExecContext(ctx, streamPos, inviteEventID)
+	return newPos, nil
+}
+
+func nextInviteID(ctx context.Context, txn *sql.Tx, stmt *sql.Stmt) (types.StreamPosition, error) {
+	var streamPos types.StreamPosition
+	err := sqlutil.TxStmt(txn, stmt).QueryRowContext(ctx).Scan(&streamPos)
 	return streamPos, err
 }
 

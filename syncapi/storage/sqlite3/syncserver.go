@@ -72,7 +72,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	invites, err := NewSqliteInvitesTable(d.db, &d.streamID)
+	invites, err := NewSqliteInvitesTable(ctx, d.db, &d.streamID)
 	if err != nil {
 		return err
 	}

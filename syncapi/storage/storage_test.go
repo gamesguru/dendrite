@@ -725,6 +725,72 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 	})
 }
 
+func TestInviteRedeliveryIsIdempotent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		aliceUserID, err := spec.NewUserID(alice.ID, true)
+		if err != nil {
+			t.Fatalf("failed to parse alice user ID: %s", err)
+		}
+
+		room := test.NewRoom(t, bob)
+		invite := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		invite.UserID = *aliceUserID
+
+		pos, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to add invite: %s", err)
+		}
+		redeliveredPos, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to redeliver invite: %s", err)
+		}
+		if pos != redeliveredPos {
+			t.Fatalf("redelivered invite moved from position %d to %d", pos, redeliveredPos)
+		}
+
+		retiredPos, err := db.RetireInviteEvent(ctx, invite.EventID())
+		if err != nil {
+			t.Fatalf("failed to retire invite: %s", err)
+		}
+		retriedPos, err := db.RetireInviteEvent(ctx, invite.EventID())
+		if err != nil {
+			t.Fatalf("failed to retry retirement: %s", err)
+		}
+		if retiredPos != retriedPos {
+			t.Fatalf("retried retirement moved from position %d to %d", retiredPos, retriedPos)
+		}
+
+		// A redelivery after retirement must not resurrect the invite.
+		afterRetirePos, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to redeliver retired invite: %s", err)
+		}
+		if afterRetirePos != retiredPos {
+			t.Fatalf("retired invite was reinserted at position %d instead of %d", afterRetirePos, retiredPos)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			invites, retired, _, err := snapshot.InviteEventsInRange(ctx, alice.ID, types.Range{From: 0, To: math.MaxInt64})
+			if err != nil {
+				t.Fatalf("InviteEventsInRange returned error: %s", err)
+			}
+			if _, ok := invites[room.ID]; ok {
+				t.Fatalf("retired invite is still active")
+			}
+			if _, ok := retired[room.ID]; !ok {
+				t.Fatalf("retired invite is missing from the retirement range")
+			}
+		})
+	})
+}
+
 /* TestInviteBehaviour is currently disabled.
 Func TestInviteBehaviour(t *testing.T) {
 	db := MustCreateDatabase(t)
