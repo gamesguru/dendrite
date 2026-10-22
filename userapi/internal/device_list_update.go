@@ -480,6 +480,10 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		"candidates": len(memberIDs),
 		"kept":       len(keep),
 		"fetched":    len(fresh),
+		"fresh":      fresh,
+		"later":      members.Later,
+		"joined":     members.Joined,
+		"now_joined": len(stillJoined),
 	}).Info("Forgetting the device lists fetched while the room had partial state")
 	if err != nil {
 		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
