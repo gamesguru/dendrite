@@ -185,10 +185,14 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 // accepting them, and refreshes the room counts for every affected user.
 func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg rsapi.OutputRejectedEvents) error {
 	affected := make(map[string]struct{})
+	var deleteErr error
 	for _, eventID := range msg.EventIDs {
 		users, err := s.db.DeleteNotificationsForEvent(ctx, msg.RoomID, eventID)
 		if err != nil {
-			return fmt.Errorf("s.db.DeleteNotificationsForEvent: %w", err)
+			// Users from earlier deletions are already unrecoverable, so refresh
+			// them before reporting the failure.
+			deleteErr = fmt.Errorf("s.db.DeleteNotificationsForEvent: %w", err)
+			break
 		}
 		for _, userID := range users {
 			affected[userID] = struct{}{}
@@ -204,7 +208,7 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg rsap
 			}).Error("Failed to publish notification counts after rejecting events")
 		}
 	}
-	return nil
+	return deleteErr
 }
 
 // cancelDelayedStateEvents cancels other users' MSC4140 delayed events for

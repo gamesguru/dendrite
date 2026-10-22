@@ -85,7 +85,7 @@ cov: ## Run library package tests with coverage and print a summary
 
 .PHONY: lint
 lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for changed packages only
-	@set -euo pipefail; \
+	set -euo pipefail; \
 	if [ -n "$(strip $(diff))" ]; then \
 		dirs="$$(git diff --name-only $(DIFF_BASE) -- '*.go' \
 			| xargs -r dirname \

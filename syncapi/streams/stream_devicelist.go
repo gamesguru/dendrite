@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
@@ -12,6 +13,9 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// partialJoinWaitTimeout bounds the whole WaitForPendingPartialJoins loop.
+const partialJoinWaitTimeout = 3 * time.Second
 
 type DeviceListStreamProvider struct {
 	DefaultStreamProvider
@@ -59,7 +63,14 @@ func (p *DeviceListStreamProvider) WaitForPendingPartialJoins(ctx context.Contex
 	if err != nil {
 		return
 	}
+	// One deadline covers every room, so many partial-state rooms cannot stack
+	// their waits into a long delay for the sync.
+	ctx, cancel := context.WithTimeout(ctx, partialJoinWaitTimeout)
+	defer cancel()
 	for _, roomID := range roomIDs {
+		if ctx.Err() != nil {
+			return
+		}
 		var res api.QueryMembershipForUserResponse
 		if err := p.rsAPI.QueryMembershipForUser(ctx, &api.QueryMembershipForUserRequest{
 			RoomID: roomID,
