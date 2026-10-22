@@ -160,12 +160,12 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 			return false, nil, err
 		}
 		if len(skipped) > 0 {
-			// Applying the latest states now would use the incomplete state some
-			// events kept. Let the worker retry instead of persisting that.
-			logger.WithField("skipped_events", skipped).Error("Could not recompute the state of every event received during the partial state")
-			return false, nil, fmt.Errorf(
-				"resync could not recompute the state of %d events received during the partial state", len(skipped),
-			)
+			// An event whose ancestor we cannot obtain never gets a recomputed state, so
+			// the latest states are incomplete. Retrying cannot help; use the fetched
+			// state for the snapshot instead.
+			logger.WithField("skipped_events", skipped).
+				Warn("Could not recompute the state of every event received during the partial state; using the fetched state")
+			recomputed = false
 		}
 	}
 	var oldStateEntries []types.StateEntry
