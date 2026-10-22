@@ -227,7 +227,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 					"rejected":         latestStates[i].IsRejected,
 				}).Info("Latest event state used to build the snapshot after partial state resync")
 			}
-			newStateNID, err = roomState.CalculateAndStoreStateAfterEvents(ctx, latestStates)
+			newStateNID, err = r.flatStateAfterEvents(ctx, updater, &roomState, roomInfo, latestStates)
 			if err != nil {
 				return false, nil, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", err)
 			}

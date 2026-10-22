@@ -98,7 +98,7 @@ func (r *Inputer) recomputeWindowState(
 			skipped = append(skipped, ev.id)
 			continue
 		}
-		stateNID, calcErr := roomState.CalculateAndStoreStateAfterEvents(ctx, prevStates)
+		stateNID, calcErr := r.flatStateAfterEvents(ctx, updater, roomState, roomInfo, prevStates)
 		if calcErr != nil {
 			return false, skipped, nil, fmt.Errorf("roomState.CalculateAndStoreStateAfterEvents: %w", calcErr)
 		}
@@ -328,4 +328,37 @@ func (r *Inputer) recomputeStateSinceJoin(
 		logger.Warn("The latest events do not lead back to the partial state join, keeping their stored state")
 	}
 	return done, skipped, rejected, nil
+}
+
+// flatStateAfterEvents is CalculateAndStoreStateAfterEvents, except that the state
+// after a single state event is stored as one block. A snapshot's blocks are kept in
+// the order of their NIDs, and a block of one event is shared with every snapshot
+// that holds it, so a delta block made earlier can sort before the block it should
+// override, and the old entry for the state key would win.
+func (r *Inputer) flatStateAfterEvents(
+	ctx context.Context,
+	updater *shared.RoomUpdater,
+	roomState *state.StateResolution,
+	roomInfo *types.RoomInfo,
+	prevStates []types.StateAtEvent,
+) (types.StateSnapshotNID, error) {
+	if len(prevStates) != 1 || prevStates[0].EventStateKeyNID == 0 || prevStates[0].IsRejected {
+		return roomState.CalculateAndStoreStateAfterEvents(ctx, prevStates)
+	}
+	prev := prevStates[0]
+	entries, err := roomState.LoadStateAtSnapshot(ctx, prev.BeforeStateSnapshotNID)
+	if err != nil {
+		return 0, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
+	}
+	replaced := false
+	for i := range entries {
+		if entries[i].StateKeyTuple == prev.StateKeyTuple {
+			entries[i] = prev.StateEntry
+			replaced = true
+		}
+	}
+	if !replaced {
+		entries = append(entries, prev.StateEntry)
+	}
+	return updater.AddState(ctx, roomInfo.RoomNID, nil, entries)
 }
