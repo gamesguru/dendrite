@@ -644,6 +644,18 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			}
 		}
 
+		joinRoomIDs := make([]string, 0, len(syncReq.Response.Rooms.Join))
+		for roomID := range syncReq.Response.Rooms.Join {
+			joinRoomIDs = append(joinRoomIDs, roomID)
+		}
+		if syncReq.Since.IsEmpty() || len(joinRoomIDs) > 0 {
+			syncReq.Log.WithFields(logrus.Fields{
+				"complete":      syncReq.Since.IsEmpty(),
+				"next_batch":    syncReq.Response.NextBatch.String(),
+				"join_room_ids": joinRoomIDs,
+			}).Info("Sync response joined rooms")
+		}
+
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: syncReq.Response,
