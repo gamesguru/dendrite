@@ -55,13 +55,6 @@
 {"Action":"pass","Test":"TestLogin/parallel/Login_with_uppercase_username_works_and_GET_/whoami_afterwards_also"}
 {"Action":"pass","Test":"TestLogin/parallel"}
 {"Action":"pass","Test":"TestLogin"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/Initial_sync_includes_requested_profile_fields_and_filters_others"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/No_updates_without_profile_fields_filter"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/Widening_profile_fields_filter_does_not_return_old_filtered_updates"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/Incremental_sync_returns_the_latest_update"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/Cleared_profile_field_is_returned_as_null"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates/A_user_leaving_the_last_shared_room_returns_a_profile_update_of_null"}
-{"Action":"fail","Test":"TestMSC4429ProfileUpdates"}
 {"Action":"pass","Test":"TestLogout/Can_logout_current_device"}
 {"Action":"pass","Test":"TestLogout/Can_logout_all_devices"}
 {"Action":"pass","Test":"TestLogout/Request_to_logout_with_invalid_an_access_token_is_rejected"}
