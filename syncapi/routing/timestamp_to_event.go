@@ -33,8 +33,10 @@ const (
 	federationTimestampLookupBatches = 10
 	// RemoteTimestampServers bounds the servers asked to fill a gap in the
 	// local history, which are tried one after the other.
-	remoteTimestampServers = 5
-	remoteTimestampTimeout = 10 * time.Second
+	remoteTimestampServers       = 5
+	remoteTimestampTimeout       = 10 * time.Second
+	syncMembershipWaitTimeout    = 5 * time.Second
+	timestampBackfillWaitTimeout = 5 * time.Second
 	// RemoteTimestampBackfillLimit is the number of events backfilled from a
 	// remote result, so that /context and /messages can use it.
 	remoteTimestampBackfillLimit = 20
@@ -332,7 +334,7 @@ func remoteTimestampServersFromRoomserver(
 // The roomserver processes membership events before the sync API consumer, so
 // an immediate timestamp query after a join can otherwise see the old state.
 func waitForSyncMembership(ctx context.Context, syncDB storage.Database, roomID, userID string) error {
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(syncMembershipWaitTimeout)
 	for {
 		db, err := syncDB.NewDatabaseSnapshot(ctx)
 		if err != nil {
@@ -469,7 +471,7 @@ func (l *remoteTimestampLookup) fetch(ctx context.Context, eventID string) (*rst
 	}
 	// Backfilled events are persisted by the roomserver consumer
 	// asynchronously, so wait briefly for the requested event to arrive.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(timestampBackfillWaitTimeout)
 	for {
 		event, err := find()
 		if err != nil || event != nil || time.Now().After(deadline) {

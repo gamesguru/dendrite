@@ -11,13 +11,14 @@ import (
 const SQLITE_DRIVER_NAME = "sqlite3"
 
 func sqliteDSNExtension(dsn string, wal bool) string {
-	if !wal {
-		return dsn
-	}
 	if strings.Contains(dsn, "?") {
 		dsn += "&"
 	} else {
 		dsn += "?"
 	}
-	return dsn + "_journal_mode=WAL&_synchronous=NORMAL"
+	dsn += "_busy_timeout=10000"
+	if wal {
+		dsn += "&_journal_mode=WAL&_synchronous=NORMAL"
+	}
+	return dsn
 }
