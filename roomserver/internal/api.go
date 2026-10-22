@@ -638,8 +638,10 @@ func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID s
 // resynced state. Callers waiting for full state are released when the sync API
 // acknowledges that event, or after a timeout, so that what they read next is
 // consistent with the resync. Without an event to wait for they are released at once.
+// The hooks run first, so that what they change, such as which device lists are cached,
+// is in place by the time anything waiting is released.
 func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
-	defer r.runUnPartialStatedHooks(roomID)
+	r.runUnPartialStatedHooks(roomID)
 	release := func() {
 		if r.PartialStateTracker != nil {
 			r.PartialStateTracker.NotifyUnPartialStated(roomID)

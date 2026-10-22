@@ -456,7 +456,8 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	for userID := range stillJoined {
 		candidates[userID] = struct{}{}
 	}
-	if members, ok := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID); ok {
+	members, snapshotKnown := u.rsAPI.TakeMembersJoinedDuringPartialState(roomID)
+	if snapshotKnown {
 		for _, userID := range members.Joined {
 			candidates[userID] = struct{}{}
 		}
@@ -473,6 +474,13 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		}
 	}
 	fresh, err := u.db.FreshDeviceLists(ctx, memberIDs)
+	util.GetLogger(ctx).WithFields(logrus.Fields{
+		"room_id":    roomID,
+		"snapshot":   snapshotKnown,
+		"candidates": len(memberIDs),
+		"kept":       len(keep),
+		"fetched":    len(fresh),
+	}).Info("Forgetting the device lists fetched while the room had partial state")
 	if err != nil {
 		return fmt.Errorf("failed to find the device lists of %s that were fetched: %w", roomID, err)
 	}
