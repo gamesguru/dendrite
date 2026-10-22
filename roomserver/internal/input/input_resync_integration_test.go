@@ -72,7 +72,9 @@ func assertMembershipRow(
 ) {
 	t.Helper()
 	res := &api.QueryMembershipsForRoomResponse{}
-	require.NoError(t, rsAPI.QueryMembershipsForRoom(ctx, &api.QueryMembershipsForRoomRequest{RoomID: roomID}, res))
+	require.NoError(t, rsAPI.QueryMembershipsForRoom(ctx, &api.QueryMembershipsForRoomRequest{
+		RoomID: roomID, JoinedOnly: true,
+	}, res))
 	joined := false
 	for _, ev := range res.JoinEvents {
 		if ev.StateKey != nil && *ev.StateKey == userID {
