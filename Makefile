@@ -47,9 +47,9 @@ COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHIN
 COMPLEMENT_PARTIAL_RUN = $(if $(COMPLEMENT_RUN),1,$(if $(filter-out $(COMPLEMENT_ALL_PACKAGES),$(COMPLEMENT_PACKAGES)),1,0))
 # Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
 # COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
-# also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
+# also drops the zendrite_blacklist tag, which excludes packages such as msc3902.
 COMPLEMENT_RUN ?=
-COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,dendrite_blacklist)
+COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,zendrite_blacklist)
 # go test's default per-package timeout is 10m; a package that deploys many
 # containers serially (e.g. csapi) can legitimately take longer than that and
 # gets killed mid-test, which looks like a hang but isn't. Give it more room.
