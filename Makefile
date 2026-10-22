@@ -42,7 +42,8 @@ COMPLEMENT_TOP = $(firstword $(subst /, ,$(COMPLEMENT_RUN)))
 # An opening parenthesis for the pattern below, as make counts the ones in a call.
 COMPLEMENT_OPEN := [(]
 COMPLEMENT_MATCHING = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && grep -rlE '^func [A-Za-z0-9_]*($(COMPLEMENT_TOP))[A-Za-z0-9_]*$(COMPLEMENT_OPEN)' tests --include='*_test.go' | xargs -r -n1 dirname | sort -u | sed 's|^|./|')
-COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHING))),./tests/...)
+COMPLEMENT_ALL_PACKAGES = $(shell cd $(COMPLEMENT_DIR) 2>/dev/null && go list ./tests/... | grep -vE '(^|/)msc(3389|4500)$$')
+COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHING))),$(COMPLEMENT_ALL_PACKAGES))
 # Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
 # COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
 # also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
