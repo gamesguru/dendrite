@@ -156,10 +156,18 @@ const presenceTimeout = time.Second * 10
 // updatePresence sends presence updates to the SyncAPI and FederationAPI.
 func (rp *RequestPool) updatePresence(db storage.Presence, presence string, userID string) {
 	// allow checking back on presence to set offline if needed
-	rp.updatePresenceInternal(db, presence, userID, true)
+	rp.updatePresenceInternal(db, presence, userID, true, false)
 }
 
-func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence string, userID string, checkAgain bool) {
+// updatePresenceExplicit applies a client-requested presence value without the
+// multi-device priority rules used by ordinary sync traffic. Sliding sync's
+// set_presence is an explicit instruction, so setting unavailable must not be
+// ignored merely because another request recently marked the user online.
+func (rp *RequestPool) updatePresenceExplicit(db storage.Presence, presence string, userID string) {
+	rp.updatePresenceInternal(db, presence, userID, false, true)
+}
+
+func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence string, userID string, checkAgain, explicit bool) {
 	if !rp.cfg.Matrix.Presence.EnableOutbound {
 		return
 	}
@@ -198,6 +206,8 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// Default to unknown presence
 	presenceToSet := types.PresenceUnknown
 	switch {
+	case explicit:
+		presenceToSet = presenceID
 	case now.Sub(lastPresence.seen[userID][types.PresenceOnline]) < presenceTimeout:
 		// online will always get priority
 		presenceToSet = types.PresenceOnline
@@ -216,7 +226,7 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 				if !process.Sleep(rp.ctx, presenceTimeout) {
 					return
 				}
-				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false)
+				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false, false)
 			})
 		}
 	}

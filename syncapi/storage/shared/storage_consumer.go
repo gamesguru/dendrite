@@ -144,9 +144,9 @@ func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Dev
 // Returns an error if there was a problem communicating with the database.
 func (d *Database) AddInviteEvent(
 	ctx context.Context, inviteEvent *rstypes.HeaderedEvent,
-) (sp types.StreamPosition, err error) {
+) (sp types.StreamPosition, active bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		sp, err = d.Invites.InsertInviteEvent(ctx, txn, inviteEvent)
+		sp, active, err = d.Invites.InsertInviteEvent(ctx, txn, inviteEvent)
 		return err
 	})
 	return

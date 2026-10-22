@@ -784,6 +784,15 @@ func (rp *RequestPool) fetchTargetedState(
 	var memberKeys map[string]bool
 	needAllMembers := false
 
+	// lazy_members is shorthand for the $LAZY include pattern. Add the
+	// senders from the timeline even when include is otherwise empty.
+	if config.LazyMembers && len(lazySenders) > 0 {
+		memberKeys = make(map[string]bool, len(lazySenders))
+		for sender := range lazySenders {
+			memberKeys[sender] = true
+		}
+	}
+
 	for _, pattern := range config.Include {
 		if len(pattern) != 2 { //nolint:mnd
 			continue
@@ -931,6 +940,11 @@ func (rp *RequestPool) matchesRequiredState(
 		}
 	}
 
+	// lazy_members is equivalent to including $LAZY members.
+	if config.LazyMembers && eventType == "m.room.member" && lazySenders[stateKey] {
+		return true
+	}
+
 	// Check if included
 	for _, pattern := range config.Include {
 		if len(pattern) == 2 { //nolint:mnd
@@ -984,8 +998,9 @@ func matchesStateKeyPattern(stateKey, pattern, userID string, lazySenders map[st
 // extractLazySenders extracts sender IDs from timeline events if $LAZY is specified
 // Phase 5: Returns a map of sender IDs for lazy member loading.
 func (rp *RequestPool) extractLazySenders(config *types.RequiredStateConfig, timeline []synctypes.ClientEvent) map[string]bool {
-	// Check if $LAZY pattern is present
-	hasLazy := false
+	// lazy_members is the MSC4186 spelling of the legacy $LAZY include
+	// pattern.
+	hasLazy := config.LazyMembers
 	for _, pattern := range config.Include {
 		if len(pattern) == 2 && pattern[1] == "$LAZY" {
 			hasLazy = true

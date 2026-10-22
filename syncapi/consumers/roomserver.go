@@ -173,15 +173,16 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		// woken for an invite that /sync cannot yet return. AddInviteEvent is
 		// idempotent, so NAKing a failed write or publish and redelivering it
 		// cannot insert a duplicate invite.
-		err = s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
-		if err == nil {
+		active, inviteErr := s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
+		err = inviteErr
+		if err == nil && active {
 			err = s.producePushEvent(msg)
 		}
 	case api.OutputTypeRetireInviteEvent:
 		err = s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
 	case api.OutputTypeNewKnockEvent:
 		// Knocks are stored like invites but never pushed: the user sent it.
-		_ = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
+		_, err = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
 		s.onNewPeek(s.ctx, *output.NewPeek) //nolint:contextcheck
 	case api.OutputTypeRetirePeek:
@@ -653,12 +654,11 @@ func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rst
 	return sp, nil
 }
 
-// onNewInviteEvent returns nil once the invite is durably stored, or when there
-// is nothing to store because the invite is not for a local user. The caller
-// NAKs the message on error; storing an invite is idempotent.
+// onNewInviteEvent reports whether the invite remains active after it is
+// durably stored. The caller NAKs on error; storing an invite is idempotent.
 func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	ctx context.Context, msg api.OutputNewInviteEvent,
-) error {
+) (bool, error) {
 	return s.addPendingMembershipEvent(ctx, msg.Event)
 }
 
@@ -666,25 +666,25 @@ func (s *OutputRoomEventConsumer) onNewInviteEvent(
 // invites table, which backs both rooms.invite and rooms.knock in /sync.
 func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 	ctx context.Context, event *rstypes.HeaderedEvent,
-) error {
+) (bool, error) {
 	if event.StateKey() == nil {
-		return nil
+		return false, nil
 	}
 
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(*event.StateKey()))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if userID == nil {
-		return nil
+		return false, nil
 	}
 	if !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
-		return nil
+		return false, nil
 	}
 
 	event.UserID = *userID
 
-	pduPos, err := s.db.AddInviteEvent(ctx, event)
+	pduPos, active, err := s.db.AddInviteEvent(ctx, event)
 	if err != nil {
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
@@ -693,12 +693,12 @@ func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 			"pdupos":     pduPos,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: write invite failure")
-		return err
+		return false, err
 	}
 
 	s.inviteStream.Advance(pduPos)
 	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *event.StateKey())
-	return nil
+	return active, nil
 }
 
 // errInviteNotStored marks a retirement that arrived before the invite it

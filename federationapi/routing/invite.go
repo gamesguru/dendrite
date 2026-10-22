@@ -20,9 +20,11 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/zendrite/internal/msc4155"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // InviteV3 implements /_matrix/federation/v2/invite/{roomID}/{userID}.
@@ -33,6 +35,7 @@ func InviteV3(
 	invitedUser spec.UserID,
 	cfg *config.FederationAPI,
 	rsAPI api.FederationRoomserverAPI,
+	userAPI userapi.FederationUserAPI,
 	keys gomatrixserverlib.JSONVerifier,
 ) util.JSONResponse {
 	inviteReq := fclient.InviteV3Request{}
@@ -48,6 +51,25 @@ func InviteV3(
 			Code: http.StatusBadRequest,
 			JSON: spec.InvalidParam("The invited user domain does not belong to this server"),
 		}
+	}
+	if sender := inviteReq.Event().SenderID; sender != "" {
+		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, spec.SenderID(sender))
+		if senderErr != nil {
+			return util.ErrorResponse(senderErr)
+		}
+		if senderUser == nil {
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not resolve invite sender")}
+		}
+		blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
+		if ruleErr != nil {
+			return util.ErrorResponse(ruleErr)
+		}
+		if blocked {
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+		}
+		// Ignored invites are still signed normally. The event will later
+		// arrive in a federation transaction, where it is dropped before it
+		// can be persisted or delivered to the invitee's sync.
 	}
 
 	input := gomatrixserverlib.HandleInviteV3Input{
@@ -100,6 +122,7 @@ func InviteV2(
 	eventID string,
 	cfg *config.FederationAPI,
 	rsAPI api.FederationRoomserverAPI,
+	userAPI userapi.FederationUserAPI,
 	keys gomatrixserverlib.JSONVerifier,
 ) util.JSONResponse {
 	inviteReq := fclient.InviteV2Request{}
@@ -152,6 +175,24 @@ func InviteV2(
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON("The event ID in the request path must match the event ID in the invite event JSON"),
 		}
+	}
+	if sender := inviteReq.Event().SenderID(); sender != "" {
+		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, sender)
+		if senderErr != nil {
+			return util.ErrorResponse(senderErr)
+		}
+		if senderUser == nil {
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not resolve invite sender")}
+		}
+		blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
+		if ruleErr != nil {
+			return util.ErrorResponse(ruleErr)
+		}
+		if blocked {
+			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+		}
+		// Ignored invites are signed normally and dropped from the later
+		// federation transaction, just like the V3 path.
 	}
 
 	input := gomatrixserverlib.HandleInviteInput{

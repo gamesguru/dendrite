@@ -195,10 +195,11 @@ type Database interface {
 	// creates a new row, else update the existing one
 	// Returns an error if there was an issue with the upsert
 	UpsertAccountData(ctx context.Context, userID, roomID, dataType string) (types.StreamPosition, error)
-	// AddInviteEvent stores a new invite event for a user.
-	// If the invite was successfully stored this returns the stream ID it was stored at.
+	// AddInviteEvent stores an invite or knock event for a user. The bool is
+	// false when this event ID has already been retired.
+	// If the event was successfully stored this returns the stream ID it was stored at.
 	// Returns an error if there was a problem communicating with the database.
-	AddInviteEvent(ctx context.Context, inviteEvent *rstypes.HeaderedEvent) (types.StreamPosition, error)
+	AddInviteEvent(ctx context.Context, inviteEvent *rstypes.HeaderedEvent) (types.StreamPosition, bool, error)
 	// RetireInviteEvent removes an old invite event from the database. Returns the new position of the retired invite.
 	// Returns an error if there was a problem communicating with the database.
 	RetireInviteEvent(ctx context.Context, inviteEventID string) (types.StreamPosition, error)

@@ -72,6 +72,12 @@ func main() {
 			},
 		}
 		if *defaultsForCI {
+			// Exercise MSC4140 in Complement. The default zero delay disables
+			// scheduling, while the suite schedules events up to one hour ahead.
+			cfg.ClientAPI.DelayedEvents.MaxDelay = 24 * time.Hour //nolint:mnd
+			// Complement covers federation presence and sliding-sync set_presence.
+			cfg.Global.Presence.EnableInbound = true
+			cfg.Global.Presence.EnableOutbound = true
 			cfg.AppServiceAPI.DisableTLSValidation = true
 			// Complement mounts one registration file per application service
 			// into this directory.

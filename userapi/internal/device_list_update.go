@@ -510,6 +510,7 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	}
 
 	var changed []string
+	changedSet := make(map[string]bool)
 	u.pendingMu.Lock()
 	for _, ev := range res.JoinEvents {
 		if ev.StateKey == nil {
@@ -517,10 +518,22 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 		}
 		if _, ok := u.pendingUsers[*ev.StateKey]; ok {
 			changed = append(changed, *ev.StateKey)
+			changedSet[*ev.StateKey] = true
 			delete(u.pendingUsers, *ev.StateKey)
 		}
 	}
 	u.pendingMu.Unlock()
+
+	// A user who was believed to be in the room but turned out not to be may
+	// still share another room with a local user. Their cached device list was
+	// just dropped, so tell those users that it changed as well.
+	for _, userID := range fresh {
+		if _, stillInRoom := stillJoined[userID]; stillInRoom || changedSet[userID] {
+			continue
+		}
+		changed = append(changed, userID)
+		changedSet[userID] = true
+	}
 
 	for _, userID := range changed {
 		if err := u.db.MarkDeviceListStale(ctx, userID, true); err != nil {

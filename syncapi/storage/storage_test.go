@@ -3,6 +3,7 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -19,6 +20,10 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	postgresstorage "codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	postgresdeltas "codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
+	sqlitestorage "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	sqlitedeltas "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -691,7 +696,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(alice.ID))
 		invite1.UserID = *aliceUserID
-		pos1, err := db.AddInviteEvent(ctx, invite1)
+		pos1, _, err := db.AddInviteEvent(ctx, invite1)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room1: %s", err)
 		}
@@ -700,7 +705,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(alice.ID))
 		invite2.UserID = *aliceUserID
-		_, err = db.AddInviteEvent(ctx, invite2)
+		_, _, err = db.AddInviteEvent(ctx, invite2)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room2: %s", err)
 		}
@@ -710,7 +715,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(charlie.ID))
 		invite3.UserID = *charlieUserID
-		_, err = db.AddInviteEvent(ctx, invite3)
+		_, _, err = db.AddInviteEvent(ctx, invite3)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room3: %s", err)
 		}
@@ -743,13 +748,19 @@ func TestInviteRedeliveryIsIdempotent(t *testing.T) {
 		}, test.WithStateKey(alice.ID))
 		invite.UserID = *aliceUserID
 
-		pos, err := db.AddInviteEvent(ctx, invite)
+		pos, active, err := db.AddInviteEvent(ctx, invite)
 		if err != nil {
 			t.Fatalf("failed to add invite: %s", err)
 		}
-		redeliveredPos, err := db.AddInviteEvent(ctx, invite)
+		if !active {
+			t.Fatalf("new invite was marked inactive")
+		}
+		redeliveredPos, active, err := db.AddInviteEvent(ctx, invite)
 		if err != nil {
 			t.Fatalf("failed to redeliver invite: %s", err)
+		}
+		if !active {
+			t.Fatalf("active redelivered invite was marked inactive")
 		}
 		if pos != redeliveredPos {
 			t.Fatalf("redelivered invite moved from position %d to %d", pos, redeliveredPos)
@@ -768,9 +779,12 @@ func TestInviteRedeliveryIsIdempotent(t *testing.T) {
 		}
 
 		// A redelivery after retirement must not resurrect the invite.
-		afterRetirePos, err := db.AddInviteEvent(ctx, invite)
+		afterRetirePos, active, err := db.AddInviteEvent(ctx, invite)
 		if err != nil {
 			t.Fatalf("failed to redeliver retired invite: %s", err)
+		}
+		if active {
+			t.Fatalf("retired invite was marked active")
 		}
 		if afterRetirePos != retiredPos {
 			t.Fatalf("retired invite was reinserted at position %d instead of %d", afterRetirePos, retiredPos)
@@ -788,6 +802,67 @@ func TestInviteRedeliveryIsIdempotent(t *testing.T) {
 				t.Fatalf("retired invite is missing from the retirement range")
 			}
 		})
+	})
+}
+
+func TestUniqueInviteMigrationPrefersRetiredDuplicate(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		var rawDB *sql.DB
+		switch d := db.(type) {
+		case *postgresstorage.SyncServerDatasource:
+			rawDB = d.DB
+		case *sqlitestorage.SyncServerDatasource:
+			rawDB = d.DB
+		default:
+			t.Fatalf("unexpected database type %T", db)
+		}
+		if _, err := rawDB.ExecContext(ctx, "DROP INDEX IF EXISTS syncapi_invites_event_id_unique_idx"); err != nil {
+			t.Fatalf("failed to drop unique invite index: %s", err)
+		}
+		for _, row := range []struct {
+			id      int64
+			deleted bool
+		}{{1000000, true}, {1000001, false}} {
+			if _, err := rawDB.ExecContext(ctx, `INSERT INTO syncapi_invite_events
+				(id, event_id, room_id, target_user_id, headered_event_json, deleted)
+				VALUES ($1, '$duplicate-invite', '!room', '@user:server', '{}', $2)`, row.id, row.deleted); err != nil {
+				t.Fatalf("failed to create duplicate invite row: %s", err)
+			}
+		}
+
+		txn, err := rawDB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("failed to begin migration transaction: %s", err)
+		}
+		switch dbType {
+		case test.DBTypePostgres:
+			err = postgresdeltas.UpUniqueInviteEventIDs(ctx, txn)
+		case test.DBTypeSQLite:
+			err = sqlitedeltas.UpUniqueInviteEventIDs(ctx, txn)
+		}
+		if err != nil {
+			_ = txn.Rollback()
+			t.Fatalf("failed to apply invite deduplication migration: %s", err)
+		}
+		if err = txn.Commit(); err != nil {
+			t.Fatalf("failed to commit invite migration: %s", err)
+		}
+
+		var count int
+		var id int64
+		var deleted bool
+		var anyDeleted int
+		if err = rawDB.QueryRowContext(ctx, `SELECT COUNT(*), MAX(id), MAX(CASE WHEN deleted THEN 1 ELSE 0 END)
+			FROM syncapi_invite_events WHERE event_id = '$duplicate-invite'`).Scan(&count, &id, &anyDeleted); err != nil {
+			t.Fatalf("failed to inspect migrated invite rows: %s", err)
+		}
+		deleted = anyDeleted == 1
+		if count != 1 || id != 1000000 || !deleted {
+			t.Fatalf("migration kept count=%d id=%d deleted=%v; want the older retired row at id 1000000", count, id, deleted)
+		}
 	})
 }
 
@@ -809,7 +884,7 @@ Func TestInviteBehaviour(t *testing.T) {
 		Sender:   "@inviteUser2:somewhere",
 	})
 	for _, ev := range []*types.HeaderedEvent{inviteEvent1, inviteEvent2} {
-		_, err := db.AddInviteEvent(ctx, ev)
+		_, _, err := db.AddInviteEvent(ctx, ev)
 		if err != nil {
 			t.Fatalf("Failed to AddInviteEvent: %s", err)
 		}
