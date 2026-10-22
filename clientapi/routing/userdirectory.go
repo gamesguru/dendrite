@@ -78,7 +78,8 @@ knownUsersLoop:
 			}
 			for _, p := range userRes.Profiles {
 				if strings.Contains(p.DisplayName, searchString) ||
-					strings.Contains(p.Localpart, searchString) {
+					strings.Contains(p.Localpart, searchString) ||
+					strings.Contains(userID, searchString) {
 					profile.DisplayName = p.DisplayName
 					profile.AvatarURL = p.AvatarURL
 					results[userID] = profile
