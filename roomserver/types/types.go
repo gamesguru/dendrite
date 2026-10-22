@@ -89,7 +89,7 @@ func (a StateBlockNIDs) Hash() []byte {
 // has to stay where it was put even if its NID is lower than the blocks around
 // it. Keeping the last occurrence preserves the last application of a block.
 func (a StateBlockNIDs) Unique() StateBlockNIDs {
-	if len(a) < 2 {
+	if len(a) <= 1 {
 		return a
 	}
 	seen := make(map[StateBlockNID]struct{}, len(a))
