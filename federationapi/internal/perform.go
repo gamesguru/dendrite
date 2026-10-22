@@ -290,6 +290,38 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		"update_room_ms": time.Since(updateRoomStartTime).Milliseconds(),
 	}).Debug("UpdateRoom completed")
 
+	// A partial-state response may omit local members, including a user who was
+	// already in the room before this join. Keep the local member events that
+	// the response does not mention, so this join does not drop them from the
+	// current state.
+	var extraStateEventIDs []string
+	if isPartialState {
+		remoteMemberKeys := make(map[string]bool)
+		for _, ev := range response.StateSnapshot.GetStateEvents().UntrustedEvents(response.JoinEvent.Version()) {
+			if ev.Type() == spec.MRoomMember && ev.StateKey() != nil {
+				remoteMemberKeys[*ev.StateKey()] = true
+			}
+		}
+		for _, ev := range response.StateSnapshot.GetAuthEvents().UntrustedEvents(response.JoinEvent.Version()) {
+			if ev.Type() == spec.MRoomMember && ev.StateKey() != nil {
+				remoteMemberKeys[*ev.StateKey()] = true
+			}
+		}
+		var members roomserverAPI.QueryMembershipsForRoomResponse
+		if err = r.rsAPI.QueryMembershipsForRoom(ctx, &roomserverAPI.QueryMembershipsForRoomRequest{
+			RoomID: roomID, JoinedOnly: true, LocalOnly: true,
+		}, &members); err != nil {
+			traceLogger.WithError(err).Warn("Failed to query local members before a partial-state join")
+		} else {
+			for _, ev := range members.JoinEvents {
+				if ev.StateKey == nil || ev.EventID == "" || remoteMemberKeys[*ev.StateKey] {
+					continue
+				}
+				extraStateEventIDs = append(extraStateEventIDs, ev.EventID)
+			}
+		}
+	}
+
 	// TODO: Can I change this to not take respState but instead just take an opaque list of events?
 	sendEventStartTime := time.Now()
 	if err = roomserverAPI.SendEventWithState( //nolint:contextcheck
@@ -302,6 +334,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		serverName,
 		nil,
 		false,
+		extraStateEventIDs...,
 	); err != nil {
 		return fmt.Errorf("roomserverAPI.SendEventWithState: %w", err)
 	}
