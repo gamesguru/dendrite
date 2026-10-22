@@ -298,8 +298,17 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	}
 
 	// Add membership events from stateEntries that aren't already in added
+	// When the snapshot was computed from the latest events, the fetched state is the
+	// state at the join, so a member who left since would be reset to their old join.
+	repairEntries := stateEntries
+	if computedFromLatest {
+		repairEntries, err = roomState.LoadStateAtSnapshot(ctx, newStateNID)
+		if err != nil {
+			return false, nil, fmt.Errorf("roomState.LoadStateAtSnapshot (new state): %w", err)
+		}
+	}
 	membershipEntriesAdded := 0
-	for _, entry := range stateEntries {
+	for _, entry := range repairEntries {
 		if entry.EventTypeNID == types.MRoomMemberNID && !addedMemberKeys[entry.EventStateKeyNID] {
 			added = append(added, entry)
 			addedMemberKeys[entry.EventStateKeyNID] = true
