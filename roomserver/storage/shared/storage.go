@@ -2470,10 +2470,6 @@ func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNI
 // GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
 // we did, as opposed to those listed in the state we joined with, and all the users
 // currently joined to it.
-//
-// A user who joins again while we already believed they were joined is not
-// counted as having joined after us: their device list was fetched under the
-// old membership, so it has to be treated as stale once the resync completes.
 func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) (later, joined []string, err error) {
 	joinEventNID, err := d.PartialStateTable.SelectPartialStateJoinEventNID(ctx, nil, roomNID)
 	if err != nil || joinEventNID == 0 {
@@ -2491,9 +2487,6 @@ func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID
 	if err != nil {
 		return nil, nil, err
 	}
-
-	eventIDs := make([]string, 0, len(events))
-	laterEvents := make(map[types.EventNID]*types.HeaderedEvent, len(events))
 	for _, ev := range events {
 		key := ev.StateKey()
 		if key == nil {
@@ -2501,60 +2494,8 @@ func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID
 		}
 		joined = append(joined, *key)
 		if ev.EventNID > joinEventNID {
-			laterEvents[ev.EventNID] = ev
+			later = append(later, *key)
 		}
-		eventIDs = append(eventIDs, ev.EventID())
-	}
-	if len(laterEvents) == 0 {
-		return nil, joined, nil
-	}
-
-	// Find the membership each user had before their current join event. If it
-	// was already a join then this is a rejoin over the partial state, not a
-	// user we have been tracking since they first joined.
-	stateAtEvents, err := d.StateAtEventIDs(ctx, eventIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	priorByEvent := make(map[types.EventNID]types.EventNID, len(laterEvents))
-	priorNIDs := make([]types.EventNID, 0, len(laterEvents))
-	for _, stateAtEvent := range stateAtEvents {
-		if _, ok := laterEvents[stateAtEvent.EventNID]; !ok || stateAtEvent.BeforeStateSnapshotNID == 0 {
-			continue
-		}
-		entries, err := d.loadStateAtSnapshot(ctx, stateAtEvent.BeforeStateSnapshotNID)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, entry := range entries {
-			if entry.EventTypeNID == types.MRoomMemberNID && entry.EventStateKeyNID == stateAtEvent.EventStateKeyNID {
-				priorByEvent[stateAtEvent.EventNID] = entry.EventNID
-				priorNIDs = append(priorNIDs, entry.EventNID)
-				break
-			}
-		}
-	}
-
-	priorWasJoin := make(map[types.EventNID]bool, len(priorNIDs))
-	if len(priorNIDs) > 0 {
-		priorEvents, err := d.Events(ctx, info.RoomVersion, priorNIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, ev := range priorEvents {
-			priorWasJoin[ev.EventNID] = ev.Membership() == "join"
-		}
-	}
-
-	for _, ev := range events {
-		key := ev.StateKey()
-		if key == nil || ev.EventNID <= joinEventNID {
-			continue
-		}
-		if priorNID, ok := priorByEvent[ev.EventNID]; ok && priorWasJoin[priorNID] {
-			continue
-		}
-		later = append(later, *key)
 	}
 	return later, joined, nil
 }
