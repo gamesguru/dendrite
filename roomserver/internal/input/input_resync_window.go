@@ -133,9 +133,21 @@ func (r *Inputer) recheckWindowEvent(
 	ev windowEvent,
 	stateBefore types.StateSnapshotNID,
 ) (becameRejected bool, err error) {
-	entries, err := roomState.LoadStateAtSnapshot(ctx, stateBefore)
+	stored, err := updater.EventsFromIDs(ctx, roomInfo, []string{ev.id})
 	if err != nil {
-		return false, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
+		return false, fmt.Errorf("updater.EventsFromIDs (window event): %w", err)
+	}
+	if len(stored) != 1 {
+		return false, fmt.Errorf("window event %s is missing", ev.id)
+	}
+
+	// Load only the state needed to authenticate this event, not the whole
+	// snapshot. The complete state is still materialized separately by
+	// flatStateAfterEvents for the new snapshot.
+	tuples := gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{stored[0].PDU}).Tuples()
+	entries, err := roomState.LoadStateAtSnapshotForStringTuples(ctx, stateBefore, tuples)
+	if err != nil {
+		return false, fmt.Errorf("roomState.LoadStateAtSnapshotForStringTuples: %w", err)
 	}
 	nids := make([]types.EventNID, 0, len(entries))
 	for _, entry := range entries {
@@ -148,13 +160,6 @@ func (r *Inputer) recheckWindowEvent(
 	authEvents, err := gomatrixserverlib.NewAuthEvents(gomatrixserverlib.ToPDUs(stateEvents))
 	if err != nil {
 		return false, fmt.Errorf("gomatrixserverlib.NewAuthEvents: %w", err)
-	}
-	stored, err := updater.EventsFromIDs(ctx, roomInfo, []string{ev.id})
-	if err != nil {
-		return false, fmt.Errorf("updater.EventsFromIDs (window event): %w", err)
-	}
-	if len(stored) != 1 {
-		return false, fmt.Errorf("window event %s is missing", ev.id)
 	}
 	wasRejected, err := updater.IsEventRejected(ctx, roomInfo.RoomNID, ev.id)
 	if err != nil {
