@@ -14,8 +14,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrix-org/util"
-
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
@@ -88,7 +86,7 @@ func (s *stateSnapshotStatements) InsertState(
 	if stateBlockNIDs == nil {
 		stateBlockNIDs = []types.StateBlockNID{} // zero slice to not store 'null' in the DB
 	}
-	stateBlockNIDs = stateBlockNIDs[:util.SortAndUnique(stateBlockNIDs)]
+	stateBlockNIDs = stateBlockNIDs.Unique()
 	stateBlockNIDsJSON, err := json.Marshal(stateBlockNIDs)
 	if err != nil {
 		return
