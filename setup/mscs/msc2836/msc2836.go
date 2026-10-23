@@ -617,7 +617,7 @@ func (rc *reqCtx) lookForEvent(eventID string) *types.HeaderedEvent {
 			}
 		}
 	}
-	if rc.req.RoomID == event.RoomID().String() {
+	if event != nil && rc.req.RoomID == event.RoomID().String() {
 		return event
 	}
 	return nil

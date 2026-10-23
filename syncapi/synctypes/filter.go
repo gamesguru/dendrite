@@ -55,6 +55,7 @@ type StateFilter struct {
 	Limit                     int       `json:"limit,omitempty"`
 	UnreadThreadNotifications bool      `json:"unread_thread_notifications,omitempty"`
 	ContainsURL               *bool     `json:"contains_url,omitempty"`
+	RelationTypes             []string  `json:"org.matrix.msc3874.rel_types,omitempty"`
 }
 
 // RoomEventFilter is used to define filtering rules for events in rooms.

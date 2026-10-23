@@ -18,6 +18,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -383,6 +384,12 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		// Filtered-empty page: return the topology end token so the client continues.
 		return []synctypes.ClientEvent{}, *r.from, end, nil
 	}
+	if len(r.filter.RelationTypes) > 0 {
+		events = filterHeaderedEvents(events, r.filter)
+		if len(events) == 0 {
+			return []synctypes.ClientEvent{}, *r.from, end, nil
+		}
+	}
 
 	// Apply room history visibility filter
 	startTime := time.Now()
@@ -607,11 +614,24 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 	if filter == nil {
 		return events
 	}
-	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil {
+	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil && len(filter.RelationTypes) == 0 {
 		return events
 	}
 	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
 	for _, ev := range events {
+		if len(filter.RelationTypes) > 0 {
+			relationType := gjson.GetBytes(ev.Content(), "m.relates_to.rel_type").Str
+			matched := false
+			for _, allowed := range filter.RelationTypes {
+				if relationType == allowed {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
 		sender := ev.UserID.String()
 
 		if filter.Senders != nil {

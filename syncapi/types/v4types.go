@@ -284,6 +284,10 @@ type SlidingList struct {
 	// used internally to populate room data and the room's `lists` field even
 	// when the list itself did not change and therefore has no operations.
 	WindowRoomIDs []string `json:"-"`
+
+	// RemovedRoomIDs holds rooms from the prior window that left it. They are
+	// candidates for a one-time leave or ban update in room data.
+	RemovedRoomIDs []string `json:"-"`
 }
 
 // SlidingOperation describes a change to a room list.

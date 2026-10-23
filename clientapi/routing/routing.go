@@ -460,6 +460,26 @@ func Setup(
 
 	unstableMux := publicAPIMux.PathPrefix("/unstable").Subrouter()
 
+	// MSC3391 allows account data to be removed by type.
+	unstableMux.Handle("/org.matrix.msc3391/user/{userID}/account_data/{type}",
+		httputil.MakeAuthAPI("delete_account_data", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return DeleteAccountData(req, userAPI, device, vars["userID"], "", vars["type"])
+		}),
+	).Methods(http.MethodDelete, http.MethodOptions)
+	unstableMux.Handle("/org.matrix.msc3391/user/{userID}/rooms/{roomID}/account_data/{type}",
+		httputil.MakeAuthAPI("delete_room_account_data", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			return DeleteAccountData(req, userAPI, device, vars["userID"], vars["roomID"], vars["type"])
+		}),
+	).Methods(http.MethodDelete, http.MethodOptions)
+
 	// MSC4140: delayed events. Scheduling goes through the send and state
 	// endpoints below; these manage and look up scheduled events.
 	delayedEvents := newDelayedEvents(
@@ -1489,9 +1509,12 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
+			if req.Method == http.MethodDelete {
+				return DeleteAccountData(req, userAPI, device, vars["userID"], "", vars["type"])
+			}
 			return SaveAccountData(req, userAPI, device, vars["userID"], "", vars["type"], syncProducer)
 		}, httputil.WithAllowCallGuests()),
-	).Methods(http.MethodPut, http.MethodOptions)
+	).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
 
 	v3mux.Handle("/user/{userID}/rooms/{roomID}/account_data/{type}",
 		httputil.MakeAuthAPI("user_account_data", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
@@ -1499,9 +1522,12 @@ func Setup(
 			if err != nil {
 				return util.ErrorResponse(err)
 			}
+			if req.Method == http.MethodDelete {
+				return DeleteAccountData(req, userAPI, device, vars["userID"], vars["roomID"], vars["type"])
+			}
 			return SaveAccountData(req, userAPI, device, vars["userID"], vars["roomID"], vars["type"], syncProducer)
 		}, httputil.WithAllowCallGuests()),
-	).Methods(http.MethodPut, http.MethodOptions)
+	).Methods(http.MethodPut, http.MethodDelete, http.MethodOptions)
 
 	v3mux.Handle("/user/{userID}/account_data/{type}",
 		httputil.MakeAuthAPI("user_account_data", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {

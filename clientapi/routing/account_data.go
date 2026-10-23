@@ -53,7 +53,7 @@ func GetAccountData(
 	} else {
 		data, ok = dataRes.GlobalAccountData[dataType]
 	}
-	if ok {
+	if ok && string(data) != "null" {
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: data,
@@ -134,6 +134,29 @@ func SaveAccountData(
 		Code: http.StatusOK,
 		JSON: struct{}{},
 	}
+}
+
+// DeleteAccountData implements MSC3391's DELETE account_data endpoint. The
+// user API treats a JSON null account-data value as deletion and emits the
+// corresponding account-data update for sync.
+func DeleteAccountData(
+	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
+	userID string, roomID string, dataType string,
+) util.JSONResponse {
+	if userID != device.UserID {
+		return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("userID does not match the current user")}
+	}
+	if dataType == "m.fully_read" || dataType == "m.push_rules" {
+		return util.JSONResponse{Code: http.StatusMethodNotAllowed, JSON: spec.BadJSON(fmt.Sprintf("Cannot delete %s through this API.", dataType))}
+	}
+	if strings.HasPrefix(dataType, threePIDBindingPrefix) {
+		return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(fmt.Sprintf("Unable to modify %q using this API", dataType))}
+	}
+	dataReq := api.InputAccountDataRequest{UserID: userID, DataType: dataType, RoomID: roomID, AccountData: json.RawMessage("null")}
+	if err := userAPI.InputAccountData(req.Context(), &dataReq, &api.InputAccountDataResponse{}); err != nil {
+		return util.ErrorResponse(err)
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
 }
 
 type fullyReadEvent struct {

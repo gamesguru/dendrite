@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 
@@ -49,12 +50,16 @@ const selectAccountDataByTypeSQL = "" +
 const deleteAccountDataSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
 
+const deleteAccountDataByTypeSQL = "" +
+	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
+
 type accountDataStatements struct {
 	db                          *sql.DB
 	insertAccountDataStmt       *sql.Stmt
 	selectAccountDataStmt       *sql.Stmt
 	selectAccountDataByTypeStmt *sql.Stmt
 	deleteAccountDataStmt       *sql.Stmt
+	deleteAccountDataByTypeStmt *sql.Stmt
 }
 
 func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
@@ -70,6 +75,7 @@ func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
 		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
+		{&s.deleteAccountDataByTypeStmt, deleteAccountDataByTypeSQL},
 	}.Prepare(db)
 }
 
@@ -78,6 +84,10 @@ func (s *accountDataStatements) InsertAccountData(
 	localpart string, serverName spec.ServerName,
 	roomID, dataType string, content json.RawMessage,
 ) error {
+	if strings.TrimSpace(string(content)) == "null" {
+		_, err := sqlutil.TxStmt(txn, s.deleteAccountDataByTypeStmt).ExecContext(ctx, localpart, serverName, roomID, dataType)
+		return err
+	}
 	stmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
 	_, err := stmt.ExecContext(ctx, localpart, serverName, roomID, dataType, content)
 	return err

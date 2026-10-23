@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	syncinternal "codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -83,7 +85,7 @@ func (rp *RequestPool) detectRoomMembership(
 // getRequiredState computes a real delta (see getRequiredStateDelta) and
 // correctly returns nothing when unchanged, it's safe to always attempt it.
 func shouldFetchRequiredState(requiredStateConfig *types.RequiredStateConfig) bool {
-	return requiredStateConfig != nil && len(requiredStateConfig.Include) > 0
+	return requiredStateConfig != nil && (len(requiredStateConfig.Include) > 0 || requiredStateConfig.LazyMembers)
 }
 
 // populateMemberCounts adds joined and invited member counts to room data.
@@ -467,11 +469,24 @@ func (rp *RequestPool) bundleTimeline(
 // getRoomNameFromDB retrieves m.room.name state event from database.
 func (rp *RequestPool) getRoomNameFromDB(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.name", "")
-	if err != nil || event == nil {
-		return ""
+	if err == nil && event != nil {
+		return gjson.GetBytes(event.Content(), "name").Str
 	}
-
-	return gjson.GetBytes(event.Content(), "name").Str
+	// The sync consumer can briefly lag behind createRoom. Roomserver state is
+	// authoritative, so use it as a fallback for initial room metadata.
+	var response roomserverAPI.QueryCurrentStateResponse
+	if queryErr := rp.rsAPI.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
+		RoomID: roomID,
+		StateTuples: []gomatrixserverlib.StateKeyTuple{{
+			EventType: spec.MRoomName,
+			StateKey:  "",
+		}},
+	}, &response); queryErr == nil {
+		if event := response.StateEvents[gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomName, StateKey: ""}]; event != nil {
+			return gjson.GetBytes(event.Content(), "name").Str
+		}
+	}
+	return ""
 }
 
 // getRoomAvatar retrieves m.room.avatar state event.

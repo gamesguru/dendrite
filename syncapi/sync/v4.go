@@ -767,6 +767,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// Phase 2: Process room lists
 		// Track which rooms appear in lists and their timeline_limit
 		roomsInLists := make(map[string]types.RoomSubscriptionConfig) // map[roomID]config with timeline_limit and required_state
+		roomsRemovedFromLists := make(map[string]bool)
 		// When pos is empty, force initial sync for all lists
 		forceInitialSync := (since == nil)
 		for listName, listConfig := range v4Req.Lists {
@@ -822,6 +823,18 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					roomsInLists[roomID] = config
 				}
 			}
+			for _, roomID := range list.RemovedRoomIDs {
+				roomsRemovedFromLists[roomID] = true
+				config := types.RoomSubscriptionConfig{
+					TimelineLimit: listConfig.TimelineLimit,
+					RequiredState: listConfig.RequiredState,
+				}
+				if existing, exists := roomsInLists[roomID]; exists {
+					roomsInLists[roomID] = mergeRoomSubscriptionConfig(existing, config)
+				} else {
+					roomsInLists[roomID] = config
+				}
+			}
 		}
 
 		// Phase 3: Process room subscriptions
@@ -864,6 +877,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// 1. Membership filtering: exclude self-left rooms, allow kicked rooms
 		// 2. Ignored user invite filtering: exclude invites from ignored users
 		// 3. Partial state filtering (MSC3706): exclude partial state rooms if required_state needs full state
+		roomsLeftOnConnection := make(map[string]bool)
 		if len(v4Req.RoomSubscriptions) > 0 {
 			subSnapshot, subSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
 			if subSnapshotErr != nil {
@@ -938,6 +952,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 								}).Debug("[V4_SYNC] Filtering out unseen self-left room from subscription")
 								continue
 							}
+							roomsLeftOnConnection[roomID] = true
 						}
 						// Kicked - allow subscription
 						logrus.WithFields(logrus.Fields{
@@ -1051,6 +1066,20 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						}
 					}
 				}
+				for roomID := range roomsRemovedFromLists {
+					if roomStates[roomID].Status == types.HaveSentRoomNever {
+						continue
+					}
+					membership, _, membershipErr := filterSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64)
+					if membershipErr == nil && (membership == spec.Leave || membership == spec.Ban) {
+						roomsToKeep[roomID] = true
+					}
+				}
+				// A previously sent room must be returned once when the user leaves,
+				// even if its leave event is absent from the stream-change query.
+				for roomID := range roomsLeftOnConnection {
+					roomsToKeep[roomID] = true
+				}
 
 				lagging := laggingRooms(roomStates, since.StreamToken.PDUPosition)
 				if len(lagging.roomIDs) > 0 {
@@ -1077,7 +1106,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// list or an explicit subscription. Expansion itself requires a
 				// response even when the room has had no new events.
 				for roomID, roomConfig := range roomsToPopulate {
-					if previous := connState.PreviousRoomConfigs[roomID]; previous != nil && roomConfig.TimelineLimit > previous.TimelineLimit {
+					previous := connState.PreviousRoomConfigs[roomID]
+					if previous == nil {
+						continue
+					}
+					if roomConfig.TimelineLimit > previous.TimelineLimit || rp.requiredStateChanged(ctx, roomConfig.RequiredState, previous.RequiredStateID) {
 						roomsToKeep[roomID] = true
 					}
 				}
@@ -1098,7 +1131,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 							prevConfig := prevConfigs[roomID]
 							if prevConfig != nil {
 								// Room was sent before - check if timeline_limit expanded
-								if subConfig.TimelineLimit > prevConfig.TimelineLimit {
+								if subConfig.TimelineLimit > prevConfig.TimelineLimit || rp.requiredStateChanged(ctx, subConfig.RequiredState, prevConfig.RequiredStateID) {
 									roomsToKeep[roomID] = true
 									reason := fmt.Sprintf("timeline_expanded:%d->%d", prevConfig.TimelineLimit, subConfig.TimelineLimit)
 									if roomKeepReasons[roomID] != "" {
@@ -1254,7 +1287,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 			// Pass required_state config (Phase 4)
 			var requiredStateConfig *types.RequiredStateConfig
-			if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 {
+			if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 || config.RequiredState.LazyMembers {
 				requiredStateConfig = &config.RequiredState
 			}
 
@@ -1284,7 +1317,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 			if !roomData.Initial && fromPosPtr != nil {
 				changed := map[string]bool{}
-				for _, event := range roomData.Timeline {
+				markChanged := func(event synctypes.ClientEvent) {
 					switch event.Type {
 					case spec.MRoomName:
 						changed[spec.MRoomName] = true
@@ -1293,6 +1326,12 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					case spec.MRoomTopic:
 						changed[spec.MRoomTopic] = true
 					}
+				}
+				for _, event := range roomData.Timeline {
+					markChanged(event)
+				}
+				for _, event := range roomData.RequiredState {
+					markChanged(event)
 				}
 				if !changed[spec.MRoomName] {
 					roomData.Name = ""
@@ -1692,6 +1731,26 @@ func appendUniqueStatePatterns(dst, src [][]string) [][]string {
 	return dst
 }
 
+// requiredStateChanged reports whether a subscription asks for state that was
+// not requested the last time this connection received the room.
+func (rp *RequestPool) requiredStateChanged(
+	ctx context.Context, current types.RequiredStateConfig, previousID int64,
+) bool {
+	if len(current.Include) == 0 && len(current.Exclude) == 0 && !current.LazyMembers {
+		return false
+	}
+	currentJSON, err := json.Marshal(current)
+	if err != nil {
+		return true
+	}
+	previousJSON, err := rp.db.GetRequiredState(ctx, previousID)
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to load previous required_state config")
+		return true
+	}
+	return string(currentJSON) != previousJSON
+}
+
 // processRoomList handles a single room list configuration.
 func (rp *RequestPool) processRoomList(
 	ctx context.Context,
@@ -1757,6 +1816,14 @@ func (rp *RequestPool) processRoomList(
 	}
 
 	listChanged := forceInitialSync || !equalStringSlices(previousRoomIDs, roomIDs)
+	var removedRoomIDs []string
+	if !forceInitialSync {
+		for _, previousRoomID := range previousRoomIDs {
+			if !slices.Contains(roomIDs, previousRoomID) {
+				removedRoomIDs = append(removedRoomIDs, previousRoomID)
+			}
+		}
+	}
 	ops := []types.SlidingOperation{}
 
 	logrus.WithFields(logrus.Fields{
@@ -1804,6 +1871,7 @@ func (rp *RequestPool) processRoomList(
 		Ops:            ops,
 		MatchedRoomIDs: matchedRoomIDs,
 		WindowRoomIDs:  roomIDs,
+		RemovedRoomIDs: removedRoomIDs,
 	}, nil
 }
 
@@ -1877,6 +1945,17 @@ func (rp *RequestPool) buildInterruptResponse(
 				roomsInLists[roomID] = config
 			}
 		}
+		for _, roomID := range list.RemovedRoomIDs {
+			config := types.RoomSubscriptionConfig{
+				TimelineLimit: listConfig.TimelineLimit,
+				RequiredState: listConfig.RequiredState,
+			}
+			if existing, exists := roomsInLists[roomID]; exists {
+				roomsInLists[roomID] = mergeRoomSubscriptionConfig(existing, config)
+			} else {
+				roomsInLists[roomID] = config
+			}
+		}
 	}
 
 	// Populate room data for rooms that appear in list operations
@@ -1909,7 +1988,7 @@ func (rp *RequestPool) buildInterruptResponse(
 					return resp
 				}
 				var requiredStateConfig *types.RequiredStateConfig
-				if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 {
+				if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 || config.RequiredState.LazyMembers {
 					requiredStateConfig = &config.RequiredState
 				}
 

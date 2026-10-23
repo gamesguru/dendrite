@@ -75,6 +75,8 @@ func main() {
 			// Exercise MSC4140 in Complement. The default zero delay disables
 			// scheduling, while the suite schedules events up to one hour ahead.
 			cfg.ClientAPI.DelayedEvents.MaxDelay = 24 * time.Hour //nolint:mnd
+			// Complement exercises the media URL preview endpoint.
+			cfg.MediaAPI.URLPreview.Enabled = true
 			// Complement covers federation presence and sliding-sync set_presence.
 			cfg.Global.Presence.EnableInbound = true
 			cfg.Global.Presence.EnableOutbound = true
