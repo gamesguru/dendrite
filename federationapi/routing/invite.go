@@ -57,24 +57,25 @@ func InviteV3(
 		// Accepted leniently until the ecosystem has adapted to MSC4311.
 		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
+	ignoredInvite := false
 	if sender := inviteReq.Event().SenderID; sender != "" && userAPI != nil {
-		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, spec.SenderID(sender))
+		senderUser, senderErr := inviteSenderUserID(httpReq.Context(), rsAPI, roomID, spec.SenderID(sender))
 		// The room may not be known locally yet, especially for a first invite
 		// to a room using pseudo-IDs. In that case the sender mapping is not
 		// available until the invite is handled; leave filtering to the
 		// subsequent transaction, which has the imported room state.
 		if senderErr == nil && senderUser != nil {
-			blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
+			blocked, ignored, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
 			if ruleErr != nil {
 				return util.ErrorResponse(ruleErr)
 			}
 			if blocked {
 				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
 			}
+			ignoredInvite = ignored
 		}
-		// Ignored invites are still signed normally. The event will later
-		// arrive in a federation transaction, where it is dropped before it
-		// can be persisted or delivered to the invitee's sync.
+		// Ignored invites are still signed normally, so the sender cannot tell,
+		// but are not stored or delivered to the invitee's sync.
 	}
 
 	input := gomatrixserverlib.HandleInviteV3Input{
@@ -109,7 +110,7 @@ func InviteV3(
 			return spec.SenderIDFromPseudoIDKey(key), key, nil
 		},
 	}
-	event, jsonErr := handleInviteV3(httpReq.Context(), input, rsAPI)
+	event, jsonErr := handleInviteV3(httpReq.Context(), input, rsAPI, ignoredInvite)
 	if jsonErr != nil {
 		return *jsonErr
 	}
@@ -185,20 +186,21 @@ func InviteV2(
 		// Accepted leniently until the ecosystem has adapted to MSC4311.
 		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
+	ignoredInvite := false
 	if sender := inviteReq.Event().SenderID(); sender != "" && userAPI != nil {
-		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, sender)
+		senderUser, senderErr := inviteSenderUserID(httpReq.Context(), rsAPI, roomID, sender)
 		// See InviteV3: an unknown room may not have the pseudo-ID mapping yet.
 		if senderErr == nil && senderUser != nil {
-			blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
+			blocked, ignored, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
 			if ruleErr != nil {
 				return util.ErrorResponse(ruleErr)
 			}
 			if blocked {
 				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
 			}
+			ignoredInvite = ignored
 		}
-		// Ignored invites are signed normally and dropped from the later
-		// federation transaction, just like the V3 path.
+		// Ignored invites are signed but not stored, just like the V3 path.
 	}
 
 	input := gomatrixserverlib.HandleInviteInput{
@@ -217,7 +219,7 @@ func InviteV2(
 			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 		},
 	}
-	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI)
+	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI, ignoredInvite)
 	if jsonErr != nil {
 		return *jsonErr
 	}
@@ -318,7 +320,7 @@ func InviteV1(
 			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 		},
 	}
-	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI)
+	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI, false)
 	if jsonErr != nil {
 		return *jsonErr
 	}
@@ -328,17 +330,17 @@ func InviteV1(
 	}
 }
 
-func handleInvite(ctx context.Context, input gomatrixserverlib.HandleInviteInput, rsAPI api.FederationRoomserverAPI) (gomatrixserverlib.PDU, *util.JSONResponse) {
+func handleInvite(ctx context.Context, input gomatrixserverlib.HandleInviteInput, rsAPI api.FederationRoomserverAPI, ignored bool) (gomatrixserverlib.PDU, *util.JSONResponse) {
 	inviteEvent, err := gomatrixserverlib.HandleInvite(ctx, input)
-	return handleInviteResult(ctx, inviteEvent, err, rsAPI)
+	return handleInviteResult(ctx, inviteEvent, err, rsAPI, ignored)
 }
 
-func handleInviteV3(ctx context.Context, input gomatrixserverlib.HandleInviteV3Input, rsAPI api.FederationRoomserverAPI) (gomatrixserverlib.PDU, *util.JSONResponse) {
+func handleInviteV3(ctx context.Context, input gomatrixserverlib.HandleInviteV3Input, rsAPI api.FederationRoomserverAPI, ignored bool) (gomatrixserverlib.PDU, *util.JSONResponse) {
 	inviteEvent, err := gomatrixserverlib.HandleInviteV3(ctx, input)
-	return handleInviteResult(ctx, inviteEvent, err, rsAPI)
+	return handleInviteResult(ctx, inviteEvent, err, rsAPI, ignored)
 }
 
-func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, err error, rsAPI api.FederationRoomserverAPI) (gomatrixserverlib.PDU, *util.JSONResponse) {
+func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, err error, rsAPI api.FederationRoomserverAPI, ignored bool) (gomatrixserverlib.PDU, *util.JSONResponse) {
 	var internalErr spec.InternalServerError
 	var matrixErr spec.MatrixError
 	switch {
@@ -372,6 +374,9 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 		}
 	}
 
+	if ignored {
+		return inviteEvent, nil
+	}
 	headeredInvite := &types.HeaderedEvent{PDU: inviteEvent}
 	if err = rsAPI.HandleInvite(ctx, headeredInvite); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("HandleInvite failed")
@@ -381,4 +386,18 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 		}
 	}
 	return inviteEvent, nil
+}
+
+// inviteSenderUserID resolves the sender of an invite for the invite rules. A
+// room that is not known locally yet has no sender mapping, but a sender ID
+// that is a plain user ID can still be used as is.
+func inviteSenderUserID(ctx context.Context, rsAPI api.FederationRoomserverAPI, roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	user, err := rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
+	if err == nil && user != nil {
+		return user, nil
+	}
+	if parsed, parseErr := spec.NewUserID(string(senderID), true); parseErr == nil {
+		return parsed, nil
+	}
+	return user, err
 }
