@@ -1350,6 +1350,18 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 			}
 
+			// A room can have a stored PDU position newer than the connection's
+			// position even though the client has no visible room data to apply
+			// (for example, events outside its history visibility). Do not send
+			// an empty room object for that case. Keep initial rooms, expansions,
+			// state deltas, and membership leaves, which all carry an update even
+			// when their timeline is empty.
+			if since != nil && !roomData.Initial && !timelineExpanded && !requiredStateExpanded &&
+				len(roomData.Timeline) == 0 && len(roomData.RequiredState) == 0 &&
+				!roomsLeftOnConnection[roomID] && roomData.Membership != string(spec.Leave) && roomData.Membership != string(spec.Ban) {
+				continue
+			}
+
 			// Set expanded_timeline flag if timeline_limit increased
 			// This signals to clients that we're sending historical events due to expansion
 			if timelineExpanded {
