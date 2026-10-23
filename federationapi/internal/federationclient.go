@@ -295,7 +295,7 @@ func (a *FederationInternalAPI) LookupMissingEvents(
 		if err == nil {
 			// The retry succeeded; clear the backoff recorded for the bad body
 			// so unrelated follow-up requests (e.g. /state_ids) are not blocked.
-			a.statistics.ForServer(s).Success(statistics.SendDirect)
+			a.statistics.ForServer(s).Success(statistics.SendDirect) //nolint:contextcheck
 		}
 	}
 	if err != nil {
