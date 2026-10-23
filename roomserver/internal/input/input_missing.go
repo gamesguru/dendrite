@@ -873,19 +873,55 @@ func (t *missingStateReq) lookupMissingStateViaState(
 		return nil, err
 	}
 
-	// Check that the returned state is valid.
-	authEvents, stateEvents, err := gomatrixserverlib.CheckStateResponse(ctx, &fclient.RespState{
-		StateEvents: state.GetStateEvents(),
-		AuthEvents:  state.GetAuthEvents(),
-	}, roomVersion, t.keys, nil, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	// Drop events with bad signatures, but keep those that are merely not
+	// allowed by their auth events. They may only be valid in the resolved
+	// state (MSC4297), and the roomserver stores them as rejected outliers.
+	authEvents := state.GetAuthEvents().UntrustedEvents(roomVersion)
+	stateEvents := state.GetStateEvents().UntrustedEvents(roomVersion)
+	all := make([]gomatrixserverlib.PDU, 0, len(authEvents)+len(stateEvents))
+	stateTuples := map[gomatrixserverlib.StateKeyTuple]bool{}
+	for _, event := range authEvents {
+		if event.StateKey() == nil {
+			return nil, fmt.Errorf("event %q does not have a state key", event.EventID())
+		}
+		all = append(all, event)
+	}
+	for _, event := range stateEvents {
+		if event.StateKey() == nil {
+			return nil, fmt.Errorf("event %q does not have a state key", event.EventID())
+		}
+		tuple := gomatrixserverlib.StateKeyTuple{EventType: event.Type(), StateKey: *event.StateKey()}
+		if stateTuples[tuple] {
+			return nil, fmt.Errorf("duplicate state key tuple (%q, %q)", event.Type(), *event.StateKey())
+		}
+		stateTuples[tuple] = true
+		all = append(all, event)
+	}
+	sigErrs := gomatrixserverlib.VerifyAllEventSignatures(ctx, all, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	})
-	if err != nil {
-		return nil, err
+	if len(sigErrs) != len(all) {
+		return nil, fmt.Errorf("expected %d signature results but got %d", len(all), len(sigErrs))
+	}
+	badSig := map[string]bool{}
+	for i, e := range all {
+		if sigErrs[i] != nil {
+			t.log.WithError(sigErrs[i]).Warnf("Signature validation failed for event %q", e.EventID())
+			badSig[e.EventID()] = true
+		}
+	}
+	keep := func(events []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+		kept := events[:0:0]
+		for _, e := range events {
+			if !badSig[e.EventID()] {
+				kept = append(kept, e)
+			}
+		}
+		return kept
 	}
 	return &parsedRespState{
-		AuthEvents:  authEvents,
-		StateEvents: stateEvents,
+		AuthEvents:  keep(authEvents),
+		StateEvents: keep(stateEvents),
 	}, nil
 }
 
