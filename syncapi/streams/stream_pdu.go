@@ -154,6 +154,16 @@ func (p *PDUStreamProvider) CompleteSync(
 		req.Rooms[roomID] = spec.Join
 	}
 
+	if req.Filter.Room.IncludeLeave {
+		if err = p.addLeftRoomsToCompleteSync(ctx, snapshot, req, to, &eventFilter, &stateFilter, bundler); err != nil {
+			if req.Context.Err() != nil || abandonsSync(err) {
+				logAbandoned(req, err, "", "complete")
+				return from
+			}
+			req.Log.WithError(err).Error("p.addLeftRoomsToCompleteSync failed")
+		}
+	}
+
 	// Add peeked rooms.
 	peeks, err := snapshot.PeeksInRange(ctx, req.Device.UserID, req.Device.ID, r)
 	if err != nil {
@@ -193,6 +203,59 @@ func (p *PDUStreamProvider) CompleteSync(
 	}
 
 	return to
+}
+
+// addLeftRoomsToCompleteSync adds the rooms the user has left or been banned
+// from to the leave section of a complete sync, as asked for by the
+// include_leave filter. Each carries the timeline and state up to the leave.
+func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	req *types.SyncRequest,
+	to types.StreamPosition,
+	eventFilter *synctypes.RoomEventFilter,
+	stateFilter *synctypes.StateFilter,
+	bundler *syncBundler,
+) error {
+	deltas, joinedRoomIDs, err := snapshot.GetStateDeltas(
+		ctx, req.Device, types.Range{From: 0, To: to}, req.Device.UserID, stateFilter, p.rsAPI,
+	)
+	if err != nil {
+		return fmt.Errorf("snapshot.GetStateDeltas: %w", err)
+	}
+	joined := make(map[string]struct{}, len(joinedRoomIDs))
+	for _, roomID := range joinedRoomIDs {
+		joined[roomID] = struct{}{}
+	}
+
+	for _, delta := range deltas {
+		if delta.Membership != spec.Leave && delta.Membership != spec.Ban {
+			continue
+		}
+		if _, ok := joined[delta.RoomID]; ok {
+			continue
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		// Look back from the leave, as for a room that was newly joined.
+		r := types.Range{From: delta.MembershipPos, To: 0, Backwards: true}
+		recent, recentErr := snapshot.RecentEvents(ctx, []string{delta.RoomID}, r, eventFilter, true, true)
+		if recentErr != nil && !errors.Is(recentErr, sql.ErrNoRows) {
+			return fmt.Errorf("snapshot.RecentEvents: %w", recentErr)
+		}
+		// The delta holds what changed in the whole room up to now.
+		delta.StateEvents, err = snapshot.RoomStateDelta(
+			ctx, req.Device, delta.RoomID, types.Range{From: 0, To: delta.MembershipPos}, stateFilter, p.rsAPI,
+		)
+		if err != nil {
+			return fmt.Errorf("snapshot.RoomStateDelta: %w", err)
+		}
+		if _, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, r, delta, eventFilter, stateFilter, req, recent, bundler); err != nil {
+			return fmt.Errorf("addRoomDeltaToResponse(%s): %w", delta.RoomID, err)
+		}
+	}
+	return nil
 }
 
 //nolint:gocyclo
@@ -417,14 +480,35 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []types.StateDelta, r types.Range, eventFilter synctypes.RoomEventFilter, snapshot storage.DatabaseTransaction) (map[string]types.RecentEvents, error) {
 	var roomIDs []string
 	var newlyJoinedRoomIDs []string
+	var leftDeltas []types.StateDelta
 	for _, delta := range stateDeltas {
-		if delta.NewlyJoined {
+		switch {
+		case delta.NewlyJoined:
 			newlyJoinedRoomIDs = append(newlyJoinedRoomIDs, delta.RoomID)
-		} else {
+		case leftWithinRange(delta, r):
+			leftDeltas = append(leftDeltas, delta)
+		default:
 			roomIDs = append(roomIDs, delta.RoomID)
 		}
 	}
 	dbEvents := make(map[string]types.RecentEvents)
+	// A user who left a room must not see what happened in it afterwards, so
+	// its timeline ends at the leave rather than at the end of the range.
+	for _, delta := range leftDeltas {
+		events, err := snapshot.RecentEvents(
+			ctx, []string{delta.RoomID},
+			types.Range{From: r.From, To: delta.MembershipPos},
+			&eventFilter, true, true,
+		)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+		}
+		for k, v := range events {
+			dbEvents[k] = v
+		}
+	}
 	if len(roomIDs) > 0 {
 		events, err := snapshot.RecentEvents(
 			ctx, roomIDs, r,
@@ -472,6 +556,15 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 	}
 
 	return dbEvents, nil
+}
+
+// leftWithinRange reports whether delta is for a room the user left or was
+// banned from partway through the forwards range r, so that the range holds
+// events from after the user's membership ended.
+func leftWithinRange(delta types.StateDelta, r types.Range) bool {
+	return !r.Backwards &&
+		(delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
+		delta.MembershipPos > r.From && delta.MembershipPos < r.To
 }
 
 // Limit the recent events to X when going backwards.
@@ -566,9 +659,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		}
 	}
 
-	// MSC4222: the state after the timeline of a room the user left is the
-	// state at their leave, without the changes the rest of the range holds.
-	if req.UseStateAfter() && (delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
+	// The state of a room the user left is the state at their leave (also what
+	// MSC4222 calls the state after the timeline), without the changes the
+	// rest of the range holds.
+	if (delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
 		delta.MembershipPos > r.Low() && delta.MembershipPos < r.High() {
 		delta.StateEvents, err = snapshot.RoomStateDelta(
 			ctx, device, delta.RoomID, types.Range{From: r.Low(), To: delta.MembershipPos}, stateFilter, p.rsAPI,

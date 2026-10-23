@@ -494,7 +494,13 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 		// If so, retrieve as much events as needed through backfilling.
 		events, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit)
 		if err != nil {
-			return
+			if r.ctx.Err() != nil {
+				return
+			}
+			// Backfill is best effort: no remote server answering must not fail
+			// the request, it just means there is nothing older to show.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
+			return []*rstypes.HeaderedEvent{}, nil
 		}
 		r.didBackfill = true
 		// Backfilled events come from federation and are not pre-filtered by the
@@ -546,15 +552,21 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		var pdus []*rstypes.HeaderedEvent
 		// Only ask the remote server for enough events to reach the limit.
 		pdus, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit-len(streamEvents))
-		if err != nil {
+		switch {
+		case err != nil && r.ctx.Err() != nil:
 			return
+		case err != nil:
+			// Backfill is best effort: fall back to the events we have locally.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
+			err = nil
+		default:
+			r.didBackfill = true
+			// Backfilled events come from federation and are not pre-filtered by the
+			// database query; apply the client's sender/type filter here.
+			pdus = filterHeaderedEvents(pdus, r.filter)
+			// Append the PDUs to the list to send back to the client.
+			events = append(events, pdus...)
 		}
-		r.didBackfill = true
-		// Backfilled events come from federation and are not pre-filtered by the
-		// database query; apply the client's sender/type filter here.
-		pdus = filterHeaderedEvents(pdus, r.filter)
-		// Append the PDUs to the list to send back to the client.
-		events = append(events, pdus...)
 	}
 
 	// Append the events ve previously retrieved locally.
