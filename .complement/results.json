@@ -381,7 +381,7 @@
 {"Action":"fail","Test":"TestMSC4186SlidingSync/IncrementalRoomDeltas/Required_state_expansion_returns_newly_requested_state_immediately"}
 {"Action":"fail","Test":"TestMSC4186SlidingSync/IncrementalRoomDeltas/State_changes_are_delivered_as_deltas_without_replaying_unchanged_state"}
 {"Action":"fail","Test":"TestMSC4186SlidingSync/IncrementalRoomDeltas/Unchanged_room_fields_are_omitted_from_incremental_timeline_updates"}
-{"Action":"fail","Test":"TestMSC4186SlidingSync/InviteStrippedState"}
+{"Action":"pass","Test":"TestMSC4186SlidingSync/InviteStrippedState"}
 {"Action":"fail","Test":"TestMSC4186SlidingSync/LazyLoading"}
 {"Action":"pass","Test":"TestMSC4186SlidingSync/ListDeltas"}
 {"Action":"pass","Test":"TestMSC4186SlidingSync/ListFilters"}
@@ -692,9 +692,9 @@
 {"Action":"pass","Test":"TestPowerLevels/GET_/rooms/:room_id/state/m.room.power_levels_can_fetch_levels"}
 {"Action":"pass","Test":"TestPowerLevels/PUT_/rooms/:room_id/state/m.room.power_levels_can_set_levels"}
 {"Action":"pass","Test":"TestPowerLevels/PUT_power_levels_should_not_explode_if_the_old_power_levels_were_empty"}
-{"Action":"fail","Test":"TestPresence"}
+{"Action":"pass","Test":"TestPresence"}
 {"Action":"pass","Test":"TestPresence/GET_/presence/:user_id/status_fetches_initial_status"}
-{"Action":"fail","Test":"TestPresence/PUT_/presence/:user_id/status_updates_my_presence"}
+{"Action":"pass","Test":"TestPresence/PUT_/presence/:user_id/status_updates_my_presence"}
 {"Action":"pass","Test":"TestPresence/Presence_can_be_set_from_sync"}
 {"Action":"pass","Test":"TestPresence/Presence_changes_are_reported_to_local_room_members"}
 {"Action":"pass","Test":"TestPresence/Presence_changes_to_UNAVAILABLE_are_reported_to_local_room_members"}
