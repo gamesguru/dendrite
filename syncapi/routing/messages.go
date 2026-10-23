@@ -7,6 +7,7 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -620,7 +620,15 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
 	for _, ev := range events {
 		if len(filter.RelationTypes) > 0 {
-			relationType := gjson.GetBytes(ev.Content(), "m.relates_to.rel_type").Str
+			var content struct {
+				RelatesTo struct {
+					RelType string `json:"rel_type"`
+				} `json:"m.relates_to"`
+			}
+			if err := json.Unmarshal(ev.Content(), &content); err != nil {
+				continue
+			}
+			relationType := content.RelatesTo.RelType
 			matched := false
 			for _, allowed := range filter.RelationTypes {
 				if relationType == allowed {

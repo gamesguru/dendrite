@@ -77,6 +77,9 @@ func main() {
 			cfg.ClientAPI.DelayedEvents.MaxDelay = 24 * time.Hour //nolint:mnd
 			// Complement exercises the media URL preview endpoint.
 			cfg.MediaAPI.URLPreview.Enabled = true
+			// Complement's preview fixture is served from the Docker bridge
+			// network. Keep this exception limited to the generated test config.
+			cfg.MediaAPI.URLPreview.IPRangeWhitelist = []string{"172.16.0.0/12"}
 			// Complement covers federation presence and sliding-sync set_presence.
 			cfg.Global.Presence.EnableInbound = true
 			cfg.Global.Presence.EnableOutbound = true

@@ -524,6 +524,7 @@ func Register(
 		r.ServerName = cfg.Matrix.ServerName
 	}
 	sessionID := gjson.GetBytes(reqBody, "auth.session").String()
+	hasSession := sessionID != ""
 	if sessionID == "" {
 		// Generate a new, random session ID
 		sessionID = util.RandomString(sessionIDLength)
@@ -548,6 +549,15 @@ func Register(
 	}
 	if resErr := httputil.UnmarshalJSON(reqBody, &r); resErr != nil {
 		return *resErr
+	}
+	// Once UIA has challenged a registration, every response must carry its
+	// session. Starting a fresh session here would let a client bypass that
+	// challenge and complete registration with only the auth stage body.
+	if r.Auth.Type != "" && !hasSession && r.Type != authtypes.LoginTypeApplicationService {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.UnknownToken("A registration session is required"),
+		}
 	}
 	if req.URL.Query().Get("kind") == "guest" {
 		return handleGuestRegistration(req, r, cfg, userAPI)
@@ -588,6 +598,14 @@ func Register(
 			if resErr := validateUserLocalpart(r.Username, r.ServerName); resErr != nil {
 				return *resErr
 			}
+		}
+	}
+	// Check a requested username before returning a UIA challenge. This keeps
+	// duplicate-name errors deterministic even when the follow-up request does
+	// not include the previous auth session.
+	if !hasSession && accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
+		if resErr := checkLocalpartRegistrable(req.Context(), cfg, userAPI, r.Username, r.ServerName); resErr != nil {
+			return *resErr
 		}
 	}
 	if err = internal.ValidatePasswordWithMinimum(r.Password, cfg.MinPasswordLength); err != nil {

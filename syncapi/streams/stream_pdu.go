@@ -793,6 +793,14 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			updateLatestPosition(last.EventID())
 		}
 	}
+	// GetStateDeltas includes every currently joined room so membership is
+	// correct even when no membership event is in this range. An unchanged
+	// joined room still belongs in the response only when a stream produced
+	// room data; the other stream providers can add that later if needed.
+	if len(events) == 0 && len(delta.StateEvents) == 0 && !hasMembershipChange &&
+		!delta.NewlyJoined && !req.WantFullState {
+		return latestPosition, nil
+	}
 
 	switch delta.Membership {
 	case spec.Join:

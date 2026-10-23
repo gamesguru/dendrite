@@ -162,6 +162,7 @@ func (rp *RequestPool) BuildRoomData(
 	fromToken *types.StreamingToken,
 	requiredStateConfig *types.RequiredStateConfig,
 	ignoreTimelineBound bool,
+	forceRequiredState bool,
 ) (*types.SlidingRoomData, error) {
 	// CRITICAL: initial indicates if this is the FIRST TIME this room is being sent on this CONNECTION
 	isInitialForRoom := fromToken == nil || roomState.Status == types.HaveSentRoomNever
@@ -215,7 +216,7 @@ func (rp *RequestPool) BuildRoomData(
 			"timeline_events": len(roomData.Timeline),
 		}).Debug("[REQUIRED_STATE] Getting required state")
 
-		requiredState, stateErr := rp.getRequiredState(ctx, snapshot, roomID, userID, requiredStateConfig, roomData.Timeline, isInitialForRoom, roomState, currentPos)
+		requiredState, stateErr := rp.getRequiredState(ctx, snapshot, roomID, userID, requiredStateConfig, roomData.Timeline, isInitialForRoom || forceRequiredState, roomState, currentPos)
 		if stateErr != nil {
 			// Fatal for this room rather than logged and dropped. On an
 			// incremental sync the state is a one-shot delta, so emitting the

@@ -1298,7 +1298,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				fromPosPtr = &since.StreamToken
 			}
 
-			roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, currentPos, fromPosPtr, requiredStateConfig, timelineExpanded)
+			requiredStateExpanded := false
+			if previous := connState.PreviousRoomConfigs[roomID]; previous != nil {
+				requiredStateExpanded = rp.requiredStateChanged(ctx, config.RequiredState, previous.RequiredStateID)
+			}
+			roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, currentPos, fromPosPtr, requiredStateConfig, timelineExpanded, requiredStateExpanded)
 			if buildErr != nil {
 				if ctx.Err() != nil {
 					break populate
@@ -2011,7 +2015,7 @@ func (rp *RequestPool) buildInterruptResponse(
 					fromPosPtr = &since.StreamToken
 				}
 
-				roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false)
+				roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false, false)
 				if buildErr != nil {
 					if errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded) {
 						return resp
