@@ -105,7 +105,41 @@ func DirectoryRoom(
 				JSON: spec.InternalServerError{},
 			}
 		}
-		res.fillServers(joinedHostsRes.ServerNames)
+		servers := joinedHostsRes.ServerNames
+		if len(servers) == 0 {
+			// The federation sender may not have processed the join yet, as
+			// during a partial-state join. The roomserver already knows the
+			// members from the send_join response, so use it as a fallback.
+			var members roomserverAPI.QueryMembershipsForRoomResponse
+			if memberErr := rsAPI.QueryMembershipsForRoom(req.Context(), &roomserverAPI.QueryMembershipsForRoomRequest{
+				RoomID:     res.RoomID,
+				JoinedOnly: true,
+			}, &members); memberErr != nil {
+				util.GetLogger(req.Context()).WithError(memberErr).Warn("QueryMembershipsForRoom fallback failed")
+			}
+			seen := make(map[spec.ServerName]struct{})
+			add := func(serverName spec.ServerName) {
+				if serverName == "" {
+					return
+				}
+				if _, ok := seen[serverName]; ok {
+					return
+				}
+				seen[serverName] = struct{}{}
+				servers = append(servers, serverName)
+			}
+			for _, event := range members.JoinEvents {
+				if event.StateKey == nil {
+					continue
+				}
+				_, domain, splitErr := gomatrixserverlib.SplitID('@', *event.StateKey)
+				if splitErr == nil {
+					add(domain)
+				}
+			}
+			add(cfg.Matrix.ServerName)
+		}
+		res.fillServers(servers)
 	}
 
 	return util.JSONResponse{
