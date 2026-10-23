@@ -848,6 +848,41 @@ func (rp *RequestPool) fetchTargetedState(
 		}
 	}
 
+	// Keep the tuples for a roomserver fallback. The sync database is updated
+	// asynchronously from the roomserver output stream, so a just-joined room
+	// can have authoritative current state before the sync state table catches
+	// up. This fallback only fills missing state slots; the sync snapshot remains
+	// the source for any slots it already has.
+	stateTuples := make([]gomatrixserverlib.StateKeyTuple, 0, len(config.Include)+len(memberKeys))
+	seenTuples := make(map[gomatrixserverlib.StateKeyTuple]struct{})
+	addTuple := func(eventType, stateKey string) {
+		tuple := gomatrixserverlib.StateKeyTuple{EventType: eventType, StateKey: stateKey}
+		if _, exists := seenTuples[tuple]; !exists {
+			seenTuples[tuple] = struct{}{}
+			stateTuples = append(stateTuples, tuple)
+		}
+	}
+	for _, pattern := range config.Include {
+		if len(pattern) != 2 || pattern[0] == "*" { //nolint:mnd
+			continue
+		}
+		eventType, stateKey := pattern[0], pattern[1]
+		if eventType == "m.room.member" {
+			switch stateKey {
+			case "*":
+				continue // The roomserver wildcard could return an unbounded member list.
+			case "$ME":
+				stateKey = userID
+			case "$LAZY":
+				for sender := range lazySenders {
+					addTuple(eventType, sender)
+				}
+				continue
+			}
+		}
+		addTuple(eventType, stateKey)
+	}
+
 	var result []*rstypes.HeaderedEvent
 
 	// Fetch non-member state events using a type filter.
@@ -893,6 +928,34 @@ func (rp *RequestPool) fetchTargetedState(
 			}
 			if ev != nil {
 				result = append(result, ev)
+			}
+		}
+	}
+
+	if len(stateTuples) > 0 {
+		currentStateQuerier, ok := rp.rsAPI.(interface {
+			QueryCurrentState(context.Context, *roomserverAPI.QueryCurrentStateRequest, *roomserverAPI.QueryCurrentStateResponse) error
+		})
+		if ok {
+			var response roomserverAPI.QueryCurrentStateResponse
+			if err := currentStateQuerier.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
+				RoomID:         roomID,
+				AllowWildcards: true,
+				StateTuples:    stateTuples,
+			}, &response); err == nil {
+				existing := make(map[string]bool, len(result))
+				for _, event := range result {
+					existing[stateEventKey(event)] = true
+				}
+				for _, event := range response.StateEvents {
+					if event == nil || event.StateKey() == nil || existing[stateEventKey(event)] {
+						continue
+					}
+					if rp.matchesRequiredState(event, userID, config, lazySenders) {
+						result = append(result, event)
+						existing[stateEventKey(event)] = true
+					}
+				}
 			}
 		}
 	}

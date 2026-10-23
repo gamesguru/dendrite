@@ -384,7 +384,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		// Filtered-empty page: return the topology end token so the client continues.
 		return []synctypes.ClientEvent{}, *r.from, end, nil
 	}
-	if len(r.filter.RelationTypes) > 0 {
+	if len(r.filter.RelationTypes) > 0 || len(r.filter.NotRelationTypes) > 0 {
 		events = filterHeaderedEvents(events, r.filter)
 		if len(events) == 0 {
 			return []synctypes.ClientEvent{}, *r.from, end, nil
@@ -614,29 +614,48 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 	if filter == nil {
 		return events
 	}
-	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil && len(filter.RelationTypes) == 0 {
+	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil && len(filter.RelationTypes) == 0 && len(filter.NotRelationTypes) == 0 {
 		return events
 	}
 	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
 	for _, ev := range events {
-		if len(filter.RelationTypes) > 0 {
+		if len(filter.RelationTypes) > 0 || len(filter.NotRelationTypes) > 0 {
+			// MSC3874 relation filters apply to room messages. Keep this guard
+			// here as well as in the database query because backfilled events
+			// are filtered in Go after they have been fetched from federation.
+			if ev.Type() != "m.room.message" {
+				continue
+			}
 			var content struct {
 				RelatesTo struct {
 					RelType string `json:"rel_type"`
 				} `json:"m.relates_to"`
 			}
-			if err := json.Unmarshal(ev.Content(), &content); err != nil {
+			err := json.Unmarshal(ev.Content(), &content)
+			if err != nil && len(filter.RelationTypes) > 0 {
 				continue
 			}
 			relationType := content.RelatesTo.RelType
-			matched := false
-			for _, allowed := range filter.RelationTypes {
-				if relationType == allowed {
-					matched = true
+			if len(filter.RelationTypes) > 0 {
+				matched := false
+				for _, allowed := range filter.RelationTypes {
+					if relationType == allowed {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			excluded := false
+			for _, excludedType := range filter.NotRelationTypes {
+				if relationType == excludedType {
+					excluded = true
 					break
 				}
 			}
-			if !matched {
+			if excluded {
 				continue
 			}
 		}

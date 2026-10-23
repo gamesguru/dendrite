@@ -71,6 +71,7 @@ type RoomEventFilter struct {
 	UnreadThreadNotifications bool      `json:"unread_thread_notifications,omitempty"`
 	ContainsURL               *bool     `json:"contains_url,omitempty"`
 	RelationTypes             []string  `json:"org.matrix.msc3874.rel_types,omitempty"`
+	NotRelationTypes          []string  `json:"org.matrix.msc3874.not_rel_types,omitempty"`
 }
 
 const (
