@@ -691,7 +691,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 			// Create a minimal sync request for the notifier
 			syncReq := &types.SyncRequest{
-				Context:       req.Context(),
+				Context:       ctx,
 				Device:        device,
 				Since:         since.StreamToken,
 				Timeout:       timeout,
@@ -714,24 +714,24 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			case <-timer.C:
 				// Timeout - return current position without changes
 				logrus.Info("[V4_SYNC] Timeout expired with no changes")
-				timeoutResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
+				timeoutResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
 				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: timeoutResp,
 				}
-			case <-process.Quiescing(req.Context()):
+			case <-process.Quiescing(ctx):
 				// A planned handover answers as if the timeout had been
 				// reached, so the next request reaches the successor.
 				logrus.Info("[V4_SYNC] Answering early for a planned handover")
 				return util.JSONResponse{
 					Code: http.StatusOK,
-					JSON: rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "timeout"),
+					JSON: rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout"),
 				}
-			case <-req.Context().Done():
+			case <-ctx.Done():
 				// Client disconnected
 				logrus.Info("[V4_SYNC] Client disconnected during wait")
-				disconnectResp := rp.buildInterruptResponse(req.Context(), &v4Req, device, connState, since, currentPos, connectionKey, "disconnect")
+				disconnectResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "disconnect")
 				logV4Response(*disconnectResp, device.UserID, device.ID, http.StatusOK)
 				return util.JSONResponse{
 					Code: http.StatusOK,
@@ -742,10 +742,10 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 
 		// Phase 10: Create new connection position for this sync response
 		// This is what goes into the pos token
-		connState.ConnectionPosition, err = rp.db.CreateConnectionPosition(req.Context(), connState.ConnectionKey)
+		connState.ConnectionPosition, err = rp.db.CreateConnectionPosition(ctx, connState.ConnectionKey)
 		if err != nil {
-			if req.Context().Err() != nil {
-				return abandonV4Sync(req.Context(), since, connState)
+			if ctx.Err() != nil {
+				return abandonV4Sync(ctx, since, connState)
 			}
 			logrus.WithError(err).Error("Failed to create connection position")
 			return util.JSONResponse{
@@ -1369,7 +1369,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// Clear receipt delivery state for this room so receipts are re-delivered
 				// This is necessary because the client is resetting its view of the room (initial:true)
 				// and needs to receive current receipt positions to avoid stuck unread badges
-				if deleteErr := rp.db.DeleteConnectionReceiptsForRoom(req.Context(), connectionKey, roomID); deleteErr != nil {
+				if deleteErr := rp.db.DeleteConnectionReceiptsForRoom(ctx, connectionKey, roomID); deleteErr != nil {
 					logrus.WithError(deleteErr).WithFields(logrus.Fields{
 						"room_id":        roomID,
 						"connection_key": connectionKey,

@@ -863,7 +863,7 @@ func (rp *RequestPool) fetchTargetedState(
 		}
 	}
 	for _, pattern := range config.Include {
-		if len(pattern) != 2 || pattern[0] == "*" { //nolint:mnd
+		if len(pattern) != 2 || pattern[0] == "*" {
 			continue
 		}
 		eventType, stateKey := pattern[0], pattern[1]
@@ -1170,10 +1170,7 @@ func (rp *RequestPool) buildInviteRoomData(
 	isInitial bool,
 	inviteEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
-	roomData, err := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, inviteEvent, "invite_room_state")
-	if err != nil {
-		return nil, err
-	}
+	roomData := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, inviteEvent, "invite_room_state")
 	// MSC4186 spec uses "stripped_state", Synapse/Element X use "invite_state"
 	roomData.InviteState = roomData.StrippedState
 	// buildStrippedRoomData starts a new room object, so carry the membership
@@ -1193,10 +1190,7 @@ func (rp *RequestPool) buildKnockRoomData(
 	isInitial bool,
 	knockEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
-	roomData, err := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
-	if err != nil {
-		return nil, err
-	}
+	roomData := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
 	roomData.Membership = spec.Knock
 	return roomData, nil
 }
@@ -1212,7 +1206,7 @@ func (rp *RequestPool) buildStrippedRoomData(
 	isInitial bool,
 	inviteEvent *rstypes.HeaderedEvent,
 	unsignedKey string,
-) (*types.SlidingRoomData, error) {
+) *types.SlidingRoomData {
 	roomData := &types.SlidingRoomData{
 		Initial: isInitial,
 	}
@@ -1310,7 +1304,7 @@ func (rp *RequestPool) buildStrippedRoomData(
 		"unsigned_key":     unsignedKey,
 	}).Debug("[V4_SYNC] Built stripped room data")
 
-	return roomData, nil
+	return roomData
 }
 
 // getHeroes fetches room heroes with displayname and avatar_url in MSC4186 format.

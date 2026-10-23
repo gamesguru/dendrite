@@ -594,7 +594,8 @@ func Register(
 	// Check a requested username before returning a UIA challenge. This keeps
 	// duplicate-name errors deterministic even when the follow-up request does
 	// not include the previous auth session.
-	if !hasSession && r.Auth.Type == "" && !cfg.ClientAPI.RecaptchaEnabled && accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
+	if !hasSession && r.Auth.Type == "" && !cfg.ClientAPI.RecaptchaEnabled &&
+		accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
 		if resErr := checkLocalpartRegistrable(req.Context(), cfg, userAPI, r.Username, r.ServerName); resErr != nil {
 			return *resErr
 		}

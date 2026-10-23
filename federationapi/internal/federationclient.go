@@ -283,15 +283,15 @@ func (a *FederationInternalAPI) LookupMissingEvents(
 ) (res fclient.RespMissingEvents, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	request := func() (any, error) { //nolint:contextcheck
+	request := func() (any, error) {
 		return a.federation.LookupMissingEvents(ctx, origin, s, roomID, missing, roomVersion)
 	}
-	ires, err := a.doFederationRequest(s, request, true)
+	ires, err := a.doFederationRequest(s, request, true) //nolint:contextcheck
 	if err != nil && isMalformedJSONError(err) {
 		// The first attempt counted as a failure and started a backoff. Retry
 		// the same server once without consulting or updating that backoff, so
 		// a single truncated body cannot make us refuse our own retry.
-		ires, err = a.doFederationRequestNoStats(s, request)
+		ires, err = a.doFederationRequestNoStats(s, request) //nolint:contextcheck
 		if err == nil {
 			// The retry succeeded; clear the backoff recorded for the bad body
 			// so unrelated follow-up requests (e.g. /state_ids) are not blocked.

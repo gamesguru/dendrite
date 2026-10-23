@@ -231,7 +231,7 @@ func InviteV2(
 
 func hasInvalidV12InviteState(roomVersion string, strippedState []gomatrixserverlib.InviteStrippedState) bool {
 	version, err := strconv.Atoi(roomVersion)
-	if err != nil || version < 12 { //nolint:mnd
+	if err != nil || version < 12 {
 		return false
 	}
 	for _, event := range strippedState {
