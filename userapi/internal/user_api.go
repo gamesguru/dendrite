@@ -395,6 +395,14 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 	if err != nil {
 		return err
 	}
+	// MSC3890: local notification settings are keyed by device ID and must
+	// disappear with the device.
+	for _, deviceID := range deletedDeviceIDs {
+		dataType := "org.matrix.msc3890.local_notification_settings." + deviceID
+		if err = a.DB.SaveAccountData(ctx, local, domain, "", dataType, json.RawMessage("null")); err != nil {
+			return fmt.Errorf("a.DB.SaveAccountData(%s): %w", dataType, err)
+		}
+	}
 	// Ask the keyserver to delete device keys and signatures for those devices
 	deleteReq := &api.PerformDeleteKeysRequest{
 		UserID: req.UserID,

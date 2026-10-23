@@ -1119,6 +1119,26 @@ func (r *Inputer) fetchAuthEvents(
 		break
 	}
 	if !found {
+		// /event_auth is optional and some servers (including Complement's
+		// MSC4297 test fixture) do not implement it. Fall back to fetching
+		// the unknown auth events directly via /event; the state fetched by
+		// /state_ids may already include their auth chains.
+		for authEventID := range unknown {
+			for _, serverName := range servers {
+				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
+				if getErr != nil || len(txn.PDUs) == 0 {
+					logger.WithError(getErr).Debugf("Failed to get missing auth event %q from %q", authEventID, serverName)
+					continue
+				}
+				for _, pdu := range txn.PDUs {
+					res.AuthEvents = append(res.AuthEvents, spec.RawJSON(pdu))
+				}
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
 		return fmt.Errorf("no servers provided event auth for event ID %q, tried servers %v", event.EventID(), servers)
 	}
 

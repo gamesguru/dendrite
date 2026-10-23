@@ -16,6 +16,7 @@ func defaultOverrideRules(userID string) []*Rule {
 		&mRuleReactionDefinition,
 		&mRuleACLsDefinition,
 		mRuleSuppressEditsDefinition(),
+		&mRulePollResponseDefinition,
 	}
 }
 
@@ -32,6 +33,7 @@ const (
 	MRuleReaction            = ".m.rule.reaction"
 	MRuleRoomACLs            = ".m.rule.room.server_acl"
 	MRuleSuppressEdits       = ".m.rule.suppress_edits"
+	MRulePollResponse        = ".org.matrix.msc3930.rule.poll_response"
 )
 
 var (
@@ -39,6 +41,19 @@ var (
 		RuleID:  MRuleMaster,
 		Default: true,
 		Enabled: false,
+		Actions: []*Action{},
+	}
+	mRulePollResponseDefinition = Rule{
+		RuleID:  MRulePollResponse,
+		Default: true,
+		Enabled: true,
+		Conditions: []*Condition{
+			{
+				Kind:    EventMatchCondition,
+				Key:     "type",
+				Pattern: pointer("org.matrix.msc3381.poll.response"),
+			},
+		},
 		Actions: []*Action{},
 	}
 	mRuleSuppressNoticesDefinition = Rule{
