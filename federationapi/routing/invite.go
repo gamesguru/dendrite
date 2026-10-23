@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -50,6 +51,12 @@ func InviteV3(
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.InvalidParam("The invited user domain does not belong to this server"),
+		}
+	}
+	if hasInvalidV12InviteState(string(inviteReq.RoomVersion()), inviteReq.InviteRoomState()) {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
 		}
 	}
 	if sender := inviteReq.Event().SenderID; sender != "" {
@@ -176,6 +183,12 @@ func InviteV2(
 			JSON: spec.BadJSON("The event ID in the request path must match the event ID in the invite event JSON"),
 		}
 	}
+	if hasInvalidV12InviteState(string(inviteReq.RoomVersion()), inviteReq.InviteRoomState()) {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
+		}
+	}
 	if sender := inviteReq.Event().SenderID(); sender != "" {
 		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, sender)
 		if senderErr != nil {
@@ -219,6 +232,19 @@ func InviteV2(
 		Code: http.StatusOK,
 		JSON: fclient.RespInviteV2{Event: event.JSON()},
 	}
+}
+
+func hasInvalidV12InviteState(roomVersion string, strippedState []gomatrixserverlib.InviteStrippedState) bool {
+	version, err := strconv.Atoi(roomVersion)
+	if err != nil || version < 12 { //nolint:mnd
+		return false
+	}
+	for _, event := range strippedState {
+		if event.Type() == spec.MRoomCreate {
+			return false
+		}
+	}
+	return true
 }
 
 // InviteV1 implements /_matrix/federation/v1/invite/{roomID}/{eventID}.

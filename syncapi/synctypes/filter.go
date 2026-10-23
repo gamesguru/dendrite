@@ -8,6 +8,8 @@ package synctypes
 
 import (
 	"errors"
+
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // Filter is used by clients to specify how the server should filter responses to e.g. sync requests
@@ -79,6 +81,68 @@ const (
 func (filter *Filter) Validate() error {
 	if filter.EventFormat != "" && filter.EventFormat != EventFormatClient && filter.EventFormat != EventFormatFederation {
 		return errors.New("bad event_format value. Must be one of [\"client\", \"federation\"]")
+	}
+	validateRoomIDs := func(name string, roomIDs *[]string) error {
+		if roomIDs == nil {
+			return nil
+		}
+		for _, roomID := range *roomIDs {
+			if _, err := spec.NewRoomID(roomID); err != nil {
+				return errors.New("invalid room ID in " + name)
+			}
+		}
+		return nil
+	}
+	validateSenders := func(name string, senders *[]string) error {
+		if senders == nil {
+			return nil
+		}
+		for _, sender := range *senders {
+			if _, err := spec.NewUserID(sender, true); err != nil {
+				return errors.New("invalid sender ID in " + name)
+			}
+		}
+		return nil
+	}
+	for _, item := range []struct {
+		name string
+		ids  *[]string
+	}{
+		{"room.rooms", filter.Room.Rooms},
+		{"room.not_rooms", filter.Room.NotRooms},
+		{"room.state.rooms", filter.Room.State.Rooms},
+		{"room.state.not_rooms", filter.Room.State.NotRooms},
+		{"room.timeline.rooms", filter.Room.Timeline.Rooms},
+		{"room.timeline.not_rooms", filter.Room.Timeline.NotRooms},
+		{"room.account_data.rooms", filter.Room.AccountData.Rooms},
+		{"room.account_data.not_rooms", filter.Room.AccountData.NotRooms},
+		{"room.ephemeral.rooms", filter.Room.Ephemeral.Rooms},
+		{"room.ephemeral.not_rooms", filter.Room.Ephemeral.NotRooms},
+	} {
+		if err := validateRoomIDs(item.name, item.ids); err != nil {
+			return err
+		}
+	}
+	for _, item := range []struct {
+		name string
+		ids  *[]string
+	}{
+		{"presence.senders", filter.Presence.Senders},
+		{"presence.not_senders", filter.Presence.NotSenders},
+		{"account_data.senders", filter.AccountData.Senders},
+		{"account_data.not_senders", filter.AccountData.NotSenders},
+		{"room.state.senders", filter.Room.State.Senders},
+		{"room.state.not_senders", filter.Room.State.NotSenders},
+		{"room.timeline.senders", filter.Room.Timeline.Senders},
+		{"room.timeline.not_senders", filter.Room.Timeline.NotSenders},
+		{"room.account_data.senders", filter.Room.AccountData.Senders},
+		{"room.account_data.not_senders", filter.Room.AccountData.NotSenders},
+		{"room.ephemeral.senders", filter.Room.Ephemeral.Senders},
+		{"room.ephemeral.not_senders", filter.Room.Ephemeral.NotSenders},
+	} {
+		if err := validateSenders(item.name, item.ids); err != nil {
+			return err
+		}
 	}
 	return nil
 }

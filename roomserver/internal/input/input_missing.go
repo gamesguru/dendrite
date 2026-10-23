@@ -2,8 +2,10 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -37,6 +39,15 @@ type parsedRespState struct {
 // response, rather than a state-resolution failure for the room, so it should
 // not put the room on the missing-state cooldown.
 var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid events")
+
+// isMalformedJSONError reports whether err came from decoding a response body
+// that was not valid JSON. Those responses are worth retrying, unlike a
+// connection failure or an HTTP error status.
+func isMalformedJSONError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.ErrUnexpectedEOF)
+}
 
 func (p *parsedRespState) Events() []gomatrixserverlib.PDU {
 	eventsByID := make(map[string]gomatrixserverlib.PDU, len(p.AuthEvents)+len(p.StateEvents))
@@ -720,26 +731,40 @@ func (t *missingStateReq) getMissingEvents(ctx context.Context, e gomatrixserver
 
 	var missingResp *fclient.RespMissingEvents
 	for _, server := range t.servers {
-		var m fclient.RespMissingEvents
-		if m, err = t.federation.LookupMissingEvents(ctx, t.virtualHost, server, e.RoomID().String(), fclient.MissingEvents{
-			Limit: 20, //nolint:mnd
-			// The latest event IDs that the sender already has. These are skipped when retrieving the previous events of latest_events.
-			EarliestEvents: latestEvents,
-			// The event IDs to retrieve the previous events for.
-			LatestEvents: []string{e.EventID()},
-		}, roomVersion); err == nil {
-			missingResp = &m
-			break
-		} else {
+		// A malformed /get_missing_events response is not evidence that the
+		// remote server is down: the connection succeeded, it just sent
+		// something we could not parse. Retry that server once before trying
+		// the next one, so a single truncated response cannot reject the
+		// event and force the sender to resend it.
+		for attempt := 0; attempt < 2; attempt++ {
+			var m fclient.RespMissingEvents
+			if m, err = t.federation.LookupMissingEvents(ctx, t.virtualHost, server, e.RoomID().String(), fclient.MissingEvents{
+				Limit: 20, //nolint:mnd
+				// The latest event IDs that the sender already has. These are skipped when retrieving the previous events of latest_events.
+				EarliestEvents: latestEvents,
+				// The event IDs to retrieve the previous events for.
+				LatestEvents: []string{e.EventID()},
+			}, roomVersion); err == nil {
+				missingResp = &m
+				break
+			}
 			logger.WithError(err).Warnf("%s pushed us an event but %q did not respond to /get_missing_events", t.origin, server)
+			if attempt == 0 && isMalformedJSONError(err) {
+				logger.Warnf("%q returned malformed JSON from /get_missing_events; retrying once", server)
+				continue
+			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				select {
 				case <-ctx.Done(): // the parent request context timed out
 					return nil, false, false, context.DeadlineExceeded
 				default: // this request exceed its own timeout
-					continue
+					break
 				}
 			}
+			break
+		}
+		if missingResp != nil {
+			break
 		}
 	}
 
