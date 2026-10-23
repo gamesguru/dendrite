@@ -304,7 +304,7 @@ func (s *OutputRoomEventConsumer) handleRoomUpgrade(ctx context.Context, oldRoom
 		}
 		// Inform the SyncAPI about the updated push_rules
 		if changed {
-			if err = s.syncProducer.SendAccountData(membership.Localpart, eventutil.AccountData{
+			if err = s.syncProducer.SendAccountData(membership.UserID, eventutil.AccountData{
 				Type: "m.push_rules",
 			}); err != nil {
 				return err
@@ -318,7 +318,7 @@ func (s *OutputRoomEventConsumer) handleRoomUpgrade(ctx context.Context, oldRoom
 		}
 		// Inform the SyncAPI about the updated m.direct
 		if changed {
-			if err = s.syncProducer.SendAccountData(membership.Localpart, eventutil.AccountData{
+			if err = s.syncProducer.SendAccountData(membership.UserID, eventutil.AccountData{
 				Type: "m.direct",
 			}); err != nil {
 				return err
@@ -332,14 +332,41 @@ func (s *OutputRoomEventConsumer) handleRoomUpgrade(ctx context.Context, oldRoom
 		}
 		// Inform the SyncAPI about the updated m.tag
 		if changed {
-			if err = s.syncProducer.SendAccountData(membership.Localpart, eventutil.AccountData{
-				Type: "m.tag",
+			if err = s.syncProducer.SendAccountData(membership.UserID, eventutil.AccountData{
+				RoomID: newRoomID,
+				Type:   "m.tag",
 			}); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// copyPushrulesFromPredecessor copies the push rules a user has for the room
+// that roomID replaced, if there is one, to roomID.
+func (s *OutputRoomEventConsumer) copyPushrulesFromPredecessor(ctx context.Context, roomID string, member *localMembership) error {
+	createTuple := gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomCreate}
+	var res rsapi.QueryCurrentStateResponse
+	if err := s.rsAPI.QueryCurrentState(ctx, &rsapi.QueryCurrentStateRequest{
+		RoomID:      roomID,
+		StateTuples: []gomatrixserverlib.StateKeyTuple{createTuple},
+	}, &res); err != nil {
+		return err
+	}
+	create := res.StateEvents[createTuple]
+	if create == nil {
+		return nil
+	}
+	oldRoomID := gjson.GetBytes(create.Content(), "predecessor.room_id").Str
+	if oldRoomID == "" {
+		return nil
+	}
+	changed, err := s.copyPushrules(ctx, oldRoomID, roomID, member.Localpart, member.Domain)
+	if err != nil || !changed {
+		return err
+	}
+	return s.syncProducer.SendAccountData(member.UserID, eventutil.AccountData{Type: "m.push_rules"})
 }
 
 func (s *OutputRoomEventConsumer) copyPushrules(ctx context.Context, oldRoomID, newRoomID, localpart string, serverName spec.ServerName) (hasChanges bool, err error) {
@@ -351,24 +378,31 @@ func (s *OutputRoomEventConsumer) copyPushrules(ctx context.Context, oldRoomID, 
 		return false, err
 	}
 
-	var rulesBytes []byte
+	var oldRule *pushrules.Rule
 	for _, roomRule := range pushRules.Global.Room {
-		if roomRule.RuleID != oldRoomID {
-			continue
+		switch roomRule.RuleID {
+		case newRoomID:
+			// Already copied, e.g. on the upgrade and again when the user joined.
+			return false, nil
+		case oldRoomID:
+			oldRule = roomRule
 		}
-		cpRool := *roomRule
-		cpRool.RuleID = newRoomID
-		pushRules.Global.Room = append(pushRules.Global.Room, &cpRool)
-		rulesBytes, err = json.Marshal(pushRules)
-		if err != nil {
-			return false, err
-		}
-		if err = s.db.SaveAccountData(ctx, localpart, serverName, "", "m.push_rules", rulesBytes); err != nil {
-			return false, err
-		}
-		hasChanges = true
 	}
-	return hasChanges, err
+	if oldRule == nil {
+		return false, nil
+	}
+
+	cpRule := *oldRule
+	cpRule.RuleID = newRoomID
+	pushRules.Global.Room = append(pushRules.Global.Room, &cpRule)
+	rulesBytes, err := json.Marshal(pushRules)
+	if err != nil {
+		return false, err
+	}
+	if err = s.db.SaveAccountData(ctx, localpart, serverName, "", "m.push_rules", rulesBytes); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // updateMDirect copies the "is_direct" flag from oldRoomID to newROomID.
@@ -451,6 +485,13 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			// localRoomMembers only adds joined members. An invite
 			// should also be pushed to the target user.
 			members = append(members, member)
+		}
+		if member.Membership == spec.Join && s.cfg.Matrix.IsLocalServerName(member.Domain) {
+			// A user joining the room that replaced another keeps their push rules
+			// for it, including when the room was upgraded on another server.
+			if err = s.copyPushrulesFromPredecessor(ctx, event.RoomID().String(), member); err != nil {
+				log.WithError(err).Errorf("UserAPI: failed to copy push rules from the predecessor of a room")
+			}
 		}
 	case event.Type() == "m.room.tombstone" && event.StateKeyEquals(""):
 		// Handle room upgrades
