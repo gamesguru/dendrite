@@ -719,8 +719,9 @@ func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
 	if lr.State != nil && len(lr.State.Events) == 0 {
 		a.State = nil
 	}
-	if lr.Timeline != nil && len(lr.Timeline.Events) == 0 {
-		a.Timeline = nil
+	// The timeline of a left room is always present, even when empty, e.g. with a limit of 0.
+	if lr.Timeline != nil && lr.Timeline.Events == nil {
+		a.Timeline = &Timeline{Events: []synctypes.ClientEvent{}, Limited: lr.Timeline.Limited, PrevBatch: lr.Timeline.PrevBatch}
 	}
 	return json.Marshal(a)
 }

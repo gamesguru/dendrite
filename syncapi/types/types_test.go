@@ -334,7 +334,7 @@ func TestResponseMoveStateToStateAfter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := `{` + tt.want + `:{"events":[]}}`; string(got) != want {
+			if want := `{` + tt.want + `:{"events":[]},"timeline":{"events":[],"limited":false}}`; string(got) != want {
 				t.Errorf("left room: got %s want %s", got, want)
 			}
 		})
