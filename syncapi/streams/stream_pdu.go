@@ -227,6 +227,10 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 	for _, roomID := range joinedRoomIDs {
 		joined[roomID] = struct{}{}
 	}
+	userID, err := spec.NewUserID(req.Device.UserID, true)
+	if err != nil {
+		return fmt.Errorf("spec.NewUserID: %w", err)
+	}
 
 	for _, delta := range deltas {
 		if delta.Membership != spec.Leave && delta.Membership != spec.Ban {
@@ -237,6 +241,17 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 		}
 		if err = ctx.Err(); err != nil {
 			return err
+		}
+		// A room the user chose to forget no longer shows up.
+		var membership roomserverAPI.QueryMembershipForUserResponse
+		if err = p.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
+			RoomID: delta.RoomID,
+			UserID: *userID,
+		}, &membership); err != nil {
+			return fmt.Errorf("rsAPI.QueryMembershipForUser(%s): %w", delta.RoomID, err)
+		}
+		if membership.IsRoomForgotten {
+			continue
 		}
 		// Look back from the leave, as for a room that was newly joined.
 		r := types.Range{From: delta.MembershipPos, To: 0, Backwards: true}
