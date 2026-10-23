@@ -83,6 +83,11 @@ func main() {
 			// into this directory.
 			cfg.AppServiceAPI.ConfigFiles = []string{"/complement/appservice/"}
 			cfg.ClientAPI.RateLimiting.Enabled = false
+			// The delayed-event management endpoints have their own limiter. The
+			// MSC4140 Complement suite deliberately makes bursts of lookup and
+			// management requests, so it must be disabled alongside the general
+			// client rate limiter.
+			cfg.ClientAPI.DelayedEvents.ManagementRateLimiting.Enabled = false
 			// Test suites register users with passwords such as "secret".
 			cfg.ClientAPI.MinPasswordLength = 1
 			cfg.FederationAPI.DisableTLSValidation = false

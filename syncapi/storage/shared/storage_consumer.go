@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -742,6 +743,17 @@ func (d *Database) SelectMemberships(
 
 // ===== Phase 10: New Sliding Sync Methods with Delta Tracking =====.
 
+// isSQLiteBusy reports whether err is SQLite's lock-contention error. It is
+// matched by text because the pure-Go and cgo drivers expose different error
+// types and the build only links one of them.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
+}
+
 func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, connID string) (connectionKey int64, err error) {
 	// Retry loop to handle race condition where two workers try to create the same connection
 	const maxRetries = 3
@@ -778,6 +790,27 @@ func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, 
 				"conn_id":   connID,
 				"attempt":   attempt + 1,
 			}).Debug("Unique constraint violation on connection insert, retrying SELECT")
+			continue
+		}
+
+		// Concurrent syncs can race between the SELECT and the INSERT. SQLite
+		// reports that as SQLITE_BUSY even with a busy timeout, because the
+		// read transaction cannot be upgraded while another writer holds the
+		// lock. Back off briefly and retry the whole transaction.
+		if isSQLiteBusy(err) {
+			logrus.WithFields(logrus.Fields{
+				"user_id":   userID,
+				"device_id": deviceID,
+				"conn_id":   connID,
+				"attempt":   attempt + 1,
+			}).Debug("SQLite database busy while creating sync connection, retrying")
+			timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return 0, ctx.Err()
+			case <-timer.C:
+			}
 			continue
 		}
 
