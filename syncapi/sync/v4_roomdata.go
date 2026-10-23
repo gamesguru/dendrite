@@ -169,6 +169,7 @@ func (rp *RequestPool) BuildRoomData(
 
 	// Detect membership (PDU + invite check)
 	membershipResult := rp.detectRoomMembership(ctx, snapshot, roomID, userID, currentPos)
+	roomData.Membership = membershipResult.membership
 
 	// If user is invited, return stripped state instead of timeline/required_state
 	if membershipResult.membership == spec.Invite {
@@ -1090,6 +1091,9 @@ func (rp *RequestPool) buildInviteRoomData(
 	}
 	// MSC4186 spec uses "stripped_state", Synapse/Element X use "invite_state"
 	roomData.InviteState = roomData.StrippedState
+	// buildStrippedRoomData starts a new room object, so carry the membership
+	// that caused this path over to the response.
+	roomData.Membership = spec.Invite
 	return roomData, nil
 }
 
@@ -1104,7 +1108,12 @@ func (rp *RequestPool) buildKnockRoomData(
 	isInitial bool,
 	knockEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
-	return rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
+	roomData, err := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
+	if err != nil {
+		return nil, err
+	}
+	roomData.Membership = spec.Knock
+	return roomData, nil
 }
 
 // buildStrippedRoomData builds the stripped state of an invited or knocked

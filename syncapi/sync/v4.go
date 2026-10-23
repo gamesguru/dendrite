@@ -1273,9 +1273,6 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				logrus.WithError(buildErr).WithField("room_id", roomID).Error("[V4_SYNC] Failed to build room data")
 				continue
 			}
-			if membership, _, membershipErr := snapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64); membershipErr == nil {
-				roomData.Membership = membership
-			}
 			roomData.Avatar = roomData.AvatarURL
 			// Always emit lists, including an empty array when the room has
 			// left every list window but is still present as a subscription.
@@ -1946,9 +1943,6 @@ func (rp *RequestPool) buildInterruptResponse(
 					continue
 				}
 
-				if membership, _, membershipErr := snapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64); membershipErr == nil {
-					roomData.Membership = membership
-				}
 				roomData.Avatar = roomData.AvatarURL
 				roomData.Lists = []string{}
 				for listName, list := range resp.Lists {
