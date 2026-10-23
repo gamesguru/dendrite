@@ -594,7 +594,7 @@ func Register(
 	// Check a requested username before returning a UIA challenge. This keeps
 	// duplicate-name errors deterministic even when the follow-up request does
 	// not include the previous auth session.
-	if !hasSession && accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
+	if !hasSession && r.Auth.Type == "" && accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
 		if resErr := checkLocalpartRegistrable(req.Context(), cfg, userAPI, r.Username, r.ServerName); resErr != nil {
 			return *resErr
 		}
@@ -1376,7 +1376,7 @@ func checkLocalpartRegistrable(ctx context.Context, cfg *config.ClientAPI, userA
 	if !res.Available {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.UserInUse("Desired User ID is already taken."),
+			JSON: spec.UserInUse("Desired user ID is already taken."),
 		}
 	}
 	return nil
