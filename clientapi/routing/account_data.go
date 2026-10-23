@@ -53,7 +53,10 @@ func GetAccountData(
 	} else {
 		data, ok = dataRes.GlobalAccountData[dataType]
 	}
-	if ok && string(data) != "null" {
+	// MSC3391 defines an empty object as deleted account data. Keep the
+	// tombstone in storage so /sync can deliver it, but make it appear absent
+	// to callers of the GET endpoint.
+	if ok && !isEmptyAccountData(data) {
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: data,
@@ -136,9 +139,8 @@ func SaveAccountData(
 	}
 }
 
-// DeleteAccountData implements MSC3391's DELETE account_data endpoint. The
-// user API treats a JSON null account-data value as deletion and emits the
-// corresponding account-data update for sync.
+// DeleteAccountData implements MSC3391's DELETE account_data endpoint. It
+// stores the empty-object tombstone so /sync can report the deletion.
 func DeleteAccountData(
 	req *http.Request, userAPI api.ClientUserAPI, device *api.Device,
 	userID string, roomID string, dataType string,
@@ -152,11 +154,21 @@ func DeleteAccountData(
 	if strings.HasPrefix(dataType, threePIDBindingPrefix) {
 		return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden(fmt.Sprintf("Unable to modify %q using this API", dataType))}
 	}
-	dataReq := api.InputAccountDataRequest{UserID: userID, DataType: dataType, RoomID: roomID, AccountData: json.RawMessage("null")}
+	dataReq := api.InputAccountDataRequest{UserID: userID, DataType: dataType, RoomID: roomID, AccountData: json.RawMessage("{}")}
 	if err := userAPI.InputAccountData(req.Context(), &dataReq, &api.InputAccountDataResponse{}); err != nil {
 		return util.ErrorResponse(err)
 	}
 	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+}
+
+// isEmptyAccountData reports whether data is an MSC3391 deletion tombstone.
+func isEmptyAccountData(data json.RawMessage) bool {
+	switch strings.TrimSpace(string(data)) {
+	case "", "null", "{}":
+		return true
+	default:
+		return false
+	}
 }
 
 type fullyReadEvent struct {

@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 
@@ -10,6 +11,16 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// isEmptyAccountData reports whether data is an MSC3391 deletion tombstone.
+func isEmptyAccountData(data []byte) bool {
+	switch strings.TrimSpace(string(data)) {
+	case "", "null", "{}":
+		return true
+	default:
+		return false
+	}
+}
 
 type AccountDataStreamProvider struct {
 	DefaultStreamProvider
@@ -81,6 +92,11 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 			}
 			if roomID == "" {
 				if globalData, ok := dataRes.GlobalAccountData[dataType]; ok {
+					// A complete sync must omit account data that was deleted
+					// (MSC3391); only incremental syncs announce the tombstone.
+					if from == 0 && isEmptyAccountData(globalData) {
+						continue
+					}
 					req.Response.AccountData.Events = append(
 						req.Response.AccountData.Events,
 						synctypes.ClientEvent{
@@ -91,6 +107,9 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 				}
 			} else {
 				if roomData, ok := dataRes.RoomAccountData[roomID][dataType]; ok {
+					if from == 0 && isEmptyAccountData(roomData) {
+						continue
+					}
 					joinData, ok := req.Response.Rooms.Join[roomID]
 					if !ok {
 						joinData = types.NewJoinResponse()
