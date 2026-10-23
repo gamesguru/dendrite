@@ -164,7 +164,7 @@ complement-run: ## Run Complement, building the image first
 	if [ $$result_status -ne 0 ]; then echo "Failed to process Complement results" >&2; exit $$result_status; fi; \
 	failed_records=$$(jq -sc '[.[] | select(.Action == "fail" and (.Test | type == "string"))] | length' "$$run_results"); \
 	failed_leaves=$$(jq -sc '([.[] | select(.Action == "fail" and (.Test | type == "string"))]) as $$f | [$$f[] as $$x | select([$$f[] | select(.Test | startswith($$x.Test + "/"))] | length == 0)] | length' "$$run_results"); \
-	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$run_logs"); \
+	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$logs"); \
 	echo "Complement: $$failed_leaves failed leaf tests ($$failed_records failing test records, $$failed_packages failed packages)"; \
 	echo "Results: $$results"; echo "Full log: $$logs"; \
 	rm -f "$$run_results"; \
