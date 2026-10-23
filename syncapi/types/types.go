@@ -541,8 +541,10 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}
 	}
-	if jr.AccountData != nil && len(jr.AccountData.Events) == 0 {
-		a.AccountData = nil
+	if jr.AccountData != nil && jr.AccountData.Events == nil {
+		// Keep the account_data object on joined rooms, with an empty
+		// events array (MSC3391 initial-sync deletion semantics).
+		jr.AccountData.Events = []synctypes.ClientEvent{}
 	}
 	if jr.Timeline != nil && len(jr.Timeline.Events) == 0 {
 		a.Timeline = nil

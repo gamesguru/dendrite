@@ -553,7 +553,8 @@ func Register(
 	// Once UIA has challenged a registration, every response must carry its
 	// session. Starting a fresh session here would let a client bypass that
 	// challenge and complete registration with only the auth stage body.
-	if r.Auth.Type != "" && !hasSession && r.Type != authtypes.LoginTypeApplicationService {
+	if r.Auth.Type != "" && r.Auth.Type != authtypes.LoginTypeApplicationService &&
+		!hasSession && r.Type != authtypes.LoginTypeApplicationService {
 		return util.JSONResponse{
 			Code: http.StatusUnauthorized,
 			JSON: spec.UnknownToken("A registration session is required"),
