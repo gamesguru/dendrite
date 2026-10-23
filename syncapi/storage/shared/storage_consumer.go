@@ -608,7 +608,9 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 		if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
 			// Keep the later receipt. The current position is returned so that the
 			// caller has nothing new to announce.
-			pos, err = d.Receipts.SelectMaxReceiptID(ctx, txn)
+			var maxID int64
+			maxID, err = d.Receipts.SelectMaxReceiptID(ctx, txn)
+			pos = types.StreamPosition(maxID)
 			return err
 		}
 		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
