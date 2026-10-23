@@ -605,10 +605,38 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 // StoreReceipt stores user receipts.
 func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
+			// Keep the later receipt. The current position is returned so that the
+			// caller has nothing new to announce.
+			pos, err = d.Receipts.SelectMaxReceiptID(ctx, txn)
+			return err
+		}
 		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
 		return err
 	})
 	return
+}
+
+// receiptMovesBackwards reports whether storing a receipt at eventID would move
+// the user's existing receipt of that type and thread to an earlier event.
+// Receipts for events not (yet) known to the sync API are never held back.
+func (d *Database) receiptMovesBackwards(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, eventID, threadID string) bool {
+	if receiptType != "m.read" && receiptType != "m.read.private" {
+		return false
+	}
+	current, err := d.Receipts.SelectUserReceiptEventID(ctx, txn, roomID, receiptType, userID, threadID)
+	if err != nil || current == "" || current == eventID {
+		return false
+	}
+	currentDepth, currentPos, err := d.Topology.SelectPositionInTopology(ctx, txn, current)
+	if err != nil {
+		return false
+	}
+	newDepth, newPos, err := d.Topology.SelectPositionInTopology(ctx, txn, eventID)
+	if err != nil {
+		return false
+	}
+	return newDepth < currentDepth || (newDepth == currentDepth && newPos < currentPos)
 }
 
 func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
