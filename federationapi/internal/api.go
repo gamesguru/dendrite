@@ -3,8 +3,10 @@ package internal
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -182,6 +184,15 @@ func federationHTTPCode(err error) int {
 	return 0
 }
 
+// isMalformedJSONError reports whether err came from decoding a response body
+// that was not valid JSON. A truncated body is a bad response, not evidence
+// that the destination is offline, so it is worth retrying immediately.
+func isMalformedJSONError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func failBlacklistableError(err error, stats *statistics.ServerStatistics) (until time.Time, blacklisted bool) {
 	if err == nil {
 		return
@@ -250,6 +261,7 @@ func (a *FederationInternalAPI) doFederationRequest(
 			Blacklisted: blacklisted,
 			RetryAfter:  retryAfter,
 			Code:        httpCode,
+			Cause:       err,
 		}
 	}
 	stats.Success(statistics.SendDirect)
@@ -288,8 +300,9 @@ func (a *FederationInternalAPI) doFederationRequestNoStats(
 			return res, limited
 		}
 		return res, &api.FederationClientError{
-			Err:  err.Error(),
-			Code: federationHTTPCode(err),
+			Err:   err.Error(),
+			Code:  federationHTTPCode(err),
+			Cause: err,
 		}
 	}
 	return res, nil
