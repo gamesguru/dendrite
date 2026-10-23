@@ -59,20 +59,20 @@ func InviteV3(
 			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
 		}
 	}
-	if sender := inviteReq.Event().SenderID; sender != "" {
+	if sender := inviteReq.Event().SenderID; sender != "" && userAPI != nil {
 		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, spec.SenderID(sender))
-		if senderErr != nil {
-			return util.ErrorResponse(senderErr)
-		}
-		if senderUser == nil {
-			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not resolve invite sender")}
-		}
-		blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
-		if ruleErr != nil {
-			return util.ErrorResponse(ruleErr)
-		}
-		if blocked {
-			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+		// The room may not be known locally yet, especially for a first invite
+		// to a room using pseudo-IDs. In that case the sender mapping is not
+		// available until the invite is handled; leave filtering to the
+		// subsequent transaction, which has the imported room state.
+		if senderErr == nil && senderUser != nil {
+			blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
+			if ruleErr != nil {
+				return util.ErrorResponse(ruleErr)
+			}
+			if blocked {
+				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+			}
 		}
 		// Ignored invites are still signed normally. The event will later
 		// arrive in a federation transaction, where it is dropped before it
@@ -189,20 +189,17 @@ func InviteV2(
 			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
 		}
 	}
-	if sender := inviteReq.Event().SenderID(); sender != "" {
+	if sender := inviteReq.Event().SenderID(); sender != "" && userAPI != nil {
 		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, sender)
-		if senderErr != nil {
-			return util.ErrorResponse(senderErr)
-		}
-		if senderUser == nil {
-			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not resolve invite sender")}
-		}
-		blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
-		if ruleErr != nil {
-			return util.ErrorResponse(ruleErr)
-		}
-		if blocked {
-			return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+		// See InviteV3: an unknown room may not have the pseudo-ID mapping yet.
+		if senderErr == nil && senderUser != nil {
+			blocked, _, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
+			if ruleErr != nil {
+				return util.ErrorResponse(ruleErr)
+			}
+			if blocked {
+				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+			}
 		}
 		// Ignored invites are signed normally and dropped from the later
 		// federation transaction, just like the V3 path.
