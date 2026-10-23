@@ -474,8 +474,14 @@ func (rp *RequestPool) getRoomNameFromDB(ctx context.Context, snapshot storage.D
 	}
 	// The sync consumer can briefly lag behind createRoom. Roomserver state is
 	// authoritative, so use it as a fallback for initial room metadata.
+	currentStateQuerier, ok := rp.rsAPI.(interface {
+		QueryCurrentState(context.Context, *roomserverAPI.QueryCurrentStateRequest, *roomserverAPI.QueryCurrentStateResponse) error
+	})
+	if !ok {
+		return ""
+	}
 	var response roomserverAPI.QueryCurrentStateResponse
-	if queryErr := rp.rsAPI.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
+	if queryErr := currentStateQuerier.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
 		RoomID: roomID,
 		StateTuples: []gomatrixserverlib.StateKeyTuple{{
 			EventType: spec.MRoomName,

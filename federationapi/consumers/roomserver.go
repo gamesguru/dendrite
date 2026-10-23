@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -287,7 +288,11 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if len(addsJoinedHosts) > 0 && ore.Event.Type() == spec.MRoomMember && ore.Event.StateKey() != nil {
 		membership, _ := ore.Event.Membership()
 		if membership == spec.Join {
-			s.sendDeviceLists(ore.Event.RoomID().String(), addsJoinedHosts)
+			// The joining host already knows the joining user's devices. Other
+			// hosts that were in the room beforehand need the current device list
+			// too, since this is the first time the user shares a room with them.
+			deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
+			s.sendDeviceLists(ore.Event.RoomID().String(), deviceListHosts)
 			if s.cfg.Matrix.Presence.EnableOutbound {
 				s.sendPresence(ore.Event.RoomID().String(), addsJoinedHosts)
 			}
@@ -457,7 +462,7 @@ func (s *OutputRoomEventConsumer) sendDeviceLists(roomID string, addedJoined []t
 	}
 	var destinations []spec.ServerName
 	for _, added := range addedJoined {
-		if !s.cfg.Matrix.IsLocalServerName(added.ServerName) {
+		if !s.cfg.Matrix.IsLocalServerName(added.ServerName) && !slices.Contains(destinations, added.ServerName) {
 			destinations = append(destinations, added.ServerName)
 		}
 	}

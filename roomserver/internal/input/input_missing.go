@@ -192,7 +192,7 @@ func (t *missingStateReq) processEventWithMissingState(
 	if len(newEvents) == 0 {
 		return nil, fmt.Errorf("expected to find missing events but didn't")
 	}
-	if isGapFilled {
+	if isGapFilled && prevStatesKnown {
 		t.log.Infof("Gap filled by /get_missing_events, injecting %d new events", len(newEvents))
 		// we can just inject all the newEvents as new as we may have only missed 1 or 2 events and have filled
 		// in the gap in the DAG
