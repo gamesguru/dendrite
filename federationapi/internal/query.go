@@ -105,7 +105,14 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil { //nolint:contextcheck
 		// non-fatal, still return the response
 		util.GetLogger(ctx).WithError(err).Warn("failed to UpdateNotaryKeys")
+		res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+		return nil
 	}
-	res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+	// Return the database's selected responses. In particular, this preserves
+	// the first-seen binding when a remote reuses a key ID for another key.
+	res.ServerKeys, err = a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	if err != nil {
+		return fmt.Errorf("failed to read selected notary keys: %w", err)
+	}
 	return nil
 }

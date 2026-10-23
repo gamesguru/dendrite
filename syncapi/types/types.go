@@ -541,8 +541,10 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}
 	}
-	if jr.AccountData != nil && len(jr.AccountData.Events) == 0 {
-		a.AccountData = nil
+	if jr.AccountData != nil && jr.AccountData.Events == nil {
+		// An explicit empty account_data section represents a deletion in an
+		// incremental sync; NewJoinResponse leaves this nil without an update.
+		jr.AccountData.Events = []synctypes.ClientEvent{}
 	}
 	if jr.Timeline != nil && len(jr.Timeline.Events) == 0 {
 		a.Timeline = nil
@@ -588,7 +590,6 @@ func NewJoinResponse() *JoinResponse {
 		State:               &ClientEvents{},
 		Timeline:            &Timeline{},
 		Ephemeral:           &ClientEvents{},
-		AccountData:         &ClientEvents{},
 		UnreadNotifications: &UnreadNotifications{},
 	}
 }

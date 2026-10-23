@@ -480,6 +480,26 @@ func Setup(
 		}),
 	).Methods(http.MethodDelete, http.MethodOptions)
 
+	// MSC4306: thread subscriptions.
+	unstableMux.Handle("/io.element.msc4306/rooms/{roomID}/thread/{threadID}/subscription",
+		httputil.MakeAuthAPI("thread_subscription", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+			if err != nil {
+				return util.ErrorResponse(err)
+			}
+			switch req.Method {
+			case http.MethodGet:
+				return getThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI, rsAPI)
+			case http.MethodPut:
+				return putThreadSubscription(req, device, vars["roomID"], vars["threadID"], req.Body, userAPI, rsAPI)
+			case http.MethodDelete:
+				return deleteThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI)
+			default:
+				return util.JSONResponse{Code: http.StatusMethodNotAllowed, JSON: spec.NotFound("Unsupported method")}
+			}
+		}),
+	).Methods(http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions)
+
 	// MSC4140: delayed events. Scheduling goes through the send and state
 	// endpoints below; these manage and look up scheduled events.
 	delayedEvents := newDelayedEvents(

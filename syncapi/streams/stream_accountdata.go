@@ -106,13 +106,22 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 					)
 				}
 			} else {
+				joinData, hasJoinData := req.Response.Rooms.Join[roomID]
+				if !hasJoinData {
+					joinData = types.NewJoinResponse()
+				}
 				if roomData, ok := dataRes.RoomAccountData[roomID][dataType]; ok {
 					if from == 0 && isEmptyAccountData(roomData) {
+						// Keep the key present but the type absent, as MSC3391
+						// requires on a complete sync.
+						if joinData.AccountData == nil {
+							joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{}}
+						}
+						req.Response.Rooms.Join[roomID] = joinData
 						continue
 					}
-					joinData, ok := req.Response.Rooms.Join[roomID]
-					if !ok {
-						joinData = types.NewJoinResponse()
+					if joinData.AccountData == nil {
+						joinData.AccountData = &types.ClientEvents{}
 					}
 					joinData.AccountData.Events = append(
 						joinData.AccountData.Events,
@@ -121,6 +130,12 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 							Content: spec.RawJSON(roomData),
 						},
 					)
+				} else if from > 0 && joinData.AccountData == nil {
+					// Keep an explicitly empty per-room account_data section on
+					// incremental syncs as the MSC3391 deletion signal.
+					joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{}}
+				}
+				if from > 0 || joinData.AccountData != nil {
 					req.Response.Rooms.Join[roomID] = joinData
 				}
 			}

@@ -31,7 +31,7 @@ func ValidateRule(kind Kind, rule *Rule) []error {
 	}
 
 	switch kind {
-	case OverrideKind, UnderrideKind:
+	case OverrideKind, PostContentKind, UnderrideKind:
 		// The empty list is allowed, but for JSON-encoding reasons,
 		// it must not be nil.
 		if rule.Conditions == nil {

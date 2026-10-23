@@ -400,7 +400,14 @@ type ExtensionRequest struct {
 	Receipts    *ReceiptsRequest    `json:"receipts,omitempty"`
 	Typing      *TypingRequest      `json:"typing,omitempty"`
 	// StickyEvents is the MSC4354 sticky events extension (MSC4480).
-	StickyEvents *StickyEventsRequest `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	StickyEvents        *StickyEventsRequest        `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	ThreadSubscriptions *ThreadSubscriptionsRequest `json:"io.element.msc4308.thread_subscriptions,omitempty"`
+}
+
+// ThreadSubscriptionsRequest configures the MSC4308 thread subscriptions extension.
+type ThreadSubscriptionsRequest struct {
+	Enabled bool `json:"enabled"`
+	Limit   int  `json:"limit,omitempty"`
 }
 
 // ToDeviceRequest configures to-device message extension.
@@ -456,7 +463,19 @@ type ExtensionResponse struct {
 	Receipts    *ReceiptsResponse    `json:"receipts,omitempty"`
 	Typing      *TypingResponse      `json:"typing,omitempty"`
 	// StickyEvents is omitted when there are no sticky events to deliver.
-	StickyEvents *StickyEventsResponse `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	StickyEvents        *StickyEventsResponse        `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	ThreadSubscriptions *ThreadSubscriptionsResponse `json:"io.element.msc4308.thread_subscriptions,omitempty"`
+}
+
+// ThreadSubscriptionsResponse contains the user's subscribed threads.
+type ThreadSubscriptionsResponse struct {
+	Subscribed map[string]map[string]ThreadSubscription `json:"subscribed,omitempty"`
+}
+
+// ThreadSubscription describes one subscribed thread.
+type ThreadSubscription struct {
+	Automatic bool  `json:"automatic"`
+	BumpStamp int64 `json:"bump_stamp"`
 }
 
 // StickyEventsResponse carries unexpired MSC4354 sticky events per room,

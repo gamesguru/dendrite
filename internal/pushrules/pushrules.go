@@ -9,11 +9,12 @@ type AccountRuleSets struct {
 // A RuleSet contains all the various push rules for an
 // account. Listed in decreasing order of priority.
 type RuleSet struct {
-	Override  []*Rule `json:"override,omitempty"`
-	Content   []*Rule `json:"content,omitempty"`
-	Room      []*Rule `json:"room,omitempty"`
-	Sender    []*Rule `json:"sender,omitempty"`
-	Underride []*Rule `json:"underride,omitempty"`
+	Override    []*Rule `json:"override,omitempty"`
+	PostContent []*Rule `json:"postcontent,omitempty"`
+	Content     []*Rule `json:"content,omitempty"`
+	Room        []*Rule `json:"room,omitempty"`
+	Sender      []*Rule `json:"sender,omitempty"`
+	Underride   []*Rule `json:"underride,omitempty"`
 }
 
 // A Rule contains matchers, conditions and final actions. While
@@ -62,10 +63,11 @@ const (
 type Kind string
 
 const (
-	UnknownKind   Kind = ""
-	OverrideKind  Kind = "override"
-	ContentKind   Kind = "content"
-	RoomKind      Kind = "room"
-	SenderKind    Kind = "sender"
-	UnderrideKind Kind = "underride"
+	UnknownKind     Kind = ""
+	OverrideKind    Kind = "override"
+	PostContentKind Kind = "postcontent"
+	ContentKind     Kind = "content"
+	RoomKind        Kind = "room"
+	SenderKind      Kind = "sender"
+	UnderrideKind   Kind = "underride"
 )

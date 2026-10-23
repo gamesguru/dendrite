@@ -210,11 +210,11 @@ func TestJoinResponse_MarshalJSON(t *testing.T) {
 			want: []byte("{}"),
 		},
 		{
-			name: "empty accountdata is removed",
+			name: "empty accountdata is retained when explicitly set",
 			fields: fields{
 				AccountData: &ClientEvents{},
 			},
-			want: []byte("{}"),
+			want: []byte(`{"account_data":{"events":[]}}`),
 		},
 		{
 			name: "empty ephemeral is kept",

@@ -52,7 +52,8 @@ const upsertServerSigningKeysSQL = "" +
 	" server_name_and_key_id, valid_until_ts, expired_ts, server_key)" +
 	" VALUES ($1, $2, $3, $4, $5, $6)" +
 	" ON CONFLICT (server_name, server_key_id)" +
-	" DO UPDATE SET valid_until_ts = $4, expired_ts = $5, server_key = $6"
+	" DO UPDATE SET valid_until_ts = $4, expired_ts = $5" +
+	" WHERE keydb_server_keys.server_key = excluded.server_key"
 
 type serverSigningKeyStatements struct {
 	db                       *sql.DB

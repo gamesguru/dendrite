@@ -1071,6 +1071,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					if roomStates[roomID].Status == types.HaveSentRoomNever {
 						continue
 					}
+					// A room which leaves a list window still needs room data when
+					// the client explicitly subscribes to it. The empty `lists`
+					// field tells the client that it is no longer in that window.
+					if _, subscribed := v4Req.RoomSubscriptions[roomID]; subscribed {
+						roomsToKeep[roomID] = true
+						continue
+					}
 					membership, _, membershipErr := filterSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64)
 					if membershipErr == nil && (membership == spec.Leave || membership == spec.Ban) {
 						roomsToKeep[roomID] = true
@@ -1356,7 +1363,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			// an empty room object for that case. Keep initial rooms, expansions,
 			// state deltas, and membership leaves, which all carry an update even
 			// when their timeline is empty.
-			if since != nil && !roomData.Initial && !timelineExpanded && !requiredStateExpanded &&
+			_, subscribed := v4Req.RoomSubscriptions[roomID]
+			if _, allSubscribed := v4Req.RoomSubscriptions["*"]; allSubscribed {
+				subscribed = true
+			}
+			if since != nil && !subscribed && !roomData.Initial && !timelineExpanded && !requiredStateExpanded &&
 				len(roomData.Timeline) == 0 && len(roomData.RequiredState) == 0 &&
 				!roomsLeftOnConnection[roomID] && roomData.Membership != string(spec.Leave) && roomData.Membership != string(spec.Ban) {
 				continue

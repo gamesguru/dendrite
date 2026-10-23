@@ -290,6 +290,8 @@ func pushRuleSetKindPointer(ruleSet *pushrules.RuleSet, kind pushrules.Kind) *[]
 	switch kind {
 	case pushrules.OverrideKind:
 		return &ruleSet.Override
+	case pushrules.PostContentKind:
+		return &ruleSet.PostContent
 	case pushrules.ContentKind:
 		return &ruleSet.Content
 	case pushrules.RoomKind:

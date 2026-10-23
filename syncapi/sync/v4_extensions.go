@@ -174,6 +174,32 @@ func (rp *RequestPool) ProcessExtensions(
 		return nil, toPos, nil, err
 	}
 
+	if req.Extensions.ThreadSubscriptions != nil && req.Extensions.ThreadSubscriptions.Enabled {
+		var accountData userapi.QueryAccountDataResponse
+		if err := rp.userAPI.QueryAccountData(ctx, &userapi.QueryAccountDataRequest{
+			UserID: userID,
+		}, &accountData); err != nil {
+			return nil, toPos, nil, err
+		}
+		subscribed := make(map[string]map[string]types.ThreadSubscription)
+		for roomID, roomData := range accountData.RoomAccountData {
+			raw := roomData["io.element.msc4306.thread_subscriptions"]
+			if len(raw) == 0 {
+				continue
+			}
+			var data struct {
+				Subscriptions map[string]types.ThreadSubscription `json:"subscriptions"`
+			}
+			if err := json.Unmarshal(raw, &data); err != nil {
+				return nil, toPos, nil, err
+			}
+			if len(data.Subscriptions) > 0 {
+				subscribed[roomID] = data.Subscriptions
+			}
+		}
+		resp.ThreadSubscriptions = &types.ThreadSubscriptionsResponse{Subscribed: subscribed}
+	}
+
 	// Process to_device extension (PreProcess)
 	if req.Extensions.ToDevice != nil && req.Extensions.ToDevice.Enabled {
 		toDeviceResp, err := rp.processToDeviceExtension(ctx, snapshot, userID, deviceID, req.Extensions.ToDevice, fromPos, toPos)

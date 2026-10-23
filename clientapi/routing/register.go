@@ -778,6 +778,17 @@ func handleRegistrationFlow(
 			),
 		}
 	}
+	// A UIA stage can only complete a challenge that this server issued. A
+	// registration token is also allowed as a single-shot credential.
+	if r.Auth.Type != "" && r.Auth.Session == "" &&
+		r.Auth.Type != authtypes.LoginTypeApplicationService &&
+		r.Auth.Type != authtypes.LoginTypeRegistrationToken &&
+		r.Auth.Type != authtypes.LoginTypeSharedSecret {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.UnknownToken("A registration session is required"),
+		}
+	}
 
 	// Make sure normal user isn't registering under an exclusive application
 	// service namespace. Skip this check if no app services are registered.
