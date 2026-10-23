@@ -330,57 +330,70 @@ func (r *Inputer) processRoomEvent(
 	knownEvents := map[string]*types.Event{}
 	isRejected := false
 	var rejectionErr error
+
+	checkAuthEvents := func(fetchUnknown bool) error {
+		if err := r.fetchAuthEvents(
+			ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
+			fetchUnknown,
+		); err != nil {
+			if input.Kind != api.KindOutlier {
+				return fmt.Errorf("r.fetchAuthEvents: %w", err)
+			}
+			// An outlier whose auth events cannot be obtained, e.g. because they
+			// are badly signed, is rejected rather than failing the whole batch
+			// it came with, such as the room state of a join.
+			isRejected = true
+			rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
+			logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
+		}
+
+		// An event whose auth events include a rejected event is rejected as a
+		// side effect, even if the remaining auth events would allow it.
+		if !isRejected {
+			for _, knownEvent := range knownEvents {
+				if knownEvent.Rejected {
+					isRejected = true
+					rejectionErr = fmt.Errorf("auth event %s was rejected", knownEvent.EventID())
+					break
+				}
+			}
+		}
+
+		// Check if the event is allowed by its auth events. If it isn't then
+		// we consider the event to be "rejected" — it will still be persisted.
+		// Skip this check for admin operations that set SkipEventAuth.
+		if !input.SkipEventAuth && !isRejected {
+			if err := gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+			}); err != nil {
+				// During partial state (MSC3706 faster joins), we may be missing member events
+				// that would authorize this event. In this case, we accept the event provisionally
+				// rather than rejecting it. The full state resync will validate events properly.
+				if hasPartialState {
+					logger.WithError(err).Debugf("Event %s failed auth during partial state, accepting provisionally", event.EventID())
+				} else {
+					isRejected = true
+					rejectionErr = err
+					logger.WithError(rejectionErr).Warnf("Event %s not allowed by auth events", event.EventID())
+				}
+			}
+		}
+		return nil
+	}
+
+	// If we are missing prev events, the auth events that we cannot find are
+	// often part of the state that we are about to fetch. Ask for the missing
+	// prev events and state first, and only then for any auth events that are
+	// still unknown. Doing it the other way round makes us depend on the
+	// event's own /event_auth response even when the server implements the
+	// /get_missing_events and /state_ids flow.
+	deferAuthUntilMissingState := !hasPartialState && missingPrev && input.Kind == api.KindNew && !input.SkipEventAuth
+
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
-	} else if err = r.fetchAuthEvents(
-		ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
-		// An event with missing prev events is looked at again once they are in, and
-		// the state looked up for them brings in its senders' memberships along the
-		// way. The room is only partly known meanwhile, so do not ask for the auth
-		// chain of the event too: it is accepted provisionally and checked after the
-		// resync.
-		!hasPartialState || !missingPrev || input.Kind != api.KindNew,
-	); err != nil {
-		if input.Kind != api.KindOutlier {
-			return fmt.Errorf("r.fetchAuthEvents: %w", err)
-		}
-		// An outlier whose auth events cannot be obtained, e.g. because they
-		// are badly signed, is rejected rather than failing the whole batch
-		// it came with, such as the room state of a join.
-		isRejected = true
-		rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
-		logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
-	}
-
-	// An event whose auth events include a rejected event is rejected as a
-	// side effect, even if the remaining auth events would allow it.
-	if !isRejected {
-		for _, knownEvent := range knownEvents {
-			if knownEvent.Rejected {
-				isRejected = true
-				rejectionErr = fmt.Errorf("auth event %s was rejected", knownEvent.EventID())
-				break
-			}
-		}
-	}
-
-	// Check if the event is allowed by its auth events. If it isn't then
-	// we consider the event to be "rejected" — it will still be persisted.
-	// Skip this check for admin operations that set SkipEventAuth.
-	if !input.SkipEventAuth && !isRejected {
-		if err = gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-		}); err != nil {
-			// During partial state (MSC3706 faster joins), we may be missing member events
-			// that would authorize this event. In this case, we accept the event provisionally
-			// rather than rejecting it. The full state resync will validate events properly.
-			if hasPartialState {
-				logger.WithError(err).Debugf("Event %s failed auth during partial state, accepting provisionally", event.EventID())
-			} else {
-				isRejected = true
-				rejectionErr = err
-				logger.WithError(rejectionErr).Warnf("Event %s not allowed by auth events", event.EventID())
-			}
+	} else if !deferAuthUntilMissingState {
+		if err = checkAuthEvents(!hasPartialState || !missingPrev || input.Kind != api.KindNew); err != nil {
+			return err
 		}
 	}
 
@@ -533,6 +546,15 @@ func (r *Inputer) processRoomEvent(
 			// reject the event and hope that it gets unrejected later.
 			isRejected = true
 			rejectionErr = fmt.Errorf("missing prev events and no other servers to ask")
+		}
+	}
+
+	// If we deferred the auth fetch until after resolving the missing prev
+	// events, do it now. The state we fetched will usually have made the
+	// unknown auth events available locally.
+	if deferAuthUntilMissingState {
+		if err = checkAuthEvents(true); err != nil {
+			return err
 		}
 	}
 
