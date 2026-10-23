@@ -54,10 +54,8 @@ func InviteV3(
 		}
 	}
 	if hasInvalidV12InviteState(string(inviteReq.RoomVersion()), inviteReq.InviteRoomState()) {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
-		}
+		// Accepted leniently until the ecosystem has adapted to MSC4311.
+		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
 	if sender := inviteReq.Event().SenderID; sender != "" && userAPI != nil {
 		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, spec.SenderID(sender))
@@ -184,10 +182,8 @@ func InviteV2(
 		}
 	}
 	if hasInvalidV12InviteState(string(inviteReq.RoomVersion()), inviteReq.InviteRoomState()) {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.MissingParam("invite_room_state must include an m.room.create event for room version 12 or later"),
-		}
+		// Accepted leniently until the ecosystem has adapted to MSC4311.
+		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
 	if sender := inviteReq.Event().SenderID(); sender != "" && userAPI != nil {
 		senderUser, senderErr := rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, sender)
