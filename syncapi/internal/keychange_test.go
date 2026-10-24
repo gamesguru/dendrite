@@ -2,7 +2,9 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 
@@ -68,6 +70,7 @@ func (k *mockKeyAPI) QuerySignatures(ctx context.Context, req *userapi.QuerySign
 type keyChangeMockRoomserverAPI struct {
 	api.RoomserverInternalAPI
 	roomIDToJoinedMembers map[string][]string
+	querySharedUsersErr   error
 }
 
 func (s *keyChangeMockRoomserverAPI) QueryUserIDForSender(ctx context.Context, roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
@@ -98,6 +101,9 @@ func (s *keyChangeMockRoomserverAPI) QueryBulkStateContent(ctx context.Context, 
 
 // QuerySharedUsers returns a list of users who share at least 1 room in common with the given user.
 func (s *keyChangeMockRoomserverAPI) QuerySharedUsers(ctx context.Context, req *api.QuerySharedUsersRequest, res *api.QuerySharedUsersResponse) error {
+	if s.querySharedUsersErr != nil {
+		return s.querySharedUsersErr
+	}
 	roomsToQuery := req.IncludeRoomIDs
 	for roomID, members := range s.roomIDToJoinedMembers {
 		exclude := false
@@ -121,10 +127,45 @@ func (s *keyChangeMockRoomserverAPI) QuerySharedUsers(ctx context.Context, req *
 	res.UserIDsToCount = make(map[string]int)
 	for _, roomID := range roomsToQuery {
 		for _, userID := range s.roomIDToJoinedMembers[roomID] {
+			if len(req.OtherUserIDs) > 0 && !slices.Contains(req.OtherUserIDs, userID) {
+				continue
+			}
 			res.UserIDsToCount[userID]++
 		}
 	}
 	return nil
+}
+
+type failingSharedUsers struct{}
+
+func (failingSharedUsers) SharedUsers(context.Context, string, []string) ([]string, error) {
+	return nil, errors.New("database unavailable")
+}
+
+func TestFilterSharedUsersFallsBackToRoomserverOnDatabaseError(t *testing.T) {
+	t.Parallel()
+	otherUser := "@bob:localhost"
+	rsAPI := &keyChangeMockRoomserverAPI{
+		roomIDToJoinedMembers: map[string][]string{
+			"!shared:localhost": {syncingUser, otherUser},
+		},
+	}
+
+	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser})
+	if shared[otherUser] == 0 {
+		t.Fatalf("roomserver fallback did not find shared user: got %v", shared)
+	}
+}
+
+func TestFilterSharedUsersFailsOpenWhenFallbackFails(t *testing.T) {
+	t.Parallel()
+	otherUser := "@bob:localhost"
+	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
+
+	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser})
+	if shared[otherUser] == 0 {
+		t.Fatalf("expected fail-open shared-user count, got %v", shared)
+	}
 }
 
 // This is actually a database function, but seeing as we track the state inside the
