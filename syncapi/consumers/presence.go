@@ -72,6 +72,27 @@ func (s *PresenceConsumer) Start() error {
 	_, err := s.nats.Subscribe(s.requestTopic, func(msg *nats.Msg) {
 		process.Do(s.ctx, func() {
 			userID := msg.Header.Get(jetstream.UserID)
+			if msg.Header.Get("set_presence") == "true" {
+				m := &nats.Msg{Header: nats.Header{}}
+				presence, ok := types.PresenceFromString(msg.Header.Get("presence"))
+				timestamp, parseErr := strconv.ParseUint(msg.Header.Get("last_active_ts"), 10, 64)
+				if !ok || parseErr != nil {
+					m.Header.Set("error", "invalid presence update")
+				} else {
+					var statusMsg *string
+					if values, exists := msg.Header["status_msg"]; exists && len(values) > 0 {
+						value := msg.Header.Get("status_msg")
+						statusMsg = &value
+					}
+					if err := s.writePresence(s.ctx, userID, presence, statusMsg, spec.Timestamp(timestamp), false); err != nil {
+						m.Header.Set("error", err.Error())
+					}
+				}
+				if err := msg.RespondMsg(m); err != nil {
+					logrus.WithError(err).Error("Unable to respond to presence update")
+				}
+				return
+			}
 			presences, err := s.db.GetPresences(s.ctx, []string{userID})
 			m := &nats.Msg{
 				Header: nats.Header{},
@@ -161,11 +182,17 @@ func (s *PresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool
 }
 
 func (s *PresenceConsumer) EmitPresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool) {
+	if err := s.writePresence(ctx, userID, presence, statusMsg, ts, fromSync); err != nil {
+		logrus.WithError(err).WithField("user", userID).WithField("presence", presence).Warn("failed to updated presence for user")
+	}
+}
+
+func (s *PresenceConsumer) writePresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool) error {
 	pos, err := s.db.UpdatePresence(ctx, userID, presence, statusMsg, ts, fromSync)
 	if err != nil {
-		logrus.WithError(err).WithField("user", userID).WithField("presence", presence).Warn("failed to updated presence for user")
-		return
+		return err
 	}
 	s.stream.Advance(pos)
 	s.notifier.OnNewPresence(ctx, types.StreamingToken{PresencePosition: pos}, userID)
+	return nil
 }

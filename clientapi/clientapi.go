@@ -49,8 +49,10 @@ func AddPublicRoutes(
 		TopicSendToDeviceEvent: cfg.Global.JetStream.Prefixed(jetstream.OutputSendToDeviceEvent),
 		TopicTypingEvent:       cfg.Global.JetStream.Prefixed(jetstream.OutputTypingEvent),
 		TopicPresenceEvent:     cfg.Global.JetStream.Prefixed(jetstream.OutputPresenceEvent),
+		TopicPresenceRequest:   cfg.Global.JetStream.Prefixed(jetstream.RequestPresence),
 		UserAPI:                userAPI,
 		ServerName:             cfg.Global.ServerName,
+		NATS:                   natsClient,
 	}
 
 	delayedEvents := routing.Setup(

@@ -29,7 +29,9 @@ type SyncAPIProducer struct {
 	TopicSendToDeviceEvent string
 	TopicTypingEvent       string
 	TopicPresenceEvent     string
+	TopicPresenceRequest   string
 	JetStream              nats.JetStreamContext
+	NATS                   *nats.Conn
 	ServerName             spec.ServerName
 	UserAPI                userapi.ClientUserAPI
 }
@@ -144,12 +146,37 @@ func (p *SyncAPIProducer) SendPresence(
 	m := nats.NewMsg(p.TopicPresenceEvent)
 	m.Header.Set(jetstream.UserID, userID)
 	m.Header.Set("presence", presence.String())
+	// The sync API writes this update synchronously through RequestPresence.
+	// Keep the durable event for federation without applying it a second time.
+	m.Header.Set("from_sync", "true")
 	if statusMsg != nil {
 		m.Header.Set("status_msg", *statusMsg)
 	}
 
-	m.Header.Set("last_active_ts", strconv.Itoa(int(spec.AsTimestamp(time.Now()))))
+	timestamp := spec.AsTimestamp(time.Now())
+	m.Header.Set("last_active_ts", strconv.Itoa(int(timestamp)))
 
 	_, err := jetstream.Publish(ctx, p.JetStream, m)
-	return err
+	if err != nil {
+		return err
+	}
+	if p.NATS == nil || p.TopicPresenceRequest == "" {
+		return nil
+	}
+	request := nats.NewMsg(p.TopicPresenceRequest)
+	request.Header.Set(jetstream.UserID, userID)
+	request.Header.Set("set_presence", "true")
+	request.Header.Set("presence", presence.String())
+	request.Header.Set("last_active_ts", strconv.Itoa(int(timestamp)))
+	if statusMsg != nil {
+		request.Header.Set("status_msg", *statusMsg)
+	}
+	response, err := p.NATS.RequestMsg(request, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("sync API failed to apply presence update: %w", err)
+	}
+	if errMsg := response.Header.Get("error"); errMsg != "" {
+		return fmt.Errorf("sync API failed to apply presence update: %s", errMsg)
+	}
+	return nil
 }
