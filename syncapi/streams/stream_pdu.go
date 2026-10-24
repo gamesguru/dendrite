@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -125,7 +126,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		eventFormat = synctypes.FormatSyncFederation
 	}
 
-	recentEvents, err := snapshot.RecentEvents(ctx, joinedRoomIDs, r, &eventFilter, true, true)
+	recentEvents, err := topologicalRecentEvents(ctx, snapshot, joinedRoomIDs, to, &eventFilter)
 	if err != nil {
 		return from
 	}
@@ -186,7 +187,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			}
 		}
 
-		recentEvents, err = snapshot.RecentEvents(ctx, peekRooms, r, &eventFilter, true, true)
+		recentEvents, err = topologicalRecentEvents(ctx, snapshot, peekRooms, to, &eventFilter)
 		if err != nil {
 			return from
 		}
@@ -960,7 +961,69 @@ func (s *syncBundler) init(ctx context.Context) error {
 	return nil
 }
 
+// topologicalRecentEvents returns the most recent events of each room up to the
+// stream position to, chosen and ordered by their position in the room DAG.
+// As in Synapse, a complete sync shows a historical section of the timeline,
+// as /messages would, rather than the events in the order they arrived: after
+// a fork, an event received late but deep in the past belongs in the state,
+// not at the end of the timeline. Incremental syncs keep stream order.
+//
 //nolint:gocyclo
+func topologicalRecentEvents(
+	ctx context.Context, snapshot storage.DatabaseTransaction, roomIDs []string,
+	to types.StreamPosition, eventFilter *synctypes.RoomEventFilter,
+) (map[string]types.RecentEvents, error) {
+	const maxBatches = 3
+	batchFilter := *eventFilter
+	batchFilter.Limit = max(eventFilter.Limit*3, 10) //nolint:mnd
+
+	result := make(map[string]types.RecentEvents, len(roomIDs))
+	for _, roomID := range roomIDs {
+		// Each batch walks back through the DAG and keeps the events that match
+		// the filter, newest first, until one more than the limit is found.
+		var picked []types.StreamEvent
+		exhausted := false
+		var cursor types.TopologyToken
+		for batch := 0; batch < maxBatches && len(picked) <= eventFilter.Limit; batch++ {
+			var matched []types.StreamEvent
+			var end types.TopologyToken
+			var err error
+			if batch == 0 {
+				matched, _, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, to, &types.TopologyToken{}, roomID, &batchFilter)
+			} else {
+				from := cursor
+				matched, _, end, err = snapshot.GetEventsInTopologicalRange(ctx, &from, &types.TopologyToken{}, roomID, &batchFilter, true)
+			}
+			if err != nil {
+				return nil, err
+			}
+			for _, ev := range matched {
+				if ev.StreamPosition <= to && !ev.ExcludeFromSync {
+					picked = append(picked, ev)
+				}
+			}
+			if end == (types.TopologyToken{}) {
+				exhausted = true
+				break
+			}
+			cursor = end
+			cursor.Decrement()
+		}
+
+		res := types.RecentEvents{}
+		if len(picked) > eventFilter.Limit {
+			res.Limited = true
+			picked = picked[:eventFilter.Limit]
+		} else if !exhausted {
+			res.Limited = true
+		}
+		slices.Reverse(picked)
+		res.Events = picked
+		result[roomID] = res
+	}
+	return result, nil
+}
+
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
