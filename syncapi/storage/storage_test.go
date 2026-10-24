@@ -72,6 +72,33 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
+// TestMaxStreamPositionForPDUsAcrossSnapshots ensures that reading the PDU
+// high-water mark from one snapshot does not close the shared prepared
+// statement used by later snapshots.
+func TestMaxStreamPositionForPDUsAcrossSnapshots(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		MustWriteEvents(t, db, r.Events())
+
+		var positions [2]types.StreamPosition
+		for i := range positions {
+			WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+				pos, err := snapshot.MaxStreamPositionForPDUs(ctx)
+				if err != nil {
+					t.Fatalf("MaxStreamPositionForPDUs (snapshot %d) failed: %s", i, err)
+				}
+				positions[i] = pos
+			})
+		}
+		if positions[0] != positions[1] {
+			t.Fatalf("MaxStreamPositionForPDUs changed between snapshots: %d != %d", positions[0], positions[1])
+		}
+	})
+}
+
 func WithSnapshot(t *testing.T, db storage.Database, f func(snapshot storage.DatabaseTransaction)) {
 	snapshot, err := db.NewDatabaseSnapshot(ctx)
 	if err != nil {
