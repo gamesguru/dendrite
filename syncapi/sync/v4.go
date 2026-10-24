@@ -1314,8 +1314,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				if ctx.Err() != nil {
 					break populate
 				}
-				// Log error but continue with other rooms
+				// Log error but continue with other rooms. This room was not
+				// sent, so let copyForwardStreamStates carry its previous
+				// state into the new connection position.
 				logrus.WithError(buildErr).WithField("room_id", roomID).Error("[V4_SYNC] Failed to build room data")
+				delete(roomsToPopulate, roomID)
 				continue
 			}
 			roomData.Avatar = roomData.AvatarURL
@@ -1370,6 +1373,11 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			if since != nil && !subscribed && !roomData.Initial && !timelineExpanded && !requiredStateExpanded &&
 				len(roomData.Timeline) == 0 && len(roomData.RequiredState) == 0 &&
 				!roomsLeftOnConnection[roomID] && roomData.Membership != string(spec.Leave) && roomData.Membership != string(spec.Ban) {
+				// The room was not actually sent (it had no visible update).
+				// Do not mark it processed, otherwise its stream state is
+				// dropped when the previous connection position is deleted and
+				// the next sync treats it as never sent.
+				delete(roomsToPopulate, roomID)
 				continue
 			}
 

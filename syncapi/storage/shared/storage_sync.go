@@ -223,6 +223,18 @@ func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
+// EventsWithDevice looks up events and annotates the device's transaction ID
+// on events the device sent, as required by GET /rooms/{roomId}/event/{eventId}.
+func (d *DatabaseTransaction) EventsWithDevice(
+	ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, d.txn, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, streamEvents, rsAPI), nil
+}
+
 func (d *DatabaseTransaction) AllJoinedUsersInRooms(ctx context.Context) (map[string][]string, error) {
 	return d.CurrentRoomState.SelectJoinedUsers(ctx, d.txn)
 }

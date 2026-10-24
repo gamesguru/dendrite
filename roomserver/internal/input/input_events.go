@@ -1253,6 +1253,12 @@ nextAuthEvent:
 		}
 	}
 
+	for _, ev := range known {
+		if ev != nil && !ev.Rejected && ev.PDU != nil {
+			_ = auth.AddEvent(ev.PDU)
+		}
+	}
+
 	return nil
 }
 

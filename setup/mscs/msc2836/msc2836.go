@@ -166,7 +166,11 @@ func eventRelationshipHandler(db Database, rsAPI roomserver.RoomserverInternalAP
 			rsAPI:              rsAPI,
 			fsAPI:              fsAPI,
 			isFederatedRequest: false,
-			db:                 db,
+			// Outgoing federation requests are signed as this server. For
+			// client requests the origin is not supplied by a request, so use
+			// the requesting user's domain (the user is local to this server).
+			serverName: userID.Domain(),
+			db:         db,
 		}
 		res, resErr := rc.process() //nolint:contextcheck
 		if resErr != nil {

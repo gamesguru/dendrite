@@ -528,17 +528,24 @@ func (t *missingStateReq) lookupStateAfterEvent(ctx context.Context, roomVersion
 	}
 	h = t.cacheAndReturn(h)
 	if h.StateKey() != nil {
-		addedToState := false
-		for i := range respState.StateEvents {
-			se := respState.StateEvents[i]
-			if se.Type() == h.Type() && se.StateKeyEquals(*h.StateKey()) {
-				respState.StateEvents[i] = h
-				addedToState = true
-				break
+		if respState.OutliersStored {
+			respState.StateEventIDs = append(respState.StateEventIDs, h.EventID())
+		} else {
+			addedToState := false
+			for i := range respState.StateEvents {
+				se := respState.StateEvents[i]
+				if se.Type() == h.Type() && se.StateKeyEquals(*h.StateKey()) {
+					respState.StateEvents[i] = h
+					// Keep the replaced state event in AuthEvents so it remains in the
+					// outlier set for authentication and state resolution.
+					respState.AuthEvents = append(respState.AuthEvents, se)
+					addedToState = true
+					break
+				}
 			}
-		}
-		if !addedToState {
-			respState.StateEvents = append(respState.StateEvents, h)
+			if !addedToState {
+				respState.StateEvents = append(respState.StateEvents, h)
+			}
 		}
 	}
 

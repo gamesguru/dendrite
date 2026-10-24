@@ -15,6 +15,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/federationapi/consumers"
@@ -41,6 +42,7 @@ type FederationInternalAPI struct {
 	partialStateWorker *PartialStateWorker // MSC3706: worker for background state resync
 	rateLimitMutex     sync.Mutex
 	rateLimits         map[spec.ServerName]time.Time
+	serverKeyFetches   singleflight.Group
 }
 
 func NewFederationInternalAPI(

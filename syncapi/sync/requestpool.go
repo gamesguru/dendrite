@@ -445,6 +445,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			}); ok {
 				waiter.WaitForPendingPartialJoins(syncReq.Context, syncReq)
 			}
+			rp.waitForJoinedRooms(syncReq.Context, syncReq)
 			syncReq.Response.NextBatch = types.StreamingToken{
 				// Get the current DeviceListPosition first, as the currentPosition
 				// might advance while processing other streams, resulting in flakey
@@ -795,4 +796,38 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 		return true
 	}
 	return false
+}
+
+func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
+	if rp.rsAPI == nil || req.Device == nil {
+		return
+	}
+	userID, err := spec.NewUserID(req.Device.UserID, true)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	rooms, err := rp.rsAPI.QueryRoomsForUser(ctx, *userID, spec.Join)
+	if err != nil || len(rooms) == 0 {
+		return
+	}
+	for _, roomID := range rooms {
+		if ctx.Err() != nil {
+			return
+		}
+		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
+		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
+			RoomID: roomID.String(),
+		}, &latestRes); err != nil {
+			continue
+		}
+		for _, ev := range latestRes.LatestEvents {
+			if ctx.Err() != nil {
+				return
+			}
+			internal.WaitForMembershipInTopology(ctx, rp.db, ev)
+		}
+	}
 }

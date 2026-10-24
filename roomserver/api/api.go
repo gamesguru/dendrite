@@ -209,6 +209,7 @@ type SyncRoomserverAPI interface {
 	QueryBulkStateContentAPI
 	QuerySenderIDAPI
 	QueryMembershipAPI
+	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
 	// QuerySharedUsers returns a list of users who share at least 1 room in common with the given user.
 	QuerySharedUsers(ctx context.Context, req *QuerySharedUsersRequest, res *QuerySharedUsersResponse) error
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine

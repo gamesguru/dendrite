@@ -100,6 +100,18 @@ func (d *Database) Events(ctx context.Context, eventIDs []string) ([]*rstypes.He
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
+// EventsWithDevice looks up events and annotates the device's transaction ID
+// on events the device sent, as required by GET /rooms/{roomId}/event/{eventId}.
+func (d *Database) EventsWithDevice(
+	ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, nil, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, streamEvents, rsAPI), nil
+}
+
 func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Device, in []types.StreamEvent, rsAPI api.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
 	out := make([]*rstypes.HeaderedEvent, len(in))
 	for i := 0; i < len(in); i++ {

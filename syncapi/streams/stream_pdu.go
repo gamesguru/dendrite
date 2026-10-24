@@ -737,6 +737,23 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
 	}
 
+	bwExtrems, bwErr := snapshot.BackwardExtremitiesForRoom(ctx, delta.RoomID)
+	if bwErr != nil {
+		logrus.WithError(bwErr).WithField("room_id", delta.RoomID).Warn("failed to query backward extremities")
+	} else if len(bwExtrems) > 0 {
+		gapIdx := -1
+		for i := len(events) - 1; i >= 0; i-- {
+			if _, ok := bwExtrems[events[i].EventID()]; ok {
+				gapIdx = i
+				break
+			}
+		}
+		if gapIdx >= 0 {
+			events = events[gapIdx:]
+			limited = true
+		}
+	}
+
 	if r.Backwards && len(events) > eventFilter.Limit {
 		// We're going backwards and the events are ordered chronologically, so take the last `limit` events
 		events = events[len(events)-eventFilter.Limit:]
@@ -818,9 +835,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
-		// If we are limited by the filter AND the history visibility filter
-		// didn't "remove" events, return that the response is limited.
-		jr.Timeline.Limited = (limited && len(events) == len(recentEvents)) || delta.NewlyJoined
+		jr.Timeline.Limited = limited || delta.NewlyJoined
 		if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, r.High()); err != nil {
 			return r.From, err
 		}
@@ -864,9 +879,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		lr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
-		// If we are limited by the filter AND the history visibility filter
-		// didn't "remove" events, return that the response is limited.
-		lr.Timeline.Limited = limited && len(events) == len(recentEvents)
+		lr.Timeline.Limited = limited
 		if err = bundler.bundle(ctx, lr.Timeline, events, eventFormat, r.High()); err != nil {
 			return r.From, err
 		}
@@ -1006,9 +1019,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		}
 	}
 
-	// If we are limited by the filter AND the history visibility filter
-	// didn't "remove" events, return that the response is limited.
-	limited = limited && len(events) == len(recentEvents)
 	if !stateAfter {
 		stateEvents = removeDuplicates(stateEvents, events)
 	}
@@ -1057,9 +1067,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
-	// If we are limited by the filter AND the history visibility filter
-	// didn't "remove" events, return that the response is limited.
-	jr.Timeline.Limited = limited && len(events) == len(recentEvents)
+	jr.Timeline.Limited = limited
 	if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, sentAt); err != nil {
 		return jr, err
 	}

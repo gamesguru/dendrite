@@ -41,6 +41,7 @@ type messagesReq struct {
 	cfg              *config.SyncAPI
 	roomID           string
 	from             *types.TopologyToken
+	fromStream       *types.StreamingToken
 	to               *types.TopologyToken
 	device           *userapi.Device
 	deviceUserID     spec.UserID
@@ -247,6 +248,7 @@ func OnIncomingMessagesRequest(
 		cfg:              cfg,
 		roomID:           roomID,
 		from:             &from,
+		fromStream:       fromStream,
 		to:               &to,
 		wasToProvided:    wasToProvided,
 		filter:           filter,
@@ -346,6 +348,23 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if err != nil {
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
+	}
+	// A stream token is a position in stream order, not topology order. Events
+	// can be persisted in a different order than their DAG depth (for example
+	// room creation state events that arrive after the client's sync token), so
+	// constrain the page by the token's stream position as well.
+	if r.fromStream != nil {
+		filtered := streamEvents[:0]
+		for _, ev := range streamEvents {
+			if r.backwardOrdering {
+				if ev.StreamPosition < r.fromStream.PDUPosition {
+					filtered = append(filtered, ev)
+				}
+			} else if ev.StreamPosition > r.fromStream.PDUPosition {
+				filtered = append(filtered, ev)
+			}
+		}
+		streamEvents = filtered
 	}
 	end.Decrement()
 

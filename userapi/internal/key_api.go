@@ -322,7 +322,7 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 
 	// attempt to satisfy key queries from the local database first as we should get device updates pushed to us
 	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys)
-	if len(domainToDeviceKeys) > 0 || len(domainToCrossSigningKeys) > 0 {
+	if len(domainToDeviceKeys) > 0 {
 		// perform key queries for remote devices
 		a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
 	}
@@ -486,12 +486,6 @@ func (a *UserInternalAPI) queryRemoteKeys(
 		}
 		domains[domain] = struct{}{}
 	}
-	for domain := range domainToCrossSigningKeys {
-		if a.Config.Matrix.IsLocalServerName(spec.ServerName(domain)) {
-			continue
-		}
-		domains[domain] = struct{}{}
-	}
 	wg.Add(len(domains))
 
 	// fan out
@@ -587,11 +581,10 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	// for cross-signing keys, it's probably easier just to hit /keys/query if we aren't already doing
 	// a device list update, so we'll populate those back into the /keys/query list if not
 	for userID := range crossSigningKeys {
-		if devKeys == nil {
-			devKeys = map[string][]string{}
-		}
-		if _, ok := userIDsForAllDevices[userID]; !ok {
-			devKeys[userID] = []string{}
+		if _, ok := devKeys[userID]; ok {
+			if _, ok := userIDsForAllDevices[userID]; !ok {
+				devKeys[userID] = []string{}
+			}
 		}
 	}
 	for userID := range userIDsForAllDevices {
@@ -625,6 +618,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			devKeys[userID] = []string{}
 			continue
 		}
+		delete(devKeys, userID)
 	}
 	if len(devKeys) == 0 {
 		return

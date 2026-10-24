@@ -93,6 +93,9 @@ type DatabaseTransaction interface {
 	// Returns an error if there was a problem talking with the database.
 	// Does not include any transaction IDs in the returned events.
 	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
+	// EventsWithDevice is like Events but annotates the requesting device's
+	// transaction ID on events that device sent.
+	EventsWithDevice(ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	// GetStateEvent returns the Matrix state event of a given type for a given room with a given state key
 	// If no event could be found, returns nil
 	// If there was an issue during the retrieval, returns an error
@@ -167,6 +170,9 @@ type Database interface {
 	// Returns an error if there was a problem talking with the database.
 	// Does not include any transaction IDs in the returned events.
 	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
+	// EventsWithDevice is like Events but annotates the requesting device's
+	// transaction ID on events that device sent.
+	EventsWithDevice(ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	// WriteEvent into the database. It is not safe to call this function from multiple goroutines, as it would create races
 	// when generating the sync stream position for this event. Returns the sync stream position for the inserted event.
 	// Returns an error if there was a problem inserting this event.
