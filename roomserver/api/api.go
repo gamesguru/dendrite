@@ -470,4 +470,7 @@ type KeyserverRoomserverAPI interface {
 	// TakeMembersJoinedDuringPartialState returns who was joined to the room before its
 	// resync state was applied, once it completed. The result is not ok when that is not known.
 	TakeMembersJoinedDuringPartialState(roomID string) (members PartialStateMembers, ok bool)
+	// QueryMembersJoinedAfterPartialJoin returns the users who joined a partial state
+	// room after we did, while it still has partial state.
+	QueryMembersJoinedAfterPartialJoin(ctx context.Context, roomID string) ([]string, error)
 }

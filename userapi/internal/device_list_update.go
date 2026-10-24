@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -391,7 +392,8 @@ func (u *DeviceListUpdater) deferWhilePartialState(ctx context.Context, userID s
 	}
 	// A user known to be in a fully stated room is handled as usual: no resync is
 	// going to say anything more about them. Membership in a partial-state room
-	// does not establish this, since the resync may still remove that user.
+	// does not establish this, since the resync may still remove that user, unless
+	// they joined after we did: their join reached us directly.
 	if user, parseErr := spec.NewUserID(userID, true); parseErr == nil {
 		if joined, roomsErr := u.rsAPI.QueryRoomsForUser(ctx, *user, spec.Join); roomsErr == nil {
 			partial := make(map[string]struct{}, len(rooms))
@@ -400,6 +402,10 @@ func (u *DeviceListUpdater) deferWhilePartialState(ctx context.Context, userID s
 			}
 			for _, roomID := range joined {
 				if _, isPartial := partial[roomID.String()]; !isPartial {
+					return false
+				}
+				later, laterErr := u.rsAPI.QueryMembersJoinedAfterPartialJoin(ctx, roomID.String())
+				if laterErr == nil && slices.Contains(later, userID) {
 					return false
 				}
 			}
