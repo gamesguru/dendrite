@@ -62,7 +62,15 @@ func (p *PDUStreamProvider) CompleteSync(
 	req *types.SyncRequest,
 ) types.StreamPosition {
 	from := types.StreamPosition(0)
-	to := p.LatestPosition(ctx)
+	// Use the high-water mark visible to this database snapshot. The in-memory
+	// provider advances after the consumer commits, so it can lag behind
+	// committed events, or move ahead of this snapshot and put next_batch past
+	// events this response could not read.
+	to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+	if err != nil {
+		req.Log.WithError(err).Error("snapshot.MaxStreamPositionForPDUs failed")
+		return from
+	}
 
 	// Get the current sync position which we will base the sync response on.
 	// For complete syncs, we want to start at the most recent events and work

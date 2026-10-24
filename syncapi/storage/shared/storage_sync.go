@@ -44,6 +44,13 @@ func (d *DatabaseTransaction) MaxStreamPositionForPDUs(ctx context.Context) (typ
 	if err != nil {
 		return 0, fmt.Errorf("d.OutputEvents.SelectMaxEventID: %w", err)
 	}
+	markerID, err := d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID(ctx, d.txn)
+	if err != nil {
+		return 0, fmt.Errorf("d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID: %w", err)
+	}
+	if markerID > id {
+		id = markerID
+	}
 	return types.StreamPosition(id), nil
 }
 

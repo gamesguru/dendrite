@@ -29,6 +29,8 @@ type DatabaseTransaction interface {
 	sqlutil.Transaction
 	SharedUsers
 
+	// MaxStreamPositionForPDUs includes completed partial-state markers, which
+	// share the PDU stream position space.
 	MaxStreamPositionForPDUs(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForReceipts(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForInvites(ctx context.Context) (types.StreamPosition, error)
