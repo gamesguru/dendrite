@@ -275,6 +275,12 @@ func (d *Database) handleBackwardExtremities(ctx context.Context, txn *sql.Tx, e
 	return nil
 }
 
+func (d *Database) PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, roomID, prevEventID)
+	})
+}
+
 func (d *Database) WriteEvent(
 	ctx context.Context,
 	ev *rstypes.HeaderedEvent,

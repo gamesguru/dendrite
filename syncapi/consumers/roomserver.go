@@ -458,6 +458,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
 	}
+	s.cleanKnownBackwardExtremities(ctx, ev)
 	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
 		log.WithFields(log.Fields{
 			"room_id":        ev.RoomID().String(),
@@ -548,6 +549,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		}).Panicf("roomserver output log: write old event failure")
 		return nil
 	}
+	s.cleanKnownBackwardExtremities(ctx, ev)
 
 	// Old state events are kept from sync, so they are not delivered as
 	// sticky events either.
@@ -1175,4 +1177,23 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 		}
 	}
 	return nil
+}
+
+// cleanKnownBackwardExtremities checks if any prev_events of ev that were missing from
+// syncapi OutputEvents are actually known to roomserver (e.g. rejected events or outliers).
+// If roomserver knows them, the DAG history has no missing gap and the backward extremity
+// marker for that prev_event is removed.
+func (s *OutputRoomEventConsumer) cleanKnownBackwardExtremities(ctx context.Context, ev *rstypes.HeaderedEvent) {
+	if s.rsAPI == nil || len(ev.PrevEventIDs()) == 0 {
+		return
+	}
+	for _, prevID := range ev.PrevEventIDs() {
+		var queryRes api.QueryEventsByIDResponse
+		if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+			RoomID:   ev.RoomID().String(),
+			EventIDs: []string{prevID},
+		}, &queryRes); err == nil && len(queryRes.Events) > 0 {
+			_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
+		}
+	}
 }
