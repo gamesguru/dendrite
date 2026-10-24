@@ -498,7 +498,15 @@ func (r *Response) MoveStateToStateAfter(key string) {
 type Timeline struct {
 	Events    []synctypes.ClientEvent `json:"events"`
 	Limited   bool                    `json:"limited"`
-	PrevBatch *TopologyToken          `json:"prev_batch,omitempty"`
+	PrevBatch *string                 `json:"prev_batch,omitempty"`
+}
+
+// PrevBatchToken returns the prev_batch token for a timeline whose first event
+// is just after tok. As in Synapse it is a stream token: paginating back from it
+// returns the events persisted before the timeline, in topological order.
+func PrevBatchToken(tok TopologyToken) *string {
+	prevBatch := StreamingToken{PDUPosition: tok.PDUPosition}.String()
+	return &prevBatch
 }
 
 type Summary struct {

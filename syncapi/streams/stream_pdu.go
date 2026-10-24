@@ -839,7 +839,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 				logrus.WithError(err).WithField("room_id", delta.RoomID).Warn("failed to get room summary")
 			}
 		}
-		jr.Timeline.PrevBatch = &prevBatch
+		jr.Timeline.PrevBatch = types.PrevBatchToken(prevBatch)
 		jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
@@ -855,7 +855,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 
 	case spec.Peek:
 		jr := types.NewJoinResponse()
-		jr.Timeline.PrevBatch = &prevBatch
+		jr.Timeline.PrevBatch = types.PrevBatchToken(prevBatch)
 		// TODO: Apply history visibility on peeked rooms
 		jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(recentEvents), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
@@ -883,7 +883,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 
 	case spec.Ban:
 		lr := types.NewLeaveResponse()
-		lr.Timeline.PrevBatch = &prevBatch
+		lr.Timeline.PrevBatch = types.PrevBatchToken(prevBatch)
 		lr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
@@ -1071,7 +1071,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		prevBatch.Decrement()
 	}
 
-	jr.Timeline.PrevBatch = prevBatch
+	if prevBatch != nil {
+		jr.Timeline.PrevBatch = types.PrevBatchToken(*prevBatch)
+	}
 	jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})

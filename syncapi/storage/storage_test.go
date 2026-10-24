@@ -13,6 +13,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -1331,6 +1332,41 @@ func TestUnPartialStatedMarkerUsesPDUPositions(t *testing.T) {
 				t.Fatalf("UnPartialStatedRoomsInRange: %v", err)
 			}
 			assert.Empty(t, rooms, "a sync that ended before the marker does not")
+		})
+	})
+}
+
+// After a network partition heals, an event can be persisted after events that
+// are deeper in the DAG. Paginating back from a stream token just before it
+// must return the events persisted earlier, in topological order, rather than
+// stopping at its depth (TestNetworkPartitionOrdering).
+func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+
+		// 1' is created at the same depth as 1, but only arrives after 1-4.
+		onePrime := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "1'"})
+		var local []*rstypes.HeaderedEvent
+		for i := 1; i <= 4; i++ {
+			local = append(local, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+		require.Equal(t, local[0].Depth(), onePrime.Depth())
+
+		_ = MustWriteEvents(t, db, base)
+		_ = MustWriteEvents(t, db, local)
+		onePrimePos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{onePrime})[0]
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			filter := &synctypes.RoomEventFilter{Limit: 4}
+			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter)
+			require.NoError(t, err)
+			gots := snapshot.StreamEventsToEvents(context.Background(), nil, paginated, nil)
+			test.AssertEventsEqual(t, gots, test.Reversed(local))
+			assert.Equal(t, local[0].Depth(), int64(end.Depth))
 		})
 	})
 }

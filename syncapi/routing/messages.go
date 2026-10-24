@@ -344,7 +344,16 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// streamEvents has already been filtered by the client's sender/type filter (SelectEvents).
 	// topologyStart/end come from the unfiltered topology range, so end remains valid for
 	// pagination even when the filter removes all events from a page.
-	streamEvents, topologyStart, end, err := r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
+	var streamEvents []types.StreamEvent
+	var topologyStart types.TopologyToken
+	if r.fromStream != nil && r.backwardOrdering {
+		// A stream token bounds the page by stream order alone, as in Synapse:
+		// events persisted before it can be deeper in the DAG than the event at
+		// the token, for instance after a network partition heals.
+		streamEvents, topologyStart, end, err = r.snapshot.GetEventsBeforeStreamPosition(r.ctx, r.fromStream.PDUPosition, r.to, r.roomID, r.filter) //nolint:contextcheck
+	} else {
+		streamEvents, topologyStart, end, err = r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
+	}
 	if err != nil {
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err

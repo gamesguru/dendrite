@@ -329,6 +329,24 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 	return
 }
 
+// GetEventsBeforeStreamPosition retrieves, newest first in topological order,
+// the events at or before a stream position and deeper than the to token.
+func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
+	ctx context.Context,
+	maxStreamPos types.StreamPosition,
+	to *types.TopologyToken,
+	roomID string,
+	filter *synctypes.RoomEventFilter,
+) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
+	var eIDs []string
+	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(ctx, d.txn, roomID, to.Depth, maxStreamPos, filter.Limit)
+	if err != nil {
+		return
+	}
+	events, err = d.OutputEvents.SelectEvents(ctx, d.txn, eIDs, filter, true)
+	return
+}
+
 func (d *DatabaseTransaction) BackwardExtremitiesForRoom(
 	ctx context.Context, roomID string,
 ) (backwardExtremities map[string][]string, err error) {
