@@ -288,11 +288,16 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if len(addsJoinedHosts) > 0 && ore.Event.Type() == spec.MRoomMember && ore.Event.StateKey() != nil {
 		membership, _ := ore.Event.Membership()
 		if membership == spec.Join {
-			// The joining host already knows the joining user's devices. Other
-			// hosts that were in the room beforehand need the current device list
-			// too, since this is the first time the user shares a room with them.
-			deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
-			s.sendDeviceLists(ore.Event.RoomID().String(), deviceListHosts)
+			// A local user who joins shares a room with the other hosts for the
+			// first time, so send them that user's current device list. Remote
+			// joins are not answered with our users' devices: those hosts ask for
+			// them, and unsolicited updates would reach servers we only believe
+			// to be in the room.
+			joiner, joinerErr := s.rsAPI.QueryUserIDForSender(s.ctx, ore.Event.RoomID(), spec.SenderID(*ore.Event.StateKey()))
+			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) {
+				deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
+				s.sendDeviceLists(ore.Event.RoomID().String(), joiner.String(), deviceListHosts)
+			}
 			if s.cfg.Matrix.Presence.EnableOutbound {
 				s.sendPresence(ore.Event.RoomID().String(), addsJoinedHosts)
 			}
@@ -452,10 +457,10 @@ func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomE
 	return "", false
 }
 
-// sendDeviceLists sends a device list update for every device of our users in
-// the room to the hosts that have just joined it, so they know of devices that
-// were created before the users shared a room with them.
-func (s *OutputRoomEventConsumer) sendDeviceLists(roomID string, addedJoined []types.JoinedHost) {
+// sendDeviceLists sends a device list update for every device of a local user
+// who has just joined the room to its other hosts, so they know of devices that
+// were created before the user shared a room with them.
+func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJoined []types.JoinedHost) {
 	lister := s.devices.get()
 	if lister == nil {
 		return
@@ -470,61 +475,49 @@ func (s *OutputRoomEventConsumer) sendDeviceLists(roomID string, addedJoined []t
 		return
 	}
 
-	var members api.QueryMembershipsForRoomResponse
-	if err := s.rsAPI.QueryMembershipsForRoom(s.ctx, &api.QueryMembershipsForRoomRequest{
-		JoinedOnly: true,
-		LocalOnly:  true,
-		RoomID:     roomID,
-	}, &members); err != nil {
-		log.WithError(err).Error("failed to query local members to send device lists for")
+	logger := log.WithField("user_id", userID).WithField("room_id", roomID)
+	var devices userapi.QueryDevicesResponse
+	if err := lister.QueryDevices(s.ctx, &userapi.QueryDevicesRequest{UserID: userID}, &devices); err != nil {
+		logger.WithError(err).Error("failed to query devices to send device lists for")
 		return
 	}
+	var messages userapi.QueryDeviceMessagesResponse
+	if err := lister.QueryDeviceMessages(s.ctx, &userapi.QueryDeviceMessagesRequest{UserID: userID}, &messages); err != nil || messages.Error != nil {
+		logger.WithError(err).Error("failed to query device keys to send device lists for")
+		return
+	}
+	keys := make(map[string]userapi.DeviceMessage, len(messages.Devices))
+	for _, msg := range messages.Devices {
+		if msg.DeviceKeys != nil {
+			keys[msg.DeviceID] = msg
+		}
+	}
 
-	for _, member := range members.JoinEvents {
-		logger := log.WithField("user_id", member.Sender).WithField("room_id", roomID)
-		var devices userapi.QueryDevicesResponse
-		if err := lister.QueryDevices(s.ctx, &userapi.QueryDevicesRequest{UserID: member.Sender}, &devices); err != nil {
-			logger.WithError(err).Error("failed to query devices to send device lists for")
+	for _, device := range devices.Devices {
+		update := gomatrixserverlib.DeviceListUpdateEvent{
+			UserID:            userID,
+			DeviceID:          device.ID,
+			DeviceDisplayName: device.DisplayName,
+			StreamID:          messages.StreamID,
+		}
+		if msg, ok := keys[device.ID]; ok {
+			update.StreamID = msg.StreamID
+			update.Keys = msg.KeyJSON
+		}
+		if update.StreamID > 1 {
+			update.PrevID = []int64{update.StreamID - 1}
+		}
+		edu := &gomatrixserverlib.EDU{
+			Type:   spec.MDeviceListUpdate,
+			Origin: string(s.cfg.Matrix.ServerName),
+		}
+		var err error
+		if edu.Content, err = json.Marshal(update); err != nil {
+			logger.WithError(err).Error("failed to marshal device list update")
 			continue
 		}
-		var messages userapi.QueryDeviceMessagesResponse
-		if err := lister.QueryDeviceMessages(s.ctx, &userapi.QueryDeviceMessagesRequest{UserID: member.Sender}, &messages); err != nil || messages.Error != nil {
-			logger.WithError(err).Error("failed to query device keys to send device lists for")
-			continue
-		}
-		keys := make(map[string]userapi.DeviceMessage, len(messages.Devices))
-		for _, msg := range messages.Devices {
-			if msg.DeviceKeys != nil {
-				keys[msg.DeviceID] = msg
-			}
-		}
-
-		for _, device := range devices.Devices {
-			update := gomatrixserverlib.DeviceListUpdateEvent{
-				UserID:            member.Sender,
-				DeviceID:          device.ID,
-				DeviceDisplayName: device.DisplayName,
-				StreamID:          messages.StreamID,
-			}
-			if msg, ok := keys[device.ID]; ok {
-				update.StreamID = msg.StreamID
-				update.Keys = msg.KeyJSON
-			}
-			if update.StreamID > 1 {
-				update.PrevID = []int64{update.StreamID - 1}
-			}
-			edu := &gomatrixserverlib.EDU{
-				Type:   spec.MDeviceListUpdate,
-				Origin: string(s.cfg.Matrix.ServerName),
-			}
-			var err error
-			if edu.Content, err = json.Marshal(update); err != nil {
-				logger.WithError(err).Error("failed to marshal device list update")
-				continue
-			}
-			if err = s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, destinations); err != nil {
-				logger.WithError(err).Error("failed to send device list update")
-			}
+		if err = s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, destinations); err != nil {
+			logger.WithError(err).Error("failed to send device list update")
 		}
 	}
 }
