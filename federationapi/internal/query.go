@@ -37,9 +37,17 @@ func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 	return
 }
 
+const serverKeyFetchFailureBackoff = 2 * time.Second
+
 func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, serverName spec.ServerName) (*gomatrixserverlib.ServerKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
 	defer cancel()
+
+	// Do not hammer a server which has just failed: notary clients retry
+	// immediately, and a failed key fetch is not useful to repeat (MSC4499 §3).
+	if until, ok := a.serverKeyFetchBackoffUntil(serverName); ok && time.Now().Before(until) {
+		return nil, fmt.Errorf("server key fetch for %s is backing off until %s", serverName, until.Format(time.RFC3339))
+	}
 
 	// Coalesce concurrent direct fetches for the same server. Every request
 	// fetches the full key document anyway, so a single upstream request can
@@ -48,13 +56,37 @@ func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, ser
 		return a.fetchServerKeysDirectlyUncoalesced(ctx, serverName)
 	})
 	if err != nil {
+		a.recordServerKeyFetchFailure(serverName)
 		return nil, err
 	}
+	a.clearServerKeyFetchFailure(serverName)
 	sks, ok := res.(*gomatrixserverlib.ServerKeys)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetServerKeys")
 	}
 	return sks, nil
+}
+
+func (a *FederationInternalAPI) serverKeyFetchBackoffUntil(serverName spec.ServerName) (time.Time, bool) {
+	a.serverKeyFetchBackoffMu.Lock()
+	defer a.serverKeyFetchBackoffMu.Unlock()
+	until, ok := a.serverKeyFetchBackoff[serverName]
+	return until, ok
+}
+
+func (a *FederationInternalAPI) recordServerKeyFetchFailure(serverName spec.ServerName) {
+	a.serverKeyFetchBackoffMu.Lock()
+	defer a.serverKeyFetchBackoffMu.Unlock()
+	if a.serverKeyFetchBackoff == nil {
+		a.serverKeyFetchBackoff = make(map[spec.ServerName]time.Time)
+	}
+	a.serverKeyFetchBackoff[serverName] = time.Now().Add(serverKeyFetchFailureBackoff)
+}
+
+func (a *FederationInternalAPI) clearServerKeyFetchFailure(serverName spec.ServerName) {
+	a.serverKeyFetchBackoffMu.Lock()
+	defer a.serverKeyFetchBackoffMu.Unlock()
+	delete(a.serverKeyFetchBackoff, serverName)
 }
 
 func (a *FederationInternalAPI) fetchServerKeysDirectlyUncoalesced(

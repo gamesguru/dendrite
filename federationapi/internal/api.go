@@ -43,6 +43,9 @@ type FederationInternalAPI struct {
 	rateLimitMutex     sync.Mutex
 	rateLimits         map[spec.ServerName]time.Time
 	serverKeyFetches   singleflight.Group
+
+	serverKeyFetchBackoffMu sync.Mutex
+	serverKeyFetchBackoff   map[spec.ServerName]time.Time
 }
 
 func NewFederationInternalAPI(
