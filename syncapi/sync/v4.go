@@ -22,8 +22,10 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
+	syncinternal "codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
@@ -662,6 +664,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	// Update presence and last seen (reuse existing v3 logic)
 	rp.updateLastSeen(req, device)
 	rp.updatePresenceExplicit(rp.db, v4Req.SetPresence, device.UserID)
+	rp.waitForMembershipChanges(ctx, device.UserID)
 
 	// Main sync loop - similar to v3 sync
 	// Loop until we have updates to return or timeout expires
@@ -739,6 +742,12 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 			}
 		}
+
+		// The notifier advances after the consumer commits, so it can lag events
+		// that are already stored, such as a leave that the client's own request
+		// has just completed. Every snapshot this response opens from here on is
+		// newer, so it can read up to the committed high-water mark.
+		currentPos.PDUPosition = rp.committedPDUPosition(ctx, currentPos.PDUPosition)
 
 		// Phase 10: Create new connection position for this sync response
 		// This is what goes into the pos token
@@ -2121,4 +2130,78 @@ func (rp *RequestPool) buildInterruptResponse(
 	}
 
 	return resp
+}
+
+// committedPDUPosition returns the later of pos and the highest PDU stream
+// position committed to the database.
+func (rp *RequestPool) committedPDUPosition(ctx context.Context, pos types.StreamPosition) types.StreamPosition {
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return pos
+	}
+	defer snapshot.Rollback() //nolint:errcheck
+	committed, err := snapshot.MaxStreamPositionForPDUs(ctx)
+	if err != nil || committed <= pos {
+		return pos
+	}
+	return committed
+}
+
+// waitForMembershipChanges waits briefly for the user's membership changes that
+// the roomserver has already accepted, such as a leave or a kick that a client
+// request has just completed, to reach the sync API. The roomserver and the sync
+// API disagree on whether the user is joined to those rooms until then.
+func (rp *RequestPool) waitForMembershipChanges(ctx context.Context, userID string) {
+	if rp.rsAPI == nil {
+		return
+	}
+	user, err := spec.NewUserID(userID, true)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	rsRooms, err := rp.rsAPI.QueryRoomsForUser(ctx, *user, spec.Join)
+	if err != nil {
+		return
+	}
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	syncRooms, err := snapshot.RoomIDsWithMembership(ctx, userID, spec.Join)
+	snapshot.Rollback() //nolint:errcheck
+	if err != nil {
+		return
+	}
+
+	joined := make(map[string]bool, len(rsRooms))
+	for _, roomID := range rsRooms {
+		joined[roomID.String()] = true
+	}
+	var differing []string
+	for _, roomID := range syncRooms {
+		if !joined[roomID] {
+			differing = append(differing, roomID)
+		}
+		delete(joined, roomID)
+	}
+	for roomID := range joined {
+		differing = append(differing, roomID)
+	}
+
+	for _, roomID := range differing {
+		if ctx.Err() != nil {
+			return
+		}
+		var res roomserverAPI.QueryMembershipForUserResponse
+		if err := rp.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
+			RoomID: roomID,
+			UserID: *user,
+		}, &res); err != nil || res.EventID == "" {
+			continue
+		}
+		syncinternal.WaitForMembershipInTopology(ctx, rp.db, res.EventID)
+	}
 }
