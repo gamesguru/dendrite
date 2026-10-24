@@ -98,6 +98,14 @@ func Setup(
 	rateLimits := httputil.NewRateLimits(&cfg.RateLimiting, ctx)
 	userInteractiveAuth := auth.NewUserInteractive(userAPI, cfg)
 
+	// Synapse-compatible room purge endpoint used by partial-state resync
+	// tooling. Keep the Zendrite-specific POST endpoint as an alias.
+	synapseAdminRouter.Handle("/admin/v1/rooms/{roomID}",
+		httputil.MakeAdminAPI("admin_purge_room", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return AdminPurgeRoom(req, rsAPI)
+		}),
+	).Methods(http.MethodDelete, http.MethodOptions)
+
 	unstableFeatures := map[string]bool{
 		"org.matrix.e2e_cross_signing":  true,
 		"org.matrix.msc2285.stable":     true,
