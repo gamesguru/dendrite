@@ -638,8 +638,13 @@ func (r *Inputer) processRoomEvent(
 		return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 	}
 
-	// Store the event.
-	eventNID, stateAtEvent, err := r.DB.StoreEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
+	// Store the event. An outlier does not extend the room DAG, so it is not
+	// recorded as referencing its prev_events.
+	storeEvent := r.DB.StoreEvent
+	if input.Kind == api.KindOutlier {
+		storeEvent = r.DB.StoreOutlierEvent
+	}
+	eventNID, stateAtEvent, err := storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 	if err != nil {
 		return fmt.Errorf("updater.StoreEvent: %w", err)
 	}
@@ -1234,8 +1239,8 @@ nextAuthEvent:
 			return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 		}
 
-		// Finally, store the event in the database.
-		eventNID, _, err := r.DB.StoreEvent(ctx, authEvent, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
+		// Finally, store the event in the database, as the outlier it is.
+		eventNID, _, err := r.DB.StoreOutlierEvent(ctx, authEvent, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 		if err != nil {
 			return fmt.Errorf("updater.StoreEvent: %w", err)
 		}

@@ -82,6 +82,9 @@ type Database interface {
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	// Stores a matrix room event in the database. Returns the room NID, the state snapshot or an error.
 	StoreEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
+	// StoreOutlierEvent is StoreEvent for an outlier: it does not record the event as
+	// referencing its prev_events.
+	StoreOutlierEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
 	// Look up the state entries for a list of string event IDs
 	// Returns an error if the there is an error talking to the database
 	// Returns a types.MissingEventError if the event IDs aren't in the database.
@@ -332,6 +335,9 @@ type EventDatabase interface {
 		ctx context.Context, roomInfo *types.RoomInfo, eventNID types.EventNID, event gomatrixserverlib.PDU, plResolver state.PowerLevelResolver, querier api.QuerySenderIDAPI,
 	) (gomatrixserverlib.PDU, gomatrixserverlib.PDU, error)
 	StoreEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
+	// StoreOutlierEvent is StoreEvent for an outlier: it does not record the event as
+	// referencing its prev_events.
+	StoreOutlierEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
 }
 
 type ReportedEvents interface {
