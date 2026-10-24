@@ -254,9 +254,13 @@ func (rp *RequestPool) roomMatchesFilterWithSpaces(
 	}
 
 	// Filter by invite status
-	if filter.IsInvite != nil {
+	isInviteFilter := filter.IsInvited
+	if isInviteFilter == nil {
+		isInviteFilter = filter.IsInvite
+	}
+	if isInviteFilter != nil {
 		isInvite := room.Membership == spec.Invite
-		if isInvite != *filter.IsInvite {
+		if isInvite != *isInviteFilter {
 			return false
 		}
 	}

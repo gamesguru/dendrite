@@ -43,6 +43,7 @@ type OutputRoomEventConsumer struct {
 	jetstream    nats.JetStreamContext
 	durable      string
 	db           storage.UserDatabase
+	keyDB        storage.KeyDatabase
 	topic        string
 	pgClient     pushgateway.Client
 	syncProducer *producers.SyncAPI
@@ -58,6 +59,7 @@ func NewOutputRoomEventConsumer(
 	cfg *config.UserAPI,
 	js nats.JetStreamContext,
 	store storage.UserDatabase,
+	keyDB storage.KeyDatabase,
 	pgClient pushgateway.Client,
 	rsAPI rsapi.UserRoomserverAPI,
 	syncProducer *producers.SyncAPI,
@@ -67,6 +69,7 @@ func NewOutputRoomEventConsumer(
 		cfg:       cfg,
 		jetstream: js,
 		db:        store,
+		keyDB:     keyDB,
 		durable:   cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
 		// Consume the syncapi-forwarded topic, not the raw roomserver output -
 		// see producers.PushEventProducer for why.
@@ -491,6 +494,16 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			// for it, including when the room was upgraded on another server.
 			if err = s.copyPushrulesFromPredecessor(ctx, event.RoomID().String(), member); err != nil {
 				log.WithError(err).Errorf("UserAPI: failed to copy push rules from the predecessor of a room")
+			}
+		}
+		if (member.Membership == spec.Leave || member.Membership == spec.Ban) && !s.cfg.Matrix.IsLocalServerName(member.Domain) {
+			var shared rsapi.QueryUsersSharingRoomWithLocalResponse
+			if err := s.rsAPI.QueryUsersSharingRoomWithLocal(ctx, &rsapi.QueryUsersSharingRoomWithLocalRequest{UserIDs: []string{member.UserID}}, &shared); err == nil && len(shared.UserIDs) == 0 {
+				if s.keyDB != nil {
+					if err := s.keyDB.DeleteStaleDeviceLists(ctx, []string{member.UserID}); err != nil {
+						log.WithError(err).Warnf("failed to delete stale device list for %s", member.UserID)
+					}
+				}
 			}
 		}
 	case event.Type() == "m.room.tombstone" && event.StateKeyEquals(""):

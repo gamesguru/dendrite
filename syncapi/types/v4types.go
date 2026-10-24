@@ -225,8 +225,9 @@ type SlidingRoomFilter struct {
 	// Filter to encrypted rooms only
 	IsEncrypted *bool `json:"is_encrypted,omitempty"`
 
-	// Filter to invites only
-	IsInvite *bool `json:"is_invite,omitempty"`
+	// Filter to invites only (MSC3575 legacy was is_invite, MSC4186 renamed to is_invited)
+	IsInvite  *bool `json:"is_invite,omitempty"`
+	IsInvited *bool `json:"is_invited,omitempty"`
 
 	// Include rooms of these types (e.g., "m.space")
 	RoomTypes []string `json:"room_types,omitempty"`

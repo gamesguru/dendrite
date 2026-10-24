@@ -658,7 +658,7 @@
 {"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Messy_room_activity/limit=50"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Messy_room_activity/limit=7"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence"}
-{"Action":"skip","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence/limit=1"}
+{"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence/limit=1"}
 {"Action":"skip","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence/limit=3"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence/limit=50"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/NoDuplicates/Re-join_with_activity_during_absence/limit=7"}

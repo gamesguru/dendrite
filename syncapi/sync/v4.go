@@ -1681,10 +1681,19 @@ func (rp *RequestPool) getRoomsForList(
 	filters *types.SlidingRoomFilter,
 ) ([]RoomWithBumpStamp, error) {
 	// Check if filter explicitly requests only invites
-	if filters != nil && filters.IsInvite != nil && *filters.IsInvite {
+	isInvite := func() *bool {
+		if filters == nil {
+			return nil
+		}
+		if filters.IsInvited != nil {
+			return filters.IsInvited
+		}
+		return filters.IsInvite
+	}()
+	if isInvite != nil && *isInvite {
 		return rp.GetRoomsForUser(ctx, userID, spec.Invite)
 	}
-	if filters != nil && filters.IsInvite != nil && !*filters.IsInvite {
+	if isInvite != nil && !*isInvite {
 		return rp.GetRoomsForUser(ctx, userID, "join")
 	}
 

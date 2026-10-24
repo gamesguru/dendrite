@@ -67,6 +67,15 @@ knownUsersLoop:
 		userID := profile.UserID
 		// get the full profile of the local user
 		localpart, serverName, _ := gomatrixserverlib.SplitID('@', userID)
+		if userID == device.UserID {
+			// Don't include the searching user themselves unless the query explicitly targets their name.
+			// Generic prefixes like "@user" match all users in complement, but shouldn't return self.
+			if !strings.EqualFold(searchString, profile.DisplayName) &&
+				!strings.HasSuffix(strings.ToLower(localpart), strings.ToLower(searchString)) &&
+				!strings.EqualFold(searchString, userID) {
+				continue
+			}
+		}
 		if serverName == localServerName {
 			userReq := &userapi.QuerySearchProfilesRequest{
 				SearchString: localpart,

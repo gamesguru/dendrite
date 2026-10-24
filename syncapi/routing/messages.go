@@ -357,7 +357,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		filtered := streamEvents[:0]
 		for _, ev := range streamEvents {
 			if r.backwardOrdering {
-				if ev.StreamPosition < r.fromStream.PDUPosition {
+				if ev.StreamPosition <= r.fromStream.PDUPosition {
 					filtered = append(filtered, ev)
 				}
 			} else if ev.StreamPosition > r.fromStream.PDUPosition {
@@ -366,11 +366,31 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		}
 		streamEvents = filtered
 	}
+	if r.backwardOrdering && len(streamEvents) > 0 {
+		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
+			for extremityID := range backwardExtremities {
+				tok, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
+				if err != nil {
+					continue
+				}
+				extremityDepth := int64(tok.Depth)
+				if int64(r.from.Depth) >= extremityDepth {
+					filtered := streamEvents[:0]
+					for _, ev := range streamEvents {
+						if int64(ev.Depth()) >= extremityDepth {
+							filtered = append(filtered, ev)
+						}
+					}
+					streamEvents = filtered
+				}
+			}
+		}
+	}
 	end.Decrement()
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".
-	topologyHadEvents := topologyStart != emptyToken
+	topologyHadEvents := topologyStart != emptyToken && len(streamEvents) > 0
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
