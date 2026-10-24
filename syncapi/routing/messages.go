@@ -367,9 +367,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		streamEvents = filtered
 	}
 	if r.backwardOrdering && len(streamEvents) > 0 {
-		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
+		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
 			for extremityID := range backwardExtremities {
-				tok, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
+				tok, err := r.snapshot.EventPositionInTopology(ctx, extremityID)
 				if err != nil {
 					continue
 				}
@@ -377,7 +377,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 				if int64(r.from.Depth) >= extremityDepth {
 					filtered := streamEvents[:0]
 					for _, ev := range streamEvents {
-						if int64(ev.Depth()) >= extremityDepth {
+						if ev.Depth() >= extremityDepth {
 							filtered = append(filtered, ev)
 						}
 					}

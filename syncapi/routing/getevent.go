@@ -75,7 +75,7 @@ func GetEvent(
 		if ctx.Err() != nil {
 			break
 		}
-		time.Sleep(50 * time.Millisecond) //nolint:forbidigo
+		time.Sleep(50 * time.Millisecond)
 		events, err = db.EventsWithDevice(ctx, device, []string{eventID}, rsAPI)
 		if err != nil {
 			logger.WithError(err).Error("GetEvent: syncDB.Events failed")

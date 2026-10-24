@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	// maxVerifyKeys is the MSC4499 per-response ceiling on active keys.
+	// The maxVerifyKeys constant is the MSC4499 per-response ceiling on active keys.
 	maxVerifyKeys = 50
-	// maxExpiredTSSkew is the MSC4499 allowed clock skew for expired_ts.
+	// The maxExpiredTSSkew constant is the MSC4499 allowed clock skew for expired_ts.
 	maxExpiredTSSkew = 5 * time.Minute
 )
 
