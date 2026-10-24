@@ -292,7 +292,9 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 			// first time, so send them that user's current device list. Remote
 			// joins are not answered with our users' devices: those hosts ask for
 			// them, and unsolicited updates would reach servers we only believe
-			// to be in the room.
+			// to be in the room. While the room has partial state the joined hosts
+			// may include servers that have left; they are sent no more than the
+			// key change consumer sends them for any device change of the user.
 			joiner, joinerErr := s.rsAPI.QueryUserIDForSender(s.ctx, ore.Event.RoomID(), spec.SenderID(*ore.Event.StateKey()))
 			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) {
 				deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
