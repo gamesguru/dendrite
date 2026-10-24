@@ -349,7 +349,9 @@ func (r *Inputer) processRoomEvent(
 
 		// An event whose auth events include a rejected event is rejected as a
 		// side effect, even if the remaining auth events would allow it.
-		if !isRejected {
+		// During partial state (MSC3706), an auth event may have been rejected
+		// only because we lacked the state to validate it, so we do not reject here.
+		if !isRejected && !hasPartialState {
 			for _, knownEvent := range knownEvents {
 				if knownEvent.Rejected {
 					isRejected = true
@@ -965,6 +967,7 @@ func (r *Inputer) processStateBefore(
 	// members, so complete it with the auth events the event cites, where it has no
 	// entry of its own. Its own entries stand, so that a ban or a leave still applies.
 	stateForAuth := stateBeforeEvent
+	var authEventPDUs []gomatrixserverlib.PDU
 	if isPartialState {
 		if authEventIDs := event.AuthEventIDs(); len(authEventIDs) > 0 {
 			authStateEvents, authErr := r.DB.EventsFromIDs(ctx, roomInfo, authEventIDs)
@@ -972,7 +975,7 @@ func (r *Inputer) processStateBefore(
 				// Without the auth events, use the local state only.
 				logrus.WithError(authErr).WithField("event_id", event.EventID()).Debug("Could not load the auth events of an event in a partial state room")
 			} else {
-				authEventPDUs := make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
+				authEventPDUs = make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
 				for _, authEvent := range authStateEvents {
 					authEventPDUs = append(authEventPDUs, authEvent.PDU)
 				}

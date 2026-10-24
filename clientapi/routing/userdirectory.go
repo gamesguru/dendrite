@@ -65,9 +65,6 @@ knownUsersLoop:
 			break
 		}
 		userID := profile.UserID
-		if userID == device.UserID {
-			continue
-		}
 		// get the full profile of the local user
 		localpart, serverName, _ := gomatrixserverlib.SplitID('@', userID)
 		if serverName == localServerName {
