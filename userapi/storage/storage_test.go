@@ -1136,7 +1136,7 @@ func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
 		_, exists := global["m.push_rules"]
 		assert.False(t, exists, "reading absent push rules must not create account data")
 
-		for _, payload := range []string{`{}`, `null`, `{"global":null}`, `{"custom":true}`} {
+		for _, payload := range []string{`{}`, `{"global":null}`, `{"custom":true}`} {
 			assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(payload)))
 			data, err = db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
 			assert.NoError(t, err)
@@ -1145,6 +1145,12 @@ func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, payload, string(global["m.push_rules"]))
 		}
+		// JSON null removes an account data event instead of storing a literal
+		// null payload.
+		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(`null`)))
+		data, err = db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
+		assert.NoError(t, err)
+		assert.Empty(t, data)
 	})
 }
 

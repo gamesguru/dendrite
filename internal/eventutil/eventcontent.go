@@ -6,7 +6,11 @@
 
 package eventutil
 
-import "github.com/gamesguru/gomatrixserverlib"
+import (
+	"encoding/json"
+
+	"github.com/gamesguru/gomatrixserverlib"
+)
 
 // NameContent is the event content for https://matrix.org/docs/spec/client_server/r0.2.0.html#m-room-name
 type NameContent struct {
@@ -16,6 +20,26 @@ type NameContent struct {
 // TopicContent is the event content for https://matrix.org/docs/spec/client_server/r0.2.0.html#m-room-topic
 type TopicContent struct {
 	Topic string `json:"topic"`
+}
+
+type topicText struct {
+	Body string `json:"body"`
+}
+
+type richTopic struct {
+	Text []topicText `json:"m.text"`
+}
+
+// MarshalJSON includes the plain text topic in the extensible rich topic
+// representation as well as the legacy field.
+func (c TopicContent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Topic string    `json:"topic"`
+		Rich  richTopic `json:"m.topic"`
+	}{
+		Topic: c.Topic,
+		Rich:  richTopic{Text: []topicText{{Body: c.Topic}}},
+	})
 }
 
 // GuestAccessContent is the event content for https://matrix.org/docs/spec/client_server/r0.2.0.html#m-room-guest-access

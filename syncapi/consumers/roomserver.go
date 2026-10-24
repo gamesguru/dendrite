@@ -113,6 +113,9 @@ func (s *OutputRoomEventConsumer) SetMetadataQueuer(queuer internal.RoomMetadata
 // onMessage is called when the sync server receives a new event from the room server output log.
 // It is not safe for this function to be called from multiple goroutines, or else the
 // sync stream position may race and be incorrectly calculated.
+// It expects a nonempty batch and processes its first message. The return value
+// tells the consumer whether to acknowledge it; false requests redelivery,
+// including after an invite write, push publication, or retirement fails.
 func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	// Parse out the event JSON
@@ -170,18 +173,19 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		err = s.onOldRoomEvent(s.ctx, *output.OldRoomEvent) //nolint:contextcheck
 	case api.OutputTypeNewInviteEvent:
 		// Publish only once the invite is persisted, so the device is never
-		// woken for an invite that /sync cannot yet return. A failed publish is
-		// not NAKed here: AddInviteEvent has no ON CONFLICT, so the redelivery
-		// would insert a duplicate row and re-advance the invite stream,
-		// re-delivering the invite to the client on every /sync.
-		if s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) == nil { //nolint:contextcheck
-			_ = s.producePushEvent(msg)
+		// woken for an invite that /sync cannot yet return. AddInviteEvent is
+		// idempotent, so NAKing a failed write or publish and redelivering it
+		// cannot insert a duplicate invite.
+		active, inviteErr := s.onNewInviteEvent(s.ctx, *output.NewInviteEvent) //nolint:contextcheck
+		err = inviteErr
+		if err == nil && active {
+			err = s.producePushEvent(msg)
 		}
 	case api.OutputTypeRetireInviteEvent:
-		s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
+		err = s.onRetireInviteEvent(s.ctx, *output.RetireInviteEvent) //nolint:contextcheck
 	case api.OutputTypeNewKnockEvent:
 		// Knocks are stored like invites but never pushed: the user sent it.
-		_ = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
+		_, err = s.addPendingMembershipEvent(s.ctx, output.NewKnockEvent.Event) //nolint:contextcheck
 	case api.OutputTypeNewPeek:
 		s.onNewPeek(s.ctx, *output.NewPeek) //nolint:contextcheck
 	case api.OutputTypeRetirePeek:
@@ -454,6 +458,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
 	}
+	s.cleanKnownBackwardExtremities(ctx, ev)
 	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
 		log.WithFields(log.Fields{
 			"room_id":        ev.RoomID().String(),
@@ -544,6 +549,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		}).Panicf("roomserver output log: write old event failure")
 		return nil
 	}
+	s.cleanKnownBackwardExtremities(ctx, ev)
 
 	// Old state events are kept from sync, so they are not delivered as
 	// sticky events either.
@@ -653,12 +659,11 @@ func (s *OutputRoomEventConsumer) notifyJoinedPeeks(ctx context.Context, ev *rst
 	return sp, nil
 }
 
-// onNewInviteEvent returns nil once the invite is durably stored, or when there
-// is nothing to store because the invite is not for a local user. The error is
-// used to gate the push publication, not to NAK the message.
+// onNewInviteEvent reports whether the invite remains active after it is
+// durably stored. The caller NAKs on error; storing an invite is idempotent.
 func (s *OutputRoomEventConsumer) onNewInviteEvent(
 	ctx context.Context, msg api.OutputNewInviteEvent,
-) error {
+) (bool, error) {
 	return s.addPendingMembershipEvent(ctx, msg.Event)
 }
 
@@ -666,25 +671,25 @@ func (s *OutputRoomEventConsumer) onNewInviteEvent(
 // invites table, which backs both rooms.invite and rooms.knock in /sync.
 func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 	ctx context.Context, event *rstypes.HeaderedEvent,
-) error {
+) (bool, error) {
 	if event.StateKey() == nil {
-		return nil
+		return false, nil
 	}
 
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), spec.SenderID(*event.StateKey()))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if userID == nil {
-		return nil
+		return false, nil
 	}
 	if !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
-		return nil
+		return false, nil
 	}
 
 	event.UserID = *userID
 
-	pduPos, err := s.db.AddInviteEvent(ctx, event)
+	pduPos, active, err := s.db.AddInviteEvent(ctx, event)
 	if err != nil {
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
@@ -693,38 +698,93 @@ func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 			"pdupos":     pduPos,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: write invite failure")
-		return err
+		return false, err
 	}
 
 	s.inviteStream.Advance(pduPos)
 	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, *event.StateKey())
-	return nil
+	return active, nil
 }
 
+// errInviteNotStored marks a retirement that arrived before the invite it
+// retires. The consumer NAKs it so it can be applied once the invite is
+// stored; otherwise a later invite redelivery could resurrect the invite.
+var errInviteNotStored = errors.New("invite not stored yet")
+
+// onRetireInviteEvent retires an invite and, unless it was accepted, advances
+// the invite stream and notifies the local target. Retries reuse the stored
+// retirement position. A missing invite for a local target returns
+// errInviteNotStored; a missing invite with no resolved local target is ignored.
+// Database and sender lookup errors are returned for retry, even when the
+// retirement has already been stored.
 func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 	ctx context.Context, msg api.OutputRetireInviteEvent,
-) {
+) error {
+	// Retire the row before resolving the user for the notification. If the
+	// lookup fails, the row is already retired and a redelivery returns the
+	// same stored position, so the notification can be retried without
+	// advancing the invite stream again.
 	pduPos, err := s.db.RetireInviteEvent(ctx, msg.EventID)
-	// It's possible we just haven't heard of this invite yet, so
-	// we should not panic if we try to retire it.
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		// panic rather than continue with an inconsistent database
+	if errors.Is(err, sql.ErrNoRows) {
+		// There is no stored invite. If the invitee is not local there is
+		// nothing to retire; otherwise the invite may still be in flight and
+		// this retirement must be retried. The consumer NAKs with a delay and
+		// keeps fetching, so the later invite can still be processed.
+		userID, lookupErr := s.inviteTargetUserID(ctx, msg)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if userID == nil || !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
+			return nil
+		}
+		log.WithFields(log.Fields{
+			"event_id": msg.EventID,
+		}).Debug("roomserver output log: invite not stored yet, retrying retirement")
+		return errInviteNotStored
+	}
+	if err != nil {
+		// NAK so the retirement is not lost. Retiring is idempotent and returns
+		// the persisted position when it is redelivered after a committed
+		// retirement.
 		log.WithFields(log.Fields{
 			"event_id":   msg.EventID,
 			log.ErrorKey: err,
 		}).Errorf("roomserver output log: remove invite failure")
-		return
+		return err
 	}
 
 	// Only notify clients about retired invite events, if the user didn't accept the invite.
 	// The PDU stream will also receive an event about accepting the invitation, so there should
 	// be a "smooth" transition from invite -> join, and not invite -> leave -> join
 	if msg.Membership == spec.Join {
-		return
+		return nil
 	}
 
 	// Notify any active sync requests that the invite has been retired.
 	s.inviteStream.Advance(pduPos)
+	userID, err := s.inviteTargetUserID(ctx, msg)
+	if err != nil {
+		// The retirement is committed. A redelivery returns the same position
+		// and retries only the notification lookup.
+		return err
+	}
+	if userID == nil || !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
+		log.WithFields(log.Fields{
+			"event_id":  msg.EventID,
+			"sender_id": msg.TargetSenderID,
+		}).Errorf("failed to find local userID for sender")
+		return nil
+	}
+	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, userID.String())
+	return nil
+}
+
+// inviteTargetUserID resolves the target sender of a retire output event to a
+// user ID. An invalid room ID or an unresolved sender returns nil, nil.
+// Sender lookup errors are propagated to the caller.
+func (s *OutputRoomEventConsumer) inviteTargetUserID(
+	ctx context.Context, msg api.OutputRetireInviteEvent,
+) (*spec.UserID, error) {
 	validRoomID, err := spec.NewRoomID(msg.RoomID)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -732,18 +792,18 @@ func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 			"room_id":    msg.RoomID,
 			log.ErrorKey: err,
 		}).Errorf("roomID is invalid")
-		return
+		return nil, nil
 	}
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, *validRoomID, msg.TargetSenderID)
-	if err != nil || userID == nil {
+	if err != nil {
 		log.WithFields(log.Fields{
 			"event_id":   msg.EventID,
 			"sender_id":  msg.TargetSenderID,
 			log.ErrorKey: err,
 		}).Errorf("failed to find userID for sender")
-		return
+		return nil, err
 	}
-	s.notifier.OnNewInvite(types.StreamingToken{InvitePosition: pduPos}, userID.String())
+	return userID, nil
 }
 
 func (s *OutputRoomEventConsumer) onNewPeek(
@@ -1117,4 +1177,23 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 		}
 	}
 	return nil
+}
+
+// cleanKnownBackwardExtremities checks if any prev_events of ev that were missing from
+// syncapi OutputEvents are actually known to roomserver (e.g. rejected events or outliers).
+// If roomserver knows them, the DAG history has no missing gap and the backward extremity
+// marker for that prev_event is removed.
+func (s *OutputRoomEventConsumer) cleanKnownBackwardExtremities(ctx context.Context, ev *rstypes.HeaderedEvent) {
+	if s.rsAPI == nil || len(ev.PrevEventIDs()) == 0 {
+		return
+	}
+	for _, prevID := range ev.PrevEventIDs() {
+		var queryRes api.QueryEventsByIDResponse
+		if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+			RoomID:   ev.RoomID().String(),
+			EventIDs: []string{prevID},
+		}, &queryRes); err == nil && len(queryRes.Events) > 0 {
+			_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
+		}
+	}
 }

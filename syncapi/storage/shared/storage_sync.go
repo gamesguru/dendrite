@@ -44,6 +44,13 @@ func (d *DatabaseTransaction) MaxStreamPositionForPDUs(ctx context.Context) (typ
 	if err != nil {
 		return 0, fmt.Errorf("d.OutputEvents.SelectMaxEventID: %w", err)
 	}
+	markerID, err := d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID(ctx, d.txn)
+	if err != nil {
+		return 0, fmt.Errorf("d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID: %w", err)
+	}
+	if markerID > id {
+		id = markerID
+	}
 	return types.StreamPosition(id), nil
 }
 
@@ -221,6 +228,18 @@ func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]
 	// We don't include a device here as we only include transaction IDs in
 	// incremental syncs.
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
+}
+
+// EventsWithDevice looks up events and annotates the device's transaction ID
+// on events the device sent, as required by GET /rooms/{roomId}/event/{eventId}.
+func (d *DatabaseTransaction) EventsWithDevice(
+	ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, d.txn, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, streamEvents, rsAPI), nil
 }
 
 func (d *DatabaseTransaction) AllJoinedUsersInRooms(ctx context.Context) (map[string][]string, error) {

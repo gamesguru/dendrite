@@ -72,11 +72,27 @@ func main() {
 			},
 		}
 		if *defaultsForCI {
+			// Exercise MSC4140 in Complement. The default zero delay disables
+			// scheduling, while the suite schedules events up to one hour ahead.
+			cfg.ClientAPI.DelayedEvents.MaxDelay = 24 * time.Hour //nolint:mnd
+			// Complement exercises the media URL preview endpoint.
+			cfg.MediaAPI.URLPreview.Enabled = true
+			// Complement's preview fixture is served from the Docker bridge
+			// network. Keep this exception limited to the generated test config.
+			cfg.MediaAPI.URLPreview.IPRangeWhitelist = []string{"172.16.0.0/12"}
+			// Complement covers federation presence and sliding-sync set_presence.
+			cfg.Global.Presence.EnableInbound = true
+			cfg.Global.Presence.EnableOutbound = true
 			cfg.AppServiceAPI.DisableTLSValidation = true
 			// Complement mounts one registration file per application service
 			// into this directory.
 			cfg.AppServiceAPI.ConfigFiles = []string{"/complement/appservice/"}
 			cfg.ClientAPI.RateLimiting.Enabled = false
+			// The delayed-event management endpoints have their own limiter. The
+			// MSC4140 Complement suite deliberately makes bursts of lookup and
+			// management requests, so it must be disabled alongside the general
+			// client rate limiter.
+			cfg.ClientAPI.DelayedEvents.ManagementRateLimiting.Enabled = false
 			// Test suites register users with passwords such as "secret".
 			cfg.ClientAPI.MinPasswordLength = 1
 			cfg.FederationAPI.DisableTLSValidation = false

@@ -47,7 +47,7 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 	if err != nil {
 		return nil, err
 	}
-	invites, err := NewPostgresInvitesTable(d.db)
+	invites, err := NewPostgresInvitesTable(ctx, d.db)
 	if err != nil {
 		return nil, err
 	}

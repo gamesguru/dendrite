@@ -338,12 +338,26 @@ func (d *Database) UpdateNotaryKeys(
 		}
 		// update the metadata for the keys
 		for keyID := range serverKeys.OldVerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				continue
+			}
 			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
 				return err
 			}
 		}
 		for keyID := range serverKeys.VerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				continue
+			}
 			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
 				return err
@@ -353,6 +367,43 @@ func (d *Database) UpdateNotaryKeys(
 		// clean up old responses
 		return d.NotaryServerKeysMetadata.DeleteOldJSONResponses(ctx, txn)
 	})
+}
+
+// notaryKeyConflicts reports whether an existing notary response binds this
+// server/key ID pair to a different public key. A key ID is a permanent
+// identity: a later response cannot replace the first value seen for it.
+func (d *Database) notaryKeyConflicts(
+	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
+	keyID gomatrixserverlib.KeyID, candidate gomatrixserverlib.ServerKeys,
+) (bool, error) {
+	existing, err := d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, []gomatrixserverlib.KeyID{keyID})
+	if err != nil {
+		return false, err
+	}
+	if len(existing) == 0 {
+		return false, nil
+	}
+	newKey, found := candidate.VerifyKeys[keyID]
+	if !found {
+		oldKey, oldFound := candidate.OldVerifyKeys[keyID]
+		if !oldFound {
+			return false, nil
+		}
+		newKey = oldKey.VerifyKey
+	}
+	for _, response := range existing {
+		if oldKey, ok := response.VerifyKeys[keyID]; ok {
+			if string(oldKey.Key) != string(newKey.Key) {
+				return true, nil
+			}
+		}
+		if oldKey, ok := response.OldVerifyKeys[keyID]; ok {
+			if string(oldKey.Key) != string(newKey.Key) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (d *Database) GetNotaryKeys(

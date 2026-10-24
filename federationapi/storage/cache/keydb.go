@@ -75,8 +75,23 @@ func (d *KeyDatabase) StoreKeys(
 	ctx context.Context,
 	keyMap map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult,
 ) error {
-	for req, res := range keyMap {
+	if err := d.inner.StoreKeys(ctx, keyMap); err != nil {
+		return err
+	}
+	// The persistent database may enforce first-seen key bindings and ignore
+	// a later response which reuses a key ID for a different public key. Cache
+	// the authoritative value from storage so the in-memory cache cannot
+	// temporarily override that binding.
+	requests := make(map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp, len(keyMap))
+	for req := range keyMap {
+		requests[req] = 0
+	}
+	stored, err := d.inner.FetchKeys(ctx, requests)
+	if err != nil {
+		return err
+	}
+	for req, res := range stored {
 		d.cache.StoreServerKey(req, res)
 	}
-	return d.inner.StoreKeys(ctx, keyMap)
+	return nil
 }

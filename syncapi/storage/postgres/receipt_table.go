@@ -9,6 +9,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -48,6 +49,10 @@ const upsertReceipt = "" +
 	" END, event_id = EXCLUDED.event_id, receipt_ts = EXCLUDED.receipt_ts" +
 	" RETURNING id"
 
+const selectUserReceiptEventIDSQL = "" +
+	"SELECT event_id FROM syncapi_receipts" +
+	" WHERE room_id = $1 AND receipt_type = $2 AND user_id = $3 AND thread_id = $4"
+
 const selectRoomReceipts = "" +
 	"SELECT id, room_id, receipt_type, user_id, event_id, thread_id, receipt_ts" +
 	" FROM syncapi_receipts" +
@@ -86,11 +91,12 @@ const deleteConnectionReceiptsForRoomSQL = "" +
 	"DELETE FROM syncapi_sliding_sync_connection_receipts WHERE connection_key = $1 AND room_id = $2"
 
 type receiptStatements struct {
-	db                 *sql.DB
-	upsertReceipt      *sql.Stmt
-	selectRoomReceipts *sql.Stmt
-	selectMaxReceiptID *sql.Stmt
-	purgeReceiptsStmt  *sql.Stmt
+	db                       *sql.DB
+	upsertReceipt            *sql.Stmt
+	selectRoomReceipts       *sql.Stmt
+	selectUserReceiptEventID *sql.Stmt
+	selectMaxReceiptID       *sql.Stmt
+	purgeReceiptsStmt        *sql.Stmt
 	// New statements for per-connection tracking
 	selectLatestUserReceipts        *sql.Stmt
 	selectConnectionReceipts        *sql.Stmt
@@ -130,6 +136,7 @@ func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 	return r, sqlutil.StatementList{
 		{&r.upsertReceipt, upsertReceipt},
 		{&r.selectRoomReceipts, selectRoomReceipts},
+		{&r.selectUserReceiptEventID, selectUserReceiptEventIDSQL},
 		{&r.selectMaxReceiptID, selectMaxReceiptIDSQL},
 		{&r.purgeReceiptsStmt, purgeReceiptsSQL},
 		{&r.selectLatestUserReceipts, selectLatestUserReceiptsSQL},
@@ -144,6 +151,16 @@ func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, room
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
 	err = stmt.QueryRowContext(ctx, roomId, receiptType, userId, eventId, threadID, timestamp).Scan(&pos)
 	return
+}
+
+// SelectUserReceiptEventID returns the event the user's receipt is at, or "" if there is none.
+func (r *receiptStatements) SelectUserReceiptEventID(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, threadID string) (string, error) {
+	var eventID string
+	err := sqlutil.TxStmt(txn, r.selectUserReceiptEventID).QueryRowContext(ctx, roomID, receiptType, userID, threadID).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return eventID, err
 }
 
 func (r *receiptStatements) SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error) {

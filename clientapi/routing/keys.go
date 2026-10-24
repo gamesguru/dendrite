@@ -36,6 +36,24 @@ func UploadKeys(req *http.Request, keyAPI api.ClientKeyAPI, device *api.Device) 
 		UserID:   device.UserID,
 	}
 	if r.DeviceKeys != nil {
+		var deviceKeys struct {
+			UserID     string                     `json:"user_id"`
+			DeviceID   string                     `json:"device_id"`
+			Algorithms []string                   `json:"algorithms"`
+			Keys       map[string]json.RawMessage `json:"keys"`
+			Signatures map[string]json.RawMessage `json:"signatures"`
+		}
+		// signatures may legitimately be an empty object (Complement's
+		// device-list tests upload unsigned keys), but a device key still
+		// needs its identity, algorithms and keys.
+		if err := json.Unmarshal(r.DeviceKeys, &deviceKeys); err != nil ||
+			deviceKeys.UserID == "" || deviceKeys.DeviceID == "" ||
+			len(deviceKeys.Algorithms) == 0 || len(deviceKeys.Keys) == 0 {
+			return util.JSONResponse{
+				Code: http.StatusBadRequest,
+				JSON: spec.BadJSON("device_keys must include user_id, device_id, algorithms, and keys"),
+			}
+		}
 		uploadReq.DeviceKeys = []api.DeviceKeys{
 			{
 				DeviceID: device.ID,

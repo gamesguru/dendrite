@@ -47,9 +47,9 @@ COMPLEMENT_PACKAGES ?= $(or $(and $(COMPLEMENT_RUN),$(strip $(COMPLEMENT_MATCHIN
 COMPLEMENT_PARTIAL_RUN = $(if $(COMPLEMENT_RUN),1,$(if $(filter-out $(COMPLEMENT_ALL_PACKAGES),$(COMPLEMENT_PACKAGES)),1,0))
 # Set COMPLEMENT_SKIP_BUILD=1 to reuse the image that is already built.
 # COMPLEMENT_RUN selects tests by regex (go test -run). Naming tests explicitly
-# also drops the dendrite_blacklist tag, which excludes packages such as msc3902.
+# also drops the zendrite_blacklist tag, which excludes packages such as msc3902.
 COMPLEMENT_RUN ?=
-COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,dendrite_blacklist)
+COMPLEMENT_TAGS ?= $(if $(COMPLEMENT_RUN),,zendrite_blacklist)
 # go test's default per-package timeout is 10m; a package that deploys many
 # containers serially (e.g. csapi) can legitimately take longer than that and
 # gets killed mid-test, which looks like a hang but isn't. Give it more room.
@@ -87,26 +87,18 @@ cov: ## Run library package tests with coverage and print a summary
 	DENDRITE_TEST_SKIP_NODB=$(DENDRITE_TEST_SKIP_NODB) $(GO) test -covermode=atomic -coverpkg=./... -coverprofile=$(COVERPROFILE) $(LIBPKGS)
 	$(GO) tool cover -func=$(COVERPROFILE)
 
+LINT_DIRS_GO ?= $(shell git diff --name-only $(DIFF_BASE) -- '*.go' | xargs -r dirname | sort -u | sed 's#^\.$$#./#; s#^[^.].*#./&#')
+
 .PHONY: lint
-lint: ## Run vet, staticcheck, and golangci-lint; use `make lint diff=1` for changed packages only
-	set -euo pipefail; \
-	if [ -n "$(strip $(diff))" ]; then \
-		dirs="$$(git diff --name-only $(DIFF_BASE) -- '*.go' \
-			| xargs -r dirname \
-			| sort -u \
-			| sed 's#^\.$$#./#; s#^[^.].*#./&#')"; \
-		if [ -z "$$dirs" ]; then \
-			echo "No changed Go packages against $(DIFF_BASE)"; \
-			exit 0; \
-		fi; \
-		$(GO) vet $(VETFLAGS) $$dirs; \
-		$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $$dirs; \
-		$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $$dirs; \
-	else \
-		$(GO) vet $(VETFLAGS) $(PKGS); \
-		$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS); \
-		$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $(PKGS); \
-	fi
+lint: ## Run vet, staticcheck, and golangci-lint
+	# check that LINT_DIRS_GO is set
+	@test -n "${LINT_DIRS_GO}" || echo "Empty \$LINT_DIRS_GO: ${LINT_DIRS_GO}"
+	# ~~~~ go vet        ~~~~
+	$(GO) vet $(VETFLAGS) $(LINT_DIRS_GO)
+	# ~~~~ golang-ci     ~~~~
+	$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $(LINT_DIRS_GO)
+	# ~~~~ staticcheck   ~~~~
+	$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $(LINT_DIRS_GO)
 
 .PHONY: build
 build: ## Build all packages
@@ -172,7 +164,7 @@ complement-run: ## Run Complement, building the image first
 	if [ $$result_status -ne 0 ]; then echo "Failed to process Complement results" >&2; exit $$result_status; fi; \
 	failed_records=$$(jq -sc '[.[] | select(.Action == "fail" and (.Test | type == "string"))] | length' "$$run_results"); \
 	failed_leaves=$$(jq -sc '([.[] | select(.Action == "fail" and (.Test | type == "string"))]) as $$f | [$$f[] as $$x | select([$$f[] | select(.Test | startswith($$x.Test + "/"))] | length == 0)] | length' "$$run_results"); \
-	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$run_logs"); \
+	failed_packages=$$(jq -sc '[.[] | select(.Action == "fail" and .Test == null)] | length' "$$logs"); \
 	echo "Complement: $$failed_leaves failed leaf tests ($$failed_records failing test records, $$failed_packages failed packages)"; \
 	echo "Results: $$results"; echo "Full log: $$logs"; \
 	rm -f "$$run_results"; \

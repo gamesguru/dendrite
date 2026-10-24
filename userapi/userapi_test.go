@@ -641,7 +641,7 @@ func TestDeviceIDReuse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Do the same request again, we expect a different sessionID
+		// Do the same request again, we expect the sessionID to be preserved
 		res2 := api.PerformDeviceCreationResponse{}
 		// Set NoDeviceListUpdate to false, to verify we don't send device list updates when
 		// reusing the same device ID
@@ -651,8 +651,8 @@ func TestDeviceIDReuse(t *testing.T) {
 			t.Fatalf("expected no error, but got: %v", err)
 		}
 
-		if res2.Device.SessionID == res.Device.SessionID {
-			t.Fatalf("expected a different session ID, but they are the same")
+		if res2.Device.SessionID != res.Device.SessionID {
+			t.Fatalf("expected the same session ID, but got different: %d vs %d", res2.Device.SessionID, res.Device.SessionID)
 		}
 
 		publisher.callCount.Range(func(key, value any) bool {

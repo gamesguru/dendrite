@@ -109,7 +109,7 @@ func sendInviteV2(t *testing.T, room *test.Room, invite *rstypes.HeaderedEvent, 
 	roomID, err := spec.NewRoomID(room.ID)
 	require.NoError(t, err)
 	rsAPI = &inviteRoomserverAPI{}
-	res := routing.InviteV2(httpReq, &req, *roomID, invite.EventID(), cfg, rsAPI, &test.NopJSONVerifier{})
+	res := routing.InviteV2(httpReq, &req, *roomID, invite.EventID(), cfg, rsAPI, nil, &test.NopJSONVerifier{})
 	body, err = json.Marshal(res.JSON)
 	require.NoError(t, err)
 	return rsAPI, res.Code, body

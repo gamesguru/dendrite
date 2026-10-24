@@ -166,7 +166,11 @@ func eventRelationshipHandler(db Database, rsAPI roomserver.RoomserverInternalAP
 			rsAPI:              rsAPI,
 			fsAPI:              fsAPI,
 			isFederatedRequest: false,
-			db:                 db,
+			// Outgoing federation requests are signed as this server. For
+			// client requests the origin is not supplied by a request, so use
+			// the requesting user's domain (the user is local to this server).
+			serverName: userID.Domain(),
+			db:         db,
 		}
 		res, resErr := rc.process() //nolint:contextcheck
 		if resErr != nil {
@@ -259,6 +263,7 @@ func (rc *reqCtx) process() (*MSC2836EventRelationshipsResponse, *util.JSONRespo
 		}
 	}
 	rc.roomVersion = event.Version()
+	_ = indexEvent(rc.ctx, rc.db, event)
 
 	// Retrieve the event. Add it to response array.
 	returnEvents = append(returnEvents, event)
@@ -448,6 +453,7 @@ func walkThread(
 		ctx: ctx,
 		req: rc.req,
 		db:  db,
+		rc:  rc,
 		fn: func(wi *walkInfo) bool { //nolint:contextcheck
 			// If already processed event, skip.
 			if included[wi.EventID] {
@@ -617,7 +623,7 @@ func (rc *reqCtx) lookForEvent(eventID string) *types.HeaderedEvent {
 			}
 		}
 	}
-	if rc.req.RoomID == event.RoomID().String() {
+	if event != nil && rc.req.RoomID == event.RoomID().String() {
 		return event
 	}
 	return nil
@@ -771,6 +777,7 @@ type walker struct {
 	ctx context.Context
 	req *EventRelationshipRequest
 	db  Database
+	rc  *reqCtx
 	fn  func(wi *walkInfo) bool // callback invoked for each event walked, return true to terminate the walk
 }
 
@@ -865,6 +872,17 @@ func (w *walker) childrenForParent(eventID string) ([]eventInfo, error) {
 	}
 	if ei != nil {
 		return []eventInfo{*ei}, nil
+	}
+	// If the relationship hasn't been indexed in w.db yet (e.g. JetStream consumer lag),
+	// check if the event exists in the roomserver and index it on-demand.
+	if w.rc != nil {
+		if ev := w.rc.getLocalEvent(w.rc.req.RoomID, eventID); ev != nil {
+			if err := indexEvent(w.ctx, w.db, ev); err == nil {
+				if ei, err = w.db.ParentForChild(w.ctx, eventID, constRelType); err == nil && ei != nil {
+					return []eventInfo{*ei}, nil
+				}
+			}
+		}
 	}
 	return nil, nil
 }

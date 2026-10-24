@@ -17,6 +17,8 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
+const requiredStateTupleLength = 2
+
 // SlidingSyncStreamToken represents a position in the sliding sync stream.
 // It combines a per-connection position with Zendrite's existing stream token.
 // Format: "{connection_position}/{stream_token}"
@@ -165,14 +167,47 @@ func (r *RequiredStateConfig) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	// Not an array, try as object with explicit fields
-	type Alias RequiredStateConfig
-	aux := &struct {
-		*Alias
-	}{
-		Alias: (*Alias)(r),
+	// The MSC4186 API uses objects with `type` and `state_key`; retain support
+	// for the tuple shorthand used by older clients and internal callers.
+	var raw struct {
+		Include     []json.RawMessage `json:"include"`
+		Exclude     []json.RawMessage `json:"exclude"`
+		LazyMembers bool              `json:"lazy_members"`
 	}
-	return json.Unmarshal(data, aux)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	parse := func(items []json.RawMessage) ([][]string, error) {
+		pairs := make([][]string, 0, len(items))
+		for _, item := range items {
+			var pair []string
+			if err := json.Unmarshal(item, &pair); err == nil {
+				if len(pair) != requiredStateTupleLength {
+					return nil, fmt.Errorf("required state tuple must have two elements")
+				}
+				pairs = append(pairs, pair)
+				continue
+			}
+			var object struct {
+				Type     string `json:"type"`
+				StateKey string `json:"state_key"`
+			}
+			if err := json.Unmarshal(item, &object); err != nil {
+				return nil, err
+			}
+			pairs = append(pairs, []string{object.Type, object.StateKey})
+		}
+		return pairs, nil
+	}
+	var err error
+	if r.Include, err = parse(raw.Include); err != nil {
+		return fmt.Errorf("parse required_state.include: %w", err)
+	}
+	if r.Exclude, err = parse(raw.Exclude); err != nil {
+		return fmt.Errorf("parse required_state.exclude: %w", err)
+	}
+	r.LazyMembers = raw.LazyMembers
+	return nil
 }
 
 // SlidingRoomFilter contains criteria for filtering rooms in a list.
@@ -190,8 +225,9 @@ type SlidingRoomFilter struct {
 	// Filter to encrypted rooms only
 	IsEncrypted *bool `json:"is_encrypted,omitempty"`
 
-	// Filter to invites only
-	IsInvite *bool `json:"is_invite,omitempty"`
+	// Filter to invites only (MSC3575 legacy was is_invite, MSC4186 renamed to is_invited)
+	IsInvite  *bool `json:"is_invite,omitempty"`
+	IsInvited *bool `json:"is_invited,omitempty"`
 
 	// Include rooms of these types (e.g., "m.space")
 	RoomTypes []string `json:"room_types,omitempty"`
@@ -244,6 +280,15 @@ type SlidingList struct {
 	// window. Extensions that cover every room the client is interested in,
 	// such as sticky events, read it.
 	MatchedRoomIDs []string `json:"-"`
+
+	// WindowRoomIDs holds the room IDs in the current sliding window. It is
+	// used internally to populate room data and the room's `lists` field even
+	// when the list itself did not change and therefore has no operations.
+	WindowRoomIDs []string `json:"-"`
+
+	// RemovedRoomIDs holds rooms from the prior window that left it. They are
+	// candidates for a one-time leave or ban update in room data.
+	RemovedRoomIDs []string `json:"-"`
 }
 
 // SlidingOperation describes a change to a room list.
@@ -263,11 +308,18 @@ type SlidingOperation struct {
 
 // SlidingRoomData represents room data in the response.
 type SlidingRoomData struct {
+	// Current membership of the syncing user in this room.
+	Membership string `json:"membership,omitempty"`
+	// Lists that currently include this room. Always present so a client can
+	// tell that a room has moved out of every list window.
+	Lists []string `json:"lists"`
+
 	// Computed room name (from m.room.name or heroes)
 	Name string `json:"name,omitempty"`
 
 	// Room avatar URL
 	AvatarURL string `json:"avatar_url,omitempty"`
+	Avatar    string `json:"avatar,omitempty"`
 
 	// Room topic
 	Topic string `json:"topic,omitempty"`
@@ -349,7 +401,14 @@ type ExtensionRequest struct {
 	Receipts    *ReceiptsRequest    `json:"receipts,omitempty"`
 	Typing      *TypingRequest      `json:"typing,omitempty"`
 	// StickyEvents is the MSC4354 sticky events extension (MSC4480).
-	StickyEvents *StickyEventsRequest `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	StickyEvents        *StickyEventsRequest        `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	ThreadSubscriptions *ThreadSubscriptionsRequest `json:"io.element.msc4308.thread_subscriptions,omitempty"`
+}
+
+// ThreadSubscriptionsRequest configures the MSC4308 thread subscriptions extension.
+type ThreadSubscriptionsRequest struct {
+	Enabled bool `json:"enabled"`
+	Limit   int  `json:"limit,omitempty"`
 }
 
 // ToDeviceRequest configures to-device message extension.
@@ -405,7 +464,19 @@ type ExtensionResponse struct {
 	Receipts    *ReceiptsResponse    `json:"receipts,omitempty"`
 	Typing      *TypingResponse      `json:"typing,omitempty"`
 	// StickyEvents is omitted when there are no sticky events to deliver.
-	StickyEvents *StickyEventsResponse `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	StickyEvents        *StickyEventsResponse        `json:"org.matrix.msc4354.sticky_events,omitempty"`
+	ThreadSubscriptions *ThreadSubscriptionsResponse `json:"io.element.msc4308.thread_subscriptions,omitempty"`
+}
+
+// ThreadSubscriptionsResponse contains the user's subscribed threads.
+type ThreadSubscriptionsResponse struct {
+	Subscribed map[string]map[string]ThreadSubscription `json:"subscribed,omitempty"`
+}
+
+// ThreadSubscription describes one subscribed thread.
+type ThreadSubscription struct {
+	Automatic bool  `json:"automatic"`
+	BumpStamp int64 `json:"bump_stamp"`
 }
 
 // StickyEventsResponse carries unexpired MSC4354 sticky events per room,

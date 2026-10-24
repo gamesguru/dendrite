@@ -68,6 +68,10 @@ func (s unPartialSnapshot) PositionInTopology(context.Context, string) (types.St
 	return 0, 0, nil
 }
 
+func (s unPartialSnapshot) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
 func (s unPartialSnapshot) MaxStreamPositionForRelations(context.Context) (types.StreamPosition, error) {
 	return 0, nil
 }

@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	syncinternal "codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -83,7 +85,7 @@ func (rp *RequestPool) detectRoomMembership(
 // getRequiredState computes a real delta (see getRequiredStateDelta) and
 // correctly returns nothing when unchanged, it's safe to always attempt it.
 func shouldFetchRequiredState(requiredStateConfig *types.RequiredStateConfig) bool {
-	return requiredStateConfig != nil && len(requiredStateConfig.Include) > 0
+	return requiredStateConfig != nil && (len(requiredStateConfig.Include) > 0 || requiredStateConfig.LazyMembers)
 }
 
 // populateMemberCounts adds joined and invited member counts to room data.
@@ -160,6 +162,7 @@ func (rp *RequestPool) BuildRoomData(
 	fromToken *types.StreamingToken,
 	requiredStateConfig *types.RequiredStateConfig,
 	ignoreTimelineBound bool,
+	forceRequiredState bool,
 ) (*types.SlidingRoomData, error) {
 	// CRITICAL: initial indicates if this is the FIRST TIME this room is being sent on this CONNECTION
 	isInitialForRoom := fromToken == nil || roomState.Status == types.HaveSentRoomNever
@@ -169,6 +172,7 @@ func (rp *RequestPool) BuildRoomData(
 
 	// Detect membership (PDU + invite check)
 	membershipResult := rp.detectRoomMembership(ctx, snapshot, roomID, userID, currentPos)
+	roomData.Membership = membershipResult.membership
 
 	// If user is invited, return stripped state instead of timeline/required_state
 	if membershipResult.membership == spec.Invite {
@@ -212,7 +216,7 @@ func (rp *RequestPool) BuildRoomData(
 			"timeline_events": len(roomData.Timeline),
 		}).Debug("[REQUIRED_STATE] Getting required state")
 
-		requiredState, stateErr := rp.getRequiredState(ctx, snapshot, roomID, userID, requiredStateConfig, roomData.Timeline, isInitialForRoom, roomState, currentPos)
+		requiredState, stateErr := rp.getRequiredState(ctx, snapshot, roomID, userID, requiredStateConfig, roomData.Timeline, isInitialForRoom || forceRequiredState, roomState, currentPos)
 		if stateErr != nil {
 			// Fatal for this room rather than logged and dropped. On an
 			// incremental sync the state is a one-shot delta, so emitting the
@@ -466,11 +470,30 @@ func (rp *RequestPool) bundleTimeline(
 // getRoomNameFromDB retrieves m.room.name state event from database.
 func (rp *RequestPool) getRoomNameFromDB(ctx context.Context, snapshot storage.DatabaseTransaction, roomID string) string {
 	event, err := snapshot.GetStateEvent(ctx, roomID, "m.room.name", "")
-	if err != nil || event == nil {
+	if err == nil && event != nil {
+		return gjson.GetBytes(event.Content(), "name").Str
+	}
+	// The sync consumer can briefly lag behind createRoom. Roomserver state is
+	// authoritative, so use it as a fallback for initial room metadata.
+	currentStateQuerier, ok := rp.rsAPI.(interface {
+		QueryCurrentState(context.Context, *roomserverAPI.QueryCurrentStateRequest, *roomserverAPI.QueryCurrentStateResponse) error
+	})
+	if !ok {
 		return ""
 	}
-
-	return gjson.GetBytes(event.Content(), "name").Str
+	var response roomserverAPI.QueryCurrentStateResponse
+	if queryErr := currentStateQuerier.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
+		RoomID: roomID,
+		StateTuples: []gomatrixserverlib.StateKeyTuple{{
+			EventType: spec.MRoomName,
+			StateKey:  "",
+		}},
+	}, &response); queryErr == nil {
+		if event := response.StateEvents[gomatrixserverlib.StateKeyTuple{EventType: spec.MRoomName, StateKey: ""}]; event != nil {
+			return gjson.GetBytes(event.Content(), "name").Str
+		}
+	}
+	return ""
 }
 
 // getRoomAvatar retrieves m.room.avatar state event.
@@ -784,6 +807,15 @@ func (rp *RequestPool) fetchTargetedState(
 	var memberKeys map[string]bool
 	needAllMembers := false
 
+	// lazy_members is shorthand for the $LAZY include pattern. Add the
+	// senders from the timeline even when include is otherwise empty.
+	if config.LazyMembers && len(lazySenders) > 0 {
+		memberKeys = make(map[string]bool, len(lazySenders))
+		for sender := range lazySenders {
+			memberKeys[sender] = true
+		}
+	}
+
 	for _, pattern := range config.Include {
 		if len(pattern) != 2 { //nolint:mnd
 			continue
@@ -814,6 +846,41 @@ func (rp *RequestPool) fetchTargetedState(
 			// but non-member types are few so this is fine.
 			nonMemberTypes[evType] = true
 		}
+	}
+
+	// Keep the tuples for a roomserver fallback. The sync database is updated
+	// asynchronously from the roomserver output stream, so a just-joined room
+	// can have authoritative current state before the sync state table catches
+	// up. This fallback only fills missing state slots; the sync snapshot remains
+	// the source for any slots it already has.
+	stateTuples := make([]gomatrixserverlib.StateKeyTuple, 0, len(config.Include)+len(memberKeys))
+	seenTuples := make(map[gomatrixserverlib.StateKeyTuple]struct{})
+	addTuple := func(eventType, stateKey string) {
+		tuple := gomatrixserverlib.StateKeyTuple{EventType: eventType, StateKey: stateKey}
+		if _, exists := seenTuples[tuple]; !exists {
+			seenTuples[tuple] = struct{}{}
+			stateTuples = append(stateTuples, tuple)
+		}
+	}
+	for _, pattern := range config.Include {
+		if len(pattern) != 2 || pattern[0] == "*" {
+			continue
+		}
+		eventType, stateKey := pattern[0], pattern[1]
+		if eventType == "m.room.member" {
+			switch stateKey {
+			case "*":
+				continue // The roomserver wildcard could return an unbounded member list.
+			case "$ME":
+				stateKey = userID
+			case "$LAZY":
+				for sender := range lazySenders {
+					addTuple(eventType, sender)
+				}
+				continue
+			}
+		}
+		addTuple(eventType, stateKey)
 	}
 
 	var result []*rstypes.HeaderedEvent
@@ -861,6 +928,34 @@ func (rp *RequestPool) fetchTargetedState(
 			}
 			if ev != nil {
 				result = append(result, ev)
+			}
+		}
+	}
+
+	if len(stateTuples) > 0 {
+		currentStateQuerier, ok := rp.rsAPI.(interface {
+			QueryCurrentState(context.Context, *roomserverAPI.QueryCurrentStateRequest, *roomserverAPI.QueryCurrentStateResponse) error
+		})
+		if ok {
+			var response roomserverAPI.QueryCurrentStateResponse
+			if err := currentStateQuerier.QueryCurrentState(ctx, &roomserverAPI.QueryCurrentStateRequest{
+				RoomID:         roomID,
+				AllowWildcards: true,
+				StateTuples:    stateTuples,
+			}, &response); err == nil {
+				existing := make(map[string]bool, len(result))
+				for _, event := range result {
+					existing[stateEventKey(event)] = true
+				}
+				for _, event := range response.StateEvents {
+					if event == nil || event.StateKey() == nil || existing[stateEventKey(event)] {
+						continue
+					}
+					if rp.matchesRequiredState(event, userID, config, lazySenders) {
+						result = append(result, event)
+						existing[stateEventKey(event)] = true
+					}
+				}
 			}
 		}
 	}
@@ -931,6 +1026,11 @@ func (rp *RequestPool) matchesRequiredState(
 		}
 	}
 
+	// lazy_members is equivalent to including $LAZY members.
+	if config.LazyMembers && eventType == "m.room.member" && lazySenders[stateKey] {
+		return true
+	}
+
 	// Check if included
 	for _, pattern := range config.Include {
 		if len(pattern) == 2 { //nolint:mnd
@@ -984,8 +1084,9 @@ func matchesStateKeyPattern(stateKey, pattern, userID string, lazySenders map[st
 // extractLazySenders extracts sender IDs from timeline events if $LAZY is specified
 // Phase 5: Returns a map of sender IDs for lazy member loading.
 func (rp *RequestPool) extractLazySenders(config *types.RequiredStateConfig, timeline []synctypes.ClientEvent) map[string]bool {
-	// Check if $LAZY pattern is present
-	hasLazy := false
+	// lazy_members is the MSC4186 spelling of the legacy $LAZY include
+	// pattern.
+	hasLazy := config.LazyMembers
 	for _, pattern := range config.Include {
 		if len(pattern) == 2 && pattern[1] == "$LAZY" {
 			hasLazy = true
@@ -1069,12 +1170,12 @@ func (rp *RequestPool) buildInviteRoomData(
 	isInitial bool,
 	inviteEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
-	roomData, err := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, inviteEvent, "invite_room_state")
-	if err != nil {
-		return nil, err
-	}
+	roomData := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, inviteEvent, "invite_room_state")
 	// MSC4186 spec uses "stripped_state", Synapse/Element X use "invite_state"
 	roomData.InviteState = roomData.StrippedState
+	// buildStrippedRoomData starts a new room object, so carry the membership
+	// that caused this path over to the response.
+	roomData.Membership = spec.Invite
 	return roomData, nil
 }
 
@@ -1089,7 +1190,9 @@ func (rp *RequestPool) buildKnockRoomData(
 	isInitial bool,
 	knockEvent *rstypes.HeaderedEvent,
 ) (*types.SlidingRoomData, error) {
-	return rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
+	roomData := rp.buildStrippedRoomData(ctx, snapshot, roomID, userID, isInitial, knockEvent, "knock_room_state")
+	roomData.Membership = spec.Knock
+	return roomData, nil
 }
 
 // buildStrippedRoomData builds the stripped state of an invited or knocked
@@ -1103,7 +1206,7 @@ func (rp *RequestPool) buildStrippedRoomData(
 	isInitial bool,
 	inviteEvent *rstypes.HeaderedEvent,
 	unsignedKey string,
-) (*types.SlidingRoomData, error) {
+) *types.SlidingRoomData {
 	roomData := &types.SlidingRoomData{
 		Initial: isInitial,
 	}
@@ -1201,7 +1304,7 @@ func (rp *RequestPool) buildStrippedRoomData(
 		"unsigned_key":     unsignedKey,
 	}).Debug("[V4_SYNC] Built stripped room data")
 
-	return roomData, nil
+	return roomData
 }
 
 // getHeroes fetches room heroes with displayname and avatar_url in MSC4186 format.

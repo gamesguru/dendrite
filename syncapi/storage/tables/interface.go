@@ -28,7 +28,7 @@ type AccountData interface {
 }
 
 type Invites interface {
-	InsertInviteEvent(ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent) (streamPos types.StreamPosition, err error)
+	InsertInviteEvent(ctx context.Context, txn *sql.Tx, inviteEvent *rstypes.HeaderedEvent) (streamPos types.StreamPosition, active bool, err error)
 	DeleteInviteEvent(ctx context.Context, txn *sql.Tx, inviteEventID string) (types.StreamPosition, error)
 	// SelectInviteEventsInRange returns a map of room ID to invite events. If multiple invite/retired invites exist in the given range, return the latest value
 	// for the room.
@@ -208,6 +208,9 @@ type Filter interface {
 
 type Receipts interface {
 	UpsertReceipt(ctx context.Context, txn *sql.Tx, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	// SelectUserReceiptEventID returns the event the user's receipt of the type and thread
+	// in the room is at, or an empty string if they have none.
+	SelectUserReceiptEventID(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, threadID string) (string, error)
 	SelectRoomReceiptsAfter(ctx context.Context, txn *sql.Tx, roomIDs []string, streamPos types.StreamPosition) (types.StreamPosition, []types.OutputReceiptEvent, error)
 	SelectMaxReceiptID(ctx context.Context, txn *sql.Tx) (id int64, err error)
 	PurgeReceipts(ctx context.Context, txn *sql.Tx, roomID string) error

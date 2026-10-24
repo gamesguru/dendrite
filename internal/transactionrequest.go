@@ -24,6 +24,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/federationapi/producers"
 	"codefloe.com/pat-s/zendrite/federationapi/types"
+	"codefloe.com/pat-s/zendrite/internal/msc4155"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	syncTypes "codefloe.com/pat-s/zendrite/syncapi/types"
@@ -220,6 +221,23 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 			continue
 		}
 
+		// MSC4155: an ignored or blocked invite must not become visible to
+		// the invitee. The /invite endpoint rejects blocked invites, but the
+		// inviter then also sends the signed event in a transaction, so drop
+		// it here as well. Reporting success is important: an error would
+		// make the sender retry forever and leak that the invite was ignored.
+		dropInvite, filterErr := t.shouldDropFilteredInvite(ctx, event)
+		if filterErr != nil {
+			failures.add("invite rules for event "+event.EventID(), filterErr)
+			results[event.EventID()] = fclient.PDUResult{Error: filterErr.Error()}
+			continue
+		}
+		if dropInvite {
+			results[event.EventID()] = fclient.PDUResult{}
+			PDUCountTotal.WithLabelValues("success").Inc()
+			continue
+		}
+
 		// A kick or ban ending a local user's invite or knock can reach us
 		// for a room we are not in, where it cannot be authorized as usual.
 		if event.Type() == spec.MRoomMember {
@@ -276,6 +294,69 @@ func (t *TxnReq) ProcessTransaction(ctx context.Context) (*fclient.RespSend, *ut
 	}
 	TxnCountTotal.WithLabelValues("ok").Inc()
 	return &fclient.RespSend{PDUs: results}, nil
+}
+
+// shouldDropFilteredInvite reports whether event is an invite to a local user
+// whose MSC4155 invite rules block or ignore the sender.
+func (t *TxnReq) shouldDropFilteredInvite(ctx context.Context, event gomatrixserverlib.PDU) (bool, error) {
+	if event.Type() != spec.MRoomMember || event.StateKey() == nil {
+		return false, nil
+	}
+	var content struct {
+		Membership string `json:"membership"`
+	}
+	if err := json.Unmarshal(event.Content(), &content); err != nil || content.Membership != "invite" {
+		return false, nil
+	}
+
+	invitedUser, ok, err := t.localUserForStateKey(ctx, event.RoomID(), *event.StateKey())
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	sender, err := t.rsAPI.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID())
+	if err != nil {
+		return false, err
+	}
+	if sender == nil {
+		return false, nil
+	}
+
+	blocked, ignored, err := msc4155.Disposition(ctx, t.userAPI, invitedUser, sender.String())
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).WithField("event_id", event.EventID()).Warn("Transaction: failed to apply invite rules")
+		return false, err
+	}
+	if blocked || ignored {
+		util.GetLogger(ctx).WithFields(logrus.Fields{
+			"event_id": event.EventID(),
+			"invitee":  invitedUser.String(),
+			"sender":   sender.String(),
+			"blocked":  blocked,
+		}).Debug("Transaction: dropping filtered invite")
+		return true, nil
+	}
+	return false, nil
+}
+
+func (t *TxnReq) localUserForStateKey(ctx context.Context, roomID spec.RoomID, stateKey string) (spec.UserID, bool, error) {
+	if userID, err := spec.NewUserID(stateKey, true); err == nil {
+		if userID.Domain() == t.ourServerName {
+			return *userID, true, nil
+		}
+		return spec.UserID{}, false, nil
+	}
+	// Room versions with pseudo-IDs may store a sender ID as the state key.
+	userID, err := t.rsAPI.QueryUserIDForSender(ctx, roomID, spec.SenderID(stateKey))
+	if err != nil {
+		return spec.UserID{}, false, err
+	}
+	if userID != nil && userID.Domain() == t.ourServerName {
+		return *userID, true, nil
+	}
+	return spec.UserID{}, false, nil
 }
 
 // processEDUs queues the transaction's EDUs. Typing notifications and

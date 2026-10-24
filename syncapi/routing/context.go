@@ -396,6 +396,10 @@ func parseRoomEventFilter(req *http.Request) (*synctypes.RoomEventFilter, error)
 			return nil, err
 		}
 	}
+	if (len(filter.RelationTypes) > 0 || len(filter.NotRelationTypes) > 0) && filter.Types == nil {
+		messageTypes := []string{"m.room.message"}
+		filter.Types = &messageTypes
+	}
 
 	return filter, nil
 }

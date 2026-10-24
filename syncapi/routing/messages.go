@@ -7,6 +7,7 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -40,6 +41,7 @@ type messagesReq struct {
 	cfg              *config.SyncAPI
 	roomID           string
 	from             *types.TopologyToken
+	fromStream       *types.StreamingToken
 	to               *types.TopologyToken
 	device           *userapi.Device
 	deviceUserID     spec.UserID
@@ -246,6 +248,7 @@ func OnIncomingMessagesRequest(
 		cfg:              cfg,
 		roomID:           roomID,
 		from:             &from,
+		fromStream:       fromStream,
 		to:               &to,
 		wasToProvided:    wasToProvided,
 		filter:           filter,
@@ -346,11 +349,48 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 	}
+	// A stream token is a position in stream order, not topology order. Events
+	// can be persisted in a different order than their DAG depth (for example
+	// room creation state events that arrive after the client's sync token), so
+	// constrain the page by the token's stream position as well.
+	if r.fromStream != nil {
+		filtered := streamEvents[:0]
+		for _, ev := range streamEvents {
+			if r.backwardOrdering {
+				if ev.StreamPosition <= r.fromStream.PDUPosition {
+					filtered = append(filtered, ev)
+				}
+			} else if ev.StreamPosition > r.fromStream.PDUPosition {
+				filtered = append(filtered, ev)
+			}
+		}
+		streamEvents = filtered
+	}
+	if r.backwardOrdering && len(streamEvents) > 0 {
+		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
+			for extremityID := range backwardExtremities {
+				tok, err := r.snapshot.EventPositionInTopology(ctx, extremityID)
+				if err != nil {
+					continue
+				}
+				extremityDepth := int64(tok.Depth)
+				if int64(r.from.Depth) >= extremityDepth {
+					filtered := streamEvents[:0]
+					for _, ev := range streamEvents {
+						if ev.Depth() >= extremityDepth {
+							filtered = append(filtered, ev)
+						}
+					}
+					streamEvents = filtered
+				}
+			}
+		}
+	}
 	end.Decrement()
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".
-	topologyHadEvents := topologyStart != emptyToken
+	topologyHadEvents := topologyStart != emptyToken && len(streamEvents) > 0
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
@@ -382,6 +422,12 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		}
 		// Filtered-empty page: return the topology end token so the client continues.
 		return []synctypes.ClientEvent{}, *r.from, end, nil
+	}
+	if len(r.filter.RelationTypes) > 0 || len(r.filter.NotRelationTypes) > 0 {
+		events = filterHeaderedEvents(events, r.filter)
+		if len(events) == 0 {
+			return []synctypes.ClientEvent{}, *r.from, end, nil
+		}
 	}
 
 	// Apply room history visibility filter
@@ -494,7 +540,13 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 		// If so, retrieve as much events as needed through backfilling.
 		events, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit)
 		if err != nil {
-			return
+			if r.ctx.Err() != nil {
+				return
+			}
+			// Backfill is best effort: no remote server answering must not fail
+			// the request, it just means there is nothing older to show.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
+			return []*rstypes.HeaderedEvent{}, nil
 		}
 		r.didBackfill = true
 		// Backfilled events come from federation and are not pre-filtered by the
@@ -546,15 +598,21 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		var pdus []*rstypes.HeaderedEvent
 		// Only ask the remote server for enough events to reach the limit.
 		pdus, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit-len(streamEvents))
-		if err != nil {
+		switch {
+		case err != nil && r.ctx.Err() != nil:
 			return
+		case err != nil:
+			// Backfill is best effort: fall back to the events we have locally.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
+			err = nil
+		default:
+			r.didBackfill = true
+			// Backfilled events come from federation and are not pre-filtered by the
+			// database query; apply the client's sender/type filter here.
+			pdus = filterHeaderedEvents(pdus, r.filter)
+			// Append the PDUs to the list to send back to the client.
+			events = append(events, pdus...)
 		}
-		r.didBackfill = true
-		// Backfilled events come from federation and are not pre-filtered by the
-		// database query; apply the client's sender/type filter here.
-		pdus = filterHeaderedEvents(pdus, r.filter)
-		// Append the PDUs to the list to send back to the client.
-		events = append(events, pdus...)
 	}
 
 	// Append the events ve previously retrieved locally.
@@ -595,11 +653,51 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 	if filter == nil {
 		return events
 	}
-	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil {
+	if filter.Senders == nil && filter.NotSenders == nil && filter.Types == nil && filter.NotTypes == nil && len(filter.RelationTypes) == 0 && len(filter.NotRelationTypes) == 0 {
 		return events
 	}
 	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
 	for _, ev := range events {
+		if len(filter.RelationTypes) > 0 || len(filter.NotRelationTypes) > 0 {
+			// MSC3874 relation filters apply to room messages. Keep this guard
+			// here as well as in the database query because backfilled events
+			// are filtered in Go after they have been fetched from federation.
+			if ev.Type() != "m.room.message" {
+				continue
+			}
+			var content struct {
+				RelatesTo struct {
+					RelType string `json:"rel_type"`
+				} `json:"m.relates_to"`
+			}
+			err := json.Unmarshal(ev.Content(), &content)
+			if err != nil && len(filter.RelationTypes) > 0 {
+				continue
+			}
+			relationType := content.RelatesTo.RelType
+			if len(filter.RelationTypes) > 0 {
+				matched := false
+				for _, allowed := range filter.RelationTypes {
+					if relationType == allowed {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			excluded := false
+			for _, excludedType := range filter.NotRelationTypes {
+				if relationType == excludedType {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
 		sender := ev.UserID.String()
 
 		if filter.Senders != nil {

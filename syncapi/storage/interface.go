@@ -29,6 +29,8 @@ type DatabaseTransaction interface {
 	sqlutil.Transaction
 	SharedUsers
 
+	// MaxStreamPositionForPDUs includes completed partial-state markers, which
+	// share the PDU stream position space.
 	MaxStreamPositionForPDUs(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForReceipts(ctx context.Context) (types.StreamPosition, error)
 	MaxStreamPositionForInvites(ctx context.Context) (types.StreamPosition, error)
@@ -93,6 +95,9 @@ type DatabaseTransaction interface {
 	// Returns an error if there was a problem talking with the database.
 	// Does not include any transaction IDs in the returned events.
 	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
+	// EventsWithDevice is like Events but annotates the requesting device's
+	// transaction ID on events that device sent.
+	EventsWithDevice(ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	// GetStateEvent returns the Matrix state event of a given type for a given room with a given state key
 	// If no event could be found, returns nil
 	// If there was an issue during the retrieval, returns an error
@@ -167,6 +172,9 @@ type Database interface {
 	// Returns an error if there was a problem talking with the database.
 	// Does not include any transaction IDs in the returned events.
 	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
+	// EventsWithDevice is like Events but annotates the requesting device's
+	// transaction ID on events that device sent.
+	EventsWithDevice(ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error)
 	// WriteEvent into the database. It is not safe to call this function from multiple goroutines, as it would create races
 	// when generating the sync stream position for this event. Returns the sync stream position for the inserted event.
 	// Returns an error if there was a problem inserting this event.
@@ -174,6 +182,8 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility,
 	) (types.StreamPosition, error)
+	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
+	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
 	// InsertStickyEvent adds an MSC4354 sticky event to the sticky events
 	// stream and returns its position, which an event already in the stream
 	// keeps. It first removes the events that have expired by now.
@@ -195,10 +205,11 @@ type Database interface {
 	// creates a new row, else update the existing one
 	// Returns an error if there was an issue with the upsert
 	UpsertAccountData(ctx context.Context, userID, roomID, dataType string) (types.StreamPosition, error)
-	// AddInviteEvent stores a new invite event for a user.
-	// If the invite was successfully stored this returns the stream ID it was stored at.
+	// AddInviteEvent stores an invite or knock event for a user. The bool is
+	// false when this event ID has already been retired.
+	// If the event was successfully stored this returns the stream ID it was stored at.
 	// Returns an error if there was a problem communicating with the database.
-	AddInviteEvent(ctx context.Context, inviteEvent *rstypes.HeaderedEvent) (types.StreamPosition, error)
+	AddInviteEvent(ctx context.Context, inviteEvent *rstypes.HeaderedEvent) (types.StreamPosition, bool, error)
 	// RetireInviteEvent removes an old invite event from the database. Returns the new position of the retired invite.
 	// Returns an error if there was a problem communicating with the database.
 	RetireInviteEvent(ctx context.Context, inviteEventID string) (types.StreamPosition, error)

@@ -62,7 +62,15 @@ func (p *PDUStreamProvider) CompleteSync(
 	req *types.SyncRequest,
 ) types.StreamPosition {
 	from := types.StreamPosition(0)
-	to := p.LatestPosition(ctx)
+	// Use the high-water mark visible to this database snapshot. The in-memory
+	// provider advances after the consumer commits, so it can lag behind
+	// committed events, or move ahead of this snapshot and put next_batch past
+	// events this response could not read.
+	to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+	if err != nil {
+		req.Log.WithError(err).Error("snapshot.MaxStreamPositionForPDUs failed")
+		return from
+	}
 
 	// Get the current sync position which we will base the sync response on.
 	// For complete syncs, we want to start at the most recent events and work
@@ -154,6 +162,16 @@ func (p *PDUStreamProvider) CompleteSync(
 		req.Rooms[roomID] = spec.Join
 	}
 
+	if req.Filter.Room.IncludeLeave {
+		if err = p.addLeftRoomsToCompleteSync(ctx, snapshot, req, to, &eventFilter, &stateFilter, bundler); err != nil {
+			if req.Context.Err() != nil || abandonsSync(err) {
+				logAbandoned(req, err, "", "complete")
+				return from
+			}
+			req.Log.WithError(err).Error("p.addLeftRoomsToCompleteSync failed")
+		}
+	}
+
 	// Add peeked rooms.
 	peeks, err := snapshot.PeeksInRange(ctx, req.Device.UserID, req.Device.ID, r)
 	if err != nil {
@@ -193,6 +211,74 @@ func (p *PDUStreamProvider) CompleteSync(
 	}
 
 	return to
+}
+
+// addLeftRoomsToCompleteSync adds the rooms the user has left or been banned
+// from to the leave section of a complete sync, as asked for by the
+// include_leave filter. Each carries the timeline and state up to the leave.
+func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	req *types.SyncRequest,
+	to types.StreamPosition,
+	eventFilter *synctypes.RoomEventFilter,
+	stateFilter *synctypes.StateFilter,
+	bundler *syncBundler,
+) error {
+	deltas, joinedRoomIDs, err := snapshot.GetStateDeltas(
+		ctx, req.Device, types.Range{From: 0, To: to}, req.Device.UserID, stateFilter, p.rsAPI,
+	)
+	if err != nil {
+		return fmt.Errorf("snapshot.GetStateDeltas: %w", err)
+	}
+	joined := make(map[string]struct{}, len(joinedRoomIDs))
+	for _, roomID := range joinedRoomIDs {
+		joined[roomID] = struct{}{}
+	}
+	userID, err := spec.NewUserID(req.Device.UserID, true)
+	if err != nil {
+		return fmt.Errorf("spec.NewUserID: %w", err)
+	}
+
+	for _, delta := range deltas {
+		if delta.Membership != spec.Leave && delta.Membership != spec.Ban {
+			continue
+		}
+		if _, ok := joined[delta.RoomID]; ok {
+			continue
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		// A room the user chose to forget no longer shows up.
+		var membership roomserverAPI.QueryMembershipForUserResponse
+		if err = p.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
+			RoomID: delta.RoomID,
+			UserID: *userID,
+		}, &membership); err != nil {
+			return fmt.Errorf("rsAPI.QueryMembershipForUser(%s): %w", delta.RoomID, err)
+		}
+		if membership.IsRoomForgotten {
+			continue
+		}
+		// Look back from the leave, as for a room that was newly joined.
+		r := types.Range{From: delta.MembershipPos, To: 0, Backwards: true}
+		recent, recentErr := snapshot.RecentEvents(ctx, []string{delta.RoomID}, r, eventFilter, true, true)
+		if recentErr != nil && !errors.Is(recentErr, sql.ErrNoRows) {
+			return fmt.Errorf("snapshot.RecentEvents: %w", recentErr)
+		}
+		// The delta holds what changed in the whole room up to now.
+		delta.StateEvents, err = snapshot.RoomStateDelta(
+			ctx, req.Device, delta.RoomID, types.Range{From: 0, To: delta.MembershipPos}, stateFilter, p.rsAPI,
+		)
+		if err != nil {
+			return fmt.Errorf("snapshot.RoomStateDelta: %w", err)
+		}
+		if _, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, r, delta, eventFilter, stateFilter, req, recent, bundler); err != nil {
+			return fmt.Errorf("addRoomDeltaToResponse(%s): %w", delta.RoomID, err)
+		}
+	}
+	return nil
 }
 
 //nolint:gocyclo
@@ -417,14 +503,35 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []types.StateDelta, r types.Range, eventFilter synctypes.RoomEventFilter, snapshot storage.DatabaseTransaction) (map[string]types.RecentEvents, error) {
 	var roomIDs []string
 	var newlyJoinedRoomIDs []string
+	var leftDeltas []types.StateDelta
 	for _, delta := range stateDeltas {
-		if delta.NewlyJoined {
+		switch {
+		case delta.NewlyJoined:
 			newlyJoinedRoomIDs = append(newlyJoinedRoomIDs, delta.RoomID)
-		} else {
+		case leftWithinRange(delta, r):
+			leftDeltas = append(leftDeltas, delta)
+		default:
 			roomIDs = append(roomIDs, delta.RoomID)
 		}
 	}
 	dbEvents := make(map[string]types.RecentEvents)
+	// A user who left a room must not see what happened in it afterwards, so
+	// its timeline ends at the leave rather than at the end of the range.
+	for _, delta := range leftDeltas {
+		events, err := snapshot.RecentEvents(
+			ctx, []string{delta.RoomID},
+			types.Range{From: r.From, To: delta.MembershipPos},
+			&eventFilter, true, true,
+		)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+		}
+		for k, v := range events {
+			dbEvents[k] = v
+		}
+	}
 	if len(roomIDs) > 0 {
 		events, err := snapshot.RecentEvents(
 			ctx, roomIDs, r,
@@ -472,6 +579,15 @@ func (p *PDUStreamProvider) getRecentEvents(ctx context.Context, stateDeltas []t
 	}
 
 	return dbEvents, nil
+}
+
+// leftWithinRange reports whether delta is for a room the user left or was
+// banned from partway through the forwards range r, so that the range holds
+// events from after the user's membership ended.
+func leftWithinRange(delta types.StateDelta, r types.Range) bool {
+	return !r.Backwards &&
+		(delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
+		delta.MembershipPos > r.From && delta.MembershipPos < r.To
 }
 
 // Limit the recent events to X when going backwards.
@@ -566,9 +682,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		}
 	}
 
-	// MSC4222: the state after the timeline of a room the user left is the
-	// state at their leave, without the changes the rest of the range holds.
-	if req.UseStateAfter() && (delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
+	// The state of a room the user left is the state at their leave (also what
+	// MSC4222 calls the state after the timeline), without the changes the
+	// rest of the range holds.
+	if (delta.Membership == spec.Leave || delta.Membership == spec.Ban) &&
 		delta.MembershipPos > r.Low() && delta.MembershipPos < r.High() {
 		delta.StateEvents, err = snapshot.RoomStateDelta(
 			ctx, device, delta.RoomID, types.Range{From: r.Low(), To: delta.MembershipPos}, stateFilter, p.rsAPI,
@@ -628,6 +745,23 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
 	}
 
+	bwExtrems, bwErr := snapshot.BackwardExtremitiesForRoom(ctx, delta.RoomID)
+	if bwErr != nil {
+		logrus.WithError(bwErr).WithField("room_id", delta.RoomID).Warn("failed to query backward extremities")
+	} else if len(bwExtrems) > 0 {
+		gapIdx := -1
+		for i := len(events) - 1; i >= 0; i-- {
+			if _, ok := bwExtrems[events[i].EventID()]; ok {
+				gapIdx = i
+				break
+			}
+		}
+		if gapIdx >= 0 {
+			events = events[gapIdx:]
+			limited = true
+		}
+	}
+
 	if r.Backwards && len(events) > eventFilter.Limit {
 		// We're going backwards and the events are ordered chronologically, so take the last `limit` events
 		events = events[len(events)-eventFilter.Limit:]
@@ -684,6 +818,14 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			updateLatestPosition(last.EventID())
 		}
 	}
+	// GetStateDeltas includes every currently joined room so membership is
+	// correct even when no membership event is in this range. An unchanged
+	// joined room still belongs in the response only when a stream produced
+	// room data; the other stream providers can add that later if needed.
+	if len(events) == 0 && len(delta.StateEvents) == 0 && !hasMembershipChange &&
+		!delta.NewlyJoined && !req.WantFullState {
+		return latestPosition, nil
+	}
 
 	switch delta.Membership {
 	case spec.Join:
@@ -701,9 +843,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
-		// If we are limited by the filter AND the history visibility filter
-		// didn't "remove" events, return that the response is limited.
-		jr.Timeline.Limited = (limited && len(events) == len(recentEvents)) || delta.NewlyJoined
+		jr.Timeline.Limited = limited || delta.NewlyJoined
 		if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, r.High()); err != nil {
 			return r.From, err
 		}
@@ -747,9 +887,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		lr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 		})
-		// If we are limited by the filter AND the history visibility filter
-		// didn't "remove" events, return that the response is limited.
-		lr.Timeline.Limited = limited && len(events) == len(recentEvents)
+		lr.Timeline.Limited = limited
 		if err = bundler.bundle(ctx, lr.Timeline, events, eventFormat, r.High()); err != nil {
 			return r.From, err
 		}
@@ -889,9 +1027,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		}
 	}
 
-	// If we are limited by the filter AND the history visibility filter
-	// didn't "remove" events, return that the response is limited.
-	limited = limited && len(events) == len(recentEvents)
 	if !stateAfter {
 		stateEvents = removeDuplicates(stateEvents, events)
 	}
@@ -940,9 +1075,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	jr.Timeline.Events = synctypes.ToClientEvents(gomatrixserverlib.ToPDUs(events), eventFormat, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return p.rsAPI.QueryUserIDForSender(ctx, roomID, senderID)
 	})
-	// If we are limited by the filter AND the history visibility filter
-	// didn't "remove" events, return that the response is limited.
-	jr.Timeline.Limited = limited && len(events) == len(recentEvents)
+	jr.Timeline.Limited = limited
 	if err = bundler.bundle(ctx, jr.Timeline, events, eventFormat, sentAt); err != nil {
 		return jr, err
 	}

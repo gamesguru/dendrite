@@ -8,6 +8,7 @@ package routing
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -59,12 +60,29 @@ func GetEvent(
 		}
 	}
 
-	events, err := db.Events(ctx, []string{eventID})
+	events, err := db.EventsWithDevice(ctx, device, []string{eventID}, rsAPI)
 	if err != nil {
 		logger.WithError(err).Error("GetEvent: syncDB.Events failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},
+		}
+	}
+	// The roomserver can accept an event slightly before the sync API consumer
+	// has written it. A client that immediately fetches the event it just sent
+	// must not see a 404 in that window.
+	for attempt := 0; len(events) == 0 && attempt < 10; attempt++ {
+		if ctx.Err() != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+		events, err = db.EventsWithDevice(ctx, device, []string{eventID}, rsAPI)
+		if err != nil {
+			logger.WithError(err).Error("GetEvent: syncDB.Events failed")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
 		}
 	}
 
