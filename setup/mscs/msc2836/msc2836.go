@@ -263,6 +263,7 @@ func (rc *reqCtx) process() (*MSC2836EventRelationshipsResponse, *util.JSONRespo
 		}
 	}
 	rc.roomVersion = event.Version()
+	_ = indexEvent(rc.ctx, rc.db, event)
 
 	// Retrieve the event. Add it to response array.
 	returnEvents = append(returnEvents, event)
@@ -452,6 +453,7 @@ func walkThread(
 		ctx: ctx,
 		req: rc.req,
 		db:  db,
+		rc:  rc,
 		fn: func(wi *walkInfo) bool { //nolint:contextcheck
 			// If already processed event, skip.
 			if included[wi.EventID] {
@@ -775,6 +777,7 @@ type walker struct {
 	ctx context.Context
 	req *EventRelationshipRequest
 	db  Database
+	rc  *reqCtx
 	fn  func(wi *walkInfo) bool // callback invoked for each event walked, return true to terminate the walk
 }
 
@@ -869,6 +872,17 @@ func (w *walker) childrenForParent(eventID string) ([]eventInfo, error) {
 	}
 	if ei != nil {
 		return []eventInfo{*ei}, nil
+	}
+	// If the relationship hasn't been indexed in w.db yet (e.g. JetStream consumer lag),
+	// check if the event exists in the roomserver and index it on-demand.
+	if w.rc != nil {
+		if ev := w.rc.getLocalEvent(w.rc.req.RoomID, eventID); ev != nil {
+			if err := indexEvent(w.ctx, w.db, ev); err == nil {
+				if ei, err = w.db.ParentForChild(w.ctx, eventID, constRelType); err == nil && ei != nil {
+					return []eventInfo{*ei}, nil
+				}
+			}
+		}
 	}
 	return nil, nil
 }
