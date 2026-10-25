@@ -82,6 +82,19 @@ func GetMemberships(
 
 	atToken, err := types.NewTopologyTokenFromString(at)
 	if err != nil {
+		// /sync prev_batch tokens are stream tokens. Preserve their stream
+		// position so membership events arriving later at the same depth are
+		// excluded from the historical result.
+		var streamToken types.StreamingToken
+		streamToken, err = types.NewStreamTokenFromString(at)
+		if err == nil {
+			// MaxInt64 is the stream-only sentinel understood by SelectMemberships:
+			// a sync token bounds membership rows by stream position, regardless of
+			// their topological depth.
+			atToken = types.TopologyToken{Depth: math.MaxInt64, PDUPosition: streamToken.PDUPosition}
+		}
+	}
+	if err != nil {
 		atToken = types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}
 		if queryRes.HasBeenInRoom && !queryRes.IsInRoom {
 			// If you have left the room then this will be the members of the room when you left.
