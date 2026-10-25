@@ -66,6 +66,10 @@ const insertDeviceSQL = "" +
 	"INSERT INTO userapi_devices(device_id, localpart, server_name, access_token, created_ts, display_name, last_seen_ts, ip, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)" +
 	" RETURNING session_id"
 
+const insertDeviceWithSessionIDSQL = "" +
+	"INSERT INTO userapi_devices(device_id, localpart, server_name, access_token, created_ts, display_name, last_seen_ts, ip, user_agent, session_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)" +
+	" RETURNING session_id"
+
 const selectDeviceByTokenSQL = "" +
 	"SELECT session_id, device_id, localpart, server_name, access_token_expires_ts, prev_refresh_token_hash IS NOT NULL FROM userapi_devices WHERE access_token = $1"
 
@@ -114,22 +118,23 @@ const updateDeviceLastSeen = "" +
 	"UPDATE userapi_devices SET last_seen_ts = $1, ip = $2, user_agent = $3 WHERE localpart = $4 AND server_name = $5 AND device_id = $6"
 
 type devicesStatements struct {
-	insertDeviceStmt             *sql.Stmt
-	selectDeviceByTokenStmt      *sql.Stmt
-	selectDeviceByIDStmt         *sql.Stmt
-	selectDevicesByLocalpartStmt *sql.Stmt
-	selectDevicesByIDStmt        *sql.Stmt
-	updateDeviceNameStmt         *sql.Stmt
-	updateDeviceAccessTokenStmt  *sql.Stmt
-	updateDeviceLastSeenStmt     *sql.Stmt
-	updateDeviceRefreshTokenStmt *sql.Stmt
-	refreshDeviceTokensStmt      *sql.Stmt
-	clearPrevRefreshTokenStmt    *sql.Stmt
-	selectRefreshTokenOwnerStmt  *sql.Stmt
-	deleteDeviceStmt             *sql.Stmt
-	deleteDevicesByLocalpartStmt *sql.Stmt
-	deleteDevicesStmt            *sql.Stmt
-	serverName                   spec.ServerName
+	insertDeviceStmt              *sql.Stmt
+	insertDeviceWithSessionIDStmt *sql.Stmt
+	selectDeviceByTokenStmt       *sql.Stmt
+	selectDeviceByIDStmt          *sql.Stmt
+	selectDevicesByLocalpartStmt  *sql.Stmt
+	selectDevicesByIDStmt         *sql.Stmt
+	updateDeviceNameStmt          *sql.Stmt
+	updateDeviceAccessTokenStmt   *sql.Stmt
+	updateDeviceLastSeenStmt      *sql.Stmt
+	updateDeviceRefreshTokenStmt  *sql.Stmt
+	refreshDeviceTokensStmt       *sql.Stmt
+	clearPrevRefreshTokenStmt     *sql.Stmt
+	selectRefreshTokenOwnerStmt   *sql.Stmt
+	deleteDeviceStmt              *sql.Stmt
+	deleteDevicesByLocalpartStmt  *sql.Stmt
+	deleteDevicesStmt             *sql.Stmt
+	serverName                    spec.ServerName
 }
 
 func NewPostgresDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.DevicesTable, error) {
@@ -155,6 +160,7 @@ func NewPostgresDevicesTable(db *sql.DB, serverName spec.ServerName) (tables.Dev
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertDeviceStmt, insertDeviceSQL},
+		{&s.insertDeviceWithSessionIDStmt, insertDeviceWithSessionIDSQL},
 		{&s.selectDeviceByTokenStmt, selectDeviceByTokenSQL},
 		{&s.selectDeviceByIDStmt, selectDeviceByIDSQL},
 		{&s.selectDevicesByLocalpartStmt, selectDevicesByLocalpartSQL},
@@ -206,7 +212,24 @@ func (s *devicesStatements) InsertDeviceWithSessionID(ctx context.Context, txn *
 	accessToken string, displayName *string, ipAddr, userAgent string,
 	sessionID int64,
 ) (*api.Device, error) {
-	return s.InsertDevice(ctx, txn, id, localpart, serverName, accessToken, displayName, ipAddr, userAgent)
+	createdTimeMS := time.Now().UnixNano() / 1000000 //nolint:mnd
+	stmt := sqlutil.TxStmt(txn, s.insertDeviceWithSessionIDStmt)
+	if err := stmt.QueryRowContext(ctx, id, localpart, serverName, accessToken, createdTimeMS, displayName, createdTimeMS, ipAddr, userAgent, sessionID).Scan(&sessionID); err != nil {
+		return nil, fmt.Errorf("insertDeviceWithSessionIDStmt: %w", err)
+	}
+	dev := &api.Device{
+		ID:          id,
+		UserID:      userutil.MakeUserID(localpart, serverName),
+		AccessToken: accessToken,
+		SessionID:   sessionID,
+		LastSeenTS:  createdTimeMS,
+		LastSeenIP:  ipAddr,
+		UserAgent:   userAgent,
+	}
+	if displayName != nil {
+		dev.DisplayName = *displayName
+	}
+	return dev, nil
 }
 
 // deleteDevice removes a single device by id and user localpart.
