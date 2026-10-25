@@ -18,7 +18,6 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"
-	"codefloe.com/pat-s/zendrite/federationapi/consumers"
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
@@ -30,7 +29,6 @@ import (
 
 // FederationInternalAPI is an implementation of api.FederationInternalAPI.
 type FederationInternalAPI struct {
-	deviceLister       consumers.DeviceListerHolder
 	db                 storage.Database
 	cfg                *config.FederationAPI
 	statistics         *statistics.Statistics
@@ -127,17 +125,6 @@ func NewFederationInternalAPI(
 		statistics: statistics,
 		queues:     queues,
 	}
-}
-
-// SetUserAPI gives the federation API the user API, which it needs to send the
-// device lists of users who join a room.
-func (a *FederationInternalAPI) SetUserAPI(userAPI consumers.DeviceLister) {
-	a.deviceLister.Set(userAPI)
-}
-
-// DeviceLister returns the holder SetUserAPI fills in.
-func (a *FederationInternalAPI) DeviceLister() *consumers.DeviceListerHolder {
-	return &a.deviceLister
 }
 
 // SetPartialStateWorker sets the partial state worker for MSC3706 background state resync.

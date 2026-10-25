@@ -154,7 +154,7 @@ func NewUnstartedInternalAPI(
 	start := func() {
 		rsConsumer := consumers.NewOutputRoomEventConsumer(
 			processContext, cfg, js, nats, queues,
-			federationDB, rsAPI, fedAPI.DeviceLister(),
+			federationDB, rsAPI,
 		)
 		if err := rsConsumer.Start(); err != nil {
 			logrus.WithError(err).Panic("failed to start room server consumer")

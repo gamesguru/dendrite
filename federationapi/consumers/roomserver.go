@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -32,35 +31,7 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	syncAPITypes "codefloe.com/pat-s/zendrite/syncapi/types"
-	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
-
-// DeviceLister is the part of the user API needed to tell servers about the
-// devices of a local user who has just joined a room.
-type DeviceLister interface {
-	QueryDevices(ctx context.Context, req *userapi.QueryDevicesRequest, res *userapi.QueryDevicesResponse) error
-	QueryDeviceMessages(ctx context.Context, req *userapi.QueryDeviceMessagesRequest, res *userapi.QueryDeviceMessagesResponse) error
-}
-
-// DeviceListerHolder hands the consumer a DeviceLister once it exists. The user
-// API is created after the federation API's consumers have started, so until
-// Set is called no device lists are sent on join.
-type DeviceListerHolder struct {
-	v atomic.Pointer[DeviceLister]
-}
-
-// Set provides the DeviceLister.
-func (h *DeviceListerHolder) Set(l DeviceLister) { h.v.Store(&l) }
-
-func (h *DeviceListerHolder) get() DeviceLister {
-	if h == nil {
-		return nil
-	}
-	if l := h.v.Load(); l != nil {
-		return *l
-	}
-	return nil
-}
 
 // OutputRoomEventConsumer consumes events that originated in the room server.
 type OutputRoomEventConsumer struct {
@@ -75,7 +46,6 @@ type OutputRoomEventConsumer struct {
 	topic         string
 	topicPresence string
 	sticky        *stickyTracker
-	devices       *DeviceListerHolder
 }
 
 // NewOutputRoomEventConsumer creates a new OutputRoomEventConsumer. Call Start() to begin consuming from room servers.
@@ -87,7 +57,6 @@ func NewOutputRoomEventConsumer(
 	queues *queue.OutgoingQueues,
 	store storage.Database,
 	rsAPI api.FederationRoomserverAPI,
-	devices *DeviceListerHolder,
 ) *OutputRoomEventConsumer {
 	return &OutputRoomEventConsumer{
 		ctx:           process.Context(),
@@ -101,7 +70,6 @@ func NewOutputRoomEventConsumer(
 		topic:         cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
 		topicPresence: cfg.Matrix.JetStream.Prefixed(jetstream.RequestPresence),
 		sticky:        newStickyTracker(),
-		devices:       devices,
 	}
 }
 
@@ -288,18 +256,6 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 	if len(addsJoinedHosts) > 0 && ore.Event.Type() == spec.MRoomMember && ore.Event.StateKey() != nil {
 		membership, _ := ore.Event.Membership()
 		if membership == spec.Join {
-			// A local user who joins shares a room with the other hosts for the
-			// first time, so send them that user's current device list. Remote
-			// joins are not answered with our users' devices: those hosts ask for
-			// them, and unsolicited updates would reach servers we only believe
-			// to be in the room. While the room has partial state the joined hosts
-			// may include servers that have left; they are sent no more than the
-			// key change consumer sends them for any device change of the user.
-			joiner, joinerErr := s.rsAPI.QueryUserIDForSender(s.ctx, ore.Event.RoomID(), spec.SenderID(*ore.Event.StateKey()))
-			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) {
-				deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
-				s.sendDeviceLists(ore.Event.RoomID().String(), joiner.String(), deviceListHosts)
-			}
 			if s.cfg.Matrix.Presence.EnableOutbound {
 				s.sendPresence(ore.Event.RoomID().String(), addsJoinedHosts)
 			}
@@ -457,71 +413,6 @@ func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomE
 		}
 	}
 	return "", false
-}
-
-// sendDeviceLists sends a device list update for every device of a local user
-// who has just joined the room to its other hosts, so they know of devices that
-// were created before the user shared a room with them.
-func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJoined []types.JoinedHost) {
-	lister := s.devices.get()
-	if lister == nil {
-		return
-	}
-	var destinations []spec.ServerName
-	for _, added := range addedJoined {
-		if !s.cfg.Matrix.IsLocalServerName(added.ServerName) && !slices.Contains(destinations, added.ServerName) {
-			destinations = append(destinations, added.ServerName)
-		}
-	}
-	if len(destinations) == 0 {
-		return
-	}
-
-	logger := log.WithField("user_id", userID).WithField("room_id", roomID)
-	var devices userapi.QueryDevicesResponse
-	if err := lister.QueryDevices(s.ctx, &userapi.QueryDevicesRequest{UserID: userID}, &devices); err != nil {
-		logger.WithError(err).Error("failed to query devices to send device lists for")
-		return
-	}
-	var messages userapi.QueryDeviceMessagesResponse
-	if err := lister.QueryDeviceMessages(s.ctx, &userapi.QueryDeviceMessagesRequest{UserID: userID}, &messages); err != nil || messages.Error != nil {
-		logger.WithError(err).Error("failed to query device keys to send device lists for")
-		return
-	}
-	keys := make(map[string]userapi.DeviceMessage, len(messages.Devices))
-	for _, msg := range messages.Devices {
-		if msg.DeviceKeys != nil {
-			keys[msg.DeviceID] = msg
-		}
-	}
-
-	for _, device := range devices.Devices {
-		update := gomatrixserverlib.DeviceListUpdateEvent{
-			UserID:            userID,
-			DeviceID:          device.ID,
-			DeviceDisplayName: device.DisplayName,
-			StreamID:          messages.StreamID,
-		}
-		if msg, ok := keys[device.ID]; ok {
-			update.StreamID = msg.StreamID
-			update.Keys = msg.KeyJSON
-		}
-		if update.StreamID > 1 {
-			update.PrevID = []int64{update.StreamID - 1}
-		}
-		edu := &gomatrixserverlib.EDU{
-			Type:   spec.MDeviceListUpdate,
-			Origin: string(s.cfg.Matrix.ServerName),
-		}
-		var err error
-		if edu.Content, err = json.Marshal(update); err != nil {
-			logger.WithError(err).Error("failed to marshal device list update")
-			continue
-		}
-		if err = s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, destinations); err != nil {
-			logger.WithError(err).Error("failed to send device list update")
-		}
-	}
 }
 
 func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []types.JoinedHost) {
