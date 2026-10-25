@@ -292,11 +292,11 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 			// first time, so send them that user's current device list. Remote
 			// joins are not answered with our users' devices: those hosts ask for
 			// them, and unsolicited updates would reach servers we only believe
-			// to be in the room. Like Synapse, partial-state joins are skipped:
-			// the room is not fully joined yet and its hosts are only an
-			// approximation.
+			// to be in the room. While the room has partial state the joined hosts
+			// may include servers that have left; they are sent no more than the
+			// key change consumer sends them for any device change of the user.
 			joiner, joinerErr := s.rsAPI.QueryUserIDForSender(s.ctx, ore.Event.RoomID(), spec.SenderID(*ore.Event.StateKey()))
-			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) && !s.isPartialStateRoom(ore.Event.RoomID().String()) {
+			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) {
 				deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
 				s.sendDeviceLists(ore.Event.RoomID().String(), joiner.String(), deviceListHosts)
 			}
@@ -457,32 +457,6 @@ func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomE
 		}
 	}
 	return "", false
-}
-
-// isPartialStateRoom reports whether the room still has partial state
-// (MSC3706). Errors are treated conservatively: do not send a join-time device
-// list when the room's completeness is unknown.
-func (s *OutputRoomEventConsumer) isPartialStateRoom(roomID string) bool {
-	parsedRoomID, err := spec.NewRoomID(roomID)
-	if err != nil {
-		log.WithError(err).WithField("room_id", roomID).Warn("failed to parse room ID before sending join device lists")
-		return true
-	}
-	roomInfo, err := s.rsAPI.QueryRoomInfo(s.ctx, *parsedRoomID)
-	if err != nil || roomInfo == nil {
-		if err != nil {
-			log.WithError(err).WithField("room_id", roomID).Warn("failed to query room info before sending join device lists")
-		} else {
-			log.WithField("room_id", roomID).Warn("room info missing before sending join device lists")
-		}
-		return true
-	}
-	partialState, err := s.rsAPI.IsRoomPartialState(s.ctx, roomInfo.RoomNID)
-	if err != nil {
-		log.WithError(err).WithField("room_id", roomID).Warn("failed to query room partial state before sending join device lists")
-		return true
-	}
-	return partialState
 }
 
 // sendDeviceLists sends a device list update for every device of a local user
