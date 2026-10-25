@@ -267,11 +267,7 @@ func (t *missingStateReq) processEventWithMissingState(
 				}
 			}
 		}
-		// Events whose prev_events we already know are a contiguous branch, not
-		// isolated state. Storing them only as outliers leaves the event they
-		// build on as a forward extremity, so current state resolves two branches
-		// that are really one. Link the branch as ordinary backfilled events.
-		return t.linkGapFilledEvents(ctx, rs, hadEvents)
+		return nil
 	}
 
 	// stateEventIDs extracts the state event IDs from the resolved state.
@@ -489,59 +485,6 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 	}
 
 	return resolvedState, validationError
-}
-
-// linkGapFilledEvents stores the fetched state events that form a contiguous
-// branch on events whose state we already know as ordinary backfilled events.
-// They were first stored as outliers, which deliberately does not record their
-// prev_events. For a linear chain of state events that reaches a known event,
-// that would leave the known event as a forward extremity even though the chain
-// descends from it, and current state would resolve a fork that does not exist.
-func (t *missingStateReq) linkGapFilledEvents(
-	ctx context.Context, rs *parsedRespState, hadEvents map[string]bool,
-) error {
-	events := make([]gomatrixserverlib.PDU, 0, len(rs.AuthEvents)+len(rs.StateEvents))
-	for _, ev := range rs.Events() {
-		if hadEvents[ev.EventID()] {
-			continue
-		}
-		events = append(events, ev)
-	}
-	ordered := gomatrixserverlib.ReverseTopologicalOrdering(
-		gomatrixserverlib.ToPDUs(events), gomatrixserverlib.TopologicalOrderByPrevEvents)
-	for _, ev := range ordered {
-		prevs := ev.PrevEventIDs()
-		if len(prevs) == 0 {
-			continue
-		}
-		states, err := t.db.StateAtEventIDs(ctx, prevs)
-		if err != nil || len(states) != len(prevs) {
-			continue
-		}
-		known := true
-		for _, state := range states {
-			if state.BeforeStateSnapshotNID == 0 {
-				known = false
-				break
-			}
-		}
-		if !known {
-			continue
-		}
-		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
-			Kind:         api.KindOld,
-			Event:        &types.HeaderedEvent{PDU: ev},
-			Origin:       t.origin,
-			SendAsServer: api.DoNotSendToOtherServers,
-		})
-		if err != nil {
-			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) {
-				return fmt.Errorf("t.inputer.processRoomEvent (linking gap-filled state): %w", err)
-			}
-		}
-	}
-	return nil
 }
 
 // lookupStateAfterEvent returns the room state after `eventID`, which is the state before eventID with the state of `eventID` (if it's a state event)
