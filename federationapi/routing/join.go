@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -309,7 +310,8 @@ func SendJoin(
 			JSON: spec.Forbidden("State not known"),
 		}
 	}
-	partialState := httpReq.URL.Query().Get("omit_members") == "true"
+	signedURI, parseErr := url.ParseRequestURI(request.RequestURI())
+	partialState := parseErr == nil && signedURI.Query().Get("omit_members") == "true"
 	var serversInRoom []string
 	if partialState {
 		// Capture the room's existing hosts before the joining server's event is

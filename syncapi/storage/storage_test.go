@@ -225,6 +225,48 @@ func TestRecentEventsPDU(t *testing.T) {
 	})
 }
 
+func TestSelectMembershipsAtStreamPosition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		charlie := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		// These joins are concurrent: both have the same depth but different
+		// stream positions, as can happen when a room DAG forks.
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		charlieJoin := r.CreateEvent(t, charlie, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(charlie.ID))
+		r.InsertEvent(t, bobJoin)
+		r.InsertEvent(t, charlieJoin)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		beforeBobJoin := positions[len(positions)-3]
+		atBobJoin := positions[len(positions)-2]
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: beforeBobJoin}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a stream token excludes memberships committed after it")
+
+		streamAtBob := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atBobJoin}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, streamAtBob, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "a stream token includes memberships committed before it")
+		require.NotContains(t, got, charlieJoin.EventID(), "a stream token excludes memberships committed after it")
+
+		topologyAtBob := types.TopologyToken{Depth: types.StreamPosition(bobJoin.Depth()), PDUPosition: atBobJoin}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, topologyAtBob, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "a topology token includes events at its depth up to its stream position")
+		require.NotContains(t, got, charlieJoin.EventID(), "a topology token excludes later events at the same depth")
+	})
+}
+
 // The purpose of this test is to ensure that backfill does indeed go backwards, using a topology token.
 func TestGetEventsInRangeWithTopologyToken(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
