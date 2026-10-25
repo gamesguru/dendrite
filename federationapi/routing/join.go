@@ -434,7 +434,9 @@ func partialSendJoinState(state []*types.HeaderedEvent, joiningUserID string) []
 	var members []*types.HeaderedEvent
 	if !hasNameOrAlias {
 		if len(joined) > 0 || len(invited) > 0 {
-			members = append(joined, invited...)
+			members = make([]*types.HeaderedEvent, 0, len(joined)+len(invited))
+			members = append(members, joined...)
+			members = append(members, invited...)
 		} else {
 			members = departed
 		}

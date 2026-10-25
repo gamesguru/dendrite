@@ -36,6 +36,9 @@ type SyncAPIProducer struct {
 	UserAPI                userapi.ClientUserAPI
 }
 
+// presenceRequestTimeout bounds how long a presence update waits for the sync API.
+const presenceRequestTimeout = 10 * time.Second
+
 func (p *SyncAPIProducer) SendReceipt(
 	ctx context.Context,
 	userID, roomID, eventID, receiptType, threadID string, timestamp spec.Timestamp,
@@ -171,7 +174,7 @@ func (p *SyncAPIProducer) SendPresence(
 	if statusMsg != nil {
 		request.Header.Set("status_msg", *statusMsg)
 	}
-	response, err := p.NATS.RequestMsg(request, 10*time.Second)
+	response, err := p.NATS.RequestMsg(request, presenceRequestTimeout)
 	if err != nil {
 		return fmt.Errorf("sync API failed to apply presence update: %w", err)
 	}
