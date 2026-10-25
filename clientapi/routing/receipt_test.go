@@ -63,7 +63,8 @@ func TestSetThreadedReceipt(t *testing.T) {
 		{name: "fully read", body: `{"thread_id":"main"}`, receiptType: "m.fully_read", wantError: "M_INVALID_PARAM"},
 		{name: "wrong thread", body: `{"thread_id":"$other"}`, eventID: reply.EventID(), wantError: "M_INVALID_PARAM"},
 		{name: "thread as main", body: `{"thread_id":"main"}`, eventID: reply.EventID(), wantError: "M_INVALID_PARAM"},
-		{name: "root in thread", body: string(threadBody), eventID: root.EventID(), wantError: "M_INVALID_PARAM"},
+		// MSC3771: a main-timeline event such as the thread root may carry an explicit thread receipt.
+		{name: "root in thread", body: string(threadBody), eventID: root.EventID(), wantThread: root.EventID()},
 		{name: "unknown event", body: `{"thread_id":"main"}`, eventID: "$unknown", wantError: "M_INVALID_PARAM"},
 		{name: "malformed", body: `{`, wantError: "M_BAD_JSON"},
 		{name: "array", body: `[]`, wantError: "M_BAD_JSON"},

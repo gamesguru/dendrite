@@ -57,8 +57,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 // (MSC2246), level 11 records erased users (MSC4025), level 12 locks
 // accounts (MSC3939), level 13 suspends accounts (MSC3823) and stores room
 // reports (MSC4151), level 14 adds the pending notification refresh outbox,
-// and level 15 uniquely indexes invite event IDs.
-const releaseLevel = 15
+// level 15 uniquely indexes invite event IDs, and level 16 tracks notary key
+// retention (MSC4499).
+const releaseLevel = 16
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades
