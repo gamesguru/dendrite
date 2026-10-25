@@ -9,6 +9,7 @@ package producers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -146,25 +147,40 @@ func (p *SyncAPIProducer) SendTyping(
 func (p *SyncAPIProducer) SendPresence(
 	ctx context.Context, userID string, presence types.Presence, statusMsg *string,
 ) error {
+	timestamp := spec.AsTimestamp(time.Now())
+	applyErr := p.applyPresence(userID, presence, statusMsg, timestamp)
+
 	m := nats.NewMsg(p.TopicPresenceEvent)
 	m.Header.Set(jetstream.UserID, userID)
 	m.Header.Set("presence", presence.String())
-	// The sync API writes this update synchronously through RequestPresence.
-	// Keep the durable event for federation without applying it a second time.
-	m.Header.Set("from_sync", "true")
+	// Only once the sync API has written this update synchronously can the
+	// durable consumer skip it; otherwise it must still apply the update.
+	if applyErr == nil {
+		m.Header.Set("from_sync", "true")
+	}
 	if statusMsg != nil {
 		m.Header.Set("status_msg", *statusMsg)
 	}
-
-	timestamp := spec.AsTimestamp(time.Now())
 	m.Header.Set("last_active_ts", strconv.Itoa(int(timestamp)))
 
-	_, err := jetstream.Publish(ctx, p.JetStream, m)
-	if err != nil {
+	if _, err := jetstream.Publish(ctx, p.JetStream, m); err != nil {
 		return err
 	}
+	if applyErr != nil && applyErr != errPresenceNotApplied {
+		return applyErr
+	}
+	return nil
+}
+
+// errPresenceNotApplied means no synchronous write was requested.
+var errPresenceNotApplied = errors.New("presence not applied synchronously")
+
+// applyPresence asks the sync API to write a presence update synchronously.
+func (p *SyncAPIProducer) applyPresence(
+	userID string, presence types.Presence, statusMsg *string, timestamp spec.Timestamp,
+) error {
 	if p.NATS == nil || p.TopicPresenceRequest == "" {
-		return nil
+		return errPresenceNotApplied
 	}
 	request := nats.NewMsg(p.TopicPresenceRequest)
 	request.Header.Set(jetstream.UserID, userID)

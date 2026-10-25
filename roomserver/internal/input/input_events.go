@@ -554,6 +554,7 @@ func (r *Inputer) processRoomEvent(
 	// If we deferred the auth fetch until after resolving the missing prev
 	// events, do it now. The state we fetched will usually have made the
 	// unknown auth events available locally.
+	rejectedBeforeDeferredAuth := isRejected
 	if deferAuthUntilMissingState {
 		if err = checkAuthEvents(true); err != nil {
 			return err
@@ -659,6 +660,8 @@ func (r *Inputer) processRoomEvent(
 			r.missingStateCooldown.Delete(stateResolutionRoomID)
 		case errors.Is(rejectionErr, errNoValidMissingEvents):
 			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
+		case !rejectedBeforeDeferredAuth:
+			// State resolution succeeded; the deferred auth check rejected this event.
 		default:
 			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
 			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
@@ -1126,6 +1129,7 @@ func (r *Inputer) fetchAuthEvents(
 		found = true
 		break
 	}
+	fullChain := found
 	if !found {
 		// /event_auth is optional and some servers (including Complement's
 		// MSC4297 test fixture) do not implement it. Fall back to fetching
@@ -1152,8 +1156,11 @@ func (r *Inputer) fetchAuthEvents(
 
 	// Start with a clean state and see if we can auth with what the remote
 	// server told us. Otherwise earlier topologically sorted events could
-	// fail to be authed by more recent referenced ones.
-	auth.Clear()
+	// fail to be authed by more recent referenced ones. The /event fallback
+	// returns no auth chain, so keep the locally known auth events instead.
+	if fullChain {
+		auth.Clear()
+	}
 
 	// Reuse these to reduce allocations.
 	_authEventNIDs := [5]types.EventNID{}
@@ -1211,6 +1218,13 @@ nextAuthEvent:
 				knownEvent = &ev
 				known[eventID] = knownEvent
 			}
+			// A partial chain can cite events we already have, such as the
+			// create event; they are needed to authorise this one.
+			if !knownEvent.Rejected && knownEvent.PDU != nil {
+				if err := auth.AddEvent(knownEvent.PDU); err != nil {
+					return fmt.Errorf("auth.AddEvent: %w", err)
+				}
+			}
 			authEventNIDs = append(authEventNIDs, knownEvent.EventNID)
 		}
 
@@ -1261,9 +1275,16 @@ nextAuthEvent:
 		}
 	}
 
-	for _, ev := range known {
-		if ev != nil && !ev.Rejected && ev.PDU != nil {
-			_ = auth.AddEvent(ev.PDU)
+	// Authorise the event against only the auth events it cites. known also
+	// holds older events from their chains, which must not shadow them.
+	auth.Clear()
+	for _, authEventID := range authEventIDs {
+		ev, ok := known[authEventID]
+		if !ok || ev == nil || ev.Rejected || ev.PDU == nil {
+			continue
+		}
+		if err := auth.AddEvent(ev.PDU); err != nil {
+			return fmt.Errorf("auth.AddEvent: %w", err)
 		}
 	}
 

@@ -129,6 +129,11 @@ func (p *PDUStreamProvider) CompleteSync(
 
 	recentEvents, err := topologicalRecentEvents(ctx, snapshot, joinedRoomIDs, to, &eventFilter)
 	if err != nil {
+		if abandonsSync(err) {
+			logAbandoned(req, err, "", "complete")
+		} else {
+			req.Log.WithError(err).Error("topologicalRecentEvents failed")
+		}
 		return from
 	}
 	// Build up a /sync response. Add joined rooms.
@@ -190,6 +195,11 @@ func (p *PDUStreamProvider) CompleteSync(
 
 		recentEvents, err = topologicalRecentEvents(ctx, snapshot, peekRooms, to, &eventFilter)
 		if err != nil {
+			if abandonsSync(err) {
+				logAbandoned(req, err, "", "complete")
+			} else {
+				req.Log.WithError(err).Error("topologicalRecentEvents failed")
+			}
 			return from
 		}
 

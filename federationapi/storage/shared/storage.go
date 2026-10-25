@@ -351,7 +351,13 @@ func (d *Database) UpdateNotaryKeys(
 			if err != nil {
 				return err
 			}
-			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, oldKey.ExpiredTS, false); err != nil {
+			// 0 marks a current key in the retention table; keep retired keys
+			// evictable even when the remote server sent no expired_ts.
+			expiredTS := oldKey.ExpiredTS
+			if expiredTS <= 0 {
+				expiredTS = 1
+			}
+			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, expiredTS, false); err != nil {
 				return err
 			}
 		}

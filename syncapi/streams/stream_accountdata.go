@@ -131,9 +131,11 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 						},
 					)
 				} else if from > 0 && joinData.AccountData == nil {
-					// Keep an explicitly empty per-room account_data section on
-					// incremental syncs as the MSC3391 deletion signal.
-					joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{}}
+					// Preserve the deleted type as a typed MSC3391 tombstone.
+					joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{{
+						Type:    dataType,
+						Content: spec.RawJSON(`{}`),
+					}}}
 				}
 				if from > 0 || joinData.AccountData != nil {
 					req.Response.Rooms.Join[roomID] = joinData

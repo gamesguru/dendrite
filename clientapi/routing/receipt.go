@@ -46,10 +46,9 @@ func SetReceipt(req *http.Request, rsAPI receipts.EventQuerier, userAPI userapi.
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam("thread_id is incompatible with this receipt type")}
 		}
 		actual, err := receipts.ThreadID(req.Context(), rsAPI, roomID, eventID)
-		// An event that is not itself in a thread can still be associated with
-		// one explicitly (MSC3771): only reject events that belong to a
-		// different non-main thread.
-		if errors.Is(err, receipts.ErrUnknownEvent) || (err == nil && actual != threadID && actual != "main") {
+		// A thread root is itself in the main timeline but may still carry a
+		// receipt for its own thread (MSC3771); any other mismatch is rejected.
+		if errors.Is(err, receipts.ErrUnknownEvent) || (err == nil && actual != threadID && (actual != "main" || threadID != eventID)) {
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam("event_id is not related to thread_id")}
 		}
 		if err != nil {

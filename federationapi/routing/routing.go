@@ -160,7 +160,7 @@ func Setup(
 			}
 			return InviteV1(
 				httpReq, request, *roomID, vars["eventID"],
-				cfg, rsAPI, keys,
+				cfg, rsAPI, userAPI, keys,
 			)
 		},
 	)).Methods(http.MethodPut, http.MethodOptions)

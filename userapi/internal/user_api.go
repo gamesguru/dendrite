@@ -397,10 +397,12 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 	}
 	// MSC3890: local notification settings are keyed by device ID and must
 	// disappear with the device.
+	// A failure here must not skip the key cleanup below; report it after.
+	var accountDataErrs []error
 	for _, deviceID := range deletedDeviceIDs {
 		dataType := "org.matrix.msc3890.local_notification_settings." + deviceID
 		if err = a.DB.SaveAccountData(ctx, local, domain, "", dataType, json.RawMessage("null")); err != nil {
-			return fmt.Errorf("a.DB.SaveAccountData(%s): %w", dataType, err)
+			accountDataErrs = append(accountDataErrs, fmt.Errorf("a.DB.SaveAccountData(%s): %w", dataType, err))
 		}
 	}
 	// Ask the keyserver to delete device keys and signatures for those devices
@@ -412,13 +414,14 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 	}
 	deleteRes := &api.PerformDeleteKeysResponse{}
 	if err := a.PerformDeleteKeys(ctx, deleteReq, deleteRes); err != nil {
-		return err
+		return errors.Join(append(accountDataErrs, err)...)
 	}
 	if err := deleteRes.Error; err != nil {
-		return fmt.Errorf("a.KeyAPI.PerformDeleteKeys: %w", err)
+		return errors.Join(append(accountDataErrs, fmt.Errorf("a.KeyAPI.PerformDeleteKeys: %w", err))...)
 	}
 	// create empty device keys and upload them to delete what was once there and trigger device list changes
-	return a.deviceListUpdate(req.UserID, deletedDeviceIDs, false) //nolint:contextcheck
+	err = a.deviceListUpdate(req.UserID, deletedDeviceIDs, false) //nolint:contextcheck
+	return errors.Join(append(accountDataErrs, err)...)
 }
 
 func (a *UserInternalAPI) deviceListUpdate(userID string, deviceIDs []string, fromRegistration bool) error {

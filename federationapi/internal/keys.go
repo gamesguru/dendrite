@@ -220,7 +220,7 @@ func (s *FederationInternalAPI) handleFetcherKeys(
 		// A retired key cannot have an expiry in the future. Treat such a
 		// response as malformed before it can enter the cache or be returned
 		// to a caller that is verifying an event.
-		if res.ExpiredTS != gomatrixserverlib.PublicKeyNotExpired && res.ExpiredTS > now {
+		if res.ExpiredTS != gomatrixserverlib.PublicKeyNotExpired && res.ExpiredTS > spec.AsTimestamp(now.Time().Add(maxExpiredTSSkew)) {
 			logrus.WithFields(logrus.Fields{
 				"server_name": req.ServerName,
 				"key_id":      req.KeyID,

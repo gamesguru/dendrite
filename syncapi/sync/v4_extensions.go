@@ -182,6 +182,7 @@ func (rp *RequestPool) ProcessExtensions(
 			return nil, toPos, nil, err
 		}
 		subscribed := make(map[string]map[string]types.ThreadSubscription)
+		unsubscribed := make(map[string]map[string]int64)
 		for roomID, roomData := range accountData.RoomAccountData {
 			raw := roomData["io.element.msc4306.thread_subscriptions"]
 			if len(raw) == 0 {
@@ -189,6 +190,7 @@ func (rp *RequestPool) ProcessExtensions(
 			}
 			var data struct {
 				Subscriptions map[string]types.ThreadSubscription `json:"subscriptions"`
+				Unsubscribed  map[string]int64                    `json:"unsubscribed"`
 			}
 			if err := json.Unmarshal(raw, &data); err != nil {
 				return nil, toPos, nil, err
@@ -196,8 +198,11 @@ func (rp *RequestPool) ProcessExtensions(
 			if len(data.Subscriptions) > 0 {
 				subscribed[roomID] = data.Subscriptions
 			}
+			if len(data.Unsubscribed) > 0 {
+				unsubscribed[roomID] = data.Unsubscribed
+			}
 		}
-		resp.ThreadSubscriptions = &types.ThreadSubscriptionsResponse{Subscribed: subscribed}
+		resp.ThreadSubscriptions = &types.ThreadSubscriptionsResponse{Subscribed: subscribed, Unsubscribed: unsubscribed}
 	}
 
 	// Process to_device extension (PreProcess)

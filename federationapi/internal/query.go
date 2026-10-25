@@ -53,7 +53,9 @@ func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, ser
 	// fetches the full key document anyway, so a single upstream request can
 	// satisfy all of them (MSC4499 §3).
 	res, err, _ := a.serverKeyFetches.Do(string(serverName), func() (any, error) {
-		return a.fetchServerKeysDirectlyUncoalesced(ctx, serverName)
+		return a.doFederationRequest(serverName, func() (any, error) { //nolint:contextcheck
+			return a.fetchServerKeysDirectlyUncoalesced(ctx, serverName)
+		}, true)
 	})
 	if err != nil {
 		a.recordServerKeyFetchFailure(serverName)

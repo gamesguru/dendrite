@@ -9,10 +9,12 @@ package msc4155
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"path"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -45,27 +47,10 @@ func matches(patterns []string, value string) bool {
 }
 
 // Disposition reports whether an invite to invitedUser from sender should be
-// blocked or silently ignored. An explicit user allow overrides user and
-// server deny rules; a user block overrides a server allow.
+// blocked or silently ignored. Any user rule overrides every server rule.
 func Disposition(ctx context.Context, accountData AccountDataQuerier, invitedUser spec.UserID, sender string) (blocked, ignored bool, err error) {
-	if accountData == nil {
-		return false, false, nil
-	}
-
-	var response userapi.QueryAccountDataResponse
-	if err := accountData.QueryAccountData(ctx, &userapi.QueryAccountDataRequest{
-		UserID:   invitedUser.String(),
-		DataType: AccountDataType,
-	}, &response); err != nil {
-		return false, false, err
-	}
-	raw := response.GlobalAccountData[AccountDataType]
-	if len(raw) == 0 || string(raw) == "null" {
-		return false, false, nil
-	}
-
-	var rules Rules
-	if err := json.Unmarshal(raw, &rules); err != nil {
+	rules, err := loadRules(ctx, accountData, invitedUser)
+	if err != nil || rules == nil {
 		return false, false, err
 	}
 
@@ -74,20 +59,69 @@ func Disposition(ctx context.Context, accountData AccountDataQuerier, invitedUse
 		return false, false, err
 	}
 
+	// MSC4155: the first matching rule wins, users before servers and allow
+	// before ignore before block.
 	if matches(rules.AllowedUsers, sender) {
 		return false, false, nil
+	}
+	if matches(rules.IgnoredUsers, sender) {
+		return false, true, nil
 	}
 	if matches(rules.BlockedUsers, sender) {
 		return true, false, nil
 	}
-	if matches(rules.AllowedServers, string(senderServer)) {
+	return serverRules(rules, senderServer)
+}
+
+// ServerDisposition applies only the server rules, for an invite whose sender
+// cannot be resolved to a user ID but whose origin server is known.
+func ServerDisposition(ctx context.Context, accountData AccountDataQuerier, invitedUser spec.UserID, server spec.ServerName) (blocked, ignored bool, err error) {
+	rules, err := loadRules(ctx, accountData, invitedUser)
+	if err != nil || rules == nil {
+		return false, false, err
+	}
+	return serverRules(rules, server)
+}
+
+// serverRules matches server globs against the server name without its port.
+func serverRules(rules *Rules, server spec.ServerName) (blocked, ignored bool, err error) {
+	host := string(server)
+	if h, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+		host = h
+	}
+	if matches(rules.AllowedServers, host) {
 		return false, false, nil
 	}
-	if matches(rules.BlockedServers, string(senderServer)) {
-		return true, false, nil
-	}
-	if matches(rules.IgnoredUsers, sender) || matches(rules.IgnoredServers, string(senderServer)) {
+	if matches(rules.IgnoredServers, host) {
 		return false, true, nil
 	}
+	if matches(rules.BlockedServers, host) {
+		return true, false, nil
+	}
 	return false, false, nil
+}
+
+func loadRules(ctx context.Context, accountData AccountDataQuerier, invitedUser spec.UserID) (*Rules, error) {
+	if accountData == nil {
+		return nil, nil
+	}
+	var response userapi.QueryAccountDataResponse
+	if err := accountData.QueryAccountData(ctx, &userapi.QueryAccountDataRequest{
+		UserID:   invitedUser.String(),
+		DataType: AccountDataType,
+	}, &response); err != nil {
+		return nil, err
+	}
+	raw := response.GlobalAccountData[AccountDataType]
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var rules Rules
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		// The content is user-controlled and a retry cannot fix it, so treat
+		// it as if no rules were configured.
+		logrus.WithError(err).WithField("user_id", invitedUser.String()).Warn("MSC4155: ignoring malformed invite rules")
+		return nil, nil
+	}
+	return &rules, nil
 }

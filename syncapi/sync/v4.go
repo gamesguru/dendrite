@@ -1769,9 +1769,21 @@ func mergeRoomSubscriptionConfig(existing, incoming types.RoomSubscriptionConfig
 		existing.TimelineLimit = incoming.TimelineLimit
 	}
 	existing.RequiredState.Include = appendUniqueStatePatterns(existing.RequiredState.Include, incoming.RequiredState.Include)
-	existing.RequiredState.Exclude = appendUniqueStatePatterns(existing.RequiredState.Exclude, incoming.RequiredState.Exclude)
+	// Exclude only what every merged list excludes: one list's exclusion must
+	// not remove state another list asked for.
+	existing.RequiredState.Exclude = intersectStatePatterns(existing.RequiredState.Exclude, incoming.RequiredState.Exclude)
 	existing.RequiredState.LazyMembers = existing.RequiredState.LazyMembers || incoming.RequiredState.LazyMembers
 	return existing
+}
+
+func intersectStatePatterns(a, b [][]string) [][]string {
+	var out [][]string
+	for _, pattern := range a {
+		if slices.ContainsFunc(b, func(p []string) bool { return slices.Equal(p, pattern) }) {
+			out = append(out, pattern)
+		}
+	}
+	return out
 }
 
 func appendUniqueStatePatterns(dst, src [][]string) [][]string {

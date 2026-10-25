@@ -57,25 +57,9 @@ func InviteV3(
 		// Accepted leniently until the ecosystem has adapted to MSC4311.
 		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
-	ignoredInvite := false
-	if sender := inviteReq.Event().SenderID; sender != "" && userAPI != nil {
-		senderUser, senderErr := inviteSenderUserID(httpReq.Context(), rsAPI, roomID, spec.SenderID(sender))
-		// The room may not be known locally yet, especially for a first invite
-		// to a room using pseudo-IDs. In that case the sender mapping is not
-		// available until the invite is handled; leave filtering to the
-		// subsequent transaction, which has the imported room state.
-		if senderErr == nil && senderUser != nil {
-			blocked, ignored, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, invitedUser, senderUser.String())
-			if ruleErr != nil {
-				return util.ErrorResponse(ruleErr)
-			}
-			if blocked {
-				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
-			}
-			ignoredInvite = ignored
-		}
-		// Ignored invites are still signed normally, so the sender cannot tell,
-		// but are not stored or delivered to the invitee's sync.
+	ignoredInvite, ruleResp := inviteDisposition(httpReq.Context(), rsAPI, userAPI, roomID, invitedUser, spec.SenderID(inviteReq.Event().SenderID), request.Origin())
+	if ruleResp != nil {
+		return *ruleResp
 	}
 
 	input := gomatrixserverlib.HandleInviteV3Input{
@@ -186,21 +170,9 @@ func InviteV2(
 		// Accepted leniently until the ecosystem has adapted to MSC4311.
 		util.GetLogger(httpReq.Context()).Warn("invite_room_state has no m.room.create event for room version 12 or later")
 	}
-	ignoredInvite := false
-	if sender := inviteReq.Event().SenderID(); sender != "" && userAPI != nil {
-		senderUser, senderErr := inviteSenderUserID(httpReq.Context(), rsAPI, roomID, sender)
-		// See InviteV3: an unknown room may not have the pseudo-ID mapping yet.
-		if senderErr == nil && senderUser != nil {
-			blocked, ignored, ruleErr := msc4155.Disposition(httpReq.Context(), userAPI, *invitedUser, senderUser.String())
-			if ruleErr != nil {
-				return util.ErrorResponse(ruleErr)
-			}
-			if blocked {
-				return util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
-			}
-			ignoredInvite = ignored
-		}
-		// Ignored invites are signed but not stored, just like the V3 path.
+	ignoredInvite, ruleResp := inviteDisposition(httpReq.Context(), rsAPI, userAPI, roomID, *invitedUser, inviteReq.Event().SenderID(), request.Origin())
+	if ruleResp != nil {
+		return *ruleResp
 	}
 
 	input := gomatrixserverlib.HandleInviteInput{
@@ -250,6 +222,7 @@ func InviteV1(
 	eventID string,
 	cfg *config.FederationAPI,
 	rsAPI api.FederationRoomserverAPI,
+	userAPI msc4155.AccountDataQuerier,
 	keys gomatrixserverlib.JSONVerifier,
 ) util.JSONResponse {
 	roomVer := gomatrixserverlib.RoomVersionV1
@@ -304,6 +277,11 @@ func InviteV1(
 		}
 	}
 
+	ignoredInvite, ruleResp := inviteDisposition(httpReq.Context(), rsAPI, userAPI, roomID, *invitedUser, event.SenderID(), request.Origin())
+	if ruleResp != nil {
+		return *ruleResp
+	}
+
 	input := gomatrixserverlib.HandleInviteInput{
 		RoomVersion:       roomVer,
 		RoomID:            roomID,
@@ -320,7 +298,7 @@ func InviteV1(
 			return rsAPI.QueryUserIDForSender(httpReq.Context(), roomID, senderID)
 		},
 	}
-	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI, false)
+	event, jsonErr := handleInvite(httpReq.Context(), input, rsAPI, ignoredInvite)
 	if jsonErr != nil {
 		return *jsonErr
 	}
@@ -386,6 +364,35 @@ func handleInviteResult(ctx context.Context, inviteEvent gomatrixserverlib.PDU, 
 		}
 	}
 	return inviteEvent, nil
+}
+
+// inviteDisposition applies the invitee's MSC4155 rules before an invite is
+// handled. A sender that cannot be resolved yet, such as a pseudo-ID in a room
+// unknown locally, is judged by the origin server's rules instead. Ignored
+// invites are still signed normally, so the sender cannot tell, but are not
+// stored or delivered to the invitee's sync.
+func inviteDisposition(
+	ctx context.Context, rsAPI api.FederationRoomserverAPI, userAPI msc4155.AccountDataQuerier,
+	roomID spec.RoomID, invitedUser spec.UserID, sender spec.SenderID, origin spec.ServerName,
+) (bool, *util.JSONResponse) {
+	if sender == "" || userAPI == nil {
+		return false, nil
+	}
+	var blocked, ignored bool
+	var err error
+	if senderUser, senderErr := inviteSenderUserID(ctx, rsAPI, roomID, sender); senderErr == nil && senderUser != nil {
+		blocked, ignored, err = msc4155.Disposition(ctx, userAPI, invitedUser, senderUser.String())
+	} else {
+		blocked, ignored, err = msc4155.ServerDisposition(ctx, userAPI, invitedUser, origin)
+	}
+	if err != nil {
+		resp := util.ErrorResponse(err)
+		return false, &resp
+	}
+	if blocked {
+		return false, &util.JSONResponse{Code: http.StatusForbidden, JSON: spec.Forbidden("Invites from this user or server are blocked")}
+	}
+	return ignored, nil
 }
 
 // inviteSenderUserID resolves the sender of an invite for the invite rules. A

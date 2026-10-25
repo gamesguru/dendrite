@@ -94,9 +94,9 @@ lint: ## Run vet, staticcheck, and golangci-lint
 	# check that LINT_DIRS_GO is set
 	@test -n "${LINT_DIRS_GO}" || echo "Empty \$LINT_DIRS_GO: ${LINT_DIRS_GO}"
 	# ~~~~ go vet        ~~~~
-	$(GO) vet $(VETFLAGS) $(LINT_DIRS_GO)
+	$(GO) vet $(VETFLAGS) $(if $(strip $(LINT_DIRS_GO)),$(LINT_DIRS_GO),$(PKGS))
 	# ~~~~ golang-ci     ~~~~
-	$(GOLANGCI_LINT) run --no-config --new-from-rev=$(DIFF_BASE) $(LINT_DIRS_GO)
+	$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS) --no-config --new-from-rev=$(DIFF_BASE) $(LINT_DIRS_GO)
 	# ~~~~ staticcheck   ~~~~
 	$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $(LINT_DIRS_GO)
 

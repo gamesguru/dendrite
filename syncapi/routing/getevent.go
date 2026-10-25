@@ -76,7 +76,18 @@ func GetEvent(
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
-		events, err = db.EventsWithDevice(ctx, device, []string{eventID}, rsAPI)
+		// A PostgreSQL snapshot's view is fixed at its first query, so each
+		// retry needs a fresh one to see the event once it is committed.
+		retry, snapErr := syncDB.NewDatabaseSnapshot(ctx)
+		if snapErr != nil {
+			logger.WithError(snapErr).Error("GetEvent: syncDB.NewDatabaseSnapshot failed")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
+		events, err = retry.EventsWithDevice(ctx, device, []string{eventID}, rsAPI)
+		retry.Rollback() //nolint:errcheck
 		if err != nil {
 			logger.WithError(err).Error("GetEvent: syncDB.Events failed")
 			return util.JSONResponse{

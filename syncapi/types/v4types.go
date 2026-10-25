@@ -470,7 +470,8 @@ type ExtensionResponse struct {
 
 // ThreadSubscriptionsResponse contains the user's subscribed threads.
 type ThreadSubscriptionsResponse struct {
-	Subscribed map[string]map[string]ThreadSubscription `json:"subscribed,omitempty"`
+	Subscribed   map[string]map[string]ThreadSubscription `json:"subscribed,omitempty"`
+	Unsubscribed map[string]map[string]int64              `json:"unsubscribed,omitempty"`
 }
 
 // ThreadSubscription describes one subscribed thread.
