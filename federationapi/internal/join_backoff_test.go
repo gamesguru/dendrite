@@ -85,8 +85,9 @@ func TestRefusedJoinDoesNotBackOff(t *testing.T) {
 
 type invitedRoomserverAPI struct {
 	rsapi.FederationRoomserverAPI
-	senderErr, inviteErr error
-	pending              bool
+	senderErr, inviteErr, roomErr error
+	pending                       bool
+	roomInfo                      *types.RoomInfo
 }
 
 func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
@@ -97,8 +98,8 @@ func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.Roo
 	return &senderID, nil
 }
 
-func (invitedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
-	return nil, nil
+func (a invitedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return a.roomInfo, a.roomErr
 }
 
 func (a invitedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
@@ -177,10 +178,17 @@ func (c *joinRecordingClient) SendJoinPartialState(context.Context, spec.ServerN
 	return fclient.RespSendJoin{}, errors.New("send_join stopped by the test")
 }
 
-// A user with a pending invite must ask for full state at once, since partial
-// state omits the invite membership the join needs, and must send exactly one
-// join. Retrying after a rejected partial join would send a second one.
-func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
+func stubRoomInfo() *types.RoomInfo {
+	roomInfo := &types.RoomInfo{RoomNID: 1}
+	roomInfo.SetIsStub(true)
+	return roomInfo
+}
+
+// A join must ask for the state it needs from the start and send exactly one
+// join: full state for an invite or a rejoin, partial state only for the first
+// join into a room we do not know. Retrying after a rejected partial join would
+// send a second one.
+func TestJoinSendJoinRequestState(t *testing.T) {
 	lookupErr := errors.New("db down")
 	for name, tc := range map[string]struct {
 		rs   invitedRoomserverAPI
@@ -188,7 +196,10 @@ func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
 	}{
 		"invited asks for full state once":               {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
 		"unknown invite state asks for full state once":  {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
-		"no invite uses partial state":                   {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"unknown room uses partial state":                {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"stub room uses partial state":                   {rs: invitedRoomserverAPI{roomInfo: stubRoomInfo()}, want: []string{"partial"}},
+		"known room asks for full state once":            {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}}, want: []string{"full"}},
+		"room lookup failure asks for full state once":   {rs: invitedRoomserverAPI{roomErr: lookupErr}, want: []string{"full"}},
 		"sender lookup failure asks for full state once": {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
 	} {
 		t.Run(name, func(t *testing.T) {
