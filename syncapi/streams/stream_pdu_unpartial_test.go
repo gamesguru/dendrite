@@ -29,6 +29,8 @@ type unPartialSnapshot struct {
 	state []*rstypes.HeaderedEvent
 	// membership is the user's membership when the range ends; empty means join.
 	membership string
+	// marker is the marker's position. Zero means it is in every range.
+	marker types.StreamPosition
 	// deltas are the state deltas the range already holds.
 	deltas []types.StateDelta
 }
@@ -48,7 +50,10 @@ func (s unPartialSnapshot) RecentEvents(context.Context, []string, types.Range, 
 	return map[string]types.RecentEvents{}, nil
 }
 
-func (s unPartialSnapshot) UnPartialStatedRoomsInRange(context.Context, string, types.Range) ([]string, error) {
+func (s unPartialSnapshot) UnPartialStatedRoomsInRange(_ context.Context, _ string, r types.Range) ([]string, error) {
+	if s.marker > 0 && (s.marker <= r.Low() || s.marker > r.High()) {
+		return nil, nil
+	}
 	return []string{s.roomID}, nil
 }
 
@@ -137,5 +142,28 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 		provider.IncrementalSync(t.Context(), left, req, 10, 20)
 		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
 		assert.Contains(t, req.Response.Rooms.Leave, room.ID)
+	})
+
+	t.Run("a marker before the token is sent with the join", func(t *testing.T) {
+		// Resync finished before the join event reached sync: the token advanced
+		// past the marker, and the join arrives in this range instead.
+		rejoined := snapshot
+		rejoined.marker = 15
+		rejoined.deltas = []types.StateDelta{{RoomID: room.ID, Membership: "join", NewlyJoined: true}}
+		req := newUnPartialRequest(t, alice.ID, false)
+		pos := provider.IncrementalSync(t.Context(), rejoined, req, 20, 30)
+
+		require.Contains(t, req.Response.Rooms.Join, room.ID)
+		assert.NotEmpty(t, req.Response.Rooms.Join[room.ID].State.Events, "the room's state comes with it")
+		assert.Contains(t, req.NewlyJoinedRooms, room.ID)
+		assert.GreaterOrEqual(t, pos, types.StreamPosition(20))
+	})
+
+	t.Run("a marker before the token without a join is not resent", func(t *testing.T) {
+		rejoined := snapshot
+		rejoined.marker = 15
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), rejoined, req, 20, 30)
+		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
 	})
 }

@@ -438,6 +438,45 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 		req.Log.WithError(err).Warn("Failed to get un-partial-stated rooms")
 		return stateDeltas, syncJoinedRooms, nil
 	}
+
+	// A partial-state rejoin can finish before the join event reaches sync. The
+	// sync between the two advances its token past the marker, so the marker is no
+	// longer in the next range even though the room was never sent. Recover such a
+	// marker when this range contains the join. A marker without a join in this
+	// range is left alone, so the room is not sent again on every later sync.
+	joinedInRange := make(map[string]bool)
+	for _, delta := range stateDeltas {
+		if delta.Membership == spec.Join && delta.NewlyJoined {
+			joinedInRange[delta.RoomID] = true
+		}
+	}
+	haveMarker := make(map[string]bool, len(roomIDs))
+	for _, roomID := range roomIDs {
+		haveMarker[roomID] = true
+	}
+	recover := false
+	for roomID := range joinedInRange {
+		if !haveMarker[roomID] {
+			recover = true
+			break
+		}
+	}
+	if recover {
+		earlier, earlierErr := snapshot.UnPartialStatedRoomsInRange(ctx, req.Device.UserID, types.Range{From: 0, To: r.From})
+		if earlierErr != nil {
+			if abandonsSync(earlierErr) {
+				return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", earlierErr)
+			}
+			req.Log.WithError(earlierErr).Warn("Failed to get un-partial-stated rooms before the sync token")
+		} else {
+			for _, roomID := range earlier {
+				if joinedInRange[roomID] && !haveMarker[roomID] {
+					roomIDs = append(roomIDs, roomID)
+					haveMarker[roomID] = true
+				}
+			}
+		}
+	}
 	if len(roomIDs) == 0 {
 		return stateDeltas, syncJoinedRooms, nil
 	}
