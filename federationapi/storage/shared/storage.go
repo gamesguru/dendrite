@@ -22,6 +22,8 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
+const maxRetainedRetiredServerKeys = 3000
+
 type Database struct {
 	DB                       *sql.DB
 	IsLocalServerName        func(spec.ServerName) bool
@@ -337,7 +339,7 @@ func (d *Database) UpdateNotaryKeys(
 			return err
 		}
 		// update the metadata for the keys
-		for keyID := range serverKeys.OldVerifyKeys {
+		for keyID, oldKey := range serverKeys.OldVerifyKeys {
 			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
 			if conflictErr != nil {
 				return conflictErr
@@ -347,6 +349,9 @@ func (d *Database) UpdateNotaryKeys(
 			}
 			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
+				return err
+			}
+			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, oldKey.ExpiredTS, false); err != nil {
 				return err
 			}
 		}
@@ -362,6 +367,12 @@ func (d *Database) UpdateNotaryKeys(
 			if err != nil {
 				return err
 			}
+			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, 0, true); err != nil {
+				return err
+			}
+		}
+		if err := d.NotaryServerKeysMetadata.EvictRetiredKeys(ctx, txn, serverName, maxRetainedRetiredServerKeys); err != nil {
+			return err
 		}
 
 		// clean up old responses
