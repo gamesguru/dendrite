@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"time"
 
@@ -311,13 +310,6 @@ func SendJoin(
 		}
 	}
 	partialState := httpReq.URL.Query().Get("omit_members") == "true"
-	if !partialState {
-		// Use the signed federation request URI as a fallback. Some HTTP
-		// middleware normalizes the request URL before the handler sees it.
-		if signedURI, parseErr := url.ParseRequestURI(request.RequestURI()); parseErr == nil {
-			partialState = signedURI.Query().Get("omit_members") == "true"
-		}
-	}
 	var serversInRoom []string
 	if partialState {
 		// Capture the room's existing hosts before the joining server's event is
@@ -445,11 +437,14 @@ func partialSendJoinState(state []*types.HeaderedEvent, joiningUserID string) []
 			members = departed
 		}
 	}
+	// Pick the oldest members first to match /sync's SelectRoomHeroes, which
+	// orders by added_at. That column lives in the sync API's database, so the
+	// event's depth (then event ID) stands in for it here.
 	sort.Slice(members, func(i, j int) bool {
 		if members[i].Depth() == members[j].Depth() {
-			return members[i].EventID() > members[j].EventID()
+			return members[i].EventID() < members[j].EventID()
 		}
-		return members[i].Depth() > members[j].Depth()
+		return members[i].Depth() < members[j].Depth()
 	})
 	if len(members) > sendJoinHeroLimit {
 		members = members[:sendJoinHeroLimit]

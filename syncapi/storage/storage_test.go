@@ -1370,3 +1370,43 @@ func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
 		})
 	})
 }
+
+func TestSelectMembershipsAtStreamAndTopologyTokens(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		charlie := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		// Charlie's join is created at the same depth as Bob's, but arrives later.
+		charlieJoin := r.CreateEvent(t, charlie, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(charlie.ID))
+		bobJoin := r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		require.Equal(t, bobJoin.Depth(), charlieJoin.Depth())
+
+		basePositions := MustWriteEvents(t, db, r.Events()[:len(r.Events())-1])
+		bobPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{bobJoin})[0]
+		_ = MustWriteEvents(t, db, []*rstypes.HeaderedEvent{charlieJoin})
+
+		members := func(pos types.TopologyToken) []string {
+			eventIDs, err := db.SelectMemberships(ctx, r.ID, pos, nil, nil)
+			require.NoError(t, err)
+			return eventIDs
+		}
+		streamOnly := func(pos types.StreamPosition) types.TopologyToken {
+			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: pos}
+		}
+
+		// s... tokens bound memberships by stream position only.
+		assert.Len(t, members(streamOnly(basePositions[len(basePositions)-1])), 1)
+		assert.ElementsMatch(t, []string{r.Events()[1].EventID(), bobJoin.EventID()}, members(streamOnly(bobPos)))
+		assert.Len(t, members(streamOnly(math.MaxInt64)), 3)
+
+		// t... tokens bound by depth, cutting within a depth by stream position.
+		depth := types.StreamPosition(bobJoin.Depth())
+		assert.ElementsMatch(t, []string{r.Events()[1].EventID(), bobJoin.EventID()}, members(types.TopologyToken{Depth: depth, PDUPosition: bobPos}))
+		assert.Len(t, members(types.TopologyToken{Depth: depth, PDUPosition: math.MaxInt64}), 3)
+		assert.Len(t, members(types.TopologyToken{Depth: depth - 1, PDUPosition: math.MaxInt64}), 1)
+	})
+}
