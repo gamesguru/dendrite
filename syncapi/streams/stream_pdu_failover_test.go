@@ -27,6 +27,11 @@ type failoverSnapshot struct {
 	events []*rstypes.HeaderedEvent
 }
 
+// This fake has no committed stream rows; leave the caller-supplied position unchanged.
+func (s failoverSnapshot) MaxStreamPositionForPDUs(context.Context) (types.StreamPosition, error) {
+	return 0, nil
+}
+
 func (s failoverSnapshot) GetStateDeltas(context.Context, *userapi.Device, types.Range, string, *synctypes.StateFilter, roomserverAPI.SyncRoomserverAPI) ([]types.StateDelta, []string, error) {
 	return []types.StateDelta{{RoomID: s.roomID, Membership: "join"}}, []string{s.roomID}, nil
 }
