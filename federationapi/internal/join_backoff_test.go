@@ -23,7 +23,6 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
-	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
@@ -37,10 +36,6 @@ type noInviteRoomserverAPI struct {
 func (noInviteRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
 	senderID := spec.SenderID(user.String())
 	return &senderID, nil
-}
-
-func (noInviteRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
-	return nil, nil
 }
 
 func (noInviteRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
@@ -85,9 +80,8 @@ func TestRefusedJoinDoesNotBackOff(t *testing.T) {
 
 type invitedRoomserverAPI struct {
 	rsapi.FederationRoomserverAPI
-	senderErr, inviteErr, roomErr error
-	pending                       bool
-	roomInfo                      *types.RoomInfo
+	senderErr, inviteErr error
+	pending              bool
 }
 
 func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
@@ -96,10 +90,6 @@ func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.Roo
 	}
 	senderID := spec.SenderID(user.String())
 	return &senderID, nil
-}
-
-func (a invitedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
-	return a.roomInfo, a.roomErr
 }
 
 func (a invitedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
@@ -178,17 +168,10 @@ func (c *joinRecordingClient) SendJoinPartialState(context.Context, spec.ServerN
 	return fclient.RespSendJoin{}, errors.New("send_join stopped by the test")
 }
 
-func stubRoomInfo() *types.RoomInfo {
-	roomInfo := &types.RoomInfo{RoomNID: 1}
-	roomInfo.SetIsStub(true)
-	return roomInfo
-}
-
-// A join must ask for the state it needs from the start and send exactly one
-// join: full state for an invite or a rejoin, partial state only for the first
-// join into a room we do not know. Retrying after a rejected partial join would
-// send a second one.
-func TestJoinSendJoinRequestState(t *testing.T) {
+// A user with a pending invite must ask for full state at once, since partial
+// state omits the invite membership the join needs, and must send exactly one
+// join. Retrying after a rejected partial join would send a second one.
+func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
 	lookupErr := errors.New("db down")
 	for name, tc := range map[string]struct {
 		rs   invitedRoomserverAPI
@@ -196,10 +179,7 @@ func TestJoinSendJoinRequestState(t *testing.T) {
 	}{
 		"invited asks for full state once":               {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
 		"unknown invite state asks for full state once":  {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
-		"unknown room uses partial state":                {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
-		"stub room uses partial state":                   {rs: invitedRoomserverAPI{roomInfo: stubRoomInfo()}, want: []string{"partial"}},
-		"known room asks for full state once":            {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}}, want: []string{"full"}},
-		"room lookup failure asks for full state once":   {rs: invitedRoomserverAPI{roomErr: lookupErr}, want: []string{"full"}},
+		"no invite uses partial state":                   {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
 		"sender lookup failure asks for full state once": {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -201,7 +201,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 			return r.rsAPI.StoreUserRoomPublicKey(ctx, senderID, *storeUserID, roomID)
 		},
 	}
-	// Use partial state for first joins into unknown rooms (MSC3706 faster joins).
+	// Use partial state join client for MSC3706 faster joins
 	performJoinStartTime := time.Now()
 	partialStateClient := &PartialStateJoinClient{FederationInternalAPI: r}
 	var response *gomatrixserverlib.PerformJoinResponse
@@ -212,21 +212,10 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		// membership needed to authorize an invited join.
 		logrus.WithError(inviteErr).WithField("room_id", roomID).Warn("Failed to check pending invite; using full state for join")
 	}
-	useFullState := invitePending || inviteErr != nil
-	if !useFullState {
-		// A rejoin into a room we already have history for uses full state too:
-		// the sync and backfill paths do not handle a partial-state rejoin.
-		roomInfo, roomErr := r.rsAPI.QueryRoomInfo(ctx, *room)
-		if roomErr != nil {
-			logrus.WithError(roomErr).WithField("room_id", roomID).Warn("Failed to check whether the room is known; using full state for join")
-		}
-		useFullState = roomErr != nil || (roomInfo != nil && !roomInfo.IsStub())
-	}
-	if useFullState {
-		// An invite needs full state because partial state omits the invite
-		// membership the auth check needs. A rejoin needs it because sync and
-		// backfill do not handle a partial-state rejoin. Asking up front avoids
-		// a second join after a rejected partial attempt.
+	if invitePending || inviteErr != nil {
+		// A partial state response omits our own invite membership, which
+		// the join's auth check needs, and retrying after it is rejected would
+		// send a second join. Ask for the full state from the start.
 		response, joinErr = gomatrixserverlib.PerformJoin(ctx, r, joinInput)
 	} else {
 		response, joinErr = gomatrixserverlib.PerformJoin(ctx, partialStateClient, joinInput)
