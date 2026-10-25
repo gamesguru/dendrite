@@ -217,6 +217,15 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 			// no matter how often we retry this event, we will always get this error, discard the event
 			return true
 		}
+		if errors.Is(err, errInviteNotStored) {
+			// The invite may never be stored, e.g. if writing it failed after
+			// it was acknowledged; stop retrying once it has had ample time.
+			if meta, metaErr := msg.Metadata(); metaErr == nil && meta.NumDelivered >= maxInviteRetirementDeliveries {
+				log.WithField("event_id", output.RetireInviteEvent.EventID).Warn("roomserver output log: giving up retiring an invite that was never stored")
+				return true
+			}
+			return false
+		}
 		log.WithFields(log.Fields{
 			"type": output.Type,
 		}).WithError(err).Error("roomserver output log: failed to process event")
@@ -710,6 +719,9 @@ func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 // retires. The consumer NAKs it so it can be applied once the invite is
 // stored; otherwise a later invite redelivery could resurrect the invite.
 var errInviteNotStored = errors.New("invite not stored yet")
+
+// maxInviteRetirementDeliveries bounds how often a retirement waits for its invite.
+const maxInviteRetirementDeliveries = 20
 
 // onRetireInviteEvent retires an invite and, unless it was accepted, advances
 // the invite stream and notifies the local target. Retries reuse the stored
