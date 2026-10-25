@@ -371,7 +371,7 @@ func SendJoin(
 	stateEvents := stateAndAuthChainResponse.StateEvents
 	authEvents := stateAndAuthChainResponse.AuthChainEvents
 	if partialState {
-		keepUserIDs := []string{gjson.GetBytes(response.JoinEvent.Content(), "join_authorised_via_users_server").Str}
+		keepUserIDs := []string{gjson.GetBytes(response.JoinEvent.Content(), "join_authorised_via_users_server").Str} //nolint:misspell // Matrix spec spelling
 		if stateKey := response.JoinEvent.StateKey(); stateKey != nil {
 			keepUserIDs = append(keepUserIDs, *stateKey)
 		}
@@ -404,9 +404,8 @@ func SendJoin(
 // partialSendJoinState keeps non-membership state and, for unnamed rooms, up to
 // five room heroes for an MSC3706 send_join response. Heroes are selected from
 // current joined and invited members, falling back to departed members when
-// none remain. The memberships of keepUserIDs (the joining user and any
-// join_authorised_via_users_server, which the join is checked against) are
-// always retained.
+// none remain. The memberships of keepUserIDs (the joining user and any user
+// who authorized the join) are always retained.
 func partialSendJoinState(state []*types.HeaderedEvent, keepUserIDs ...string) []*types.HeaderedEvent {
 	var joined, invited, departed, kept []*types.HeaderedEvent
 	hasNameOrAlias := false
