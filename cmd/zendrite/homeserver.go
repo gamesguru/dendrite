@@ -129,6 +129,7 @@ func startHomeserver(processCtx *process.ProcessContext, cfg *config.Zendrite, h
 
 	rsAPI.SetAppserviceAPI(asAPI)
 	rsAPI.SetUserAPI(userAPI)
+	fsAPI.SetUserAPI(userAPI)
 
 	monolith := setup.Monolith{
 		Config:    cfg,
