@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
@@ -36,6 +37,10 @@ type noInviteRoomserverAPI struct {
 func (noInviteRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
 	senderID := spec.SenderID(user.String())
 	return &senderID, nil
+}
+
+func (noInviteRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return nil, nil
 }
 
 func (noInviteRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
@@ -90,6 +95,10 @@ func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.Roo
 	}
 	senderID := spec.SenderID(user.String())
 	return &senderID, nil
+}
+
+func (invitedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return nil, nil
 }
 
 func (a invitedRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
