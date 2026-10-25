@@ -66,7 +66,8 @@ type sessionsDict struct {
 	// challengedUsers records usernames for which this server has already
 	// issued a UIA challenge, so a follow-up without its session can be
 	// rejected while allowing first requests that preselect an auth stage.
-	challengedUsers map[string]struct{}
+	// Each entry holds the sessions still active for that username.
+	challengedUsers map[string]map[string]struct{}
 }
 
 // defaultTimeout is the timeout used to clean up sessions.
@@ -89,8 +90,24 @@ func (d *sessionsDict) addParams(sessionID string, r registerRequest) {
 	d.startTimer(defaultTimeOut, sessionID)
 	d.Lock()
 	defer d.Unlock()
+	if old, ok := d.params[sessionID]; ok {
+		d.forgetChallenge(sessionID, old)
+	}
 	d.params[sessionID] = r
-	d.challengedUsers[challengeKey(r.ServerName, r.Username)] = struct{}{}
+	key := challengeKey(r.ServerName, r.Username)
+	if d.challengedUsers[key] == nil {
+		d.challengedUsers[key] = make(map[string]struct{})
+	}
+	d.challengedUsers[key][sessionID] = struct{}{}
+}
+
+// forgetChallenge drops sessionID from its username's challenges. Callers hold the lock.
+func (d *sessionsDict) forgetChallenge(sessionID string, r registerRequest) {
+	key := challengeKey(r.ServerName, r.Username)
+	delete(d.challengedUsers[key], sessionID)
+	if len(d.challengedUsers[key]) == 0 {
+		delete(d.challengedUsers, key)
+	}
 }
 
 func challengeKey(serverName spec.ServerName, username string) string {
@@ -116,6 +133,9 @@ func (d *sessionsDict) getParams(sessionID string) (registerRequest, bool) {
 func (d *sessionsDict) deleteSession(sessionID string) {
 	d.Lock()
 	defer d.Unlock()
+	if r, ok := d.params[sessionID]; ok {
+		d.forgetChallenge(sessionID, r)
+	}
 	delete(d.params, sessionID)
 	delete(d.sessions, sessionID)
 	delete(d.deleteSessionToDeviceID, sessionID)
@@ -143,7 +163,7 @@ func newSessionsDict() *sessionsDict {
 		deleteSessionToDeviceID: make(map[string]string),
 		pendingTokens:           make(map[string]string),
 		oauthSessions:           make(map[string]string),
-		challengedUsers:         make(map[string]struct{}),
+		challengedUsers:         make(map[string]map[string]struct{}),
 	}
 }
 
