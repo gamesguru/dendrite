@@ -102,3 +102,15 @@ func TestPartialSendJoinStateFallsBackToDepartedMembers(t *testing.T) {
 
 	assert.ElementsMatch(t, []string{joiner.ID, alice.ID, bob.ID}, memberStateKeys(state))
 }
+
+func TestPartialSendJoinStateKeepsJoinAuthoriser(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+	room.CreateAndInsert(t, alice, spec.MRoomName, map[string]any{"name": "named"}, test.WithStateKey(""))
+	joiner := test.NewUser(t)
+	joinUser(t, room, joiner)
+
+	state := partialSendJoinState(room.CurrentState(), joiner.ID, alice.ID)
+
+	assert.ElementsMatch(t, []string{joiner.ID, alice.ID}, memberStateKeys(state))
+}

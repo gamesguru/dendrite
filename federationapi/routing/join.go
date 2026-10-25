@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -369,11 +371,11 @@ func SendJoin(
 	stateEvents := stateAndAuthChainResponse.StateEvents
 	authEvents := stateAndAuthChainResponse.AuthChainEvents
 	if partialState {
-		joiningUserID := ""
+		keepUserIDs := []string{gjson.GetBytes(response.JoinEvent.Content(), "join_authorised_via_users_server").Str}
 		if stateKey := response.JoinEvent.StateKey(); stateKey != nil {
-			joiningUserID = *stateKey
+			keepUserIDs = append(keepUserIDs, *stateKey)
 		}
-		stateEvents = partialSendJoinState(stateEvents, joiningUserID)
+		stateEvents = partialSendJoinState(stateEvents, keepUserIDs...)
 		stateEventIDs := make(map[string]struct{}, len(stateEvents))
 		for _, event := range stateEvents {
 			stateEventIDs[event.EventID()] = struct{}{}
@@ -402,10 +404,11 @@ func SendJoin(
 // partialSendJoinState keeps non-membership state and, for unnamed rooms, up to
 // five room heroes for an MSC3706 send_join response. Heroes are selected from
 // current joined and invited members, falling back to departed members when
-// none remain. The joining user's existing membership event is retained.
-func partialSendJoinState(state []*types.HeaderedEvent, joiningUserID string) []*types.HeaderedEvent {
-	var joined, invited, departed []*types.HeaderedEvent
-	var joiningMembership *types.HeaderedEvent
+// none remain. The memberships of keepUserIDs (the joining user and any
+// join_authorised_via_users_server, which the join is checked against) are
+// always retained.
+func partialSendJoinState(state []*types.HeaderedEvent, keepUserIDs ...string) []*types.HeaderedEvent {
+	var joined, invited, departed, kept []*types.HeaderedEvent
 	hasNameOrAlias := false
 	for _, event := range state {
 		if event.Type() == spec.MRoomName || event.Type() == spec.MRoomCanonicalAlias {
@@ -414,8 +417,8 @@ func partialSendJoinState(state []*types.HeaderedEvent, joiningUserID string) []
 		if event.Type() != spec.MRoomMember || event.StateKey() == nil {
 			continue
 		}
-		if *event.StateKey() == joiningUserID {
-			joiningMembership = event
+		if slices.Contains(keepUserIDs, *event.StateKey()) {
+			kept = append(kept, event)
 			continue
 		}
 		membership, err := event.Membership()
@@ -453,11 +456,8 @@ func partialSendJoinState(state []*types.HeaderedEvent, joiningUserID string) []
 	if len(members) > sendJoinHeroLimit {
 		members = members[:sendJoinHeroLimit]
 	}
-	heroes := make(map[string]struct{}, len(members)+1)
-	if joiningMembership != nil {
-		heroes[joiningMembership.EventID()] = struct{}{}
-	}
-	for _, event := range members {
+	heroes := make(map[string]struct{}, len(members)+len(kept))
+	for _, event := range append(members, kept...) {
 		heroes[event.EventID()] = struct{}{}
 	}
 	filtered := make([]*types.HeaderedEvent, 0, len(state))
