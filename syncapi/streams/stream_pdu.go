@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -493,7 +494,10 @@ func (p *PDUStreamProvider) addUnPartialStatedRooms(
 		if left[roomID] {
 			continue
 		}
-		membership, _, memErr := snapshot.SelectMembershipForUser(ctx, roomID, req.Device.UserID, int64(r.To))
+		// Use the current membership, not the one at the end of the range: the
+		// marker can precede the join event, so the range may still end in leave
+		// even though the user has since joined.
+		membership, _, memErr := snapshot.SelectMembershipForUser(ctx, roomID, req.Device.UserID, math.MaxInt64)
 		if memErr != nil {
 			if abandonsSync(memErr) {
 				return stateDeltas, syncJoinedRooms, fmt.Errorf("snapshot.SelectMembershipForUser: %w", memErr)

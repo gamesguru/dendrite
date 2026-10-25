@@ -7,6 +7,7 @@ package streams
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -29,13 +30,19 @@ type unPartialSnapshot struct {
 	state []*rstypes.HeaderedEvent
 	// membership is the user's membership when the range ends; empty means join.
 	membership string
+	// membershipAtRangeEnd is the membership at the range end when it differs
+	// from the current membership, as when a marker precedes the join.
+	membershipAtRangeEnd string
 	// marker is the marker's position. Zero means it is in every range.
 	marker types.StreamPosition
 	// deltas are the state deltas the range already holds.
 	deltas []types.StateDelta
 }
 
-func (s unPartialSnapshot) SelectMembershipForUser(context.Context, string, string, int64) (string, int64, error) {
+func (s unPartialSnapshot) SelectMembershipForUser(_ context.Context, _, _ string, pos int64) (string, int64, error) {
+	if s.membershipAtRangeEnd != "" && pos != math.MaxInt64 {
+		return s.membershipAtRangeEnd, 0, nil
+	}
 	if s.membership == "" {
 		return "join", 0, nil
 	}
@@ -144,6 +151,19 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 		assert.Contains(t, req.Response.Rooms.Leave, room.ID)
 	})
 
+	t.Run("a marker before the join uses the current membership", func(t *testing.T) {
+		// The range still ends in leave because the join event comes after it,
+		// but the user is currently joined, so the room must be sent.
+		rejoined := snapshot
+		rejoined.marker = 15
+		rejoined.membershipAtRangeEnd = "leave"
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), rejoined, req, 10, 20)
+
+		require.Contains(t, req.Response.Rooms.Join, room.ID)
+		assert.NotEmpty(t, req.Response.Rooms.Join[room.ID].State.Events, "the room's state comes with it")
+	})
+
 	t.Run("a marker before the token is sent with the join", func(t *testing.T) {
 		// Resync finished before the join event reached sync: the token advanced
 		// past the marker, and the join arrives in this range instead.
@@ -162,6 +182,15 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 	t.Run("a marker before the token without a join is not resent", func(t *testing.T) {
 		rejoined := snapshot
 		rejoined.marker = 15
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), rejoined, req, 20, 30)
+		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
+	})
+
+	t.Run("an ordinary joined room does not recover an old marker", func(t *testing.T) {
+		rejoined := snapshot
+		rejoined.marker = 15
+		rejoined.deltas = []types.StateDelta{{RoomID: room.ID, Membership: "join"}}
 		req := newUnPartialRequest(t, alice.ID, false)
 		provider.IncrementalSync(t.Context(), rejoined, req, 20, 30)
 		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
