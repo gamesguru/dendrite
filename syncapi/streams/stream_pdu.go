@@ -290,6 +290,17 @@ func (p *PDUStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) (newPos types.StreamPosition) {
+	// The sync consumer commits an event before advancing the notifier. A sync
+	// request can therefore open a snapshot that sees a PDU the notifier has
+	// not announced yet. Read through the snapshot's committed high-water mark
+	// so this response and its token include the same events.
+	if committed, err := snapshot.MaxStreamPositionForPDUs(ctx); err != nil {
+		req.Log.WithError(err).Error("snapshot.MaxStreamPositionForPDUs failed")
+		return from
+	} else if committed > to {
+		to = committed
+	}
+
 	r := types.Range{
 		From:      from,
 		To:        to,
