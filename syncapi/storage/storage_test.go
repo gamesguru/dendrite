@@ -836,11 +836,11 @@ func TestInviteRedeliveryIsIdempotent(t *testing.T) {
 			t.Fatalf("redelivered invite moved from position %d to %d", pos, redeliveredPos)
 		}
 
-		retiredPos, err := db.RetireInviteEvent(ctx, invite.EventID())
+		retiredPos, err := db.RetireInviteEvent(ctx, invite.EventID(), room.ID)
 		if err != nil {
 			t.Fatalf("failed to retire invite: %s", err)
 		}
-		retriedPos, err := db.RetireInviteEvent(ctx, invite.EventID())
+		retriedPos, err := db.RetireInviteEvent(ctx, invite.EventID(), room.ID)
 		if err != nil {
 			t.Fatalf("failed to retry retirement: %s", err)
 		}
@@ -870,6 +870,36 @@ func TestInviteRedeliveryIsIdempotent(t *testing.T) {
 			}
 			if _, ok := retired[room.ID]; !ok {
 				t.Fatalf("retired invite is missing from the retirement range")
+			}
+		})
+
+		// A retirement can arrive before its invite is written. Keep a
+		// tombstone so that the later invite delivery cannot make it active.
+		lateInvite := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		lateInvite.UserID = *aliceUserID
+		lateRetiredPos, err := db.RetireInviteEvent(ctx, lateInvite.EventID(), room.ID)
+		if err != nil {
+			t.Fatalf("failed to retire invite before it was stored: %s", err)
+		}
+		lateInvitePos, active, err := db.AddInviteEvent(ctx, lateInvite)
+		if err != nil {
+			t.Fatalf("failed to add late invite: %s", err)
+		}
+		if active {
+			t.Fatal("invite delivered after its retirement was marked active")
+		}
+		if lateInvitePos != lateRetiredPos {
+			t.Fatalf("late invite position %d differs from tombstone position %d", lateInvitePos, lateRetiredPos)
+		}
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			invites, _, _, err := snapshot.InviteEventsInRange(ctx, alice.ID, types.Range{From: 0, To: math.MaxInt64})
+			if err != nil {
+				t.Fatalf("InviteEventsInRange returned error: %s", err)
+			}
+			if _, ok := invites[room.ID]; ok {
+				t.Fatal("late invite appeared in active invite results")
 			}
 		})
 	})
@@ -972,7 +1002,7 @@ Func TestInviteBehaviour(t *testing.T) {
 	assertInvitedToRooms(t, beforeRetireRes, []string{inviteRoom1, inviteRoom2})
 
 	// retire one event: a fresh sync should just return 1 invite room
-	if _, err = db.RetireInviteEvent(ctx, inviteEvent1.EventID()); err != nil {
+	if _, err = db.RetireInviteEvent(ctx, inviteEvent1.EventID(), inviteRoom1); err != nil {
 		t.Fatalf("Failed to RetireInviteEvent: %s", err)
 	}
 	latest, err = db.SyncPosition(ctx)

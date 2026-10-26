@@ -67,15 +67,26 @@ func saveThreadSubscriptions(req *http.Request, userID, roomID string, data thre
 	}, &userapi.InputAccountDataResponse{})
 }
 
-// threadSubscriptionLocks serialises the read-modify-write of each user's
+// threadSubscriptionLocks serializes the read-modify-write of each user's
 // per-room subscription document, so concurrent changes to different threads
 // are not lost.
-var threadSubscriptionLocks sync.Map // "userID\x00roomID" -> *sync.Mutex
+var threadSubscriptionLocks = struct {
+	sync.Mutex
+	locks map[string]*sync.Mutex
+}{locks: make(map[string]*sync.Mutex)}
 
 func lockThreadSubscriptions(userID, roomID string) func() {
-	mu, _ := threadSubscriptionLocks.LoadOrStore(userID+"\x00"+roomID, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	return mu.(*sync.Mutex).Unlock
+	key := userID + "\x00" + roomID
+	threadSubscriptionLocks.Lock()
+	mu := threadSubscriptionLocks.locks[key]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		threadSubscriptionLocks.locks[key] = mu
+	}
+	threadSubscriptionLocks.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
 }
 
 // getThreadEvent returns the event if it exists in the room and the user may

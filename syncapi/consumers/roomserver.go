@@ -8,7 +8,6 @@ package consumers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -216,15 +215,6 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		if errors.As(err, new(base64.CorruptInputError)) {
 			// no matter how often we retry this event, we will always get this error, discard the event
 			return true
-		}
-		if errors.Is(err, errInviteNotStored) {
-			// The invite may never be stored, e.g. if writing it failed after
-			// it was acknowledged; stop retrying once it has had ample time.
-			if meta, metaErr := msg.Metadata(); metaErr == nil && meta.NumDelivered >= maxInviteRetirementDeliveries {
-				log.WithField("event_id", output.RetireInviteEvent.EventID).Warn("roomserver output log: giving up retiring an invite that was never stored")
-				return true
-			}
-			return false
 		}
 		log.WithFields(log.Fields{
 			"type": output.Type,
@@ -715,20 +705,11 @@ func (s *OutputRoomEventConsumer) addPendingMembershipEvent(
 	return active, nil
 }
 
-// errInviteNotStored marks a retirement that arrived before the invite it
-// retires. The consumer NAKs it so it can be applied once the invite is
-// stored; otherwise a later invite redelivery could resurrect the invite.
-var errInviteNotStored = errors.New("invite not stored yet")
-
-// maxInviteRetirementDeliveries bounds how often a retirement waits for its invite.
-const maxInviteRetirementDeliveries = 20
-
 // onRetireInviteEvent retires an invite and, unless it was accepted, advances
 // the invite stream and notifies the local target. Retries reuse the stored
-// retirement position. A missing invite for a local target returns
-// errInviteNotStored; a missing invite with no resolved local target is ignored.
-// Database and sender lookup errors are returned for retry, even when the
-// retirement has already been stored.
+// retirement position. A missing invite creates a tombstone, preventing a late
+// invite delivery from resurrecting it. Database and sender lookup errors are
+// returned for retry, even when the retirement has already been stored.
 func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 	ctx context.Context, msg api.OutputRetireInviteEvent,
 ) error {
@@ -736,24 +717,7 @@ func (s *OutputRoomEventConsumer) onRetireInviteEvent(
 	// lookup fails, the row is already retired and a redelivery returns the
 	// same stored position, so the notification can be retried without
 	// advancing the invite stream again.
-	pduPos, err := s.db.RetireInviteEvent(ctx, msg.EventID)
-	if errors.Is(err, sql.ErrNoRows) {
-		// There is no stored invite. If the invitee is not local there is
-		// nothing to retire; otherwise the invite may still be in flight and
-		// this retirement must be retried. The consumer NAKs with a delay and
-		// keeps fetching, so the later invite can still be processed.
-		userID, lookupErr := s.inviteTargetUserID(ctx, msg)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if userID == nil || !s.cfg.Matrix.IsLocalServerName(userID.Domain()) {
-			return nil
-		}
-		log.WithFields(log.Fields{
-			"event_id": msg.EventID,
-		}).Debug("roomserver output log: invite not stored yet, retrying retirement")
-		return errInviteNotStored
-	}
+	pduPos, err := s.db.RetireInviteEvent(ctx, msg.EventID, msg.RoomID)
 	if err != nil {
 		// NAK so the retirement is not lost. Retiring is idempotent and returns
 		// the persisted position when it is redelivered after a committed

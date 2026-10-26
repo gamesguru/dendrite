@@ -1219,7 +1219,7 @@ nextAuthEvent:
 				known[eventID] = knownEvent
 			}
 			// A partial chain can cite events we already have, such as the
-			// create event; they are needed to authorise this one.
+			// create event; they are needed to authorize this one.
 			if !knownEvent.Rejected && knownEvent.PDU != nil {
 				if err := auth.AddEvent(knownEvent.PDU); err != nil {
 					return fmt.Errorf("auth.AddEvent: %w", err)
@@ -1275,7 +1275,7 @@ nextAuthEvent:
 		}
 	}
 
-	// Authorise the event against only the auth events it cites. known also
+	// Authorize the event against only the auth events it cites. known also
 	// holds older events from their chains, which must not shadow them.
 	auth.Clear()
 	for _, authEventID := range authEventIDs {

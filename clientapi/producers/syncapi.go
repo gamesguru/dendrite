@@ -166,7 +166,7 @@ func (p *SyncAPIProducer) SendPresence(
 	if _, err := jetstream.Publish(ctx, p.JetStream, m); err != nil {
 		return err
 	}
-	if applyErr != nil && applyErr != errPresenceNotApplied {
+	if applyErr != nil && !errors.Is(applyErr, errPresenceNotApplied) {
 		return applyErr
 	}
 	return nil
