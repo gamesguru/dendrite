@@ -1155,21 +1155,38 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 	return nil
 }
 
-// cleanKnownBackwardExtremities checks if any prev_events of ev that were missing from
-// syncapi OutputEvents are actually known to roomserver (e.g. rejected events or outliers).
-// If roomserver knows them, the DAG history has no missing gap and the backward extremity
-// marker for that prev_event is removed.
+// cleanKnownBackwardExtremities removes the backward extremity marker of each
+// prev_event of ev that /messages can never paginate to, so it does not try to
+// backfill it: events the sync API stored, and events the roomserver only holds
+// as rejected. Non-rejected outliers, such as events fetched while resyncing
+// partial state, are in the roomserver but not the sync API timeline, so their
+// marker stays and /messages backfills them.
 func (s *OutputRoomEventConsumer) cleanKnownBackwardExtremities(ctx context.Context, ev *rstypes.HeaderedEvent) {
-	if s.rsAPI == nil || len(ev.PrevEventIDs()) == 0 {
-		return
-	}
 	for _, prevID := range ev.PrevEventIDs() {
-		var queryRes api.QueryEventsByIDResponse
-		if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
-			RoomID:   ev.RoomID().String(),
-			EventIDs: []string{prevID},
-		}, &queryRes); err == nil && len(queryRes.Events) > 0 {
-			_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
+		if !s.prevEventNeedsNoBackfill(ctx, ev.RoomID().String(), prevID) {
+			continue
 		}
+		_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
 	}
+}
+
+func (s *OutputRoomEventConsumer) prevEventNeedsNoBackfill(ctx context.Context, roomID, prevID string) bool {
+	if stored, err := s.db.Events(ctx, []string{prevID}); err == nil && len(stored) > 0 && stored[0] != nil {
+		return true
+	}
+	if s.rsAPI == nil {
+		return false
+	}
+	var known, accepted api.QueryEventsByIDResponse
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID},
+	}, &known); err != nil || len(known.Events) == 0 {
+		return false
+	}
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
+	}, &accepted); err != nil {
+		return false
+	}
+	return len(accepted.Events) == 0
 }
