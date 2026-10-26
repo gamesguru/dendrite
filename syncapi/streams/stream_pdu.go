@@ -360,7 +360,12 @@ func (p *PDUStreamProvider) IncrementalSync(
 			filteredDeltas := make([]types.StateDelta, 0, len(stateDeltas))
 			filteredJoinedRooms := make([]string, 0, len(syncJoinedRooms))
 			for _, delta := range stateDeltas {
-				if !partialStateRooms[delta.RoomID] {
+				// A leave or ban only needs the user's own membership, not the full
+				// state, so deliver it. The server that removed the user may refuse
+				// to serve the state, which would leave the resync, and the client's
+				// only notice of the removal, outstanding indefinitely.
+				leaving := delta.Membership == spec.Leave || delta.Membership == spec.Ban
+				if !partialStateRooms[delta.RoomID] || leaving {
 					filteredDeltas = append(filteredDeltas, delta)
 				} else {
 					req.Log.WithField("room_id", delta.RoomID).Debug("Excluding partial state room from non-lazy incremental sync")

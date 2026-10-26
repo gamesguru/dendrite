@@ -68,6 +68,10 @@ func (s unPartialSnapshot) FullStateDeltas(context.Context, *userapi.Device, []s
 	return []types.StateDelta{{RoomID: s.roomID, Membership: "join", NewlyJoined: true, StateEvents: s.state}}, nil
 }
 
+func (s unPartialSnapshot) RoomStateDelta(context.Context, *userapi.Device, string, types.Range, *synctypes.StateFilter, roomserverAPI.SyncRoomserverAPI) ([]*rstypes.HeaderedEvent, error) {
+	return s.state, nil
+}
+
 func (s unPartialSnapshot) GetBackwardTopologyPos(context.Context, []*rstypes.HeaderedEvent) (types.TopologyToken, error) {
 	return types.TopologyToken{}, nil
 }
@@ -193,6 +197,55 @@ func TestIncrementalSyncSendsARoomWhoseResyncFinished(t *testing.T) {
 		rejoined.deltas = []types.StateDelta{{RoomID: room.ID, Membership: "join"}}
 		req := newUnPartialRequest(t, alice.ID, false)
 		provider.IncrementalSync(t.Context(), rejoined, req, 20, 30)
+		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
+	})
+}
+
+// partialStateRooms reports its rooms as still resyncing their state.
+type partialStateRooms struct {
+	roomserverAPI.SyncRoomserverAPI
+	rooms []string
+}
+
+func (p partialStateRooms) GetPartialStateRoomIDs(context.Context) ([]string, error) {
+	return p.rooms, nil
+}
+
+func (partialStateRooms) QueryMembershipForUser(context.Context, *roomserverAPI.QueryMembershipForUserRequest, *roomserverAPI.QueryMembershipForUserResponse) error {
+	return nil
+}
+
+// A user who is removed from a room whose partial state resync has not finished,
+// and may never, as the server that removed them can refuse to serve it, must still
+// be told: leaving needs no room state. A join is held back until the resync ends.
+func TestIncrementalSyncDeliversRemovalFromAPartialStateRoom(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	provider := &PDUStreamProvider{rsAPI: partialStateRooms{rooms: []string{room.ID}}}
+
+	for _, membership := range []string{"leave", "ban"} {
+		t.Run(membership+" is delivered", func(t *testing.T) {
+			snapshot := unPartialSnapshot{
+				failoverSnapshot: failoverSnapshot{roomID: room.ID},
+				state:            room.Events()[:1],
+				membership:       membership,
+				marker:           1000, // the resync has not finished: no marker in range
+				deltas:           []types.StateDelta{{RoomID: room.ID, Membership: membership, MembershipPos: 15, StateEvents: room.Events()[:1]}},
+			}
+			req := newUnPartialRequest(t, alice.ID, false)
+			provider.IncrementalSync(t.Context(), snapshot, req, 10, 20)
+			assert.Contains(t, req.Response.Rooms.Leave, room.ID)
+		})
+	}
+
+	t.Run("a join is still held back", func(t *testing.T) {
+		snapshot := unPartialSnapshot{
+			failoverSnapshot: failoverSnapshot{roomID: room.ID},
+			marker:           1000,
+			deltas:           []types.StateDelta{{RoomID: room.ID, Membership: "join", NewlyJoined: true}},
+		}
+		req := newUnPartialRequest(t, alice.ID, false)
+		provider.IncrementalSync(t.Context(), snapshot, req, 10, 20)
 		assert.NotContains(t, req.Response.Rooms.Join, room.ID)
 	})
 }
