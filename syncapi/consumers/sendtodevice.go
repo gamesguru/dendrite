@@ -86,14 +86,20 @@ func (s *OutputSendToDeviceEventConsumer) WaitUntilCaughtUp(ctx context.Context,
 
 	// Remember how far the stream had got when the barrier started. Messages
 	// published later, for this user or another, must not extend this wait.
-	cutoff, haveCutoff := s.sendToDeviceCutoff(ctx)
+	var cutoff uint64
+	haveCutoff := false
 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		// An unknown cutoff is retried until the deadline: an empty consumer
+		// only proves the barrier if the cutoff was read first.
+		if !haveCutoff {
+			cutoff, haveCutoff = s.sendToDeviceCutoff(ctx)
+		}
 		info, err := s.jetstream.ConsumerInfo(s.topic, s.pullDurable, nats.Context(ctx))
-		if err == nil {
-			// Keep the old fast path for an empty consumer: no messages are
+		if err == nil && haveCutoff {
+			// Keep the fast path for an empty consumer: no messages are
 			// waiting and none are in flight.
 			if info.NumPending == 0 && info.NumAckPending == 0 {
 				return
@@ -101,7 +107,7 @@ func (s *OutputSendToDeviceEventConsumer) WaitUntilCaughtUp(ctx context.Context,
 			// Otherwise wait only for the messages that existed before the
 			// barrier started. The ack floor is the highest stream position
 			// below which everything has been acknowledged.
-			if haveCutoff && info.AckFloor.Stream >= cutoff {
+			if info.AckFloor.Stream >= cutoff {
 				return
 			}
 		}

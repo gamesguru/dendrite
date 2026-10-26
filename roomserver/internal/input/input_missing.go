@@ -41,8 +41,8 @@ type parsedRespState struct {
 var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid events")
 
 // isMalformedJSONError reports whether err came from decoding a response body
-// that was not valid JSON. Those responses are worth retrying, unlike a
-// connection failure or an HTTP error status.
+// that was empty or not valid JSON. Those responses are worth retrying once,
+// unlike a connection failure or an HTTP error status.
 func isMalformedJSONError(err error) bool {
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError

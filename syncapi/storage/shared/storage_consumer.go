@@ -628,6 +628,7 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 	// upgraded, so retry the whole transaction, including the lookup.
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		pos = 0
 		changed = false
 		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 			if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
@@ -641,6 +642,9 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 		})
 		if err == nil || !isSQLiteBusy(err) {
 			return pos, changed, err
+		}
+		if attempt == maxRetries-1 {
+			break
 		}
 		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
 		select {

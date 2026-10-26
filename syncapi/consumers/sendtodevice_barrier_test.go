@@ -7,6 +7,7 @@ package consumers
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,9 +31,17 @@ func TestSendToDeviceBarrierAgainstJetStream(t *testing.T) {
 	topic := cfg.Global.JetStream.Prefixed(jetstream.OutputSendToDeviceEvent)
 	durable := cfg.Global.JetStream.Durable("SyncAPISendToDeviceConsumer")
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseHandler()
+	received := make(chan struct{}, 1)
 	require.NoError(t, jetstream.JetStreamConsumer(
 		processCtx.Context(), js, topic, durable, 1,
 		func(ctx context.Context, msgs []*nats.Msg) bool {
+			select {
+			case received <- struct{}{}:
+			default:
+			}
 			<-release
 			return true
 		}, nats.DeliverAll(), nats.ManualAck(),
@@ -46,6 +55,12 @@ func TestSendToDeviceBarrierAgainstJetStream(t *testing.T) {
 	_, err := js.Publish(topic, []byte("first"))
 	require.NoError(t, err)
 
+	select {
+	case <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consumer never received the message")
+	}
+
 	// The message is not handled yet, so the barrier runs out its timeout.
 	started := time.Now()
 	consumer.WaitUntilCaughtUp(context.Background(), 150*time.Millisecond)
@@ -57,7 +72,7 @@ func TestSendToDeviceBarrierAgainstJetStream(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
-	close(release)
+	releaseHandler()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
