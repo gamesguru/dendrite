@@ -231,10 +231,10 @@
 {"Action":"pass","Test":"TestInboundFederationProfile"}
 {"Action":"pass","Test":"TestInboundFederationProfile/Inbound_federation_can_query_profile_data"}
 {"Action":"pass","Test":"TestInboundFederationProfile/Non-numeric_ports_in_server_names_are_rejected"}
-{"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents"}
+{"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents"}
 {"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/Outlier_should_be_rejected"}
 {"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_1_should_be_rejected"}
-{"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_2_should_be_rejected"}
+{"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_2_should_be_rejected"}
 {"Action":"pass","Test":"TestInviteFiltering"}
 {"Action":"pass","Test":"TestInviteFiltering/Can_allow_a_user_from_a_blocked_server"}
 {"Action":"pass","Test":"TestInviteFiltering/Can_block_a_single_user"}
@@ -669,7 +669,7 @@
 {"Action":"pass","Test":"TestPartialStateJoin/Outgoing_device_list_updates/Device_list_updates_reach_newly_joined_servers_in_partial_state_rooms"}
 {"Action":"pass","Test":"TestPartialStateJoin/PartialStateJoinContinuesAfterRestart"}
 {"Action":"pass","Test":"TestPartialStateJoin/PartialStateJoinSyncsUsingOtherHomeservers"}
-{"Action":"pass","Test":"TestPartialStateJoin/Purge_during_resync"}
+{"Action":"skip","Test":"TestPartialStateJoin/Purge_during_resync"}
 {"Action":"pass","Test":"TestPartialStateJoin/Rejected_events_remain_rejected_after_resync"}
 {"Action":"pass","Test":"TestPartialStateJoin/Rejects_make_join_during_partial_join"}
 {"Action":"pass","Test":"TestPartialStateJoin/Rejects_make_knock_during_partial_join"}
