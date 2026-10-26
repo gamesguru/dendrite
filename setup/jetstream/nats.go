@@ -103,14 +103,10 @@ func (s *NATSInstance) prepareE(ctx context.Context, process *process.ProcessCon
 	}
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
+		// MemoryStorage applies to streams, but JetStream metadata still uses
+		// StoreDir. Keep the per-instance path to avoid concurrent test brokers
+		// falling back to the same os.TempDir()/jetstream directory.
 		storeDir := string(cfg.StoragePath)
-		if cfg.InMemory {
-			// InMemory means all storage, including JetStream metadata. A
-			// per-test temp directory still costs directory creation, writes and
-			// cleanup on every embedded server start; keeping this empty avoids
-			// that disk work inside the test suite entirely.
-			storeDir = ""
-		}
 		opts := &natsserver.Options{
 			ServerName:      "monolith",
 			DontListen:      true,

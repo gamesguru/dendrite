@@ -197,6 +197,9 @@ func TestPrepareUsesMemoryStorageWhenInMemory(t *testing.T) {
 	if js == nil || nc == nil {
 		t.Fatal("expected an in-memory NATS instance")
 	}
+	if got, want := instance.Server.JetStreamConfig().StoreDir, filepath.Join(dir, natsserver.JetStreamStoreDir); got != want {
+		t.Fatalf("JetStream metadata store = %q, want per-instance directory %q", got, want)
+	}
 
 	info, err := js.StreamInfo(cfg.Prefixed(InputRoomEvent))
 	if err != nil {
@@ -204,6 +207,42 @@ func TestPrepareUsesMemoryStorageWhenInMemory(t *testing.T) {
 	}
 	if info.Config.Storage != natsclient.MemoryStorage {
 		t.Fatalf("stream storage = %v, want memory", info.Config.Storage)
+	}
+}
+
+func TestPrepareConcurrentInMemoryInstances(t *testing.T) {
+	const instances = 16
+	type prepared struct {
+		process *process.ProcessContext
+		err     error
+	}
+	dirs := make([]string, instances)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	results := make(chan prepared, instances)
+	for i := 0; i < instances; i++ {
+		go func(i int) {
+			cfg := &config.JetStream{
+				InMemory:    true,
+				StoragePath: config.Path(dirs[i]),
+				TopicPrefix: fmt.Sprintf("concurrent_%d_", i),
+				NoLog:       true,
+			}
+			cfg.Matrix = &config.Global{JetStream: *cfg}
+			processCtx := process.NewProcessContext()
+			instance := &NATSInstance{}
+			_, _, err := instance.PrepareE(processCtx, cfg)
+			results <- prepared{process: processCtx, err: err}
+		}(i)
+	}
+	for i := 0; i < instances; i++ {
+		result := <-results
+		if result.err != nil {
+			t.Errorf("prepare concurrent broker: %v", result.err)
+		}
+		result.process.ShutdownZendrite()
+		result.process.WaitForComponentsToFinish()
 	}
 }
 
