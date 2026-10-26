@@ -336,7 +336,11 @@ func (n *Notifier) PartialStateSharedUsersForCandidates(ctx context.Context, use
 	defer n.lock.RUnlock()
 	shared := make(map[string]struct{})
 	for roomID, servers := range partialRooms {
-		if !n.roomIDToJoinedUsers[roomID].isIn(userA) {
+		// A partial-state room can be known to the roomserver before the
+		// notifier has populated its joined-user set (for example, while the
+		// room's initial join is still being processed).
+		users := n.roomIDToJoinedUsers[roomID]
+		if users == nil || !users.isIn(userA) {
 			continue
 		}
 		for _, userID := range candidates {
