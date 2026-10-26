@@ -305,9 +305,20 @@ func (r *Joiner) performJoinRoomByID(
 	// A user the room bans cannot rejoin it, so refuse at once rather than ask another
 	// server, which may not yet know of the ban (a partial state join in particular).
 	if info != nil && senderID != "" {
-		var banRes rsAPI.QueryMembershipForUserResponse
-		if banErr := r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, &banRes); banErr == nil && banRes.Membership == spec.Ban {
-			return "", "", rsAPI.ErrNotAllowed{Err: fmt.Errorf("user %s is banned from the room", req.UserID)}
+		var membershipRes rsAPI.QueryMembershipForUserResponse
+		if banErr := r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, &membershipRes); banErr == nil {
+			if membershipRes.Membership == spec.Ban {
+				return "", "", rsAPI.ErrNotAllowed{Err: fmt.Errorf("user %s is banned from the room", req.UserID)}
+			}
+			// A rejoin after leaving uses the stale local DAG. If the room has
+			// other servers and the client named one, join through it so the
+			// new join event is anchored to the room's current forward
+			// extremities rather than the old branch that the user left.
+			if membershipRes.Membership == spec.Leave && len(req.ServerNames) > 0 {
+				if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
+					forceFederatedJoin = true
+				}
+			}
 		}
 	}
 
