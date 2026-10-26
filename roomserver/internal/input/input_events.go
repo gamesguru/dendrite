@@ -555,8 +555,27 @@ func (r *Inputer) processRoomEvent(
 	// events, do it now. The state we fetched will usually have made the
 	// unknown auth events available locally.
 	rejectedBeforeDeferredAuth := isRejected
+	recordStateResolutionResult := func() {
+		if !didStateResolution || stateResolutionRoomID == "" {
+			return
+		}
+		switch {
+		case !isRejected:
+			r.missingStateCooldown.Delete(stateResolutionRoomID)
+		case errors.Is(rejectionErr, errNoValidMissingEvents):
+			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
+		case !rejectedBeforeDeferredAuth:
+			// State resolution succeeded; the deferred auth check rejected this event.
+		default:
+			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
+			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
+		}
+	}
 	if deferAuthUntilMissingState {
 		if err = checkAuthEvents(true); err != nil {
+			// The event is not stored when deferred auth fails, so this is the last
+			// chance to record a state-resolution failure for the cooldown.
+			recordStateResolutionResult()
 			return err
 		}
 	}
@@ -654,19 +673,7 @@ func (r *Inputer) processRoomEvent(
 	// cooldown based on whether the event was ultimately accepted or rejected.
 	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
 	// and memory on federation state lookups for every incoming transaction.
-	if didStateResolution && stateResolutionRoomID != "" {
-		switch {
-		case !isRejected:
-			r.missingStateCooldown.Delete(stateResolutionRoomID)
-		case errors.Is(rejectionErr, errNoValidMissingEvents):
-			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
-		case !rejectedBeforeDeferredAuth:
-			// State resolution succeeded; the deferred auth check rejected this event.
-		default:
-			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
-			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
-		}
-	}
+	recordStateResolutionResult()
 
 	// For outliers we can stop after we've stored the event itself as it
 	// doesn't have any associated state to store and we don't need to

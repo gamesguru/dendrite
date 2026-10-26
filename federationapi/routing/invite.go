@@ -380,9 +380,14 @@ func inviteDisposition(
 	}
 	var blocked, ignored bool
 	var err error
-	if senderUser, senderErr := inviteSenderUserID(ctx, rsAPI, roomID, sender); senderErr == nil && senderUser != nil {
+	senderUser, senderErr := inviteSenderUserID(ctx, rsAPI, roomID, sender)
+	switch {
+	case senderErr != nil:
+		resp := util.ErrorResponse(senderErr)
+		return false, &resp
+	case senderUser != nil:
 		blocked, ignored, err = msc4155.Disposition(ctx, userAPI, invitedUser, senderUser.String())
-	} else {
+	default:
 		blocked, ignored, err = msc4155.ServerDisposition(ctx, userAPI, invitedUser, origin)
 	}
 	if err != nil {

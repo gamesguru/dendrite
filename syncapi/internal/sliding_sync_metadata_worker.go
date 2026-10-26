@@ -70,9 +70,9 @@ func NewSlidingSyncMetadataWorker(
 
 // Start begins the metadata worker. This is non-blocking - all work happens
 // in background goroutines.
-func (w *SlidingSyncMetadataWorker) Start() error {
+func (w *SlidingSyncMetadataWorker) Start(ctx context.Context) error {
 	// Check if tables need initial population
-	needsPopulation, err := w.checkNeedsInitialPopulation()
+	needsPopulation, err := w.checkNeedsInitialPopulation(ctx)
 	if err != nil {
 		logrus.WithError(err).Warn("[SLIDING_SYNC_METADATA] Failed to check if initial population needed")
 		// Continue anyway - we'll populate incrementally
@@ -80,7 +80,7 @@ func (w *SlidingSyncMetadataWorker) Start() error {
 
 	// Start worker goroutines
 	for i := 0; i < metadataWorkerCount; i++ {
-		w.process.Go(func() { w.worker(i) })
+		w.process.Go(func() { w.worker(ctx, i) })
 	}
 
 	// Start retry/ticker loop
@@ -97,9 +97,7 @@ func (w *SlidingSyncMetadataWorker) Start() error {
 
 // checkNeedsInitialPopulation checks if we need to do initial population
 // by checking if the recalculation queue or joined_rooms table is empty.
-func (w *SlidingSyncMetadataWorker) checkNeedsInitialPopulation() (bool, error) { //nolint:unparam // error kept for interface compatibility
-	ctx := w.process.Context()
-
+func (w *SlidingSyncMetadataWorker) checkNeedsInitialPopulation(ctx context.Context) (bool, error) { //nolint:unparam // error kept for interface compatibility
 	// Check if SlidingSyncRoomMetadata is nil (tables not yet created)
 	if w.roomMetadata == nil {
 		logrus.Warn("[SLIDING_SYNC_METADATA] SlidingSyncRoomMetadata table not initialized")
@@ -212,11 +210,11 @@ func (w *SlidingSyncMetadataWorker) QueueRoom(roomID string) {
 }
 
 // worker processes rooms from the channel.
-func (w *SlidingSyncMetadataWorker) worker(workerID int) {
+func (w *SlidingSyncMetadataWorker) worker(ctx context.Context, workerID int) {
 	for {
 		var roomID string
 		select {
-		case <-w.process.Context().Done():
+		case <-ctx.Done():
 			return
 		case room, ok := <-w.workerCh:
 			if !ok {
@@ -224,11 +222,11 @@ func (w *SlidingSyncMetadataWorker) worker(workerID int) {
 			}
 			roomID = room
 		}
-		if w.process.Context().Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
 
-		if err := w.processRoom(roomID); err != nil {
+		if err := w.processRoom(ctx, roomID); err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"room_id":   roomID,
 				"worker_id": workerID,
@@ -294,9 +292,7 @@ func (w *SlidingSyncMetadataWorker) checkRecalculateQueue() {
 }
 
 // processRoom calculates and stores metadata for a single room.
-func (w *SlidingSyncMetadataWorker) processRoom(roomID string) error {
-	ctx := w.process.Context()
-
+func (w *SlidingSyncMetadataWorker) processRoom(ctx context.Context, roomID string) error {
 	snapshot, err := w.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
 		return err

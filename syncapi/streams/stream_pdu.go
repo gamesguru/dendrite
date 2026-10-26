@@ -304,11 +304,13 @@ func (p *PDUStreamProvider) IncrementalSync(
 	// request can therefore open a snapshot that sees a PDU the notifier has
 	// not announced yet. Read through the snapshot's committed high-water mark
 	// so this response and its token include the same events.
-	if committed, err := snapshot.MaxStreamPositionForPDUs(ctx); err != nil {
-		req.Log.WithError(err).Error("snapshot.MaxStreamPositionForPDUs failed")
-		return from
-	} else if committed > to {
-		to = committed
+	if from <= to {
+		if committed, err := snapshot.MaxStreamPositionForPDUs(ctx); err != nil {
+			req.Log.WithError(err).Error("snapshot.MaxStreamPositionForPDUs failed")
+			return from
+		} else if committed > to {
+			to = committed
+		}
 	}
 
 	r := types.Range{

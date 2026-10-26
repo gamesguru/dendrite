@@ -114,14 +114,8 @@ func SaveAccountData(
 		}
 	}
 
-	if !json.Valid(body) {
-		return util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON("Bad JSON content"),
-		}
-	}
-	// Storage treats null as a deletion; that is only reachable via DELETE.
-	if strings.TrimSpace(string(body)) == "null" {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(body, &data); err != nil || data == nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON("Account data content must be a JSON object"),

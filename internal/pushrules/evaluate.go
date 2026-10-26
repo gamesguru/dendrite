@@ -44,8 +44,8 @@ func NewRuleSetEvaluator(ec EvaluationContext, ruleSet *RuleSet) *RuleSetEvaluat
 		ec: ec,
 		ruleSet: []kindAndRules{
 			{OverrideKind, ruleSet.Override},
-			{PostContentKind, ruleSet.PostContent},
 			{ContentKind, ruleSet.Content},
+			{PostContentKind, ruleSet.PostContent},
 			{RoomKind, ruleSet.Room},
 			{SenderKind, ruleSet.Sender},
 			{UnderrideKind, ruleSet.Underride},

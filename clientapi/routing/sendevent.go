@@ -367,7 +367,24 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 		if err = json.Unmarshal(existingEvent.Content(), &existingContent); err != nil {
 			return "", false
 		}
-		if reflect.DeepEqual(existingContent, newContent) && string(existingEvent.SenderID()) == senderID {
+		if !reflect.DeepEqual(existingContent, newContent) {
+			return "", false
+		}
+		// Events are stored with the sender ID, which differs from the user ID
+		// in pseudo ID rooms.
+		parsedRoomID, err := spec.NewRoomID(roomID)
+		if err != nil {
+			return "", false
+		}
+		parsedUserID, err := spec.NewUserID(senderID, true)
+		if err != nil {
+			return "", false
+		}
+		requesterSenderID, err := rsAPI.QuerySenderIDForUser(ctx, *parsedRoomID, *parsedUserID)
+		if err != nil || requesterSenderID == nil {
+			return "", false
+		}
+		if existingEvent.SenderID() == *requesterSenderID {
 			return existingEvent.EventID(), true
 		}
 	}

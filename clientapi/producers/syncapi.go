@@ -148,7 +148,7 @@ func (p *SyncAPIProducer) SendPresence(
 	ctx context.Context, userID string, presence types.Presence, statusMsg *string,
 ) error {
 	timestamp := spec.AsTimestamp(time.Now())
-	applyErr := p.applyPresence(userID, presence, statusMsg, timestamp)
+	applyErr := p.applyPresence(ctx, userID, presence, statusMsg, timestamp)
 
 	m := nats.NewMsg(p.TopicPresenceEvent)
 	m.Header.Set(jetstream.UserID, userID)
@@ -177,7 +177,7 @@ var errPresenceNotApplied = errors.New("presence not applied synchronously")
 
 // applyPresence asks the sync API to write a presence update synchronously.
 func (p *SyncAPIProducer) applyPresence(
-	userID string, presence types.Presence, statusMsg *string, timestamp spec.Timestamp,
+	ctx context.Context, userID string, presence types.Presence, statusMsg *string, timestamp spec.Timestamp,
 ) error {
 	if p.NATS == nil || p.TopicPresenceRequest == "" {
 		return errPresenceNotApplied
@@ -190,7 +190,9 @@ func (p *SyncAPIProducer) applyPresence(
 	if statusMsg != nil {
 		request.Header.Set("status_msg", *statusMsg)
 	}
-	response, err := p.NATS.RequestMsg(request, presenceRequestTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, presenceRequestTimeout)
+	defer cancel()
+	response, err := p.NATS.RequestMsgWithContext(requestCtx, request)
 	if err != nil {
 		return fmt.Errorf("sync API failed to apply presence update: %w", err)
 	}

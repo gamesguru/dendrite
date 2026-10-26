@@ -130,12 +130,18 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 							Content: spec.RawJSON(roomData),
 						},
 					)
-				} else if from > 0 && joinData.AccountData == nil {
+				} else if from > 0 {
 					// Preserve the deleted type as a typed MSC3391 tombstone.
-					joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{{
-						Type:    dataType,
-						Content: spec.RawJSON(`{}`),
-					}}}
+					if joinData.AccountData == nil {
+						joinData.AccountData = &types.ClientEvents{}
+					}
+					joinData.AccountData.Events = append(
+						joinData.AccountData.Events,
+						synctypes.ClientEvent{
+							Type:    dataType,
+							Content: spec.RawJSON(`{}`),
+						},
+					)
 				}
 				if from > 0 || joinData.AccountData != nil {
 					req.Response.Rooms.Join[roomID] = joinData

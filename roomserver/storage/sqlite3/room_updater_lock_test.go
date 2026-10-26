@@ -100,12 +100,14 @@ func TestRoomUpdaterIsReleasedByRollbackAndHonoursContext(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	require.NoError(t, first.Rollback())
-	again, err := db.GetRoomUpdater(context.Background(), room)
+	acquireCtx, acquireCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer acquireCancel()
+	again, err := db.GetRoomUpdater(acquireCtx, room)
 	require.NoError(t, err)
 	require.NoError(t, again.Commit())
 	// Finishing twice must not release a lock it no longer holds.
 	require.NoError(t, again.Commit())
-	third, err := db.GetRoomUpdater(context.Background(), room)
+	third, err := db.GetRoomUpdater(acquireCtx, room)
 	require.NoError(t, err)
 	require.NoError(t, third.Commit())
 }

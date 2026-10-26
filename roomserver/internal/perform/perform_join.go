@@ -306,7 +306,10 @@ func (r *Joiner) performJoinRoomByID(
 	// server, which may not yet know of the ban (a partial state join in particular).
 	if info != nil && senderID != "" {
 		var banRes rsAPI.QueryMembershipForUserResponse
-		if banErr := r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, &banRes); banErr == nil && banRes.Membership == spec.Ban {
+		if banErr := r.Queryer.QueryMembershipForSenderID(ctx, *roomID, senderID, &banRes); banErr != nil {
+			return "", "", fmt.Errorf("r.Queryer.QueryMembershipForSenderID: %w", banErr)
+		}
+		if banRes.Membership == spec.Ban {
 			return "", "", rsAPI.ErrNotAllowed{Err: fmt.Errorf("user %s is banned from the room", req.UserID)}
 		}
 	}
@@ -429,14 +432,17 @@ func (r *Joiner) performJoinRoomByID(
 			return "", "", rsAPI.ErrNotAllowed{Err: aerr}
 		}
 		// No local user can authorize the restricted join, but another server
-		// in the room may have one: join through it instead. Only choose
-		// fallback servers ourselves when the client did not name any; an
-		// explicit ?server_name= list must be honored so a refused join is
-		// reported instead of silently succeeding through another server.
-		if len(req.ServerNames) == 0 && errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
-			if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
-				delete(req.Content, "join_authorised_via_users_server") //nolint:misspell // Matrix spec uses British spelling
-				req.ServerNames = append(req.ServerNames, servers...)
+		// in the room may have one: join through it instead. Prefer the servers
+		// the client named; only choose fallback servers ourselves when the
+		// client did not name any.
+		if errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
+			delete(req.Content, "join_authorised_via_users_server") //nolint:misspell // Matrix spec uses British spelling
+			if len(req.ServerNames) == 0 {
+				if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
+					req.ServerNames = append(req.ServerNames, servers...)
+				}
+			}
+			if len(req.ServerNames) > 0 {
 				joinedVia, err = r.performFederatedJoinRoomByID(ctx, req)
 				return req.RoomIDOrAlias, joinedVia, err
 			}

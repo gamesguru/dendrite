@@ -667,7 +667,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	rp.waitForMembershipChanges(ctx, device.UserID)
 	if rp.toDeviceBarrier != nil && v4Req.Extensions != nil &&
 		v4Req.Extensions.ToDevice != nil && v4Req.Extensions.ToDevice.Enabled {
-		rp.toDeviceBarrier(ctx)
+		rp.toDeviceBarrier()
 	}
 
 	// Main sync loop - similar to v3 sync

@@ -207,9 +207,13 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 	} else {
 		bumpStamp = root.OriginServerTS().Time().UnixMilli()
 	}
-	// Every change gets a later stamp than the subscription it replaces.
-	if subscribed && bumpStamp <= existing.BumpStamp {
-		bumpStamp = existing.BumpStamp + 1
+	// Every change gets a later stamp than the subscription or unsubscribe it replaces.
+	floor := data.Unsubscribed[threadID]
+	if subscribed && existing.BumpStamp > floor {
+		floor = existing.BumpStamp
+	}
+	if bumpStamp <= floor {
+		bumpStamp = floor + 1
 	}
 	data.Subscriptions[threadID] = threadSubscription{Automatic: request.Automatic != "", BumpStamp: bumpStamp, CauseEvent: request.Automatic}
 	delete(data.Unsubscribed, threadID)
@@ -225,8 +229,13 @@ func deleteThreadSubscription(req *http.Request, device *userapi.Device, roomID,
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
+	existing, subscribed := data.Subscriptions[threadID]
 	delete(data.Subscriptions, threadID)
-	data.Unsubscribed[threadID] = time.Now().UnixMilli()
+	unsubscribedAt := time.Now().UnixMilli()
+	if subscribed && unsubscribedAt <= existing.BumpStamp {
+		unsubscribedAt = existing.BumpStamp + 1
+	}
+	data.Unsubscribed[threadID] = unsubscribedAt
 	if err = saveThreadSubscriptions(req, device.UserID, roomID, data, userAPI); err != nil {
 		return util.ErrorResponse(err)
 	}
