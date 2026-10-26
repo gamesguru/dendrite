@@ -382,12 +382,37 @@ func (d *Database) PutFilter(
 	ctx context.Context, localpart string, filter *synctypes.Filter,
 ) (string, error) {
 	var filterID string
-	var err error
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		filterID, err = d.Filter.InsertFilter(ctx, txn, filter, localpart)
-		return err
+	// InsertFilter looks the filter up before inserting it, so SQLite can
+	// report SQLITE_BUSY when another writer holds the lock. Retry the whole
+	// transaction.
+	err := retrySQLiteBusy(ctx, func() error {
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) (insertErr error) {
+			filterID, insertErr = d.Filter.InsertFilter(ctx, txn, filter, localpart)
+			return insertErr
+		})
 	})
 	return filterID, err
+}
+
+// retrySQLiteBusy runs fn, running it again after a short backoff while it
+// fails with SQLITE_BUSY, for at most three attempts.
+func retrySQLiteBusy(ctx context.Context, fn func() error) error {
+	const maxRetries = 3
+	var err error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = fn()
+		if err == nil || !isSQLiteBusy(err) || attempt == maxRetries-1 {
+			return err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error {

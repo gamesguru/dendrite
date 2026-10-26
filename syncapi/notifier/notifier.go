@@ -324,6 +324,8 @@ func (n *Notifier) SharedUsersForCandidates(userA string, candidates []string) m
 // PartialStateSharedUsersForCandidates returns candidates whose server is
 // known to participate in a partial-state room joined by userA. This permits
 // presence received from that server while the member list is still unknown.
+// The candidate is not required to be in the notifier's joined set: that set
+// is incomplete until the room's state has been resynced.
 func (n *Notifier) PartialStateSharedUsersForCandidates(ctx context.Context, userA string, candidates []string) map[string]struct{} {
 	if len(candidates) == 0 {
 		return nil
@@ -344,12 +346,6 @@ func (n *Notifier) PartialStateSharedUsersForCandidates(ctx context.Context, use
 			continue
 		}
 		for _, userID := range candidates {
-			// Partial state does not establish membership merely from a shared
-			// server. Only expose presence when this notifier has confirmed the
-			// candidate is joined to the same room.
-			if !users.isIn(userID) {
-				continue
-			}
 			_, domain, err := gomatrixserverlib.SplitID('@', userID)
 			if err == nil && slices.Contains(servers, string(domain)) {
 				shared[userID] = struct{}{}
