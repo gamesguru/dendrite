@@ -72,8 +72,8 @@ func TestRoomUpdaterHoldsTheRoomUntilItEnds(t *testing.T) {
 	}()
 
 	select {
-	case <-got:
-		t.Fatal("a second updater for the same room started while the first was open")
+	case err := <-got:
+		t.Fatalf("a second updater for the same room started while the first was open: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 
