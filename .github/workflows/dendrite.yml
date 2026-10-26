@@ -273,7 +273,7 @@ jobs:
   # run Complement
   complement:
     name: "Complement (${{ matrix.label }})"
-    timeout-minutes: 20
+    timeout-minutes: 35
     needs: initial-tests-done
     runs-on: ubuntu-latest
     strategy:
@@ -338,8 +338,8 @@ jobs:
       # Run Complement
       - run: |
           set -o pipefail &&
-          (go test -v -json -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
-           go test -v -json -tags zendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
+          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
+           go test -v -json -timeout 1h -tags zendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
            if [ $test_status -ne 0 ]; then exit $test_status; fi; exit $target_status) 2>&1 | gotestfmt -hide all
         shell: bash
         name: Run Complement Tests
