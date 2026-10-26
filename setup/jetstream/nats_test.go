@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 func TestNATSConnectOptions(t *testing.T) {
@@ -170,6 +171,37 @@ func TestNATSConnectOptions(t *testing.T) {
 			t.Fatalf("second signature did not verify with rotated key: %v", err)
 		}
 	})
+}
+
+func TestPrepareUsesMemoryStoreWhenInMemory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.JetStream{
+		InMemory:    true,
+		StoragePath: config.Path(dir),
+		NoLog:       true,
+	}
+	cfg.Matrix = &config.Global{JetStream: *cfg}
+	processCtx := process.NewProcessContext()
+	t.Cleanup(func() {
+		processCtx.ShutdownZendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+
+	instance := &NATSInstance{}
+	js, nc := instance.Prepare(processCtx, cfg)
+	if js == nil || nc == nil {
+		t.Fatal("expected an in-memory NATS instance")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading storage directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("in-memory NATS wrote %d files to %s", len(entries), dir)
+	}
 }
 
 func TestConnectToNATSWithURLCredentials(t *testing.T) {

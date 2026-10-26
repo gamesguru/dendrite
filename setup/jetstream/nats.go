@@ -64,11 +64,20 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 	}
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
+		storeDir := string(cfg.StoragePath)
+		if cfg.InMemory {
+			// An empty StoreDir makes embedded JetStream keep its metadata in
+			// memory too, rather than only switching the streams themselves to
+			// memory storage. Unit tests run many embedded servers in parallel;
+			// sharing a real on-disk store makes startup contend on fsync and
+			// can exceed the readiness timeout.
+			storeDir = ""
+		}
 		opts := &natsserver.Options{
 			ServerName:      "monolith",
 			DontListen:      true,
 			JetStream:       true,
-			StoreDir:        string(cfg.StoragePath),
+			StoreDir:        storeDir,
 			NoSystemAccount: true,
 			MaxPayload:      embeddedMaxPayload,
 			NoSigs:          true,
@@ -84,11 +93,17 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 		go s.Start()
 		process.Defer(func() { s.Shutdown(); s.WaitForShutdown() })
 		if !s.ReadyForConnections(time.Second * 60) { //nolint:mnd
-			logrus.Fatalln("NATS did not start in time, shutting down")
 			process.ShutdownZendrite()
 			s.Shutdown()
 			s.WaitForShutdown()
-			return nil, nil
+			err := errors.New("embedded NATS did not start within 60s")
+			if cfg.InMemory {
+				// Tests use InMemory. Panic so testing catches the failure and
+				// reports it against this test instead of os.Exit killing the
+				// whole package binary and every other test with it.
+				panic(err)
+			}
+			logrus.WithError(err).Fatal("NATS did not start in time, shutting down")
 		}
 	}
 
