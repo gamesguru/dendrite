@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -387,5 +388,58 @@ func TestRepeatedPeeksRenew(t *testing.T) {
 		if len(outboundPeeks) != 1 || outboundPeeks[0].RenewalInterval != 2000 {
 			t.Fatalf("expected one outbound peek renewed to 2000ms, got %+v", outboundPeeks)
 		}
+	})
+}
+
+func TestNotaryKeysRefreshSameMaterialAndHideExpiredResponses(t *testing.T) {
+	ctx := context.Background()
+	serverName := spec.ServerName("notary.example")
+	keyID := gomatrixserverlib.KeyID("ed25519:1")
+	keyMaterial := spec.Base64Bytes("test-key-material")
+	makeKeys := func(server spec.ServerName, validUntil time.Time, material spec.Base64Bytes) gomatrixserverlib.ServerKeys {
+		fields := gomatrixserverlib.ServerKeyFields{
+			ServerName:   server,
+			ValidUntilTS: spec.AsTimestamp(validUntil),
+			VerifyKeys: map[gomatrixserverlib.KeyID]gomatrixserverlib.VerifyKey{
+				keyID: {Key: material},
+			},
+		}
+		raw, err := json.Marshal(fields)
+		assert.NoError(t, err)
+		return gomatrixserverlib.ServerKeys{Raw: raw, ServerKeyFields: fields}
+	}
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := mustCreateFederationDatabase(t, dbType) //nolint:contextcheck
+		defer closeDB()
+
+		firstExpiry := time.Now().Add(time.Hour)
+		assert.NoError(t, db.UpdateNotaryKeys(ctx, serverName, makeKeys(serverName, firstExpiry, keyMaterial)))
+
+		refreshedExpiry := time.Now().Add(2 * time.Hour)
+		assert.NoError(t, db.UpdateNotaryKeys(ctx, serverName, makeKeys(serverName, refreshedExpiry, keyMaterial)))
+		keys, err := db.GetNotaryKeys(ctx, serverName, []gomatrixserverlib.KeyID{keyID})
+		assert.NoError(t, err)
+		if assert.Len(t, keys, 1) {
+			assert.Equal(t, spec.AsTimestamp(refreshedExpiry), keys[0].ValidUntilTS)
+		}
+
+		// A key ID cannot be rebound to different material, even by a newer response.
+		assert.NoError(t, db.UpdateNotaryKeys(ctx, serverName, makeKeys(serverName, time.Now().Add(3*time.Hour), spec.Base64Bytes("different-key"))))
+		keys, err = db.GetNotaryKeys(ctx, serverName, []gomatrixserverlib.KeyID{keyID})
+		assert.NoError(t, err)
+		if assert.Len(t, keys, 1) {
+			assert.Equal(t, spec.AsTimestamp(refreshedExpiry), keys[0].ValidUntilTS)
+			assert.Equal(t, keyMaterial, keys[0].VerifyKeys[keyID].Key)
+		}
+
+		expiredServer := spec.ServerName("expired.example")
+		assert.NoError(t, db.UpdateNotaryKeys(ctx, expiredServer, makeKeys(expiredServer, time.Now().Add(-time.Minute), keyMaterial)))
+		keys, err = db.GetNotaryKeys(ctx, expiredServer, nil)
+		assert.NoError(t, err)
+		assert.Empty(t, keys)
+		keys, err = db.GetNotaryKeys(ctx, expiredServer, []gomatrixserverlib.KeyID{keyID})
+		assert.NoError(t, err)
+		assert.Empty(t, keys)
 	})
 }

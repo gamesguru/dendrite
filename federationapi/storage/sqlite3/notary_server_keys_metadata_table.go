@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -39,7 +38,7 @@ CREATE TABLE IF NOT EXISTS federationsender_notary_server_keys_retention (
 
 const upsertServerKeysSQL = "" +
 	"INSERT INTO federationsender_notary_server_keys_metadata (notary_id, server_name, key_id) VALUES ($1, $2, $3)" +
-	" ON CONFLICT (server_name, key_id) DO NOTHING"
+	" ON CONFLICT (server_name, key_id) DO UPDATE SET notary_id = excluded.notary_id"
 
 // for a given (server_name, key_id), find the existing notary ID and valid until. Used to check if we will replace it
 // JOINs with the json table.
@@ -173,8 +172,8 @@ func (s *notaryServerKeysMetadataStatements) UpsertKey(
 		// the existing valid_until is valid longer, so use that.
 		return existingNotaryID, nil
 	}
-	// Keep the first notary response bound to a key ID. Another process may
-	// have inserted a binding after the lookup above.
+	// Rebind the key ID to the newer response. The caller has already rejected
+	// responses whose key material differs from the stored one.
 	upsertServerKeysStmt := txn.Stmt(s.upsertServerKeysStmt)
 	defer upsertServerKeysStmt.Close()
 	_, err := upsertServerKeysStmt.ExecContext(ctx, notaryID, serverName, keyID)
@@ -201,8 +200,6 @@ func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn
 			iKeyIDs[i+1] = string(keyIDs[i])
 		}
 		sql := strings.Replace(selectNotaryKeyResponsesWithKeyIDsSQL, "($2)", sqlutil.QueryVariadicOffset(len(keyIDs), 1), 1)
-		fmt.Println(sql)
-		fmt.Println(iKeyIDs...)
 		rows, err = s.db.QueryContext(ctx, sql, iKeyIDs...)
 	}
 	if err != nil {

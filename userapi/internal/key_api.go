@@ -246,6 +246,12 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	if ctx.Err() != nil {
 		return
 	}
+	// Prefer cross-signing keys already in the local database. Only ask remote
+	// servers for key types that are still missing.
+	a.crossSigningKeysFromDatabase(ctx, req, res)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// make a map from domain to device keys
 	domainToDeviceKeys := make(map[string]map[string][]string)
@@ -325,13 +331,6 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	if len(domainToDeviceKeys) > 0 || len(domainToCrossSigningKeys) > 0 {
 		// perform key queries for remote devices
 		a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
-	}
-
-	// Now that we've done the potentially expensive work of asking the federation,
-	// try filling the cross-signing keys from the database that we know about.
-	a.crossSigningKeysFromDatabase(ctx, req, res)
-	if ctx.Err() != nil {
-		return
 	}
 
 	// Finally, append signatures that we know about
@@ -580,6 +579,10 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	// lack a stream ID.
 	userIDsForAllDevices := map[string]struct{}{}
 	crossSigningOnly := map[string]struct{}{}
+	if devKeys == nil {
+		// A domain may only be asked for cross-signing keys.
+		devKeys = make(map[string][]string)
+	}
 	for userID, deviceIDs := range devKeys {
 		if len(deviceIDs) == 0 {
 			userIDsForAllDevices[userID] = struct{}{}

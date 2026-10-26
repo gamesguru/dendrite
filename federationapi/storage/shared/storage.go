@@ -459,7 +459,17 @@ func (d *Database) GetNotaryKeys(
 		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
 		return err
 	})
-	return sks, err
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	valid := sks[:0]
+	for _, serverKeys := range sks {
+		if serverKeys.ValidUntilTS.Time().After(now) {
+			valid = append(valid, serverKeys)
+		}
+	}
+	return valid, nil
 }
 
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
