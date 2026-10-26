@@ -974,6 +974,33 @@ func backfillEvents(
 		}
 	}
 
+	// WriteEvent adds a backward extremity for every prev event it could not
+	// find, but it cannot remove extremities belonging to other events which
+	// cited those prev events as missing. Now that the whole batch is stored,
+	// those extremities are stale: the /messages branch filter would hide the
+	// events we just backfilled. Drop markers for every prev event we now know.
+	prevEventIDs := make(map[string]struct{})
+	for _, ev := range events {
+		for _, prevID := range ev.PrevEventIDs() {
+			prevEventIDs[prevID] = struct{}{}
+		}
+	}
+	if len(prevEventIDs) > 0 {
+		ids := make([]string, 0, len(prevEventIDs))
+		for eventID := range prevEventIDs {
+			ids = append(ids, eventID)
+		}
+		stored, selectErr := db.Events(ctx, ids)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		for _, ev := range stored {
+			if err := db.PurgeBackwardExtremitiesForEvent(ctx, roomID, ev.EventID()); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// we may have got more than the requested limit so resize now
 	if len(events) > limit {
 		// last `limit` events
