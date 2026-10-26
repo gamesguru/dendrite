@@ -34,21 +34,23 @@ import (
 )
 
 type messagesReq struct {
-	ctx              context.Context
-	db               storage.Database
-	snapshot         storage.DatabaseTransaction
-	rsAPI            api.SyncRoomserverAPI
-	cfg              *config.SyncAPI
-	roomID           string
-	from             *types.TopologyToken
-	fromStream       *types.StreamingToken
-	to               *types.TopologyToken
-	device           *userapi.Device
-	deviceUserID     spec.UserID
-	wasToProvided    bool
-	backwardOrdering bool
-	filter           *synctypes.RoomEventFilter
-	didBackfill      bool
+	ctx               context.Context
+	db                storage.Database
+	snapshot          storage.DatabaseTransaction
+	rsAPI             api.SyncRoomserverAPI
+	cfg               *config.SyncAPI
+	roomID            string
+	from              *types.TopologyToken
+	fromStream        *types.StreamingToken
+	to                *types.TopologyToken
+	device            *userapi.Device
+	deviceUserID      spec.UserID
+	wasToProvided     bool
+	backwardOrdering  bool
+	filter            *synctypes.RoomEventFilter
+	didBackfill       bool
+	backfillHadEvents bool
+	backfillEnd       *types.TopologyToken
 }
 
 type messagesResp struct {
@@ -358,6 +360,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 	}
+	topologyHadEvents := len(streamEvents) > 0
 	// A stream token is a position in stream order, not topology order. Events
 	// can be persisted in a different order than their DAG depth (for example
 	// room creation state events that arrive after the client's sync token), so
@@ -399,7 +402,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".
-	topologyHadEvents := topologyStart != emptyToken && len(streamEvents) > 0
+	topologyHadEvents = topologyHadEvents && topologyStart != emptyToken
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
@@ -425,6 +428,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// If we didn't get any event, we don't need to proceed any further.
 	if len(events) == 0 {
+		if r.backfillHadEvents && r.backfillEnd != nil {
+			return []synctypes.ClientEvent{}, *r.from, *r.backfillEnd, nil
+		}
 		if !topologyHadEvents {
 			// True end of history (or backfill returned nothing): signal client to stop.
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, nil
@@ -435,6 +441,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if len(r.filter.RelationTypes) > 0 || len(r.filter.NotRelationTypes) > 0 {
 		events = filterHeaderedEvents(events, r.filter)
 		if len(events) == 0 {
+			if r.backfillHadEvents && r.backfillEnd != nil {
+				return []synctypes.ClientEvent{}, *r.from, *r.backfillEnd, nil
+			}
 			return []synctypes.ClientEvent{}, *r.from, end, nil
 		}
 	}
@@ -461,7 +470,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// If we backfilled in the process of getting events, we need
 	// to re-fetch the start/end positions
 	if r.didBackfill {
-		_, end, err = r.getStartEnd(filteredEvents)
+		end, err = r.getEnd(filteredEvents)
 		if err != nil {
 			return []synctypes.ClientEvent{}, *r.from, *r.to, err
 		}
@@ -501,9 +510,8 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	return clientEvents, start, end, nil
 }
 
-func (r *messagesReq) getStartEnd(events []*rstypes.HeaderedEvent) (start, end types.TopologyToken, err error) {
+func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.TopologyToken, err error) {
 	if r.backwardOrdering {
-		start = *r.from
 		if events[len(events)-1].Type() == spec.MRoomCreate {
 			// NOTSPEC: We've hit the beginning of the room so there's really nowhere
 			// else to go. This seems to fix Element iOS from looping on /messages endlessly.
@@ -520,7 +528,6 @@ func (r *messagesReq) getStartEnd(events []*rstypes.HeaderedEvent) (start, end t
 			end.Decrement()
 		}
 	} else {
-		start = *r.from
 		end, err = r.snapshot.EventPositionInTopology(
 			r.ctx, events[len(events)-1].EventID(),
 		)
@@ -558,6 +565,14 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			return []*rstypes.HeaderedEvent{}, nil
 		}
 		r.didBackfill = true
+		r.backfillHadEvents = len(events) > 0
+		if r.backfillHadEvents {
+			backfillEnd, positionErr := r.getEnd(events)
+			if positionErr != nil {
+				return nil, positionErr
+			}
+			r.backfillEnd = &backfillEnd
+		}
 		// Backfilled events come from federation and are not pre-filtered by the
 		// database query; apply the client's sender/type filter here.
 		events = filterHeaderedEvents(events, r.filter)
@@ -616,6 +631,14 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 			err = nil
 		default:
 			r.didBackfill = true
+			if len(pdus) > 0 {
+				r.backfillHadEvents = true
+				backfillEnd, positionErr := r.getEnd(pdus)
+				if positionErr != nil {
+					return nil, positionErr
+				}
+				r.backfillEnd = &backfillEnd
+			}
 			// Backfilled events come from federation and are not pre-filtered by the
 			// database query; apply the client's sender/type filter here.
 			pdus = filterHeaderedEvents(pdus, r.filter)
@@ -668,12 +691,6 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 	filtered := make([]*rstypes.HeaderedEvent, 0, len(events))
 	for _, ev := range events {
 		if len(filter.RelationTypes) > 0 || len(filter.NotRelationTypes) > 0 {
-			// MSC3874 relation filters apply to room messages. Keep this guard
-			// here as well as in the database query because backfilled events
-			// are filtered in Go after they have been fetched from federation.
-			if ev.Type() != "m.room.message" {
-				continue
-			}
 			var content struct {
 				RelatesTo struct {
 					RelType string `json:"rel_type"`

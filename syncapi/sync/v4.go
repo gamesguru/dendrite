@@ -782,6 +782,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// Track which rooms appear in lists and their timeline_limit
 		roomsInLists := make(map[string]types.RoomSubscriptionConfig) // map[roomID]config with timeline_limit and required_state
 		roomsRemovedFromLists := make(map[string]bool)
+		roomsChangedInLists := make(map[string]bool)
 		// When pos is empty, force initial sync for all lists
 		forceInitialSync := (since == nil)
 		for listName, listConfig := range v4Req.Lists {
@@ -813,6 +814,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}).Info("[V4_SYNC] List processed")
 
 			for i, op := range list.Ops {
+				for _, roomID := range op.RoomIDs {
+					roomsChangedInLists[roomID] = true
+				}
 				logrus.WithFields(logrus.Fields{
 					"list_name":    listName,
 					"op_index":     i,
@@ -1084,6 +1088,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					if roomStates[roomID].Status == types.HaveSentRoomNever {
 						continue
 					}
+					// A previously sent room needs a room update when it leaves a
+					// list window so the client can clear its list membership.
+					roomsToKeep[roomID] = true
 					// A room which leaves a list window still needs room data when
 					// the client explicitly subscribes to it. The empty `lists`
 					// field tells the client that it is no longer in that window.
@@ -1099,6 +1106,9 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// A previously sent room must be returned once when the user leaves,
 				// even if its leave event is absent from the stream-change query.
 				for roomID := range roomsLeftOnConnection {
+					roomsToKeep[roomID] = true
+				}
+				for roomID := range roomsChangedInLists {
 					roomsToKeep[roomID] = true
 				}
 
@@ -1345,21 +1355,25 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 			if !roomData.Initial && fromPosPtr != nil {
 				changed := map[string]bool{}
-				markChanged := func(event synctypes.ClientEvent) {
-					switch event.Type {
-					case spec.MRoomName:
-						changed[spec.MRoomName] = true
-					case spec.MRoomAvatar:
-						changed[spec.MRoomAvatar] = true
-					case spec.MRoomTopic:
-						changed[spec.MRoomTopic] = true
+				if roomState.LastToken != nil {
+					metadataTypes := []string{spec.MRoomName, spec.MRoomAvatar, spec.MRoomTopic}
+					metadataFilter := &synctypes.StateFilter{Types: &metadataTypes}
+					metadataChanges, metadataErr := snapshot.RoomStateDelta(ctx, device, roomID, types.Range{
+						From:      currentPos.PDUPosition,
+						To:        roomState.LastToken.PDUPosition,
+						Backwards: true,
+					}, metadataFilter, rp.rsAPI)
+					if metadataErr != nil {
+						if ctx.Err() != nil {
+							break populate
+						}
+						logrus.WithError(metadataErr).WithField("room_id", roomID).Error("[V4_SYNC] Failed to get metadata state delta")
+						delete(roomsToPopulate, roomID)
+						continue
 					}
-				}
-				for _, event := range roomData.Timeline {
-					markChanged(event)
-				}
-				for _, event := range roomData.RequiredState {
-					markChanged(event)
+					for _, event := range metadataChanges {
+						changed[event.Type()] = true
+					}
 				}
 				if !changed[spec.MRoomName] {
 					roomData.Name = ""
@@ -1385,7 +1399,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			}
 			if since != nil && !subscribed && !roomData.Initial && !timelineExpanded && !requiredStateExpanded &&
 				len(roomData.Timeline) == 0 && len(roomData.RequiredState) == 0 &&
-				!roomsLeftOnConnection[roomID] && roomData.Membership != string(spec.Leave) && roomData.Membership != string(spec.Ban) {
+				!roomsLeftOnConnection[roomID] && !roomsChangedInLists[roomID] && !roomsRemovedFromLists[roomID] &&
+				roomData.Membership != string(spec.Leave) && roomData.Membership != string(spec.Ban) {
 				// The room was not actually sent (it had no visible update).
 				// Do not mark it processed, otherwise its stream state is
 				// dropped when the previous connection position is deleted and
@@ -2002,17 +2017,19 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 		resp.Lists[listName] = list
 
-		// Track every room in the current window, not only rooms in list
-		// operations, so unchanged windows still get room data.
-		for _, roomID := range list.WindowRoomIDs {
-			config := types.RoomSubscriptionConfig{
-				TimelineLimit: listConfig.TimelineLimit,
-				RequiredState: listConfig.RequiredState,
-			}
-			if existing, exists := roomsInLists[roomID]; exists {
-				roomsInLists[roomID] = mergeRoomSubscriptionConfig(existing, config)
-			} else {
-				roomsInLists[roomID] = config
+		// A timeout response only needs room data for list operations it sends.
+		// Unchanged windows have no operation for the client to apply.
+		if len(list.Ops) > 0 {
+			for _, roomID := range list.WindowRoomIDs {
+				config := types.RoomSubscriptionConfig{
+					TimelineLimit: listConfig.TimelineLimit,
+					RequiredState: listConfig.RequiredState,
+				}
+				if existing, exists := roomsInLists[roomID]; exists {
+					roomsInLists[roomID] = mergeRoomSubscriptionConfig(existing, config)
+				} else {
+					roomsInLists[roomID] = config
+				}
 			}
 		}
 		for _, roomID := range list.RemovedRoomIDs {

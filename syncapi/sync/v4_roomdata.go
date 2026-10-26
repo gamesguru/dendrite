@@ -882,6 +882,12 @@ func (rp *RequestPool) fetchTargetedState(
 		}
 		addTuple(eventType, stateKey)
 	}
+	// lazy_members is shorthand for requesting the timeline senders' membership
+	// events. Include those keys in the roomserver fallback too, even when the
+	// caller did not provide an explicit $LAZY include pattern.
+	for stateKey := range memberKeys {
+		addTuple("m.room.member", stateKey)
+	}
 
 	var result []*rstypes.HeaderedEvent
 
