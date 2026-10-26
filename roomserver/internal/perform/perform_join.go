@@ -429,8 +429,11 @@ func (r *Joiner) performJoinRoomByID(
 			return "", "", rsAPI.ErrNotAllowed{Err: aerr}
 		}
 		// No local user can authorize the restricted join, but another server
-		// in the room may have one: join through it instead.
-		if errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
+		// in the room may have one: join through it instead. Only choose
+		// fallback servers ourselves when the client did not name any; an
+		// explicit ?server_name= list must be honoured so a refused join is
+		// reported instead of silently succeeding through another server.
+		if len(req.ServerNames) == 0 && errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
 			if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
 				delete(req.Content, "join_authorised_via_users_server") //nolint:misspell // Matrix spec uses British spelling
 				req.ServerNames = append(req.ServerNames, servers...)
