@@ -316,6 +316,59 @@ func OnIncomingMessagesRequest(
 	}
 }
 
+// extremityBranchEvents returns page events older than extremityDepth which
+// are ancestors of the given backwards-extremity event. Walking prev_events
+// keeps a depth boundary scoped to the DAG branch that owns that extremity.
+func (r *messagesReq) extremityBranchEvents(
+	ctx context.Context, extremityID string, page []types.StreamEvent, extremityDepth int64,
+) (map[string]struct{}, error) {
+	candidates := make(map[string]struct{})
+	minDepth := extremityDepth
+	for _, ev := range page {
+		if ev.Depth() < extremityDepth {
+			candidates[ev.EventID()] = struct{}{}
+			if ev.Depth() < minDepth {
+				minDepth = ev.Depth()
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	ancestors := make(map[string]struct{})
+	seen := make(map[string]struct{})
+	queue := []string{extremityID}
+	for len(queue) > 0 {
+		batch := queue
+		queue = nil
+		unseen := batch[:0]
+		for _, eventID := range batch {
+			if _, ok := seen[eventID]; ok {
+				continue
+			}
+			seen[eventID] = struct{}{}
+			unseen = append(unseen, eventID)
+		}
+		if len(unseen) == 0 {
+			continue
+		}
+		events, err := r.snapshot.Events(ctx, unseen)
+		if err != nil {
+			return nil, fmt.Errorf("load events for backwards extremity %s: %w", extremityID, err)
+		}
+		for _, ev := range events {
+			if _, ok := candidates[ev.EventID()]; ok {
+				ancestors[ev.EventID()] = struct{}{}
+			}
+			if ev.Depth() > minDepth {
+				queue = append(queue, ev.PrevEventIDs()...)
+			}
+		}
+	}
+	return ancestors, nil
+}
+
 func getMembershipForUser(ctx context.Context, roomID, userID string, rsAPI api.SyncRoomserverAPI) (resp api.QueryMembershipForUserResponse, err error) {
 	fullUserID, err := spec.NewUserID(userID, true)
 	if err != nil {
@@ -378,8 +431,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		}
 		streamEvents = filtered
 	}
+	decrementEnd := r.backwardOrdering
+	extremityFilteredEmpty := false
 	if r.backwardOrdering && len(streamEvents) > 0 {
 		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
+			excluded := make(map[string]struct{})
 			for extremityID := range backwardExtremities {
 				tok, err := r.snapshot.EventPositionInTopology(ctx, extremityID)
 				if err != nil {
@@ -387,18 +443,46 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 				}
 				extremityDepth := int64(tok.Depth)
 				if int64(r.from.Depth) >= extremityDepth {
-					filtered := streamEvents[:0]
-					for _, ev := range streamEvents {
-						if ev.Depth() >= extremityDepth {
-							filtered = append(filtered, ev)
-						}
+					branchEvents, branchErr := r.extremityBranchEvents(ctx, extremityID, streamEvents, extremityDepth)
+					if branchErr != nil {
+						return nil, *r.from, emptyToken, branchErr
 					}
-					streamEvents = filtered
+					for eventID := range branchEvents {
+						excluded[eventID] = struct{}{}
+					}
 				}
+			}
+			if len(excluded) > 0 {
+				// A topology token is a single linear cursor, so stop at the first
+				// excluded event. Advancing farther would skip that event on the
+				// next request, including when another branch has older events.
+				filtered := streamEvents[:0]
+				for _, ev := range streamEvents {
+					if _, shouldExclude := excluded[ev.EventID()]; shouldExclude {
+						if len(filtered) > 0 {
+							end, err = r.snapshot.EventPositionInTopology(ctx, filtered[len(filtered)-1].EventID())
+							if err != nil {
+								return nil, *r.from, emptyToken, err
+							}
+						} else {
+							// Leave this event at the cursor so a subsequent request can
+							// retry it after the extremity has been backfilled.
+							end, err = r.snapshot.EventPositionInTopology(ctx, ev.EventID())
+							if err != nil {
+								return nil, *r.from, emptyToken, err
+							}
+							decrementEnd = false
+							extremityFilteredEmpty = true
+						}
+						break
+					}
+					filtered = append(filtered, ev)
+				}
+				streamEvents = filtered
 			}
 		}
 	}
-	if r.backwardOrdering {
+	if decrementEnd {
 		// A forward token already sits at the last event returned, and the
 		// forward range excludes the events up to its stream position.
 		end.Decrement()
@@ -406,7 +490,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".
-	topologyHadEvents = topologyHadEvents && topologyStart != emptyToken
+	topologyHadEvents = topologyHadEvents && topologyStart != emptyToken && !extremityFilteredEmpty
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
@@ -618,6 +702,24 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID)
 	if err != nil {
 		return
+	}
+
+	// A full page can still end at a backward extremity: backfill stores at most
+	// maxBackfillEvents per request, so the oldest events of a long gap may not
+	// have been fetched yet. Fetch them now so the next page does not skip them.
+	if len(backwardExtremities) > 0 && isSetLargeEnough && r.backwardOrdering {
+		for i := range streamEvents {
+			if _, ok := backwardExtremities[streamEvents[i].EventID()]; !ok {
+				continue
+			}
+			if _, bfErr := r.backfill(r.roomID, backwardExtremities, r.filter.Limit); bfErr != nil {
+				if r.ctx.Err() != nil {
+					return nil, bfErr
+				}
+				util.GetLogger(r.ctx).WithError(bfErr).Warn("Backfill at backward extremity failed")
+			}
+			break
+		}
 	}
 
 	// Backfill is needed if we've reached a backward extremity and need more
