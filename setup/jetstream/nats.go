@@ -91,14 +91,6 @@ func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.Jet
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
 		storeDir := string(cfg.StoragePath)
-		if cfg.InMemory {
-			// An empty StoreDir makes embedded JetStream keep its metadata in
-			// memory too, rather than only switching the streams themselves to
-			// memory storage. Unit tests run many embedded servers in parallel;
-			// sharing a real on-disk store makes startup contend on fsync and
-			// can exceed the readiness timeout.
-			storeDir = ""
-		}
 		opts := &natsserver.Options{
 			ServerName:      "monolith",
 			DontListen:      true,
