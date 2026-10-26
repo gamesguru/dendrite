@@ -623,18 +623,34 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 
 // StoreReceipt stores user receipts.
 func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, changed bool, err error) {
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
-			// Keep the later receipt. A false changed result tells the consumer
-			// not to advance or notify at an unrelated stream position.
-			changed = false
-			return nil
+	// The lookup reads before the upsert writes. SQLite can report SQLITE_BUSY
+	// when another writer holds the lock and the read transaction cannot be
+	// upgraded, so retry the whole transaction, including the lookup.
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		changed = false
+		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+			if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
+				// Keep the later receipt. A false changed result tells the consumer
+				// not to advance or notify at an unrelated stream position.
+				return nil
+			}
+			pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
+			changed = err == nil
+			return err
+		})
+		if err == nil || !isSQLiteBusy(err) {
+			return pos, changed, err
 		}
-		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
-		changed = err == nil
-		return err
-	})
-	return pos, changed, err
+		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return 0, false, err
 }
 
 // receiptMovesBackwards reports whether storing a receipt at eventID would move
