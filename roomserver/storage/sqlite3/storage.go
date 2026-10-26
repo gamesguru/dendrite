@@ -307,7 +307,10 @@ func (d *Database) GetRoomUpdater(
 		return shared.NewRoomUpdater(ctx, &d.Database, nil, roomInfo)
 	}
 	lockAny, _ := d.updaterLocks.LoadOrStore(roomInfo.RoomNID, make(chan struct{}, 1))
-	lock := lockAny.(chan struct{})
+	lock, ok := lockAny.(chan struct{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected room updater lock type %T", lockAny)
+	}
 	select {
 	case lock <- struct{}{}:
 	case <-ctx.Done():
