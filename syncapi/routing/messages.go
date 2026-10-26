@@ -478,7 +478,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// Sort the events to ensure we send them in the right order.
 	if r.backwardOrdering {
-		if events[len(events)-1].Type() == spec.MRoomCreate {
+		if events[0].Type() == spec.MRoomCreate {
 			// NOTSPEC: We've hit the beginning of the room so there's really nowhere
 			// else to go. This seems to fix Element iOS from looping on /messages endlessly.
 			end = types.TopologyToken{}
@@ -512,7 +512,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.TopologyToken, err error) {
 	if r.backwardOrdering {
-		if events[len(events)-1].Type() == spec.MRoomCreate {
+		if events[0].Type() == spec.MRoomCreate {
 			// NOTSPEC: We've hit the beginning of the room so there's really nowhere
 			// else to go. This seems to fix Element iOS from looping on /messages endlessly.
 			end = types.TopologyToken{}
