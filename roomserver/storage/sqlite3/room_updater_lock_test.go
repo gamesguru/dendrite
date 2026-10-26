@@ -50,7 +50,8 @@ func mustRoom(t *testing.T, db *sqlite3.Database, roomID string) *types.RoomInfo
 // then overwrite what it wrote. An updater must hold its room until it ends.
 func TestRoomUpdaterHoldsTheRoomUntilItEnds(t *testing.T) {
 	db := mustOpen(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	room := mustRoom(t, db, "!one:test")
 	other := mustRoom(t, db, "!two:test")
 
@@ -64,7 +65,9 @@ func TestRoomUpdaterHoldsTheRoomUntilItEnds(t *testing.T) {
 
 	got := make(chan error, 1)
 	go func() {
-		second, err := db.GetRoomUpdater(ctx, room)
+		secondCtx, secondCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer secondCancel()
+		second, err := db.GetRoomUpdater(secondCtx, room)
 		if err == nil {
 			err = second.Commit()
 		}
@@ -90,7 +93,9 @@ func TestRoomUpdaterIsReleasedByRollbackAndHonoursContext(t *testing.T) {
 	db := mustOpen(t)
 	room := mustRoom(t, db, "!one:test")
 
-	first, err := db.GetRoomUpdater(context.Background(), room)
+	firstCtx, firstCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer firstCancel()
+	first, err := db.GetRoomUpdater(firstCtx, room)
 	require.NoError(t, err)
 
 	// Waiting for a held room gives up when the context ends.

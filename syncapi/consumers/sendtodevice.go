@@ -83,19 +83,46 @@ func (s *OutputSendToDeviceEventConsumer) Start() error {
 func (s *OutputSendToDeviceEventConsumer) WaitUntilCaughtUp(ctx context.Context, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// Remember how far the stream had got when the barrier started. Messages
+	// published later, for this user or another, must not extend this wait.
+	cutoff, haveCutoff := s.sendToDeviceCutoff(ctx)
+
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		info, err := s.jetstream.ConsumerInfo(s.topic, s.pullDurable, nats.Context(ctx))
-		if err != nil || (info.NumPending == 0 && info.NumAckPending == 0) {
-			return
+		if err == nil {
+			// Keep the old fast path for an empty consumer: no messages are
+			// waiting and none are in flight.
+			if info.NumPending == 0 && info.NumAckPending == 0 {
+				return
+			}
+			// Otherwise wait only for the messages that existed before the
+			// barrier started. The ack floor is the highest stream position
+			// below which everything has been acknowledged.
+			if haveCutoff && info.AckFloor.Stream >= cutoff {
+				return
+			}
 		}
+		// A failed lookup, for example while the consumer is being created,
+		// is retried until the deadline instead of letting the sync race ahead.
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// sendToDeviceCutoff returns the last sequence published to the send-to-device
+// stream before the barrier started.
+func (s *OutputSendToDeviceEventConsumer) sendToDeviceCutoff(ctx context.Context) (uint64, bool) {
+	info, err := s.jetstream.StreamInfo(s.topic, nats.Context(ctx))
+	if err != nil {
+		return 0, false
+	}
+	return info.State.LastSeq, true
 }
 
 func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
