@@ -559,10 +559,10 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			if r.ctx.Err() != nil {
 				return
 			}
-			// Backfill is best effort: no remote server answering must not fail
-			// the request, it just means there is nothing older to show.
-			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
-			return []*rstypes.HeaderedEvent{}, nil
+			// There are no local events to return, so suppressing a backfill
+			// failure would make the client treat an incomplete page as history's
+			// end. Return the error so the request can be retried.
+			return nil, err
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0
@@ -632,6 +632,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		default:
 			r.didBackfill = true
 			if len(pdus) > 0 {
+				sort.Sort(eventsByDepth(pdus))
 				r.backfillHadEvents = true
 				backfillEnd, positionErr := r.getEnd(pdus)
 				if positionErr != nil {

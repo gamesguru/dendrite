@@ -881,6 +881,9 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 			}
 		}
 		u.api.PerformUploadDeviceKeys(ctx, uploadReq, uploadRes)
+		if uploadRes.Error != nil {
+			return defaultWaitTime, fmt.Errorf("failed to store cross-signing keys for %s: %s", userID, uploadRes.Error.Err)
+		}
 	}
 	err = u.updateDeviceList(&res) //nolint:contextcheck
 	if err != nil {

@@ -97,8 +97,9 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 	// rather than acknowledged: nothing else carries it. Storing is an upsert,
 	// so a retry is safe.
 	var streamPos types.StreamPosition
+	var changed bool
 	err = sqlutil.RetryTransient(ctx, "sync API write of a receipt", func() (err error) {
-		streamPos, err = s.db.StoreReceipt(
+		streamPos, changed, err = s.db.StoreReceipt(
 			ctx,
 			output.RoomID,
 			output.Type,
@@ -117,6 +118,9 @@ func (s *OutputReceiptEventConsumer) onMessage(ctx context.Context, msgs []*nats
 		}).Error("SyncAPI receipt consumer: failed to store receipt")
 		sentry.CaptureException(err)
 		return ctx.Err() == nil && !sqlutil.IsTransient(err)
+	}
+	if !changed {
+		return true
 	}
 
 	log.WithFields(log.Fields{

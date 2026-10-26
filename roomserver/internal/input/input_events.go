@@ -1140,21 +1140,64 @@ func (r *Inputer) fetchAuthEvents(
 	if !found {
 		// /event_auth is optional and some servers (including Complement's
 		// MSC4297 test fixture) do not implement it. Fall back to fetching
-		// the unknown auth events directly via /event; the state fetched by
-		// /state_ids may already include their auth chains.
+		// the unknown auth events directly via /event and walk their auth-event
+		// dependencies. The state fetched by /state_ids may already include
+		// some of those dependencies locally.
+		verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
+		if versionErr != nil {
+			return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
+		}
+		pending := make([]string, 0, len(unknown))
 		for authEventID := range unknown {
+			pending = append(pending, authEventID)
+		}
+		requested := make(map[string]struct{}, len(pending))
+		unresolved := make(map[string]struct{})
+		for len(pending) > 0 {
+			authEventID := pending[0]
+			pending = pending[1:]
+			if _, ok := known[authEventID]; ok {
+				continue
+			}
+			if _, ok := requested[authEventID]; ok {
+				continue
+			}
+			requested[authEventID] = struct{}{}
+			var fetched gomatrixserverlib.PDU
 			for _, serverName := range servers {
 				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
 				if getErr != nil || len(txn.PDUs) == 0 {
 					logger.WithError(getErr).Debugf("Failed to get missing auth event %q from %q", authEventID, serverName)
 					continue
 				}
+				foundRequestedEvent := false
 				for _, pdu := range txn.PDUs {
+					parsed, parseErr := verImpl.NewEventFromUntrustedJSON(pdu)
+					if parseErr != nil || parsed.EventID() != authEventID {
+						continue
+					}
 					res.AuthEvents = append(res.AuthEvents, spec.RawJSON(pdu))
+					fetched = parsed
+					foundRequestedEvent = true
+					break
 				}
-				found = true
-				break
+				if foundRequestedEvent {
+					break
+				}
 			}
+			if fetched == nil {
+				unresolved[authEventID] = struct{}{}
+				continue
+			}
+			found = true
+			for _, dependencyID := range fetched.AuthEventIDs() {
+				if _, ok := known[dependencyID]; !ok {
+					pending = append(pending, dependencyID)
+				}
+			}
+		}
+		if len(unresolved) > 0 {
+			return fmt.Errorf("failed to fetch auth event dependencies %v for event %q", unresolved, event.EventID())
 		}
 	}
 	if !found {

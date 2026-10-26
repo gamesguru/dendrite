@@ -78,6 +78,8 @@ type OutputRoomEventConsumer struct {
 	devices       *DeviceListerHolder
 }
 
+var errRetryRoomEvent = errors.New("retry room event after federation delivery failure")
+
 // NewOutputRoomEventConsumer creates a new OutputRoomEventConsumer. Call Start() to begin consuming from room servers.
 func NewOutputRoomEventConsumer(
 	process *process.ProcessContext,
@@ -154,6 +156,14 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 					"event_id": ev.EventID(),
 					"room_id":  ev.RoomID().String(),
 				}).Warn("Interrupted before the room event was written; leaving it for redelivery")
+				return false
+			}
+			if errors.Is(err, errRetryRoomEvent) {
+				log.WithFields(log.Fields{
+					"event_id":   ev.EventID(),
+					"room_id":    ev.RoomID().String(),
+					log.ErrorKey: err,
+				}).Warn("Federation delivery failed; leaving the room event for redelivery")
 				return false
 			}
 			// A room purge evacuates the room (producing leave events) and then
@@ -298,7 +308,19 @@ func (s *OutputRoomEventConsumer) processMessage(ore api.OutputNewRoomEvent, rew
 			joiner, joinerErr := s.rsAPI.QueryUserIDForSender(s.ctx, ore.Event.RoomID(), spec.SenderID(*ore.Event.StateKey()))
 			if joinerErr == nil && joiner != nil && s.cfg.Matrix.IsLocalServerName(joiner.Domain()) {
 				deviceListHosts := append(slices.Clone(addsJoinedHosts), oldJoinedHosts...)
-				s.sendDeviceLists(ore.Event.RoomID().String(), joiner.String(), deviceListHosts)
+				if oldJoinedHosts == nil {
+					// A previous delivery may have updated the joined-host table
+					// before failing to send the EDU. On redelivery UpdateRoom
+					// identifies the event as a duplicate and cannot return the
+					// original old-host set, so recover the current destinations.
+					deviceListHosts, err = s.db.GetJoinedHosts(s.ctx, ore.Event.RoomID().String())
+					if err != nil {
+						return fmt.Errorf("%w: get joined hosts for device list retry: %w", errRetryRoomEvent, err)
+					}
+				}
+				if sendErr := s.sendDeviceLists(ore.Event.RoomID().String(), joiner.String(), deviceListHosts); sendErr != nil {
+					return fmt.Errorf("%w: send device lists: %w", errRetryRoomEvent, sendErr)
+				}
 			}
 			if s.cfg.Matrix.Presence.EnableOutbound {
 				s.sendPresence(ore.Event.RoomID().String(), addsJoinedHosts)
@@ -462,10 +484,10 @@ func (s *OutputRoomEventConsumer) pendingMembershipTarget(ore api.OutputNewRoomE
 // sendDeviceLists sends a device list update for every device of a local user
 // who has just joined the room to its other hosts, so they know of devices that
 // were created before the user shared a room with them.
-func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJoined []types.JoinedHost) {
+func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJoined []types.JoinedHost) error {
 	lister := s.devices.get()
 	if lister == nil {
-		return
+		return nil
 	}
 	var destinations []spec.ServerName
 	for _, added := range addedJoined {
@@ -474,19 +496,22 @@ func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJo
 		}
 	}
 	if len(destinations) == 0 {
-		return
+		return nil
 	}
 
 	logger := log.WithField("user_id", userID).WithField("room_id", roomID)
 	var devices userapi.QueryDevicesResponse
 	if err := lister.QueryDevices(s.ctx, &userapi.QueryDevicesRequest{UserID: userID}, &devices); err != nil {
 		logger.WithError(err).Error("failed to query devices to send device lists for")
-		return
+		return err
 	}
 	var messages userapi.QueryDeviceMessagesResponse
-	if err := lister.QueryDeviceMessages(s.ctx, &userapi.QueryDeviceMessagesRequest{UserID: userID}, &messages); err != nil || messages.Error != nil {
+	if err := lister.QueryDeviceMessages(s.ctx, &userapi.QueryDeviceMessagesRequest{UserID: userID}, &messages); err != nil {
 		logger.WithError(err).Error("failed to query device keys to send device lists for")
-		return
+		return err
+	} else if messages.Error != nil {
+		logger.WithError(errors.New(messages.Error.Err)).Error("failed to query device keys to send device lists for")
+		return errors.New(messages.Error.Err)
 	}
 	keys := make(map[string]userapi.DeviceMessage, len(messages.Devices))
 	for _, msg := range messages.Devices {
@@ -516,12 +541,14 @@ func (s *OutputRoomEventConsumer) sendDeviceLists(roomID, userID string, addedJo
 		var err error
 		if edu.Content, err = json.Marshal(update); err != nil {
 			logger.WithError(err).Error("failed to marshal device list update")
-			continue
+			return err
 		}
 		if err = s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, destinations); err != nil {
 			logger.WithError(err).Error("failed to send device list update")
+			return err
 		}
 	}
+	return nil
 }
 
 func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []types.JoinedHost) {

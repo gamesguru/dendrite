@@ -241,7 +241,7 @@ type Database interface {
 	// RedactEvent wipes an event in the database and sets the unsigned.redacted_because key to the redaction event
 	RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error
 	// StoreReceipt stores new receipt events
-	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error)
+	StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, changed bool, err error)
 	UpdateIgnoresForUser(ctx context.Context, userID string, ignores *types.IgnoredUsers) error
 	ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error)
 	UpdateRelations(ctx context.Context, event *rstypes.HeaderedEvent) error

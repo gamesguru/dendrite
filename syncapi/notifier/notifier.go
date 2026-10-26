@@ -344,6 +344,12 @@ func (n *Notifier) PartialStateSharedUsersForCandidates(ctx context.Context, use
 			continue
 		}
 		for _, userID := range candidates {
+			// Partial state does not establish membership merely from a shared
+			// server. Only expose presence when this notifier has confirmed the
+			// candidate is joined to the same room.
+			if !users.isIn(userID) {
+				continue
+			}
 			_, domain, err := gomatrixserverlib.SplitID('@', userID)
 			if err == nil && slices.Contains(servers, string(domain)) {
 				shared[userID] = struct{}{}

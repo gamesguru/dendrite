@@ -334,22 +334,46 @@ func (d *Database) UpdateNotaryKeys(
 		if weekIntoFuture.Before(validUntil.Time()) {
 			validUntil = spec.AsTimestamp(weekIntoFuture)
 		}
+		// Reject the entire response before it can be indexed through another
+		// key ID. A response with one conflicting key must not expose that key
+		// when a caller asks for one of its otherwise non-conflicting IDs.
+		for keyID := range serverKeys.OldVerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				return nil
+			}
+		}
+		for keyID := range serverKeys.VerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				return nil
+			}
+		}
 		notaryID, err := d.NotaryServerKeysJSON.InsertJSONResponse(ctx, txn, serverKeys, serverName, validUntil)
 		if err != nil {
 			return err
 		}
 		// update the metadata for the keys
 		for keyID, oldKey := range serverKeys.OldVerifyKeys {
-			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
-			if conflictErr != nil {
-				return conflictErr
-			}
-			if conflict {
-				continue
-			}
-			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
+			var boundID tables.NotaryID
+			boundID, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
 				return err
+			}
+			if boundID != notaryID {
+				conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+				if conflictErr != nil {
+					return conflictErr
+				}
+				if conflict {
+					return fmt.Errorf("notary response attempted to rebind %s/%s", serverName, keyID)
+				}
 			}
 			// 0 marks a current key in the retention table; keep retired keys
 			// evictable even when the remote server sent no expired_ts.
@@ -362,16 +386,19 @@ func (d *Database) UpdateNotaryKeys(
 			}
 		}
 		for keyID := range serverKeys.VerifyKeys {
-			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
-			if conflictErr != nil {
-				return conflictErr
-			}
-			if conflict {
-				continue
-			}
-			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
+			var boundID tables.NotaryID
+			boundID, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
 				return err
+			}
+			if boundID != notaryID {
+				conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+				if conflictErr != nil {
+					return conflictErr
+				}
+				if conflict {
+					return fmt.Errorf("notary response attempted to rebind %s/%s", serverName, keyID)
+				}
 			}
 			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, 0, true); err != nil {
 				return err

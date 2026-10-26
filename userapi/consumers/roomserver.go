@@ -54,6 +54,8 @@ type OutputRoomEventConsumer struct {
 	serverName   spec.ServerName
 }
 
+var errRetryPushRuleCopy = errors.New("retry room event after push rule copy failure")
+
 func NewOutputRoomEventConsumer(
 	process *process.ProcessContext,
 	cfg *config.UserAPI,
@@ -179,6 +181,9 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		log.WithFields(log.Fields{
 			"event_id": event.EventID(),
 		}).WithError(err).Errorf("userapi consumer: process room event failure")
+		if errors.Is(err, errRetryPushRuleCopy) {
+			return false
+		}
 	}
 
 	return true
@@ -472,6 +477,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	if err != nil {
 		return fmt.Errorf("s.localRoomMembers: %w", err)
 	}
+	var pushRuleCopyErr error
 
 	switch {
 	case event.Type() == spec.MRoomMember:
@@ -496,6 +502,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			// for it, including when the room was upgraded on another server.
 			if err = s.copyPushrulesFromPredecessor(ctx, event.RoomID().String(), member); err != nil {
 				log.WithError(err).Errorf("UserAPI: failed to copy push rules from the predecessor of a room")
+				pushRuleCopyErr = fmt.Errorf("%w: %w", errRetryPushRuleCopy, err)
 			}
 		}
 		if (member.Membership == spec.Leave || member.Membership == spec.Ban) && !s.cfg.Matrix.IsLocalServerName(member.Domain) {
@@ -569,7 +576,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 		}
 	}
 	if err != nil {
-		return err
+		return errors.Join(pushRuleCopyErr, err)
 	}
 	for _, userID := range users {
 		if err = s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); err != nil {
@@ -583,7 +590,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			return err
 		}
 	}
-	return nil
+	return pushRuleCopyErr
 }
 
 type localMembership struct {

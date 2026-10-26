@@ -622,20 +622,19 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 }
 
 // StoreReceipt stores user receipts.
-func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
+func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, changed bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
-			// Keep the later receipt. The current position is returned so that the
-			// caller has nothing new to announce.
-			var maxID int64
-			maxID, err = d.Receipts.SelectMaxReceiptID(ctx, txn)
-			pos = types.StreamPosition(maxID)
-			return err
+			// Keep the later receipt. A false changed result tells the consumer
+			// not to advance or notify at an unrelated stream position.
+			changed = false
+			return nil
 		}
 		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
+		changed = err == nil
 		return err
 	})
-	return
+	return pos, changed, err
 }
 
 // receiptMovesBackwards reports whether storing a receipt at eventID would move

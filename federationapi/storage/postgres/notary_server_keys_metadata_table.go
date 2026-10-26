@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS federationsender_notary_server_keys_retention (
 
 const upsertServerKeysSQL = "" +
 	"INSERT INTO federationsender_notary_server_keys_metadata (notary_id, server_name, key_id) VALUES ($1, $2, $3)" +
-	" ON CONFLICT (server_name, key_id) DO UPDATE SET notary_id = $1"
+	" ON CONFLICT (server_name, key_id) DO NOTHING"
 
 // for a given (server_name, key_id), find the existing notary ID and valid until. Used to check if we will replace it
 // JOINs with the json table.
@@ -173,11 +173,18 @@ func (s *notaryServerKeysMetadataStatements) UpsertKey(
 		// the existing valid_until is valid longer, so use that.
 		return existingNotaryID, nil
 	}
-	// overwrite the notary_id for this (server_name, key_id) tuple
+	// Keep the first notary response bound to a key ID. Another process may
+	// have inserted a binding after the lookup above.
 	upsertStmt := txn.Stmt(s.upsertServerKeysStmt)
 	defer upsertStmt.Close()
 	_, err := upsertStmt.ExecContext(ctx, notaryID, serverName, keyID)
-	return notaryID, err
+	if err != nil {
+		return 0, err
+	}
+	if err = selectStmt.QueryRowContext(ctx, serverName, keyID).Scan(&existingNotaryID, &existingValidUntil); err != nil {
+		return 0, err
+	}
+	return existingNotaryID, nil
 }
 
 func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn *sql.Tx, serverName spec.ServerName, keyIDs []gomatrixserverlib.KeyID) ([]gomatrixserverlib.ServerKeys, error) {

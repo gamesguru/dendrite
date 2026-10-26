@@ -237,8 +237,10 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 	stateFilter *synctypes.StateFilter,
 	bundler *syncBundler,
 ) error {
+	memberTypes := []string{spec.MRoomMember}
+	leaveFilter := &synctypes.StateFilter{Types: &memberTypes}
 	deltas, joinedRoomIDs, err := snapshot.GetStateDeltas(
-		ctx, req.Device, types.Range{From: 0, To: to}, req.Device.UserID, stateFilter, p.rsAPI,
+		ctx, req.Device, types.Range{From: 0, To: to}, req.Device.UserID, leaveFilter, p.rsAPI,
 	)
 	if err != nil {
 		return fmt.Errorf("snapshot.GetStateDeltas: %w", err)

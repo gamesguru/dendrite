@@ -1722,7 +1722,28 @@ func (rp *RequestPool) getRoomsForList(
 		return rp.GetRoomsForUser(ctx, userID, spec.Invite)
 	}
 	if isInvite != nil && !*isInvite {
-		return rp.GetRoomsForUser(ctx, userID, "join")
+		joinedRooms, err := rp.GetRoomsForUser(ctx, userID, "join")
+		if err != nil {
+			return nil, err
+		}
+		knockedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Knock)
+		if err != nil {
+			return nil, err
+		}
+		bannedRooms, err := rp.GetRoomsForUser(ctx, userID, spec.Ban)
+		if err != nil {
+			return nil, err
+		}
+		kickedRooms, err := rp.GetKickedRooms(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		rooms := make([]RoomWithBumpStamp, 0, len(joinedRooms)+len(knockedRooms)+len(bannedRooms)+len(kickedRooms))
+		rooms = append(rooms, joinedRooms...)
+		rooms = append(rooms, knockedRooms...)
+		rooms = append(rooms, bannedRooms...)
+		rooms = append(rooms, kickedRooms...)
+		return deduplicateRooms(rooms), nil
 	}
 
 	// No invite filter - get rooms with active memberships (joined + invited + banned + kicked)

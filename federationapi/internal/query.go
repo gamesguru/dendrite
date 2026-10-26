@@ -52,11 +52,22 @@ func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, ser
 	// Coalesce concurrent direct fetches for the same server. Every request
 	// fetches the full key document anyway, so a single upstream request can
 	// satisfy all of them (MSC4499 §3).
-	res, err, _ := a.serverKeyFetches.Do(string(serverName), func() (any, error) {
+	resultCh := a.serverKeyFetches.DoChan(string(serverName), func() (any, error) {
+		fetchCtx, fetchCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second*30) //nolint:mnd
+		defer fetchCancel()
 		return a.doFederationRequest(serverName, func() (any, error) { //nolint:contextcheck
-			return a.fetchServerKeysDirectlyUncoalesced(ctx, serverName)
+			return a.fetchServerKeysDirectlyUncoalesced(fetchCtx, serverName)
 		}, true)
 	})
+	var res any
+	var err error
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		res = result.Val
+		err = result.Err
+	}
 	if err != nil {
 		a.recordServerKeyFetchFailure(serverName)
 		return nil, err

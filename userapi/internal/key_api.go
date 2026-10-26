@@ -322,7 +322,7 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 
 	// attempt to satisfy key queries from the local database first as we should get device updates pushed to us
 	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys)
-	if len(domainToDeviceKeys) > 0 {
+	if len(domainToDeviceKeys) > 0 || len(domainToCrossSigningKeys) > 0 {
 		// perform key queries for remote devices
 		a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
 	}
@@ -473,7 +473,7 @@ func (a *UserInternalAPI) queryRemoteKeys(
 	ctx context.Context, timeout time.Duration, res *api.QueryKeysResponse,
 	domainToDeviceKeys map[string]map[string][]string, domainToCrossSigningKeys map[string]map[string]struct{},
 ) {
-	resultCh := make(chan *fclient.RespQueryKeys, len(domainToDeviceKeys))
+	resultCh := make(chan *fclient.RespQueryKeys, len(domainToDeviceKeys)+len(domainToCrossSigningKeys))
 	// allows us to wait until all federation servers have been poked
 	var wg sync.WaitGroup
 	// mutex for writing directly to res (e.g failures)
@@ -481,6 +481,12 @@ func (a *UserInternalAPI) queryRemoteKeys(
 
 	domains := map[string]struct{}{}
 	for domain := range domainToDeviceKeys {
+		if a.Config.Matrix.IsLocalServerName(spec.ServerName(domain)) {
+			continue
+		}
+		domains[domain] = struct{}{}
+	}
+	for domain := range domainToCrossSigningKeys {
 		if a.Config.Matrix.IsLocalServerName(spec.ServerName(domain)) {
 			continue
 		}
@@ -573,9 +579,16 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	// by hitting /users/devices - otherwise fallback to /keys/query which has nicer bulk properties but
 	// lack a stream ID.
 	userIDsForAllDevices := map[string]struct{}{}
+	crossSigningOnly := map[string]struct{}{}
 	for userID, deviceIDs := range devKeys {
 		if len(deviceIDs) == 0 {
 			userIDsForAllDevices[userID] = struct{}{}
+		}
+	}
+	for userID := range crossSigningKeys {
+		if _, ok := devKeys[userID]; !ok {
+			devKeys[userID] = []string{}
+			crossSigningOnly[userID] = struct{}{}
 		}
 	}
 	// for cross-signing keys, it's probably easier just to hit /keys/query if we aren't already doing
@@ -588,6 +601,9 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 		}
 	}
 	for userID := range userIDsForAllDevices {
+		if _, ok := crossSigningOnly[userID]; ok {
+			continue
+		}
 		err := a.Updater.ManualUpdate(context.Background(), spec.ServerName(serverName), userID) //nolint:contextcheck
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -618,7 +634,13 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			devKeys[userID] = []string{}
 			continue
 		}
-		delete(devKeys, userID)
+		if _, needsCrossSigning := crossSigningKeys[userID]; needsCrossSigning {
+			// ManualUpdate refreshes the device list asynchronously. Keep this
+			// user in /keys/query so a missing cross-signing key is not lost.
+			devKeys[userID] = []string{}
+		} else {
+			delete(devKeys, userID)
+		}
 	}
 	if len(devKeys) == 0 {
 		return
