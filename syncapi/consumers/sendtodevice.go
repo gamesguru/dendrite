@@ -9,6 +9,7 @@ package consumers
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -34,6 +35,7 @@ type OutputSendToDeviceEventConsumer struct {
 	jetstream         nats.JetStreamContext
 	durable           string
 	topic             string
+	pullDurable       string
 	db                storage.Database
 	userAPI           api.SyncKeyAPI
 	isLocalServerName func(spec.ServerName) bool
@@ -57,6 +59,7 @@ func NewOutputSendToDeviceEventConsumer(
 		jetstream:         js,
 		topic:             cfg.Matrix.JetStream.Prefixed(jetstream.OutputSendToDeviceEvent),
 		durable:           cfg.Matrix.JetStream.Durable("SyncAPISendToDeviceConsumer"),
+		pullDurable:       cfg.Matrix.JetStream.Durable("SyncAPISendToDeviceConsumer") + "Pull",
 		db:                store,
 		userAPI:           userAPI,
 		isLocalServerName: cfg.Matrix.IsLocalServerName,
@@ -71,6 +74,28 @@ func (s *OutputSendToDeviceEventConsumer) Start() error {
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
 		s.onMessage, nats.DeliverAll(), nats.ManualAck(),
 	)
+}
+
+// WaitUntilCaughtUp waits, for at most timeout, until the consumer has handled
+// every send-to-device message published so far. A client that has just sent
+// a message to one of its own devices syncs before this asynchronous consumer
+// has stored it, and would otherwise miss the message.
+func (s *OutputSendToDeviceEventConsumer) WaitUntilCaughtUp(ctx context.Context, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		info, err := s.jetstream.ConsumerInfo(s.topic, s.pullDurable, nats.Context(ctx))
+		if err != nil || (info.NumPending == 0 && info.NumAckPending == 0) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {

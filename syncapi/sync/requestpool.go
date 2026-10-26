@@ -49,9 +49,18 @@ type RequestPool struct {
 	producer PresencePublisher
 	consumer PresenceConsumer
 
+	// toDeviceBarrier, if set, waits for pending send-to-device messages to be stored.
+	toDeviceBarrier func(ctx context.Context)
+
 	// v4 sliding sync per-connection state tracking
 	// Key: "{user_id}|{device_id}|{conn_id}" -> *V4ConnectionState
 	v4Connections *sync.Map
+}
+
+// SetSendToDeviceBarrier sets a function that waits for send-to-device messages
+// already published to be stored, so a sync that follows a send sees them.
+func (rp *RequestPool) SetSendToDeviceBarrier(f func(ctx context.Context)) {
+	rp.toDeviceBarrier = f
 }
 
 type PresencePublisher interface {

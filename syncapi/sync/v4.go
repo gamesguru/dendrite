@@ -665,6 +665,10 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	rp.updateLastSeen(req, device)
 	rp.updatePresenceExplicit(rp.db, v4Req.SetPresence, device.UserID)
 	rp.waitForMembershipChanges(ctx, device.UserID)
+	if rp.toDeviceBarrier != nil && v4Req.Extensions != nil &&
+		v4Req.Extensions.ToDevice != nil && v4Req.Extensions.ToDevice.Enabled {
+		rp.toDeviceBarrier(ctx)
+	}
 
 	// Main sync loop - similar to v3 sync
 	// Loop until we have updates to return or timeout expires

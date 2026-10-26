@@ -7,8 +7,10 @@
 package syncapi
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -175,6 +177,9 @@ func AddPublicRoutes(
 	if err = sendToDeviceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start send-to-device consumer")
 	}
+	requestPool.SetSendToDeviceBarrier(func(ctx context.Context) {
+		sendToDeviceConsumer.WaitUntilCaughtUp(ctx, time.Second)
+	})
 
 	receiptConsumer := consumers.NewOutputReceiptEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.ReceiptStreamProvider,
