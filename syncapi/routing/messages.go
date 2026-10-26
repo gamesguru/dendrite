@@ -755,7 +755,22 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	}
 
 	// Append the events ve previously retrieved locally.
-	events = append(events, r.snapshot.StreamEventsToEvents(r.ctx, nil, streamEvents, r.rsAPI)...)
+	localEvents := r.snapshot.StreamEventsToEvents(r.ctx, nil, streamEvents, r.rsAPI)
+	if r.backwardOrdering && len(events) > 0 {
+		// Backfill returns only the newest events of the gap. Local events older than
+		// those sit below the gap (e.g. from an earlier stay in the room); returning
+		// them would put the end token past the gap and skip the stored events in
+		// between, so leave them for a later page.
+		oldest := events[0].Depth()
+		kept := localEvents[:0]
+		for _, ev := range localEvents {
+			if ev.Depth() >= oldest {
+				kept = append(kept, ev)
+			}
+		}
+		localEvents = kept
+	}
+	events = append(events, localEvents...)
 	sort.Sort(eventsByDepth(events))
 
 	return
