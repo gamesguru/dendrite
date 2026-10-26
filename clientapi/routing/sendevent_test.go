@@ -22,6 +22,7 @@ import (
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/test"
 	uapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
@@ -333,4 +334,26 @@ func TestSendEventConcurrentTransactionRetries(t *testing.T) {
 		assert.Equal(t, response.Code, http.StatusOK)
 	}
 	assert.Equal(t, inputs.Load(), int32(1), "concurrent retries must only submit one event")
+}
+
+// Identical state sent by a different user must still be authorised, not
+// answered from the idempotency shortcut.
+func TestStateEqualRequiresSameSender(t *testing.T) {
+	alice := test.NewUser(t)
+	bob := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	stateEvent := room.CreateEvent(t, alice, "com.example.test", map[string]any{}, test.WithStateKey(alice.ID))
+	rs := &sendEventTestRoomserverAPI{
+		t:           t,
+		roomIDStr:   room.ID,
+		roomVersion: gomatrixserverlib.RoomVersionV10,
+		roomState:   []*types.HeaderedEvent{stateEvent},
+	}
+
+	eventID, ok := stateEqual(t.Context(), rs, "com.example.test", alice.ID, room.ID, alice.ID, map[string]any{})
+	assert.Assert(t, ok)
+	assert.Equal(t, eventID, stateEvent.EventID())
+
+	_, ok = stateEqual(t.Context(), rs, "com.example.test", alice.ID, room.ID, bob.ID, map[string]any{})
+	assert.Assert(t, !ok, "a different sender must not be short-circuited")
 }
