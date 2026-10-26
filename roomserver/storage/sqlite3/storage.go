@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/gamesguru/gomatrixserverlib"
 
@@ -26,6 +27,8 @@ import (
 // A Database is used to store room events and stream offsets.
 type Database struct {
 	shared.Database
+	// updaterLocks holds one lock per room, taken for the life of a RoomUpdater.
+	updaterLocks sync.Map // types.RoomNID -> chan struct{}
 }
 
 // Open a sqlite database.
@@ -294,7 +297,29 @@ func (d *Database) GetRoomUpdater(
 	// 'database is locked' errors. As sqlite doesn't support multi-process on the
 	// same DB anyway, and we only execute updates sequentially, the only worries
 	// are for rolling back when things go wrong. (atomicity)
-	return shared.NewRoomUpdater(ctx, &d.Database, nil, roomInfo)
+	//
+	// Updates are not all sequential though: the partial state resync runs
+	// beside the room's input worker. Without a transaction nothing stops it
+	// reading the room's latest events, then writing a state that predates an
+	// event the worker has applied since, such as restoring a user's join
+	// after they left. So hold a lock per room until the updater finishes.
+	if roomInfo == nil {
+		return shared.NewRoomUpdater(ctx, &d.Database, nil, roomInfo)
+	}
+	lockAny, _ := d.updaterLocks.LoadOrStore(roomInfo.RoomNID, make(chan struct{}, 1))
+	lock := lockAny.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	updater, err := shared.NewRoomUpdater(ctx, &d.Database, nil, roomInfo)
+	if err != nil {
+		<-lock
+		return nil, err
+	}
+	updater.OnFinish(func() { <-lock })
+	return updater, nil
 }
 
 func (d *Database) MembershipUpdater(
