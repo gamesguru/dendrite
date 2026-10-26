@@ -1197,6 +1197,7 @@ nextAuthEvent:
 		// In order to store the new auth event, we need to know its auth chain
 		// as NIDs for the `auth_event_nids` column. Let's see if we can find those.
 		authEventNIDs := _authEventNIDs[:0]
+		citesRejected := false
 		for _, eventID := range authEvent.AuthEventIDs() {
 			knownEvent, ok := known[eventID]
 			if !ok {
@@ -1218,6 +1219,9 @@ nextAuthEvent:
 				knownEvent = &ev
 				known[eventID] = knownEvent
 			}
+			// An event citing a rejected auth event is rejected too, even if
+			// its remaining auth events would allow it.
+			citesRejected = citesRejected || knownEvent.Rejected
 			// A partial chain can cite events we already have, such as the
 			// create event; they are needed to authorize this one.
 			if !knownEvent.Rejected && knownEvent.PDU != nil {
@@ -1232,6 +1236,9 @@ nextAuthEvent:
 		err := gomatrixserverlib.Allowed(authEvent, auth, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		})
+		if err == nil && citesRejected {
+			err = errors.New("cites a rejected auth event")
+		}
 		if isRejected = err != nil; isRejected {
 			logger.WithError(err).Warnf("Auth event %s rejected", authEvent.EventID())
 		}
