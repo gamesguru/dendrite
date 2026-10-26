@@ -34,10 +34,6 @@ CREATE TABLE IF NOT EXISTS syncapi_invite_events (
 -- For looking up the invites for a given user.
 CREATE INDEX IF NOT EXISTS syncapi_invites_target_user_id_idx
 	ON syncapi_invite_events (target_user_id, id);
-
--- For deleting old invites
-CREATE INDEX IF NOT EXISTS syncapi_invites_event_id_idx
-	ON syncapi_invite_events (event_id);
 `
 
 const insertInviteEventSQL = "" +

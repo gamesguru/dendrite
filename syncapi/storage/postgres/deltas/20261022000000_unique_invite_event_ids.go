@@ -23,7 +23,11 @@ func UpUniqueInviteEventIDs(ctx context.Context, tx *sql.Tx) error {
 		       OR (preferred.deleted = old.deleted AND preferred.id > old.id))`); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS syncapi_invites_event_id_unique_idx
-		ON syncapi_invite_events (event_id)`)
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS syncapi_invites_event_id_unique_idx
+		ON syncapi_invite_events (event_id)`); err != nil {
+		return err
+	}
+	// The unique index serves every lookup by event ID.
+	_, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS syncapi_invites_event_id_idx`)
 	return err
 }

@@ -115,6 +115,7 @@ func Setup(
 		"org.matrix.msc4143":            len(cfg.Matrix.RTCFoci) > 0,
 		"org.matrix.msc4354":            true, // MSC4354: sticky events
 		"org.matrix.msc4222":            true, // MSC4222: state_after in /sync
+		"org.matrix.msc4306":            true, // MSC4306: thread subscriptions
 		"uk.tcpip.msc4133":              true, // MSC4133: custom profile fields, unstable path
 		"uk.tcpip.msc4133.stable":       true, // MSC4133: custom profile fields, v3 path
 		"com.beeper.msc4169":            true, // MSC4169: redactions through /send in every room version

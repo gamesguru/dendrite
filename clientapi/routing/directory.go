@@ -137,7 +137,6 @@ func DirectoryRoom(
 					add(domain)
 				}
 			}
-			add(cfg.Matrix.ServerName)
 		}
 		res.fillServers(servers)
 	}

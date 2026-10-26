@@ -608,7 +608,6 @@ index syncapi_filter | syncapi_filter_localpart | CREATE INDEX syncapi_filter_lo
 index syncapi_filter | syncapi_filter_pkey | CREATE UNIQUE INDEX syncapi_filter_pkey ON public.syncapi_filter USING btree (id, localpart)
 index syncapi_ignores | syncapi_ignores_pkey | CREATE UNIQUE INDEX syncapi_ignores_pkey ON public.syncapi_ignores USING btree (user_id)
 index syncapi_invite_events | syncapi_invite_events_pkey | CREATE UNIQUE INDEX syncapi_invite_events_pkey ON public.syncapi_invite_events USING btree (id)
-index syncapi_invite_events | syncapi_invites_event_id_idx | CREATE INDEX syncapi_invites_event_id_idx ON public.syncapi_invite_events USING btree (event_id)
 index syncapi_invite_events | syncapi_invites_event_id_unique_idx | CREATE UNIQUE INDEX syncapi_invites_event_id_unique_idx ON public.syncapi_invite_events USING btree (event_id)
 index syncapi_invite_events | syncapi_invites_target_user_id_idx | CREATE INDEX syncapi_invites_target_user_id_idx ON public.syncapi_invite_events USING btree (target_user_id, id)
 index syncapi_memberships | syncapi_memberships_unique | CREATE UNIQUE INDEX syncapi_memberships_unique ON public.syncapi_memberships USING btree (room_id, user_id, membership)

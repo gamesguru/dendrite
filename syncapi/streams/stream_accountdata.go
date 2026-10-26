@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -14,12 +15,12 @@ import (
 
 // isEmptyAccountData reports whether data is an MSC3391 deletion tombstone.
 func isEmptyAccountData(data []byte) bool {
-	switch strings.TrimSpace(string(data)) {
-	case "", "null", "{}":
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
 		return true
-	default:
-		return false
 	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal([]byte(trimmed), &object) == nil && len(object) == 0
 }
 
 type AccountDataStreamProvider struct {

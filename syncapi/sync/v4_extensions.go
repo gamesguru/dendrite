@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -201,6 +202,9 @@ func (rp *RequestPool) ProcessExtensions(
 			if len(data.Unsubscribed) > 0 {
 				unsubscribed[roomID] = data.Unsubscribed
 			}
+		}
+		if limit := req.Extensions.ThreadSubscriptions.Limit; limit > 0 {
+			subscribed = limitThreadSubscriptions(subscribed, limit)
 		}
 		resp.ThreadSubscriptions = &types.ThreadSubscriptionsResponse{Subscribed: subscribed, Unsubscribed: unsubscribed}
 	}
@@ -1067,4 +1071,33 @@ func (rp *RequestPool) processTypingExtension(
 	// Always return typing extension if requested
 	// Synapse may return empty typing objects
 	return resp, nil
+}
+
+// limitThreadSubscriptions keeps at most limit subscriptions, taking rooms and
+// threads in sorted order so repeated requests return the same ones.
+func limitThreadSubscriptions(subscribed map[string]map[string]types.ThreadSubscription, limit int) map[string]map[string]types.ThreadSubscription {
+	roomIDs := make([]string, 0, len(subscribed))
+	for roomID := range subscribed {
+		roomIDs = append(roomIDs, roomID)
+	}
+	sort.Strings(roomIDs)
+	limited := make(map[string]map[string]types.ThreadSubscription)
+	for _, roomID := range roomIDs {
+		threadIDs := make([]string, 0, len(subscribed[roomID]))
+		for threadID := range subscribed[roomID] {
+			threadIDs = append(threadIDs, threadID)
+		}
+		sort.Strings(threadIDs)
+		for _, threadID := range threadIDs {
+			if limit == 0 {
+				return limited
+			}
+			if limited[roomID] == nil {
+				limited[roomID] = make(map[string]types.ThreadSubscription)
+			}
+			limited[roomID][threadID] = subscribed[roomID][threadID]
+			limit--
+		}
+	}
+	return limited
 }
