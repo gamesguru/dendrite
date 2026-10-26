@@ -88,18 +88,11 @@ cov: ## Run library package tests with coverage and print a summary
 	DENDRITE_TEST_SKIP_NODB=$(DENDRITE_TEST_SKIP_NODB) $(GO) test -covermode=atomic -coverpkg=./... -coverprofile=$(COVERPROFILE) $(LIBPKGS)
 	$(GO) tool cover -func=$(COVERPROFILE)
 
-LINT_DIRS_GO ?= $(shell git diff --name-only $(DIFF_BASE) -- '*.go' | xargs -r dirname | sort -u | sed 's#^\.$$#./#; s#^[^.].*#./&#')
-
 .PHONY: lint
 lint: ## Run vet, staticcheck, and golangci-lint
-	# check that LINT_DIRS_GO is set
-	@test -n "${LINT_DIRS_GO}" || echo "Empty \$LINT_DIRS_GO: ${LINT_DIRS_GO}"
-	# ~~~~ go vet        ~~~~
-	$(GO) vet $(VETFLAGS) $(if $(strip $(LINT_DIRS_GO)),$(LINT_DIRS_GO),$(PKGS))
-	# ~~~~ golang-ci     ~~~~
-	$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS) --no-config --new-from-rev=$(DIFF_BASE) $(LINT_DIRS_GO)
-	# ~~~~ staticcheck   ~~~~
-	$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) $(LINT_DIRS_GO)
+	$(GO) vet $(VETFLAGS) ./...
+	$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS) --no-config --new-from-rev=$(DIFF_BASE) ./...
+	$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) ./...
 
 .PHONY: build
 build: ## Build all packages
