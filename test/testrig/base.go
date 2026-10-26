@@ -52,6 +52,9 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.
 			MaxIdleConnections:     2,  //nolint:mnd
 			ConnMaxLifetimeSeconds: 60, //nolint:mnd
 		}
+		// Keep each test broker's store private, even when a future change
+		// stops using the fully in-memory path.
+		cfg.Global.JetStream.StoragePath = config.Path(t.TempDir())
 		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {
 			ctx.ShutdownZendrite()
@@ -80,6 +83,9 @@ func CreateConfig(t *testing.T, dbType test.DBType) (*config.Zendrite, *process.
 		cfg.SyncAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "syncapi.db"))
 		cfg.UserAPI.AccountDatabase.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "userapi.db"))
 		cfg.RelayAPI.Database.ConnectionString = config.DataSource(filepath.Join("file://", tempDir, "relayapi.db"))
+		// Keep each test broker's store private, even when a future change
+		// stops using the fully in-memory path.
+		cfg.Global.JetStream.StoragePath = config.Path(t.TempDir())
 
 		applyTestOverrides(&cfg)
 		return &cfg, ctx, func() {

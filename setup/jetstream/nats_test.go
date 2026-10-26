@@ -190,7 +190,10 @@ func TestPrepareUsesMemoryStoreWhenInMemory(t *testing.T) {
 	})
 
 	instance := &NATSInstance{}
-	js, nc := instance.Prepare(processCtx, cfg)
+	js, nc, err := instance.PrepareE(processCtx, cfg)
+	if err != nil {
+		t.Fatalf("prepare in-memory NATS: %v", err)
+	}
 	if js == nil || nc == nil {
 		t.Fatal("expected an in-memory NATS instance")
 	}
@@ -201,6 +204,45 @@ func TestPrepareUsesMemoryStoreWhenInMemory(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("in-memory NATS wrote %d files to %s", len(entries), dir)
+	}
+}
+
+func TestPrepareEFailureLeavesInstanceReusable(t *testing.T) {
+	oldTimeout := embeddedStartTimeout
+	embeddedStartTimeout = 100 * time.Millisecond
+	defer func() { embeddedStartTimeout = oldTimeout }()
+
+	// A regular file cannot be used as the JetStream store directory, so the
+	// embedded server cannot become ready.
+	storeFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(storeFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("writing store file: %v", err)
+	}
+	badCfg := &config.JetStream{StoragePath: config.Path(storeFile), NoLog: true}
+	badCfg.Matrix = &config.Global{JetStream: *badCfg}
+	processCtx := process.NewProcessContext()
+	t.Cleanup(func() {
+		processCtx.ShutdownZendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+
+	instance := &NATSInstance{}
+	if _, _, err := instance.PrepareE(processCtx, badCfg); err == nil {
+		t.Fatal("expected a startup error")
+	}
+	if instance.Server != nil || instance.nc != nil || instance.js != nil {
+		t.Fatal("failed startup left the instance half-built")
+	}
+
+	embeddedStartTimeout = oldTimeout
+	goodCfg := &config.JetStream{InMemory: true, NoLog: true}
+	goodCfg.Matrix = &config.Global{JetStream: *goodCfg}
+	js, nc, err := instance.PrepareE(processCtx, goodCfg)
+	if err != nil {
+		t.Fatalf("retry after failed startup: %v", err)
+	}
+	if js == nil || nc == nil {
+		t.Fatal("expected a running NATS instance after retry")
 	}
 }
 
