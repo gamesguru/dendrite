@@ -225,7 +225,7 @@ func sendEventContent(
 		// If the existing/new state content are equal and the same user sent
 		// the existing event, return the existing event_id, making the request
 		// idempotent. Do not short-circuit state set by another user: their
-		// request still has to be authorised by the roomserver.
+		// request still has to be authorized by the roomserver.
 		if eventID, ok := stateEqual(ctx, rsAPI, eventType, *stateKey, roomID, device.UserID, r); ok {
 			return eventID, nil
 		}

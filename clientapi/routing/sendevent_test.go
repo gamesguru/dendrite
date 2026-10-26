@@ -336,7 +336,7 @@ func TestSendEventConcurrentTransactionRetries(t *testing.T) {
 	assert.Equal(t, inputs.Load(), int32(1), "concurrent retries must only submit one event")
 }
 
-// Identical state sent by a different user must still be authorised, not
+// Identical state sent by a different user must still be authorized, not
 // answered from the idempotency shortcut.
 func TestStateEqualRequiresSameSender(t *testing.T) {
 	alice := test.NewUser(t)

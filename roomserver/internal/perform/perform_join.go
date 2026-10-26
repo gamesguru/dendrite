@@ -442,7 +442,7 @@ func (r *Joiner) performJoinRoomByID(
 		// No local user can authorize the restricted join, but another server
 		// in the room may have one: join through it instead. Only choose
 		// fallback servers ourselves when the client did not name any; an
-		// explicit ?server_name= list must be honoured so a refused join is
+		// explicit ?server_name= list must be honored so a refused join is
 		// reported instead of silently succeeding through another server.
 		if len(req.ServerNames) == 0 && errors.As(aerr, &matrixErr) && (matrixErr.ErrCode == rsAPI.ErrorUnableToAuthoriseJoin || matrixErr.ErrCode == rsAPI.ErrorUnableToGrantJoin) {
 			if servers := r.otherServersInRoom(ctx, req.RoomIDOrAlias); len(servers) > 0 {
