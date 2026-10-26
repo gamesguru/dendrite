@@ -173,7 +173,7 @@ func TestNATSConnectOptions(t *testing.T) {
 	})
 }
 
-func TestPrepareUsesConfiguredStoreWithMemoryStreams(t *testing.T) {
+func TestPrepareUsesMemoryStorageWhenInMemory(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -198,9 +198,6 @@ func TestPrepareUsesConfiguredStoreWithMemoryStreams(t *testing.T) {
 		t.Fatal("expected an in-memory NATS instance")
 	}
 
-	if got, want := instance.StoreDir(), filepath.Join(dir, "jetstream"); got != want {
-		t.Fatalf("embedded NATS store dir = %q, want %q", got, want)
-	}
 	info, err := js.StreamInfo(cfg.Prefixed(InputRoomEvent))
 	if err != nil {
 		t.Fatalf("reading stream info: %v", err)

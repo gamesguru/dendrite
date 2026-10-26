@@ -792,11 +792,11 @@ func TestPurgeRoom(t *testing.T) {
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
 		natsInstance := jetstream.NATSInstance{}
-		defer func() {
+		defer func() { //nolint:contextcheck // ProcessContext owns the deferred cleanup lifetime.
 			defer close()
 			// Purging queues leave events and a purge event for both consumers.
 			// Keep their databases open until every queued message is acknowledged.
-			js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+			js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream)
 			assert.Eventually(t, func() bool {
 				for _, consumer := range []string{"SyncAPIRoomServerConsumer", "FederationAPIRoomServerConsumer"} {
 					info, err := js.ConsumerInfo(cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent), cfg.Global.JetStream.Durable(consumer)+"Pull")
@@ -945,7 +945,7 @@ func TestAdminEvacuateRoom(t *testing.T) {
 		}
 
 		// Wait for the FS API to have consumed every message
-		js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream) //nolint:contextcheck // ProcessContext owns the request lifetime.
 		timeout := time.After(time.Second)
 		for {
 			select {
@@ -1050,7 +1050,7 @@ func TestAdminEvacuateUser(t *testing.T) {
 			})
 		}
 		// Wait for the FS API to have consumed every message
-		js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream) //nolint:contextcheck // ProcessContext owns the request lifetime.
 		timeout := time.After(time.Second)
 		for {
 			select {

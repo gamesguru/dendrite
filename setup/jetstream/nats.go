@@ -45,15 +45,22 @@ func DeleteAllStreams(js natsclient.JetStreamContext, cfg *config.JetStream) {
 
 // embeddedStartTimeout bounds how long PrepareE waits for the embedded server
 // to accept connections.
-var embeddedStartTimeout = 60 * time.Second //nolint:mnd
+var embeddedStartTimeout = 60 * time.Second
 
 // Prepare returns the JetStream connection, starting the embedded server if
 // needed. A server that cannot start is fatal for the process, except with
 // InMemory set, which unit tests use: that panics instead, so testing reports
 // the failure against one test rather than os.Exit ending the whole binary.
 // Use PrepareE to handle the failure.
-func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) {
-	js, nc, err := s.PrepareE(process, cfg)
+//
+//nolint:contextcheck,nolintlint // ProcessContext owns the lifetime, as in configureStreams.
+func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) { //nolint:contextcheck // legacy API; PrepareE carries the process context
+	return s.PrepareWithContext(process.Context(), process, cfg)
+}
+
+// PrepareWithContext is Prepare with an explicit startup and connection context.
+func (s *NATSInstance) PrepareWithContext(ctx context.Context, process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) {
+	js, nc, err := s.prepareE(ctx, process, cfg)
 	if err != nil {
 		if cfg.InMemory {
 			panic(err)
@@ -65,7 +72,13 @@ func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetS
 
 // PrepareE is Prepare, but returns a failure to start the embedded server and
 // leaves the instance unstarted, so that a later call can try again.
+//
+//nolint:contextcheck,nolintlint // ProcessContext owns the lifetime, as in configureStreams.
 func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn, error) {
+	return s.prepareE(process.Context(), process, cfg)
+}
+
+func (s *NATSInstance) prepareE(ctx context.Context, process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var err error
@@ -91,6 +104,13 @@ func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.Jet
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
 		storeDir := string(cfg.StoragePath)
+		if cfg.InMemory {
+			// InMemory means all storage, including JetStream metadata. A
+			// per-test temp directory still costs directory creation, writes and
+			// cleanup on every embedded server start; keeping this empty avoids
+			// that disk work inside the test suite entirely.
+			storeDir = ""
+		}
 		opts := &natsserver.Options{
 			ServerName:      "monolith",
 			DontListen:      true,
@@ -114,7 +134,7 @@ func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.Jet
 		}
 		go server.Start()
 		natsStartLock.Unlock()
-		if err = waitForEmbeddedNATS(process.Context(), server, embeddedStartTimeout); err != nil {
+		if err = waitForEmbeddedNATS(ctx, server, embeddedStartTimeout); err != nil {
 			err = fmt.Errorf("%w (store %q, in memory: %t, goroutines: %d)",
 				err, storeDir, cfg.InMemory, runtime.NumGoroutine())
 			server.Shutdown()
@@ -128,8 +148,8 @@ func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.Jet
 	// No existing process connection, create a new one.
 	if s.nc, err = natsclient.Connect("", natsclient.InProcessServer(s.Server)); err != nil {
 		s.nc = nil
-		s.Server.Shutdown()
-		s.Server.WaitForShutdown()
+		s.Shutdown()
+		s.WaitForShutdown()
 		s.Server = nil
 		return nil, nil, fmt.Errorf("create NATS client: %w", err)
 	}
