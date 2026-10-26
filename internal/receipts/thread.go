@@ -28,6 +28,47 @@ func ThreadID(ctx context.Context, query EventQuerier, roomID, eventID string) (
 	return EventThreadID(ctx, query, event)
 }
 
+// RelatedToThread reports whether the event is the thread ID itself or is
+// related to it through at most three relationship hops, as allowed by
+// MSC3771. A thread ID of "main" matches events which are not in a thread.
+func RelatedToThread(ctx context.Context, query EventQuerier, roomID, eventID, threadID string) (bool, error) {
+	if threadID == "main" {
+		actual, err := ThreadID(ctx, query, roomID, eventID)
+		if err != nil {
+			return false, err
+		}
+		return actual == "main", nil
+	}
+
+	event, err := queryEvent(ctx, query, roomID, eventID)
+	if err != nil {
+		return false, err
+	}
+	seen := make(map[string]bool, 3)
+	for range 3 {
+		if seen[event.EventID()] {
+			return false, nil
+		}
+		seen[event.EventID()] = true
+		if event.EventID() == threadID {
+			return true, nil
+		}
+		parentID := gjson.GetBytes(event.Content(), "m\\.relates_to").Get("event_id").Str
+		if parentID == "" {
+			return false, nil
+		}
+		parent, err := queryEvent(ctx, query, roomID, parentID)
+		if errors.Is(err, ErrUnknownEvent) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		event = parent
+	}
+	return event.EventID() == threadID, nil
+}
+
 // EventThreadID classifies an event already available to the caller.
 func EventThreadID(ctx context.Context, query EventQuerier, event *types.HeaderedEvent) (string, error) {
 	roomID := event.RoomID().String()
