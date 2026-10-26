@@ -398,7 +398,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 			}
 		}
 	}
-	end.Decrement()
+	if r.backwardOrdering {
+		// A forward token already sits at the last event returned, and the
+		// forward range excludes the events up to its stream position.
+		end.Decrement()
+	}
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".

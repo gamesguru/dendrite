@@ -42,7 +42,7 @@ const selectEventIDsInRangeASCSQL = "" +
 	" WHERE room_id = $1 AND (" +
 	"(topological_position > $2 AND topological_position < $3) OR" +
 	"(topological_position = $4 AND stream_position > $5) OR" +
-	"(topological_position = $3 AND stream_position >= 0)" +
+	"(topological_position = $3 AND stream_position >= 0 AND $3 > $2)" +
 	") ORDER BY topological_position ASC, stream_position ASC LIMIT $6"
 
 const selectEventIDsInRangeDESCSQL = "" +

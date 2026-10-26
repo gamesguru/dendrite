@@ -176,6 +176,16 @@ func TestTopologyTablePagesForwardPastForkedDepth(t *testing.T) {
 				return err
 			}
 			assert.Equal(t, []string{remote.EventID()}, eventIDs)
+			// When the range is limited to the cursor's depth, the inclusive
+			// upper-bound clause must not re-include the already-seen event.
+			eventIDs, _, _, err = tab.SelectEventIDsInRange(
+				ctx, txn, room.ID, types.StreamPosition(local.Depth()),
+				types.StreamPosition(local.Depth()), 10, 10, true,
+			)
+			if err != nil {
+				return err
+			}
+			assert.Equal(t, []string{remote.EventID()}, eventIDs)
 			return nil
 		})
 		if err != nil {
