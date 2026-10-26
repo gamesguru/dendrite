@@ -301,7 +301,7 @@ func (s *OutputRoomEventConsumer) storeMessageStats(ctx context.Context, eventTy
 func (s *OutputRoomEventConsumer) handleRoomUpgrade(ctx context.Context, oldRoomID, newRoomID string, localMembers []*localMembership, roomSize int) error {
 	for _, membership := range localMembers {
 		// Copy any existing push rules from old -> new room
-		changed, err := s.copyPushrules(ctx, oldRoomID, newRoomID, membership.Localpart, membership.Domain)
+		changed, err := s.copyPushrules(ctx, oldRoomID, newRoomID, membership.UserID, membership.Localpart, membership.Domain)
 		if err != nil {
 			return err
 		}
@@ -365,14 +365,16 @@ func (s *OutputRoomEventConsumer) copyPushrulesFromPredecessor(ctx context.Conte
 	if oldRoomID == "" {
 		return nil
 	}
-	changed, err := s.copyPushrules(ctx, oldRoomID, roomID, member.Localpart, member.Domain)
+	changed, err := s.copyPushrules(ctx, oldRoomID, roomID, member.UserID, member.Localpart, member.Domain)
 	if err != nil || !changed {
 		return err
 	}
 	return s.syncProducer.SendAccountData(member.UserID, eventutil.AccountData{Type: "m.push_rules"})
 }
 
-func (s *OutputRoomEventConsumer) copyPushrules(ctx context.Context, oldRoomID, newRoomID, localpart string, serverName spec.ServerName) (hasChanges bool, err error) {
+func (s *OutputRoomEventConsumer) copyPushrules(ctx context.Context, oldRoomID, newRoomID, userID, localpart string, serverName spec.ServerName) (hasChanges bool, err error) {
+	defer pushrules.LockForUser(userID)()
+
 	pushRules, err := s.db.QueryPushRules(ctx, localpart, serverName)
 	if err != nil {
 		return false, err
