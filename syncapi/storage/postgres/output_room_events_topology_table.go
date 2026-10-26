@@ -44,7 +44,8 @@ const selectEventIDsInRangeASCSQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND (" +
 	"(topological_position > $2 AND topological_position < $3) OR" +
-	"(topological_position = $4 AND stream_position >= $5)" +
+	"(topological_position = $4 AND stream_position > $5) OR" +
+	"(topological_position = $3 AND stream_position >= 0)" +
 	") ORDER BY topological_position ASC, stream_position ASC LIMIT $6"
 
 const selectEventIDsInRangeDESCSQL = "" +
@@ -140,7 +141,12 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 	}
 
 	// Query the event IDs.
-	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, maxDepth, maxStreamPos, limit)
+	boundaryDepth := maxDepth
+	if chronologicalOrder {
+		// Forward cursors sit at the lower bound; backward cursors at the upper.
+		boundaryDepth = minDepth
+	}
+	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, boundaryDepth, maxStreamPos, limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no event matched the request, return an empty slice.
 		return []string{}, start, end, nil

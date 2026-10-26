@@ -296,7 +296,7 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 	filter *synctypes.RoomEventFilter,
 	backwardOrdering bool,
 ) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
-	var minDepth, maxDepth, maxStreamPosForMaxDepth types.StreamPosition
+	var minDepth, maxDepth, streamPosAtFrom types.StreamPosition
 	if backwardOrdering {
 		// Backward ordering means the 'from' token has a higher depth than the 'to' token
 		minDepth = to.Depth
@@ -304,17 +304,20 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 		// for cases where we have say 5 events with the same depth, the TopologyToken needs to
 		// know which of the 5 the client has seen. This is done by using the PDU position.
 		// Events with the same maxDepth but less than this PDU position will be returned.
-		maxStreamPosForMaxDepth = from.PDUPosition
+		streamPosAtFrom = from.PDUPosition
 	} else {
 		// Forward ordering means the 'from' token has a lower depth than the 'to' token.
 		minDepth = from.Depth
 		maxDepth = to.Depth
+		// Events which share the from token's depth but were persisted after it
+		// are still ahead of the cursor, so forward pagination must return them.
+		streamPosAtFrom = from.PDUPosition
 	}
 
 	// Select the event IDs from the defined range.
 	var eIDs []string
 	eIDs, start, end, err = d.Topology.SelectEventIDsInRange(
-		ctx, d.txn, roomID, minDepth, maxDepth, maxStreamPosForMaxDepth, filter.Limit, !backwardOrdering,
+		ctx, d.txn, roomID, minDepth, maxDepth, streamPosAtFrom, filter.Limit, !backwardOrdering,
 	)
 	if err != nil {
 		return
