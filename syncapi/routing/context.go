@@ -266,6 +266,15 @@ func Context(
 		response.End = end.String()
 		response.Start = start.String()
 	}
+	if response.Start == "" {
+		// There is no event before the context event in the response (for
+		// example with limit=0), but clients still need a token positioned just
+		// before it to paginate backwards from.
+		if start, err = snapshot.EventPositionInTopology(ctx, eventID); err == nil {
+			start.Decrement()
+			response.Start = start.String()
+		}
+	}
 	if response.End == "" {
 		// There is no event after the context event, but clients still need a
 		// token positioned after it (for example to paginate backwards and
