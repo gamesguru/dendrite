@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
 func TestNATSConnectOptions(t *testing.T) {
@@ -170,6 +171,122 @@ func TestNATSConnectOptions(t *testing.T) {
 			t.Fatalf("second signature did not verify with rotated key: %v", err)
 		}
 	})
+}
+
+func TestPrepareUsesMemoryStorageWhenInMemory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.JetStream{
+		InMemory:    true,
+		StoragePath: config.Path(dir),
+		NoLog:       true,
+	}
+	cfg.Matrix = &config.Global{JetStream: *cfg}
+	processCtx := process.NewProcessContext()
+	t.Cleanup(func() {
+		processCtx.ShutdownZendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+
+	instance := &NATSInstance{}
+	js, nc, err := instance.PrepareE(processCtx, cfg)
+	if err != nil {
+		t.Fatalf("prepare in-memory NATS: %v", err)
+	}
+	if js == nil || nc == nil {
+		t.Fatal("expected an in-memory NATS instance")
+	}
+	if got, want := instance.Server.JetStreamConfig().StoreDir, filepath.Join(dir, natsserver.JetStreamStoreDir); got != want {
+		t.Fatalf("JetStream metadata store = %q, want per-instance directory %q", got, want)
+	}
+
+	info, err := js.StreamInfo(cfg.Prefixed(InputRoomEvent))
+	if err != nil {
+		t.Fatalf("reading stream info: %v", err)
+	}
+	if info.Config.Storage != natsclient.MemoryStorage {
+		t.Fatalf("stream storage = %v, want memory", info.Config.Storage)
+	}
+}
+
+func TestPrepareConcurrentInMemoryInstances(t *testing.T) {
+	const instances = 16
+	type prepared struct {
+		process *process.ProcessContext
+		err     error
+	}
+	dirs := make([]string, instances)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	results := make(chan prepared, instances)
+	for i := 0; i < instances; i++ {
+		go func(i int) {
+			cfg := &config.JetStream{
+				InMemory:    true,
+				StoragePath: config.Path(dirs[i]),
+				TopicPrefix: fmt.Sprintf("concurrent_%d_", i),
+				NoLog:       true,
+			}
+			cfg.Matrix = &config.Global{JetStream: *cfg}
+			processCtx := process.NewProcessContext()
+			instance := &NATSInstance{}
+			_, _, err := instance.PrepareE(processCtx, cfg)
+			results <- prepared{process: processCtx, err: err}
+		}(i)
+	}
+	for i := 0; i < instances; i++ {
+		result := <-results
+		if result.err != nil {
+			t.Errorf("prepare concurrent broker: %v", result.err)
+		}
+		result.process.ShutdownZendrite()
+		result.process.WaitForComponentsToFinish()
+	}
+}
+
+func TestPrepareEFailureLeavesInstanceReusable(t *testing.T) {
+	oldTimeout := embeddedStartTimeout
+	embeddedStartTimeout = 100 * time.Millisecond
+	defer func() { embeddedStartTimeout = oldTimeout }()
+
+	// A regular file cannot be used as the JetStream store directory, so the
+	// embedded server cannot become ready.
+	storeFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(storeFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("writing store file: %v", err)
+	}
+	badCfg := &config.JetStream{StoragePath: config.Path(storeFile), NoLog: true}
+	badCfg.Matrix = &config.Global{JetStream: *badCfg}
+	processCtx := process.NewProcessContext()
+	t.Cleanup(func() {
+		processCtx.ShutdownZendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+
+	instance := &NATSInstance{}
+	if _, _, err := instance.PrepareE(processCtx, badCfg); err == nil {
+		t.Fatal("expected a startup error")
+	}
+	if instance.Server != nil || instance.nc != nil || instance.js != nil {
+		t.Fatal("failed startup left the instance half-built")
+	}
+
+	embeddedStartTimeout = oldTimeout
+	goodCfg := &config.JetStream{
+		StoragePath: config.Path(t.TempDir()),
+		InMemory:    true,
+		NoLog:       true,
+	}
+	goodCfg.Matrix = &config.Global{JetStream: *goodCfg}
+	js, nc, err := instance.PrepareE(processCtx, goodCfg)
+	if err != nil {
+		t.Fatalf("retry after failed startup: %v", err)
+	}
+	if js == nil || nc == nil {
+		t.Fatal("expected a running NATS instance after retry")
+	}
 }
 
 func TestConnectToNATSWithURLCredentials(t *testing.T) {

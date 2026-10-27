@@ -72,10 +72,14 @@ const purgeMembershipsSQL = "" +
 
 const selectMembersSQL = `
 	SELECT event_id FROM (
-		SELECT DISTINCT ON (room_id, user_id) room_id, user_id, event_id, membership FROM syncapi_memberships WHERE room_id = $1 AND topological_pos <= $2 ORDER BY room_id, user_id, stream_pos DESC
+		SELECT DISTINCT ON (room_id, user_id) room_id, user_id, event_id, membership FROM syncapi_memberships
+		WHERE room_id = $1 AND (($2 = 9223372036854775807 AND stream_pos <= $3)
+			OR ($2 <> 9223372036854775807 AND
+				(topological_pos < $2 OR (topological_pos = $2 AND stream_pos <= $3))))
+		ORDER BY room_id, user_id, stream_pos DESC
 	) t
-	WHERE ($3::text IS NULL OR t.membership = $3)
-		AND ($4::text IS NULL OR t.membership <> $4)
+	WHERE ($4::text IS NULL OR t.membership = $4)
+		AND ($5::text IS NULL OR t.membership <> $5)
 `
 
 type membershipsStatements struct {
@@ -193,7 +197,7 @@ func (s *membershipsStatements) SelectMemberships(
 	membership, notMembership *string,
 ) (eventIDs []string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembersStmt)
-	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, membership, notMembership)
+	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, pos.PDUPosition, membership, notMembership)
 	if err != nil {
 		return
 	}

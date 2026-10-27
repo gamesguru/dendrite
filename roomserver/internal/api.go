@@ -544,6 +544,17 @@ func (r *RoomserverInternalAPI) TakeMembersJoinedDuringPartialState(roomID strin
 	return members, true
 }
 
+// QueryMembersJoinedAfterPartialJoin returns the users who joined a partial state room
+// after we did. Their joins reached us directly, so they are known to be in the room.
+func (r *RoomserverInternalAPI) QueryMembersJoinedAfterPartialJoin(ctx context.Context, roomID string) ([]string, error) {
+	info, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil || info == nil {
+		return nil, err
+	}
+	later, _, err := r.DB.GetMembersJoinedAfterPartialJoin(ctx, info.RoomNID)
+	return later, err
+}
+
 // RegisterUnPartialStatedHook registers a function to call whenever a room finishes its
 // partial state resync.
 func (r *RoomserverInternalAPI) RegisterUnPartialStatedHook(hook func(ctx context.Context, roomID string)) {

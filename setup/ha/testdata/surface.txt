@@ -19,6 +19,10 @@ column federationsender_notary_server_keys_json | valid_until | bigint | NO |
 column federationsender_notary_server_keys_metadata | key_id | text | NO |
 column federationsender_notary_server_keys_metadata | notary_id | bigint | NO |
 column federationsender_notary_server_keys_metadata | server_name | text | NO |
+column federationsender_notary_server_keys_retention | corroborated | boolean | NO |
+column federationsender_notary_server_keys_retention | expired_ts | bigint | NO |
+column federationsender_notary_server_keys_retention | key_id | text | NO |
+column federationsender_notary_server_keys_retention | server_name | text | NO |
 column federationsender_outbound_peeks | creation_ts | bigint | NO |
 column federationsender_outbound_peeks | peek_id | text | NO |
 column federationsender_outbound_peeks | renewal_interval | bigint | NO |
@@ -519,6 +523,7 @@ index federationsender_joined_hosts | federatonsender_joined_hosts_event_id_idx 
 index federationsender_joined_hosts | federatonsender_joined_hosts_room_id_idx | CREATE INDEX federatonsender_joined_hosts_room_id_idx ON public.federationsender_joined_hosts USING btree (room_id)
 index federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_pkey1 | CREATE UNIQUE INDEX federationsender_notary_server_keys_json_pkey1 ON public.federationsender_notary_server_keys_json USING btree (notary_id)
 index federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_meta_server_name_key_id_key | CREATE UNIQUE INDEX federationsender_notary_server_keys_meta_server_name_key_id_key ON public.federationsender_notary_server_keys_metadata USING btree (server_name, key_id)
+index federationsender_notary_server_keys_retention | federationsender_notary_server_keys_rete_server_name_key_id_key | CREATE UNIQUE INDEX federationsender_notary_server_keys_rete_server_name_key_id_key ON public.federationsender_notary_server_keys_retention USING btree (server_name, key_id)
 index federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_server_name_peek_id_key | CREATE UNIQUE INDEX federationsender_outbound_peeks_room_id_server_name_peek_id_key ON public.federationsender_outbound_peeks USING btree (room_id, server_name, peek_id)
 index federationsender_queue_edus | federationsender_queue_edus_json_nid_idx | CREATE UNIQUE INDEX federationsender_queue_edus_json_nid_idx ON public.federationsender_queue_edus USING btree (json_nid, server_name)
 index federationsender_queue_edus | federationsender_queue_edus_nid_idx | CREATE INDEX federationsender_queue_edus_nid_idx ON public.federationsender_queue_edus USING btree (json_nid)
@@ -603,7 +608,7 @@ index syncapi_filter | syncapi_filter_localpart | CREATE INDEX syncapi_filter_lo
 index syncapi_filter | syncapi_filter_pkey | CREATE UNIQUE INDEX syncapi_filter_pkey ON public.syncapi_filter USING btree (id, localpart)
 index syncapi_ignores | syncapi_ignores_pkey | CREATE UNIQUE INDEX syncapi_ignores_pkey ON public.syncapi_ignores USING btree (user_id)
 index syncapi_invite_events | syncapi_invite_events_pkey | CREATE UNIQUE INDEX syncapi_invite_events_pkey ON public.syncapi_invite_events USING btree (id)
-index syncapi_invite_events | syncapi_invites_event_id_idx | CREATE INDEX syncapi_invites_event_id_idx ON public.syncapi_invite_events USING btree (event_id)
+index syncapi_invite_events | syncapi_invites_event_id_unique_idx | CREATE UNIQUE INDEX syncapi_invites_event_id_unique_idx ON public.syncapi_invite_events USING btree (event_id)
 index syncapi_invite_events | syncapi_invites_target_user_id_idx | CREATE INDEX syncapi_invites_target_user_id_idx ON public.syncapi_invite_events USING btree (target_user_id, id)
 index syncapi_memberships | syncapi_memberships_unique | CREATE UNIQUE INDEX syncapi_memberships_unique ON public.syncapi_memberships USING btree (room_id, user_id, membership)
 index syncapi_notification_data | syncapi_notification_data_pkey | CREATE UNIQUE INDEX syncapi_notification_data_pkey ON public.syncapi_notification_data USING btree (id)
@@ -714,6 +719,7 @@ constraint federationsender_blacklist | federationsender_blacklist_server_name_k
 constraint federationsender_inbound_peeks | federationsender_inbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
 constraint federationsender_notary_server_keys_json | federationsender_notary_server_keys_json_pkey1 | PRIMARY KEY (notary_id)
 constraint federationsender_notary_server_keys_metadata | federationsender_notary_server_keys_meta_server_name_key_id_key | UNIQUE (server_name, key_id)
+constraint federationsender_notary_server_keys_retention | federationsender_notary_server_keys_rete_server_name_key_id_key | UNIQUE (server_name, key_id)
 constraint federationsender_outbound_peeks | federationsender_outbound_peeks_room_id_server_name_peek_id_key | UNIQUE (room_id, server_name, peek_id)
 constraint federationsender_relay_servers | federationsender_relay_server_server_name_relay_server_name_key | UNIQUE (server_name, relay_server_name)
 constraint federationsender_retry_state | federationsender_retry_state_pkey | PRIMARY KEY (server_name)
@@ -875,6 +881,7 @@ migration syncapi: restore event IDs of redacted output events
 migration syncapi: set history visibility for existing events
 migration syncapi: store output event timestamps separately
 migration syncapi: threaded receipts
+migration syncapi: unique invite event IDs
 migration userapi: add account locks
 migration userapi: add account suspensions
 migration userapi: add account type

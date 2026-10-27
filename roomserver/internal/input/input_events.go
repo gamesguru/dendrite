@@ -330,57 +330,72 @@ func (r *Inputer) processRoomEvent(
 	knownEvents := map[string]*types.Event{}
 	isRejected := false
 	var rejectionErr error
+
+	checkAuthEvents := func(fetchUnknown bool) error {
+		if err := r.fetchAuthEvents(
+			ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
+			fetchUnknown,
+		); err != nil {
+			if input.Kind != api.KindOutlier {
+				return fmt.Errorf("r.fetchAuthEvents: %w", err)
+			}
+			// An outlier whose auth events cannot be obtained, e.g. because they
+			// are badly signed, is rejected rather than failing the whole batch
+			// it came with, such as the room state of a join.
+			isRejected = true
+			rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
+			logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
+		}
+
+		// An event whose auth events include a rejected event is rejected as a
+		// side effect, even if the remaining auth events would allow it.
+		// During partial state (MSC3706), an auth event may have been rejected
+		// only because we lacked the state to validate it, so we do not reject here.
+		if !isRejected && !hasPartialState {
+			for _, knownEvent := range knownEvents {
+				if knownEvent.Rejected {
+					isRejected = true
+					rejectionErr = fmt.Errorf("auth event %s was rejected", knownEvent.EventID())
+					break
+				}
+			}
+		}
+
+		// Check if the event is allowed by its auth events. If it isn't then
+		// we consider the event to be "rejected" — it will still be persisted.
+		// Skip this check for admin operations that set SkipEventAuth.
+		if !input.SkipEventAuth && !isRejected {
+			if err := gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+			}); err != nil {
+				// During partial state (MSC3706 faster joins), we may be missing member events
+				// that would authorize this event. In this case, we accept the event provisionally
+				// rather than rejecting it. The full state resync will validate events properly.
+				if hasPartialState {
+					logger.WithError(err).Debugf("Event %s failed auth during partial state, accepting provisionally", event.EventID())
+				} else {
+					isRejected = true
+					rejectionErr = err
+					logger.WithError(rejectionErr).Warnf("Event %s not allowed by auth events", event.EventID())
+				}
+			}
+		}
+		return nil
+	}
+
+	// If we are missing prev events, the auth events that we cannot find are
+	// often part of the state that we are about to fetch. Ask for the missing
+	// prev events and state first, and only then for any auth events that are
+	// still unknown. Doing it the other way round makes us depend on the
+	// event's own /event_auth response even when the server implements the
+	// /get_missing_events and /state_ids flow.
+	deferAuthUntilMissingState := !hasPartialState && missingPrev && input.Kind == api.KindNew && !input.SkipEventAuth
+
 	if hasPartialState && input.Kind == api.KindOutlier {
 		logger.Debugf("Skipping federation auth fetch for outlier %s (partial state active)", event.EventID())
-	} else if err = r.fetchAuthEvents(
-		ctx, logger, roomInfo, virtualHost, headered, authEvents, knownEvents, serverRes.ServerNames,
-		// An event with missing prev events is looked at again once they are in, and
-		// the state looked up for them brings in its senders' memberships along the
-		// way. The room is only partly known meanwhile, so do not ask for the auth
-		// chain of the event too: it is accepted provisionally and checked after the
-		// resync.
-		!hasPartialState || !missingPrev || input.Kind != api.KindNew,
-	); err != nil {
-		if input.Kind != api.KindOutlier {
-			return fmt.Errorf("r.fetchAuthEvents: %w", err)
-		}
-		// An outlier whose auth events cannot be obtained, e.g. because they
-		// are badly signed, is rejected rather than failing the whole batch
-		// it came with, such as the room state of a join.
-		isRejected = true
-		rejectionErr = fmt.Errorf("r.fetchAuthEvents: %w", err)
-		logger.WithError(err).Warnf("Rejecting outlier %s whose auth events could not be obtained", event.EventID())
-	}
-
-	// An event whose auth events include a rejected event is rejected as a
-	// side effect, even if the remaining auth events would allow it.
-	if !isRejected {
-		for _, knownEvent := range knownEvents {
-			if knownEvent.Rejected {
-				isRejected = true
-				rejectionErr = fmt.Errorf("auth event %s was rejected", knownEvent.EventID())
-				break
-			}
-		}
-	}
-
-	// Check if the event is allowed by its auth events. If it isn't then
-	// we consider the event to be "rejected" — it will still be persisted.
-	// Skip this check for admin operations that set SkipEventAuth.
-	if !input.SkipEventAuth && !isRejected {
-		if err = gomatrixserverlib.Allowed(event, authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-		}); err != nil {
-			// During partial state (MSC3706 faster joins), we may be missing member events
-			// that would authorize this event. In this case, we accept the event provisionally
-			// rather than rejecting it. The full state resync will validate events properly.
-			if hasPartialState {
-				logger.WithError(err).Debugf("Event %s failed auth during partial state, accepting provisionally", event.EventID())
-			} else {
-				isRejected = true
-				rejectionErr = err
-				logger.WithError(rejectionErr).Warnf("Event %s not allowed by auth events", event.EventID())
-			}
+	} else if !deferAuthUntilMissingState {
+		if err = checkAuthEvents(!hasPartialState || !missingPrev || input.Kind != api.KindNew); err != nil {
+			return err
 		}
 	}
 
@@ -536,6 +551,35 @@ func (r *Inputer) processRoomEvent(
 		}
 	}
 
+	// If we deferred the auth fetch until after resolving the missing prev
+	// events, do it now. The state we fetched will usually have made the
+	// unknown auth events available locally.
+	rejectedBeforeDeferredAuth := isRejected
+	recordStateResolutionResult := func() {
+		if !didStateResolution || stateResolutionRoomID == "" {
+			return
+		}
+		switch {
+		case !isRejected:
+			r.missingStateCooldown.Delete(stateResolutionRoomID)
+		case errors.Is(rejectionErr, errNoValidMissingEvents):
+			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
+		case !rejectedBeforeDeferredAuth:
+			// State resolution succeeded; the deferred auth check rejected this event.
+		default:
+			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
+			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
+		}
+	}
+	if deferAuthUntilMissingState {
+		if err = checkAuthEvents(true); err != nil {
+			// The event is not stored when deferred auth fails, so this is the last
+			// chance to record a state-resolution failure for the cooldown.
+			recordStateResolutionResult()
+			return err
+		}
+	}
+
 	// Accumulate the auth event NIDs.
 	authEventIDs := event.AuthEventIDs()
 	authEventNIDs := make([]types.EventNID, 0, len(authEventIDs))
@@ -614,8 +658,13 @@ func (r *Inputer) processRoomEvent(
 		return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 	}
 
-	// Store the event.
-	eventNID, stateAtEvent, err := r.DB.StoreEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
+	// Store the event. An outlier does not extend the room DAG, so it is not
+	// recorded as referencing its prev_events.
+	storeEvent := r.DB.StoreEvent
+	if input.Kind == api.KindOutlier {
+		storeEvent = r.DB.StoreOutlierEvent
+	}
+	eventNID, stateAtEvent, err := storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 	if err != nil {
 		return fmt.Errorf("updater.StoreEvent: %w", err)
 	}
@@ -624,17 +673,7 @@ func (r *Inputer) processRoomEvent(
 	// cooldown based on whether the event was ultimately accepted or rejected.
 	// This ensures that rooms stuck in a rejection loop don't keep burning CPU
 	// and memory on federation state lookups for every incoming transaction.
-	if didStateResolution && stateResolutionRoomID != "" {
-		switch {
-		case !isRejected:
-			r.missingStateCooldown.Delete(stateResolutionRoomID)
-		case errors.Is(rejectionErr, errNoValidMissingEvents):
-			logger.Debugf("Not entering missing-state cooldown after invalid /get_missing_events response")
-		default:
-			r.missingStateCooldown.Store(stateResolutionRoomID, time.Now())
-			logger.Warnf("State resolution for room %s resulted in rejection, entering %s cooldown", stateResolutionRoomID, missingStateCooldownDuration)
-		}
-	}
+	recordStateResolutionResult()
 
 	// For outliers we can stop after we've stored the event itself as it
 	// doesn't have any associated state to store and we don't need to
@@ -943,6 +982,7 @@ func (r *Inputer) processStateBefore(
 	// members, so complete it with the auth events the event cites, where it has no
 	// entry of its own. Its own entries stand, so that a ban or a leave still applies.
 	stateForAuth := stateBeforeEvent
+	var authEventPDUs []gomatrixserverlib.PDU
 	if isPartialState {
 		if authEventIDs := event.AuthEventIDs(); len(authEventIDs) > 0 {
 			authStateEvents, authErr := r.DB.EventsFromIDs(ctx, roomInfo, authEventIDs)
@@ -950,7 +990,7 @@ func (r *Inputer) processStateBefore(
 				// Without the auth events, use the local state only.
 				logrus.WithError(authErr).WithField("event_id", event.EventID()).Debug("Could not load the auth events of an event in a partial state room")
 			} else {
-				authEventPDUs := make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
+				authEventPDUs = make([]gomatrixserverlib.PDU, 0, len(authStateEvents))
 				for _, authEvent := range authStateEvents {
 					authEventPDUs = append(authEventPDUs, authEvent.PDU)
 				}
@@ -1096,14 +1136,81 @@ func (r *Inputer) fetchAuthEvents(
 		found = true
 		break
 	}
+	fullChain := found
+	if !found {
+		// /event_auth is optional and some servers (including Complement's
+		// MSC4297 test fixture) do not implement it. Fall back to fetching
+		// the unknown auth events directly via /event and walk their auth-event
+		// dependencies. The state fetched by /state_ids may already include
+		// some of those dependencies locally.
+		verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
+		if versionErr != nil {
+			return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
+		}
+		pending := make([]string, 0, len(unknown))
+		for authEventID := range unknown {
+			pending = append(pending, authEventID)
+		}
+		requested := make(map[string]struct{}, len(pending))
+		unresolved := make(map[string]struct{})
+		for len(pending) > 0 {
+			authEventID := pending[0]
+			pending = pending[1:]
+			if _, ok := known[authEventID]; ok {
+				continue
+			}
+			if _, ok := requested[authEventID]; ok {
+				continue
+			}
+			requested[authEventID] = struct{}{}
+			var fetched gomatrixserverlib.PDU
+			for _, serverName := range servers {
+				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
+				if getErr != nil || len(txn.PDUs) == 0 {
+					logger.WithError(getErr).Debugf("Failed to get missing auth event %q from %q", authEventID, serverName)
+					continue
+				}
+				foundRequestedEvent := false
+				for _, pdu := range txn.PDUs {
+					parsed, parseErr := verImpl.NewEventFromUntrustedJSON(pdu)
+					if parseErr != nil || parsed.EventID() != authEventID {
+						continue
+					}
+					res.AuthEvents = append(res.AuthEvents, spec.RawJSON(pdu))
+					fetched = parsed
+					foundRequestedEvent = true
+					break
+				}
+				if foundRequestedEvent {
+					break
+				}
+			}
+			if fetched == nil {
+				unresolved[authEventID] = struct{}{}
+				continue
+			}
+			found = true
+			for _, dependencyID := range fetched.AuthEventIDs() {
+				if _, ok := known[dependencyID]; !ok {
+					pending = append(pending, dependencyID)
+				}
+			}
+		}
+		if len(unresolved) > 0 {
+			return fmt.Errorf("failed to fetch auth event dependencies %v for event %q", unresolved, event.EventID())
+		}
+	}
 	if !found {
 		return fmt.Errorf("no servers provided event auth for event ID %q, tried servers %v", event.EventID(), servers)
 	}
 
 	// Start with a clean state and see if we can auth with what the remote
 	// server told us. Otherwise earlier topologically sorted events could
-	// fail to be authed by more recent referenced ones.
-	auth.Clear()
+	// fail to be authed by more recent referenced ones. The /event fallback
+	// returns no auth chain, so keep the locally known auth events instead.
+	if fullChain {
+		auth.Clear()
+	}
 
 	// Reuse these to reduce allocations.
 	_authEventNIDs := [5]types.EventNID{}
@@ -1140,6 +1247,7 @@ nextAuthEvent:
 		// In order to store the new auth event, we need to know its auth chain
 		// as NIDs for the `auth_event_nids` column. Let's see if we can find those.
 		authEventNIDs := _authEventNIDs[:0]
+		citesRejected := false
 		for _, eventID := range authEvent.AuthEventIDs() {
 			knownEvent, ok := known[eventID]
 			if !ok {
@@ -1161,6 +1269,16 @@ nextAuthEvent:
 				knownEvent = &ev
 				known[eventID] = knownEvent
 			}
+			// An event citing a rejected auth event is rejected too, even if
+			// its remaining auth events would allow it.
+			citesRejected = citesRejected || knownEvent.Rejected
+			// A partial chain can cite events we already have, such as the
+			// create event; they are needed to authorize this one.
+			if !knownEvent.Rejected && knownEvent.PDU != nil {
+				if err := auth.AddEvent(knownEvent.PDU); err != nil {
+					return fmt.Errorf("auth.AddEvent: %w", err)
+				}
+			}
 			authEventNIDs = append(authEventNIDs, knownEvent.EventNID)
 		}
 
@@ -1168,6 +1286,9 @@ nextAuthEvent:
 		err := gomatrixserverlib.Allowed(authEvent, auth, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 		})
+		if err == nil && citesRejected {
+			err = errors.New("cites a rejected auth event")
+		}
 		if isRejected = err != nil; isRejected {
 			logger.WithError(err).Warnf("Auth event %s rejected", authEvent.EventID())
 		}
@@ -1189,8 +1310,8 @@ nextAuthEvent:
 			return fmt.Errorf("r.DB.GetOrCreateEventStateKeyNID: %w", err)
 		}
 
-		// Finally, store the event in the database.
-		eventNID, _, err := r.DB.StoreEvent(ctx, authEvent, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
+		// Finally, store the event in the database, as the outlier it is.
+		eventNID, _, err := r.DB.StoreOutlierEvent(ctx, authEvent, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected)
 		if err != nil {
 			return fmt.Errorf("updater.StoreEvent: %w", err)
 		}
@@ -1208,6 +1329,19 @@ nextAuthEvent:
 			EventNID: eventNID,
 			Rejected: isRejected,
 			PDU:      authEvent,
+		}
+	}
+
+	// Authorize the event against only the auth events it cites. known also
+	// holds older events from their chains, which must not shadow them.
+	auth.Clear()
+	for _, authEventID := range authEventIDs {
+		ev, ok := known[authEventID]
+		if !ok || ev == nil || ev.Rejected || ev.PDU == nil {
+			continue
+		}
+		if err := auth.AddEvent(ev.PDU); err != nil {
+			return fmt.Errorf("auth.AddEvent: %w", err)
 		}
 	}
 

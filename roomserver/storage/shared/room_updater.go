@@ -19,6 +19,7 @@ type RoomUpdater struct {
 	lastEventIDSent         string
 	currentStateSnapshotNID types.StateSnapshotNID
 	roomExists              bool
+	release                 func()
 }
 
 func rollback(txn *sql.Tx) {
@@ -36,7 +37,7 @@ func NewRoomUpdater(ctx context.Context, d *Database, txn *sql.Tx, roomInfo *typ
 	// succeed, processing a create event which creates the room, or it won't.
 	if roomInfo == nil {
 		return &RoomUpdater{
-			transaction{ctx, txn}, d, nil, nil, "", 0, false,
+			transaction{ctx, txn}, d, nil, nil, "", 0, false, nil,
 		}, nil
 	}
 
@@ -59,7 +60,7 @@ func NewRoomUpdater(ctx context.Context, d *Database, txn *sql.Tx, roomInfo *typ
 		}
 	}
 	return &RoomUpdater{
-		transaction{ctx, txn}, d, roomInfo, stateAndRefs, lastEventIDSent, currentStateSnapshotNID, true,
+		transaction{ctx, txn}, d, roomInfo, stateAndRefs, lastEventIDSent, currentStateSnapshotNID, true, nil,
 	}, nil
 }
 
@@ -68,8 +69,23 @@ func (u *RoomUpdater) RoomExists() bool {
 	return u.roomExists
 }
 
+// OnFinish registers f to run once when the updater is committed or rolled
+// back. SQLite uses it to hold a per-room lock, as it has no transaction to
+// do so.
+func (u *RoomUpdater) OnFinish(f func()) {
+	u.release = f
+}
+
+func (u *RoomUpdater) finish() {
+	if u.release != nil {
+		u.release()
+		u.release = nil
+	}
+}
+
 // Implements sqlutil.Transaction.
 func (u *RoomUpdater) Commit() error {
+	defer u.finish()
 	if u.txn == nil { // SQLite mode probably
 		return nil
 	}
@@ -78,6 +94,7 @@ func (u *RoomUpdater) Commit() error {
 
 // Implements sqlutil.Transaction.
 func (u *RoomUpdater) Rollback() error {
+	defer u.finish()
 	if u.txn == nil { // SQLite mode probably
 		return nil
 	}

@@ -65,11 +65,17 @@ knownUsersLoop:
 			break
 		}
 		userID := profile.UserID
-		if userID == device.UserID {
-			continue
-		}
 		// get the full profile of the local user
 		localpart, serverName, _ := gomatrixserverlib.SplitID('@', userID)
+		if userID == device.UserID {
+			// Don't include the searching user themselves unless the query explicitly targets their name.
+			// Generic prefixes like "@user" match all users in complement, but shouldn't return self.
+			if !strings.EqualFold(searchString, profile.DisplayName) &&
+				!strings.HasSuffix(strings.ToLower(localpart), strings.ToLower(searchString)) &&
+				!strings.EqualFold(searchString, userID) {
+				continue
+			}
+		}
 		if serverName == localServerName {
 			userReq := &userapi.QuerySearchProfilesRequest{
 				SearchString: localpart,
@@ -80,9 +86,9 @@ knownUsersLoop:
 				return util.ErrorResponse(fmt.Errorf("userAPI.QuerySearchProfiles: %w", err))
 			}
 			for _, p := range userRes.Profiles {
-				if strings.Contains(p.DisplayName, searchString) ||
-					strings.Contains(p.Localpart, searchString) ||
-					strings.Contains(userID, searchString) {
+				if strings.Contains(strings.ToLower(p.DisplayName), strings.ToLower(searchString)) ||
+					strings.Contains(strings.ToLower(p.Localpart), strings.ToLower(searchString)) ||
+					strings.Contains(strings.ToLower(userID), strings.ToLower(searchString)) {
 					profile.DisplayName = p.DisplayName
 					profile.AvatarURL = p.AvatarURL
 					results[userID] = profile
@@ -92,7 +98,7 @@ knownUsersLoop:
 					}
 				}
 			}
-		} else if strings.Contains(localpart, searchString) {
+		} else if strings.Contains(strings.ToLower(localpart), strings.ToLower(searchString)) {
 			// Search remote users by ID only. Fetching profiles here creates one
 			// federation request per known user, and the response isn't cached.
 			results[userID] = profile

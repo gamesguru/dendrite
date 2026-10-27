@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
 	"codefloe.com/pat-s/zendrite/test"
@@ -36,6 +37,10 @@ type noInviteRoomserverAPI struct {
 func (noInviteRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
 	senderID := spec.SenderID(user.String())
 	return &senderID, nil
+}
+
+func (noInviteRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return nil, nil
 }
 
 func (noInviteRoomserverAPI) InvitePending(context.Context, spec.RoomID, spec.SenderID) (bool, error) {
@@ -80,8 +85,23 @@ func TestRefusedJoinDoesNotBackOff(t *testing.T) {
 
 type invitedRoomserverAPI struct {
 	rsapi.FederationRoomserverAPI
-	senderErr, inviteErr error
-	pending              bool
+	senderErr, inviteErr, roomErr error
+	pending, partial              bool
+	roomInfo                      *types.RoomInfo
+}
+
+func (a invitedRoomserverAPI) QueryRoomInfo(context.Context, spec.RoomID) (*types.RoomInfo, error) {
+	return a.roomInfo, a.roomErr
+}
+
+func (a invitedRoomserverAPI) IsRoomPartialState(context.Context, types.RoomNID) (bool, error) {
+	return a.partial, nil
+}
+
+func stubRoomInfo() *types.RoomInfo {
+	roomInfo := &types.RoomInfo{RoomNID: 1}
+	roomInfo.SetIsStub(true)
+	return roomInfo
 }
 
 func (a invitedRoomserverAPI) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, user spec.UserID) (*spec.SenderID, error) {
@@ -179,7 +199,11 @@ func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
 	}{
 		"invited asks for full state once":               {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
 		"unknown invite state asks for full state once":  {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
-		"no invite uses partial state":                   {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"unknown room uses partial state":                {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"stub room uses partial state":                   {rs: invitedRoomserverAPI{roomInfo: stubRoomInfo()}, want: []string{"partial"}},
+		"partial room uses partial state":                {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}, partial: true}, want: []string{"partial"}},
+		"resynced room asks for full state once":         {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}}, want: []string{"full"}},
+		"room lookup failure uses partial state":         {rs: invitedRoomserverAPI{roomErr: errors.New("db down")}, want: []string{"partial"}},
 		"sender lookup failure asks for full state once": {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
 	} {
 		t.Run(name, func(t *testing.T) {

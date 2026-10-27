@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -172,6 +173,40 @@ func (rp *RequestPool) ProcessExtensions(
 
 	if err := ctx.Err(); err != nil {
 		return nil, toPos, nil, err
+	}
+
+	if req.Extensions.ThreadSubscriptions != nil && req.Extensions.ThreadSubscriptions.Enabled {
+		var accountData userapi.QueryAccountDataResponse
+		if err := rp.userAPI.QueryAccountData(ctx, &userapi.QueryAccountDataRequest{
+			UserID: userID,
+		}, &accountData); err != nil {
+			return nil, toPos, nil, err
+		}
+		subscribed := make(map[string]map[string]types.ThreadSubscription)
+		unsubscribed := make(map[string]map[string]int64)
+		for roomID, roomData := range accountData.RoomAccountData {
+			raw := roomData["io.element.msc4306.thread_subscriptions"]
+			if len(raw) == 0 {
+				continue
+			}
+			var data struct {
+				Subscriptions map[string]types.ThreadSubscription `json:"subscriptions"`
+				Unsubscribed  map[string]int64                    `json:"unsubscribed"`
+			}
+			if err := json.Unmarshal(raw, &data); err != nil {
+				return nil, toPos, nil, err
+			}
+			if len(data.Subscriptions) > 0 {
+				subscribed[roomID] = data.Subscriptions
+			}
+			if len(data.Unsubscribed) > 0 {
+				unsubscribed[roomID] = data.Unsubscribed
+			}
+		}
+		if limit := req.Extensions.ThreadSubscriptions.Limit; limit > 0 {
+			subscribed = limitThreadSubscriptions(subscribed, limit)
+		}
+		resp.ThreadSubscriptions = &types.ThreadSubscriptionsResponse{Subscribed: subscribed, Unsubscribed: unsubscribed}
 	}
 
 	// Process to_device extension (PreProcess)
@@ -1036,4 +1071,33 @@ func (rp *RequestPool) processTypingExtension(
 	// Always return typing extension if requested
 	// Synapse may return empty typing objects
 	return resp, nil
+}
+
+// limitThreadSubscriptions keeps at most limit subscriptions, taking rooms and
+// threads in sorted order so repeated requests return the same ones.
+func limitThreadSubscriptions(subscribed map[string]map[string]types.ThreadSubscription, limit int) map[string]map[string]types.ThreadSubscription {
+	roomIDs := make([]string, 0, len(subscribed))
+	for roomID := range subscribed {
+		roomIDs = append(roomIDs, roomID)
+	}
+	sort.Strings(roomIDs)
+	limited := make(map[string]map[string]types.ThreadSubscription)
+	for _, roomID := range roomIDs {
+		threadIDs := make([]string, 0, len(subscribed[roomID]))
+		for threadID := range subscribed[roomID] {
+			threadIDs = append(threadIDs, threadID)
+		}
+		sort.Strings(threadIDs)
+		for _, threadID := range threadIDs {
+			if limit == 0 {
+				return limited
+			}
+			if limited[roomID] == nil {
+				limited[roomID] = make(map[string]types.ThreadSubscription)
+			}
+			limited[roomID][threadID] = subscribed[roomID][threadID]
+			limit--
+		}
+	}
+	return limited
 }

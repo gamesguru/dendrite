@@ -54,6 +54,7 @@ type MediaUserAPI interface {
 // api functions required by the federation api.
 type FederationUserAPI interface {
 	UploadDeviceKeysAPI
+	QueryAccountData(ctx context.Context, req *QueryAccountDataRequest, res *QueryAccountDataResponse) error
 	QueryOpenIDToken(ctx context.Context, req *QueryOpenIDTokenRequest, res *QueryOpenIDTokenResponse) error
 	QueryProfile(ctx context.Context, userID string) (*authtypes.Profile, error)
 	QueryDevices(ctx context.Context, req *QueryDevicesRequest, res *QueryDevicesResponse) error

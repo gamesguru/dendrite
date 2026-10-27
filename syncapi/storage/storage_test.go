@@ -3,6 +3,7 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -19,6 +21,10 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	postgresstorage "codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	postgresdeltas "codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
+	sqlitestorage "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	sqlitedeltas "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -64,6 +70,71 @@ func TestWriteEvents(t *testing.T) {
 		db, close := MustCreateDatabase(t, dbType)
 		defer close()
 		MustWriteEvents(t, db, r.Events())
+	})
+}
+
+func TestGetOrCreateConnectionConcurrent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+
+		const workers = 16
+		start := make(chan struct{})
+		keys := make(chan int64, workers)
+		errs := make(chan error, workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				<-start
+				key, err := db.GetOrCreateConnection(ctx, "@user:test", "DEVICE", "connection")
+				if err != nil {
+					errs <- err
+					return
+				}
+				keys <- key
+			}()
+		}
+		close(start)
+
+		var first int64
+		for i := 0; i < workers; i++ {
+			select {
+			case err := <-errs:
+				t.Fatalf("GetOrCreateConnection: %s", err)
+			case key := <-keys:
+				if first == 0 {
+					first = key
+				} else if key != first {
+					t.Fatalf("GetOrCreateConnection returned different keys: %d and %d", first, key)
+				}
+			}
+		}
+	})
+}
+
+// TestMaxStreamPositionForPDUsAcrossSnapshots ensures that reading the PDU
+// high-water mark from one snapshot does not close the shared prepared
+// statement used by later snapshots.
+func TestMaxStreamPositionForPDUsAcrossSnapshots(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		MustWriteEvents(t, db, r.Events())
+
+		var positions [2]types.StreamPosition
+		for i := range positions {
+			WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+				pos, err := snapshot.MaxStreamPositionForPDUs(ctx)
+				if err != nil {
+					t.Fatalf("MaxStreamPositionForPDUs (snapshot %d) failed: %s", i, err)
+				}
+				positions[i] = pos
+			})
+		}
+		if positions[0] != positions[1] {
+			t.Fatalf("MaxStreamPositionForPDUs changed between snapshots: %d != %d", positions[0], positions[1])
+		}
 	})
 }
 
@@ -189,6 +260,48 @@ func TestRecentEventsPDU(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestSelectMembershipsAtStreamPosition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		charlie := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		// These joins are concurrent: both have the same depth but different
+		// stream positions, as can happen when a room DAG forks.
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		charlieJoin := r.CreateEvent(t, charlie, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(charlie.ID))
+		r.InsertEvent(t, bobJoin)
+		r.InsertEvent(t, charlieJoin)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		beforeBobJoin := positions[len(positions)-3]
+		atBobJoin := positions[len(positions)-2]
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: beforeBobJoin}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a stream token excludes memberships committed after it")
+
+		streamAtBob := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atBobJoin}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, streamAtBob, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "a stream token includes memberships committed before it")
+		require.NotContains(t, got, charlieJoin.EventID(), "a stream token excludes memberships committed after it")
+
+		topologyAtBob := types.TopologyToken{Depth: types.StreamPosition(bobJoin.Depth()), PDUPosition: atBobJoin}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, topologyAtBob, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "a topology token includes events at its depth up to its stream position")
+		require.NotContains(t, got, charlieJoin.EventID(), "a topology token excludes later events at the same depth")
 	})
 }
 
@@ -691,7 +804,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(alice.ID))
 		invite1.UserID = *aliceUserID
-		pos1, err := db.AddInviteEvent(ctx, invite1)
+		pos1, _, err := db.AddInviteEvent(ctx, invite1)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room1: %s", err)
 		}
@@ -700,7 +813,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(alice.ID))
 		invite2.UserID = *aliceUserID
-		_, err = db.AddInviteEvent(ctx, invite2)
+		_, _, err = db.AddInviteEvent(ctx, invite2)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room2: %s", err)
 		}
@@ -710,7 +823,7 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			"membership": spec.Invite,
 		}, test.WithStateKey(charlie.ID))
 		invite3.UserID = *charlieUserID
-		_, err = db.AddInviteEvent(ctx, invite3)
+		_, _, err = db.AddInviteEvent(ctx, invite3)
 		if err != nil {
 			t.Fatalf("failed to AddInviteEvent for room3: %s", err)
 		}
@@ -722,6 +835,172 @@ func TestRoomsWithInvitesSinceSnapshotSQLite(t *testing.T) {
 			}
 			assert.ElementsMatch(t, []string{room2.ID}, got)
 		})
+	})
+}
+
+func TestInviteRedeliveryIsIdempotent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		aliceUserID, err := spec.NewUserID(alice.ID, true)
+		if err != nil {
+			t.Fatalf("failed to parse alice user ID: %s", err)
+		}
+
+		room := test.NewRoom(t, bob)
+		invite := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		invite.UserID = *aliceUserID
+
+		pos, active, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to add invite: %s", err)
+		}
+		if !active {
+			t.Fatalf("new invite was marked inactive")
+		}
+		redeliveredPos, active, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to redeliver invite: %s", err)
+		}
+		if !active {
+			t.Fatalf("active redelivered invite was marked inactive")
+		}
+		if pos != redeliveredPos {
+			t.Fatalf("redelivered invite moved from position %d to %d", pos, redeliveredPos)
+		}
+
+		retiredPos, err := db.RetireInviteEvent(ctx, invite.EventID(), room.ID)
+		if err != nil {
+			t.Fatalf("failed to retire invite: %s", err)
+		}
+		retriedPos, err := db.RetireInviteEvent(ctx, invite.EventID(), room.ID)
+		if err != nil {
+			t.Fatalf("failed to retry retirement: %s", err)
+		}
+		if retiredPos != retriedPos {
+			t.Fatalf("retried retirement moved from position %d to %d", retiredPos, retriedPos)
+		}
+
+		// A redelivery after retirement must not resurrect the invite.
+		afterRetirePos, active, err := db.AddInviteEvent(ctx, invite)
+		if err != nil {
+			t.Fatalf("failed to redeliver retired invite: %s", err)
+		}
+		if active {
+			t.Fatalf("retired invite was marked active")
+		}
+		if afterRetirePos != retiredPos {
+			t.Fatalf("retired invite was reinserted at position %d instead of %d", afterRetirePos, retiredPos)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			invites, retired, _, err := snapshot.InviteEventsInRange(ctx, alice.ID, types.Range{From: 0, To: math.MaxInt64})
+			if err != nil {
+				t.Fatalf("InviteEventsInRange returned error: %s", err)
+			}
+			if _, ok := invites[room.ID]; ok {
+				t.Fatalf("retired invite is still active")
+			}
+			if _, ok := retired[room.ID]; !ok {
+				t.Fatalf("retired invite is missing from the retirement range")
+			}
+		})
+
+		// A retirement can arrive before its invite is written. Keep a
+		// tombstone so that the later invite delivery cannot make it active.
+		lateInvite := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{
+			"membership": spec.Invite,
+		}, test.WithStateKey(alice.ID))
+		lateInvite.UserID = *aliceUserID
+		lateRetiredPos, err := db.RetireInviteEvent(ctx, lateInvite.EventID(), room.ID)
+		if err != nil {
+			t.Fatalf("failed to retire invite before it was stored: %s", err)
+		}
+		lateInvitePos, active, err := db.AddInviteEvent(ctx, lateInvite)
+		if err != nil {
+			t.Fatalf("failed to add late invite: %s", err)
+		}
+		if active {
+			t.Fatal("invite delivered after its retirement was marked active")
+		}
+		if lateInvitePos != lateRetiredPos {
+			t.Fatalf("late invite position %d differs from tombstone position %d", lateInvitePos, lateRetiredPos)
+		}
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			invites, _, _, err := snapshot.InviteEventsInRange(ctx, alice.ID, types.Range{From: 0, To: math.MaxInt64})
+			if err != nil {
+				t.Fatalf("InviteEventsInRange returned error: %s", err)
+			}
+			if _, ok := invites[room.ID]; ok {
+				t.Fatal("late invite appeared in active invite results")
+			}
+		})
+	})
+}
+
+func TestUniqueInviteMigrationPrefersRetiredDuplicate(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+
+		var rawDB *sql.DB
+		switch d := db.(type) {
+		case *postgresstorage.SyncServerDatasource:
+			rawDB = d.DB
+		case *sqlitestorage.SyncServerDatasource:
+			rawDB = d.DB
+		default:
+			t.Fatalf("unexpected database type %T", db)
+		}
+		if _, err := rawDB.ExecContext(ctx, "DROP INDEX IF EXISTS syncapi_invites_event_id_unique_idx"); err != nil {
+			t.Fatalf("failed to drop unique invite index: %s", err)
+		}
+		for _, row := range []struct {
+			id      int64
+			deleted bool
+		}{{1000000, true}, {1000001, false}} {
+			if _, err := rawDB.ExecContext(ctx, `INSERT INTO syncapi_invite_events
+				(id, event_id, room_id, target_user_id, headered_event_json, deleted)
+				VALUES ($1, '$duplicate-invite', '!room', '@user:server', '{}', $2)`, row.id, row.deleted); err != nil {
+				t.Fatalf("failed to create duplicate invite row: %s", err)
+			}
+		}
+
+		txn, err := rawDB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("failed to begin migration transaction: %s", err)
+		}
+		switch dbType {
+		case test.DBTypePostgres:
+			err = postgresdeltas.UpUniqueInviteEventIDs(ctx, txn)
+		case test.DBTypeSQLite:
+			err = sqlitedeltas.UpUniqueInviteEventIDs(ctx, txn)
+		}
+		if err != nil {
+			_ = txn.Rollback()
+			t.Fatalf("failed to apply invite deduplication migration: %s", err)
+		}
+		if err = txn.Commit(); err != nil {
+			t.Fatalf("failed to commit invite migration: %s", err)
+		}
+
+		var count int
+		var id int64
+		var deleted bool
+		var anyDeleted int
+		if err = rawDB.QueryRowContext(ctx, `SELECT COUNT(*), MAX(id), MAX(CASE WHEN deleted THEN 1 ELSE 0 END)
+			FROM syncapi_invite_events WHERE event_id = '$duplicate-invite'`).Scan(&count, &id, &anyDeleted); err != nil {
+			t.Fatalf("failed to inspect migrated invite rows: %s", err)
+		}
+		deleted = anyDeleted == 1
+		if count != 1 || id != 1000000 || !deleted {
+			t.Fatalf("migration kept count=%d id=%d deleted=%v; want the older retired row at id 1000000", count, id, deleted)
+		}
 	})
 }
 
@@ -743,7 +1022,7 @@ Func TestInviteBehaviour(t *testing.T) {
 		Sender:   "@inviteUser2:somewhere",
 	})
 	for _, ev := range []*types.HeaderedEvent{inviteEvent1, inviteEvent2} {
-		_, err := db.AddInviteEvent(ctx, ev)
+		_, _, err := db.AddInviteEvent(ctx, ev)
 		if err != nil {
 			t.Fatalf("Failed to AddInviteEvent: %s", err)
 		}
@@ -761,7 +1040,7 @@ Func TestInviteBehaviour(t *testing.T) {
 	assertInvitedToRooms(t, beforeRetireRes, []string{inviteRoom1, inviteRoom2})
 
 	// retire one event: a fresh sync should just return 1 invite room
-	if _, err = db.RetireInviteEvent(ctx, inviteEvent1.EventID()); err != nil {
+	if _, err = db.RetireInviteEvent(ctx, inviteEvent1.EventID(), inviteRoom1); err != nil {
 		t.Fatalf("Failed to RetireInviteEvent: %s", err)
 	}
 	latest, err = db.SyncPosition(ctx)
@@ -1164,5 +1443,80 @@ func TestUnPartialStatedMarkerUsesPDUPositions(t *testing.T) {
 			}
 			assert.Empty(t, rooms, "a sync that ended before the marker does not")
 		})
+	})
+}
+
+// After a network partition heals, an event can be persisted after events that
+// are deeper in the DAG. Paginating back from a stream token just before it
+// must return the events persisted earlier, in topological order, rather than
+// stopping at its depth (TestNetworkPartitionOrdering).
+func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+
+		// 1' is created at the same depth as 1, but only arrives after 1-4.
+		onePrime := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "1'"})
+		var local []*rstypes.HeaderedEvent
+		for i := 1; i <= 4; i++ {
+			local = append(local, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+		require.Equal(t, local[0].Depth(), onePrime.Depth())
+
+		_ = MustWriteEvents(t, db, base)
+		_ = MustWriteEvents(t, db, local)
+		onePrimePos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{onePrime})[0]
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			filter := &synctypes.RoomEventFilter{Limit: 4}
+			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter)
+			require.NoError(t, err)
+			gots := snapshot.StreamEventsToEvents(context.Background(), nil, paginated, nil)
+			test.AssertEventsEqual(t, gots, test.Reversed(local))
+			assert.Equal(t, local[0].Depth(), int64(end.Depth))
+		})
+	})
+}
+
+func TestSelectMembershipsAtStreamAndTopologyTokens(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		charlie := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		// Charlie's join is created at the same depth as Bob's, but arrives later.
+		charlieJoin := r.CreateEvent(t, charlie, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(charlie.ID))
+		bobJoin := r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		require.Equal(t, bobJoin.Depth(), charlieJoin.Depth())
+
+		basePositions := MustWriteEvents(t, db, r.Events()[:len(r.Events())-1])
+		bobPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{bobJoin})[0]
+		_ = MustWriteEvents(t, db, []*rstypes.HeaderedEvent{charlieJoin})
+
+		members := func(pos types.TopologyToken) []string {
+			eventIDs, err := db.SelectMemberships(ctx, r.ID, pos, nil, nil)
+			require.NoError(t, err)
+			return eventIDs
+		}
+		streamOnly := func(pos types.StreamPosition) types.TopologyToken {
+			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: pos}
+		}
+
+		// s... tokens bound memberships by stream position only.
+		assert.Len(t, members(streamOnly(basePositions[len(basePositions)-1])), 1)
+		assert.ElementsMatch(t, []string{r.Events()[1].EventID(), bobJoin.EventID()}, members(streamOnly(bobPos)))
+		assert.Len(t, members(streamOnly(math.MaxInt64)), 3)
+
+		// t... tokens bound by depth, cutting within a depth by stream position.
+		depth := types.StreamPosition(bobJoin.Depth())
+		assert.ElementsMatch(t, []string{r.Events()[1].EventID(), bobJoin.EventID()}, members(types.TopologyToken{Depth: depth, PDUPosition: bobPos}))
+		assert.Len(t, members(types.TopologyToken{Depth: depth, PDUPosition: math.MaxInt64}), 3)
+		assert.Len(t, members(types.TopologyToken{Depth: depth - 1, PDUPosition: math.MaxInt64}), 1)
 	})
 }

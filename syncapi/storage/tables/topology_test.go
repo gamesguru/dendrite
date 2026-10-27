@@ -146,3 +146,50 @@ func TestTopologyTablePagesPastForkedDepth(t *testing.T) {
 		}
 	})
 }
+
+// TestTopologyTablePagesForwardPastForkedDepth checks forward pagination from
+// one event in a fork. Events at the same depth with later stream positions
+// must remain visible after the cursor.
+func TestTopologyTablePagesForwardPastForkedDepth(t *testing.T) {
+	ctx := context.Background()
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	local := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "local"})
+	remote := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "remote"})
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		tab, db, close := newTopologyTable(t, dbType)
+		defer close()
+		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
+			if _, err := tab.InsertEventInTopology(ctx, txn, local, 10); err != nil {
+				return err
+			}
+			if _, err := tab.InsertEventInTopology(ctx, txn, remote, 20); err != nil {
+				return err
+			}
+			// Start at local's token and continue in chronological order.
+			eventIDs, _, _, err := tab.SelectEventIDsInRange(
+				ctx, txn, room.ID, types.StreamPosition(local.Depth()),
+				types.StreamPosition(local.Depth()+1), 10, 10, true,
+			)
+			if err != nil {
+				return err
+			}
+			assert.Equal(t, []string{remote.EventID()}, eventIDs)
+			// When the range is limited to the cursor's depth, the inclusive
+			// upper-bound clause must not re-include the already-seen event.
+			eventIDs, _, _, err = tab.SelectEventIDsInRange(
+				ctx, txn, room.ID, types.StreamPosition(local.Depth()),
+				types.StreamPosition(local.Depth()), 10, 10, true,
+			)
+			if err != nil {
+				return err
+			}
+			assert.Equal(t, []string{remote.EventID()}, eventIDs)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+	})
+}

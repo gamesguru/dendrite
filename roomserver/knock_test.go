@@ -72,7 +72,7 @@ func TestPerformFederatedKnock(t *testing.T) {
 		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
 		natsInstance := jetstream.NATSInstance{}
-		jsctx, nc := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		jsctx, nc := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream) //nolint:contextcheck // ProcessContext owns the test lifetime.
 		defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 		outputs, err := nc.SubscribeSync(cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent))
 		require.NoError(t, err)

@@ -160,6 +160,12 @@ func (s *FederationInternalAPI) handleDatabaseKeys(
 
 	// We successfully got some keys. Add them to the results.
 	for req, res := range dbResults {
+		// A retired key cannot expire in the future. Ignore a cached entry
+		// that violates this (MSC4499 §8) and let the fetcher try again.
+		if res.ExpiredTS != gomatrixserverlib.PublicKeyNotExpired &&
+			res.ExpiredTS > spec.AsTimestamp(now.Time().Add(maxExpiredTSSkew)) {
+			continue
+		}
 		// The key we've retrieved from the database/cache might
 		// have passed its validity period, but right now, it's
 		// the best thing we've got, and it might be sufficient to
@@ -185,7 +191,7 @@ func (s *FederationInternalAPI) handleDatabaseKeys(
 // the remaining requests.
 func (s *FederationInternalAPI) handleFetcherKeys(
 	ctx context.Context,
-	_ spec.Timestamp,
+	now spec.Timestamp,
 	fetcher gomatrixserverlib.KeyFetcher,
 	requests map[gomatrixserverlib.PublicKeyLookupRequest]spec.Timestamp,
 	results map[gomatrixserverlib.PublicKeyLookupRequest]gomatrixserverlib.PublicKeyLookupResult,
@@ -211,6 +217,16 @@ func (s *FederationInternalAPI) handleFetcherKeys(
 
 	// Now let's look at the results that we got from this fetcher.
 	for req, res := range fetcherResults {
+		// A retired key cannot have an expiry in the future. Treat such a
+		// response as malformed before it can enter the cache or be returned
+		// to a caller that is verifying an event.
+		if res.ExpiredTS != gomatrixserverlib.PublicKeyNotExpired && res.ExpiredTS > spec.AsTimestamp(now.Time().Add(maxExpiredTSSkew)) {
+			logrus.WithFields(logrus.Fields{
+				"server_name": req.ServerName,
+				"key_id":      req.KeyID,
+			}).Warn("Ignoring server key with future expired_ts")
+			continue
+		}
 		if prev, ok := results[req]; ok {
 			// We've already got a previous entry for this request
 			// so let's see if the newly retrieved one contains a more

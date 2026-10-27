@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -87,6 +88,31 @@ func (s *syncRoomserverAPI) QueryMembershipAtEvent(
 	senderID spec.SenderID,
 ) (map[string]*rstypes.HeaderedEvent, error) {
 	return map[string]*rstypes.HeaderedEvent{}, nil
+}
+
+func (s *syncRoomserverAPI) QueryEventsByID(ctx context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	for _, room := range s.rooms {
+		for _, ev := range room.Events() {
+			for _, id := range req.EventIDs {
+				if ev.EventID() == id {
+					res.Events = append(res.Events, ev)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *syncRoomserverAPI) QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error) {
+	var roomIDs []spec.RoomID
+	for _, room := range s.rooms {
+		roomID, err := spec.NewRoomID(room.ID)
+		if err != nil {
+			return nil, err
+		}
+		roomIDs = append(roomIDs, *roomID)
+	}
+	return roomIDs, nil
 }
 
 func (s *syncRoomserverAPI) GetPartialStateRoomIDs(ctx context.Context) ([]string, error) {
@@ -810,7 +836,9 @@ func TestGetMembership(t *testing.T) {
 			request: func(t *testing.T, room *test.Room) *http.Request {
 				return test.NewRequest(t, "GET", fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", room.ID), test.WithQueryParams(map[string]string{
 					"access_token": aliceDev.AccessToken,
-					"at":           "t2_5",
+					// Depth 2 is Alice's join. Topology tokens also cut within a depth by
+					// stream position, so allow any stream position at that depth.
+					"at": fmt.Sprintf("t2_%d", math.MaxInt64-1),
 				}))
 			},
 			additionalEvents: func(t *testing.T, room *test.Room) {

@@ -49,9 +49,18 @@ type RequestPool struct {
 	producer PresencePublisher
 	consumer PresenceConsumer
 
+	// toDeviceBarrier, if set, waits for pending send-to-device messages to be stored.
+	toDeviceBarrier func()
+
 	// v4 sliding sync per-connection state tracking
 	// Key: "{user_id}|{device_id}|{conn_id}" -> *V4ConnectionState
 	v4Connections *sync.Map
+}
+
+// SetSendToDeviceBarrier sets a function that waits for send-to-device messages
+// already published to be stored, so a sync that follows a send sees them.
+func (rp *RequestPool) SetSendToDeviceBarrier(f func()) {
+	rp.toDeviceBarrier = f
 }
 
 type PresencePublisher interface {
@@ -156,10 +165,18 @@ const presenceTimeout = time.Second * 10
 // updatePresence sends presence updates to the SyncAPI and FederationAPI.
 func (rp *RequestPool) updatePresence(db storage.Presence, presence string, userID string) {
 	// allow checking back on presence to set offline if needed
-	rp.updatePresenceInternal(db, presence, userID, true)
+	rp.updatePresenceInternal(db, presence, userID, true, false)
 }
 
-func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence string, userID string, checkAgain bool) {
+// updatePresenceExplicit applies a client-requested presence value without the
+// multi-device priority rules used by ordinary sync traffic. Sliding sync's
+// set_presence is an explicit instruction, so setting unavailable must not be
+// ignored merely because another request recently marked the user online.
+func (rp *RequestPool) updatePresenceExplicit(db storage.Presence, presence string, userID string) {
+	rp.updatePresenceInternal(db, presence, userID, false, true)
+}
+
+func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence string, userID string, checkAgain, explicit bool) {
 	if !rp.cfg.Matrix.Presence.EnableOutbound {
 		return
 	}
@@ -198,6 +215,8 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// Default to unknown presence
 	presenceToSet := types.PresenceUnknown
 	switch {
+	case explicit:
+		presenceToSet = presenceID
 	case now.Sub(lastPresence.seen[userID][types.PresenceOnline]) < presenceTimeout:
 		// online will always get priority
 		presenceToSet = types.PresenceOnline
@@ -216,7 +235,7 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 				if !process.Sleep(rp.ctx, presenceTimeout) {
 					return
 				}
-				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false)
+				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false, false)
 			})
 		}
 	}
@@ -435,6 +454,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			}); ok {
 				waiter.WaitForPendingPartialJoins(syncReq.Context, syncReq)
 			}
+			rp.waitForJoinedRooms(syncReq.Context, syncReq)
 			syncReq.Response.NextBatch = types.StreamingToken{
 				// Get the current DeviceListPosition first, as the currentPosition
 				// might advance while processing other streams, resulting in flakey
@@ -785,4 +805,38 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 		return true
 	}
 	return false
+}
+
+func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
+	if rp.rsAPI == nil || req.Device == nil {
+		return
+	}
+	userID, err := spec.NewUserID(req.Device.UserID, true)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	rooms, err := rp.rsAPI.QueryRoomsForUser(ctx, *userID, spec.Join)
+	if err != nil || len(rooms) == 0 {
+		return
+	}
+	for _, roomID := range rooms {
+		if ctx.Err() != nil {
+			return
+		}
+		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
+		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
+			RoomID: roomID.String(),
+		}, &latestRes); err != nil {
+			continue
+		}
+		for _, ev := range latestRes.LatestEvents {
+			if ctx.Err() != nil {
+				return
+			}
+			internal.WaitForMembershipInTopology(ctx, rp.db, ev)
+		}
+	}
 }

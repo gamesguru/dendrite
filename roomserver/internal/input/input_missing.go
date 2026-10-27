@@ -2,8 +2,10 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -37,6 +39,15 @@ type parsedRespState struct {
 // response, rather than a state-resolution failure for the room, so it should
 // not put the room on the missing-state cooldown.
 var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid events")
+
+// isMalformedJSONError reports whether err came from decoding a response body
+// that was empty or not valid JSON. Those responses are worth retrying once,
+// unlike a connection failure or an HTTP error status.
+func isMalformedJSONError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
 
 func (p *parsedRespState) Events() []gomatrixserverlib.PDU {
 	eventsByID := make(map[string]gomatrixserverlib.PDU, len(p.AuthEvents)+len(p.StateEvents))
@@ -181,7 +192,7 @@ func (t *missingStateReq) processEventWithMissingState(
 	if len(newEvents) == 0 {
 		return nil, fmt.Errorf("expected to find missing events but didn't")
 	}
-	if isGapFilled {
+	if isGapFilled && prevStatesKnown {
 		t.log.Infof("Gap filled by /get_missing_events, injecting %d new events", len(newEvents))
 		// we can just inject all the newEvents as new as we may have only missed 1 or 2 events and have filled
 		// in the gap in the DAG
@@ -517,17 +528,24 @@ func (t *missingStateReq) lookupStateAfterEvent(ctx context.Context, roomVersion
 	}
 	h = t.cacheAndReturn(h)
 	if h.StateKey() != nil {
-		addedToState := false
-		for i := range respState.StateEvents {
-			se := respState.StateEvents[i]
-			if se.Type() == h.Type() && se.StateKeyEquals(*h.StateKey()) {
-				respState.StateEvents[i] = h
-				addedToState = true
-				break
+		if respState.OutliersStored {
+			respState.StateEventIDs = append(respState.StateEventIDs, h.EventID())
+		} else {
+			addedToState := false
+			for i := range respState.StateEvents {
+				se := respState.StateEvents[i]
+				if se.Type() == h.Type() && se.StateKeyEquals(*h.StateKey()) {
+					respState.StateEvents[i] = h
+					// Keep the replaced state event in AuthEvents so it remains in the
+					// outlier set for authentication and state resolution.
+					respState.AuthEvents = append(respState.AuthEvents, se)
+					addedToState = true
+					break
+				}
 			}
-		}
-		if !addedToState {
-			respState.StateEvents = append(respState.StateEvents, h)
+			if !addedToState {
+				respState.StateEvents = append(respState.StateEvents, h)
+			}
 		}
 	}
 
@@ -720,26 +738,40 @@ func (t *missingStateReq) getMissingEvents(ctx context.Context, e gomatrixserver
 
 	var missingResp *fclient.RespMissingEvents
 	for _, server := range t.servers {
-		var m fclient.RespMissingEvents
-		if m, err = t.federation.LookupMissingEvents(ctx, t.virtualHost, server, e.RoomID().String(), fclient.MissingEvents{
-			Limit: 20, //nolint:mnd
-			// The latest event IDs that the sender already has. These are skipped when retrieving the previous events of latest_events.
-			EarliestEvents: latestEvents,
-			// The event IDs to retrieve the previous events for.
-			LatestEvents: []string{e.EventID()},
-		}, roomVersion); err == nil {
-			missingResp = &m
-			break
-		} else {
+		// A malformed /get_missing_events response is not evidence that the
+		// remote server is down: the connection succeeded, it just sent
+		// something we could not parse. Retry that server once before trying
+		// the next one, so a single truncated response cannot reject the
+		// event and force the sender to resend it.
+		for attempt := 0; attempt < 2; attempt++ {
+			var m fclient.RespMissingEvents
+			if m, err = t.federation.LookupMissingEvents(ctx, t.virtualHost, server, e.RoomID().String(), fclient.MissingEvents{
+				Limit: 20, //nolint:mnd
+				// The latest event IDs that the sender already has. These are skipped when retrieving the previous events of latest_events.
+				EarliestEvents: latestEvents,
+				// The event IDs to retrieve the previous events for.
+				LatestEvents: []string{e.EventID()},
+			}, roomVersion); err == nil {
+				missingResp = &m
+				break
+			}
 			logger.WithError(err).Warnf("%s pushed us an event but %q did not respond to /get_missing_events", t.origin, server)
+			if attempt == 0 && isMalformedJSONError(err) {
+				logger.Warnf("%q returned malformed JSON from /get_missing_events; retrying once", server)
+				continue
+			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				select {
 				case <-ctx.Done(): // the parent request context timed out
 					return nil, false, false, context.DeadlineExceeded
 				default: // this request exceed its own timeout
-					continue
+					break
 				}
 			}
+			break
+		}
+		if missingResp != nil {
+			break
 		}
 	}
 
@@ -848,19 +880,55 @@ func (t *missingStateReq) lookupMissingStateViaState(
 		return nil, err
 	}
 
-	// Check that the returned state is valid.
-	authEvents, stateEvents, err := gomatrixserverlib.CheckStateResponse(ctx, &fclient.RespState{
-		StateEvents: state.GetStateEvents(),
-		AuthEvents:  state.GetAuthEvents(),
-	}, roomVersion, t.keys, nil, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	// Drop events with bad signatures, but keep those that are merely not
+	// allowed by their auth events. They may only be valid in the resolved
+	// state (MSC4297), and the roomserver stores them as rejected outliers.
+	authEvents := state.GetAuthEvents().UntrustedEvents(roomVersion)
+	stateEvents := state.GetStateEvents().UntrustedEvents(roomVersion)
+	all := make([]gomatrixserverlib.PDU, 0, len(authEvents)+len(stateEvents))
+	stateTuples := map[gomatrixserverlib.StateKeyTuple]bool{}
+	for _, event := range authEvents {
+		if event.StateKey() == nil {
+			return nil, fmt.Errorf("event %q does not have a state key", event.EventID())
+		}
+		all = append(all, event)
+	}
+	for _, event := range stateEvents {
+		if event.StateKey() == nil {
+			return nil, fmt.Errorf("event %q does not have a state key", event.EventID())
+		}
+		tuple := gomatrixserverlib.StateKeyTuple{EventType: event.Type(), StateKey: *event.StateKey()}
+		if stateTuples[tuple] {
+			return nil, fmt.Errorf("duplicate state key tuple (%q, %q)", event.Type(), *event.StateKey())
+		}
+		stateTuples[tuple] = true
+		all = append(all, event)
+	}
+	sigErrs := gomatrixserverlib.VerifyAllEventSignatures(ctx, all, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	})
-	if err != nil {
-		return nil, err
+	if len(sigErrs) != len(all) {
+		return nil, fmt.Errorf("expected %d signature results but got %d", len(all), len(sigErrs))
+	}
+	badSig := map[string]bool{}
+	for i, e := range all {
+		if sigErrs[i] != nil {
+			t.log.WithError(sigErrs[i]).Warnf("Signature validation failed for event %q", e.EventID())
+			badSig[e.EventID()] = true
+		}
+	}
+	keep := func(events []gomatrixserverlib.PDU) []gomatrixserverlib.PDU {
+		kept := events[:0:0]
+		for _, e := range events {
+			if !badSig[e.EventID()] {
+				kept = append(kept, e)
+			}
+		}
+		return kept
 	}
 	return &parsedRespState{
-		AuthEvents:  authEvents,
-		StateEvents: stateEvents,
+		AuthEvents:  keep(authEvents),
+		StateEvents: keep(stateEvents),
 	}, nil
 }
 

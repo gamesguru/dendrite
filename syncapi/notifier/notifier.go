@@ -321,6 +321,40 @@ func (n *Notifier) SharedUsersForCandidates(userA string, candidates []string) m
 	return shared
 }
 
+// PartialStateSharedUsersForCandidates returns candidates whose server is
+// known to participate in a partial-state room joined by userA. This permits
+// presence received from that server while the member list is still unknown.
+// The candidate is not required to be in the notifier's joined set: that set
+// is incomplete until the room's state has been resynced.
+func (n *Notifier) PartialStateSharedUsersForCandidates(ctx context.Context, userA string, candidates []string) map[string]struct{} {
+	if len(candidates) == 0 {
+		return nil
+	}
+	partialRooms := n.partialStateRoomServers(ctx)
+	if len(partialRooms) == 0 {
+		return nil
+	}
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+	shared := make(map[string]struct{})
+	for roomID, servers := range partialRooms {
+		// A partial-state room can be known to the roomserver before the
+		// notifier has populated its joined-user set (for example, while the
+		// room's initial join is still being processed).
+		users := n.roomIDToJoinedUsers[roomID]
+		if users == nil || !users.isIn(userA) {
+			continue
+		}
+		for _, userID := range candidates {
+			_, domain, err := gomatrixserverlib.SplitID('@', userID)
+			if err == nil && slices.Contains(servers, string(domain)) {
+				shared[userID] = struct{}{}
+			}
+		}
+	}
+	return shared
+}
+
 // partialStateServerQuerier is implemented by the roomserver API, which can tell
 // which servers are known to be in a room that only has partial state.
 type partialStateServerQuerier interface {

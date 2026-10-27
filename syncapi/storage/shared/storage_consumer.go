@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -99,6 +100,18 @@ func (d *Database) Events(ctx context.Context, eventIDs []string) ([]*rstypes.He
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
+// EventsWithDevice looks up events and annotates the device's transaction ID
+// on events the device sent, as required by GET /rooms/{roomId}/event/{eventId}.
+func (d *Database) EventsWithDevice(
+	ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, nil, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, streamEvents, rsAPI), nil
+}
+
 func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Device, in []types.StreamEvent, rsAPI api.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
 	out := make([]*rstypes.HeaderedEvent, len(in))
 	for i := 0; i < len(in); i++ {
@@ -144,9 +157,9 @@ func (d *Database) StreamEventsToEvents(ctx context.Context, device *userapi.Dev
 // Returns an error if there was a problem communicating with the database.
 func (d *Database) AddInviteEvent(
 	ctx context.Context, inviteEvent *rstypes.HeaderedEvent,
-) (sp types.StreamPosition, err error) {
+) (sp types.StreamPosition, active bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		sp, err = d.Invites.InsertInviteEvent(ctx, txn, inviteEvent)
+		sp, active, err = d.Invites.InsertInviteEvent(ctx, txn, inviteEvent)
 		return err
 	})
 	return
@@ -155,10 +168,10 @@ func (d *Database) AddInviteEvent(
 // RetireInviteEvent removes an old invite event from the database.
 // Returns an error if there was a problem communicating with the database.
 func (d *Database) RetireInviteEvent(
-	ctx context.Context, inviteEventID string,
+	ctx context.Context, inviteEventID, roomID string,
 ) (sp types.StreamPosition, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		sp, err = d.Invites.DeleteInviteEvent(ctx, txn, inviteEventID)
+		sp, err = d.Invites.DeleteInviteEvent(ctx, txn, inviteEventID, roomID)
 		return err
 	})
 	return
@@ -262,6 +275,23 @@ func (d *Database) handleBackwardExtremities(ctx context.Context, txn *sql.Tx, e
 	return nil
 }
 
+func (d *Database) PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, roomID, prevEventID)
+	})
+}
+
+func (d *Database) PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, prevEventIDs []string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		for _, prevEventID := range prevEventIDs {
+			if err := d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, roomID, prevEventID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (d *Database) WriteEvent(
 	ctx context.Context,
 	ev *rstypes.HeaderedEvent,
@@ -363,12 +393,63 @@ func (d *Database) PutFilter(
 	ctx context.Context, localpart string, filter *synctypes.Filter,
 ) (string, error) {
 	var filterID string
-	var err error
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		filterID, err = d.Filter.InsertFilter(ctx, txn, filter, localpart)
-		return err
+	// InsertFilter looks the filter up before inserting it, so SQLite can
+	// report SQLITE_BUSY when another writer holds the lock. Retry the whole
+	// transaction.
+	err := retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) (insertErr error) {
+			filterID, insertErr = d.Filter.InsertFilter(ctx, txn, filter, localpart)
+			return insertErr
+		})
 	})
 	return filterID, err
+}
+
+type sqliteRetryPolicy struct {
+	maxAttempts int
+	delayStep   time.Duration
+	maxDelay    time.Duration
+}
+
+const (
+	sqliteMaxRetryAttempts = 10
+	sqliteRetryDelayStep   = 25 * time.Millisecond
+	sqliteMaxRetryDelay    = 250 * time.Millisecond
+)
+
+// sqliteLockRetryPolicy waits out the normal room-creation write burst while
+// staying bounded for callers that cannot be blocked indefinitely.
+var sqliteLockRetryPolicy = sqliteRetryPolicy{
+	maxAttempts: sqliteMaxRetryAttempts,
+	delayStep:   sqliteRetryDelayStep,
+	maxDelay:    sqliteMaxRetryDelay,
+}
+
+// retrySQLiteBusy runs fn, retrying with a bounded backoff while it fails with
+// SQLITE_BUSY. Read-then-write transactions can fail to upgrade their lock
+// immediately even though the SQLite busy timeout is set, so the whole
+// transaction and its lookup must be retried.
+func retrySQLiteBusy(ctx context.Context, policy sqliteRetryPolicy, fn func() error) error {
+	var err error
+	for attempt := 0; attempt < policy.maxAttempts; attempt++ {
+		err = fn()
+		if err == nil || !isSQLiteBusy(err) || attempt == policy.maxAttempts-1 {
+			return err
+		}
+		delay := time.Duration(attempt+1) * policy.delayStep
+		if policy.maxDelay > 0 && delay > policy.maxDelay {
+			delay = policy.maxDelay
+		}
+		logrus.WithError(err).WithField("attempt", attempt+1).Debug("SQLite database busy, retrying")
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error {
@@ -603,12 +684,64 @@ func getMembershipFromEvent(ctx context.Context, ev gomatrixserverlib.PDU, userI
 }
 
 // StoreReceipt stores user receipts.
-func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, err error) {
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
-		return err
+func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId, eventId, threadID string, timestamp spec.Timestamp) (pos types.StreamPosition, changed bool, err error) {
+	// The lookup reads before the upsert writes. SQLite can report SQLITE_BUSY
+	// when another writer holds the lock and the read transaction cannot be
+	// upgraded, so retry the whole transaction, including the lookup.
+	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+		pos = 0
+		changed = false
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+			movesBackwards, checkErr := d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if movesBackwards {
+				// Keep the later receipt. A false changed result tells the consumer
+				// not to advance or notify at an unrelated stream position.
+				return nil
+			}
+			var upsertErr error
+			pos, upsertErr = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
+			changed = upsertErr == nil
+			return upsertErr
+		})
 	})
-	return
+	if err != nil {
+		return 0, false, err
+	}
+	return pos, changed, nil
+}
+
+// receiptMovesBackwards reports whether storing a receipt at eventID would move
+// the user's existing receipt of that type and thread to an earlier event.
+// Receipts for events not (yet) known to the sync API are never held back.
+func (d *Database) receiptMovesBackwards(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, eventID, threadID string) (bool, error) {
+	if receiptType != "m.read" && receiptType != "m.read.private" {
+		return false, nil
+	}
+	current, err := d.Receipts.SelectUserReceiptEventID(ctx, txn, roomID, receiptType, userID, threadID)
+	if err != nil {
+		return false, err
+	}
+	if current == "" || current == eventID {
+		return false, nil
+	}
+	currentDepth, currentPos, err := d.Topology.SelectPositionInTopology(ctx, txn, current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	newDepth, newPos, err := d.Topology.SelectPositionInTopology(ctx, txn, eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return newDepth < currentDepth || (newDepth == currentDepth && newPos < currentPos), nil
 }
 
 func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
@@ -712,49 +845,53 @@ func (d *Database) SelectMemberships(
 
 // ===== Phase 10: New Sliding Sync Methods with Delta Tracking =====.
 
+// isSQLiteBusy reports whether err is SQLite's lock-contention error. It is
+// matched by text because the pure-Go and cgo drivers expose different error
+// types and the build only links one of them.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
+}
+
 func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, connID string) (connectionKey int64, err error) {
-	// Retry loop to handle race condition where two workers try to create the same connection
-	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-			// Try to select existing connection
-			conn, selectErr := d.SlidingSync.SelectConnectionByIDs(ctx, txn, userID, deviceID, connID)
-			if selectErr != nil {
-				return selectErr
-			}
-
-			if conn != nil {
-				// Connection exists
-				connectionKey = conn.ConnectionKey
-				return nil
-			}
-
-			// Connection doesn't exist, create it
-			createdTS := time.Now().UnixMilli()
-			var insertErr error
-			connectionKey, insertErr = d.SlidingSync.InsertConnection(ctx, txn, userID, deviceID, connID, createdTS)
-			return insertErr
-		})
-
-		if err == nil {
-			return connectionKey, nil
-		}
-
-		// Check if it's a unique constraint violation
-		if sqlutil.IsUniqueConstraintViolationErr(err) {
-			logrus.WithFields(logrus.Fields{
-				"user_id":   userID,
-				"device_id": deviceID,
-				"conn_id":   connID,
-				"attempt":   attempt + 1,
-			}).Debug("Unique constraint violation on connection insert, retrying SELECT")
-			continue
-		}
-
+	// Look up the connection outside a transaction so inserting a missing row
+	// doesn't need to upgrade a SQLite read transaction to a write transaction.
+	conn, err := d.SlidingSync.SelectConnectionByIDs(ctx, nil, userID, deviceID, connID)
+	if err != nil {
 		return 0, err
 	}
+	if conn != nil {
+		return conn.ConnectionKey, nil
+	}
 
-	return 0, fmt.Errorf("failed to get or create connection after %d attempts: %w", maxRetries, err)
+	// If another request creates the same connection after the lookup, the
+	// unique constraint resolves the race. A write-first transaction can wait
+	// for SQLite's busy timeout without hitting the read-to-write upgrade case.
+	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+			var insertErr error
+			connectionKey, insertErr = d.SlidingSync.InsertConnection(ctx, txn, userID, deviceID, connID, time.Now().UnixMilli())
+			return insertErr
+		})
+	})
+	if sqlutil.IsUniqueConstraintViolationErr(err) {
+		insertErr := err
+		conn, err = d.SlidingSync.SelectConnectionByIDs(ctx, nil, userID, deviceID, connID)
+		if err != nil {
+			return 0, err
+		}
+		if conn != nil {
+			return conn.ConnectionKey, nil
+		}
+		return 0, insertErr
+	}
+	if err != nil {
+		return 0, err
+	}
+	return connectionKey, nil
 }
 
 func (d *Database) CreateConnectionPosition(ctx context.Context, connectionKey int64) (connectionPosition int64, err error) {

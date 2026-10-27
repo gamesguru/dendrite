@@ -109,7 +109,7 @@ func DeviceListCatchup(
 	queryRes.UserIDs = append(queryRes.UserIDs, joinUserIDs...)
 	queryRes.UserIDs = append(queryRes.UserIDs, leaveUserIDs...)
 	queryRes.UserIDs = util.UniqueStrings(queryRes.UserIDs)
-	sharedUsersMap := filterSharedUsers(ctx, db, userID, queryRes.UserIDs)
+	sharedUsersMap := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs)
 	userSet := make(map[string]bool)
 	for _, userID := range res.DeviceLists.Changed {
 		userSet[userID] = true
@@ -259,7 +259,8 @@ func TrackChangedUsers(
 // filterSharedUsers takes a list of remote users whose keys have changed and filters
 // it down to include only users who the requesting user shares a room with.
 func filterSharedUsers(
-	ctx context.Context, db storage.SharedUsers, userID string, usersWithChangedKeys []string,
+	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
+	userID string, usersWithChangedKeys []string,
 ) map[string]int {
 	sharedUsersMap := make(map[string]int, len(usersWithChangedKeys))
 	for _, changedUserID := range usersWithChangedKeys {
@@ -278,11 +279,48 @@ func filterSharedUsers(
 		if ctx.Err() == nil {
 			util.GetLogger(ctx).WithError(err).Errorf("db.SharedUsers failed: %s", err)
 		}
-		// default to all users so we do needless queries rather than miss some important device update
-		return sharedUsersMap
+	} else {
+		for _, userID := range sharedUsers {
+			sharedUsersMap[userID]++
+		}
 	}
-	for _, userID := range sharedUsers {
-		sharedUsersMap[userID]++
+
+	// The sync API's current_room_state table can lag behind the roomserver,
+	// notably just after a partial-state resync has completed. A device list
+	// update for a user who has just become visible would otherwise be
+	// discarded and its key-change position advanced past. Ask the authoritative
+	// roomserver about the users we believe we share no room with.
+	var missing []string
+	missingSet := make(map[string]struct{}, len(sharedUsersMap))
+	for changedUserID, count := range sharedUsersMap {
+		if count == 0 && changedUserID != userID {
+			missing = append(missing, changedUserID)
+			missingSet[changedUserID] = struct{}{}
+		}
+	}
+	if len(missing) > 0 {
+		// This live roomserver view may be ahead of the sync snapshot. Prefer a
+		// harmless extra device-list notification over dropping a key change and
+		// advancing the catch-up position past it.
+		var sharedRes roomserverAPI.QuerySharedUsersResponse
+		if err := rsAPI.QuerySharedUsers(ctx, &roomserverAPI.QuerySharedUsersRequest{
+			UserID:       userID,
+			OtherUserIDs: missing,
+		}, &sharedRes); err != nil {
+			util.GetLogger(ctx).WithError(err).Warn("QuerySharedUsers fallback failed")
+			for _, changedUserID := range missing {
+				sharedUsersMap[changedUserID] = 1
+			}
+		} else {
+			for changedUserID, count := range sharedRes.UserIDsToCount {
+				if count > 0 {
+					if _, requested := missingSet[changedUserID]; !requested {
+						continue
+					}
+					sharedUsersMap[changedUserID] = count
+				}
+			}
+		}
 	}
 	return sharedUsersMap
 }

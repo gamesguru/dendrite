@@ -153,6 +153,23 @@ func (f *fedClient) GetServerKeys(ctx context.Context, matrixServer spec.ServerN
 	return keys, nil
 }
 
+// DoRequestAndParseResponse serves the raw /_matrix/key/v2/server documents
+// that the key fetcher now requests directly.
+func (f *fedClient) DoRequestAndParseResponse(ctx context.Context, req *http.Request, result any) error {
+	if req.URL.Path != "/_matrix/key/v2/server" {
+		return fmt.Errorf("fedClient: unexpected request %s", req.URL)
+	}
+	keys, err := f.GetServerKeys(ctx, spec.ServerName(req.URL.Host))
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, result)
+}
+
 func (f *fedClient) MakeJoin(ctx context.Context, origin, s spec.ServerName, roomID, userID string) (res fclient.RespMakeJoin, err error) {
 	f.fedClientMutex.Lock()
 	defer f.fedClientMutex.Unlock()

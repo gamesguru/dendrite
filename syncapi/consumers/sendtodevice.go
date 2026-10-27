@@ -9,6 +9,7 @@ package consumers
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -34,6 +35,7 @@ type OutputSendToDeviceEventConsumer struct {
 	jetstream         nats.JetStreamContext
 	durable           string
 	topic             string
+	pullDurable       string
 	db                storage.Database
 	userAPI           api.SyncKeyAPI
 	isLocalServerName func(spec.ServerName) bool
@@ -57,6 +59,7 @@ func NewOutputSendToDeviceEventConsumer(
 		jetstream:         js,
 		topic:             cfg.Matrix.JetStream.Prefixed(jetstream.OutputSendToDeviceEvent),
 		durable:           cfg.Matrix.JetStream.Durable("SyncAPISendToDeviceConsumer"),
+		pullDurable:       cfg.Matrix.JetStream.Durable("SyncAPISendToDeviceConsumer") + "Pull",
 		db:                store,
 		userAPI:           userAPI,
 		isLocalServerName: cfg.Matrix.IsLocalServerName,
@@ -71,6 +74,61 @@ func (s *OutputSendToDeviceEventConsumer) Start() error {
 		s.ctx, s.jetstream, s.topic, s.durable, 1,
 		s.onMessage, nats.DeliverAll(), nats.ManualAck(),
 	)
+}
+
+// WaitUntilCaughtUp waits, for at most timeout, until the consumer has handled
+// every send-to-device message published so far. A client that has just sent
+// a message to one of its own devices syncs before this asynchronous consumer
+// has stored it, and would otherwise miss the message.
+func (s *OutputSendToDeviceEventConsumer) WaitUntilCaughtUp(ctx context.Context, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Remember how far the stream had got when the barrier started. Messages
+	// published later, for this user or another, must not extend this wait.
+	var cutoff uint64
+	haveCutoff := false
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		// An unknown cutoff is retried until the deadline: an empty consumer
+		// only proves the barrier if the cutoff was read first.
+		if !haveCutoff {
+			cutoff, haveCutoff = s.sendToDeviceCutoff(ctx)
+		}
+		info, err := s.jetstream.ConsumerInfo(s.topic, s.pullDurable, nats.Context(ctx))
+		if err == nil && haveCutoff {
+			// Keep the fast path for an empty consumer: no messages are
+			// waiting and none are in flight.
+			if info.NumPending == 0 && info.NumAckPending == 0 {
+				return
+			}
+			// Otherwise wait only for the messages that existed before the
+			// barrier started. The ack floor is the highest stream position
+			// below which everything has been acknowledged.
+			if info.AckFloor.Stream >= cutoff {
+				return
+			}
+		}
+		// A failed lookup, for example while the consumer is being created,
+		// is retried until the deadline instead of letting the sync race ahead.
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// sendToDeviceCutoff returns the last sequence published to the send-to-device
+// stream before the barrier started.
+func (s *OutputSendToDeviceEventConsumer) sendToDeviceCutoff(ctx context.Context) (uint64, bool) {
+	info, err := s.jetstream.StreamInfo(s.topic, nats.Context(ctx))
+	if err != nil {
+		return 0, false
+	}
+	return info.State.LastSeq, true
 }
 
 func (s *OutputSendToDeviceEventConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {

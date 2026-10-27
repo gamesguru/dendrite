@@ -209,6 +209,7 @@ type SyncRoomserverAPI interface {
 	QueryBulkStateContentAPI
 	QuerySenderIDAPI
 	QueryMembershipAPI
+	QueryRoomsForUser(ctx context.Context, userID spec.UserID, desiredMembership string) ([]spec.RoomID, error)
 	// QuerySharedUsers returns a list of users who share at least 1 room in common with the given user.
 	QuerySharedUsers(ctx context.Context, req *QuerySharedUsersRequest, res *QuerySharedUsersResponse) error
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
@@ -469,4 +470,7 @@ type KeyserverRoomserverAPI interface {
 	// TakeMembersJoinedDuringPartialState returns who was joined to the room before its
 	// resync state was applied, once it completed. The result is not ok when that is not known.
 	TakeMembersJoinedDuringPartialState(roomID string) (members PartialStateMembers, ok bool)
+	// QueryMembersJoinedAfterPartialJoin returns the users who joined a partial state
+	// room after we did, while it still has partial state.
+	QueryMembersJoinedAfterPartialJoin(ctx context.Context, roomID string) ([]string, error)
 }

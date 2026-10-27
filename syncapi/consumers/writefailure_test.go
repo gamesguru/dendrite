@@ -33,8 +33,8 @@ func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, [
 	return 0, errDatabaseUnavailable
 }
 
-func (unavailableDatabase) StoreReceipt(context.Context, string, string, string, string, string, spec.Timestamp) (types.StreamPosition, error) {
-	return 0, errDatabaseUnavailable
+func (unavailableDatabase) StoreReceipt(context.Context, string, string, string, string, string, spec.Timestamp) (types.StreamPosition, bool, error) {
+	return 0, false, errDatabaseUnavailable
 }
 
 type senderResolver struct {

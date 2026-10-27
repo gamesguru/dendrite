@@ -2,6 +2,8 @@ package streams
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 
@@ -10,6 +12,16 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+// isEmptyAccountData reports whether data is an MSC3391 deletion tombstone.
+func isEmptyAccountData(data []byte) bool {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		return true
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal([]byte(trimmed), &object) == nil && len(object) == 0
+}
 
 type AccountDataStreamProvider struct {
 	DefaultStreamProvider
@@ -81,6 +93,11 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 			}
 			if roomID == "" {
 				if globalData, ok := dataRes.GlobalAccountData[dataType]; ok {
+					// A complete sync must omit account data that was deleted
+					// (MSC3391); only incremental syncs announce the tombstone.
+					if from == 0 && isEmptyAccountData(globalData) {
+						continue
+					}
 					req.Response.AccountData.Events = append(
 						req.Response.AccountData.Events,
 						synctypes.ClientEvent{
@@ -90,10 +107,22 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 					)
 				}
 			} else {
+				joinData, hasJoinData := req.Response.Rooms.Join[roomID]
+				if !hasJoinData {
+					joinData = types.NewJoinResponse()
+				}
 				if roomData, ok := dataRes.RoomAccountData[roomID][dataType]; ok {
-					joinData, ok := req.Response.Rooms.Join[roomID]
-					if !ok {
-						joinData = types.NewJoinResponse()
+					if from == 0 && isEmptyAccountData(roomData) {
+						// Keep the key present but the type absent, as MSC3391
+						// requires on a complete sync.
+						if joinData.AccountData == nil {
+							joinData.AccountData = &types.ClientEvents{Events: []synctypes.ClientEvent{}}
+						}
+						req.Response.Rooms.Join[roomID] = joinData
+						continue
+					}
+					if joinData.AccountData == nil {
+						joinData.AccountData = &types.ClientEvents{}
 					}
 					joinData.AccountData.Events = append(
 						joinData.AccountData.Events,
@@ -102,6 +131,20 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 							Content: spec.RawJSON(roomData),
 						},
 					)
+				} else if from > 0 {
+					// Preserve the deleted type as a typed MSC3391 tombstone.
+					if joinData.AccountData == nil {
+						joinData.AccountData = &types.ClientEvents{}
+					}
+					joinData.AccountData.Events = append(
+						joinData.AccountData.Events,
+						synctypes.ClientEvent{
+							Type:    dataType,
+							Content: spec.RawJSON(`{}`),
+						},
+					)
+				}
+				if from > 0 || joinData.AccountData != nil {
 					req.Response.Rooms.Join[roomID] = joinData
 				}
 			}

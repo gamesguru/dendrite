@@ -10,7 +10,7 @@ import (
 func TestIdleMetadataWorkerStops(t *testing.T) {
 	p := process.NewProcessContextWithParent(t.Context())
 	w := &SlidingSyncMetadataWorker{process: p, workerCh: make(chan string)}
-	p.Go(func() { w.worker(0) })
+	p.Go(func() { w.worker(p.Context(), 0) })
 	p.ShutdownZendrite()
 	done := make(chan struct{})
 	go func() { p.WaitForComponentsToFinish(); close(done) }()

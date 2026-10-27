@@ -41,7 +41,8 @@ const selectEventIDsInRangeASCSQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND (" +
 	"(topological_position > $2 AND topological_position < $3) OR" +
-	"(topological_position = $4 AND stream_position >= $5)" +
+	"(topological_position = $4 AND stream_position > $5) OR" +
+	"(topological_position = $3 AND stream_position >= 0 AND $3 > $2)" +
 	") ORDER BY topological_position ASC, stream_position ASC LIMIT $6"
 
 const selectEventIDsInRangeDESCSQL = "" +
@@ -50,6 +51,13 @@ const selectEventIDsInRangeDESCSQL = "" +
 	"(topological_position > $2 AND topological_position < $3) OR" +
 	"(topological_position = $4 AND stream_position <= $5)" +
 	") ORDER BY topological_position DESC, stream_position DESC LIMIT $6"
+
+// A stream token bounds pagination by stream order alone; the events before it
+// are still returned in topological order.
+const selectEventIDsBeforeStreamPositionSQL = "" +
+	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
+	" WHERE room_id = $1 AND topological_position > $2 AND stream_position <= $3" +
+	" ORDER BY topological_position DESC, stream_position DESC LIMIT $4"
 
 const selectPositionInTopologySQL = "" +
 	"SELECT topological_position, stream_position FROM syncapi_output_room_events_topology" +
@@ -72,6 +80,7 @@ type outputRoomEventsTopologyStatements struct {
 	insertEventInTopologyStmt                 *sql.Stmt
 	selectEventIDsInRangeASCStmt              *sql.Stmt
 	selectEventIDsInRangeDESCStmt             *sql.Stmt
+	selectEventIDsBeforeStreamPositionStmt    *sql.Stmt
 	selectPositionInTopologyStmt              *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt  *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt *sql.Stmt
@@ -91,6 +100,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.insertEventInTopologyStmt, insertEventInTopologySQL},
 		{&s.selectEventIDsInRangeASCStmt, selectEventIDsInRangeASCSQL},
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
+		{&s.selectEventIDsBeforeStreamPositionStmt, selectEventIDsBeforeStreamPositionSQL},
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
@@ -133,7 +143,12 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 	}
 
 	// Query the event IDs.
-	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, maxDepth, maxStreamPos, limit)
+	boundaryDepth := maxDepth
+	if chronologicalOrder {
+		// Forward cursors sit at the lower bound; backward cursors at the upper.
+		boundaryDepth = minDepth
+	}
+	rows, err := stmt.QueryContext(ctx, roomID, minDepth, maxDepth, boundaryDepth, maxStreamPos, limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no event matched the request, return an empty slice.
 		return []string{}, start, end, nil
@@ -161,6 +176,34 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 	}
 	err = rows.Err()
 	return
+}
+
+// SelectEventIDsBeforeStreamPosition selects, newest first in topological order,
+// the events of a room at or before a stream position and deeper than minDepth.
+func (s *outputRoomEventsTopologyStatements) SelectEventIDsBeforeStreamPosition(
+	ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos types.StreamPosition, limit int,
+) (eventIDs []string, start, end types.TopologyToken, err error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectEventIDsBeforeStreamPositionStmt).QueryContext(ctx, roomID, minDepth, maxStreamPos, limit)
+	if err != nil {
+		return
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectEventIDsBeforeStreamPosition: failed to close rows")
+
+	var eventID string
+	var token types.TopologyToken
+	var tokens []types.TopologyToken
+	for rows.Next() {
+		if err = rows.Scan(&eventID, &token.Depth, &token.PDUPosition); err != nil {
+			return
+		}
+		eventIDs = append(eventIDs, eventID)
+		tokens = append(tokens, token)
+	}
+	if len(tokens) > 0 {
+		start = tokens[0]
+		end = tokens[len(tokens)-1]
+	}
+	return eventIDs, start, end, rows.Err()
 }
 
 // selectPositionInTopology returns the position of a given event in the

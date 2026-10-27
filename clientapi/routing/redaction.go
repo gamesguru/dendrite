@@ -164,13 +164,10 @@ func checkRedactionAllowed(
 	ctx context.Context, rsAPI roomserverAPI.ClientRoomserverAPI, roomID, eventID string, senderID spec.SenderID, suspended bool,
 ) *util.JSONResponse {
 	ev := roomserverAPI.GetEvent(ctx, rsAPI, roomID, eventID)
-	if ev == nil {
-		return &util.JSONResponse{
-			Code: 400,                               //nolint:mnd
-			JSON: spec.NotFound("unknown event ID"), // TODO: is it ok to leak existence?
-		}
-	}
-	if ev.RoomID().String() != roomID {
+	// The event may be unknown to us (e.g. we joined partway through the room's
+	// history). We then can't tell who sent it, so only the power level check
+	// below applies and the redaction is still sent out over federation.
+	if ev != nil && ev.RoomID().String() != roomID {
 		return &util.JSONResponse{
 			Code: 400, //nolint:mnd
 			JSON: spec.NotFound("cannot redact event in another room"),
@@ -178,7 +175,7 @@ func checkRedactionAllowed(
 	}
 
 	// Suspended users may only redact their own events (MSC3823).
-	if suspended && ev.SenderID() != senderID {
+	if suspended && (ev == nil || ev.SenderID() != senderID) {
 		res := auth.UserSuspendedResponse()
 		return &res
 	}
@@ -188,7 +185,7 @@ func checkRedactionAllowed(
 	// "Users may redact their own events, and any user with a power level greater than or equal
 	// to the redact power level of the room may redact events there"
 	// https://matrix.org/docs/spec/client_server/r0.6.1#put-matrix-client-r0-rooms-roomid-redact-eventid-txnid
-	allowedToRedact := ev.SenderID() == senderID || privileged
+	allowedToRedact := (ev != nil && ev.SenderID() == senderID) || privileged
 	if !allowedToRedact {
 		plEvent := roomserverAPI.GetStateEvent(ctx, rsAPI, roomID, gomatrixserverlib.StateKeyTuple{
 			EventType: spec.MRoomPowerLevels,

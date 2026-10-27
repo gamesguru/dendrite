@@ -44,6 +44,13 @@ func (d *DatabaseTransaction) MaxStreamPositionForPDUs(ctx context.Context) (typ
 	if err != nil {
 		return 0, fmt.Errorf("d.OutputEvents.SelectMaxEventID: %w", err)
 	}
+	markerID, err := d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID(ctx, d.txn)
+	if err != nil {
+		return 0, fmt.Errorf("d.UnPartialStatedRooms.SelectMaxUnPartialStatedRoomID: %w", err)
+	}
+	if markerID > id {
+		id = markerID
+	}
 	return types.StreamPosition(id), nil
 }
 
@@ -223,6 +230,18 @@ func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
+// EventsWithDevice looks up events and annotates the device's transaction ID
+// on events the device sent, as required by GET /rooms/{roomId}/event/{eventId}.
+func (d *DatabaseTransaction) EventsWithDevice(
+	ctx context.Context, device *userapi.Device, eventIDs []string, rsAPI api.SyncRoomserverAPI,
+) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, d.txn, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, device, streamEvents, rsAPI), nil
+}
+
 func (d *DatabaseTransaction) AllJoinedUsersInRooms(ctx context.Context) (map[string][]string, error) {
 	return d.CurrentRoomState.SelectJoinedUsers(ctx, d.txn)
 }
@@ -277,7 +296,7 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 	filter *synctypes.RoomEventFilter,
 	backwardOrdering bool,
 ) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
-	var minDepth, maxDepth, maxStreamPosForMaxDepth types.StreamPosition
+	var minDepth, maxDepth, streamPosAtFrom types.StreamPosition
 	if backwardOrdering {
 		// Backward ordering means the 'from' token has a higher depth than the 'to' token
 		minDepth = to.Depth
@@ -285,17 +304,20 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 		// for cases where we have say 5 events with the same depth, the TopologyToken needs to
 		// know which of the 5 the client has seen. This is done by using the PDU position.
 		// Events with the same maxDepth but less than this PDU position will be returned.
-		maxStreamPosForMaxDepth = from.PDUPosition
+		streamPosAtFrom = from.PDUPosition
 	} else {
 		// Forward ordering means the 'from' token has a lower depth than the 'to' token.
 		minDepth = from.Depth
 		maxDepth = to.Depth
+		// Events which share the from token's depth but were persisted after it
+		// are still ahead of the cursor, so forward pagination must return them.
+		streamPosAtFrom = from.PDUPosition
 	}
 
 	// Select the event IDs from the defined range.
 	var eIDs []string
 	eIDs, start, end, err = d.Topology.SelectEventIDsInRange(
-		ctx, d.txn, roomID, minDepth, maxDepth, maxStreamPosForMaxDepth, filter.Limit, !backwardOrdering,
+		ctx, d.txn, roomID, minDepth, maxDepth, streamPosAtFrom, filter.Limit, !backwardOrdering,
 	)
 	if err != nil {
 		return
@@ -307,6 +329,24 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 		return
 	}
 
+	return
+}
+
+// GetEventsBeforeStreamPosition retrieves, newest first in topological order,
+// the events at or before a stream position and deeper than the to token.
+func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
+	ctx context.Context,
+	maxStreamPos types.StreamPosition,
+	to *types.TopologyToken,
+	roomID string,
+	filter *synctypes.RoomEventFilter,
+) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
+	var eIDs []string
+	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(ctx, d.txn, roomID, to.Depth, maxStreamPos, filter.Limit)
+	if err != nil {
+		return
+	}
+	events, err = d.OutputEvents.SelectEvents(ctx, d.txn, eIDs, filter, true)
 	return
 }
 

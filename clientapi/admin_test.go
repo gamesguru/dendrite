@@ -792,11 +792,11 @@ func TestPurgeRoom(t *testing.T) {
 		cfg, processCtx, close := testrig.CreateConfig(t, dbType)
 		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
 		natsInstance := jetstream.NATSInstance{}
-		defer func() {
+		defer func() { //nolint:contextcheck // ProcessContext owns the deferred cleanup lifetime.
 			defer close()
 			// Purging queues leave events and a purge event for both consumers.
 			// Keep their databases open until every queued message is acknowledged.
-			js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+			js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream)
 			assert.Eventually(t, func() bool {
 				for _, consumer := range []string{"SyncAPIRoomServerConsumer", "FederationAPIRoomServerConsumer"} {
 					info, err := js.ConsumerInfo(cfg.Global.JetStream.Prefixed(jetstream.OutputRoomEvent), cfg.Global.JetStream.Durable(consumer)+"Pull")
@@ -834,24 +834,31 @@ func TestPurgeRoom(t *testing.T) {
 		createAccessTokens(t, accessTokens, userAPI, ctx, routers)
 
 		testCases := []struct {
-			name   string
-			roomID string
-			wantOK bool
+			name       string
+			roomID     string
+			wantOK     bool
+			method     string
+			path       string
+			useSynapse bool
 		}{
-			{name: "Can purge existing room", wantOK: true, roomID: room.ID},
-			{name: "Can not purge non-existent room", wantOK: false, roomID: "!doesnotexist:localhost"},
-			{name: "rejects invalid room ID", wantOK: false, roomID: "@doesnotexist:localhost"},
+			{name: "Can purge existing room through Synapse admin API", wantOK: true, roomID: room.ID, method: http.MethodDelete, path: "/_synapse/admin/v1/rooms/", useSynapse: true},
+			{name: "Can not purge non-existent room", wantOK: false, roomID: "!doesnotexist:localhost", method: http.MethodPost, path: "/_zendrite/admin/purgeRoom/"},
+			{name: "rejects invalid room ID", wantOK: false, roomID: "@doesnotexist:localhost", method: http.MethodPost, path: "/_zendrite/admin/purgeRoom/"},
 		}
 
 		for _, tc := range testCases {
 			tc := tc // ensure we don't accidentally only test the last test case
 			t.Run(tc.name, func(t *testing.T) {
-				req := test.NewRequest(t, http.MethodPost, "/_zendrite/admin/purgeRoom/"+tc.roomID)
+				req := test.NewRequest(t, tc.method, tc.path+tc.roomID)
 
 				req.Header.Set("Authorization", "Bearer "+accessTokens[aliceAdmin].accessToken)
 
 				rec := httptest.NewRecorder()
-				routers.ZendriteAdmin.ServeHTTP(rec, req)
+				if tc.useSynapse {
+					routers.SynapseAdmin.ServeHTTP(rec, req)
+				} else {
+					routers.ZendriteAdmin.ServeHTTP(rec, req)
+				}
 				t.Logf("%s", rec.Body.String())
 				if tc.wantOK && rec.Code != http.StatusOK {
 					t.Fatalf("expected http status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
@@ -938,7 +945,7 @@ func TestAdminEvacuateRoom(t *testing.T) {
 		}
 
 		// Wait for the FS API to have consumed every message
-		js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream) //nolint:contextcheck // ProcessContext owns the request lifetime.
 		timeout := time.After(time.Second)
 		for {
 			select {
@@ -1043,7 +1050,7 @@ func TestAdminEvacuateUser(t *testing.T) {
 			})
 		}
 		// Wait for the FS API to have consumed every message
-		js, _ := natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
+		js, _ := natsInstance.PrepareWithContext(processCtx.Context(), processCtx, &cfg.Global.JetStream) //nolint:contextcheck // ProcessContext owns the request lifetime.
 		timeout := time.After(time.Second)
 		for {
 			select {

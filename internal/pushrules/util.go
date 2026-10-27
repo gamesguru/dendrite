@@ -21,7 +21,13 @@ func ActionsToTweaks(as []*Action) (ActionKind, map[string]any, error) {
 			if tweaks == nil {
 				tweaks = map[string]any{}
 			}
-			tweaks[string(a.Tweak)] = a.Value
+			// A set_tweak action without an explicit value defaults to true
+			// (e.g. {"set_tweak": "highlight"}).
+			if a.Value == nil {
+				tweaks[string(a.Tweak)] = true
+			} else {
+				tweaks[string(a.Tweak)] = a.Value
+			}
 
 		default:
 			if kind != UnknownAction {

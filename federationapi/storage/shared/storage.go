@@ -22,6 +22,8 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 )
 
+const maxRetainedRetiredServerKeys = 3000
+
 type Database struct {
 	DB                       *sql.DB
 	IsLocalServerName        func(spec.ServerName) bool
@@ -332,27 +334,120 @@ func (d *Database) UpdateNotaryKeys(
 		if weekIntoFuture.Before(validUntil.Time()) {
 			validUntil = spec.AsTimestamp(weekIntoFuture)
 		}
+		// Reject the entire response before it can be indexed through another
+		// key ID. A response with one conflicting key must not expose that key
+		// when a caller asks for one of its otherwise non-conflicting IDs.
+		for keyID := range serverKeys.OldVerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				return nil
+			}
+		}
+		for keyID := range serverKeys.VerifyKeys {
+			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+			if conflictErr != nil {
+				return conflictErr
+			}
+			if conflict {
+				return nil
+			}
+		}
 		notaryID, err := d.NotaryServerKeysJSON.InsertJSONResponse(ctx, txn, serverKeys, serverName, validUntil)
 		if err != nil {
 			return err
 		}
 		// update the metadata for the keys
-		for keyID := range serverKeys.OldVerifyKeys {
-			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
+		for keyID, oldKey := range serverKeys.OldVerifyKeys {
+			var boundID tables.NotaryID
+			boundID, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
+				return err
+			}
+			if boundID != notaryID {
+				conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+				if conflictErr != nil {
+					return conflictErr
+				}
+				if conflict {
+					return fmt.Errorf("notary response attempted to rebind %s/%s", serverName, keyID)
+				}
+			}
+			// 0 marks a current key in the retention table; keep retired keys
+			// evictable even when the remote server sent no expired_ts.
+			expiredTS := oldKey.ExpiredTS
+			if expiredTS <= 0 {
+				expiredTS = 1
+			}
+			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, expiredTS, false); err != nil {
 				return err
 			}
 		}
 		for keyID := range serverKeys.VerifyKeys {
-			_, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
+			var boundID tables.NotaryID
+			boundID, err = d.NotaryServerKeysMetadata.UpsertKey(ctx, txn, serverName, keyID, notaryID, validUntil)
 			if err != nil {
 				return err
 			}
+			if boundID != notaryID {
+				conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
+				if conflictErr != nil {
+					return conflictErr
+				}
+				if conflict {
+					return fmt.Errorf("notary response attempted to rebind %s/%s", serverName, keyID)
+				}
+			}
+			if err = d.NotaryServerKeysMetadata.UpsertKeyRetention(ctx, txn, serverName, keyID, 0, true); err != nil {
+				return err
+			}
+		}
+		if err := d.NotaryServerKeysMetadata.EvictRetiredKeys(ctx, txn, serverName, maxRetainedRetiredServerKeys); err != nil {
+			return err
 		}
 
 		// clean up old responses
 		return d.NotaryServerKeysMetadata.DeleteOldJSONResponses(ctx, txn)
 	})
+}
+
+// notaryKeyConflicts reports whether an existing notary response binds this
+// server/key ID pair to a different public key. A key ID is a permanent
+// identity: a later response cannot replace the first value seen for it.
+func (d *Database) notaryKeyConflicts(
+	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
+	keyID gomatrixserverlib.KeyID, candidate gomatrixserverlib.ServerKeys,
+) (bool, error) {
+	existing, err := d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, []gomatrixserverlib.KeyID{keyID})
+	if err != nil {
+		return false, err
+	}
+	if len(existing) == 0 {
+		return false, nil
+	}
+	newKey, found := candidate.VerifyKeys[keyID]
+	if !found {
+		oldKey, oldFound := candidate.OldVerifyKeys[keyID]
+		if !oldFound {
+			return false, nil
+		}
+		newKey = oldKey.VerifyKey
+	}
+	for _, response := range existing {
+		if oldKey, ok := response.VerifyKeys[keyID]; ok {
+			if string(oldKey.Key) != string(newKey.Key) {
+				return true, nil
+			}
+		}
+		if oldKey, ok := response.OldVerifyKeys[keyID]; ok {
+			if string(oldKey.Key) != string(newKey.Key) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (d *Database) GetNotaryKeys(
@@ -364,7 +459,17 @@ func (d *Database) GetNotaryKeys(
 		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
 		return err
 	})
-	return sks, err
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	valid := sks[:0]
+	for _, serverKeys := range sks {
+		if serverKeys.ValidUntilTS.Time().After(now) {
+			valid = append(valid, serverKeys)
+		}
+	}
+	return valid, nil
 }
 
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {

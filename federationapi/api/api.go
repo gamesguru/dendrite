@@ -120,10 +120,18 @@ type FederationClientError struct {
 	RetryAfter  time.Duration
 	Blacklisted bool
 	Code        int // HTTP Status code from the remote server
+	// Cause is the underlying transport or decoding error, if any. It is
+	// exposed for errors.Is/As so callers can classify failures without
+	// parsing Err.
+	Cause error
 }
 
 func (e FederationClientError) Error() string {
 	return fmt.Sprintf("%s - (retry_after=%s, blacklisted=%v)", e.Err, e.RetryAfter.String(), e.Blacklisted)
+}
+
+func (e FederationClientError) Unwrap() error {
+	return e.Cause
 }
 
 type QueryServerKeysRequest struct {

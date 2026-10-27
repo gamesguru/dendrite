@@ -9,6 +9,7 @@ package sqlite3
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -46,6 +47,10 @@ const upsertReceipt = "" +
 	"   ELSE syncapi_receipts.id" +
 	" END, event_id = excluded.event_id, receipt_ts = excluded.receipt_ts"
 
+const selectUserReceiptEventIDSQL = "" +
+	"SELECT event_id FROM syncapi_receipts" +
+	" WHERE room_id = $1 AND receipt_type = $2 AND user_id = $3 AND thread_id = $4"
+
 const selectRoomReceipts = "" +
 	"SELECT id, room_id, receipt_type, user_id, event_id, thread_id, receipt_ts" +
 	" FROM syncapi_receipts" +
@@ -80,6 +85,7 @@ type receiptStatements struct {
 	streamIDStatements              *StreamIDStatements
 	upsertReceipt                   *sql.Stmt
 	selectRoomReceipts              *sql.Stmt
+	selectUserReceiptEventID        *sql.Stmt
 	selectMaxReceiptID              *sql.Stmt
 	purgeReceiptsStmt               *sql.Stmt
 	selectConnectionReceipts        *sql.Stmt
@@ -120,6 +126,7 @@ func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Re
 	return r, sqlutil.StatementList{
 		{&r.upsertReceipt, upsertReceipt},
 		{&r.selectRoomReceipts, selectRoomReceipts},
+		{&r.selectUserReceiptEventID, selectUserReceiptEventIDSQL},
 		{&r.selectMaxReceiptID, selectMaxReceiptIDSQL},
 		{&r.purgeReceiptsStmt, purgeReceiptsSQL},
 		{&r.selectConnectionReceipts, selectConnectionReceiptsSQL},
@@ -139,6 +146,16 @@ func (r *receiptStatements) UpsertReceipt(ctx context.Context, txn *sql.Tx, room
 	stmt := sqlutil.TxStmt(txn, r.upsertReceipt)
 	_, err = stmt.ExecContext(ctx, pos, roomId, receiptType, userId, eventId, threadID, timestamp)
 	return
+}
+
+// SelectUserReceiptEventID returns the event the user's receipt is at, or "" if there is none.
+func (r *receiptStatements) SelectUserReceiptEventID(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, threadID string) (string, error) {
+	var eventID string
+	err := sqlutil.TxStmt(txn, r.selectUserReceiptEventID).QueryRowContext(ctx, roomID, receiptType, userID, threadID).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return eventID, err
 }
 
 // SelectRoomReceiptsAfter select all receipts for a given room after a specific timestamp.

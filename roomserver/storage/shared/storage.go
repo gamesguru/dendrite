@@ -806,6 +806,26 @@ func (d *EventDatabase) StoreEvent(
 	roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID,
 	authEventNIDs []types.EventNID, isRejected bool,
 ) (types.EventNID, types.StateAtEvent, error) {
+	return d.storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected, true)
+}
+
+// StoreOutlierEvent stores an event like StoreEvent, without recording it as
+// referencing its prev_events. An outlier is not part of the room DAG, so it
+// must not stop the events it names from being forward extremities. If it is
+// later stored by StoreEvent, its references are recorded then.
+func (d *EventDatabase) StoreOutlierEvent(
+	ctx context.Context, event gomatrixserverlib.PDU,
+	roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID,
+	authEventNIDs []types.EventNID, isRejected bool,
+) (types.EventNID, types.StateAtEvent, error) {
+	return d.storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected, false)
+}
+
+func (d *EventDatabase) storeEvent(
+	ctx context.Context, event gomatrixserverlib.PDU,
+	roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID,
+	authEventNIDs []types.EventNID, isRejected, recordPrevEvents bool,
+) (types.EventNID, types.StateAtEvent, error) {
 	var (
 		eventNID types.EventNID
 		stateNID types.StateSnapshotNID
@@ -839,7 +859,7 @@ func (d *EventDatabase) StoreEvent(
 			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
 		}
 
-		if prevEvents := event.PrevEventIDs(); len(prevEvents) > 0 {
+		if prevEvents := event.PrevEventIDs(); recordPrevEvents && len(prevEvents) > 0 {
 			// Create an updater - NB: on sqlite this WILL create a txn as we are directly calling the shared DB form of
 			// GetLatestEventsForUpdate - not via the SQLiteDatabase form which has `nil` txns. This
 			// function only does SELECTs though so the created txn (at this point) is just a read txn like

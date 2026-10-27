@@ -26,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/clientapi/httputil"
 	"codefloe.com/pat-s/zendrite/clientapi/threepid"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	"codefloe.com/pat-s/zendrite/internal/msc4155"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -323,6 +324,26 @@ func SendInvite(
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
 			JSON: spec.BadJSON("missing user_id"),
+		}
+	}
+
+	// MSC4155 invite filtering is enforced here for local invitees. Remote
+	// invitees apply their own rules when the federation invite reaches them.
+	if invitee, err := spec.NewUserID(body.UserID, true); err == nil && cfg.Matrix.IsLocalServerName(invitee.Domain()) {
+		blocked, ignored, ruleErr := msc4155.Disposition(req.Context(), profileAPI, *invitee, device.UserID)
+		if ruleErr != nil {
+			return util.ErrorResponse(ruleErr)
+		}
+		if blocked {
+			return util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden("Invites from this user or server are blocked"),
+			}
+		}
+		if ignored {
+			// Successful but deliberately not stored: the inviter must not
+			// learn that the invite was ignored.
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
 		}
 	}
 

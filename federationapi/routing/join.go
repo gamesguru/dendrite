@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"sort"
 	"time"
 
@@ -18,12 +20,16 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
+	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 )
+
+const sendJoinHeroLimit = 5
 
 // MakeJoin implements the /make_join API.
 func MakeJoin(
@@ -194,6 +200,7 @@ func SendJoin(
 	request *fclient.FederationRequest,
 	cfg *config.FederationAPI,
 	rsAPI api.FederationRoomserverAPI,
+	fsAPI federationAPI.ClientFederationAPI,
 	keys gomatrixserverlib.JSONVerifier,
 	roomID spec.RoomID,
 	eventID string,
@@ -305,6 +312,24 @@ func SendJoin(
 			JSON: spec.Forbidden("State not known"),
 		}
 	}
+	signedURI, parseErr := url.ParseRequestURI(request.RequestURI())
+	partialState := parseErr == nil && signedURI.Query().Get("omit_members") == "true"
+	var serversInRoom []string
+	if partialState {
+		// Capture the room's existing hosts before the joining server's event is
+		// persisted, so servers_in_room does not include the requester itself.
+		var serverRes federationAPI.QueryJoinedHostServerNamesInRoomResponse
+		if err := fsAPI.QueryJoinedHostServerNamesInRoom(httpReq.Context(), &federationAPI.QueryJoinedHostServerNamesInRoomRequest{
+			RoomID: roomID.String(),
+		}, &serverRes); err != nil {
+			util.GetLogger(httpReq.Context()).WithError(err).Error("fsAPI.QueryJoinedHostServerNamesInRoom failed")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
+		serversInRoom = make([]string, 0, len(serverRes.ServerNames))
+		for _, serverName := range serverRes.ServerNames {
+			serversInRoom = append(serversInRoom, string(serverName))
+		}
+	}
 
 	// Send the events to the room server.
 	// We are responsible for notifying other servers that the user has joined
@@ -343,15 +368,107 @@ func SendJoin(
 	sort.Sort(eventsByDepth(stateAndAuthChainResponse.AuthChainEvents))
 
 	// https://matrix.org/docs/spec/server_server/latest#put-matrix-federation-v1-send-join-roomid-eventid
+	stateEvents := stateAndAuthChainResponse.StateEvents
+	authEvents := stateAndAuthChainResponse.AuthChainEvents
+	if partialState {
+		keepUserIDs := []string{gjson.GetBytes(response.JoinEvent.Content(), "join_authorised_via_users_server").Str} //nolint:misspell // Matrix spec spelling
+		if stateKey := response.JoinEvent.StateKey(); stateKey != nil {
+			keepUserIDs = append(keepUserIDs, *stateKey)
+		}
+		stateEvents = partialSendJoinState(stateEvents, keepUserIDs...)
+		stateEventIDs := make(map[string]struct{}, len(stateEvents))
+		for _, event := range stateEvents {
+			stateEventIDs[event.EventID()] = struct{}{}
+		}
+		filteredAuthEvents := make([]*types.HeaderedEvent, 0, len(authEvents))
+		for _, event := range authEvents {
+			if _, includedInState := stateEventIDs[event.EventID()]; !includedInState {
+				filteredAuthEvents = append(filteredAuthEvents, event)
+			}
+		}
+		authEvents = filteredAuthEvents
+	}
 	return util.JSONResponse{
 		Code: http.StatusOK,
 		JSON: fclient.RespSendJoin{
-			StateEvents: types.NewEventJSONsFromHeaderedEvents(stateAndAuthChainResponse.StateEvents),
-			AuthEvents:  types.NewEventJSONsFromHeaderedEvents(stateAndAuthChainResponse.AuthChainEvents),
-			Origin:      cfg.Matrix.ServerName,
-			Event:       response.JoinEvent.JSON(),
+			StateEvents:    types.NewEventJSONsFromHeaderedEvents(stateEvents),
+			AuthEvents:     types.NewEventJSONsFromHeaderedEvents(authEvents),
+			Origin:         cfg.Matrix.ServerName,
+			Event:          response.JoinEvent.JSON(),
+			MembersOmitted: partialState,
+			ServersInRoom:  serversInRoom,
 		},
 	}
+}
+
+// partialSendJoinState keeps non-membership state and, for unnamed rooms, up to
+// five room heroes for an MSC3706 send_join response. Heroes are selected from
+// current joined and invited members, falling back to departed members when
+// none remain. The memberships of keepUserIDs (the joining user and any user
+// who authorized the join) are always retained.
+func partialSendJoinState(state []*types.HeaderedEvent, keepUserIDs ...string) []*types.HeaderedEvent {
+	var joined, invited, departed, kept []*types.HeaderedEvent
+	hasNameOrAlias := false
+	for _, event := range state {
+		if event.Type() == spec.MRoomName || event.Type() == spec.MRoomCanonicalAlias {
+			hasNameOrAlias = true
+		}
+		if event.Type() != spec.MRoomMember || event.StateKey() == nil {
+			continue
+		}
+		if slices.Contains(keepUserIDs, *event.StateKey()) {
+			kept = append(kept, event)
+			continue
+		}
+		membership, err := event.Membership()
+		if err != nil {
+			continue
+		}
+		switch membership {
+		case spec.Join:
+			joined = append(joined, event)
+		case spec.Invite:
+			invited = append(invited, event)
+		case spec.Leave, spec.Ban:
+			departed = append(departed, event)
+		}
+	}
+	var members []*types.HeaderedEvent
+	if !hasNameOrAlias {
+		if len(joined) > 0 || len(invited) > 0 {
+			members = make([]*types.HeaderedEvent, 0, len(joined)+len(invited))
+			members = append(members, joined...)
+			members = append(members, invited...)
+		} else {
+			members = departed
+		}
+	}
+	// Pick the oldest members first to match /sync's SelectRoomHeroes, which
+	// orders by added_at. That column lives in the sync API's database, so the
+	// event's depth (then event ID) stands in for it here.
+	sort.Slice(members, func(i, j int) bool {
+		if members[i].Depth() == members[j].Depth() {
+			return members[i].EventID() < members[j].EventID()
+		}
+		return members[i].Depth() < members[j].Depth()
+	})
+	if len(members) > sendJoinHeroLimit {
+		members = members[:sendJoinHeroLimit]
+	}
+	heroes := make(map[string]struct{}, len(members)+len(kept))
+	for _, event := range append(members, kept...) {
+		heroes[event.EventID()] = struct{}{}
+	}
+	filtered := make([]*types.HeaderedEvent, 0, len(state))
+	for _, event := range state {
+		if event.Type() == spec.MRoomMember {
+			if _, ok := heroes[event.EventID()]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
 }
 
 type eventsByDepth []*types.HeaderedEvent

@@ -120,6 +120,7 @@ func PutPushRuleByRuleID(ctx context.Context, scope, kind, ruleID, afterRuleID, 
 		return errorResponse(ctx, spec.InvalidParam(errs[0].Error()), "rule sanity check failed: %v", errs)
 	}
 
+	defer pushrules.LockForUser(device.UserID)()
 	ruleSets, err := userAPI.QueryPushRules(ctx, device.UserID)
 	if err != nil {
 		return errorResponse(ctx, err, "queryPushRules failed")
@@ -172,6 +173,7 @@ func PutPushRuleByRuleID(ctx context.Context, scope, kind, ruleID, afterRuleID, 
 }
 
 func DeletePushRuleByRuleID(ctx context.Context, scope, kind, ruleID string, device *userapi.Device, userAPI userapi.ClientUserAPI) util.JSONResponse {
+	defer pushrules.LockForUser(device.UserID)()
 	ruleSets, err := userAPI.QueryPushRules(ctx, device.UserID)
 	if err != nil {
 		return errorResponse(ctx, err, "queryPushRules failed")
@@ -249,6 +251,7 @@ func PutPushRuleAttrByRuleID(ctx context.Context, scope, kind, ruleID, attr stri
 		return errorResponse(ctx, err, "pushRuleAttrSetter failed")
 	}
 
+	defer pushrules.LockForUser(device.UserID)()
 	ruleSets, err := userAPI.QueryPushRules(ctx, device.UserID)
 	if err != nil {
 		return errorResponse(ctx, err, "queryPushRules failed")
@@ -290,6 +293,8 @@ func pushRuleSetKindPointer(ruleSet *pushrules.RuleSet, kind pushrules.Kind) *[]
 	switch kind {
 	case pushrules.OverrideKind:
 		return &ruleSet.Override
+	case pushrules.PostContentKind:
+		return &ruleSet.PostContent
 	case pushrules.ContentKind:
 		return &ruleSet.Content
 	case pushrules.RoomKind:

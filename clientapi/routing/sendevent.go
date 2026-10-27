@@ -222,8 +222,11 @@ func sendEventContent(
 	domain := device.UserDomain()
 
 	if stateKey != nil {
-		// If the existing/new state content are equal, return the existing event_id, making the request idempotent.
-		if eventID, ok := stateEqual(ctx, rsAPI, eventType, *stateKey, roomID, r); ok {
+		// If the existing/new state content are equal and the same user sent
+		// the existing event, return the existing event_id, making the request
+		// idempotent. Do not short-circuit state set by another user: their
+		// request still has to be authorized by the roomserver.
+		if eventID, ok := stateEqual(ctx, rsAPI, eventType, *stateKey, roomID, device.UserID, r); ok {
 			return eventID, nil
 		}
 	}
@@ -344,8 +347,9 @@ func updatePowerLevels(ctx context.Context, r map[string]any, roomID string, rsA
 }
 
 // stateEqual compares the new and the existing state event content. If they
-// are equal, it returns the existing event ID, making the request idempotent.
-func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID string, newContent map[string]any) (string, bool) {
+// are equal and the existing event was sent by senderID, it returns the
+// existing event ID, making the request idempotent.
+func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, stateKey, roomID, senderID string, newContent map[string]any) (string, bool) {
 	stateRes := api.QueryCurrentStateResponse{}
 	tuple := gomatrixserverlib.StateKeyTuple{
 		EventType: eventType,
@@ -363,7 +367,24 @@ func stateEqual(ctx context.Context, rsAPI api.ClientRoomserverAPI, eventType, s
 		if err = json.Unmarshal(existingEvent.Content(), &existingContent); err != nil {
 			return "", false
 		}
-		if reflect.DeepEqual(existingContent, newContent) {
+		if !reflect.DeepEqual(existingContent, newContent) {
+			return "", false
+		}
+		// Events are stored with the sender ID, which differs from the user ID
+		// in pseudo ID rooms.
+		parsedRoomID, err := spec.NewRoomID(roomID)
+		if err != nil {
+			return "", false
+		}
+		parsedUserID, err := spec.NewUserID(senderID, true)
+		if err != nil {
+			return "", false
+		}
+		requesterSenderID, err := rsAPI.QuerySenderIDForUser(ctx, *parsedRoomID, *parsedUserID)
+		if err != nil || requesterSenderID == nil {
+			return "", false
+		}
+		if existingEvent.SenderID() == *requesterSenderID {
 			return existingEvent.EventID(), true
 		}
 	}

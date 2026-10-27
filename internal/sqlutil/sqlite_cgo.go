@@ -10,14 +10,17 @@ import (
 
 const SQLITE_DRIVER_NAME = "sqlite3"
 
+// sqliteDSNExtension appends a 10,000-millisecond busy timeout to the DSN.
+// When wal is true, it also requests WAL journal mode and NORMAL synchronization.
 func sqliteDSNExtension(dsn string, wal bool) string {
-	if !wal {
-		return dsn
-	}
 	if strings.Contains(dsn, "?") {
 		dsn += "&"
 	} else {
 		dsn += "?"
 	}
-	return dsn + "_journal_mode=WAL&_synchronous=NORMAL"
+	dsn += "_busy_timeout=10000"
+	if wal {
+		dsn += "&_journal_mode=WAL&_synchronous=NORMAL"
+	}
+	return dsn
 }

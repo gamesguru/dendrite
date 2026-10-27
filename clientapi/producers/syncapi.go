@@ -9,6 +9,7 @@ package producers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -29,10 +30,15 @@ type SyncAPIProducer struct {
 	TopicSendToDeviceEvent string
 	TopicTypingEvent       string
 	TopicPresenceEvent     string
+	TopicPresenceRequest   string
 	JetStream              nats.JetStreamContext
+	NATS                   *nats.Conn
 	ServerName             spec.ServerName
 	UserAPI                userapi.ClientUserAPI
 }
+
+// presenceRequestTimeout bounds how long a presence update waits for the sync API.
+const presenceRequestTimeout = 10 * time.Second
 
 func (p *SyncAPIProducer) SendReceipt(
 	ctx context.Context,
@@ -141,15 +147,57 @@ func (p *SyncAPIProducer) SendTyping(
 func (p *SyncAPIProducer) SendPresence(
 	ctx context.Context, userID string, presence types.Presence, statusMsg *string,
 ) error {
+	timestamp := spec.AsTimestamp(time.Now())
+	applyErr := p.applyPresence(ctx, userID, presence, statusMsg, timestamp)
+
 	m := nats.NewMsg(p.TopicPresenceEvent)
 	m.Header.Set(jetstream.UserID, userID)
 	m.Header.Set("presence", presence.String())
+	// Only once the sync API has written this update synchronously can the
+	// durable consumer skip it; otherwise it must still apply the update.
+	if applyErr == nil {
+		m.Header.Set("from_sync", "true")
+	}
 	if statusMsg != nil {
 		m.Header.Set("status_msg", *statusMsg)
 	}
+	m.Header.Set("last_active_ts", strconv.Itoa(int(timestamp)))
 
-	m.Header.Set("last_active_ts", strconv.Itoa(int(spec.AsTimestamp(time.Now()))))
+	if _, err := jetstream.Publish(ctx, p.JetStream, m); err != nil {
+		return err
+	}
+	if applyErr != nil && !errors.Is(applyErr, errPresenceNotApplied) {
+		return applyErr
+	}
+	return nil
+}
 
-	_, err := jetstream.Publish(ctx, p.JetStream, m)
-	return err
+// errPresenceNotApplied means no synchronous write was requested.
+var errPresenceNotApplied = errors.New("presence not applied synchronously")
+
+// applyPresence asks the sync API to write a presence update synchronously.
+func (p *SyncAPIProducer) applyPresence(
+	ctx context.Context, userID string, presence types.Presence, statusMsg *string, timestamp spec.Timestamp,
+) error {
+	if p.NATS == nil || p.TopicPresenceRequest == "" {
+		return errPresenceNotApplied
+	}
+	request := nats.NewMsg(p.TopicPresenceRequest)
+	request.Header.Set(jetstream.UserID, userID)
+	request.Header.Set("set_presence", "true")
+	request.Header.Set("presence", presence.String())
+	request.Header.Set("last_active_ts", strconv.Itoa(int(timestamp)))
+	if statusMsg != nil {
+		request.Header.Set("status_msg", *statusMsg)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, presenceRequestTimeout)
+	defer cancel()
+	response, err := p.NATS.RequestMsgWithContext(requestCtx, request)
+	if err != nil {
+		return fmt.Errorf("sync API failed to apply presence update: %w", err)
+	}
+	if errMsg := response.Header.Get("error"); errMsg != "" {
+		return fmt.Errorf("sync API failed to apply presence update: %s", errMsg)
+	}
+	return nil
 }

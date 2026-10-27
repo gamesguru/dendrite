@@ -283,9 +283,23 @@ func (a *FederationInternalAPI) LookupMissingEvents(
 ) (res fclient.RespMissingEvents, err error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	ires, err := a.doFederationRequest(s, func() (any, error) { //nolint:contextcheck
+	requestStarted := false
+	request := func() (any, error) {
+		requestStarted = true
 		return a.federation.LookupMissingEvents(ctx, origin, s, roomID, missing, roomVersion)
-	}, true)
+	}
+	ires, err := a.doFederationRequestNoStats(s, request) //nolint:contextcheck
+	if err != nil && isMalformedJSONError(err) {
+		// Retry malformed bodies before accounting for a destination failure.
+		ires, err = a.doFederationRequestNoStats(s, request) //nolint:contextcheck
+	}
+	if requestStarted {
+		if err == nil {
+			a.statistics.ForServer(s).Success(statistics.SendDirect) //nolint:contextcheck
+		} else {
+			failBlacklistableError(err, a.statistics.ForServer(s)) //nolint:contextcheck
+		}
+	}
 	if err != nil {
 		return fclient.RespMissingEvents{}, err
 	}

@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -28,11 +27,18 @@ CREATE TABLE IF NOT EXISTS federationsender_notary_server_keys_metadata (
 	key_id TEXT NOT NULL,
 	UNIQUE (server_name, key_id)
 );
+CREATE TABLE IF NOT EXISTS federationsender_notary_server_keys_retention (
+	server_name TEXT NOT NULL,
+	key_id TEXT NOT NULL,
+	expired_ts BIGINT NOT NULL,
+	corroborated BOOLEAN NOT NULL,
+	UNIQUE (server_name, key_id)
+);
 `
 
 const upsertServerKeysSQL = "" +
 	"INSERT INTO federationsender_notary_server_keys_metadata (notary_id, server_name, key_id) VALUES ($1, $2, $3)" +
-	" ON CONFLICT (server_name, key_id) DO UPDATE SET notary_id = $1"
+	" ON CONFLICT (server_name, key_id) DO UPDATE SET notary_id = excluded.notary_id"
 
 // for a given (server_name, key_id), find the existing notary ID and valid until. Used to check if we will replace it
 // JOINs with the json table.
@@ -69,12 +75,39 @@ const deleteUnusedServerKeysJSONSQL = `
 	)
 `
 
+const upsertKeyRetentionSQL = `
+INSERT INTO federationsender_notary_server_keys_retention (server_name, key_id, expired_ts, corroborated)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (server_name, key_id) DO UPDATE SET
+	expired_ts = excluded.expired_ts,
+	corroborated = CASE WHEN federationsender_notary_server_keys_retention.corroborated OR excluded.corroborated THEN TRUE ELSE FALSE END
+`
+
+const evictRetiredMetadataSQL = `
+DELETE FROM federationsender_notary_server_keys_metadata WHERE server_name = $1 AND key_id IN (
+	SELECT key_id FROM federationsender_notary_server_keys_retention
+	WHERE server_name = $1 AND expired_ts > 0
+	ORDER BY corroborated DESC, expired_ts DESC, key_id ASC LIMIT -1 OFFSET $2
+)
+`
+
+const evictRetiredRetentionSQL = `
+DELETE FROM federationsender_notary_server_keys_retention WHERE server_name = $1 AND key_id IN (
+	SELECT key_id FROM federationsender_notary_server_keys_retention
+	WHERE server_name = $1 AND expired_ts > 0
+	ORDER BY corroborated DESC, expired_ts DESC, key_id ASC LIMIT -1 OFFSET $2
+)
+`
+
 type notaryServerKeysMetadataStatements struct {
 	db                             *sql.DB
 	upsertServerKeysStmt           *sql.Stmt
 	selectNotaryKeyResponsesStmt   *sql.Stmt
 	selectNotaryKeyMetadataStmt    *sql.Stmt
 	deleteUnusedServerKeysJSONStmt *sql.Stmt
+	upsertKeyRetentionStmt         *sql.Stmt
+	evictRetiredMetadataStmt       *sql.Stmt
+	evictRetiredRetentionStmt      *sql.Stmt
 }
 
 func NewSQLiteNotaryServerKeysMetadataTable(db *sql.DB) (s *notaryServerKeysMetadataStatements, err error) {
@@ -91,7 +124,34 @@ func NewSQLiteNotaryServerKeysMetadataTable(db *sql.DB) (s *notaryServerKeysMeta
 		{&s.selectNotaryKeyResponsesStmt, selectNotaryKeyResponsesSQL},
 		{&s.selectNotaryKeyMetadataStmt, selectNotaryKeyMetadataSQL},
 		{&s.deleteUnusedServerKeysJSONStmt, deleteUnusedServerKeysJSONSQL},
+		{&s.upsertKeyRetentionStmt, upsertKeyRetentionSQL},
+		{&s.evictRetiredMetadataStmt, evictRetiredMetadataSQL},
+		{&s.evictRetiredRetentionStmt, evictRetiredRetentionSQL},
 	}.Prepare(db)
+}
+
+func (s *notaryServerKeysMetadataStatements) UpsertKeyRetention(
+	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, keyID gomatrixserverlib.KeyID,
+	expiredTS spec.Timestamp, corroborated bool,
+) error {
+	stmt := txn.Stmt(s.upsertKeyRetentionStmt)
+	defer internal.CloseAndLogIfError(ctx, stmt, "UpsertKeyRetention: failed to close statement")
+	_, err := stmt.ExecContext(ctx, serverName, keyID, expiredTS, corroborated)
+	return err
+}
+
+func (s *notaryServerKeysMetadataStatements) EvictRetiredKeys(
+	ctx context.Context, txn *sql.Tx, serverName spec.ServerName, limit int,
+) error {
+	metadataStmt := txn.Stmt(s.evictRetiredMetadataStmt)
+	defer internal.CloseAndLogIfError(ctx, metadataStmt, "EvictRetiredKeys: failed to close metadata statement")
+	if _, err := metadataStmt.ExecContext(ctx, serverName, limit); err != nil {
+		return err
+	}
+	retentionStmt := txn.Stmt(s.evictRetiredRetentionStmt)
+	defer internal.CloseAndLogIfError(ctx, retentionStmt, "EvictRetiredKeys: failed to close retention statement")
+	_, err := retentionStmt.ExecContext(ctx, serverName, limit)
+	return err
 }
 
 func (s *notaryServerKeysMetadataStatements) UpsertKey(
@@ -112,11 +172,18 @@ func (s *notaryServerKeysMetadataStatements) UpsertKey(
 		// the existing valid_until is valid longer, so use that.
 		return existingNotaryID, nil
 	}
-	// overwrite the notary_id for this (server_name, key_id) tuple
+	// Rebind the key ID to the newer response. The caller has already rejected
+	// responses whose key material differs from the stored one.
 	upsertServerKeysStmt := txn.Stmt(s.upsertServerKeysStmt)
 	defer upsertServerKeysStmt.Close()
 	_, err := upsertServerKeysStmt.ExecContext(ctx, notaryID, serverName, keyID)
-	return notaryID, err
+	if err != nil {
+		return 0, err
+	}
+	if err = selectNotaryKeyMetadataStmt.QueryRowContext(ctx, serverName, keyID).Scan(&existingNotaryID, &existingValidUntil); err != nil {
+		return 0, err
+	}
+	return existingNotaryID, nil
 }
 
 func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn *sql.Tx, serverName spec.ServerName, keyIDs []gomatrixserverlib.KeyID) ([]gomatrixserverlib.ServerKeys, error) {
@@ -133,8 +200,6 @@ func (s *notaryServerKeysMetadataStatements) SelectKeys(ctx context.Context, txn
 			iKeyIDs[i+1] = string(keyIDs[i])
 		}
 		sql := strings.Replace(selectNotaryKeyResponsesWithKeyIDsSQL, "($2)", sqlutil.QueryVariadicOffset(len(keyIDs), 1), 1)
-		fmt.Println(sql)
-		fmt.Println(iKeyIDs...)
 		rows, err = s.db.QueryContext(ctx, sql, iKeyIDs...)
 	}
 	if err != nil {

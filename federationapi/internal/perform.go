@@ -212,7 +212,9 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		// membership needed to authorize an invited join.
 		logrus.WithError(inviteErr).WithField("room_id", roomID).Warn("Failed to check pending invite; using full state for join")
 	}
-	if invitePending || inviteErr != nil {
+	if invitePending || inviteErr != nil || r.rejoinsResyncedRoom(ctx, room) {
+		// A rejoin into a room whose resync has finished also uses full state:
+		// sync and backfill do not handle a partial-state rejoin there.
 		// A partial state response omits our own invite membership, which
 		// the join's auth check needs, and retrying after it is rejected would
 		// send a second join. Ask for the full state from the start.
@@ -390,6 +392,27 @@ func (r *FederationInternalAPI) invitePending(ctx context.Context, room *spec.Ro
 	}
 	pending, err := r.rsAPI.InvitePending(ctx, *room, *senderID)
 	return pending, err
+}
+
+// rejoinsResyncedRoom reports whether we already have the room's full state,
+// that is, the room is known, not a stub and not partial. A room still in
+// partial state keeps using partial-state joins (MSC3706). Lookup errors fall
+// back to partial state.
+func (r *FederationInternalAPI) rejoinsResyncedRoom(ctx context.Context, room *spec.RoomID) bool {
+	roomInfo, err := r.rsAPI.QueryRoomInfo(ctx, *room)
+	if err != nil {
+		logrus.WithError(err).WithField("room_id", room.String()).Warn("Failed to look up room before join; using partial state")
+		return false
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return false
+	}
+	partial, err := r.rsAPI.IsRoomPartialState(ctx, roomInfo.RoomNID)
+	if err != nil {
+		logrus.WithError(err).WithField("room_id", room.String()).Warn("Failed to check partial state before join; using partial state")
+		return false
+	}
+	return !partial
 }
 
 func shouldRetryJoinWithoutPartialState(client *PartialStateJoinClient, joinErr *gomatrixserverlib.FederationError) bool {

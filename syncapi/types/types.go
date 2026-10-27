@@ -498,7 +498,15 @@ func (r *Response) MoveStateToStateAfter(key string) {
 type Timeline struct {
 	Events    []synctypes.ClientEvent `json:"events"`
 	Limited   bool                    `json:"limited"`
-	PrevBatch *TopologyToken          `json:"prev_batch,omitempty"`
+	PrevBatch *string                 `json:"prev_batch,omitempty"`
+}
+
+// PrevBatchToken returns the prev_batch token for a timeline whose first event
+// is just after tok. As in Synapse it is a stream token: paginating back from it
+// returns the events persisted before the timeline, in topological order.
+func PrevBatchToken(tok TopologyToken) *string {
+	prevBatch := StreamingToken{PDUPosition: tok.PDUPosition}.String()
+	return &prevBatch
 }
 
 type Summary struct {
@@ -541,8 +549,10 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 			jr.Ephemeral.Events[i].RoomID = ""
 		}
 	}
-	if jr.AccountData != nil && len(jr.AccountData.Events) == 0 {
-		a.AccountData = nil
+	if jr.AccountData != nil && jr.AccountData.Events == nil {
+		// An explicit empty account_data section represents a deletion in an
+		// incremental sync; NewJoinResponse leaves this nil without an update.
+		jr.AccountData.Events = []synctypes.ClientEvent{}
 	}
 	if jr.Timeline != nil && len(jr.Timeline.Events) == 0 {
 		a.Timeline = nil
@@ -588,7 +598,6 @@ func NewJoinResponse() *JoinResponse {
 		State:               &ClientEvents{},
 		Timeline:            &Timeline{},
 		Ephemeral:           &ClientEvents{},
-		AccountData:         &ClientEvents{},
 		UnreadNotifications: &UnreadNotifications{},
 	}
 }
@@ -678,10 +687,31 @@ func strippedStateWithEvent(
 	// Ensure unsigned field is empty so it isn't marshaled into the final JSON
 	clientEvent.Unsigned = nil
 
-	if ev, err := json.Marshal(*clientEvent); err == nil {
+	var ev []byte
+	if eventFormat == synctypes.FormatSyncFederation {
+		ev, err = json.Marshal(*clientEvent)
+	} else {
+		// Stripped state events carry only these fields (MSC4311); any more, such
+		// as origin_server_ts, tells a client that it was sent a full event.
+		ev, err = json.Marshal(strippedStateEvent{
+			Content:  clientEvent.Content,
+			Sender:   clientEvent.Sender,
+			StateKey: clientEvent.StateKey,
+			Type:     clientEvent.Type,
+		})
+	}
+	if err == nil {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+// strippedStateEvent is an event in the invite_state or knock_state of a sync.
+type strippedStateEvent struct {
+	Content  spec.RawJSON `json:"content"`
+	Sender   string       `json:"sender"`
+	StateKey *string      `json:"state_key,omitempty"`
+	Type     string       `json:"type"`
 }
 
 // LeaveResponse represents a /sync response for a room which is under the 'leave' key.
@@ -698,8 +728,9 @@ func (lr LeaveResponse) MarshalJSON() ([]byte, error) {
 	if lr.State != nil && len(lr.State.Events) == 0 {
 		a.State = nil
 	}
-	if lr.Timeline != nil && len(lr.Timeline.Events) == 0 {
-		a.Timeline = nil
+	// The timeline of a left room is always present, even when empty, e.g. with a limit of 0.
+	if lr.Timeline != nil && lr.Timeline.Events == nil {
+		a.Timeline = &Timeline{Events: []synctypes.ClientEvent{}, Limited: lr.Timeline.Limited, PrevBatch: lr.Timeline.PrevBatch}
 	}
 	return json.Marshal(a)
 }

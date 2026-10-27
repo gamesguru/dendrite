@@ -160,7 +160,7 @@ func Setup(
 			}
 			return InviteV1(
 				httpReq, request, *roomID, vars["eventID"],
-				cfg, rsAPI, keys,
+				cfg, rsAPI, userAPI, keys,
 			)
 		},
 	)).Methods(http.MethodPut, http.MethodOptions)
@@ -184,7 +184,7 @@ func Setup(
 			}
 			return InviteV2(
 				httpReq, request, *roomID, vars["eventID"],
-				cfg, rsAPI, keys,
+				cfg, rsAPI, userAPI, keys,
 			)
 		},
 	)).Methods(http.MethodPut, http.MethodOptions)
@@ -215,7 +215,7 @@ func Setup(
 			}
 			return InviteV3(
 				httpReq, request, *roomID, *userID,
-				cfg, rsAPI, keys,
+				cfg, rsAPI, userAPI, keys,
 			)
 		},
 	)).Methods(http.MethodPut, http.MethodOptions)
@@ -419,7 +419,7 @@ func Setup(
 			}
 
 			res := SendJoin(
-				httpReq, request, cfg, rsAPI, keys, *roomID, eventID,
+				httpReq, request, cfg, rsAPI, fsAPI, keys, *roomID, eventID,
 			)
 			// not all responses get wrapped in [code, body]
 			var body any
@@ -461,7 +461,7 @@ func Setup(
 			}
 
 			return SendJoin(
-				httpReq, request, cfg, rsAPI, keys, *roomID, eventID,
+				httpReq, request, cfg, rsAPI, fsAPI, keys, *roomID, eventID,
 			)
 		},
 	)).Methods(http.MethodPut)

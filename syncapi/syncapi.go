@@ -9,6 +9,7 @@ package syncapi
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -57,7 +58,7 @@ func AddPublicRoutes(
 
 	// Start the sliding sync metadata worker for Phase 12 optimization
 	metadataWorker := internal.NewSlidingSyncMetadataWorker(processContext, syncDB)
-	if err = metadataWorker.Start(); err != nil {
+	if err = metadataWorker.Start(processContext.Context()); err != nil {
 		logrus.WithError(err).Warn("failed to start sliding sync metadata worker")
 		// Non-fatal - we can continue without background population
 	}
@@ -175,6 +176,9 @@ func AddPublicRoutes(
 	if err = sendToDeviceConsumer.Start(); err != nil {
 		logrus.WithError(err).Panicf("failed to start send-to-device consumer")
 	}
+	requestPool.SetSendToDeviceBarrier(func() {
+		sendToDeviceConsumer.WaitUntilCaughtUp(processContext.Context(), time.Second)
+	})
 
 	receiptConsumer := consumers.NewOutputReceiptEventConsumer(
 		processContext, &zendriteCfg.SyncAPI, js, syncDB, notifier, streams.ReceiptStreamProvider,

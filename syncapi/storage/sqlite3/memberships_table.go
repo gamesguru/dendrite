@@ -59,9 +59,13 @@ const selectMembershipBeforeSQL = "" +
 
 const selectMembersSQL = `
 SELECT event_id FROM
- ( SELECT event_id, membership FROM syncapi_memberships WHERE room_id = $1 AND topological_pos <= $2 GROUP BY user_id HAVING(max(stream_pos))) t
-    WHERE ($3 IS NULL OR t.membership = $3)
-		 	AND ($4 IS NULL OR t.membership <> $4)
+ ( SELECT event_id, membership FROM syncapi_memberships WHERE room_id = $1
+   AND (($2 = 9223372036854775807 AND stream_pos <= $3)
+        OR ($2 <> 9223372036854775807 AND
+            (topological_pos < $2 OR (topological_pos = $2 AND stream_pos <= $3))))
+   GROUP BY user_id HAVING(max(stream_pos))) t
+    WHERE ($4 IS NULL OR t.membership = $4)
+    AND ($5 IS NULL OR t.membership <> $5)
 `
 
 const purgeMembershipsSQL = "" +
@@ -168,7 +172,7 @@ func (s *membershipsStatements) SelectMemberships(
 	membership, notMembership *string,
 ) (eventIDs []string, err error) {
 	stmt := sqlutil.TxStmt(txn, s.selectMembersStmt)
-	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, membership, notMembership)
+	rows, err := stmt.QueryContext(ctx, roomID, pos.Depth, pos.PDUPosition, membership, notMembership)
 	if err != nil {
 		return
 	}

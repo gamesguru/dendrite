@@ -91,6 +91,7 @@ func (p *PresenceStreamProvider) IncrementalSync(
 		}
 	}
 	sharedUsers := p.notifier.SharedUsersForCandidates(req.Device.UserID, presenceUsers)
+	partialStateSharedUsers := p.notifier.PartialStateSharedUsersForCandidates(ctx, req.Device.UserID, presenceUsers)
 
 	lastPos := from
 	for _, presence := range presences {
@@ -100,7 +101,9 @@ func (p *PresenceStreamProvider) IncrementalSync(
 		// Ignore users we don't share a room with
 		if req.Device.UserID != presence.UserID {
 			if _, shared := sharedUsers[presence.UserID]; !shared {
-				continue
+				if _, partialStateShared := partialStateSharedUsers[presence.UserID]; !partialStateShared {
+					continue
+				}
 			}
 		}
 		cacheKey := req.Device.UserID + req.Device.ID + presence.UserID
@@ -112,7 +115,8 @@ func (p *PresenceStreamProvider) IncrementalSync(
 				continue
 			}
 			currentlyActive := prevPresence.CurrentlyActive()
-			skip := prevPresence.Equals(presence) && currentlyActive && req.Device.UserID != presence.UserID
+			// A complete sync starts the client over, so it gets every presence again.
+			skip := from > 0 && prevPresence.Equals(presence) && currentlyActive && req.Device.UserID != presence.UserID
 			_, membershipChange := req.MembershipChanges[presence.UserID]
 			if skip && !membershipChange {
 				req.Log.Tracef("Skipping presence, no change (%s)", presence.UserID)

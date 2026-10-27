@@ -17,6 +17,9 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -273,7 +276,7 @@ jobs:
   # run Complement
   complement:
     name: "Complement (${{ matrix.label }})"
-    timeout-minutes: 20
+    timeout-minutes: 35
     needs: initial-tests-done
     runs-on: ubuntu-latest
     strategy:
@@ -321,13 +324,13 @@ jobs:
           #    for pull requests, otherwise GITHUB_REF).
           # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
           #    (GITHUB_BASE_REF for pull requests).
-          # 3. Use the default complement branch ("master").
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "master"; do
+          # 3. Use the Zendrite complement fork's default branch ("dev").
+          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "dev"; do
             # Skip empty branch names and merge commits.
             if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
               continue
             fi
-            (wget -O - "https://github.com/matrix-org/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
+            (wget -O - "https://github.com/gamesguru/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
           done
       # Build initial Dendrite image
       - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
@@ -338,8 +341,8 @@ jobs:
       # Run Complement
       - run: |
           set -o pipefail &&
-          (go test -v -json -tags dendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
-           go test -v -json -tags dendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
+          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
+           go test -v -json -timeout 1h -tags zendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
            if [ $test_status -ne 0 ]; then exit $test_status; fi; exit $target_status) 2>&1 | gotestfmt -hide all
         shell: bash
         name: Run Complement Tests

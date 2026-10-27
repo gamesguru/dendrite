@@ -63,6 +63,11 @@ type sessionsDict struct {
 	// clients from completing the m.oauth stage with a session ID that was
 	// never issued, or one issued for a different user.
 	oauthSessions map[string]string
+	// challengedUsers records usernames for which this server has already
+	// issued a UIA challenge, so a follow-up without its session can be
+	// rejected while allowing first requests that preselect an auth stage.
+	// Each entry holds the sessions still active for that username.
+	challengedUsers map[string]map[string]struct{}
 }
 
 // defaultTimeout is the timeout used to clean up sessions.
@@ -85,7 +90,35 @@ func (d *sessionsDict) addParams(sessionID string, r registerRequest) {
 	d.startTimer(defaultTimeOut, sessionID)
 	d.Lock()
 	defer d.Unlock()
+	if old, ok := d.params[sessionID]; ok {
+		d.forgetChallenge(sessionID, old)
+	}
 	d.params[sessionID] = r
+	key := challengeKey(r.ServerName, r.Username)
+	if d.challengedUsers[key] == nil {
+		d.challengedUsers[key] = make(map[string]struct{})
+	}
+	d.challengedUsers[key][sessionID] = struct{}{}
+}
+
+// forgetChallenge drops sessionID from its username's challenges. Callers hold the lock.
+func (d *sessionsDict) forgetChallenge(sessionID string, r registerRequest) {
+	key := challengeKey(r.ServerName, r.Username)
+	delete(d.challengedUsers[key], sessionID)
+	if len(d.challengedUsers[key]) == 0 {
+		delete(d.challengedUsers, key)
+	}
+}
+
+func challengeKey(serverName spec.ServerName, username string) string {
+	return string(serverName) + "\x00" + username
+}
+
+func (d *sessionsDict) wasChallenged(serverName spec.ServerName, username string) bool {
+	d.RLock()
+	defer d.RUnlock()
+	_, ok := d.challengedUsers[challengeKey(serverName, username)]
+	return ok
 }
 
 func (d *sessionsDict) getParams(sessionID string) (registerRequest, bool) {
@@ -100,6 +133,9 @@ func (d *sessionsDict) getParams(sessionID string) (registerRequest, bool) {
 func (d *sessionsDict) deleteSession(sessionID string) {
 	d.Lock()
 	defer d.Unlock()
+	if r, ok := d.params[sessionID]; ok {
+		d.forgetChallenge(sessionID, r)
+	}
 	delete(d.params, sessionID)
 	delete(d.sessions, sessionID)
 	delete(d.deleteSessionToDeviceID, sessionID)
@@ -127,6 +163,7 @@ func newSessionsDict() *sessionsDict {
 		deleteSessionToDeviceID: make(map[string]string),
 		pendingTokens:           make(map[string]string),
 		oauthSessions:           make(map[string]string),
+		challengedUsers:         make(map[string]map[string]struct{}),
 	}
 }
 
@@ -524,6 +561,7 @@ func Register(
 		r.ServerName = cfg.Matrix.ServerName
 	}
 	sessionID := gjson.GetBytes(reqBody, "auth.session").String()
+	hasSession := sessionID != ""
 	if sessionID == "" {
 		// Generate a new, random session ID
 		sessionID = util.RandomString(sessionIDLength)
@@ -588,6 +626,15 @@ func Register(
 			if resErr := validateUserLocalpart(r.Username, r.ServerName); resErr != nil {
 				return *resErr
 			}
+		}
+	}
+	// Check a requested username before returning a UIA challenge. This keeps
+	// duplicate-name errors deterministic even when the follow-up request does
+	// not include the previous auth session.
+	if !hasSession && r.Auth.Type == "" && !cfg.RecaptchaEnabled &&
+		accessTokenErr != nil && !callGuestRegistration(cfg, r.ServerName) && r.Username != "" {
+		if resErr := checkLocalpartRegistrable(req.Context(), cfg, userAPI, r.Username, r.ServerName); resErr != nil {
+			return *resErr
 		}
 	}
 	if err = internal.ValidatePasswordWithMinimum(r.Password, cfg.MinPasswordLength); err != nil {
@@ -766,6 +813,17 @@ func handleRegistrationFlow(
 			JSON: spec.Forbidden(
 				fmt.Sprintf("Registration is disabled on %q", r.ServerName),
 			),
+		}
+	}
+	// A UIA stage can only complete a challenge that this server issued. A
+	// registration token is also allowed as a single-shot credential.
+	if r.Auth.Type != "" && r.Auth.Session == "" && sessions.wasChallenged(r.ServerName, r.Username) &&
+		r.Auth.Type != authtypes.LoginTypeApplicationService &&
+		r.Auth.Type != authtypes.LoginTypeRegistrationToken &&
+		r.Auth.Type != authtypes.LoginTypeSharedSecret {
+		return util.JSONResponse{
+			Code: http.StatusUnauthorized,
+			JSON: spec.UnknownToken("A registration session is required"),
 		}
 	}
 
@@ -1367,7 +1425,7 @@ func checkLocalpartRegistrable(ctx context.Context, cfg *config.ClientAPI, userA
 	if !res.Available {
 		return &util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.UserInUse("Desired User ID is already taken."),
+			JSON: spec.UserInUse("Desired user ID is already taken."),
 		}
 	}
 	return nil

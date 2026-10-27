@@ -45,7 +45,9 @@ func TestSetThreadedReceipt(t *testing.T) {
 	reply := room.CreateEvent(t, alice, "m.room.message", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.thread", "event_id": root.EventID()}})
 	reaction := room.CreateEvent(t, alice, "m.reaction", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.annotation", "event_id": reply.EventID(), "key": "x"}})
 	rootReaction := room.CreateEvent(t, alice, "m.reaction", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.annotation", "event_id": root.EventID(), "key": "x"}})
-	query := receiptEventQuery{events: []*roomtypes.HeaderedEvent{root, reply, reaction, rootReaction}}
+	reference := room.CreateEvent(t, alice, "m.room.message", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.reference", "event_id": root.EventID()}})
+	referenceReaction := room.CreateEvent(t, alice, "m.reaction", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.annotation", "event_id": reference.EventID(), "key": "x"}})
+	query := receiptEventQuery{events: []*roomtypes.HeaderedEvent{root, reply, reaction, rootReaction, reference, referenceReaction}}
 	threadBody, err := json.Marshal(map[string]string{"thread_id": root.EventID()})
 	require.NoError(t, err)
 	for _, tc := range []struct{ name, body, receiptType, eventID, wantThread, wantError string }{
@@ -55,6 +57,9 @@ func TestSetThreadedReceipt(t *testing.T) {
 		{name: "thread", body: string(threadBody), eventID: reply.EventID(), wantThread: root.EventID()},
 		{name: "private", body: string(threadBody), receiptType: "m.read.private", eventID: reply.EventID(), wantThread: root.EventID()},
 		{name: "indirect", body: string(threadBody), eventID: reaction.EventID(), wantThread: root.EventID()},
+		// An annotation on a reference to the thread root is related to the
+		// thread but does not itself have an m.thread relation (MSC3771).
+		{name: "indirect reference", body: string(threadBody), eventID: referenceReaction.EventID(), wantThread: root.EventID()},
 		{name: "root relation", body: `{"thread_id":"main"}`, eventID: rootReaction.EventID(), wantThread: "main"},
 		{name: "null", body: `{"thread_id":null}`, wantError: "M_INVALID_PARAM"},
 		{name: "empty", body: `{"thread_id":""}`, wantError: "M_INVALID_PARAM"},
@@ -63,7 +68,9 @@ func TestSetThreadedReceipt(t *testing.T) {
 		{name: "fully read", body: `{"thread_id":"main"}`, receiptType: "m.fully_read", wantError: "M_INVALID_PARAM"},
 		{name: "wrong thread", body: `{"thread_id":"$other"}`, eventID: reply.EventID(), wantError: "M_INVALID_PARAM"},
 		{name: "thread as main", body: `{"thread_id":"main"}`, eventID: reply.EventID(), wantError: "M_INVALID_PARAM"},
-		{name: "root in thread", body: string(threadBody), eventID: root.EventID(), wantError: "M_INVALID_PARAM"},
+		// MSC3771: a main-timeline event such as the thread root may carry an explicit thread receipt.
+		{name: "root in thread", body: string(threadBody), eventID: root.EventID(), wantThread: root.EventID()},
+		{name: "main event in unrelated thread", body: `{"thread_id":"$other"}`, eventID: root.EventID(), wantError: "M_INVALID_PARAM"},
 		{name: "unknown event", body: `{"thread_id":"main"}`, eventID: "$unknown", wantError: "M_INVALID_PARAM"},
 		{name: "malformed", body: `{`, wantError: "M_BAD_JSON"},
 		{name: "array", body: `[]`, wantError: "M_BAD_JSON"},

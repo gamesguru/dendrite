@@ -45,6 +45,7 @@ func NewRuleSetEvaluator(ec EvaluationContext, ruleSet *RuleSet) *RuleSetEvaluat
 		ruleSet: []kindAndRules{
 			{OverrideKind, ruleSet.Override},
 			{ContentKind, ruleSet.Content},
+			{PostContentKind, ruleSet.PostContent},
 			{RoomKind, ruleSet.Room},
 			{SenderKind, ruleSet.Sender},
 			{UnderrideKind, ruleSet.Underride},
@@ -103,7 +104,7 @@ func ruleMatches(rule *Rule, kind Kind, event gomatrixserverlib.PDU, ec Evaluati
 	}
 
 	switch kind {
-	case OverrideKind, UnderrideKind:
+	case OverrideKind, PostContentKind, UnderrideKind:
 		for _, cond := range rule.Conditions {
 			ok, err := conditionMatches(cond, event, ec)
 			if err != nil {

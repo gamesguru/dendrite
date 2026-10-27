@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 type NATSInstance struct {
 	*natsserver.Server
+	mu sync.Mutex
 	// Ownership is set only in HA, where every publication must pass the
 	// activation's ownership check before it reaches the broker.
 	Ownership Ownership
@@ -30,7 +32,9 @@ type NATSInstance struct {
 	js        natsclient.JetStreamContext
 }
 
-var natsLock sync.Mutex
+// natsStartLock protects NATS' shared package startup state. It is held only
+// while constructing and launching a server, never during readiness waits.
+var natsStartLock sync.Mutex
 
 func DeleteAllStreams(js natsclient.JetStreamContext, cfg *config.JetStream) {
 	for _, stream := range streams { // streams are defined in streams.go
@@ -39,66 +43,135 @@ func DeleteAllStreams(js natsclient.JetStreamContext, cfg *config.JetStream) {
 	}
 }
 
-func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) {
-	natsLock.Lock()
-	defer natsLock.Unlock()
+// embeddedStartTimeout bounds how long PrepareE waits for the embedded server
+// to accept connections.
+var embeddedStartTimeout = 60 * time.Second
+
+// Prepare returns the JetStream connection, starting the embedded server if
+// needed. A server that cannot start is fatal for the process, except with
+// InMemory set, which unit tests use: that panics instead, so testing reports
+// the failure against one test rather than os.Exit ending the whole binary.
+// Use PrepareE to handle the failure.
+//
+//nolint:contextcheck,nolintlint // ProcessContext owns the lifetime, as in configureStreams.
+func (s *NATSInstance) Prepare(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) { //nolint:contextcheck // legacy API; PrepareE carries the process context
+	return s.PrepareWithContext(process.Context(), process, cfg)
+}
+
+// PrepareWithContext is Prepare with an explicit startup and connection context.
+func (s *NATSInstance) PrepareWithContext(ctx context.Context, process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn) {
+	js, nc, err := s.prepareE(ctx, process, cfg)
+	if err != nil {
+		if cfg.InMemory {
+			panic(err)
+		}
+		logrus.WithError(err).Fatal("Unable to start NATS")
+	}
+	return js, nc
+}
+
+// PrepareE is Prepare, but returns a failure to start the embedded server and
+// leaves the instance unstarted, so that a later call can try again.
+//
+//nolint:contextcheck,nolintlint // ProcessContext owns the lifetime, as in configureStreams.
+func (s *NATSInstance) PrepareE(process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn, error) {
+	return s.prepareE(process.Context(), process, cfg)
+}
+
+func (s *NATSInstance) prepareE(ctx context.Context, process *process.ProcessContext, cfg *config.JetStream) (natsclient.JetStreamContext, *natsclient.Conn, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var err error
 
 	// If an existing connection exists, return it.
 	if s.nc != nil && s.js != nil {
-		return s.js, s.nc
+		return s.js, s.nc, nil
 	}
 
 	// For connecting to an external NATS server.
 	if len(cfg.Addresses) > 0 {
 		s.js, s.nc = setupNATS(process, cfg, nil, s.Ownership)
 		process.Defer(s.nc.Close)
-		return s.js, s.nc
+		return s.js, s.nc, nil
 	}
 
 	// Configuration already rejects embedded NATS in HA, but the embedded path
 	// below connects without any of the ownership options, so refuse it here
 	// too rather than silently running an HA candidate with no broker barrier.
 	if s.Ownership != nil {
-		logrus.Fatal("HA requires external JetStream addresses; refusing to start the embedded NATS server")
+		return nil, nil, errors.New("HA requires external JetStream addresses; refusing to start the embedded NATS server")
 	}
 
 	if len(cfg.Addresses) == 0 && s.Server == nil {
+		// MemoryStorage applies to streams, but JetStream metadata still uses
+		// StoreDir. Keep the per-instance path to avoid concurrent test brokers
+		// falling back to the same os.TempDir()/jetstream directory.
+		storeDir := string(cfg.StoragePath)
 		opts := &natsserver.Options{
 			ServerName:      "monolith",
 			DontListen:      true,
 			JetStream:       true,
-			StoreDir:        string(cfg.StoragePath),
+			StoreDir:        storeDir,
 			NoSystemAccount: true,
 			MaxPayload:      embeddedMaxPayload,
 			NoSigs:          true,
 			NoLog:           cfg.NoLog,
-			SyncAlways:      true,
+			SyncAlways:      !cfg.InMemory,
 		}
-		if s.Server, err = natsserver.NewServer(opts); err != nil {
-			panic(err)
+		natsStartLock.Lock()
+		server, serverErr := natsserver.NewServer(opts)
+		if serverErr != nil {
+			natsStartLock.Unlock()
+			return nil, nil, fmt.Errorf("create embedded NATS server: %w", serverErr)
 		}
+		s.Server = server
 		if !cfg.NoLog {
-			s.SetLogger(NewLogAdapter(), opts.Debug, opts.Trace)
+			server.SetLogger(NewLogAdapter(), opts.Debug, opts.Trace)
 		}
-		go s.Start()
-		process.Defer(func() { s.Shutdown(); s.WaitForShutdown() })
-		if !s.ReadyForConnections(time.Second * 60) { //nolint:mnd
-			logrus.Fatalln("NATS did not start in time, shutting down")
-			process.ShutdownZendrite()
-			s.Shutdown()
-			s.WaitForShutdown()
-			return nil, nil
+		go server.Start()
+		natsStartLock.Unlock()
+		if err = waitForEmbeddedNATS(ctx, server, embeddedStartTimeout); err != nil {
+			err = fmt.Errorf("%w (store %q, in memory: %t, goroutines: %d)",
+				err, storeDir, cfg.InMemory, runtime.NumGoroutine())
+			server.Shutdown()
+			server.WaitForShutdown()
+			s.Server = nil
+			return nil, nil, err
 		}
+		process.Defer(func() { server.Shutdown(); server.WaitForShutdown() })
 	}
 
 	// No existing process connection, create a new one.
 	if s.nc, err = natsclient.Connect("", natsclient.InProcessServer(s.Server)); err != nil {
-		logrus.Fatalln("Failed to create NATS client")
+		s.nc = nil
+		s.Shutdown()
+		s.WaitForShutdown()
+		s.Server = nil
+		return nil, nil, fmt.Errorf("create NATS client: %w", err)
 	}
 	s.js, s.nc = setupNATS(process, cfg, s.nc, s.Ownership)
 	process.Defer(s.nc.Close)
-	return s.js, s.nc
+	return s.js, s.nc, nil
+}
+
+func waitForEmbeddedNATS(ctx context.Context, server *natsserver.Server, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("embedded NATS startup canceled: %w", err)
+		}
+		if server.ReadyForConnections(100 * time.Millisecond) { //nolint:mnd
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("embedded NATS startup canceled: %w", ctx.Err())
+		case <-deadline.C:
+			return fmt.Errorf("embedded NATS did not become ready within %s", timeout)
+		default:
+		}
+	}
 }
 
 func setupNATS(process *process.ProcessContext, cfg *config.JetStream, nc *natsclient.Conn, ownership Ownership) (natsclient.JetStreamContext, *natsclient.Conn) {

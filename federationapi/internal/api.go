@@ -3,8 +3,10 @@ package internal
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -13,8 +15,10 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/gomatrix"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/federationapi/consumers"
 	"codefloe.com/pat-s/zendrite/federationapi/queue"
 	"codefloe.com/pat-s/zendrite/federationapi/statistics"
 	"codefloe.com/pat-s/zendrite/federationapi/storage"
@@ -26,6 +30,7 @@ import (
 
 // FederationInternalAPI is an implementation of api.FederationInternalAPI.
 type FederationInternalAPI struct {
+	deviceLister       consumers.DeviceListerHolder
 	db                 storage.Database
 	cfg                *config.FederationAPI
 	statistics         *statistics.Statistics
@@ -37,6 +42,10 @@ type FederationInternalAPI struct {
 	partialStateWorker *PartialStateWorker // MSC3706: worker for background state resync
 	rateLimitMutex     sync.Mutex
 	rateLimits         map[spec.ServerName]time.Time
+	serverKeyFetches   singleflight.Group
+
+	serverKeyFetchBackoffMu sync.Mutex
+	serverKeyFetchBackoff   map[spec.ServerName]time.Time
 }
 
 func NewFederationInternalAPI(
@@ -120,6 +129,17 @@ func NewFederationInternalAPI(
 	}
 }
 
+// SetUserAPI gives the federation API the user API, which it needs to send the
+// device lists of users who join a room.
+func (a *FederationInternalAPI) SetUserAPI(userAPI consumers.DeviceLister) {
+	a.deviceLister.Set(userAPI)
+}
+
+// DeviceLister returns the holder SetUserAPI fills in.
+func (a *FederationInternalAPI) DeviceLister() *consumers.DeviceListerHolder {
+	return &a.deviceLister
+}
+
 // SetPartialStateWorker sets the partial state worker for MSC3706 background state resync.
 func (a *FederationInternalAPI) SetPartialStateWorker(worker *PartialStateWorker) {
 	a.partialStateWorker = worker
@@ -167,6 +187,15 @@ func federationHTTPCode(err error) int {
 		return mxErr.Code
 	}
 	return 0
+}
+
+// isMalformedJSONError reports whether err came from decoding a response body
+// that was not valid JSON. A truncated body is a bad response, not evidence
+// that the destination is offline, so it is worth retrying immediately.
+func isMalformedJSONError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
 func failBlacklistableError(err error, stats *statistics.ServerStatistics) (until time.Time, blacklisted bool) {
@@ -237,6 +266,7 @@ func (a *FederationInternalAPI) doFederationRequest(
 			Blacklisted: blacklisted,
 			RetryAfter:  retryAfter,
 			Code:        httpCode,
+			Cause:       err,
 		}
 	}
 	stats.Success(statistics.SendDirect)
@@ -275,8 +305,9 @@ func (a *FederationInternalAPI) doFederationRequestNoStats(
 			return res, limited
 		}
 		return res, &api.FederationClientError{
-			Err:  err.Error(),
-			Code: federationHTTPCode(err),
+			Err:   err.Error(),
+			Code:  federationHTTPCode(err),
+			Cause: err,
 		}
 	}
 	return res, nil

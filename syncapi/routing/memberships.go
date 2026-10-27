@@ -80,7 +80,7 @@ func GetMemberships(
 	}
 	defer db.Rollback() //nolint:errcheck
 
-	atToken, err := types.NewTopologyTokenFromString(at)
+	atToken, err := parseMembershipAtToken(at)
 	if err != nil {
 		atToken = types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}
 		if queryRes.HasBeenInRoom && !queryRes.IsInRoom {
@@ -122,4 +122,18 @@ func GetMemberships(
 			return rsAPI.QueryUserIDForSender(req.Context(), roomID, senderID)
 		})},
 	}
+}
+
+// parseMembershipAtToken accepts both topology tokens and /sync stream tokens.
+// MaxInt64 depth marks a stream-only token for SelectMemberships.
+func parseMembershipAtToken(at string) (types.TopologyToken, error) {
+	atToken, err := types.NewTopologyTokenFromString(at)
+	if err == nil {
+		return atToken, nil
+	}
+	streamToken, streamErr := types.NewStreamTokenFromString(at)
+	if streamErr != nil {
+		return types.TopologyToken{}, err
+	}
+	return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: streamToken.PDUPosition}, nil
 }

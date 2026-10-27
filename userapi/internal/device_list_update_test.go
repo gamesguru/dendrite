@@ -399,6 +399,12 @@ type mockKeyserverRoomserverAPI struct {
 	roomsForUser map[string][]spec.RoomID
 	// joinedDuringPartialState says who was joined before the resync state was applied; nil if unknown.
 	joinedDuringPartialState *roomserver.PartialStateMembers
+	// joinedAfterPartialJoin lists, per partial state room, who joined after we did.
+	joinedAfterPartialJoin map[string][]string
+}
+
+func (m *mockKeyserverRoomserverAPI) QueryMembersJoinedAfterPartialJoin(_ context.Context, roomID string) ([]string, error) {
+	return m.joinedAfterPartialJoin[roomID], nil
 }
 
 func (m *mockKeyserverRoomserverAPI) GetPartialStateRoomIDs(context.Context) ([]string, error) {
@@ -659,6 +665,23 @@ func TestDeviceListUpdaterDoesNotHoldUpdatesForKnownUsers(t *testing.T) {
 
 	rsAPI.partialRooms = nil
 	assert.False(t, updater.deferWhilePartialState(ctx, "@another:remote.test"), "with no partial room nothing waits")
+}
+
+// A user who joined a partial state room after we did is followed from their join,
+// which reached us directly, so their updates are not held back for the resync.
+func TestDeviceListUpdaterDoesNotHoldUpdatesForLaterJoiners(t *testing.T) {
+	const userID = "@elsie:remote.test"
+	partialRoom, err := spec.NewRoomID("!partial:test")
+	require.NoError(t, err)
+	rsAPI := &mockKeyserverRoomserverAPI{
+		partialRooms: []string{partialRoom.String()},
+		roomsForUser: map[string][]spec.RoomID{userID: {*partialRoom}},
+	}
+	updater := NewDeviceListUpdater(process.NewProcessContext(), &mockDeviceListUpdaterDatabase{}, &mockDeviceListUpdaterAPI{}, &mockKeyChangeProducer{}, nil, 2, rsAPI, "local.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	assert.True(t, updater.deferWhilePartialState(ctx, userID), "a member from the partial state waits")
+
+	rsAPI.joinedAfterPartialJoin = map[string][]string{partialRoom.String(): {userID}}
+	assert.False(t, updater.deferWhilePartialState(ctx, userID))
 }
 
 // The servers of a room are only partly known while it has partial state, so a

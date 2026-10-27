@@ -8,6 +8,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
@@ -234,6 +236,11 @@ type noPartialStateRoomserver struct {
 
 func (noPartialStateRoomserver) GetPartialStateRoomIDs(context.Context) ([]string, error) {
 	return nil, nil
+}
+
+// QueryRoomsForUser fails, so these tests skip the wait for membership changes.
+func (noPartialStateRoomserver) QueryRoomsForUser(context.Context, spec.UserID, string) ([]spec.RoomID, error) {
+	return nil, errors.New("not implemented")
 }
 
 // A sliding sync request whose client goes away while the response is being
