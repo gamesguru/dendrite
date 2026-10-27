@@ -187,6 +187,8 @@ type Database interface {
 	) (types.StreamPosition, error)
 	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
 	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
+	// PurgeBackwardExtremitiesForEvents is PurgeBackwardExtremitiesForEvent for many events in one transaction.
+	PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, prevEventIDs []string) error
 	// InsertStickyEvent adds an MSC4354 sticky event to the sticky events
 	// stream and returns its position, which an event already in the stream
 	// keeps. It first removes the events that have expired by now.

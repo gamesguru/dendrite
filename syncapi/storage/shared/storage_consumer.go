@@ -281,6 +281,17 @@ func (d *Database) PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID,
 	})
 }
 
+func (d *Database) PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, prevEventIDs []string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		for _, prevEventID := range prevEventIDs {
+			if err := d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, roomID, prevEventID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (d *Database) WriteEvent(
 	ctx context.Context,
 	ev *rstypes.HeaderedEvent,

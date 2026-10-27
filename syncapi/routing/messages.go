@@ -995,11 +995,12 @@ func backfillEvents(
 		if selectErr != nil {
 			util.GetLogger(ctx).WithError(selectErr).Warn("Failed to look up backfilled prev events")
 		}
+		storedIDs := make([]string, 0, len(stored))
 		for _, ev := range stored {
-			if purgeErr := db.PurgeBackwardExtremitiesForEvent(ctx, roomID, ev.EventID()); purgeErr != nil {
-				util.GetLogger(ctx).WithError(purgeErr).Warn("Failed to purge stale backward extremity")
-				break
-			}
+			storedIDs = append(storedIDs, ev.EventID())
+		}
+		if purgeErr := db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs); purgeErr != nil {
+			util.GetLogger(ctx).WithError(purgeErr).Warn("Failed to purge stale backward extremities")
 		}
 	}
 
