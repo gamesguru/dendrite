@@ -73,6 +73,44 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
+func TestGetOrCreateConnectionConcurrent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+
+		const workers = 16
+		start := make(chan struct{})
+		keys := make(chan int64, workers)
+		errs := make(chan error, workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				<-start
+				key, err := db.GetOrCreateConnection(ctx, "@user:test", "DEVICE", "connection")
+				if err != nil {
+					errs <- err
+					return
+				}
+				keys <- key
+			}()
+		}
+		close(start)
+
+		var first int64
+		for i := 0; i < workers; i++ {
+			select {
+			case err := <-errs:
+				t.Fatalf("GetOrCreateConnection: %s", err)
+			case key := <-keys:
+				if first == 0 {
+					first = key
+				} else if key != first {
+					t.Fatalf("GetOrCreateConnection returned different keys: %d and %d", first, key)
+				}
+			}
+		}
+	})
+}
+
 // TestMaxStreamPositionForPDUsAcrossSnapshots ensures that reading the PDU
 // high-water mark from one snapshot does not close the shared prepared
 // statement used by later snapshots.

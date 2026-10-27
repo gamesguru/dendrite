@@ -396,7 +396,7 @@ func (d *Database) PutFilter(
 	// InsertFilter looks the filter up before inserting it, so SQLite can
 	// report SQLITE_BUSY when another writer holds the lock. Retry the whole
 	// transaction.
-	err := retrySQLiteBusy(ctx, func() error {
+	err := retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
 		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) (insertErr error) {
 			filterID, insertErr = d.Filter.InsertFilter(ctx, txn, filter, localpart)
 			return insertErr
@@ -405,17 +405,43 @@ func (d *Database) PutFilter(
 	return filterID, err
 }
 
-// retrySQLiteBusy runs fn, running it again after a short backoff while it
-// fails with SQLITE_BUSY, for at most three attempts.
-func retrySQLiteBusy(ctx context.Context, fn func() error) error {
-	const maxRetries = 3
+type sqliteRetryPolicy struct {
+	maxAttempts int
+	delayStep   time.Duration
+	maxDelay    time.Duration
+}
+
+const (
+	sqliteMaxRetryAttempts = 10
+	sqliteRetryDelayStep   = 25 * time.Millisecond
+	sqliteMaxRetryDelay    = 250 * time.Millisecond
+)
+
+// sqliteLockRetryPolicy waits out the normal room-creation write burst while
+// staying bounded for callers that cannot be blocked indefinitely.
+var sqliteLockRetryPolicy = sqliteRetryPolicy{
+	maxAttempts: sqliteMaxRetryAttempts,
+	delayStep:   sqliteRetryDelayStep,
+	maxDelay:    sqliteMaxRetryDelay,
+}
+
+// retrySQLiteBusy runs fn, retrying with a bounded backoff while it fails with
+// SQLITE_BUSY. Read-then-write transactions can fail to upgrade their lock
+// immediately even though the SQLite busy timeout is set, so the whole
+// transaction and its lookup must be retried.
+func retrySQLiteBusy(ctx context.Context, policy sqliteRetryPolicy, fn func() error) error {
 	var err error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < policy.maxAttempts; attempt++ {
 		err = fn()
-		if err == nil || !isSQLiteBusy(err) || attempt == maxRetries-1 {
+		if err == nil || !isSQLiteBusy(err) || attempt == policy.maxAttempts-1 {
 			return err
 		}
-		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+		delay := time.Duration(attempt+1) * policy.delayStep
+		if policy.maxDelay > 0 && delay > policy.maxDelay {
+			delay = policy.maxDelay
+		}
+		logrus.WithError(err).WithField("attempt", attempt+1).Debug("SQLite database busy, retrying")
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -662,35 +688,25 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 	// The lookup reads before the upsert writes. SQLite can report SQLITE_BUSY
 	// when another writer holds the lock and the read transaction cannot be
 	// upgraded, so retry the whole transaction, including the lookup.
-	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
 		pos = 0
 		changed = false
-		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 			if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
 				// Keep the later receipt. A false changed result tells the consumer
 				// not to advance or notify at an unrelated stream position.
 				return nil
 			}
-			pos, err = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
-			changed = err == nil
-			return err
+			var upsertErr error
+			pos, upsertErr = d.Receipts.UpsertReceipt(ctx, txn, roomId, receiptType, userId, eventId, threadID, timestamp)
+			changed = upsertErr == nil
+			return upsertErr
 		})
-		if err == nil || !isSQLiteBusy(err) {
-			return pos, changed, err
-		}
-		if attempt == maxRetries-1 {
-			break
-		}
-		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, false, ctx.Err()
-		case <-timer.C:
-		}
+	})
+	if err != nil {
+		return 0, false, err
 	}
-	return 0, false, err
+	return pos, changed, nil
 }
 
 // receiptMovesBackwards reports whether storing a receipt at eventID would move
@@ -828,69 +844,41 @@ func isSQLiteBusy(err error) bool {
 }
 
 func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, connID string) (connectionKey int64, err error) {
-	// Retry loop to handle race condition where two workers try to create the same connection
-	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-			// Try to select existing connection
-			conn, selectErr := d.SlidingSync.SelectConnectionByIDs(ctx, txn, userID, deviceID, connID)
-			if selectErr != nil {
-				return selectErr
-			}
-
-			if conn != nil {
-				// Connection exists
-				connectionKey = conn.ConnectionKey
-				return nil
-			}
-
-			// Connection doesn't exist, create it
-			createdTS := time.Now().UnixMilli()
-			var insertErr error
-			connectionKey, insertErr = d.SlidingSync.InsertConnection(ctx, txn, userID, deviceID, connID, createdTS)
-			return insertErr
-		})
-
-		if err == nil {
-			return connectionKey, nil
-		}
-
-		// Check if it's a unique constraint violation
-		if sqlutil.IsUniqueConstraintViolationErr(err) {
-			logrus.WithFields(logrus.Fields{
-				"user_id":   userID,
-				"device_id": deviceID,
-				"conn_id":   connID,
-				"attempt":   attempt + 1,
-			}).Debug("Unique constraint violation on connection insert, retrying SELECT")
-			continue
-		}
-
-		// Concurrent syncs can race between the SELECT and the INSERT. SQLite
-		// reports that as SQLITE_BUSY even with a busy timeout, because the
-		// read transaction cannot be upgraded while another writer holds the
-		// lock. Back off briefly and retry the whole transaction.
-		if isSQLiteBusy(err) {
-			logrus.WithFields(logrus.Fields{
-				"user_id":   userID,
-				"device_id": deviceID,
-				"conn_id":   connID,
-				"attempt":   attempt + 1,
-			}).Debug("SQLite database busy while creating sync connection, retrying")
-			timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return 0, ctx.Err()
-			case <-timer.C:
-			}
-			continue
-		}
-
+	// Look up the connection outside a transaction so inserting a missing row
+	// doesn't need to upgrade a SQLite read transaction to a write transaction.
+	conn, err := d.SlidingSync.SelectConnectionByIDs(ctx, nil, userID, deviceID, connID)
+	if err != nil {
 		return 0, err
 	}
+	if conn != nil {
+		return conn.ConnectionKey, nil
+	}
 
-	return 0, fmt.Errorf("failed to get or create connection after %d attempts: %w", maxRetries, err)
+	// If another request creates the same connection after the lookup, the
+	// unique constraint resolves the race. A write-first transaction can wait
+	// for SQLite's busy timeout without hitting the read-to-write upgrade case.
+	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+			var insertErr error
+			connectionKey, insertErr = d.SlidingSync.InsertConnection(ctx, txn, userID, deviceID, connID, time.Now().UnixMilli())
+			return insertErr
+		})
+	})
+	if sqlutil.IsUniqueConstraintViolationErr(err) {
+		insertErr := err
+		conn, err = d.SlidingSync.SelectConnectionByIDs(ctx, nil, userID, deviceID, connID)
+		if err != nil {
+			return 0, err
+		}
+		if conn != nil {
+			return conn.ConnectionKey, nil
+		}
+		return 0, insertErr
+	}
+	if err != nil {
+		return 0, err
+	}
+	return connectionKey, nil
 }
 
 func (d *Database) CreateConnectionPosition(ctx context.Context, connectionKey int64) (connectionPosition int64, err error) {
