@@ -514,8 +514,13 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
 			// are all there is: return them rather than ending pagination here.
+			sort.Slice(withheld, func(i, j int) bool {
+				if withheld[i].Depth() == withheld[j].Depth() {
+					return withheld[i].StreamPosition < withheld[j].StreamPosition
+				}
+				return withheld[i].Depth() < withheld[j].Depth()
+			})
 			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, withheld, r.rsAPI) //nolint:contextcheck
-			sort.Sort(eventsByDepth(events))
 			topologyHadEvents = true
 		}
 	} else if len(streamEvents) > 0 {
