@@ -12,7 +12,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -824,24 +823,28 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 		return
 	}
 
-	// Find the joins the sync API has not caught up with yet. One snapshot is
-	// enough, and it is closed before waiting so the waits can take their own.
-	var pending []spec.RoomID
+	// Find the joins the sync API has not caught up with yet. One snapshot and
+	// one batched query are enough, and the snapshot is closed before waiting so
+	// the waits can take their own.
 	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
 		return
 	}
-	for _, roomID := range rooms {
-		if ctx.Err() != nil {
-			break
-		}
-		membership, _, membershipErr := snapshot.SelectMembershipForUser(ctx, roomID.String(), req.Device.UserID, math.MaxInt64)
-		if membershipErr == nil && membership == spec.Join {
-			continue
-		}
-		pending = append(pending, roomID)
-	}
+	synced, err := snapshot.RoomIDsWithMembership(ctx, req.Device.UserID, spec.Join)
 	_ = snapshot.Rollback()
+	if err != nil {
+		return
+	}
+	syncedSet := make(map[string]struct{}, len(synced))
+	for _, id := range synced {
+		syncedSet[id] = struct{}{}
+	}
+	var pending []spec.RoomID
+	for _, roomID := range rooms {
+		if _, ok := syncedSet[roomID.String()]; !ok {
+			pending = append(pending, roomID)
+		}
+	}
 
 	for _, roomID := range pending {
 		if ctx.Err() != nil {
