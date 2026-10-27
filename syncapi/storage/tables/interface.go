@@ -241,7 +241,7 @@ type Memberships interface {
 	SelectMembershipForUser(ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error)
 	// SelectMembershipForUserAtStreamPosition returns the membership of the
 	// user at or before the given stream position.
-	SelectMembershipForUserAtStreamPosition(ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64) (membership string, err error)
+	SelectMembershipForUserAtStreamPosition(ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64) (membership, eventID string, err error)
 	PurgeMemberships(ctx context.Context, txn *sql.Tx, roomID string) error
 	SelectMemberships(
 		ctx context.Context, txn *sql.Tx,

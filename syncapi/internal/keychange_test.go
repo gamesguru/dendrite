@@ -151,7 +151,10 @@ func TestFilterSharedUsersFallsBackToRoomserverOnDatabaseError(t *testing.T) {
 		},
 	}
 
-	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, []string{otherUser})
+	shared, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, []string{otherUser})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if shared[otherUser] == 0 {
 		t.Fatalf("roomserver fallback did not find shared user: got %v", shared)
 	}
@@ -160,15 +163,41 @@ func TestFilterSharedUsersFallsBackToRoomserverOnDatabaseError(t *testing.T) {
 func TestFilterSharedUsersFailsOpenWhenFallbackFails(t *testing.T) {
 	t.Parallel()
 	otherUser := "@bob:localhost"
-	unrelatedUser := "@carol:localhost"
 	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
 
-	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser, unrelatedUser}, []string{otherUser})
+	shared, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, []string{otherUser})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if shared[otherUser] == 0 {
 		t.Fatalf("expected fail-open shared-user count, got %v", shared)
 	}
-	if shared[unrelatedUser] != 0 {
-		t.Fatalf("unrelated user was marked shared after fallback failure: got %v", shared)
+}
+
+func TestFilterSharedUsersErrorsWhenUnverifiableUserHasNoJoin(t *testing.T) {
+	t.Parallel()
+	otherUser := "@bob:localhost"
+	unrelatedUser := "@carol:localhost"
+	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
+
+	if _, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser, unrelatedUser}, []string{otherUser}); err == nil {
+		t.Fatal("expected an error for a user that cannot be verified")
+	}
+}
+
+func TestFilterSharedUsersChecksRoomserverForUsersWithoutJoin(t *testing.T) {
+	t.Parallel()
+	otherUser := "@bob:localhost"
+	rsAPI := &keyChangeMockRoomserverAPI{
+		roomIDToJoinedMembers: map[string][]string{"!shared:localhost": {syncingUser, otherUser}},
+	}
+
+	shared, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared[otherUser] == 0 {
+		t.Fatalf("roomserver was not consulted for a user without a join event: got %v", shared)
 	}
 }
 

@@ -121,7 +121,10 @@ func DeviceListCatchup(
 			failOpenUserIDs = append(failOpenUserIDs, joinUserID)
 		}
 	}
-	sharedUsersMap := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs, failOpenUserIDs)
+	sharedUsersMap, err := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs, failOpenUserIDs)
+	if err != nil {
+		return from, false, err
+	}
 	userSet := make(map[string]bool)
 	for _, userID := range res.DeviceLists.Changed {
 		userSet[userID] = true
@@ -273,7 +276,7 @@ func TrackChangedUsers(
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, usersWithChangedKeys, failOpenUserIDs []string,
-) map[string]int {
+) (map[string]int, error) {
 	sharedUsersMap := make(map[string]int, len(usersWithChangedKeys))
 	for _, changedUserID := range usersWithChangedKeys {
 		sharedUsersMap[changedUserID] = 0
@@ -305,12 +308,11 @@ func filterSharedUsers(
 	// notably just after a partial-state resync has completed. A device list
 	// update for a user who has just become visible would otherwise be
 	// discarded and its key-change position advanced past. Ask the authoritative
-	// roomserver about the users we believe we share no room with.
+	// roomserver about every user we believe we share no room with.
 	var missing []string
 	missingSet := make(map[string]struct{}, len(sharedUsersMap))
 	for changedUserID, count := range sharedUsersMap {
-		_, eligible := failOpenSet[changedUserID]
-		if count == 0 && changedUserID != userID && eligible {
+		if count == 0 && changedUserID != userID {
 			missing = append(missing, changedUserID)
 			missingSet[changedUserID] = struct{}{}
 		}
@@ -325,8 +327,15 @@ func filterSharedUsers(
 			OtherUserIDs: missing,
 		}, &sharedRes); err != nil {
 			util.GetLogger(ctx).WithError(err).Warn("QuerySharedUsers fallback failed")
+			// Only users the caller expects to share a room are assumed to
+			// when the check fails. For anyone else the answer is unknown, so
+			// fail rather than report them as unshared or advance past a change.
 			for _, changedUserID := range missing {
-				sharedUsersMap[changedUserID] = 1
+				if _, eligible := failOpenSet[changedUserID]; eligible {
+					sharedUsersMap[changedUserID] = 1
+				} else {
+					return nil, fmt.Errorf("QuerySharedUsers for %s: %w", changedUserID, err)
+				}
 			}
 		} else {
 			for changedUserID, count := range sharedRes.UserIDsToCount {
@@ -339,7 +348,7 @@ func filterSharedUsers(
 			}
 		}
 	}
-	return sharedUsersMap
+	return sharedUsersMap, nil
 }
 
 func joinedRooms(res *types.Response, userID string) []string {

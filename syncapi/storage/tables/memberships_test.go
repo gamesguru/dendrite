@@ -83,8 +83,8 @@ func TestMembershipsTable(t *testing.T) {
 			}
 		}
 
-		testUpsert(t, ctx, table, userEvents[0], alice, room)
 		testMembershipCount(t, ctx, table, room)
+		testUpsert(t, ctx, table, userEvents[0], alice, room)
 	})
 }
 
@@ -156,6 +156,25 @@ func testUpsert(t *testing.T, ctx context.Context, table tables.Memberships, mem
 		}
 		if membership != spec.Leave {
 			t.Fatalf("expected membership to be leave, got %s", membership)
+		}
+
+		// Position-bounded membership reads must retain transitions even when
+		// a later event with the same membership overwrites the compact row.
+		joinAt10 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
+		joinAt20 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
+		leaveAt30 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(user.ID))
+		for i, ev := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
+			position := types.StreamPosition((i + 1) * 10)
+			if err = table.UpsertMembership(ctx, nil, ev, position, position); err != nil {
+				t.Fatalf("failed to upsert membership history: %s", err)
+			}
+		}
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, user.ID, 15)
+		if err != nil {
+			t.Fatalf("failed to select membership history: %s", err)
+		}
+		if membership != spec.Join || eventID != joinAt10.EventID() {
+			t.Fatalf("expected join at position 10 when reading at 15, got %s (%s)", membership, eventID)
 		}
 	})
 }

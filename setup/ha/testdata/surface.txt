@@ -236,6 +236,11 @@ column syncapi_invite_events | headered_event_json | text | NO |
 column syncapi_invite_events | id | bigint | NO | nextval('syncapi_stream_id'::regclass)
 column syncapi_invite_events | room_id | text | NO |
 column syncapi_invite_events | target_user_id | text | NO |
+column syncapi_membership_history | event_id | text | NO |
+column syncapi_membership_history | membership | text | NO |
+column syncapi_membership_history | room_id | text | NO |
+column syncapi_membership_history | stream_pos | bigint | NO |
+column syncapi_membership_history | user_id | text | NO |
 column syncapi_memberships | event_id | text | NO |
 column syncapi_memberships | membership | text | NO |
 column syncapi_memberships | room_id | text | NO |
@@ -614,6 +619,8 @@ index syncapi_ignores | syncapi_ignores_pkey | CREATE UNIQUE INDEX syncapi_ignor
 index syncapi_invite_events | syncapi_invite_events_pkey | CREATE UNIQUE INDEX syncapi_invite_events_pkey ON public.syncapi_invite_events USING btree (id)
 index syncapi_invite_events | syncapi_invites_event_id_unique_idx | CREATE UNIQUE INDEX syncapi_invites_event_id_unique_idx ON public.syncapi_invite_events USING btree (event_id)
 index syncapi_invite_events | syncapi_invites_target_user_id_idx | CREATE INDEX syncapi_invites_target_user_id_idx ON public.syncapi_invite_events USING btree (target_user_id, id)
+index syncapi_membership_history | syncapi_membership_history_pkey | CREATE UNIQUE INDEX syncapi_membership_history_pkey ON public.syncapi_membership_history USING btree (room_id, user_id, stream_pos)
+index syncapi_membership_history | syncapi_membership_history_pos_idx | CREATE INDEX syncapi_membership_history_pos_idx ON public.syncapi_membership_history USING btree (room_id, user_id, stream_pos DESC)
 index syncapi_memberships | syncapi_memberships_unique | CREATE UNIQUE INDEX syncapi_memberships_unique ON public.syncapi_memberships USING btree (room_id, user_id, membership)
 index syncapi_notification_data | syncapi_notification_data_pkey | CREATE UNIQUE INDEX syncapi_notification_data_pkey ON public.syncapi_notification_data USING btree (id)
 index syncapi_notification_data | syncapi_notification_data_unique | CREATE UNIQUE INDEX syncapi_notification_data_unique ON public.syncapi_notification_data USING btree (user_id, room_id)
@@ -775,6 +782,7 @@ constraint syncapi_filter | syncapi_filter_id_key | UNIQUE (id)
 constraint syncapi_filter | syncapi_filter_pkey | PRIMARY KEY (id, localpart)
 constraint syncapi_ignores | syncapi_ignores_pkey | PRIMARY KEY (user_id)
 constraint syncapi_invite_events | syncapi_invite_events_pkey | PRIMARY KEY (id)
+constraint syncapi_membership_history | syncapi_membership_history_pkey | PRIMARY KEY (room_id, user_id, stream_pos)
 constraint syncapi_memberships | syncapi_memberships_unique | UNIQUE (room_id, user_id, membership)
 constraint syncapi_notification_data | syncapi_notification_data_pkey | PRIMARY KEY (id)
 constraint syncapi_notification_data | syncapi_notification_data_unique | UNIQUE (user_id, room_id)

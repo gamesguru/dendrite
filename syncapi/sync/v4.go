@@ -273,7 +273,7 @@ func roomLeaveIsNew(
 	if err != nil {
 		return false
 	}
-	previousMembership, err := snapshot.SelectMembershipForUserAtStreamPosition(
+	previousMembership, _, err := snapshot.SelectMembershipForUserAtStreamPosition(
 		ctx, roomID, userID, int64(lastToken.PDUPosition),
 	)
 	if err != nil {
@@ -2272,7 +2272,78 @@ func (rp *RequestPool) buildInterruptResponse(
 		succeeded = true
 	}
 
+	rp.acknowledgeInterruptLists(ctx, resp, connState, since)
 	return resp
+}
+
+// acknowledgeInterruptLists gives a timeout response that sent list operations
+// a connection position of its own, with the windows it sent saved against it.
+// Without one the client applies the operations, but the next request is still
+// compared with the window of the old position and repeats them.
+//
+// On any failure the response keeps the old position, as a response without
+// list operations does.
+func (rp *RequestPool) acknowledgeInterruptLists(
+	ctx context.Context,
+	resp *types.SlidingSyncResponse,
+	connState *V4ConnectionState,
+	since *types.SlidingSyncStreamToken,
+) {
+	if connState == nil || since == nil || ctx.Err() != nil {
+		return
+	}
+	var sentOps bool
+	for _, list := range resp.Lists {
+		if len(list.Ops) > 0 {
+			sentOps = true
+			break
+		}
+	}
+	if !sentOps {
+		return
+	}
+	// If the response cannot be acknowledged with a new position, drop the
+	// operations rather than letting the next request replay them against a
+	// window the client has already applied.
+	discardOps := func() {
+		for listName, list := range resp.Lists {
+			list.Ops = nil
+			resp.Lists[listName] = list
+		}
+	}
+	position, err := rp.db.CreateConnectionPosition(ctx, connState.ConnectionKey)
+	if err != nil {
+		logrus.WithError(err).Warn("[V4_SYNC] Failed to create position for timeout response with list operations")
+		discardOps()
+		return
+	}
+	acknowledged := *connState
+	acknowledged.ConnectionPosition = position
+	acknowledged.AccountDataWritten = nil
+	for listName, list := range resp.Lists {
+		windowJSON, err := json.Marshal(list.WindowRoomIDs)
+		if err == nil {
+			err = rp.db.UpdateConnectionListWindow(ctx, connState.ConnectionKey, listName, position, string(windowJSON))
+		}
+		if err != nil {
+			logrus.WithError(err).WithField("list", listName).Warn("[V4_SYNC] Failed to save list window for timeout response")
+			discardOps()
+			return
+		}
+	}
+	if _, err := rp.copyForwardStreamStates(ctx, &acknowledged, nil); err != nil {
+		discardOps()
+		return
+	}
+	if err := rp.copyForwardRoomConfigs(ctx, &acknowledged, nil); err != nil {
+		discardOps()
+		return
+	}
+	if err := rp.copyForwardAccountDataState(ctx, &acknowledged); err != nil {
+		discardOps()
+		return
+	}
+	resp.Pos = types.NewSlidingSyncStreamToken(position, since.StreamToken).String()
 }
 
 // committedPDUPosition returns the later of pos and the highest PDU stream

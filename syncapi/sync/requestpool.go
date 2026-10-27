@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -823,30 +824,31 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 		return
 	}
 
-	// Find the joins the sync API has not caught up with yet. One snapshot and
-	// one batched query are enough, and the snapshot is closed before waiting so
-	// the waits can take their own.
+	// Read the join event the sync API has stored for each room first. The
+	// snapshot is closed before the roomserver calls so neither those calls nor
+	// the waits can hold a connection open.
+	type syncMembership struct {
+		membership string
+		eventID    string
+		err        error
+	}
 	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
 		return
 	}
-	synced, err := snapshot.RoomIDsWithMembership(ctx, req.Device.UserID, spec.Join)
-	_ = snapshot.Rollback()
-	if err != nil {
-		return
-	}
-	syncedSet := make(map[string]struct{}, len(synced))
-	for _, id := range synced {
-		syncedSet[id] = struct{}{}
-	}
-	var pending []spec.RoomID
+	stored := make(map[string]syncMembership, len(rooms))
 	for _, roomID := range rooms {
-		if _, ok := syncedSet[roomID.String()]; !ok {
-			pending = append(pending, roomID)
+		if ctx.Err() != nil {
+			break
 		}
+		membership, eventID, membershipErr := snapshot.SelectMembershipForUserAtStreamPosition(
+			ctx, roomID.String(), req.Device.UserID, math.MaxInt64,
+		)
+		stored[roomID.String()] = syncMembership{membership, eventID, membershipErr}
 	}
+	_ = snapshot.Rollback()
 
-	for _, roomID := range pending {
+	for _, roomID := range rooms {
 		if ctx.Err() != nil {
 			return
 		}
@@ -856,6 +858,11 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 			RoomID: roomIDStr,
 			UserID: *userID,
 		}, &membershipRes); err != nil || !membershipRes.IsInRoom || membershipRes.EventID == "" {
+			continue
+		}
+		// A join in sync storage is not enough: the roomserver may already have
+		// a newer join for a rejoin that has not reached the sync API yet.
+		if current := stored[roomIDStr]; current.err == nil && current.membership == spec.Join && current.eventID == membershipRes.EventID {
 			continue
 		}
 		internal.WaitForMembershipInTopology(ctx, rp.db, membershipRes.EventID)

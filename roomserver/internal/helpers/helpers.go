@@ -561,6 +561,12 @@ func QueryLatestEventsAndState(
 	if err != nil {
 		return err
 	}
+	if request.IncludeMaxEventNID {
+		response.MaxEventNID, err = db.MaxEventNIDInRoom(ctx, request.RoomID)
+		if err != nil {
+			return err
+		}
+	}
 
 	var stateEntries []types.StateEntry
 	if len(request.StateToFetch) == 0 {

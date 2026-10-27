@@ -98,6 +98,23 @@ func (d *DatabaseTransaction) CurrentState(ctx context.Context, roomID string, s
 	return d.CurrentRoomState.SelectCurrentState(ctx, d.txn, roomID, stateFilterPart, excludeEventIDs)
 }
 
+func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
+	streamEvents, err := d.OutputEvents.SelectEvents(ctx, d.txn, eventIDs, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
+}
+
+func (d *DatabaseTransaction) PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, eventIDs []string) error {
+	for _, eventID := range eventIDs {
+		if err := d.BackwardExtremities.DeleteBackwardExtremity(ctx, d.txn, roomID, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *DatabaseTransaction) RoomIDsWithMembership(ctx context.Context, userID string, membership string) ([]string, error) {
 	return d.CurrentRoomState.SelectRoomIDsWithMembership(ctx, d.txn, userID, membership)
 }
@@ -110,6 +127,14 @@ func (d *DatabaseTransaction) KickedRoomIDs(ctx context.Context, userID string) 
 
 func (d *DatabaseTransaction) MembershipCount(ctx context.Context, roomID, membership string, pos types.StreamPosition) (int, error) {
 	return d.Memberships.SelectMembershipCount(ctx, d.txn, roomID, membership, pos)
+}
+
+func (d *DatabaseTransaction) SelectMembershipForUser(ctx context.Context, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error) {
+	return d.Memberships.SelectMembershipForUser(ctx, d.txn, roomID, userID, pos)
+}
+
+func (d *DatabaseTransaction) SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error) {
+	return d.Memberships.SelectMembershipForUserAtStreamPosition(ctx, d.txn, roomID, userID, streamPos)
 }
 
 func (d *DatabaseTransaction) GetRoomSummary(ctx context.Context, roomID, userID string) (*types.Summary, error) {
@@ -212,22 +237,6 @@ func (d *DatabaseTransaction) UpsertConnectionReceipt(ctx context.Context, conne
 
 func (d *DatabaseTransaction) DeleteConnectionReceipts(ctx context.Context, connectionKey int64) error {
 	return d.Receipts.DeleteConnectionReceipts(ctx, d.txn, connectionKey)
-}
-
-// Events lookups a list of event by their event ID.
-// Returns a list of events matching the requested IDs found in the database.
-// If an event is not found in the database then it will be omitted from the list.
-// Returns an error if there was a problem talking with the database.
-// Does not include any transaction IDs in the returned events.
-func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
-	streamEvents, err := d.OutputEvents.SelectEvents(ctx, d.txn, eventIDs, nil, false)
-	if err != nil {
-		return nil, err
-	}
-
-	// We don't include a device here as we only include transaction IDs in
-	// incremental syncs.
-	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
 // EventsWithDevice looks up events and annotates the device's transaction ID

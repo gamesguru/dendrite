@@ -277,21 +277,26 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 	return util.ErrorResponse(errors.New("thread subscription update conflicted with concurrent changes"))
 }
 
-// maxRoomOrdering returns the greatest locally assigned event ordering among
-// the room's latest events. Unlike depth, it cannot be chosen by a remote
-// sender. It is scoped to this database's event sequence, so account data and
-// the roomserver database must be restored together.
+// maxRoomOrdering returns an upper bound on the locally assigned orderings of
+// all events stored for the room, including events that are no longer forward
+// extremities. Unlike depth, it cannot be chosen by a remote sender. It is
+// scoped to this database's event sequence, so account data and the roomserver
+// database must be restored together.
 func maxRoomOrdering(req *http.Request, roomID string, rsAPI roomserver.ClientRoomserverAPI) (int64, error) {
 	var latest roomserver.QueryLatestEventsAndStateResponse
 	if err := rsAPI.QueryLatestEventsAndState(req.Context(), &roomserver.QueryLatestEventsAndStateRequest{
-		RoomID: roomID,
+		RoomID:             roomID,
+		IncludeMaxEventNID: true,
 		// Avoid fetching the entire current state just to learn the ordering.
 		StateToFetch: []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomCreate, StateKey: ""}},
 	}, &latest); err != nil {
 		return 0, err
 	}
 	if len(latest.LatestEvents) == 0 {
-		return 0, nil
+		return latest.MaxEventNID, nil
+	}
+	if latest.MaxEventNID > 0 {
+		return latest.MaxEventNID, nil
 	}
 	var events roomserver.QueryEventsByIDResponse
 	if err := rsAPI.QueryEventsByID(req.Context(), &roomserver.QueryEventsByIDRequest{

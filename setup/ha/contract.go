@@ -47,8 +47,9 @@ type Contract struct {
 // either turns the transition into an offline upgrade.
 // Level 17 only drops a redundant index. A level 16 build recreates it from
 // its own schema on startup, so rolling back to level 16 stays supported.
-// Level 18 adds the sliding sync list-window table. An older build ignores it,
-// so rolling back to level 16 remains supported.
+// Level 18 adds the sliding sync list-window table. Level 19 adds retained
+// membership history. An older build ignores both, so rolling back to level 16
+// remains supported.
 var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, RollbackTo: rollbackToLevel}
 
 // releaseLevel is the current shared-state surface level. Level 2 stores
@@ -63,8 +64,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 // reports (MSC4151), level 14 adds the pending notification refresh outbox,
 // level 15 uniquely indexes invite event IDs, level 16 tracks notary key
 // retention (MSC4499), level 17 drops the redundant invite event ID index,
-// and level 18 stores sliding-sync list windows by connection position.
-const releaseLevel = 18
+// level 18 stores sliding-sync list windows by connection position, and level
+// 19 retains every membership transition for position-bounded lookups.
+const releaseLevel = 19
 
 // rollbackToLevel is the oldest level that may take over from state this build
 // writes. It stays behind releaseLevel while the changes between them remain
