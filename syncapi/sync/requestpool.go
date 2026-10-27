@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -822,21 +823,38 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 	if err != nil || len(rooms) == 0 {
 		return
 	}
+
+	// Find the joins the sync API has not caught up with yet. One snapshot is
+	// enough, and it is closed before waiting so the waits can take their own.
+	var pending []spec.RoomID
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return
+	}
 	for _, roomID := range rooms {
+		if ctx.Err() != nil {
+			break
+		}
+		membership, _, membershipErr := snapshot.SelectMembershipForUser(ctx, roomID.String(), req.Device.UserID, math.MaxInt64)
+		if membershipErr == nil && membership == spec.Join {
+			continue
+		}
+		pending = append(pending, roomID)
+	}
+	_ = snapshot.Rollback()
+
+	for _, roomID := range pending {
 		if ctx.Err() != nil {
 			return
 		}
-		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
-		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
-			RoomID: roomID.String(),
-		}, &latestRes); err != nil {
+		roomIDStr := roomID.String()
+		var membershipRes roomserverAPI.QueryMembershipForUserResponse
+		if err := rp.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
+			RoomID: roomIDStr,
+			UserID: *userID,
+		}, &membershipRes); err != nil || !membershipRes.IsInRoom || membershipRes.EventID == "" {
 			continue
 		}
-		for _, ev := range latestRes.LatestEvents {
-			if ctx.Err() != nil {
-				return
-			}
-			internal.WaitForMembershipInTopology(ctx, rp.db, ev)
-		}
+		internal.WaitForMembershipInTopology(ctx, rp.db, membershipRes.EventID)
 	}
 }

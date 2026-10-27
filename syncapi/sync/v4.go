@@ -84,6 +84,8 @@ type V4ConnectionState struct {
 	ConnectionKey int64
 	// Connection position for THIS response (created at start of request)
 	ConnectionPosition int64
+	// Position supplied by the client for this request, or zero on an initial sync.
+	PreviousPosition int64
 	// Stream states from previous syncs (for delta computation)
 	// map[roomID]map[stream]*StreamState
 	PreviousStreamStates map[string]map[string]*types.SlidingSyncStreamState
@@ -248,6 +250,36 @@ func determineRoomStreamState(
 		Status:    types.HaveSentRoomPreviously,
 		LastToken: lastToken,
 	}
+}
+
+// roomLeaveIsNew reports whether the user's leave happened after the last
+// position this connection received for the room. A leave that was already
+// delivered does not need to be sent again.
+func roomLeaveIsNew(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	connState *V4ConnectionState,
+	roomID string,
+	userID string,
+) bool {
+	if connState == nil || connState.PreviousStreamStates == nil {
+		return false
+	}
+	previousState := connState.PreviousStreamStates[roomID]["events"]
+	if previousState == nil || previousState.LastToken == "" {
+		return false
+	}
+	lastToken, err := types.NewStreamTokenFromString(previousState.LastToken)
+	if err != nil {
+		return false
+	}
+	previousMembership, _, err := snapshot.SelectMembershipForUser(
+		ctx, roomID, userID, int64(lastToken.PDUPosition),
+	)
+	if err != nil {
+		return false
+	}
+	return previousMembership != spec.Leave
 }
 
 // logV4Response logs full response body at trace level (sensitive data)
@@ -646,9 +678,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	}
 
 	// Create connection state for this request
+	previousPosition := int64(0)
+	if since != nil {
+		previousPosition = since.ConnectionPosition
+	}
 	connState := &V4ConnectionState{
 		ConnectionKey:        connectionKey,
 		ConnectionPosition:   0, // Will be set after creating position
+		PreviousPosition:     previousPosition,
 		PreviousStreamStates: previousStreamStates,
 		PreviousRoomConfigs:  previousRoomConfigs,
 	}
@@ -962,12 +999,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						// Check if this is a kick (in kickedRooms) or self-leave
 						if !kickedRooms[roomID] {
 							// Include a self-leave once when this connection already
-							// saw the room, so its client receives the leave event.
-							if determineRoomStreamState(ctx, subSnapshot, connState, roomID, device.UserID).Status == types.HaveSentRoomNever {
+							// saw the room's predecessor state, so its client receives
+							// the leave event. A leave already sent stays filtered.
+							if !roomLeaveIsNew(ctx, subSnapshot, connState, roomID, device.UserID) {
 								logrus.WithFields(logrus.Fields{
 									"room_id": roomID,
 									"user_id": device.UserID,
-								}).Debug("[V4_SYNC] Filtering out unseen self-left room from subscription")
+								}).Debug("[V4_SYNC] Filtering out seen self-left room from subscription")
 								continue
 							}
 							roomsLeftOnConnection[roomID] = true
@@ -1099,7 +1137,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						continue
 					}
 					membership, _, membershipErr := filterSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64)
-					if membershipErr == nil && (membership == spec.Leave || membership == spec.Ban) {
+					if membershipErr == nil && (membership == spec.Leave || membership == spec.Ban) &&
+						roomLeaveIsNew(ctx, filterSnapshot, connState, roomID, device.UserID) {
 						roomsToKeep[roomID] = true
 					}
 				}
@@ -1908,15 +1947,33 @@ func (rp *RequestPool) processRoomList(
 
 	// Load the previously sent window. On an initial sync the stored list is
 	// deliberately ignored so that the response is a SYNC, not a delta against
-	// a window the client never received.
+	// a window the client never received. The window is keyed by the client's
+	// position so a retry from an unacknowledged position compares against the
+	// window that client actually received.
 	var previousRoomIDs []string
+	var previousWindowExists bool
 	if !forceInitialSync {
-		previousRoomIDsJSON, exists, err := rp.db.GetConnectionList(ctx, connState.ConnectionKey, listName)
-		if err != nil {
-			logrus.WithError(err).WithField("list", listName).Error("Failed to load connection list")
-		} else if exists {
-			if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
-				logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list JSON")
+		if connState != nil && connState.PreviousPosition > 0 {
+			previousRoomIDsJSON, exists, err := rp.db.GetConnectionListWindow(ctx, connState.ConnectionKey, listName, connState.PreviousPosition)
+			if err != nil {
+				return types.SlidingList{}, fmt.Errorf("load connection list window %q: %w", listName, err)
+			} else if exists {
+				previousWindowExists = true
+				if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
+					logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list window JSON")
+				}
+			}
+		}
+		if !previousWindowExists {
+			// Fall back to the legacy per-connection list for connections that
+			// predate position-keyed windows.
+			previousRoomIDsJSON, exists, err := rp.db.GetConnectionList(ctx, connState.ConnectionKey, listName)
+			if err != nil {
+				logrus.WithError(err).WithField("list", listName).Error("Failed to load connection list")
+			} else if exists {
+				if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
+					logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list JSON")
+				}
 			}
 		}
 	}
@@ -1961,11 +2018,24 @@ func (rp *RequestPool) processRoomList(
 		roomIDsJSON, err := json.Marshal(roomIDs)
 		if err != nil {
 			logrus.WithError(err).WithField("list", listName).Error("Failed to encode room IDs to JSON")
-		} else if err := rp.db.UpdateConnectionList(ctx, connState.ConnectionKey, listName, string(roomIDsJSON)); err != nil {
-			logrus.WithError(err).WithField("list", listName).Error("Failed to persist connection list")
+		} else {
+			if err := rp.db.UpdateConnectionList(ctx, connState.ConnectionKey, listName, string(roomIDsJSON)); err != nil {
+				logrus.WithError(err).WithField("list", listName).Error("Failed to persist connection list")
+			}
 		}
 	} else {
 		logrus.WithField("list_name", listName).Debug("[V4_SYNC] List unchanged, no operations needed")
+	}
+	// Persist a window for every response position, including unchanged lists,
+	// so the next request can always compare with the position it acknowledges.
+	if connState.ConnectionPosition > 0 {
+		roomIDsJSON, err := json.Marshal(roomIDs)
+		if err != nil {
+			return types.SlidingList{}, fmt.Errorf("encode connection list window %q: %w", listName, err)
+		}
+		if err := rp.db.UpdateConnectionListWindow(ctx, connState.ConnectionKey, listName, connState.ConnectionPosition, string(roomIDsJSON)); err != nil {
+			return types.SlidingList{}, fmt.Errorf("persist connection list window %q: %w", listName, err)
+		}
 	}
 
 	matchedRoomIDs := make([]string, len(rooms))

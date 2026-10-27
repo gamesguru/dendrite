@@ -151,7 +151,7 @@ func TestFilterSharedUsersFallsBackToRoomserverOnDatabaseError(t *testing.T) {
 		},
 	}
 
-	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser})
+	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, []string{otherUser})
 	if shared[otherUser] == 0 {
 		t.Fatalf("roomserver fallback did not find shared user: got %v", shared)
 	}
@@ -160,11 +160,15 @@ func TestFilterSharedUsersFallsBackToRoomserverOnDatabaseError(t *testing.T) {
 func TestFilterSharedUsersFailsOpenWhenFallbackFails(t *testing.T) {
 	t.Parallel()
 	otherUser := "@bob:localhost"
+	unrelatedUser := "@carol:localhost"
 	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
 
-	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser})
+	shared := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser, unrelatedUser}, []string{otherUser})
 	if shared[otherUser] == 0 {
 		t.Fatalf("expected fail-open shared-user count, got %v", shared)
+	}
+	if shared[unrelatedUser] != 0 {
+		t.Fatalf("unrelated user was marked shared after fallback failure: got %v", shared)
 	}
 }
 

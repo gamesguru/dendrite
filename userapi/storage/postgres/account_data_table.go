@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -41,11 +42,19 @@ const insertAccountDataSQL = `
 	ON CONFLICT (localpart, server_name, room_id, type) DO UPDATE SET content = EXCLUDED.content
 `
 
+const insertAccountDataIfAbsentSQL = `
+	INSERT INTO userapi_account_datas(localpart, server_name, room_id, type, content) VALUES($1, $2, $3, $4, $5)
+	ON CONFLICT (localpart, server_name, room_id, type) DO NOTHING
+`
+
 const selectAccountDataSQL = "" +
 	"SELECT room_id, type, content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
 
 const selectAccountDataByTypeSQL = "" +
 	"SELECT content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
+
+const selectAccountDataByTypeForUpdateSQL = "" +
+	"SELECT content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4 FOR UPDATE"
 
 const deleteAccountDataSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
@@ -54,11 +63,13 @@ const deleteAccountDataByTypeSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
 
 type accountDataStatements struct {
-	insertAccountDataStmt       *sql.Stmt
-	selectAccountDataStmt       *sql.Stmt
-	selectAccountDataByTypeStmt *sql.Stmt
-	deleteAccountDataStmt       *sql.Stmt
-	deleteAccountDataByTypeStmt *sql.Stmt
+	insertAccountDataStmt                *sql.Stmt
+	insertAccountDataIfAbsentStmt        *sql.Stmt
+	selectAccountDataStmt                *sql.Stmt
+	selectAccountDataByTypeStmt          *sql.Stmt
+	selectAccountDataByTypeForUpdateStmt *sql.Stmt
+	deleteAccountDataStmt                *sql.Stmt
+	deleteAccountDataByTypeStmt          *sql.Stmt
 }
 
 func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
@@ -69,8 +80,10 @@ func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertAccountDataStmt, insertAccountDataSQL},
+		{&s.insertAccountDataIfAbsentStmt, insertAccountDataIfAbsentSQL},
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
+		{&s.selectAccountDataByTypeForUpdateStmt, selectAccountDataByTypeForUpdateSQL},
 		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
 		{&s.deleteAccountDataByTypeStmt, deleteAccountDataByTypeSQL},
 	}.Prepare(db)
@@ -82,8 +95,7 @@ func (s *accountDataStatements) InsertAccountData(
 	roomID, dataType string, content json.RawMessage,
 ) (err error) {
 	if strings.TrimSpace(string(content)) == "null" {
-		_, err = sqlutil.TxStmt(txn, s.deleteAccountDataByTypeStmt).ExecContext(ctx, localpart, serverName, roomID, dataType)
-		return err
+		return errors.New("account data content must not be null")
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
 	// Empty/nil json.RawMessage is not interpreted as "nil", so use *json.RawMessage
@@ -94,6 +106,49 @@ func (s *accountDataStatements) InsertAccountData(
 	}
 	_, err = stmt.ExecContext(ctx, localpart, serverName, roomID, dataType, data)
 	return
+}
+
+func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	roomID, dataType string, expected, content json.RawMessage,
+) (bool, error) {
+	if strings.TrimSpace(string(content)) == "null" {
+		return false, errors.New("account data content must not be null")
+	}
+	var current []byte
+	stmt := sqlutil.TxStmt(txn, s.selectAccountDataByTypeForUpdateStmt)
+	err := stmt.QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
+	switch {
+	case err == sql.ErrNoRows:
+		if len(expected) != 0 {
+			return false, nil
+		}
+		result, err := sqlutil.TxStmt(txn, s.insertAccountDataIfAbsentStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content)
+		if err != nil {
+			return false, err
+		}
+		updated, err := result.RowsAffected()
+		return updated > 0, err
+	case err != nil:
+		return false, err
+	case string(current) != string(expected):
+		return false, nil
+	}
+	if _, err = sqlutil.TxStmt(txn, s.insertAccountDataStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *accountDataStatements) DeleteAccountDataByType(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	roomID, dataType string,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.deleteAccountDataByTypeStmt)
+	_, err := stmt.ExecContext(ctx, localpart, serverName, roomID, dataType)
+	return err
 }
 
 func (s *accountDataStatements) SelectAccountData(

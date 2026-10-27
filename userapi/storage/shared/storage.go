@@ -379,6 +379,33 @@ func (d *Database) SaveAccountData(
 	})
 }
 
+// SaveAccountDataIfUnchanged saves account data only if the stored value still
+// matches expected. An empty expected value requires that no account data is
+// currently stored. It reports whether the write was applied.
+func (d *Database) SaveAccountDataIfUnchanged(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+	roomID, dataType string, expected, content json.RawMessage,
+) (bool, error) {
+	var updated bool
+	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		var err error
+		updated, err = d.AccountDatas.UpdateAccountDataIfUnchanged(ctx, txn, localpart, serverName, roomID, dataType, expected, content)
+		return err
+	})
+	return updated, err
+}
+
+// DeleteAccountDataByType removes the account data for the given user, room
+// and type.
+func (d *Database) DeleteAccountDataByType(
+	ctx context.Context, localpart string, serverName spec.ServerName,
+	roomID, dataType string,
+) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.AccountDatas.DeleteAccountDataByType(ctx, txn, localpart, serverName, roomID, dataType)
+	})
+}
+
 // RemoveAllAccountData implements storage.AccountData.
 func (d *Database) RemoveAllAccountData(ctx context.Context, localpart string, serverName spec.ServerName) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {

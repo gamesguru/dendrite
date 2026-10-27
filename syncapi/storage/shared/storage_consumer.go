@@ -983,7 +983,10 @@ func (d *Database) GetConnectionStreamsByPosition(ctx context.Context, connectio
 // This is called when a client uses a position token, to clean up old state (like Synapse does).
 func (d *Database) DeleteOtherConnectionPositions(ctx context.Context, connectionKey int64, keepPosition int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.SlidingSync.DeleteOtherConnectionPositions(ctx, txn, connectionKey, keepPosition)
+		if err := d.SlidingSync.DeleteOtherConnectionPositions(ctx, txn, connectionKey, keepPosition); err != nil {
+			return err
+		}
+		return d.SlidingSync.DeleteOtherConnectionListWindows(ctx, txn, connectionKey, keepPosition)
 	})
 }
 
@@ -1121,6 +1124,21 @@ func (d *Database) GetConnectionList(ctx context.Context, connectionKey int64, l
 func (d *Database) UpdateConnectionList(ctx context.Context, connectionKey int64, listName string, roomIDsJSON string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.SlidingSync.UpsertConnectionList(ctx, txn, connectionKey, listName, roomIDsJSON)
+	})
+}
+
+func (d *Database) GetConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64) (roomIDsJSON string, exists bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		var selectErr error
+		roomIDsJSON, exists, selectErr = d.SlidingSync.SelectConnectionListWindow(ctx, txn, connectionKey, listName, connectionPosition)
+		return selectErr
+	})
+	return roomIDsJSON, exists, err
+}
+
+func (d *Database) UpdateConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.SlidingSync.UpsertConnectionListWindow(ctx, txn, connectionKey, listName, connectionPosition, roomIDsJSON)
 	})
 }
 

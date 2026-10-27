@@ -502,7 +502,7 @@ func Setup(
 			case http.MethodPut:
 				return putThreadSubscription(req, device, vars["roomID"], vars["threadID"], req.Body, userAPI, rsAPI)
 			case http.MethodDelete:
-				return deleteThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI)
+				return deleteThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI, rsAPI)
 			default:
 				return util.JSONResponse{Code: http.StatusMethodNotAllowed, JSON: spec.NotFound("Unsupported method")}
 			}

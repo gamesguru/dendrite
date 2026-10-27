@@ -2,10 +2,10 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -17,7 +17,10 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-const threadSubscriptionsAccountDataType = "io.element.msc4306.thread_subscriptions"
+const (
+	threadSubscriptionsAccountDataType = "io.element.msc4306.thread_subscriptions"
+	maxThreadSubscriptionRetries       = 10
+)
 
 type threadSubscription struct {
 	Automatic  bool   `json:"automatic"`
@@ -39,32 +42,41 @@ func (d *threadSubscriptionsData) normalize() {
 	}
 }
 
-func queryThreadSubscriptions(req *http.Request, userID, roomID string, userAPI userapi.ClientUserAPI) (threadSubscriptionsData, error) {
+func queryThreadSubscriptions(req *http.Request, userID, roomID string, userAPI userapi.ClientUserAPI) (threadSubscriptionsData, json.RawMessage, error) {
 	var response userapi.QueryAccountDataResponse
 	err := userAPI.QueryAccountData(req.Context(), &userapi.QueryAccountDataRequest{
 		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType,
 	}, &response)
 	if err != nil {
-		return threadSubscriptionsData{}, err
+		return threadSubscriptionsData{}, nil, err
 	}
 	data := threadSubscriptionsData{}
-	if raw := response.RoomAccountData[roomID][threadSubscriptionsAccountDataType]; len(raw) > 0 {
-		if err = json.Unmarshal(raw, &data); err != nil {
-			return threadSubscriptionsData{}, err
+	var raw json.RawMessage
+	if stored := response.RoomAccountData[roomID][threadSubscriptionsAccountDataType]; len(stored) > 0 {
+		raw = stored
+		if err = json.Unmarshal(stored, &data); err != nil {
+			return threadSubscriptionsData{}, nil, err
 		}
 	}
 	data.normalize()
-	return data, nil
+	return data, raw, nil
 }
 
-func saveThreadSubscriptions(req *http.Request, userID, roomID string, data threadSubscriptionsData, userAPI userapi.ClientUserAPI) error {
+// saveThreadSubscriptionsIfUnchanged writes data only if the stored document
+// still matches expected, so a concurrent change to another thread is not lost.
+func saveThreadSubscriptionsIfUnchanged(req *http.Request, userID, roomID string, expected []byte, data threadSubscriptionsData, userAPI userapi.ClientUserAPI) (bool, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return userAPI.InputAccountData(req.Context(), &userapi.InputAccountDataRequest{
-		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType, AccountData: raw,
-	}, &userapi.InputAccountDataResponse{})
+	var response userapi.InputAccountDataResponse
+	if err = userAPI.InputAccountData(req.Context(), &userapi.InputAccountDataRequest{
+		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType,
+		AccountData: raw, CompareAccountData: true, ExpectedAccountData: expected,
+	}, &response); err != nil {
+		return false, err
+	}
+	return response.Updated, nil
 }
 
 // threadSubscriptionLocks serializes the read-modify-write of each user's
@@ -157,7 +169,7 @@ func getThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 	if getThreadEvent(req, device.UserID, roomID, threadID, rsAPI) == nil {
 		return util.MatrixErrorResponse(http.StatusNotFound, string(spec.ErrorNotFound), "Unknown thread")
 	}
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+	data, _, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -188,56 +200,99 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 		if cause == nil || gjson.GetBytes(cause.Content(), `m\.relates_to.rel_type`).Str != "m.thread" || gjson.GetBytes(cause.Content(), `m\.relates_to.event_id`).Str != threadID {
 			return util.MatrixErrorResponse(http.StatusBadRequest, "IO.ELEMENT.MSC4306.M_NOT_IN_THREAD", "Automatic subscription cause event is not in this thread")
 		}
-		bumpStamp = cause.OriginServerTS().Time().UnixMilli()
+		bumpStamp = cause.Depth()
+	} else {
+		// A manual subscription is not caused by an event, so use the room's
+		// current logical position. Fall back to the thread root if the room
+		// query fails.
+		bumpStamp = root.Depth()
+		if roomDepth, depthErr := maxRoomDepth(req, roomID, rsAPI); depthErr == nil && roomDepth > bumpStamp {
+			bumpStamp = roomDepth
+		}
 	}
 	defer lockThreadSubscriptions(device.UserID, roomID)()
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	existing, subscribed := data.Subscriptions[threadID]
-	if request.Automatic != "" && subscribed && !existing.Automatic {
-		// An automatic subscription never downgrades a manual one.
-		return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
-	}
-	if request.Automatic != "" {
-		if unsubscribedAt := data.Unsubscribed[threadID]; unsubscribedAt > 0 && bumpStamp <= unsubscribedAt {
-			return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
+	for attempt := 0; attempt < maxThreadSubscriptionRetries; attempt++ {
+		data, expected, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
 		}
-	} else {
-		bumpStamp = root.OriginServerTS().Time().UnixMilli()
+		existing, subscribed := data.Subscriptions[threadID]
+		if request.Automatic != "" && subscribed && !existing.Automatic {
+			// An automatic subscription never downgrades a manual one.
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
+		if request.Automatic != "" {
+			if unsubscribedAt := data.Unsubscribed[threadID]; unsubscribedAt > 0 && bumpStamp <= unsubscribedAt {
+				return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
+			}
+		}
+		// Every change gets a later stamp than the subscription or unsubscribe it replaces.
+		floor := data.Unsubscribed[threadID]
+		if subscribed && existing.BumpStamp > floor {
+			floor = existing.BumpStamp
+		}
+		updatedStamp := bumpStamp
+		if updatedStamp <= floor {
+			updatedStamp = floor + 1
+		}
+		data.Subscriptions[threadID] = threadSubscription{Automatic: request.Automatic != "", BumpStamp: updatedStamp, CauseEvent: request.Automatic}
+		delete(data.Unsubscribed, threadID)
+		updated, err := saveThreadSubscriptionsIfUnchanged(req, device.UserID, roomID, expected, data, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if updated {
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
 	}
-	// Every change gets a later stamp than the subscription or unsubscribe it replaces.
-	floor := data.Unsubscribed[threadID]
-	if subscribed && existing.BumpStamp > floor {
-		floor = existing.BumpStamp
-	}
-	if bumpStamp <= floor {
-		bumpStamp = floor + 1
-	}
-	data.Subscriptions[threadID] = threadSubscription{Automatic: request.Automatic != "", BumpStamp: bumpStamp, CauseEvent: request.Automatic}
-	delete(data.Unsubscribed, threadID)
-	if err = saveThreadSubscriptions(req, device.UserID, roomID, data, userAPI); err != nil {
-		return util.ErrorResponse(err)
-	}
-	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+	return util.ErrorResponse(errors.New("thread subscription update conflicted with concurrent changes"))
 }
 
-func deleteThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, userAPI userapi.ClientUserAPI) util.JSONResponse {
+// maxRoomDepth returns the greatest event depth currently in the room.
+func maxRoomDepth(req *http.Request, roomID string, rsAPI roomserver.ClientRoomserverAPI) (int64, error) {
+	var res roomserver.QueryLatestEventsAndStateResponse
+	if err := rsAPI.QueryLatestEventsAndState(req.Context(), &roomserver.QueryLatestEventsAndStateRequest{
+		RoomID: roomID,
+		// Avoid fetching the entire current state just to learn the room depth.
+		StateToFetch: []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomCreate, StateKey: ""}},
+	}, &res); err != nil {
+		return 0, err
+	}
+	// Depth is one greater than the maximum depth of the latest events.
+	if res.Depth <= 0 {
+		return 0, nil
+	}
+	return res.Depth - 1, nil
+}
+
+func deleteThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, userAPI userapi.ClientUserAPI, rsAPI roomserver.ClientRoomserverAPI) util.JSONResponse {
 	defer lockThreadSubscriptions(device.UserID, roomID)()
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+	roomDepth, err := maxRoomDepth(req, roomID, rsAPI)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	existing, subscribed := data.Subscriptions[threadID]
-	delete(data.Subscriptions, threadID)
-	unsubscribedAt := time.Now().UnixMilli()
-	if subscribed && unsubscribedAt <= existing.BumpStamp {
-		unsubscribedAt = existing.BumpStamp + 1
+	for attempt := 0; attempt < maxThreadSubscriptionRetries; attempt++ {
+		data, expected, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		existing, subscribed := data.Subscriptions[threadID]
+		delete(data.Subscriptions, threadID)
+		unsubscribedAt := roomDepth
+		if subscribed && unsubscribedAt <= existing.BumpStamp {
+			unsubscribedAt = existing.BumpStamp + 1
+		}
+		if previous := data.Unsubscribed[threadID]; previous >= unsubscribedAt {
+			unsubscribedAt = previous + 1
+		}
+		data.Unsubscribed[threadID] = unsubscribedAt
+		updated, err := saveThreadSubscriptionsIfUnchanged(req, device.UserID, roomID, expected, data, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if updated {
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
 	}
-	data.Unsubscribed[threadID] = unsubscribedAt
-	if err = saveThreadSubscriptions(req, device.UserID, roomID, data, userAPI); err != nil {
-		return util.ErrorResponse(err)
-	}
-	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+	return util.ErrorResponse(errors.New("thread subscription update conflicted with concurrent changes"))
 }

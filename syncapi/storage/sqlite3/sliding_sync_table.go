@@ -176,6 +176,34 @@ const selectConnectionListSQL = `
 	WHERE connection_key = $1 AND list_name = $2
 `
 
+const connectionListWindowSchema = `
+CREATE TABLE IF NOT EXISTS syncapi_sliding_sync_connection_list_windows (
+    connection_key INTEGER NOT NULL REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE,
+    list_name TEXT NOT NULL,
+    connection_position INTEGER NOT NULL,
+    room_ids TEXT NOT NULL,
+    PRIMARY KEY (connection_key, list_name, connection_position)
+);
+`
+
+const upsertConnectionListWindowSQL = `
+	INSERT INTO syncapi_sliding_sync_connection_list_windows (connection_key, list_name, connection_position, room_ids)
+	VALUES ($1, $2, $3, $4)
+	ON CONFLICT (connection_key, list_name, connection_position)
+	DO UPDATE SET room_ids = $4
+`
+
+const selectConnectionListWindowSQL = `
+	SELECT room_ids
+	FROM syncapi_sliding_sync_connection_list_windows
+	WHERE connection_key = $1 AND list_name = $2 AND connection_position = $3
+`
+
+const deleteOtherConnectionListWindowsSQL = `
+	DELETE FROM syncapi_sliding_sync_connection_list_windows
+	WHERE connection_key = $1 AND connection_position != $2
+`
+
 type slidingSyncStatements struct {
 	db                                    *sql.DB
 	insertConnectionStmt                  *sql.Stmt
@@ -201,10 +229,16 @@ type slidingSyncStatements struct {
 	deleteOtherConnectionPositionsStmt    *sql.Stmt
 	upsertConnectionListStmt              *sql.Stmt
 	selectConnectionListStmt              *sql.Stmt
+	upsertConnectionListWindowStmt        *sql.Stmt
+	selectConnectionListWindowStmt        *sql.Stmt
+	deleteOtherConnectionListWindowsStmt  *sql.Stmt
 }
 
 func NewSqliteSlidingSyncTable(db *sql.DB) (tables.SlidingSync, error) {
 	s := &slidingSyncStatements{db: db}
+	if _, err := db.Exec(connectionListWindowSchema); err != nil {
+		return nil, err
+	}
 	return s, sqlutil.StatementList{
 		{&s.insertConnectionStmt, insertConnectionSQL},
 		{&s.selectConnectionByKeyStmt, selectConnectionByKeySQL},
@@ -229,6 +263,9 @@ func NewSqliteSlidingSyncTable(db *sql.DB) (tables.SlidingSync, error) {
 		{&s.deleteOtherConnectionPositionsStmt, deleteOtherConnectionPositionsSQL},
 		{&s.upsertConnectionListStmt, upsertConnectionListSQL},
 		{&s.selectConnectionListStmt, selectConnectionListSQL},
+		{&s.upsertConnectionListWindowStmt, upsertConnectionListWindowSQL},
+		{&s.selectConnectionListWindowStmt, selectConnectionListWindowSQL},
+		{&s.deleteOtherConnectionListWindowsStmt, deleteOtherConnectionListWindowsSQL},
 	}.Prepare(db)
 }
 
@@ -581,6 +618,37 @@ func (s *slidingSyncStatements) SelectConnectionList(
 		return "", false, err
 	}
 	return roomIDsJSON, true, nil
+}
+
+func (s *slidingSyncStatements) UpsertConnectionListWindow(
+	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.upsertConnectionListWindowStmt)
+	_, err := stmt.ExecContext(ctx, connectionKey, listName, connectionPosition, roomIDsJSON)
+	return err
+}
+
+func (s *slidingSyncStatements) SelectConnectionListWindow(
+	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64,
+) (string, bool, error) {
+	stmt := sqlutil.TxStmt(txn, s.selectConnectionListWindowStmt)
+	var roomIDsJSON string
+	err := stmt.QueryRowContext(ctx, connectionKey, listName, connectionPosition).Scan(&roomIDsJSON)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return roomIDsJSON, true, nil
+}
+
+func (s *slidingSyncStatements) DeleteOtherConnectionListWindows(
+	ctx context.Context, txn *sql.Tx, connectionKey int64, keepPosition int64,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.deleteOtherConnectionListWindowsStmt)
+	_, err := stmt.ExecContext(ctx, connectionKey, keepPosition)
+	return err
 }
 
 // Ensure we implement the interface.

@@ -107,9 +107,21 @@ func (a *UserInternalAPI) InputAccountData(ctx context.Context, req *api.InputAc
 	if req.DataType == "" {
 		return fmt.Errorf("data type must not be empty")
 	}
-	if err := a.DB.SaveAccountData(ctx, local, domain, req.RoomID, req.DataType, req.AccountData); err != nil {
+	if req.CompareAccountData {
+		updated, saveErr := a.DB.SaveAccountDataIfUnchanged(ctx, local, domain, req.RoomID, req.DataType, req.ExpectedAccountData, req.AccountData)
+		if saveErr != nil {
+			util.GetLogger(ctx).WithError(saveErr).Error("a.DB.SaveAccountDataIfUnchanged failed")
+			return fmt.Errorf("failed to save account data: %w", saveErr)
+		}
+		res.Updated = updated
+		if !updated {
+			return nil
+		}
+	} else if err := a.DB.SaveAccountData(ctx, local, domain, req.RoomID, req.DataType, req.AccountData); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("a.DB.SaveAccountData failed")
 		return fmt.Errorf("failed to save account data: %w", err)
+	} else {
+		res.Updated = true
 	}
 	var ignoredUsers *synctypes.IgnoredUsers
 	if req.DataType == "m.ignored_user_list" {
@@ -401,8 +413,8 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 	var accountDataErrs []error
 	for _, deviceID := range deletedDeviceIDs {
 		dataType := "org.matrix.msc3890.local_notification_settings." + deviceID
-		if err = a.DB.SaveAccountData(ctx, local, domain, "", dataType, json.RawMessage("null")); err != nil {
-			accountDataErrs = append(accountDataErrs, fmt.Errorf("a.DB.SaveAccountData(%s): %w", dataType, err))
+		if err = a.DB.DeleteAccountDataByType(ctx, local, domain, "", dataType); err != nil {
+			accountDataErrs = append(accountDataErrs, fmt.Errorf("a.DB.DeleteAccountDataByType(%s): %w", dataType, err))
 		}
 	}
 	// Ask the keyserver to delete device keys and signatures for those devices

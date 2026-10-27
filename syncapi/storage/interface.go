@@ -334,4 +334,8 @@ type SlidingSync interface {
 	GetConnectionList(ctx context.Context, connectionKey int64, listName string) (roomIDsJSON string, exists bool, err error)
 	// UpdateConnectionList stores the current room IDs for a list (JSON array)
 	UpdateConnectionList(ctx context.Context, connectionKey int64, listName string, roomIDsJSON string) error
+	// GetConnectionListWindow retrieves the room IDs a list had at a connection position.
+	GetConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64) (roomIDsJSON string, exists bool, err error)
+	// UpdateConnectionListWindow stores the room IDs a list had at a connection position.
+	UpdateConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string) error
 }

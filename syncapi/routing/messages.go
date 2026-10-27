@@ -947,6 +947,15 @@ func backfillEvents(
 ) ([]*rstypes.HeaderedEvent, error) {
 	// Finish the backfill even if the client goes away, so the events are stored.
 	ctx = context.WithoutCancel(ctx)
+
+	// Backward-extremity rows are durable cleanup work: if a previous lookup or
+	// purge failed, retry it on the next /messages backfill attempt.
+	var pendingPrevIDs []string
+	for _, prevIDs := range backwardsExtremities {
+		pendingPrevIDs = append(pendingPrevIDs, prevIDs...)
+	}
+	retryBackwardExtremityCleanup(ctx, db, roomID, pendingPrevIDs)
+
 	var res api.PerformBackfillResponse
 	err := rsAPI.PerformBackfill(ctx, &api.PerformBackfillRequest{
 		RoomID:               roomID,
@@ -1008,18 +1017,7 @@ func backfillEvents(
 		for eventID := range prevEventIDs {
 			ids = append(ids, eventID)
 		}
-		// The events are already stored, so a failed cleanup must not discard them.
-		stored, selectErr := db.Events(ctx, ids)
-		if selectErr != nil {
-			util.GetLogger(ctx).WithError(selectErr).Warn("Failed to look up backfilled prev events")
-		}
-		storedIDs := make([]string, 0, len(stored))
-		for _, ev := range stored {
-			storedIDs = append(storedIDs, ev.EventID())
-		}
-		if purgeErr := db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs); purgeErr != nil {
-			util.GetLogger(ctx).WithError(purgeErr).Warn("Failed to purge stale backward extremities")
-		}
+		retryBackwardExtremityCleanup(ctx, db, roomID, ids)
 	}
 
 	// we may have got more than the requested limit so resize now
@@ -1029,4 +1027,28 @@ func backfillEvents(
 	}
 
 	return events, nil
+}
+
+// retryBackwardExtremityCleanup removes markers for events that are now stored.
+// The markers themselves persist failed work, so a later backfill can retry it.
+func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, roomID string, candidateIDs []string) {
+	if len(candidateIDs) == 0 {
+		return
+	}
+	candidateIDs = util.UniqueStrings(candidateIDs)
+	stored, err := db.Events(ctx, candidateIDs)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to look up events for backward-extremity cleanup")
+		return
+	}
+	storedIDs := make([]string, 0, len(stored))
+	for _, ev := range stored {
+		storedIDs = append(storedIDs, ev.EventID())
+	}
+	if len(storedIDs) == 0 {
+		return
+	}
+	if err = db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to purge stale backward extremities")
+	}
 }

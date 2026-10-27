@@ -109,7 +109,19 @@ func DeviceListCatchup(
 	queryRes.UserIDs = append(queryRes.UserIDs, joinUserIDs...)
 	queryRes.UserIDs = append(queryRes.UserIDs, leaveUserIDs...)
 	queryRes.UserIDs = util.UniqueStrings(queryRes.UserIDs)
-	sharedUsersMap := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs)
+	// Leave users must stay at zero even if the same user also appears in a
+	// join event in this response.
+	leaveSet := make(map[string]struct{}, len(leaveUserIDs))
+	for _, leaveUserID := range leaveUserIDs {
+		leaveSet[leaveUserID] = struct{}{}
+	}
+	failOpenUserIDs := make([]string, 0, len(joinUserIDs))
+	for _, joinUserID := range joinUserIDs {
+		if _, leaving := leaveSet[joinUserID]; !leaving {
+			failOpenUserIDs = append(failOpenUserIDs, joinUserID)
+		}
+	}
+	sharedUsersMap := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs, failOpenUserIDs)
 	userSet := make(map[string]bool)
 	for _, userID := range res.DeviceLists.Changed {
 		userSet[userID] = true
@@ -260,7 +272,7 @@ func TrackChangedUsers(
 // it down to include only users who the requesting user shares a room with.
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
-	userID string, usersWithChangedKeys []string,
+	userID string, usersWithChangedKeys, failOpenUserIDs []string,
 ) map[string]int {
 	sharedUsersMap := make(map[string]int, len(usersWithChangedKeys))
 	for _, changedUserID := range usersWithChangedKeys {
@@ -284,6 +296,10 @@ func filterSharedUsers(
 			sharedUsersMap[userID]++
 		}
 	}
+	failOpenSet := make(map[string]struct{}, len(failOpenUserIDs))
+	for _, candidate := range failOpenUserIDs {
+		failOpenSet[candidate] = struct{}{}
+	}
 
 	// The sync API's current_room_state table can lag behind the roomserver,
 	// notably just after a partial-state resync has completed. A device list
@@ -293,7 +309,8 @@ func filterSharedUsers(
 	var missing []string
 	missingSet := make(map[string]struct{}, len(sharedUsersMap))
 	for changedUserID, count := range sharedUsersMap {
-		if count == 0 && changedUserID != userID {
+		_, eligible := failOpenSet[changedUserID]
+		if count == 0 && changedUserID != userID && eligible {
 			missing = append(missing, changedUserID)
 			missingSet[changedUserID] = struct{}{}
 		}
