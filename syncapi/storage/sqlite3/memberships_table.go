@@ -85,6 +85,8 @@ type membershipsStatements struct {
 	purgeMembershipsStmt         *sql.Stmt
 }
 
+// NewSqliteMembershipsTable creates the membership table if needed and prepares
+// its queries, returning schema or statement preparation errors.
 func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 	s := &membershipsStatements{
 		db: db,
@@ -163,6 +165,10 @@ func (s *membershipsStatements) SelectMembershipForUser(
 	return membership, topologyPos, nil
 }
 
+// SelectMembershipForUserAtStreamPosition returns the latest retained membership
+// at or before streamPos, using sync stream order rather than room topology.
+// The table retains only the latest event for each membership value. No matching
+// row returns "leave" without an error; other query or scan errors propagate.
 func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64,
 ) (membership string, err error) {

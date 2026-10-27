@@ -41,9 +41,11 @@ func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceI
 	return nil
 }
 
-// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. HasNew=true if the response
-// was filled in, else false if there are no new device list changes because there is nothing to catch up on. The response MUST
-// be already filled in with join/leave information.
+// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. The response MUST
+// be already filled in with join/leave information. It returns the key-change
+// position and whether room tracking found changes or device_lists.changed grew.
+// Room-tracking errors propagate. Key-change query failures preserve membership
+// results and return to as the position without an error.
 func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
@@ -268,8 +270,11 @@ func TrackChangedUsers(
 	return changed, left, nil
 }
 
-// filterSharedUsers takes a list of remote users whose keys have changed and filters
-// it down to include only users who the requesting user shares a room with.
+// filterSharedUsers returns shared-room counts for usersWithChangedKeys,
+// retaining zero-count entries and treating the requesting user as shared with
+// itself. Only zero-count users in failOpenUserIDs are checked against the
+// roomserver; if that query fails, their counts become one. Database lookup
+// failures use the same fallback, leaving other users at their initial counts.
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, usersWithChangedKeys, failOpenUserIDs []string,

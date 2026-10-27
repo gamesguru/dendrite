@@ -940,6 +940,11 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 
 // backfillEvents asks the roomserver to backfill events over federation and
 // stores them as backfilled events, which keeps them out of sync responses.
+// It continues independently of ctx cancellation and deadlines, returning at most
+// limit events in ascending depth order after storing the full batch. limit must
+// be nonnegative. Backfill and event-write errors propagate; backward-extremity
+// cleanup failures do not fail the request. Earlier writes may remain when a
+// later write fails.
 func backfillEvents(
 	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
 	serverName, virtualHost spec.ServerName,
@@ -1029,8 +1034,9 @@ func backfillEvents(
 	return events, nil
 }
 
-// retryBackwardExtremityCleanup removes markers for events that are now stored.
-// The markers themselves persist failed work, so a later backfill can retry it.
+// retryBackwardExtremityCleanup removes markers for candidate events that are
+// now stored. Empty candidates do nothing. Lookup or purge failures are not
+// returned; the markers themselves persist failed work for a later backfill.
 func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, roomID string, candidateIDs []string) {
 	if len(candidateIDs) == 0 {
 		return

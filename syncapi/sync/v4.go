@@ -252,9 +252,10 @@ func determineRoomStreamState(
 	}
 }
 
-// roomLeaveIsNew reports whether the user's leave happened after the last
-// position this connection received for the room. A leave that was already
-// delivered does not need to be sent again.
+// roomLeaveIsNew reports whether the retained membership at the room's last
+// sent PDU stream position was other than "leave". Callers use this for rooms
+// currently left or banned. Missing stream state, invalid tokens, and membership
+// lookup errors return false.
 func roomLeaveIsNew(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
@@ -1896,7 +1897,13 @@ func (rp *RequestPool) requiredStateChanged(
 	return string(currentJSON) != previousJSON
 }
 
-// processRoomList handles a single room list configuration.
+// processRoomList returns an activity-sorted, filtered room list with its total
+// count, window, operations, and removed room IDs. connState must be non-nil.
+// forceInitialSync ignores the previous window; otherwise the client's previous
+// position selects it, with a missing or invalid saved window triggering resync.
+// A positive response position saves the current window even when unchanged.
+// Room-query, filter, and position-specific window storage errors propagate;
+// legacy list storage failures do not fail the result.
 func (rp *RequestPool) processRoomList(
 	ctx context.Context,
 	userID string,
@@ -2059,7 +2066,8 @@ func (rp *RequestPool) processRoomList(
 
 // selectPreviousListWindow resolves the window saved at the client's
 // acknowledged position. A missing window means the list must be resynced
-// rather than compared against a possibly newer legacy window.
+// rather than compared against a possibly newer legacy window. Invalid JSON
+// returns a decoding error with resync false; an empty saved window is valid.
 func selectPreviousListWindow(roomIDsJSON string, exists bool) (roomIDs []string, resync bool, err error) {
 	if !exists {
 		return nil, true, nil

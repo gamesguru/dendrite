@@ -74,6 +74,8 @@ type accountDataStatements struct {
 	deleteAccountDataByTypeStmt      *sql.Stmt
 }
 
+// NewPostgresAccountDataTable creates account-data storage if needed and prepares
+// its queries, returning schema or statement preparation errors.
 func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	s := &accountDataStatements{}
 	_, err := db.Exec(accountDataSchema)
@@ -91,6 +93,9 @@ func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	}.Prepare(db)
 }
 
+// InsertAccountData stores or replaces content for a user's room and data type.
+// An empty roomID selects global account data. JSON null, including surrounding
+// whitespace, is rejected with an error; SQL execution errors propagate.
 func (s *accountDataStatements) InsertAccountData(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
@@ -110,6 +115,11 @@ func (s *accountDataStatements) InsertAccountData(
 	return
 }
 
+// UpdateAccountDataIfUnchanged writes content when the stored bytes match a
+// nonempty expected value. Empty expected only allows insertion of a missing row. An empty roomID
+// selects global account data. It reports whether the write was applied; a
+// mismatch returns false without an error. JSON null content is rejected, and
+// database errors propagate.
 func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
@@ -134,6 +144,9 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	return updated > 0, err
 }
 
+// DeleteAccountDataByType removes the user's account data for a room and type.
+// An empty roomID selects global account data. A missing row succeeds; SQL
+// execution errors propagate.
 func (s *accountDataStatements) DeleteAccountDataByType(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,

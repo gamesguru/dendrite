@@ -105,6 +105,9 @@ type receiptStatements struct {
 	deleteConnectionReceiptsForRoom *sql.Stmt
 }
 
+// NewPostgresReceiptsTable creates and migrates receipt and Sliding Sync storage,
+// then prepares receipt queries. Schema, migration,
+// and statement preparation errors are returned.
 func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 	_, err := db.Exec(receiptsSchema)
 	if err != nil {

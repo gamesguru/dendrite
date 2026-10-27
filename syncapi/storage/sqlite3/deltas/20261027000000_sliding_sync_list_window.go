@@ -10,6 +10,9 @@ import (
 	"database/sql"
 )
 
+// UpCreateSlidingSyncListWindows creates storage for list windows at connection
+// positions if it does not exist, returning any SQL execution error. Deleting a
+// referenced connection or position also deletes its windows.
 func UpCreateSlidingSyncListWindows(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS syncapi_sliding_sync_connection_list_windows (

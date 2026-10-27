@@ -69,6 +69,8 @@ type accountDataStatements struct {
 	deleteAccountDataByTypeStmt   *sql.Stmt
 }
 
+// NewSQLiteAccountDataTable creates account-data storage if needed and prepares
+// its queries, returning schema or statement preparation errors.
 func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	s := &accountDataStatements{
 		db: db,
@@ -87,6 +89,9 @@ func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	}.Prepare(db)
 }
 
+// InsertAccountData stores or replaces content for a user's room and data type.
+// An empty roomID selects global account data. JSON null, including surrounding
+// whitespace, is rejected with an error; SQL execution errors propagate.
 func (s *accountDataStatements) InsertAccountData(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
@@ -100,6 +105,11 @@ func (s *accountDataStatements) InsertAccountData(
 	return err
 }
 
+// UpdateAccountDataIfUnchanged writes content when the stored bytes match
+// expected, or inserts a missing row when expected is empty. An empty roomID
+// selects global account data. It reports whether the write was applied; a
+// mismatch returns false without an error. JSON null content is rejected, and
+// database errors propagate.
 func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
@@ -132,6 +142,9 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	return true, nil
 }
 
+// DeleteAccountDataByType removes the user's account data for a room and type.
+// An empty roomID selects global account data. A missing row succeeds; SQL
+// execution errors propagate.
 func (s *accountDataStatements) DeleteAccountDataByType(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
@@ -181,6 +194,9 @@ func (s *accountDataStatements) SelectAccountData(
 	return global, rooms, rows.Err()
 }
 
+// SelectAccountDataByType returns content for the user's room and data type,
+// or nil without an error if absent. An empty roomID selects global account
+// data. Other query and scan errors propagate.
 func (s *accountDataStatements) SelectAccountDataByType(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,

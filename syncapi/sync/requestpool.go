@@ -808,6 +808,10 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 	return false
 }
 
+// waitForJoinedRooms makes a best-effort wait for joined-room membership events
+// that the sync database has not yet caught up with. The shared wait context is
+// limited to one second or the caller's earlier cancellation or deadline.
+// Unavailable membership information and lookup failures do not reach callers.
 func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
 	if rp.rsAPI == nil || req.Device == nil {
 		return

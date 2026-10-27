@@ -380,8 +380,11 @@ func (d *Database) SaveAccountData(
 }
 
 // SaveAccountDataIfUnchanged saves account data only if the stored value still
-// matches expected. An empty expected value requires that no account data is
-// currently stored. It reports whether the write was applied.
+// matches expected. An empty expected value allows insertion when no account
+// data is stored. It reports whether the write was applied. Comparison uses
+// stored bytes, and an empty roomID selects global account data. A mismatch
+// returns false without an error; JSON null content is rejected, and database
+// or transaction errors propagate.
 func (d *Database) SaveAccountDataIfUnchanged(
 	ctx context.Context, localpart string, serverName spec.ServerName,
 	roomID, dataType string, expected, content json.RawMessage,
