@@ -294,6 +294,10 @@ column syncapi_send_to_device | content | text | NO |
 column syncapi_send_to_device | device_id | text | NO |
 column syncapi_send_to_device | id | bigint | NO | nextval('syncapi_send_to_device_id'::regclass)
 column syncapi_send_to_device | user_id | text | NO |
+column syncapi_sliding_sync_connection_list_windows | connection_key | bigint | NO |
+column syncapi_sliding_sync_connection_list_windows | connection_position | bigint | NO |
+column syncapi_sliding_sync_connection_list_windows | list_name | text | NO |
+column syncapi_sliding_sync_connection_list_windows | room_ids | text | NO |
 column syncapi_sliding_sync_connection_lists | connection_key | bigint | NO |
 column syncapi_sliding_sync_connection_lists | list_name | text | NO |
 column syncapi_sliding_sync_connection_lists | room_ids | text | NO |
@@ -638,6 +642,7 @@ index syncapi_relations | syncapi_relations_pkey | CREATE UNIQUE INDEX syncapi_r
 index syncapi_relations | syncapi_relations_unique | CREATE UNIQUE INDEX syncapi_relations_unique ON public.syncapi_relations USING btree (room_id, event_id, child_event_id, rel_type)
 index syncapi_send_to_device | syncapi_send_to_device_pkey | CREATE UNIQUE INDEX syncapi_send_to_device_pkey ON public.syncapi_send_to_device USING btree (id)
 index syncapi_send_to_device | syncapi_send_to_device_user_id_device_id_idx | CREATE INDEX syncapi_send_to_device_user_id_device_id_idx ON public.syncapi_send_to_device USING btree (user_id, device_id)
+index syncapi_sliding_sync_connection_list_windows | syncapi_sliding_sync_connection_list_windows_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_list_windows_pkey ON public.syncapi_sliding_sync_connection_list_windows USING btree (connection_key, list_name, connection_position)
 index syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_lists_pkey ON public.syncapi_sliding_sync_connection_lists USING btree (connection_key, list_name)
 index syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_conn_idx | CREATE INDEX syncapi_sliding_sync_connection_positions_conn_idx ON public.syncapi_sliding_sync_connection_positions USING btree (connection_key)
 index syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_pkey | CREATE UNIQUE INDEX syncapi_sliding_sync_connection_positions_pkey ON public.syncapi_sliding_sync_connection_positions USING btree (connection_position)
@@ -784,6 +789,9 @@ constraint syncapi_receipts | syncapi_receipts_unique | UNIQUE (room_id, receipt
 constraint syncapi_relations | syncapi_relations_pkey | PRIMARY KEY (id)
 constraint syncapi_relations | syncapi_relations_unique | UNIQUE (room_id, event_id, child_event_id, rel_type)
 constraint syncapi_send_to_device | syncapi_send_to_device_pkey | PRIMARY KEY (id)
+constraint syncapi_sliding_sync_connection_list_windows | syncapi_sliding_sync_connection_list_w_connection_position_fkey | FOREIGN KEY (connection_position) REFERENCES syncapi_sliding_sync_connection_positions(connection_position) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_list_windows | syncapi_sliding_sync_connection_list_window_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
+constraint syncapi_sliding_sync_connection_list_windows | syncapi_sliding_sync_connection_list_windows_pkey | PRIMARY KEY (connection_key, list_name, connection_position)
 constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
 constraint syncapi_sliding_sync_connection_lists | syncapi_sliding_sync_connection_lists_pkey | PRIMARY KEY (connection_key, list_name)
 constraint syncapi_sliding_sync_connection_positions | syncapi_sliding_sync_connection_positions_connection_key_fkey | FOREIGN KEY (connection_key) REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE
@@ -871,6 +879,7 @@ migration roomserver: state blocks refactor
 migration syncapi: add connection receipts table for sliding sync
 migration syncapi: add history visibility column (current_room_state)
 migration syncapi: add history visibility column (output_room_events)
+migration syncapi: create sliding sync list windows
 migration syncapi: create sliding sync room metadata tables
 migration syncapi: create sliding sync tables
 migration syncapi: drop sent_by_token

@@ -1973,9 +1973,10 @@ func (rp *RequestPool) processRoomList(
 			// Fall back to the legacy per-connection list for connections that
 			// have no client-supplied position.
 			previousRoomIDsJSON, exists, err := rp.db.GetConnectionList(ctx, connState.ConnectionKey, listName)
-			if err != nil {
+			switch {
+			case err != nil:
 				logrus.WithError(err).WithField("list", listName).Error("Failed to load connection list")
-			} else if exists {
+			case exists:
 				if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
 					logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list JSON")
 				}

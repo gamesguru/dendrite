@@ -48,4 +48,3 @@ func TestCommittedPDUPositionCoversEventsAheadOfNotifier(t *testing.T) {
 		assert.Equal(t, last+5, rp.committedPDUPosition(ctx, last+5), "a notifier ahead of the database is kept")
 	})
 }
-

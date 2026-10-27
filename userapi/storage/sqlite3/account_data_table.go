@@ -111,7 +111,7 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	var current []byte
 	err := sqlutil.TxStmt(txn, s.selectAccountDataByTypeStmt).QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		if len(expected) != 0 {
 			return false, nil
 		}
@@ -189,7 +189,7 @@ func (s *accountDataStatements) SelectAccountDataByType(
 	var bytes []byte
 	stmt := s.selectAccountDataByTypeStmt
 	if err = stmt.QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&bytes); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return
