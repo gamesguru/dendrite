@@ -86,8 +86,8 @@ func Test_AccountData(t *testing.T) {
 // Tests conditional account data writes and explicit deletion.
 func Test_AccountDataConditionalWrites(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateUserDatabase(t, dbType)
-		defer close()
+		db, cleanup := mustCreateUserDatabase(t, dbType)
+		defer cleanup()
 		alice := test.NewUser(t)
 		localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
 		assert.NoError(t, err)
@@ -120,6 +120,70 @@ func Test_AccountDataConditionalWrites(t *testing.T) {
 		stored, err = db.GetAccountDataByType(ctx, localpart, domain, "", "test.type")
 		assert.NoError(t, err)
 		assert.Nil(t, stored)
+	})
+}
+
+// Tests that concurrent conditional writers do not lose updates.
+func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, dbType)
+		defer cleanup()
+		alice := test.NewUser(t)
+		localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
+		assert.NoError(t, err)
+
+		initial := json.RawMessage(`{"n":0}`)
+		updated, err := db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.concurrent", nil, initial)
+		assert.NoError(t, err)
+		assert.True(t, updated)
+
+		const workers = 8
+		var wg sync.WaitGroup
+		errs := make(chan error, workers)
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for attempt := 0; attempt < 100; attempt++ {
+					stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
+					if err != nil {
+						errs <- err
+						return
+					}
+					var doc map[string]int
+					if err = json.Unmarshal(stored, &doc); err != nil {
+						errs <- err
+						return
+					}
+					doc["n"]++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						errs <- err
+						return
+					}
+					ok, err := db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.concurrent", stored, next)
+					if err != nil {
+						errs <- err
+						return
+					}
+					if ok {
+						return
+					}
+				}
+				errs <- errors.New("conditional write did not succeed after retries")
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			assert.NoError(t, err)
+		}
+
+		stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
+		assert.NoError(t, err)
+		var doc map[string]int
+		assert.NoError(t, json.Unmarshal(stored, &doc))
+		assert.Equal(t, workers, doc["n"])
 	})
 }
 

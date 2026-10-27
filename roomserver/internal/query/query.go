@@ -229,7 +229,11 @@ func (r *Queryer) QueryEventsByID(
 	}
 
 	for _, event := range events {
-		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU})
+		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU, EventNID: event.EventNID})
+	}
+	response.EventNIDs = make(map[string]types.EventNID, len(events))
+	for _, event := range events {
+		response.EventNIDs[event.EventID()] = event.EventNID
 	}
 
 	return nil

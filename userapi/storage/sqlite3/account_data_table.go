@@ -109,8 +109,7 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 		return false, errors.New("account data content must not be null")
 	}
 	var current []byte
-	stmt := sqlutil.TxStmt(txn, s.selectAccountDataByTypeStmt)
-	err := stmt.QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
+	err := sqlutil.TxStmt(txn, s.selectAccountDataByTypeStmt).QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
 	switch {
 	case err == sql.ErrNoRows:
 		if len(expected) != 0 {

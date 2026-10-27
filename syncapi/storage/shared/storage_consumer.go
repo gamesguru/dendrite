@@ -792,6 +792,10 @@ func (d *Database) SelectMembershipForUser(ctx context.Context, roomID, userID s
 	return d.Memberships.SelectMembershipForUser(ctx, nil, roomID, userID, pos)
 }
 
+func (d *Database) SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership string, err error) {
+	return d.Memberships.SelectMembershipForUserAtStreamPosition(ctx, nil, roomID, userID, streamPos)
+}
+
 func (d *Database) ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error) {
 	return d.OutputEvents.ReIndex(ctx, nil, limit, afterID, []string{
 		spec.MRoomName,

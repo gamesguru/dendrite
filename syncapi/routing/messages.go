@@ -948,8 +948,8 @@ func backfillEvents(
 	// Finish the backfill even if the client goes away, so the events are stored.
 	ctx = context.WithoutCancel(ctx)
 
-	// Backward-extremity rows are durable cleanup work: if a previous lookup or
-	// purge failed, retry it on the next /messages backfill attempt.
+	// Backward-extremity rows persist failed cleanup work: if a previous lookup
+	// or purge failed, retry it on the next /messages backfill attempt.
 	var pendingPrevIDs []string
 	for _, prevIDs := range backwardsExtremities {
 		pendingPrevIDs = append(pendingPrevIDs, prevIDs...)

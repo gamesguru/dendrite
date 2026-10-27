@@ -273,7 +273,7 @@ func roomLeaveIsNew(
 	if err != nil {
 		return false
 	}
-	previousMembership, _, err := snapshot.SelectMembershipForUser(
+	previousMembership, err := snapshot.SelectMembershipForUserAtStreamPosition(
 		ctx, roomID, userID, int64(lastToken.PDUPosition),
 	)
 	if err != nil {
@@ -1951,22 +1951,24 @@ func (rp *RequestPool) processRoomList(
 	// position so a retry from an unacknowledged position compares against the
 	// window that client actually received.
 	var previousRoomIDs []string
-	var previousWindowExists bool
 	if !forceInitialSync {
 		if connState != nil && connState.PreviousPosition > 0 {
 			previousRoomIDsJSON, exists, err := rp.db.GetConnectionListWindow(ctx, connState.ConnectionKey, listName, connState.PreviousPosition)
 			if err != nil {
 				return types.SlidingList{}, fmt.Errorf("load connection list window %q: %w", listName, err)
 			} else if exists {
-				previousWindowExists = true
 				if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
 					logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list window JSON")
 				}
+			} else {
+				// A position without a saved window predates this table or did not
+				// include this list. The legacy latest window may belong to a newer,
+				// unacknowledged response, so resync this list from the client's view.
+				forceInitialSync = true
 			}
-		}
-		if !previousWindowExists {
+		} else {
 			// Fall back to the legacy per-connection list for connections that
-			// predate position-keyed windows.
+			// have no client-supplied position.
 			previousRoomIDsJSON, exists, err := rp.db.GetConnectionList(ctx, connState.ConnectionKey, listName)
 			if err != nil {
 				logrus.WithError(err).WithField("list", listName).Error("Failed to load connection list")

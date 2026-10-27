@@ -187,16 +187,6 @@ const selectConnectionListSQL = `
 	WHERE connection_key = $1 AND list_name = $2
 `
 
-const connectionListWindowSchema = `
-CREATE TABLE IF NOT EXISTS syncapi_sliding_sync_connection_list_windows (
-    connection_key BIGINT NOT NULL REFERENCES syncapi_sliding_sync_connections(connection_key) ON DELETE CASCADE,
-    list_name TEXT NOT NULL,
-    connection_position BIGINT NOT NULL,
-    room_ids TEXT NOT NULL,
-    PRIMARY KEY (connection_key, list_name, connection_position)
-);
-`
-
 const upsertConnectionListWindowSQL = `
 	INSERT INTO syncapi_sliding_sync_connection_list_windows (connection_key, list_name, connection_position, room_ids)
 	VALUES ($1, $2, $3, $4)
@@ -247,9 +237,6 @@ type slidingSyncStatements struct {
 
 func NewPostgresSlidingSyncTable(db *sql.DB) (tables.SlidingSync, error) {
 	s := &slidingSyncStatements{}
-	if _, err := db.Exec(connectionListWindowSchema); err != nil {
-		return nil, err
-	}
 	return s, sqlutil.StatementList{
 		{&s.insertConnectionStmt, insertConnectionSQL},
 		{&s.selectConnectionByKeyStmt, selectConnectionByKeySQL},

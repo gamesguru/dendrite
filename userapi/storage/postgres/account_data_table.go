@@ -47,14 +47,16 @@ const insertAccountDataIfAbsentSQL = `
 	ON CONFLICT (localpart, server_name, room_id, type) DO NOTHING
 `
 
+const updateAccountDataIfUnchangedSQL = `
+	UPDATE userapi_account_datas SET content = $5
+	WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4 AND content = $6
+`
+
 const selectAccountDataSQL = "" +
 	"SELECT room_id, type, content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
 
 const selectAccountDataByTypeSQL = "" +
 	"SELECT content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
-
-const selectAccountDataByTypeForUpdateSQL = "" +
-	"SELECT content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4 FOR UPDATE"
 
 const deleteAccountDataSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
@@ -63,13 +65,13 @@ const deleteAccountDataByTypeSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
 
 type accountDataStatements struct {
-	insertAccountDataStmt                *sql.Stmt
-	insertAccountDataIfAbsentStmt        *sql.Stmt
-	selectAccountDataStmt                *sql.Stmt
-	selectAccountDataByTypeStmt          *sql.Stmt
-	selectAccountDataByTypeForUpdateStmt *sql.Stmt
-	deleteAccountDataStmt                *sql.Stmt
-	deleteAccountDataByTypeStmt          *sql.Stmt
+	insertAccountDataStmt            *sql.Stmt
+	insertAccountDataIfAbsentStmt    *sql.Stmt
+	selectAccountDataStmt            *sql.Stmt
+	selectAccountDataByTypeStmt      *sql.Stmt
+	updateAccountDataIfUnchangedStmt *sql.Stmt
+	deleteAccountDataStmt            *sql.Stmt
+	deleteAccountDataByTypeStmt      *sql.Stmt
 }
 
 func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
@@ -83,7 +85,7 @@ func NewPostgresAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 		{&s.insertAccountDataIfAbsentStmt, insertAccountDataIfAbsentSQL},
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
-		{&s.selectAccountDataByTypeForUpdateStmt, selectAccountDataByTypeForUpdateSQL},
+		{&s.updateAccountDataIfUnchangedStmt, updateAccountDataIfUnchangedSQL},
 		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
 		{&s.deleteAccountDataByTypeStmt, deleteAccountDataByTypeSQL},
 	}.Prepare(db)
@@ -116,29 +118,20 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	if strings.TrimSpace(string(content)) == "null" {
 		return false, errors.New("account data content must not be null")
 	}
-	var current []byte
-	stmt := sqlutil.TxStmt(txn, s.selectAccountDataByTypeForUpdateStmt)
-	err := stmt.QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
-	switch {
-	case err == sql.ErrNoRows:
-		if len(expected) != 0 {
-			return false, nil
-		}
+	if len(expected) == 0 {
 		result, err := sqlutil.TxStmt(txn, s.insertAccountDataIfAbsentStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content)
 		if err != nil {
 			return false, err
 		}
 		updated, err := result.RowsAffected()
 		return updated > 0, err
-	case err != nil:
-		return false, err
-	case string(current) != string(expected):
-		return false, nil
 	}
-	if _, err = sqlutil.TxStmt(txn, s.insertAccountDataStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content); err != nil {
+	result, err := sqlutil.TxStmt(txn, s.updateAccountDataIfUnchangedStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content, string(expected))
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	updated, err := result.RowsAffected()
+	return updated > 0, err
 }
 
 func (s *accountDataStatements) DeleteAccountDataByType(

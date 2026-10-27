@@ -107,6 +107,9 @@ type QueryEventsByIDResponse struct {
 	// the entire request.
 	// This list will be in an arbitrary order.
 	Events []*types.HeaderedEvent `json:"events"`
+	// EventNIDs gives the roomserver-assigned insertion order for each event.
+	// Unlike origin timestamps or event depth, this order is chosen locally.
+	EventNIDs map[string]types.EventNID `json:"event_nids,omitempty"`
 }
 
 // QueryMembershipForUserRequest is a request to QueryMembership.

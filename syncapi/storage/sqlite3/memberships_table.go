@@ -57,6 +57,9 @@ const selectMembershipCountSQL = "" +
 const selectMembershipBeforeSQL = "" +
 	"SELECT membership, topological_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND topological_pos <= $3 ORDER BY topological_pos DESC LIMIT 1"
 
+const selectMembershipAtStreamSQL = "" +
+	"SELECT membership FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
+
 const selectMembersSQL = `
 SELECT event_id FROM
  ( SELECT event_id, membership FROM syncapi_memberships WHERE room_id = $1
@@ -76,9 +79,10 @@ type membershipsStatements struct {
 	upsertMembershipStmt      *sql.Stmt
 	selectMembershipCountStmt *sql.Stmt
 	// selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
-	selectMembershipForUserStmt *sql.Stmt
-	selectMembersStmt           *sql.Stmt
-	purgeMembershipsStmt        *sql.Stmt
+	selectMembershipForUserStmt  *sql.Stmt
+	selectMembershipAtStreamStmt *sql.Stmt
+	selectMembersStmt            *sql.Stmt
+	purgeMembershipsStmt         *sql.Stmt
 }
 
 func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
@@ -93,6 +97,7 @@ func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 		{&s.upsertMembershipStmt, upsertMembershipSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCountSQL},
 		{&s.selectMembershipForUserStmt, selectMembershipBeforeSQL},
+		{&s.selectMembershipAtStreamStmt, selectMembershipAtStreamSQL},
 		{&s.selectMembersStmt, selectMembersSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
 	}.Prepare(db)
@@ -156,6 +161,20 @@ func (s *membershipsStatements) SelectMembershipForUser(
 		return "", 0, err
 	}
 	return membership, topologyPos, nil
+}
+
+func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
+	ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64,
+) (membership string, err error) {
+	stmt := sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
+	err = stmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&membership)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "leave", nil
+		}
+		return "", err
+	}
+	return membership, nil
 }
 
 func (s *membershipsStatements) PurgeMemberships(
