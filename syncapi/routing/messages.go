@@ -433,6 +433,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	}
 	decrementEnd := r.backwardOrdering
 	extremityFilteredEmpty := false
+	// withheld holds the page set aside because its first event sits on an
+	// extremity branch, so it can still be returned if backfill finds nothing.
+	var withheld []types.StreamEvent
 	if r.backwardOrdering && len(streamEvents) > 0 {
 		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
 			excluded := make(map[string]struct{})
@@ -465,6 +468,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 								return nil, *r.from, emptyToken, err
 							}
 						} else {
+							// Keep the page so it can be returned if backfill has
+							// nothing to fill the extremity with.
+							withheld = append([]types.StreamEvent(nil), streamEvents...)
 							// Leave this event at the cursor so a subsequent request can
 							// retry it after the extremity has been backfilled.
 							end, err = r.snapshot.EventPositionInTopology(ctx, ev.EventID())
@@ -504,6 +510,13 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		// beginning of the room. Check for backfill opportunities.
 		if events, err = r.handleEmptyEventsSlice(); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
+		}
+		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
+			// Backfill found nothing to fill the extremity, so the withheld events
+			// are all there is: return them rather than ending pagination here.
+			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, withheld, r.rsAPI) //nolint:contextcheck
+			sort.Sort(eventsByDepth(events))
+			topologyHadEvents = true
 		}
 	} else if len(streamEvents) > 0 {
 		if events, err = r.handleNonEmptyEventsSlice(streamEvents); err != nil {

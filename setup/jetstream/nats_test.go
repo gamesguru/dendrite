@@ -274,7 +274,11 @@ func TestPrepareEFailureLeavesInstanceReusable(t *testing.T) {
 	}
 
 	embeddedStartTimeout = oldTimeout
-	goodCfg := &config.JetStream{InMemory: true, NoLog: true}
+	goodCfg := &config.JetStream{
+		StoragePath: config.Path(t.TempDir()),
+		InMemory:    true,
+		NoLog:       true,
+	}
 	goodCfg.Matrix = &config.Global{JetStream: *goodCfg}
 	js, nc, err := instance.PrepareE(processCtx, goodCfg)
 	if err != nil {
