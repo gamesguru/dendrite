@@ -1956,11 +1956,14 @@ func (rp *RequestPool) processRoomList(
 			previousRoomIDsJSON, exists, err := rp.db.GetConnectionListWindow(ctx, connState.ConnectionKey, listName, connState.PreviousPosition)
 			if err != nil {
 				return types.SlidingList{}, fmt.Errorf("load connection list window %q: %w", listName, err)
-			} else if exists {
-				if err := json.Unmarshal([]byte(previousRoomIDsJSON), &previousRoomIDs); err != nil {
-					logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list window JSON")
-				}
-			} else {
+			}
+			var resync bool
+			previousRoomIDs, resync, err = selectPreviousListWindow(previousRoomIDsJSON, exists)
+			if err != nil {
+				logrus.WithError(err).WithField("list", listName).Error("Failed to decode connection list window JSON")
+				resync = true
+			}
+			if resync {
 				// A position without a saved window predates this table or did not
 				// include this list. The legacy latest window may belong to a newer,
 				// unacknowledged response, so resync this list from the client's view.
@@ -2051,6 +2054,19 @@ func (rp *RequestPool) processRoomList(
 		WindowRoomIDs:  roomIDs,
 		RemovedRoomIDs: removedRoomIDs,
 	}, nil
+}
+
+// selectPreviousListWindow resolves the window saved at the client's
+// acknowledged position. A missing window means the list must be resynced
+// rather than compared against a possibly newer legacy window.
+func selectPreviousListWindow(roomIDsJSON string, exists bool) (roomIDs []string, resync bool, err error) {
+	if !exists {
+		return nil, true, nil
+	}
+	if err := json.Unmarshal([]byte(roomIDsJSON), &roomIDs); err != nil {
+		return nil, false, err
+	}
+	return roomIDs, false, nil
 }
 
 // equalStringSlices checks if two string slices have the same elements in order.

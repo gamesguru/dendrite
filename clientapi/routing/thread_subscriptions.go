@@ -48,6 +48,18 @@ func (d *threadSubscriptionsData) normalize() {
 	}
 }
 
+// automaticSubscriptionConflicts reports whether a manual unsubscription
+// happened after the event that caused an automatic subscription. Local event
+// orderings are used when both sides have them; older documents fall back to
+// timestamps.
+func automaticSubscriptionConflicts(data threadSubscriptionsData, threadID string, bumpOrder, bumpStamp int64) bool {
+	if unsubscribedOrder := data.UnsubscribedOrder[threadID]; unsubscribedOrder > 0 && bumpOrder > 0 {
+		return bumpOrder <= unsubscribedOrder
+	}
+	unsubscribedAt := data.Unsubscribed[threadID]
+	return unsubscribedAt > 0 && bumpStamp > 0 && bumpStamp <= unsubscribedAt
+}
+
 func queryThreadSubscriptions(req *http.Request, userID, roomID string, userAPI userapi.ClientUserAPI) (threadSubscriptionsData, json.RawMessage, error) {
 	var response userapi.QueryAccountDataResponse
 	err := userAPI.QueryAccountData(req.Context(), &userapi.QueryAccountDataRequest{
@@ -239,12 +251,8 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 			// An automatic subscription never downgrades a manual one.
 			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
 		}
-		if request.Automatic != "" {
-			unsubscribedOrder := data.UnsubscribedOrder[threadID]
-			if (unsubscribedOrder > 0 && bumpOrder > 0 && bumpOrder <= unsubscribedOrder) ||
-				(unsubscribedOrder == 0 && data.Unsubscribed[threadID] > 0 && bumpStamp <= data.Unsubscribed[threadID]) {
-				return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
-			}
+		if request.Automatic != "" && automaticSubscriptionConflicts(data, threadID, bumpOrder, bumpStamp) {
+			return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
 		}
 		// Every change gets a later stamp than the subscription or unsubscribe it replaces.
 		floor := data.Unsubscribed[threadID]
@@ -271,7 +279,8 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 
 // maxRoomOrdering returns the greatest locally assigned event ordering among
 // the room's latest events. Unlike depth, it cannot be chosen by a remote
-// sender.
+// sender. It is scoped to this database's event sequence, so account data and
+// the roomserver database must be restored together.
 func maxRoomOrdering(req *http.Request, roomID string, rsAPI roomserver.ClientRoomserverAPI) (int64, error) {
 	var latest roomserver.QueryLatestEventsAndStateResponse
 	if err := rsAPI.QueryLatestEventsAndState(req.Context(), &roomserver.QueryLatestEventsAndStateRequest{
