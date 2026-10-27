@@ -692,7 +692,11 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 		pos = 0
 		changed = false
 		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-			if d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID) {
+			movesBackwards, checkErr := d.receiptMovesBackwards(ctx, txn, roomId, receiptType, userId, eventId, threadID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if movesBackwards {
 				// Keep the later receipt. A false changed result tells the consumer
 				// not to advance or notify at an unrelated stream position.
 				return nil
@@ -712,23 +716,32 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 // receiptMovesBackwards reports whether storing a receipt at eventID would move
 // the user's existing receipt of that type and thread to an earlier event.
 // Receipts for events not (yet) known to the sync API are never held back.
-func (d *Database) receiptMovesBackwards(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, eventID, threadID string) bool {
+func (d *Database) receiptMovesBackwards(ctx context.Context, txn *sql.Tx, roomID, receiptType, userID, eventID, threadID string) (bool, error) {
 	if receiptType != "m.read" && receiptType != "m.read.private" {
-		return false
+		return false, nil
 	}
 	current, err := d.Receipts.SelectUserReceiptEventID(ctx, txn, roomID, receiptType, userID, threadID)
-	if err != nil || current == "" || current == eventID {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if current == "" || current == eventID {
+		return false, nil
 	}
 	currentDepth, currentPos, err := d.Topology.SelectPositionInTopology(ctx, txn, current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	newDepth, newPos, err := d.Topology.SelectPositionInTopology(ctx, txn, eventID)
-	if err != nil {
-		return false
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
-	return newDepth < currentDepth || (newDepth == currentDepth && newPos < currentPos)
+	if err != nil {
+		return false, err
+	}
+	return newDepth < currentDepth || (newDepth == currentDepth && newPos < currentPos), nil
 }
 
 func (d *Database) UpsertRoomUnreadNotificationCounts(ctx context.Context, userID string, data *eventutil.NotificationData) (pos types.StreamPosition, err error) {
