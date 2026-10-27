@@ -990,13 +990,15 @@ func backfillEvents(
 		for eventID := range prevEventIDs {
 			ids = append(ids, eventID)
 		}
+		// The events are already stored, so a failed cleanup must not discard them.
 		stored, selectErr := db.Events(ctx, ids)
 		if selectErr != nil {
-			return nil, selectErr
+			util.GetLogger(ctx).WithError(selectErr).Warn("Failed to look up backfilled prev events")
 		}
 		for _, ev := range stored {
-			if err := db.PurgeBackwardExtremitiesForEvent(ctx, roomID, ev.EventID()); err != nil {
-				return nil, err
+			if purgeErr := db.PurgeBackwardExtremitiesForEvent(ctx, roomID, ev.EventID()); purgeErr != nil {
+				util.GetLogger(ctx).WithError(purgeErr).Warn("Failed to purge stale backward extremity")
+				break
 			}
 		}
 	}
