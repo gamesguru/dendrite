@@ -235,6 +235,8 @@ type slidingSyncStatements struct {
 	deleteOtherConnectionListWindowsStmt  *sql.Stmt
 }
 
+// NewPostgresSlidingSyncTable prepares queries for existing Sliding Sync tables,
+// returning any statement preparation error.
 func NewPostgresSlidingSyncTable(db *sql.DB) (tables.SlidingSync, error) {
 	s := &slidingSyncStatements{}
 	return s, sqlutil.StatementList{
@@ -626,6 +628,9 @@ func (s *slidingSyncStatements) SelectConnectionList(
 	return roomIDsJSON, true, nil
 }
 
+// UpsertConnectionListWindow stores or replaces the ordered room IDs encoded in
+// roomIDsJSON for a list at a connection position. It does not validate the JSON
+// and returns SQL execution errors.
 func (s *slidingSyncStatements) UpsertConnectionListWindow(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string,
 ) error {
@@ -634,6 +639,9 @@ func (s *slidingSyncStatements) UpsertConnectionListWindow(
 	return err
 }
 
+// SelectConnectionListWindow returns the stored room-ID JSON at a connection
+// position and whether a window exists. A missing row returns "", false, nil;
+// other query or scan errors propagate. The JSON is not decoded.
 func (s *slidingSyncStatements) SelectConnectionListWindow(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64,
 ) (string, bool, error) {
@@ -649,6 +657,8 @@ func (s *slidingSyncStatements) SelectConnectionListWindow(
 	return roomIDsJSON, true, nil
 }
 
+// DeleteOtherConnectionListWindows removes all list windows for connectionKey
+// except those at keepPosition, returning any SQL execution error.
 func (s *slidingSyncStatements) DeleteOtherConnectionListWindows(
 	ctx context.Context, txn *sql.Tx, connectionKey int64, keepPosition int64,
 ) error {

@@ -96,6 +96,13 @@ func (a *UserInternalAPI) PerformAdminUpdateRegistrationToken(ctx context.Contex
 	return a.DB.UpdateRegistrationToken(ctx, tokenString, newAttributes)
 }
 
+// InputAccountData stores account data for a local user and publishes an update.
+// CompareAccountData makes the write conditional on ExpectedAccountData; a
+// mismatch returns without an error or notification and sets res.Updated to false.
+// Invalid user IDs, remote users, empty types, JSON null content, and storage
+// failures return errors. Successful writes set res.Updated before fully-read
+// processing and publication, whose errors propagate even though data is stored.
+// Malformed ignored-user data does not prevent publication.
 func (a *UserInternalAPI) InputAccountData(ctx context.Context, req *api.InputAccountDataRequest, res *api.InputAccountDataResponse) error {
 	local, domain, err := gomatrixserverlib.SplitID('@', req.UserID)
 	if err != nil {
@@ -385,6 +392,13 @@ func hashRefreshToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// PerformDeviceDeletion removes a local user's requested devices, their local
+// notification settings, and keys, then publishes device-list updates. An empty
+// DeviceIDs removes all devices except ExceptDeviceID. Invalid user IDs, remote
+// users, and device-removal errors stop processing. Notification-setting cleanup
+// errors are combined with later errors and do not prevent key cleanup; key
+// cleanup errors prevent the final device-list update. Completed deletions are
+// not rolled back by later failures.
 func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.PerformDeviceDeletionRequest, res *api.PerformDeviceDeletionResponse) error {
 	util.GetLogger(ctx).WithField("user_id", req.UserID).WithField("devices", req.DeviceIDs).Info("PerformDeviceDeletion")
 	local, domain, err := gomatrixserverlib.SplitID('@', req.UserID)
