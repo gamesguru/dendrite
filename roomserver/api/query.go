@@ -30,7 +30,8 @@ type QueryLatestEventsAndStateRequest struct {
 	RoomID string `json:"room_id"`
 	// The state key tuples to fetch from the room current state.
 	// If this list is empty or nil then *ALL* current state events are returned.
-	StateToFetch []gomatrixserverlib.StateKeyTuple `json:"state_to_fetch"`
+	StateToFetch       []gomatrixserverlib.StateKeyTuple `json:"state_to_fetch"`
+	IncludeMaxEventNID bool                              `json:"include_max_event_nid,omitempty"`
 }
 
 // QueryLatestEventsAndStateResponse is a response to QueryLatestEventsAndState
@@ -54,6 +55,9 @@ type QueryLatestEventsAndStateResponse struct {
 	// This is one greater than the maximum depth of the latest events.
 	// This is used to set the depth when sending an event.
 	Depth int64 `json:"depth"`
+	// MaxEventNID is the greatest locally assigned event NID among all stored
+	// events in the room, including events that are no longer forward extremities.
+	MaxEventNID int64 `json:"max_event_nid,omitempty"`
 }
 
 // QueryStateAfterEventsRequest is a request to QueryStateAfterEvents.
@@ -107,6 +111,9 @@ type QueryEventsByIDResponse struct {
 	// the entire request.
 	// This list will be in an arbitrary order.
 	Events []*types.HeaderedEvent `json:"events"`
+	// EventNIDs gives the roomserver-assigned insertion order for each event.
+	// Unlike origin timestamps or event depth, this order is chosen locally.
+	EventNIDs map[string]types.EventNID `json:"event_nids,omitempty"`
 }
 
 // QueryMembershipForUserRequest is a request to QueryMembership.

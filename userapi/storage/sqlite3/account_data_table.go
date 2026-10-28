@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -41,6 +42,11 @@ const insertAccountDataSQL = `
 	ON CONFLICT (localpart, server_name, room_id, type) DO UPDATE SET content = $5
 `
 
+const insertAccountDataIfAbsentSQL = `
+	INSERT INTO userapi_account_datas(localpart, server_name, room_id, type, content) VALUES($1, $2, $3, $4, $5)
+	ON CONFLICT (localpart, server_name, room_id, type) DO NOTHING
+`
+
 const selectAccountDataSQL = "" +
 	"SELECT room_id, type, content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
 
@@ -54,14 +60,17 @@ const deleteAccountDataByTypeSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
 
 type accountDataStatements struct {
-	db                          *sql.DB
-	insertAccountDataStmt       *sql.Stmt
-	selectAccountDataStmt       *sql.Stmt
-	selectAccountDataByTypeStmt *sql.Stmt
-	deleteAccountDataStmt       *sql.Stmt
-	deleteAccountDataByTypeStmt *sql.Stmt
+	db                            *sql.DB
+	insertAccountDataStmt         *sql.Stmt
+	insertAccountDataIfAbsentStmt *sql.Stmt
+	selectAccountDataStmt         *sql.Stmt
+	selectAccountDataByTypeStmt   *sql.Stmt
+	deleteAccountDataStmt         *sql.Stmt
+	deleteAccountDataByTypeStmt   *sql.Stmt
 }
 
+// NewSQLiteAccountDataTable creates account-data storage if needed and prepares
+// its queries, returning schema or statement preparation errors.
 func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	s := &accountDataStatements{
 		db: db,
@@ -72,6 +81,7 @@ func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	}
 	return s, sqlutil.StatementList{
 		{&s.insertAccountDataStmt, insertAccountDataSQL},
+		{&s.insertAccountDataIfAbsentStmt, insertAccountDataIfAbsentSQL},
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
 		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
@@ -79,17 +89,69 @@ func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	}.Prepare(db)
 }
 
+// InsertAccountData stores or replaces content for a user's room and data type.
+// An empty roomID selects global account data. JSON null, including surrounding
+// whitespace, is rejected with an error; SQL execution errors propagate.
 func (s *accountDataStatements) InsertAccountData(
 	ctx context.Context, txn *sql.Tx,
 	localpart string, serverName spec.ServerName,
 	roomID, dataType string, content json.RawMessage,
 ) error {
 	if strings.TrimSpace(string(content)) == "null" {
-		_, err := sqlutil.TxStmt(txn, s.deleteAccountDataByTypeStmt).ExecContext(ctx, localpart, serverName, roomID, dataType)
-		return err
+		return errors.New("account data content must not be null")
 	}
 	stmt := sqlutil.TxStmt(txn, s.insertAccountDataStmt)
 	_, err := stmt.ExecContext(ctx, localpart, serverName, roomID, dataType, content)
+	return err
+}
+
+// UpdateAccountDataIfUnchanged writes content when the stored bytes match
+// expected, or inserts a missing row when expected is empty. An empty roomID
+// selects global account data. It reports whether the write was applied; a
+// mismatch returns false without an error. JSON null content is rejected, and
+// database errors propagate.
+func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	roomID, dataType string, expected, content json.RawMessage,
+) (bool, error) {
+	if strings.TrimSpace(string(content)) == "null" {
+		return false, errors.New("account data content must not be null")
+	}
+	var current []byte
+	err := sqlutil.TxStmt(txn, s.selectAccountDataByTypeStmt).QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if len(expected) != 0 {
+			return false, nil
+		}
+		result, err := sqlutil.TxStmt(txn, s.insertAccountDataIfAbsentStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content)
+		if err != nil {
+			return false, err
+		}
+		updated, err := result.RowsAffected()
+		return updated > 0, err
+	case err != nil:
+		return false, err
+	case string(current) != string(expected):
+		return false, nil
+	}
+	if _, err = sqlutil.TxStmt(txn, s.insertAccountDataStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteAccountDataByType removes the user's account data for a room and type.
+// An empty roomID selects global account data. A missing row succeeds; SQL
+// execution errors propagate.
+func (s *accountDataStatements) DeleteAccountDataByType(
+	ctx context.Context, txn *sql.Tx,
+	localpart string, serverName spec.ServerName,
+	roomID, dataType string,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.deleteAccountDataByTypeStmt)
+	_, err := stmt.ExecContext(ctx, localpart, serverName, roomID, dataType)
 	return err
 }
 
@@ -132,6 +194,9 @@ func (s *accountDataStatements) SelectAccountData(
 	return global, rooms, rows.Err()
 }
 
+// SelectAccountDataByType returns content for the user's room and data type,
+// or nil without an error if absent. An empty roomID selects global account
+// data. Other query and scan errors propagate.
 func (s *accountDataStatements) SelectAccountDataByType(
 	ctx context.Context,
 	localpart string, serverName spec.ServerName,
@@ -140,7 +205,7 @@ func (s *accountDataStatements) SelectAccountDataByType(
 	var bytes []byte
 	stmt := s.selectAccountDataByTypeStmt
 	if err = stmt.QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&bytes); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return

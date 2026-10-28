@@ -83,6 +83,110 @@ func Test_AccountData(t *testing.T) {
 	})
 }
 
+// Tests conditional account data writes and explicit deletion.
+func Test_AccountDataConditionalWrites(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, dbType)
+		defer cleanup()
+		alice := test.NewUser(t)
+		localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
+		assert.NoError(t, err)
+
+		first := json.RawMessage(`{"value":"first"}`)
+		updated, err := db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.type", nil, first)
+		assert.NoError(t, err)
+		assert.True(t, updated)
+
+		// A second writer that saw no existing value must lose the race.
+		updated, err = db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.type", nil, json.RawMessage(`{"value":"other"}`))
+		assert.NoError(t, err)
+		assert.False(t, updated)
+
+		second := json.RawMessage(`{"value":"second"}`)
+		updated, err = db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.type", first, second)
+		assert.NoError(t, err)
+		assert.True(t, updated)
+
+		// The old value is stale now.
+		updated, err = db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.type", first, json.RawMessage(`{"value":"third"}`))
+		assert.NoError(t, err)
+		assert.False(t, updated)
+
+		stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.type")
+		assert.NoError(t, err)
+		assert.Equal(t, second, stored)
+
+		assert.NoError(t, db.DeleteAccountDataByType(ctx, localpart, domain, "", "test.type"))
+		stored, err = db.GetAccountDataByType(ctx, localpart, domain, "", "test.type")
+		assert.NoError(t, err)
+		assert.Nil(t, stored)
+	})
+}
+
+// Tests that concurrent conditional writers do not lose updates.
+func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, dbType)
+		defer cleanup()
+		alice := test.NewUser(t)
+		localpart, domain, err := gomatrixserverlib.SplitID('@', alice.ID)
+		assert.NoError(t, err)
+
+		initial := json.RawMessage(`{"n":0}`)
+		updated, err := db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.concurrent", nil, initial)
+		assert.NoError(t, err)
+		assert.True(t, updated)
+
+		const workers = 8
+		var wg sync.WaitGroup
+		errs := make(chan error, workers)
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for attempt := 0; attempt < 100; attempt++ {
+					stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
+					if err != nil {
+						errs <- err
+						return
+					}
+					var doc map[string]int
+					if err = json.Unmarshal(stored, &doc); err != nil {
+						errs <- err
+						return
+					}
+					doc["n"]++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						errs <- err
+						return
+					}
+					ok, err := db.SaveAccountDataIfUnchanged(ctx, localpart, domain, "", "test.concurrent", stored, next)
+					if err != nil {
+						errs <- err
+						return
+					}
+					if ok {
+						return
+					}
+				}
+				errs <- errors.New("conditional write did not succeed after retries")
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			assert.NoError(t, err)
+		}
+
+		stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
+		assert.NoError(t, err)
+		var doc map[string]int
+		assert.NoError(t, json.Unmarshal(stored, &doc))
+		assert.Equal(t, workers, doc["n"])
+	})
+}
+
 // Tests the creation of accounts.
 func Test_Accounts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
@@ -1145,12 +1249,11 @@ func TestPushRulesAccountDataReadCompatibility(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, payload, string(global["m.push_rules"]))
 		}
-		// JSON null removes an account data event instead of storing a literal
-		// null payload.
-		assert.NoError(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(`null`)))
+		// JSON null is not a deletion request and must not replace stored data.
+		assert.Error(t, db.SaveAccountData(ctx, "alice", "localhost", "", "m.push_rules", json.RawMessage(`null`)))
 		data, err = db.GetAccountDataByType(ctx, "alice", "localhost", "", "m.push_rules")
 		assert.NoError(t, err)
-		assert.Empty(t, data)
+		assert.Equal(t, `{"custom":true}`, string(data))
 	})
 }
 

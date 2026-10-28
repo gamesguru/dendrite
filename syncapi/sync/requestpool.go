@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -807,6 +808,10 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 	return false
 }
 
+// waitForJoinedRooms makes a best-effort wait for joined-room membership events
+// that the sync database has not yet caught up with. The shared wait context is
+// limited to one second or the caller's earlier cancellation or deadline.
+// Unavailable membership information and lookup failures do not reach callers.
 func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
 	if rp.rsAPI == nil || req.Device == nil {
 		return
@@ -822,21 +827,48 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 	if err != nil || len(rooms) == 0 {
 		return
 	}
+
+	// Read the join event the sync API has stored for each room first. The
+	// snapshot is closed before the roomserver calls so neither those calls nor
+	// the waits can hold a connection open.
+	type syncMembership struct {
+		membership string
+		eventID    string
+		err        error
+	}
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	stored := make(map[string]syncMembership, len(rooms))
+	for _, roomID := range rooms {
+		if ctx.Err() != nil {
+			break
+		}
+		membership, eventID, membershipErr := snapshot.SelectMembershipForUserAtStreamPosition(
+			ctx, roomID.String(), req.Device.UserID, math.MaxInt64,
+		)
+		stored[roomID.String()] = syncMembership{membership, eventID, membershipErr}
+	}
+	_ = snapshot.Rollback()
+
 	for _, roomID := range rooms {
 		if ctx.Err() != nil {
 			return
 		}
-		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
-		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
-			RoomID: roomID.String(),
-		}, &latestRes); err != nil {
+		roomIDStr := roomID.String()
+		var membershipRes roomserverAPI.QueryMembershipForUserResponse
+		if err := rp.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
+			RoomID: roomIDStr,
+			UserID: *userID,
+		}, &membershipRes); err != nil || !membershipRes.IsInRoom || membershipRes.EventID == "" {
 			continue
 		}
-		for _, ev := range latestRes.LatestEvents {
-			if ctx.Err() != nil {
-				return
-			}
-			internal.WaitForMembershipInTopology(ctx, rp.db, ev)
+		// A join in sync storage is not enough: the roomserver may already have
+		// a newer join for a rejoin that has not reached the sync API yet.
+		if current := stored[roomIDStr]; current.err == nil && current.membership == spec.Join && current.eventID == membershipRes.EventID {
+			continue
 		}
+		internal.WaitForMembershipInTopology(ctx, rp.db, membershipRes.EventID)
 	}
 }

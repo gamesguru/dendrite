@@ -61,10 +61,13 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		require.Contains(t, extremities, newer.EventID())
 
 		// Backfilling the prev event makes the newer event's marker stale.
+		requestTxn, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
 		_, err = backfillEvents(ctx, &backfillOnlyAPI{events: []*rstypes.HeaderedEvent{older}},
-			db, "hs2", "hs2", room.ID,
+			db, requestTxn, "hs2", "hs2", room.ID,
 			map[string][]string{newer.EventID(): {older.EventID()}}, 10)
 		require.NoError(t, err)
+		require.NoError(t, requestTxn.Commit())
 
 		snapshot, err = db.NewDatabaseSnapshot(ctx)
 		require.NoError(t, err)

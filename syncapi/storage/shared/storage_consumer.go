@@ -792,6 +792,13 @@ func (d *Database) SelectMembershipForUser(ctx context.Context, roomID, userID s
 	return d.Memberships.SelectMembershipForUser(ctx, nil, roomID, userID, pos)
 }
 
+// SelectMembershipForUserAtStreamPosition returns the latest retained membership
+// and its event ID at or before streamPos in sync stream order. No matching row
+// returns "leave" without an error; other database errors propagate.
+func (d *Database) SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error) {
+	return d.Memberships.SelectMembershipForUserAtStreamPosition(ctx, nil, roomID, userID, streamPos)
+}
+
 func (d *Database) ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error) {
 	return d.OutputEvents.ReIndex(ctx, nil, limit, afterID, []string{
 		spec.MRoomName,
@@ -979,11 +986,15 @@ func (d *Database) GetConnectionStreamsByPosition(ctx context.Context, connectio
 	return streams, err
 }
 
-// DeleteOtherConnectionPositions removes all positions for a connection except the specified one
-// This is called when a client uses a position token, to clean up old state (like Synapse does).
+// DeleteOtherConnectionPositions removes all positions and list windows for a
+// connection except those at keepPosition. The cleanup runs in one transaction;
+// database and transaction errors propagate.
 func (d *Database) DeleteOtherConnectionPositions(ctx context.Context, connectionKey int64, keepPosition int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		return d.SlidingSync.DeleteOtherConnectionPositions(ctx, txn, connectionKey, keepPosition)
+		if err := d.SlidingSync.DeleteOtherConnectionPositions(ctx, txn, connectionKey, keepPosition); err != nil {
+			return err
+		}
+		return d.SlidingSync.DeleteOtherConnectionListWindows(ctx, txn, connectionKey, keepPosition)
 	})
 }
 
@@ -1121,6 +1132,27 @@ func (d *Database) GetConnectionList(ctx context.Context, connectionKey int64, l
 func (d *Database) UpdateConnectionList(ctx context.Context, connectionKey int64, listName string, roomIDsJSON string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.SlidingSync.UpsertConnectionList(ctx, txn, connectionKey, listName, roomIDsJSON)
+	})
+}
+
+// GetConnectionListWindow returns the stored room-ID JSON for a list at a
+// connection position. A missing window returns "", false, nil. Database and
+// transaction errors propagate; the JSON is not decoded.
+func (d *Database) GetConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64) (roomIDsJSON string, exists bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		var selectErr error
+		roomIDsJSON, exists, selectErr = d.SlidingSync.SelectConnectionListWindow(ctx, txn, connectionKey, listName, connectionPosition)
+		return selectErr
+	})
+	return roomIDsJSON, exists, err
+}
+
+// UpdateConnectionListWindow stores or replaces a list window's ordered room-ID
+// JSON at a connection position. It does not validate the JSON and returns
+// database or transaction errors.
+func (d *Database) UpdateConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.SlidingSync.UpsertConnectionListWindow(ctx, txn, connectionKey, listName, connectionPosition, roomIDsJSON)
 	})
 }
 

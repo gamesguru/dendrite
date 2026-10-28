@@ -110,6 +110,7 @@ type Database interface {
 	// Returns the latest events, the current state and the maximum depth of the latest events plus 1.
 	// Returns an error if there was a problem talking to the database.
 	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)
+	MaxEventNIDInRoom(ctx context.Context, roomID string) (int64, error)
 	// Look up the active invites targeting a user in a room and return the
 	// numeric state key IDs for the user IDs who sent them along with the event IDs for the invites.
 	// Returns an error if there was a problem talking to the database.

@@ -471,7 +471,7 @@ func (l *remoteTimestampLookup) fetch(ctx context.Context, eventID string) (*rst
 	// The backfill requests the remote event and those before it, attributing
 	// them to the known successor so the roomserver can pick servers by its state.
 	extremities := map[string][]string{l.successor: {eventID}}
-	if _, err := backfillEvents(ctx, l.rsAPI, l.syncDB, l.cfg.Matrix.ServerName, l.virtualHost, l.roomID, extremities, remoteTimestampBackfillLimit); err != nil {
+	if _, err := backfillEvents(ctx, l.rsAPI, l.syncDB, nil, l.cfg.Matrix.ServerName, l.virtualHost, l.roomID, extremities, remoteTimestampBackfillLimit); err != nil {
 		return nil, err
 	}
 	// Backfilled events are persisted by the roomserver consumer

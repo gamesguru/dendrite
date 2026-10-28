@@ -184,7 +184,10 @@ func (r *Queryer) QueryStateAfterEvents(
 }
 
 // QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
-// which room to use by querying the first events roomID.
+// which room to use by querying the first event's room ID. Returned events include
+// local event orderings, also indexed by event ID in response.EventNIDs. Rejected
+// events are omitted when ExcludeRejected is set. An empty event list or unknown
+// room returns without adding events; database and rejection-filter errors propagate.
 func (r *Queryer) QueryEventsByID(
 	ctx context.Context,
 	request *api.QueryEventsByIDRequest,
@@ -229,7 +232,11 @@ func (r *Queryer) QueryEventsByID(
 	}
 
 	for _, event := range events {
-		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU})
+		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU, EventNID: event.EventNID})
+	}
+	response.EventNIDs = make(map[string]types.EventNID, len(events))
+	for _, event := range events {
+		response.EventNIDs[event.EventID()] = event.EventNID
 	}
 
 	return nil

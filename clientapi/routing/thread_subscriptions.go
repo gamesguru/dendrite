@@ -2,6 +2,7 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -17,19 +18,25 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-const threadSubscriptionsAccountDataType = "io.element.msc4306.thread_subscriptions"
+const (
+	threadSubscriptionsAccountDataType = "io.element.msc4306.thread_subscriptions"
+	maxThreadSubscriptionRetries       = 10
+)
 
 type threadSubscription struct {
 	Automatic  bool   `json:"automatic"`
 	BumpStamp  int64  `json:"bump_stamp"`
+	BumpOrder  int64  `json:"bump_order,omitempty"`
 	CauseEvent string `json:"-"`
 }
 
 type threadSubscriptionsData struct {
-	Subscriptions map[string]threadSubscription `json:"subscriptions"`
-	Unsubscribed  map[string]int64              `json:"unsubscribed,omitempty"`
+	Subscriptions     map[string]threadSubscription `json:"subscriptions"`
+	Unsubscribed      map[string]int64              `json:"unsubscribed,omitempty"`
+	UnsubscribedOrder map[string]int64              `json:"unsubscribed_order,omitempty"`
 }
 
+// normalize initializes missing subscription and unsubscription maps for updates.
 func (d *threadSubscriptionsData) normalize() {
 	if d.Subscriptions == nil {
 		d.Subscriptions = make(map[string]threadSubscription)
@@ -37,34 +44,63 @@ func (d *threadSubscriptionsData) normalize() {
 	if d.Unsubscribed == nil {
 		d.Unsubscribed = make(map[string]int64)
 	}
+	if d.UnsubscribedOrder == nil {
+		d.UnsubscribedOrder = make(map[string]int64)
+	}
 }
 
-func queryThreadSubscriptions(req *http.Request, userID, roomID string, userAPI userapi.ClientUserAPI) (threadSubscriptionsData, error) {
+// automaticSubscriptionConflicts reports whether a manual unsubscription
+// is at or after the event that caused an automatic subscription. Positive local
+// orderings take precedence when both are available; otherwise positive timestamps
+// in Unix milliseconds are compared. Missing values do not establish a conflict.
+func automaticSubscriptionConflicts(data threadSubscriptionsData, threadID string, bumpOrder, bumpStamp int64) bool {
+	if unsubscribedOrder := data.UnsubscribedOrder[threadID]; unsubscribedOrder > 0 && bumpOrder > 0 {
+		return bumpOrder <= unsubscribedOrder
+	}
+	unsubscribedAt := data.Unsubscribed[threadID]
+	return unsubscribedAt > 0 && bumpStamp > 0 && bumpStamp <= unsubscribedAt
+}
+
+// queryThreadSubscriptions returns the user's room subscriptions and the stored
+// JSON for a conditional update. Missing account data yields initialized empty
+// maps and nil JSON. Account-data query and JSON decoding errors are returned.
+func queryThreadSubscriptions(req *http.Request, userID, roomID string, userAPI userapi.ClientUserAPI) (threadSubscriptionsData, json.RawMessage, error) {
 	var response userapi.QueryAccountDataResponse
 	err := userAPI.QueryAccountData(req.Context(), &userapi.QueryAccountDataRequest{
 		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType,
 	}, &response)
 	if err != nil {
-		return threadSubscriptionsData{}, err
+		return threadSubscriptionsData{}, nil, err
 	}
 	data := threadSubscriptionsData{}
-	if raw := response.RoomAccountData[roomID][threadSubscriptionsAccountDataType]; len(raw) > 0 {
-		if err = json.Unmarshal(raw, &data); err != nil {
-			return threadSubscriptionsData{}, err
+	var raw json.RawMessage
+	if stored := response.RoomAccountData[roomID][threadSubscriptionsAccountDataType]; len(stored) > 0 {
+		raw = stored
+		if err = json.Unmarshal(stored, &data); err != nil {
+			return threadSubscriptionsData{}, nil, err
 		}
 	}
 	data.normalize()
-	return data, nil
+	return data, raw, nil
 }
 
-func saveThreadSubscriptions(req *http.Request, userID, roomID string, data threadSubscriptionsData, userAPI userapi.ClientUserAPI) error {
+// saveThreadSubscriptionsIfUnchanged writes data only if the stored document
+// still matches expected, so a concurrent change to another thread is not lost.
+// An empty expected value represents a missing document. A mismatch returns
+// false without an error; account-data update errors propagate.
+func saveThreadSubscriptionsIfUnchanged(req *http.Request, userID, roomID string, expected []byte, data threadSubscriptionsData, userAPI userapi.ClientUserAPI) (bool, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return userAPI.InputAccountData(req.Context(), &userapi.InputAccountDataRequest{
-		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType, AccountData: raw,
-	}, &userapi.InputAccountDataResponse{})
+	var response userapi.InputAccountDataResponse
+	if err = userAPI.InputAccountData(req.Context(), &userapi.InputAccountDataRequest{
+		UserID: userID, RoomID: roomID, DataType: threadSubscriptionsAccountDataType,
+		AccountData: raw, CompareAccountData: true, ExpectedAccountData: expected,
+	}, &response); err != nil {
+		return false, err
+	}
+	return response.Updated, nil
 }
 
 // threadSubscriptionLocks serializes the read-modify-write of each user's
@@ -90,16 +126,29 @@ func lockThreadSubscriptions(userID, roomID string) func() {
 }
 
 // getThreadEvent returns the event if it exists in the room and the user may
-// see it; an event the user may not see is treated as unknown.
-func getThreadEvent(req *http.Request, userID, roomID, eventID string, rsAPI roomserver.ClientRoomserverAPI) *roomtypes.HeaderedEvent {
-	event := roomserver.GetEvent(req.Context(), rsAPI, roomID, eventID)
-	if event == nil || event.EventID() != eventID || event.RoomID().String() != roomID {
-		return nil
+// see it, together with its local event ordering (zero if unavailable). Missing
+// or inaccessible events and query failures return nil and zero.
+func getThreadEvent(req *http.Request, userID, roomID, eventID string, rsAPI roomserver.ClientRoomserverAPI) (*roomtypes.HeaderedEvent, int64) {
+	var response roomserver.QueryEventsByIDResponse
+	if err := rsAPI.QueryEventsByID(req.Context(), &roomserver.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{eventID},
+	}, &response); err != nil {
+		return nil, 0
 	}
-	if !canSeeThreadEvent(req, userID, event, rsAPI) {
-		return nil
+	for _, event := range response.Events {
+		if event == nil || event.EventID() != eventID || event.RoomID().String() != roomID {
+			continue
+		}
+		if !canSeeThreadEvent(req, userID, event, rsAPI) {
+			return nil, 0
+		}
+		order := int64(response.EventNIDs[eventID])
+		if order == 0 {
+			order = int64(event.EventNID)
+		}
+		return event, order
 	}
-	return event
+	return nil, 0
 }
 
 // canSeeThreadEvent applies the room's history visibility at the event.
@@ -153,11 +202,15 @@ func canSeeThreadEvent(req *http.Request, userID string, event *roomtypes.Header
 	}
 }
 
+// getThreadSubscription returns the subscription's automatic flag and bump
+// stamp in Unix milliseconds. Missing or inaccessible thread roots and absent
+// subscriptions return 404; account-data query or decoding failures return an
+// internal error response.
 func getThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, userAPI userapi.ClientUserAPI, rsAPI roomserver.ClientRoomserverAPI) util.JSONResponse {
-	if getThreadEvent(req, device.UserID, roomID, threadID, rsAPI) == nil {
+	if root, _ := getThreadEvent(req, device.UserID, roomID, threadID, rsAPI); root == nil {
 		return util.MatrixErrorResponse(http.StatusNotFound, string(spec.ErrorNotFound), "Unknown thread")
 	}
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+	data, _, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -171,8 +224,16 @@ func getThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 	}}
 }
 
+// putThreadSubscription creates or updates a subscription from body. A nonempty
+// "automatic" value identifies a visible reply in the thread that caused the
+// subscription; an empty value requests a manual subscription. Automatic requests
+// preserve manual subscriptions and return 409 when a manual unsubscription is
+// at or after the cause. Bump stamps use Unix milliseconds and increase past
+// stored stamps. Unknown roots return 404; invalid JSON or causes return 400.
+// Storage failures or ten consecutive conditional-write conflicts return an
+// internal error response.
 func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, body io.Reader, userAPI userapi.ClientUserAPI, rsAPI roomserver.ClientRoomserverAPI) util.JSONResponse {
-	root := getThreadEvent(req, device.UserID, roomID, threadID, rsAPI)
+	root, rootOrder := getThreadEvent(req, device.UserID, roomID, threadID, rsAPI)
 	if root == nil {
 		return util.MatrixErrorResponse(http.StatusNotFound, string(spec.ErrorNotFound), "Unknown thread")
 	}
@@ -183,61 +244,133 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON(err.Error())}
 	}
 	var bumpStamp int64
+	var bumpOrder int64
 	if request.Automatic != "" {
-		cause := getThreadEvent(req, device.UserID, roomID, request.Automatic, rsAPI)
+		cause, causeOrder := getThreadEvent(req, device.UserID, roomID, request.Automatic, rsAPI)
 		if cause == nil || gjson.GetBytes(cause.Content(), `m\.relates_to.rel_type`).Str != "m.thread" || gjson.GetBytes(cause.Content(), `m\.relates_to.event_id`).Str != threadID {
 			return util.MatrixErrorResponse(http.StatusBadRequest, "IO.ELEMENT.MSC4306.M_NOT_IN_THREAD", "Automatic subscription cause event is not in this thread")
 		}
 		bumpStamp = cause.OriginServerTS().Time().UnixMilli()
-	}
-	defer lockThreadSubscriptions(device.UserID, roomID)()
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
-	if err != nil {
-		return util.ErrorResponse(err)
-	}
-	existing, subscribed := data.Subscriptions[threadID]
-	if request.Automatic != "" && subscribed && !existing.Automatic {
-		// An automatic subscription never downgrades a manual one.
-		return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
-	}
-	if request.Automatic != "" {
-		if unsubscribedAt := data.Unsubscribed[threadID]; unsubscribedAt > 0 && bumpStamp <= unsubscribedAt {
-			return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
-		}
+		bumpOrder = causeOrder
 	} else {
 		bumpStamp = root.OriginServerTS().Time().UnixMilli()
+		bumpOrder = rootOrder
+		if roomOrdering, orderingErr := maxRoomOrdering(req, roomID, rsAPI); orderingErr == nil && roomOrdering > bumpOrder {
+			bumpOrder = roomOrdering
+		}
 	}
-	// Every change gets a later stamp than the subscription or unsubscribe it replaces.
-	floor := data.Unsubscribed[threadID]
-	if subscribed && existing.BumpStamp > floor {
-		floor = existing.BumpStamp
+	defer lockThreadSubscriptions(device.UserID, roomID)()
+	for attempt := 0; attempt < maxThreadSubscriptionRetries; attempt++ {
+		data, expected, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		existing, subscribed := data.Subscriptions[threadID]
+		if request.Automatic != "" && subscribed && !existing.Automatic {
+			// An automatic subscription never downgrades a manual one.
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
+		if request.Automatic != "" && automaticSubscriptionConflicts(data, threadID, bumpOrder, bumpStamp) {
+			return util.MatrixErrorResponse(http.StatusConflict, "IO.ELEMENT.MSC4306.M_CONFLICTING_UNSUBSCRIPTION", "Thread was unsubscribed after the cause event")
+		}
+		// Every change gets a later stamp than the subscription or unsubscribe it replaces.
+		floor := data.Unsubscribed[threadID]
+		if subscribed && existing.BumpStamp > floor {
+			floor = existing.BumpStamp
+		}
+		updatedStamp := bumpStamp
+		if updatedStamp <= floor {
+			updatedStamp = floor + 1
+		}
+		data.Subscriptions[threadID] = threadSubscription{Automatic: request.Automatic != "", BumpStamp: updatedStamp, BumpOrder: bumpOrder, CauseEvent: request.Automatic}
+		delete(data.Unsubscribed, threadID)
+		delete(data.UnsubscribedOrder, threadID)
+		updated, err := saveThreadSubscriptionsIfUnchanged(req, device.UserID, roomID, expected, data, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if updated {
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
 	}
-	if bumpStamp <= floor {
-		bumpStamp = floor + 1
-	}
-	data.Subscriptions[threadID] = threadSubscription{Automatic: request.Automatic != "", BumpStamp: bumpStamp, CauseEvent: request.Automatic}
-	delete(data.Unsubscribed, threadID)
-	if err = saveThreadSubscriptions(req, device.UserID, roomID, data, userAPI); err != nil {
-		return util.ErrorResponse(err)
-	}
-	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+	return util.ErrorResponse(errors.New("thread subscription update conflicted with concurrent changes"))
 }
 
-func deleteThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, userAPI userapi.ClientUserAPI) util.JSONResponse {
+// maxRoomOrdering returns an upper bound on the locally assigned orderings of
+// all events stored for the room, including events that are no longer forward
+// extremities. Unlike depth, it cannot be chosen by a remote sender. It is
+// scoped to this database's event sequence, so account data and the roomserver
+// database must be restored together. It returns zero when no positive
+// ordering is available and propagates roomserver query errors.
+func maxRoomOrdering(req *http.Request, roomID string, rsAPI roomserver.ClientRoomserverAPI) (int64, error) {
+	var latest roomserver.QueryLatestEventsAndStateResponse
+	if err := rsAPI.QueryLatestEventsAndState(req.Context(), &roomserver.QueryLatestEventsAndStateRequest{
+		RoomID:             roomID,
+		IncludeMaxEventNID: true,
+		// Avoid fetching the entire current state just to learn the ordering.
+		StateToFetch: []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomCreate, StateKey: ""}},
+	}, &latest); err != nil {
+		return 0, err
+	}
+	if len(latest.LatestEvents) == 0 {
+		return latest.MaxEventNID, nil
+	}
+	if latest.MaxEventNID > 0 {
+		return latest.MaxEventNID, nil
+	}
+	var events roomserver.QueryEventsByIDResponse
+	if err := rsAPI.QueryEventsByID(req.Context(), &roomserver.QueryEventsByIDRequest{
+		RoomID:   roomID,
+		EventIDs: latest.LatestEvents,
+	}, &events); err != nil {
+		return 0, err
+	}
+	var maxOrdering int64
+	for _, event := range events.Events {
+		ordering := int64(events.EventNIDs[event.EventID()])
+		if ordering == 0 {
+			ordering = int64(event.EventNID)
+		}
+		if ordering > maxOrdering {
+			maxOrdering = ordering
+		}
+	}
+	return maxOrdering, nil
+}
+
+// deleteThreadSubscription removes a subscription, even if absent, and records
+// a manual unsubscription's local room ordering and increasing Unix millisecond
+// stamp. It returns 200 on success. Roomserver or account-data failures and ten
+// consecutive conditional-write conflicts return an internal error response.
+func deleteThreadSubscription(req *http.Request, device *userapi.Device, roomID, threadID string, userAPI userapi.ClientUserAPI, rsAPI roomserver.ClientRoomserverAPI) util.JSONResponse {
 	defer lockThreadSubscriptions(device.UserID, roomID)()
-	data, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+	roomOrdering, err := maxRoomOrdering(req, roomID, rsAPI)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	existing, subscribed := data.Subscriptions[threadID]
-	delete(data.Subscriptions, threadID)
-	unsubscribedAt := time.Now().UnixMilli()
-	if subscribed && unsubscribedAt <= existing.BumpStamp {
-		unsubscribedAt = existing.BumpStamp + 1
+	for attempt := 0; attempt < maxThreadSubscriptionRetries; attempt++ {
+		data, expected, err := queryThreadSubscriptions(req, device.UserID, roomID, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		existing, subscribed := data.Subscriptions[threadID]
+		delete(data.Subscriptions, threadID)
+		unsubscribedAt := time.Now().UnixMilli()
+		if subscribed && unsubscribedAt <= existing.BumpStamp {
+			unsubscribedAt = existing.BumpStamp + 1
+		}
+		if previous := data.Unsubscribed[threadID]; previous >= unsubscribedAt {
+			unsubscribedAt = previous + 1
+		}
+		data.Unsubscribed[threadID] = unsubscribedAt
+		data.UnsubscribedOrder[threadID] = roomOrdering
+		updated, err := saveThreadSubscriptionsIfUnchanged(req, device.UserID, roomID, expected, data, userAPI)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if updated {
+			return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+		}
 	}
-	data.Unsubscribed[threadID] = unsubscribedAt
-	if err = saveThreadSubscriptions(req, device.UserID, roomID, data, userAPI); err != nil {
-		return util.ErrorResponse(err)
-	}
-	return util.JSONResponse{Code: http.StatusOK, JSON: struct{}{}}
+	return util.ErrorResponse(errors.New("thread subscription update conflicted with concurrent changes"))
 }

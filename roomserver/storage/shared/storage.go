@@ -447,6 +447,19 @@ func (d *Database) LatestEventIDs(ctx context.Context, roomNID types.RoomNID) (r
 	return
 }
 
+func (d *Database) MaxEventNIDInRoom(ctx context.Context, roomID string) (int64, error) {
+	roomInfo, err := d.RoomInfo(ctx, roomID)
+	if err != nil || roomInfo == nil {
+		return 0, err
+	}
+	var maxEventNID int64
+	err = d.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(event_nid), 0) FROM roomserver_events WHERE room_nid = $1",
+		roomInfo.RoomNID,
+	).Scan(&maxEventNID)
+	return maxEventNID, err
+}
+
 func (d *Database) StateBlockNIDs(
 	ctx context.Context, stateNIDs []types.StateSnapshotNID,
 ) ([]types.StateBlockNIDList, error) {

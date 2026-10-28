@@ -33,6 +33,11 @@ type RegistrationTokensTable interface {
 
 type AccountDataTable interface {
 	InsertAccountData(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, dataType string, content json.RawMessage) error
+	// UpdateAccountDataIfUnchanged updates content only when the stored value
+	// matches expected. An empty expected value requires that no row exists.
+	UpdateAccountDataIfUnchanged(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, dataType string, expected, content json.RawMessage) (bool, error)
+	// DeleteAccountDataByType removes the row for the given user, room and type.
+	DeleteAccountDataByType(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, dataType string) error
 	SelectAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (map[string]json.RawMessage, map[string]map[string]json.RawMessage, error)
 	SelectAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) (data json.RawMessage, err error)
 	// DeleteAccountData deletes all global and room account data of a user.
