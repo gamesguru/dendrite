@@ -508,11 +508,8 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if len(streamEvents) == 0 && !topologyHadEvents {
 		// The topology query itself found no events: we are at a backward extremity or the
 		// beginning of the room. Check for backfill opportunities.
-		if events, err = r.handleEmptyEventsSlice(withheld); err != nil {
+		if events, err = r.handleEmptyEventsSlice(); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
-		}
-		if len(events) > 0 {
-			topologyHadEvents = true
 		}
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
@@ -653,9 +650,8 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 // the set is empty because we've reached a backward extremity, and if that is
 // the case, by retrieving as much events as requested by backfilling from
 // another homeserver.
-// Returns an error if there was an issue talking with the database or if
-// backfilling failed and there are no local events to return.
-func (r *messagesReq) handleEmptyEventsSlice(localEvents []types.StreamEvent) (
+// Returns an error if there was an issue talking with the database.
+func (r *messagesReq) handleEmptyEventsSlice() (
 	events []*rstypes.HeaderedEvent, err error,
 ) {
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID)
@@ -668,12 +664,10 @@ func (r *messagesReq) handleEmptyEventsSlice(localEvents []types.StreamEvent) (
 			if r.ctx.Err() != nil {
 				return
 			}
-			if len(localEvents) == 0 {
-				return nil, err
-			}
-			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning local events")
-			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, localEvents, r.rsAPI)
-			return events, nil
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning local events where available")
+			// The caller can still return events withheld at the extremity. With
+			// no local events, return an empty page rather than failing the request.
+			return []*rstypes.HeaderedEvent{}, nil
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0
