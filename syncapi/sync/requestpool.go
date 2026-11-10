@@ -12,13 +12,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -808,10 +808,11 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 	return false
 }
 
-// waitForJoinedRooms makes a best-effort wait for joined-room membership events
-// that the sync database has not yet caught up with. The shared wait context is
-// limited to one second or the caller's earlier cancellation or deadline.
-// Unavailable membership information and lookup failures do not reach callers.
+// waitForJoinedRooms makes a best-effort wait, before a complete sync picks its
+// token, for the sync API to catch up with each joined room's latest events and
+// the user's current membership event, so the token covers events the client
+// has already written. The shared wait context is limited to one second or the
+// caller's earlier cancellation or deadline. Lookup failures do not reach callers.
 func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
 	if rp.rsAPI == nil || req.Device == nil {
 		return
@@ -828,47 +829,53 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 		return
 	}
 
-	// Read the join event the sync API has stored for each room first. The
-	// snapshot is closed before the roomserver calls so neither those calls nor
-	// the waits can hold a connection open.
-	type syncMembership struct {
-		membership string
-		eventID    string
-		err        error
-	}
-	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
-	if err != nil {
-		return
-	}
-	stored := make(map[string]syncMembership, len(rooms))
-	for _, roomID := range rooms {
-		if ctx.Err() != nil {
-			break
-		}
-		membership, eventID, membershipErr := snapshot.SelectMembershipForUserAtStreamPosition(
-			ctx, roomID.String(), req.Device.UserID, math.MaxInt64,
-		)
-		stored[roomID.String()] = syncMembership{membership, eventID, membershipErr}
-	}
-	_ = snapshot.Rollback()
-
+	// Collect the events the roomserver has: the forward extremities, plus the
+	// membership event, which may be a newer join for a rejoin.
+	var wanted []string
+	memberTuple := []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomMember, StateKey: req.Device.UserID}}
 	for _, roomID := range rooms {
 		if ctx.Err() != nil {
 			return
 		}
-		roomIDStr := roomID.String()
-		var membershipRes roomserverAPI.QueryMembershipForUserResponse
-		if err := rp.rsAPI.QueryMembershipForUser(ctx, &roomserverAPI.QueryMembershipForUserRequest{
-			RoomID: roomIDStr,
-			UserID: *userID,
-		}, &membershipRes); err != nil || !membershipRes.IsInRoom || membershipRes.EventID == "" {
+		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
+		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
+			RoomID:       roomID.String(),
+			StateToFetch: memberTuple,
+		}, &latestRes); err != nil {
 			continue
 		}
-		// A join in sync storage is not enough: the roomserver may already have
-		// a newer join for a rejoin that has not reached the sync API yet.
-		if current := stored[roomIDStr]; current.err == nil && current.membership == spec.Join && current.eventID == membershipRes.EventID {
-			continue
+		wanted = append(wanted, latestRes.LatestEvents...)
+		for _, ev := range latestRes.StateEvents {
+			if ev != nil {
+				wanted = append(wanted, ev.EventID())
+			}
 		}
-		internal.WaitForMembershipInTopology(ctx, rp.db, membershipRes.EventID)
+	}
+	if len(wanted) == 0 {
+		return
+	}
+
+	// Check them on one snapshot, closed before waiting so the waits can take
+	// their own, and only wait for those the sync API does not have yet.
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, eventID := range util.UniqueStrings(wanted) {
+		if ctx.Err() != nil {
+			break
+		}
+		if _, posErr := snapshot.EventPositionInTopology(ctx, eventID); errors.Is(posErr, sql.ErrNoRows) {
+			missing = append(missing, eventID)
+		}
+	}
+	_ = snapshot.Rollback()
+
+	for _, eventID := range missing {
+		if ctx.Err() != nil {
+			return
+		}
+		internal.WaitForMembershipInTopology(ctx, rp.db, eventID)
 	}
 }
