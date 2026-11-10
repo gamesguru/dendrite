@@ -704,17 +704,27 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		return false, nil
 	}
 
-	recEvents := gomatrixserverlib.ReverseTopologicalOrdering(
-		gomatrixserverlib.ToPDUs(snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI)),
-		gomatrixserverlib.TopologicalOrderByPrevEvents,
-	)
-	recentEvents := make([]*rstypes.HeaderedEvent, len(recEvents))
-	for i := range recEvents {
-		he, ok := recEvents[i].(*rstypes.HeaderedEvent)
-		if !ok {
-			continue
+	// Incremental timelines are in the order events arrived, which the storage
+	// layer returns as ascending stream position. Rooms shown as a historical
+	// section (a complete sync, a newly joined room, or a left room) are ordered
+	// by the room DAG instead, as /messages is: an event received late but deep
+	// in the past belongs in history, not at the end of the timeline.
+	var recentEvents []*rstypes.HeaderedEvent
+	if r.Backwards {
+		recEvents := gomatrixserverlib.ReverseTopologicalOrdering(
+			gomatrixserverlib.ToPDUs(snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI)),
+			gomatrixserverlib.TopologicalOrderByPrevEvents,
+		)
+		recentEvents = make([]*rstypes.HeaderedEvent, 0, len(recEvents))
+		for i := range recEvents {
+			he, ok := recEvents[i].(*rstypes.HeaderedEvent)
+			if !ok {
+				continue
+			}
+			recentEvents = append(recentEvents, he)
 		}
-		recentEvents[i] = he
+	} else {
+		recentEvents = snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI)
 	}
 
 	// A resync can finish without adding timeline events. The completion marker
