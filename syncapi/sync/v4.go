@@ -1898,7 +1898,7 @@ func (rp *RequestPool) requiredStateChanged(
 }
 
 // processRoomList returns an activity-sorted, filtered room list with its total
-// count, window, operations, and removed room IDs. connState must be non-nil.
+// Count, window, operations, and removed room IDs. connState must be non-nil.
 // forceInitialSync ignores the previous window; otherwise the client's previous
 // position selects it, with a missing or invalid saved window triggering resync.
 // A positive response position saves the current window even when unchanged.

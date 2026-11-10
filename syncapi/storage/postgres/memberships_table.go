@@ -61,6 +61,7 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (room_id, user_id, stream_pos) DO UPDATE
 SET membership = EXCLUDED.membership, event_id = EXCLUDED.event_id
 `
+
 const insertMembershipHistoryBatchSQL = `
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT room_id, user_id, membership, event_id, $5
@@ -68,6 +69,7 @@ FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS rows(room_id, use
 ON CONFLICT (room_id, user_id, stream_pos) DO UPDATE
 SET membership = EXCLUDED.membership, event_id = EXCLUDED.event_id
 `
+
 const selectMembershipHistoryAtStreamSQL = `
 SELECT membership, event_id FROM syncapi_membership_history
 WHERE room_id = $1 AND user_id = $2 AND stream_pos <= $3

@@ -59,6 +59,7 @@ INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, s
 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (room_id, user_id, stream_pos) DO UPDATE
 SET membership = excluded.membership, event_id = excluded.event_id
 `
+
 const selectMembershipHistoryAtStreamSQL = `
 SELECT membership, event_id FROM syncapi_membership_history
 WHERE room_id = $1 AND user_id = $2 AND stream_pos <= $3
