@@ -43,7 +43,8 @@ var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid 
 // errNoPrevEventsReturned says that a server answered /get_missing_events but
 // the response held none of the event's prev_events, for instance because it
 // was empty. The server is reachable, so the state before the event can still
-// be had from /state_ids and /event.
+// be had from /state_ids and /event. Any other events the response held are not
+// used: without a prev_event of e they do not connect it to our history.
 var errNoPrevEventsReturned = errors.New("/get_missing_events returned none of the prev_events")
 
 // isMalformedJSONError reports whether err came from decoding a response body
@@ -186,12 +187,13 @@ func (t *missingStateReq) processEventWithMissingState(
 		"txn_prev_events": e.PrevEventIDs(),
 	})
 
-	// Attempt to fill in the gap using /get_missing_events
-	// This will either:
-	// - fill in the gap completely then process event `e` returning no backwards extremity
-	// - fail to fill in the gap, in which case we resolve state from the prev_events
-	// - fail to find state, in which case we terminate the transaction with err != nil
-	// - fail to fill in the gap and tell us to fetch state at the new backwards extremity, and to not terminate the transaction
+	// Attempt to fill in the gap using /get_missing_events. This will either:
+	//   - fill the gap: inject the events and process e normally;
+	//   - return none of e's prev_events: leave the gap and resolve the state
+	//     before e from its prev_events;
+	//   - partly fill the gap: resolve the state at the new backward extremity,
+	//     roll it forward, then process e;
+	//   - fail outright (e.g. no server answers): reject the event.
 	newEvents, isGapFilled, prevStatesKnown, err := t.getMissingEvents(ctx, e, roomVersion)
 	if errors.Is(err, errNoPrevEventsReturned) {
 		// The server answered but gave us nothing to close the gap with, as
