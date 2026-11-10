@@ -935,18 +935,18 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 // Returns an error if there was an issue with retrieving the list of servers in
 // the room or sending the request.
 func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]string, limit int) ([]*rstypes.HeaderedEvent, error) {
-	return backfillEvents(r.ctx, r.rsAPI, r.db, r.snapshot, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit)
+	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit)
 }
 
 // backfillEvents asks the roomserver to backfill events over federation and
 // stores them as backfilled events, which keeps them out of sync responses.
-// It continues independently of ctx cancellation and deadlines, returning at most
-// Limit events in ascending depth order after storing the full batch. limit must
+// It continues independently of ctx cancellation and deadlines. The result contains
+// at most limit events in ascending depth order after storing the full batch. limit must
 // be nonnegative. Backfill and event-write errors propagate; backward-extremity
 // cleanup failures do not fail the request. Earlier writes may remain when a
 // later write fails.
 func backfillEvents(
-	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database, cleanupTxn storage.DatabaseTransaction,
+	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
 	serverName, virtualHost spec.ServerName,
 	roomID string, backwardsExtremities map[string][]string, limit int,
 ) ([]*rstypes.HeaderedEvent, error) {
@@ -959,7 +959,7 @@ func backfillEvents(
 	for _, prevIDs := range backwardsExtremities {
 		pendingPrevIDs = append(pendingPrevIDs, prevIDs...)
 	}
-	retryBackwardExtremityCleanup(ctx, db, cleanupTxn, roomID, pendingPrevIDs)
+	retryBackwardExtremityCleanup(ctx, db, roomID, pendingPrevIDs)
 
 	var res api.PerformBackfillResponse
 	err := rsAPI.PerformBackfill(ctx, &api.PerformBackfillRequest{
@@ -1022,7 +1022,7 @@ func backfillEvents(
 		for eventID := range prevEventIDs {
 			ids = append(ids, eventID)
 		}
-		retryBackwardExtremityCleanup(ctx, db, cleanupTxn, roomID, ids)
+		retryBackwardExtremityCleanup(ctx, db, roomID, ids)
 	}
 
 	// we may have got more than the requested limit so resize now
@@ -1035,17 +1035,15 @@ func backfillEvents(
 }
 
 // retryBackwardExtremityCleanup removes markers for candidate events that are
-// now stored, using cleanupTxn. Empty candidates do nothing. Lookup or purge
+// now stored, in an independent write transaction. Empty candidates do nothing. Lookup or purge
 // failures are not returned; the markers themselves persist failed work for a
 // later backfill.
-func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, cleanupTxn storage.DatabaseTransaction, roomID string, candidateIDs []string) {
+func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, roomID string, candidateIDs []string) {
 	if len(candidateIDs) == 0 {
 		return
 	}
 	candidateIDs = util.UniqueStrings(candidateIDs)
-	// Read on a fresh view so events just written by the backfill are visible,
-	// but purge through the request transaction when there is one, so the
-	// cleanup does not wait for another writer connection.
+	// Read on a fresh view so events just written by the backfill are visible.
 	stored, err := db.Events(ctx, candidateIDs)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Warn("Failed to look up events for backward-extremity cleanup")
@@ -1058,11 +1056,7 @@ func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, cle
 	if len(storedIDs) == 0 {
 		return
 	}
-	if cleanupTxn != nil {
-		err = cleanupTxn.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs)
-	} else {
-		err = db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs)
-	}
+	err = db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Warn("Failed to purge stale backward extremities")
 	}

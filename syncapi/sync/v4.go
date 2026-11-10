@@ -1899,8 +1899,8 @@ func (rp *RequestPool) requiredStateChanged(
 
 // processRoomList returns an activity-sorted, filtered room list with its total
 // Count, window, operations, and removed room IDs. connState must be non-nil.
-// forceInitialSync ignores the previous window; otherwise the client's previous
-// position selects it, with a missing or invalid saved window triggering resync.
+// When forceInitialSync is true, the previous window is ignored. Otherwise the
+// client's previous position selects it, with a missing or invalid saved window triggering resync.
 // A positive response position saves the current window even when unchanged.
 // Room-query, filter, and position-specific window storage errors propagate;
 // legacy list storage failures do not fail the result.
@@ -2163,122 +2163,124 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 	}
 
-	// Populate room data for rooms that appear in list operations
-	if ctx.Err() != nil {
-		return resp
-	}
-	if len(roomsInLists) > 0 {
-		snapshot, snapshotErr := rp.db.NewDatabaseSnapshot(ctx)
-		if snapshotErr != nil {
-			if errors.Is(snapshotErr, context.Canceled) || errors.Is(snapshotErr, context.DeadlineExceeded) {
-				return resp
+	func() {
+		// Populate room data for rooms that appear in list operations
+		if ctx.Err() != nil {
+			return
+		}
+		if len(roomsInLists) > 0 {
+			snapshot, snapshotErr := rp.db.NewDatabaseSnapshot(ctx)
+			if snapshotErr != nil {
+				if errors.Is(snapshotErr, context.Canceled) || errors.Is(snapshotErr, context.DeadlineExceeded) {
+					return
+				}
+				logrus.WithError(snapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for room data")
+			} else {
+				var succeeded bool
+				defer func() {
+					if succeeded {
+						_ = snapshot.Commit()
+					}
+					_ = snapshot.Rollback()
+				}()
+
+				logrus.WithFields(logrus.Fields{
+					"num_rooms":     len(roomsInLists),
+					"response_type": responseType,
+				}).Debug("[V4_SYNC] Populating room data for interrupt response")
+
+				for roomID, config := range roomsInLists {
+					if ctx.Err() != nil {
+						return
+					}
+					var requiredStateConfig *types.RequiredStateConfig
+					if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 || config.RequiredState.LazyMembers {
+						requiredStateConfig = &config.RequiredState
+					}
+
+					roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID)
+
+					// An interrupt response persists no stream state and returns
+					// pos unchanged, so anything it emits is emitted again on the
+					// next timeout and in the following real response. Pin
+					// LastToken to since so getTimelineEvents does not widen the
+					// range down to a lagging room token here: the gap is caught
+					// up by the next real response, which does persist state.
+					if roomState.LastToken != nil && since != nil {
+						pinned := since.StreamToken
+						roomState.LastToken = &pinned
+					}
+
+					var fromPosPtr *types.StreamingToken
+					if since != nil {
+						fromPosPtr = &since.StreamToken
+					}
+
+					roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false, false)
+					if buildErr != nil {
+						if errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded) {
+							return
+						}
+						logrus.WithError(buildErr).WithFields(logrus.Fields{
+							"room_id":       roomID,
+							"response_type": responseType,
+						}).Error("[V4_SYNC] Failed to build room data")
+						continue
+					}
+
+					roomData.Avatar = roomData.AvatarURL
+					roomData.Lists = []string{}
+					for listName, list := range resp.Lists {
+						if slices.Contains(list.WindowRoomIDs, roomID) {
+							roomData.Lists = append(roomData.Lists, listName)
+						}
+					}
+					resp.Rooms[roomID] = *roomData
+				}
+				succeeded = true
 			}
-			logrus.WithError(snapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for room data")
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Process extensions (provides e2ee data like OTK counts)
+		extSnapshot, extSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
+		if extSnapshotErr != nil {
+			if errors.Is(extSnapshotErr, context.Canceled) || errors.Is(extSnapshotErr, context.DeadlineExceeded) {
+				return
+			}
+			logrus.WithError(extSnapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for extensions")
 		} else {
 			var succeeded bool
 			defer func() {
 				if succeeded {
-					_ = snapshot.Commit()
+					_ = extSnapshot.Commit()
 				}
-				_ = snapshot.Rollback()
+				_ = extSnapshot.Rollback()
 			}()
 
-			logrus.WithFields(logrus.Fields{
-				"num_rooms":     len(roomsInLists),
-				"response_type": responseType,
-			}).Debug("[V4_SYNC] Populating room data for interrupt response")
-
-			for roomID, config := range roomsInLists {
-				if ctx.Err() != nil {
-					return resp
+			var fromPosPtr *types.StreamingToken
+			if since != nil {
+				fromPosPtr = &since.StreamToken
+			}
+			roomSubscriptions := make(map[string]bool, len(v4Req.RoomSubscriptions))
+			for roomID := range v4Req.RoomSubscriptions {
+				roomSubscriptions[roomID] = true
+			}
+			extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions, resp.Rooms)
+			if extErr != nil {
+				if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
+					return
 				}
-				var requiredStateConfig *types.RequiredStateConfig
-				if len(config.RequiredState.Include) > 0 || len(config.RequiredState.Exclude) > 0 || config.RequiredState.LazyMembers {
-					requiredStateConfig = &config.RequiredState
-				}
-
-				roomState := determineRoomStreamState(ctx, snapshot, connState, roomID, device.UserID)
-
-				// An interrupt response persists no stream state and returns
-				// pos unchanged, so anything it emits is emitted again on the
-				// next timeout and in the following real response. Pin
-				// LastToken to since so getTimelineEvents does not widen the
-				// range down to a lagging room token here: the gap is caught
-				// up by the next real response, which does persist state.
-				if roomState.LastToken != nil && since != nil {
-					pinned := since.StreamToken
-					roomState.LastToken = &pinned
-				}
-
-				var fromPosPtr *types.StreamingToken
-				if since != nil {
-					fromPosPtr = &since.StreamToken
-				}
-
-				roomData, buildErr := rp.BuildRoomData(ctx, snapshot, roomID, device.UserID, config.TimelineLimit, roomState, since.StreamToken, fromPosPtr, requiredStateConfig, false, false)
-				if buildErr != nil {
-					if errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded) {
-						return resp
-					}
-					logrus.WithError(buildErr).WithFields(logrus.Fields{
-						"room_id":       roomID,
-						"response_type": responseType,
-					}).Error("[V4_SYNC] Failed to build room data")
-					continue
-				}
-
-				roomData.Avatar = roomData.AvatarURL
-				roomData.Lists = []string{}
-				for listName, list := range resp.Lists {
-					if slices.Contains(list.WindowRoomIDs, roomID) {
-						roomData.Lists = append(roomData.Lists, listName)
-					}
-				}
-				resp.Rooms[roomID] = *roomData
+				logrus.WithError(extErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to process extensions")
+			} else {
+				resp.Extensions = extensionResp
 			}
 			succeeded = true
 		}
-	}
-
-	if ctx.Err() != nil {
-		return resp
-	}
-
-	// Process extensions (provides e2ee data like OTK counts)
-	extSnapshot, extSnapshotErr := rp.db.NewDatabaseSnapshot(ctx)
-	if extSnapshotErr != nil {
-		if errors.Is(extSnapshotErr, context.Canceled) || errors.Is(extSnapshotErr, context.DeadlineExceeded) {
-			return resp
-		}
-		logrus.WithError(extSnapshotErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to create snapshot for extensions")
-	} else {
-		var succeeded bool
-		defer func() {
-			if succeeded {
-				_ = extSnapshot.Commit()
-			}
-			_ = extSnapshot.Rollback()
-		}()
-
-		var fromPosPtr *types.StreamingToken
-		if since != nil {
-			fromPosPtr = &since.StreamToken
-		}
-		roomSubscriptions := make(map[string]bool, len(v4Req.RoomSubscriptions))
-		for roomID := range v4Req.RoomSubscriptions {
-			roomSubscriptions[roomID] = true
-		}
-		extensionResp, _, _, extErr := rp.ProcessExtensions(ctx, extSnapshot, connState, v4Req, device.UserID, device.ID, connectionKey, fromPosPtr, currentPos, resp.Lists, roomSubscriptions, resp.Rooms)
-		if extErr != nil {
-			if errors.Is(extErr, context.Canceled) || errors.Is(extErr, context.DeadlineExceeded) {
-				return resp
-			}
-			logrus.WithError(extErr).WithField("response_type", responseType).Error("[V4_SYNC] Failed to process extensions")
-		} else {
-			resp.Extensions = extensionResp
-		}
-		succeeded = true
-	}
+	}()
 
 	rp.acknowledgeInterruptLists(ctx, resp, connState, since)
 	return resp

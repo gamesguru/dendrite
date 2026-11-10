@@ -71,7 +71,7 @@ SET membership = EXCLUDED.membership, event_id = EXCLUDED.event_id
 `
 
 const selectMembershipHistoryAtStreamSQL = `
-SELECT membership, event_id FROM syncapi_membership_history
+SELECT membership, event_id, stream_pos FROM syncapi_membership_history
 WHERE room_id = $1 AND user_id = $2 AND stream_pos <= $3
 ORDER BY stream_pos DESC LIMIT 1
 `
@@ -101,7 +101,7 @@ const selectMembershipBeforeSQL = "" +
 	"SELECT membership, topological_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND topological_pos <= $3 ORDER BY topological_pos DESC LIMIT 1"
 
 const selectMembershipAtStreamSQL = "" +
-	"SELECT membership, event_id FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
+	"SELECT membership, event_id, stream_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
 
 const purgeMembershipsSQL = "" +
 	"DELETE FROM syncapi_memberships WHERE room_id = $1"
@@ -249,30 +249,34 @@ func (s *membershipsStatements) SelectMembershipForUser(
 	return membership, topologyPos, nil
 }
 
-// SelectMembershipForUserAtStreamPosition returns the latest retained membership
+// SelectMembershipForUserAtStreamPosition returns the latest membership
 // at or before streamPos, using sync stream order rather than room topology.
-// The table retains only the latest event for each membership value. No matching
+// Membership history retains every transition. No matching
 // row returns "leave" without an error; other query or scan errors propagate.
 func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64,
 ) (membership, eventID string, err error) {
-	stmt := sqlutil.TxStmt(txn, s.selectMembershipHistoryAtStreamStmt)
-	err = stmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&membership, &eventID)
-	if err == nil {
-		return membership, eventID, nil
+	var historyMembership, historyEventID string
+	var historyPos int64
+	historyStmt := sqlutil.TxStmt(txn, s.selectMembershipHistoryAtStreamStmt)
+	historyErr := historyStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&historyMembership, &historyEventID, &historyPos)
+	if historyErr != nil && historyErr != sql.ErrNoRows {
+		return "", "", historyErr
 	}
-	if err != sql.ErrNoRows {
-		return "", "", err
+	var currentMembership, currentEventID string
+	var currentPos int64
+	currentStmt := sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
+	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos)
+	if currentErr != nil && currentErr != sql.ErrNoRows {
+		return "", "", currentErr
 	}
-	stmt = sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
-	err = stmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&membership, &eventID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "leave", "", nil
-		}
-		return "", "", err
+	if historyErr == nil && (currentErr == sql.ErrNoRows || historyPos >= currentPos) {
+		return historyMembership, historyEventID, nil
 	}
-	return membership, eventID, nil
+	if currentErr == nil {
+		return currentMembership, currentEventID, nil
+	}
+	return "leave", "", nil
 }
 
 func (s *membershipsStatements) PurgeMemberships(
