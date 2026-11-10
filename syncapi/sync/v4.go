@@ -703,6 +703,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	rp.updateLastSeen(req, device)
 	rp.updatePresenceExplicit(rp.db, v4Req.SetPresence, device.UserID)
 	rp.waitForMembershipChanges(ctx, device.UserID)
+	// A complete sync must not advertise a position older than the room state
+	// it returns. Room metadata can come from the roomserver while the sync
+	// consumer is still catching up, so wait for the joined rooms' latest
+	// events before the loop picks currentPos. Otherwise the next incremental
+	// sync sees those events after since and replays unchanged fields.
+	if since == nil {
+		rp.waitForJoinedRooms(ctx, device.UserID)
+	}
 	if rp.toDeviceBarrier != nil && v4Req.Extensions != nil &&
 		v4Req.Extensions.ToDevice != nil && v4Req.Extensions.ToDevice.Enabled {
 		rp.toDeviceBarrier()

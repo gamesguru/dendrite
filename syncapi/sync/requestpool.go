@@ -455,7 +455,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			}); ok {
 				waiter.WaitForPendingPartialJoins(syncReq.Context, syncReq)
 			}
-			rp.waitForJoinedRooms(syncReq.Context, syncReq)
+			rp.waitForJoinedRooms(syncReq.Context, syncReq.Device.UserID)
 			syncReq.Response.NextBatch = types.StreamingToken{
 				// Get the current DeviceListPosition first, as the currentPosition
 				// might advance while processing other streams, resulting in flakey
@@ -813,11 +813,11 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 // the user's current membership event, so the token covers events the client
 // has already written. The shared wait context is limited to one second or the
 // caller's earlier cancellation or deadline. Lookup failures do not reach callers.
-func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
-	if rp.rsAPI == nil || req.Device == nil {
+func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, deviceUserID string) {
+	if rp.rsAPI == nil || deviceUserID == "" {
 		return
 	}
-	userID, err := spec.NewUserID(req.Device.UserID, true)
+	userID, err := spec.NewUserID(deviceUserID, true)
 	if err != nil {
 		return
 	}
@@ -832,7 +832,7 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 	// Collect the events the roomserver has: the forward extremities, plus the
 	// membership event, which may be a newer join for a rejoin.
 	var wanted []string
-	memberTuple := []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomMember, StateKey: req.Device.UserID}}
+	memberTuple := []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomMember, StateKey: deviceUserID}}
 	for _, roomID := range rooms {
 		if ctx.Err() != nil {
 			return
