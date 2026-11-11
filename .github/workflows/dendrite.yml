@@ -23,6 +23,7 @@ permissions:
 env:
   # Upstream libolm version built from source. Matches the Ubuntu 3.2.16 package.
   OLM_VERSION: "3.2.16"
+  OLM_SHA256: "1e90f9891009965fd064be747616da46b232086fe270b77605ec9bda34272a68"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -79,7 +80,9 @@ jobs:
         # mirrors, which hosted runners intermittently cannot resolve.
         run: |
           set -euo pipefail
-          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz | tar xz
+          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+          tar xzf olm.tar.gz
           cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build olm-build -j"$(nproc)"
@@ -127,7 +130,9 @@ jobs:
         # mirrors, which hosted runners intermittently cannot resolve.
         run: |
           set -euo pipefail
-          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz | tar xz
+          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+          tar xzf olm.tar.gz
           cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build olm-build -j"$(nproc)"
@@ -270,7 +275,9 @@ jobs:
         # mirrors, which hosted runners intermittently cannot resolve.
         run: |
           set -euo pipefail
-          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz | tar xz
+          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+          tar xzf olm.tar.gz
           cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build olm-build -j"$(nproc)"
@@ -338,7 +345,9 @@ jobs:
         # See https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-Readme.md specifically GOROOT_1_17_X64
         run: |
           set -euo pipefail
-          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz | tar xz
+          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+          tar xzf olm.tar.gz
           cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build olm-build -j"$(nproc)"
