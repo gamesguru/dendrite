@@ -49,7 +49,7 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 }
 
 // sync serves both kinds of request. A cursor of 0 is also a valid incremental
-// position, so a complete sync is signalled explicitly.
+// position, so a complete sync is signaled explicitly.
 func (p *NotificationDataStreamProvider) sync(
 	ctx context.Context,
 	snapshot storage.DatabaseTransaction,
