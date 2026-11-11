@@ -71,13 +71,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        # Build from source so the job does not depend on the Ubuntu package
+        # mirrors, which hosted runners intermittently cannot resolve.
         run: |
-          for attempt in 1 2 3; do
-            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
-            sleep 20
-          done
-          exit 1
+          set -euo pipefail
+          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz | tar xz
+          cmake -S olm-3.2.16 -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build olm-build -j"$(nproc)"
+          sudo cmake --install olm-build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -115,13 +119,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        # Build from source so the job does not depend on the Ubuntu package
+        # mirrors, which hosted runners intermittently cannot resolve.
         run: |
-          for attempt in 1 2 3; do
-            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
-            sleep 20
-          done
-          exit 1
+          set -euo pipefail
+          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz | tar xz
+          cmake -S olm-3.2.16 -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build olm-build -j"$(nproc)"
+          sudo cmake --install olm-build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -254,13 +262,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        # Build from source so the job does not depend on the Ubuntu package
+        # mirrors, which hosted runners intermittently cannot resolve.
         run: |
-          for attempt in 1 2 3; do
-            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
-            sleep 20
-          done
-          exit 1
+          set -euo pipefail
+          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz | tar xz
+          cmake -S olm-3.2.16 -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build olm-build -j"$(nproc)"
+          sudo cmake --install olm-build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -321,7 +333,14 @@ jobs:
         # We don't need to install Go because it is included on the Ubuntu 20.04 image:
         # See https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-Readme.md specifically GOROOT_1_17_X64
         run: |
-          sudo apt-get update && sudo apt-get install -y libolm3 libolm-dev
+          set -euo pipefail
+          curl -fsSL https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz | tar xz
+          cmake -S olm-3.2.16 -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build olm-build -j"$(nproc)"
+          sudo cmake --install olm-build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
           go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
       - name: Run actions/checkout@v5 for dendrite
         uses: actions/checkout@v5
