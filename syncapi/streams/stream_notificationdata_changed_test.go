@@ -132,3 +132,17 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 		})
 	})
 }
+
+func TestRoomSelected(t *testing.T) {
+	const roomID = "!room:test"
+	none := []string{}
+	some := []string{"!other:test", roomID}
+	excluded := []string{roomID}
+
+	require.True(t, roomSelected(nil, nil, roomID), "no filter selects every room")
+	require.False(t, roomSelected(&none, nil, roomID), "an explicit empty allow-list selects no room")
+	require.True(t, roomSelected(&some, nil, roomID))
+	require.False(t, roomSelected(&some, nil, "!missing:test"))
+	require.False(t, roomSelected(nil, &excluded, roomID))
+	require.False(t, roomSelected(&some, &excluded, roomID), "exclusions take precedence")
+}

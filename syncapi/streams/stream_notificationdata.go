@@ -154,7 +154,8 @@ func (p *NotificationDataStreamProvider) sync(
 	return latest
 }
 
-// roomSelected applies the filter's room allow-list and exclusions.
+// roomSelected applies the filter's room allow-list and exclusions. An empty
+// allow-list selects no room; an absent one selects all.
 func roomSelected(rooms, notRooms *[]string, roomID string) bool {
 	if notRooms != nil {
 		for _, r := range *notRooms {
@@ -163,7 +164,7 @@ func roomSelected(rooms, notRooms *[]string, roomID string) bool {
 			}
 		}
 	}
-	if rooms != nil && len(*rooms) > 0 {
+	if rooms != nil {
 		for _, r := range *rooms {
 			if r == roomID {
 				return true
