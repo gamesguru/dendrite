@@ -128,7 +128,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
+			if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 				return fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 			}
 		}
@@ -223,7 +223,7 @@ func (t *missingStateReq) processEventWithMissingState(
 			})
 			if err != nil {
 				var rejErr types.RejectedError
-				if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
+				if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 					return nil, fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 				}
 			}
@@ -302,7 +302,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
+			if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 				return nil, fmt.Errorf("t.inputer.processRoomEvent (fast forward): %w", err)
 			}
 		}
@@ -452,7 +452,7 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			states = append(states, &respState{false, fallbackState})
 		} else {
 			t.log.WithError(err).Warnf("Federation state fallback also failed for event %s", e.EventID())
-			// Without any state the event cannot be authorised. A fetch
+			// Without any state the event cannot be authorized. A fetch
 			// failure says nothing about the event, so leave it unstored for
 			// a later event to fetch again rather than rejecting it.
 			var validationErr gomatrixserverlib.EventValidationError
@@ -1223,7 +1223,7 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 				default:
 					t.log.WithFields(logrus.Fields{"missing_event_id": missingEventID}).WithError(herr).Warn("Failed to fetch missing event")
 					// The state cannot be built without this event. Leaving
-					// it out would authorise the new event against the
+					// it out would authorize the new event against the
 					// wrong state and could reset the room's state.
 					haveEventsMutex.Lock()
 					if fetchErr == nil {

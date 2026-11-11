@@ -8,7 +8,6 @@ package input_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"slices"
 	"sync/atomic"
@@ -60,7 +59,7 @@ func (f *unreachableStateFederation) GetEvent(
 
 // When one state event at a missing prev event cannot be fetched, the state
 // before the new event is unknown. The event must not be accepted on the
-// partial state, which would authorise it against the wrong state and reset
+// partial state, which would authorize it against the wrong state and reset
 // the room's state, and it must not be stored as rejected either, since the
 // failure says nothing about the event.
 func TestMissingStateEventLeavesEventUnaccepted(t *testing.T) {
@@ -136,8 +135,7 @@ func TestMissingStateEventLeavesEventUnaccepted(t *testing.T) {
 func stateKeys(events []*types.HeaderedEvent) map[string]string {
 	keys := make(map[string]string, len(events))
 	for _, ev := range events {
-		raw, _ := json.Marshal([]string{ev.Type(), *ev.StateKey()})
-		keys[string(raw)] = ev.EventID()
+		keys[ev.Type()+"\x00"+*ev.StateKey()] = ev.EventID()
 	}
 	return keys
 }

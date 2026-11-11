@@ -931,7 +931,7 @@ func (r *Inputer) processStateBefore(
 		}
 	case missingPrev && input.Kind == api.KindOld:
 		// Without all of the prev events the state before the event cannot
-		// be worked out, so it cannot be authorised against that state
+		// be worked out, so it cannot be authorized against that state
 		// either. Missing history is not a reason to reject an event, and a
 		// rejection is permanent: later state resolution would skip the
 		// event's whole branch. Leave it unstored so that a later event
@@ -1529,7 +1529,7 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 // dependencies rather than on the event or the servers asked about it.
 // Generic network errors are not counted: while filling a gap they may as
 // well come from a remote server, whose failures the cooldown is for.
-// errStateUnavailable marks a failure to obtain the state before an event,
+// The errStateUnavailable error marks a failure to obtain the state before an event,
 // such as a remote server that timed out or is backing off. It says nothing
 // about whether the event is valid, so the event is left unstored rather
 // than rejected.
