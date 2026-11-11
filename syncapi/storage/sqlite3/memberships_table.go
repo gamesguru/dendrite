@@ -50,12 +50,18 @@ CREATE TABLE IF NOT EXISTS syncapi_membership_history (
     stream_pos BIGINT NOT NULL,
     PRIMARY KEY (room_id, user_id, stream_pos)
 );
--- The primary key already serves "stream_pos DESC LIMIT 1" lookups.
+-- The primary key serves per-user "stream_pos DESC LIMIT 1" lookups. The
+-- catch-up below needs the global maximum and the rows past it, which only a
+-- stream_pos index answers without scanning either table on every startup.
 DROP INDEX IF EXISTS syncapi_membership_history_pos_idx;
+CREATE INDEX IF NOT EXISTS syncapi_membership_history_stream_pos_idx ON syncapi_membership_history (stream_pos);
+CREATE INDEX IF NOT EXISTS syncapi_memberships_stream_pos_idx ON syncapi_memberships (stream_pos);
 -- Backfill from the current-state table so lookups before the upgrade don't
 -- fall back to the lossy current table. Catch up rows beyond the history floor
--- on later startups as well, which also recovers transitions after a SQLite
--- downgrade to a build that predates membership history.
+-- on later startups as well. That recovers only the latest transition per
+-- membership type written after a downgrade to a build that predates
+-- membership history, because syncapi_memberships keeps one row per
+-- (room, user, membership).
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT room_id, user_id, membership, event_id, stream_pos FROM syncapi_memberships
 WHERE stream_pos > COALESCE((SELECT MAX(stream_pos) FROM syncapi_membership_history), 0)

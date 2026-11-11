@@ -40,7 +40,12 @@ SELECT o.room_id,
        o.id
 FROM syncapi_output_room_events o
 WHERE o.type = 'm.room.member'
-  AND EXISTS (SELECT 1 FROM json_each(o.add_state_ids) WHERE value = o.event_id)
+  AND EXISTS (
+      -- InsertEvent stores an empty list as '', which json_each rejects.
+      SELECT 1 FROM json_each(
+          CASE WHEN json_valid(o.add_state_ids) THEN o.add_state_ids ELSE '[]' END
+      ) WHERE value = o.event_id
+  )
   AND json_extract(o.headered_event_json, '$.state_key') IS NOT NULL
   AND json_extract(o.headered_event_json, '$.content.membership') IS NOT NULL
 ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING

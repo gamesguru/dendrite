@@ -70,7 +70,7 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 			case dbType == test.DBTypeSQLite && addState:
 				addIDs = `["` + eventID + `"]`
 			case dbType == test.DBTypeSQLite:
-				addIDs = `[]`
+				addIDs = "" // InsertEvent stores an empty list as an empty string
 			case addState:
 				addIDs = []string{eventID}
 			default:
