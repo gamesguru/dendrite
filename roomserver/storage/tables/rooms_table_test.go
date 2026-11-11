@@ -25,7 +25,7 @@ func mustCreateRoomsTable(t *testing.T, dbType test.DBType) (tab tables.Rooms, c
 	assert.NoError(t, err)
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreateRoomsTable(db)
+		err = postgres.CreateRoomsTable(context.Background(), db)
 		assert.NoError(t, err)
 		tab, err = postgres.PrepareRoomsTable(db)
 	case test.DBTypeSQLite:

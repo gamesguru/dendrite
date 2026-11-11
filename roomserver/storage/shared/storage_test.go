@@ -40,13 +40,13 @@ func mustCreateRoomserverDatabase(t *testing.T, dbType test.DBType) (*shared.Dat
 	var partialStateTable tables.PartialState
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreateRoomsTable(db)
+		err = postgres.CreateRoomsTable(context.Background(), db)
 		assert.NoError(t, err)
 		err = postgres.CreateEventStateKeysTable(db)
 		assert.NoError(t, err)
-		err = postgres.CreateMembershipTable(db)
+		err = postgres.CreateMembershipTable(context.Background(), db)
 		assert.NoError(t, err)
-		err = postgres.CreatePartialStateTable(db)
+		err = postgres.CreatePartialStateTable(context.Background(), db)
 		assert.NoError(t, err)
 		err = postgres.CreateUserRoomKeysTable(db)
 		assert.NoError(t, err)

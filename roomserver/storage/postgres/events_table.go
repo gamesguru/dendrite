@@ -203,7 +203,10 @@ func CreateEventsTable(ctx context.Context, db *sql.DB) error {
 // while its build is still running, so a session advisory lock serializes
 // overlapping initializations: whoever holds it knows no other build is active.
 func createRoomEventNIDIndex(ctx context.Context, db *sql.DB) error {
-	const indexName = "roomserver_events_room_event_nid_idx"
+	const (
+		indexName     = "roomserver_events_room_event_nid_idx"
+		unlockTimeout = 5 * time.Second
+	)
 	// The lock belongs to a session, so every statement must use one connection.
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -228,8 +231,11 @@ func createRoomEventNIDIndex(ctx context.Context, db *sql.DB) error {
 	defer func() {
 		// Closing the connection would also release it, but a pooled session
 		// outlives this call. The caller's context may already be canceled, so
-		// release the lock with a context that cannot be canceled.
-		_, _ = conn.ExecContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock(351, 1)")
+		// release the lock with a context that cannot be canceled, but bound it
+		// so a stalled connection cannot hang startup during cleanup.
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+		defer cancel()
+		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)")
 	}()
 
 	var valid bool

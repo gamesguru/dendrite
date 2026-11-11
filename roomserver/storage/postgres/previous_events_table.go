@@ -55,8 +55,8 @@ type previousEventStatements struct {
 	selectPreviousEventExistsStmt *sql.Stmt
 }
 
-func CreatePrevEventsTable(db *sql.DB) error {
-	_, err := db.Exec(previousEventSchema)
+func CreatePrevEventsTable(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, previousEventSchema)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func CreatePrevEventsTable(db *sql.DB) error {
 			Up:      deltas.UpDropEventReferenceSHAPrevEvents,
 		},
 	}...)
-	return m.Up(context.Background())
+	return m.Up(ctx)
 }
 
 func PreparePrevEventsTable(db *sql.DB) (tables.PreviousEvents, error) {

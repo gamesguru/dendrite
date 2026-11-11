@@ -74,7 +74,7 @@ func mustCreateAnnotationsTable(t *testing.T, dbType test.DBType, db *sql.DB) ta
 	var err error
 	switch dbType {
 	case test.DBTypePostgres:
-		require.NoError(t, postgres.CreateAnnotationsTable(db))
+		require.NoError(t, postgres.CreateAnnotationsTable(context.Background(), db))
 		tab, err = postgres.PrepareAnnotationsTable(db)
 	case test.DBTypeSQLite:
 		require.NoError(t, sqlite3.CreateAnnotationsTable(db))

@@ -34,7 +34,7 @@ func mustCreatePartialStateTable(t *testing.T, dbType test.DBType) (tables.Parti
 	var tab tables.PartialState
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreatePartialStateTable(db)
+		err = postgres.CreatePartialStateTable(context.Background(), db)
 		require.NoError(t, err)
 		tab, err = postgres.PreparePartialStateTable(db)
 	case test.DBTypeSQLite:

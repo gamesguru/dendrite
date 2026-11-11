@@ -69,7 +69,21 @@ func TestCreateRoomEventNIDIndexLockCanBeCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	started := make(chan error, 1)
 	go func() { started <- createRoomEventNIDIndex(ctx, db) }()
-	time.Sleep(200 * time.Millisecond)
+	// Wait until the initializer is actually polling for the lock: a session
+	// other than ours whose last statement is its pg_try_advisory_lock call.
+	require.Eventually(t, func() bool {
+		var n int
+		err := db.QueryRowContext(context.Background(),
+			`SELECT count(*) FROM pg_stat_activity
+WHERE datname = current_database() AND pid <> pg_backend_pid()
+AND query LIKE '%pg_try_advisory_lock(351, 1)%'`).Scan(&n)
+		return err == nil && n > 0
+	}, 5*time.Second, 10*time.Millisecond, "initializer never started waiting for the lock")
+	select {
+	case err = <-started:
+		t.Fatalf("index initialization returned while the lock was held: %v", err)
+	default:
+	}
 	cancel(nil)
 	select {
 	case err = <-started:

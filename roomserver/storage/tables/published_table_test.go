@@ -25,7 +25,7 @@ func mustCreatePublishedTable(t *testing.T, dbType test.DBType) (tab tables.Publ
 	assert.NoError(t, err)
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreatePublishedTable(db)
+		err = postgres.CreatePublishedTable(context.Background(), db)
 		assert.NoError(t, err)
 		tab, err = postgres.PreparePublishedTable(db)
 	case test.DBTypeSQLite:

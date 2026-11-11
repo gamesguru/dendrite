@@ -29,9 +29,9 @@ func mustCreateMembershipTable(
 	case test.DBTypePostgres:
 		err = postgres.CreateEventStateKeysTable(db)
 		assert.NoError(t, err)
-		err = postgres.CreateMembershipTable(db)
+		err = postgres.CreateMembershipTable(context.Background(), db)
 		assert.NoError(t, err)
-		err = postgres.CreatePartialStateTable(db)
+		err = postgres.CreatePartialStateTable(context.Background(), db)
 		assert.NoError(t, err)
 		tab, err = postgres.PrepareMembershipTable(db)
 		assert.NoError(t, err)

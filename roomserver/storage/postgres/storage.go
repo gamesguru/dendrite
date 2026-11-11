@@ -96,7 +96,7 @@ func (d *Database) create(ctx context.Context, db *sql.DB) error {
 	if err := CreateEventsTable(ctx, db); err != nil {
 		return err
 	}
-	if err := CreateRoomsTable(db); err != nil { //nolint:contextcheck
+	if err := CreateRoomsTable(ctx, db); err != nil {
 		return err
 	}
 	if err := CreateStateBlockTable(db); err != nil {
@@ -105,7 +105,7 @@ func (d *Database) create(ctx context.Context, db *sql.DB) error {
 	if err := CreateStateSnapshotTable(db); err != nil {
 		return err
 	}
-	if err := CreatePrevEventsTable(db); err != nil { //nolint:contextcheck
+	if err := CreatePrevEventsTable(ctx, db); err != nil {
 		return err
 	}
 	if err := CreateRoomAliasesTable(db); err != nil {
@@ -114,10 +114,10 @@ func (d *Database) create(ctx context.Context, db *sql.DB) error {
 	if err := CreateInvitesTable(db); err != nil {
 		return err
 	}
-	if err := CreateMembershipTable(db); err != nil { //nolint:contextcheck
+	if err := CreateMembershipTable(ctx, db); err != nil {
 		return err
 	}
-	if err := CreatePublishedTable(db); err != nil { //nolint:contextcheck
+	if err := CreatePublishedTable(ctx, db); err != nil {
 		return err
 	}
 	if err := CreateRedactionsTable(db); err != nil {
@@ -132,7 +132,7 @@ func (d *Database) create(ctx context.Context, db *sql.DB) error {
 	if err := CreateClientTransactionsTable(db); err != nil {
 		return err
 	}
-	if err := CreatePartialStateTable(db); err != nil { //nolint:contextcheck
+	if err := CreatePartialStateTable(ctx, db); err != nil {
 		return err
 	}
 	if err := CreateErasedUsersTable(db); err != nil {
@@ -142,7 +142,7 @@ func (d *Database) create(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	// Last, as its migration reads the events tables.
-	if err := CreateAnnotationsTable(db); err != nil { //nolint:contextcheck
+	if err := CreateAnnotationsTable(ctx, db); err != nil {
 		return err
 	}
 
