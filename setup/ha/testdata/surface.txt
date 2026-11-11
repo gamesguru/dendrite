@@ -888,6 +888,7 @@ migration roomserver: state blocks refactor
 migration syncapi: add connection receipts table for sliding sync
 migration syncapi: add history visibility column (current_room_state)
 migration syncapi: add history visibility column (output_room_events)
+migration syncapi: backfill membership history from output events
 migration syncapi: create sliding sync list windows
 migration syncapi: create sliding sync room metadata tables
 migration syncapi: create sliding sync tables
