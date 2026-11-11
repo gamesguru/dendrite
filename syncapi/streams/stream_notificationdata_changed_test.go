@@ -58,7 +58,7 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 		}
 		// run does one incremental notification pass for a client whose cursor is from,
 		// where no PDU stream added any room: req.Rooms and the join response are empty.
-		run := func(from types.StreamPosition) (types.StreamPosition, map[string]json.RawMessage) {
+		run := func(from types.StreamPosition, complete bool) (types.StreamPosition, map[string]json.RawMessage) {
 			snapshot, err := db.NewDatabaseSnapshot(ctx)
 			require.NoError(t, err)
 			defer snapshot.Rollback() //nolint:errcheck
@@ -68,8 +68,13 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 				Response: types.NewResponse(),
 				Filter:   synctypes.DefaultFilter(),
 			}
-			provider := &NotificationDataStreamProvider{DefaultStreamProvider{DB: db}}
-			next := provider.IncrementalSync(ctx, snapshot, req, from, 0)
+			provider := &NotificationDataStreamProvider{DefaultStreamProvider: DefaultStreamProvider{DB: db}}
+			var next types.StreamPosition
+			if complete {
+				next = provider.CompleteSync(ctx, snapshot, req)
+			} else {
+				next = provider.IncrementalSync(ctx, snapshot, req, from, 0)
+			}
 			rooms := map[string]json.RawMessage{}
 			for roomID, jr := range req.Response.Rooms.Join {
 				raw, err := json.Marshal(jr)
@@ -82,7 +87,7 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 		t.Run("a changed count adds its joined room with the new count", func(t *testing.T) {
 			from := upsert(joined.ID, 5, 2)
 			latest := upsert(joined.ID, 6, 2)
-			next, rooms := run(from)
+			next, rooms := run(from, false)
 			require.Equal(t, latest, next)
 			require.Contains(t, rooms, joined.ID)
 			require.JSONEq(t, `{"highlight_count":2,"notification_count":6}`, field(t, rooms[joined.ID], "unread_notifications"))
@@ -91,7 +96,7 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 		t.Run("a cleared count is sent explicitly", func(t *testing.T) {
 			from := upsert(joined.ID, 6, 2)
 			latest := upsert(joined.ID, 0, 0)
-			next, rooms := run(from)
+			next, rooms := run(from, false)
 			require.Equal(t, latest, next)
 			require.Contains(t, rooms, joined.ID)
 			require.JSONEq(t, `{"highlight_count":0,"notification_count":0}`, field(t, rooms[joined.ID], "unread_notifications"))
@@ -100,22 +105,30 @@ func TestNotificationCountChangeWithoutNewEvent(t *testing.T) {
 		t.Run("a room the user is not joined to is not added", func(t *testing.T) {
 			from := upsert(joined.ID, 6, 2)
 			latest := upsert(left.ID, 9, 0)
-			next, rooms := run(from)
+			next, rooms := run(from, false)
 			require.Equal(t, latest, next)
 			require.NotContains(t, rooms, left.ID)
 		})
 
 		t.Run("nothing changed since the cursor adds nothing", func(t *testing.T) {
 			latest := upsert(joined.ID, 6, 2)
-			next, rooms := run(latest)
+			next, rooms := run(latest, false)
 			require.Equal(t, latest, next)
 			require.Empty(t, rooms)
 		})
 
 		t.Run("a complete sync does not add rooms the PDU stream did not", func(t *testing.T) {
 			upsert(joined.ID, 7, 2)
-			_, rooms := run(0)
+			_, rooms := run(0, true)
 			require.Empty(t, rooms)
+		})
+
+		t.Run("incremental sync from zero includes a changed count", func(t *testing.T) {
+			latest := upsert(joined.ID, 8, 3)
+			next, rooms := run(0, false)
+			require.Equal(t, latest, next)
+			require.Contains(t, rooms, joined.ID)
+			require.JSONEq(t, `{"highlight_count":3,"notification_count":8}`, field(t, rooms[joined.ID], "unread_notifications"))
 		})
 	})
 }

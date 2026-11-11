@@ -150,8 +150,9 @@ type DatabaseTransaction interface {
 	SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error)
 	// getUserUnreadNotificationCountsForRooms returns the unread notifications for the given rooms
 	GetUserUnreadNotificationCountsForRooms(ctx context.Context, userID string, roomIDs map[string]string) (map[string]*eventutil.NotificationData, error)
-	// GetUserNotificationRoomsAfter returns the rooms whose notification counts for
-	// the user changed at a stream position in the range (after, upTo].
+	// GetUserNotificationRoomsAfter returns the rooms with a notification
+	// row for the user written at a stream position in the range (after, upTo].
+	// A row can be rewritten with identical counts.
 	GetUserNotificationRoomsAfter(ctx context.Context, userID string, after, upTo types.StreamPosition) ([]string, error)
 	GetPresences(ctx context.Context, userID []string) ([]*types.PresenceInternal, error)
 	PresenceAfter(ctx context.Context, after types.StreamPosition, filter synctypes.EventFilter) (map[string]*types.PresenceInternal, error)

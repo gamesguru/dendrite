@@ -58,6 +58,7 @@ func NewSyncStreamProviders(
 		},
 		NotificationDataStreamProvider: &NotificationDataStreamProvider{
 			DefaultStreamProvider: DefaultStreamProvider{DB: d},
+			rsAPI:                 rsAPI,
 		},
 		DeviceListStreamProvider: &DeviceListStreamProvider{
 			DefaultStreamProvider: DefaultStreamProvider{DB: d},

@@ -6,12 +6,14 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
+	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
 type NotificationDataStreamProvider struct {
 	DefaultStreamProvider
+	rsAPI roomserverAPI.SyncRoomserverAPI
 }
 
 func (p *NotificationDataStreamProvider) Setup(
@@ -34,7 +36,7 @@ func (p *NotificationDataStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	return p.sync(ctx, snapshot, req, 0, true)
 }
 
 func (p *NotificationDataStreamProvider) IncrementalSync(
@@ -42,6 +44,18 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 	from, _ types.StreamPosition,
+) types.StreamPosition {
+	return p.sync(ctx, snapshot, req, from, false)
+}
+
+// sync serves both kinds of request. A cursor of 0 is also a valid incremental
+// position, so a complete sync is signalled explicitly.
+func (p *NotificationDataStreamProvider) sync(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	req *types.SyncRequest,
+	from types.StreamPosition,
+	complete bool,
 ) types.StreamPosition {
 	// Read the latest committed position from this snapshot: it bounds the
 	// changed-room query below and is the cursor handed back, so the token never
@@ -60,7 +74,7 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 	// or when a read receipt clears it. Add those joined rooms to the response so
 	// the client receives the new count before the cursor moves past it. A
 	// complete sync already includes every joined room.
-	if from > 0 && latest > from {
+	if !complete && latest > from {
 		changed, err := snapshot.GetUserNotificationRoomsAfter(ctx, req.Device.UserID, from, latest)
 		if err != nil {
 			req.Log.WithError(err).Error("GetUserNotificationRoomsAfter failed")
@@ -78,15 +92,20 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 			for _, roomID := range joined {
 				joinedSet[roomID] = struct{}{}
 			}
+			partial := p.partialStateRooms(ctx, req)
 			for _, roomID := range changed {
 				if _, ok := joinedSet[roomID]; !ok {
 					continue
 				}
-				if _, ok := req.Response.Rooms.Join[roomID]; !ok {
-					jr := types.NewJoinResponse()
-					jr.UnreadNotificationsChanged = true
+				if !roomSelected(req.Filter.Room.Rooms, req.Filter.Room.NotRooms, roomID) || partial[roomID] {
+					continue
+				}
+				jr, ok := req.Response.Rooms.Join[roomID]
+				if !ok {
+					jr = types.NewJoinResponse()
 					req.Response.Rooms.Join[roomID] = jr
 				}
+				jr.UnreadNotificationsChanged = true
 				// The counts lookup below only reads rooms marked joined.
 				req.Rooms[roomID] = spec.Join
 			}
@@ -133,4 +152,42 @@ func (p *NotificationDataStreamProvider) IncrementalSync(
 	}
 
 	return latest
+}
+
+// roomSelected applies the filter's room allow-list and exclusions.
+func roomSelected(rooms, notRooms *[]string, roomID string) bool {
+	if notRooms != nil {
+		for _, r := range *notRooms {
+			if r == roomID {
+				return false
+			}
+		}
+	}
+	if rooms != nil && len(*rooms) > 0 {
+		for _, r := range *rooms {
+			if r == roomID {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// partialStateRooms returns the rooms the PDU stream leaves out of a non-lazy
+// sync (MSC3706). A lookup failure excludes nothing, as it does there.
+func (p *NotificationDataStreamProvider) partialStateRooms(ctx context.Context, req *types.SyncRequest) map[string]bool {
+	if req.Filter.Room.State.LazyLoadMembers || p.rsAPI == nil {
+		return nil
+	}
+	ids, err := p.rsAPI.GetPartialStateRoomIDs(ctx)
+	if err != nil {
+		req.Log.WithError(err).Warn("Failed to get partial state rooms")
+		return nil
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out
 }

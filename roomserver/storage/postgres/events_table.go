@@ -10,6 +10,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -212,7 +213,7 @@ func createRoomEventNIDIndex(db *sql.DB) error {
 		if _, err = db.Exec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName); err != nil {
 			return fmt.Errorf("drop invalid %s: %w", indexName, err)
 		}
-	case err != nil && err != sql.ErrNoRows:
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("look up %s: %w", indexName, err)
 	}
 	if _, err = db.Exec(
