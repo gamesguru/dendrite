@@ -22,20 +22,23 @@ import (
 // value as a fallback.
 func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
+-- Resolve each raw member state key once per room instead of running a
+-- correlated lookup for every output event. MIN() picks a stable key if a raw
+-- key somehow maps to more than one resolved row.
+WITH resolved AS (
+  SELECT room_id,
+         json_extract(headered_event_json, '$.state_key') AS raw_key,
+         MIN(state_key) AS user_id
+  FROM syncapi_current_room_state
+  WHERE type = 'm.room.member'
+  GROUP BY room_id, raw_key
+)
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT o.room_id,
        CASE
          WHEN json_extract(m.headered_event_json, '$.state_key') GLOB '@*:*'
            THEN json_extract(m.headered_event_json, '$.state_key')
-         ELSE COALESCE(
-           (SELECT cs.state_key
-            FROM syncapi_current_room_state cs
-            WHERE cs.room_id = o.room_id
-              AND cs.type = 'm.room.member'
-              AND json_extract(cs.headered_event_json, '$.state_key') =
-                  json_extract(m.headered_event_json, '$.state_key')
-            LIMIT 1),
-           json_extract(m.headered_event_json, '$.state_key'))
+         ELSE COALESCE(r.user_id, json_extract(m.headered_event_json, '$.state_key'))
        END,
        json_extract(m.headered_event_json, '$.content.membership'),
        m.event_id,
@@ -44,6 +47,9 @@ FROM syncapi_output_room_events o
 -- InsertEvent stores an empty list as '', which json_each rejects.
 JOIN json_each(CASE WHEN json_valid(o.add_state_ids) THEN o.add_state_ids ELSE '[]' END) a
 JOIN syncapi_output_room_events m ON m.event_id = a.value AND m.type = 'm.room.member'
+LEFT JOIN resolved r
+       ON r.room_id = o.room_id
+      AND r.raw_key = json_extract(m.headered_event_json, '$.state_key')
 WHERE json_extract(m.headered_event_json, '$.state_key') IS NOT NULL
   AND json_extract(m.headered_event_json, '$.content.membership') IS NOT NULL
 -- The live writer keeps the last added event per user at a position.

@@ -195,8 +195,10 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 // that another server can provide the events.
 func backfillFailuresRetryable(errs []error) bool {
 	if len(errs) == 0 {
-		// The failure came from somewhere other than a server response, such
-		// as event loading. Treat it as transient rather than ending history.
+		// No server error was recorded, so the failure came from event loading
+		// or another local step. Treat it as transient rather than ending
+		// history. A request with no servers to ask produces no error at all,
+		// so it never reaches this helper.
 		return true
 	}
 	for _, err := range errs {

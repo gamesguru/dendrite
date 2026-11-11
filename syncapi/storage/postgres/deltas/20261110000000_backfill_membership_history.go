@@ -39,8 +39,9 @@ func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
 	resolvers := make(map[string]map[string]string)
 	lastID := int64(-1)
 	for {
-		// Keyset pages keep memory bounded: the rows of a page are read and
-		// closed before the next statement runs on the transaction.
+		// Keyset pages keep the number of output events bounded: the rows of a
+		// page are read and closed before the next statement runs on the
+		// transaction, and each event is written before the next is loaded.
 		rows, err := tx.QueryContext(ctx, `
 SELECT id, room_id, add_state_ids
 FROM syncapi_output_room_events
@@ -57,7 +58,6 @@ LIMIT $2
 			ids    []string
 		}
 		var page []added
-		var wanted []string
 		for rows.Next() {
 			var a added
 			var ids sqlutil.StringArray
@@ -68,7 +68,6 @@ LIMIT $2
 			a.ids = ids
 			lastID = a.pos
 			page = append(page, a)
-			wanted = append(wanted, ids...)
 		}
 		if err = rows.Err(); err != nil {
 			_ = rows.Close()
@@ -81,15 +80,17 @@ LIMIT $2
 			return nil
 		}
 
-		// The added state events are stored as output events of their own,
-		// possibly at an earlier position than the event that added them back.
-		bodies, err := loadMemberBodies(ctx, tx, wanted)
-		if err != nil {
-			return err
-		}
-		var pos []int64
-		var rooms, users, states, events []string
+		// Process one output event at a time. A rewrite (such as a federated
+		// join) can add the whole room state at once, so batching whole pages
+		// would let one event pull every other event's state into memory.
 		for _, a := range page {
+			// The added state events are stored as output events of their own,
+			// possibly at an earlier position than the event that added them
+			// back.
+			bodies, err := loadMemberBodies(ctx, tx, a.ids)
+			if err != nil {
+				return err
+			}
 			// The live writer keeps the last added event per user at a position.
 			latest := make(map[string]string)
 			var order []string
@@ -103,6 +104,11 @@ LIMIT $2
 				}
 				latest[m.user] = id
 			}
+			if len(order) == 0 {
+				continue
+			}
+			var pos []int64
+			var rooms, users, states, events []string
 			for _, user := range order {
 				id := latest[user]
 				pos = append(pos, a.pos)
@@ -111,19 +117,16 @@ LIMIT $2
 				states = append(states, bodies[id].membership)
 				events = append(events, id)
 			}
-		}
-		if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
-			return err
-		}
-		if len(pos) == 0 {
-			continue
-		}
-		if _, err = tx.ExecContext(ctx, `
+			if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[])
 ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING
 `, rooms, users, states, events, pos); err != nil {
-			return err
+				return err
+			}
 		}
 	}
 }
