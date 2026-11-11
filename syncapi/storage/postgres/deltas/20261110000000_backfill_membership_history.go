@@ -33,8 +33,6 @@ const backfillBatchSize = 1000
 // is already resolved by the live path; a key with no current-state row keeps
 // its raw value as a fallback.
 func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
-	// Resolved pseudo-ID maps are loaded once per room and kept across batches.
-	resolvers := make(map[string]map[string]string)
 	lastID := int64(-1)
 	lastOrdinal := int64(0)
 	for {
@@ -96,7 +94,9 @@ func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
 		}
 		// Entries for one output event can span pages. Updating conflicts in
 		// ordinal order keeps the same last-added event as the live writer.
-		if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
+		// The resolver cache lives for one page only, so memory stays bounded
+		// by the rooms that have pseudo keys on this page.
+		if err = resolvePseudoStateKeys(ctx, tx, make(map[string]map[string]string), rooms, users); err != nil {
 			return err
 		}
 		if len(positions) == 0 {
@@ -143,7 +143,7 @@ SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[
 // key, together with the event JSON that keeps the raw one, so no roomserver
 // call is needed from a schema delta. A key without a current-state row is
 // left as it is. Each room's mapping is loaded once, on first use, into
-// resolvers.
+// resolvers, which the caller scopes to a single page.
 func resolvePseudoStateKeys(ctx context.Context, tx *sql.Tx, resolvers map[string]map[string]string, rooms, users []string) error {
 	for i, user := range users {
 		if isUserID(user) {
