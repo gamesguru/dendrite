@@ -128,7 +128,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) {
+			if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
 				return fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 			}
 		}
@@ -223,7 +223,7 @@ func (t *missingStateReq) processEventWithMissingState(
 			})
 			if err != nil {
 				var rejErr types.RejectedError
-				if !errors.As(err, &rejErr) {
+				if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
 					return nil, fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 				}
 			}
@@ -302,7 +302,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) {
+			if !errors.As(err, &rejErr) && !errors.Is(err, errStateUnavailable) {
 				return nil, fmt.Errorf("t.inputer.processRoomEvent (fast forward): %w", err)
 			}
 		}
@@ -422,7 +422,7 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			}
 			validationError = err2
 		default:
-			return nil, fmt.Errorf("t.lookupStateAfterEvent: %w", err)
+			return nil, fmt.Errorf("t.lookupStateAfterEvent: %w: %w", errStateUnavailable, err)
 		}
 		// Append the state onto the collected state. We'll run this through the
 		// state resolution next.
@@ -1008,6 +1008,7 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 		close(pending)
 
 		var batchEvents []gomatrixserverlib.PDU
+		var fetchErr error
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		wg.Add(workers)
@@ -1017,6 +1018,13 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 				for id := range pending {
 					h, herr := t.lookupEvent(ctx, roomVersion, roomID, id, false)
 					if herr != nil {
+						if fetchFailureIsTransient(herr) {
+							mu.Lock()
+							if fetchErr == nil {
+								fetchErr = fmt.Errorf("fetching state event %s: %w: %w", id, errStateUnavailable, herr)
+							}
+							mu.Unlock()
+						}
 						continue
 					}
 					mu.Lock()
@@ -1026,6 +1034,9 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 			}()
 		}
 		wg.Wait()
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
 
 		// Store this batch as outliers immediately.
 		for _, ev := range batchEvents {
@@ -1165,6 +1176,7 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 		// multiple goroutines, and everywhere else is blocked on this
 		// synchronous function anyway.
 		var haveEventsMutex sync.Mutex
+		var fetchErr error
 
 		// Define what we'll do in order to fetch the missing event ID.
 		fetch := func(missingEventID string) {
@@ -1183,6 +1195,14 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 					break
 				default:
 					t.log.WithFields(logrus.Fields{"missing_event_id": missingEventID}).WithError(herr).Warn("Failed to fetch missing event")
+					// The state cannot be built without this event. Leaving
+					// it out would authorise the new event against the
+					// wrong state and could reset the room's state.
+					haveEventsMutex.Lock()
+					if fetchErr == nil {
+						fetchErr = fmt.Errorf("fetching state event %s: %w: %w", missingEventID, errStateUnavailable, herr)
+					}
+					haveEventsMutex.Unlock()
 					return
 				}
 			}
@@ -1206,6 +1226,9 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 
 		// Wait for the workers to finish.
 		fetchgroup.Wait()
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
 	}
 
 	resp, err := t.createRespStateFromStateIDs(stateIDs)
@@ -1387,4 +1410,13 @@ func (e missingPrevEventsError) Error() string {
 
 func (e missingPrevEventsError) Unwrap() error {
 	return e.err
+}
+
+// fetchFailureIsTransient reports whether a failed /event fetch might succeed
+// later. An event that fails validation or signature checks is left out of
+// the state for good, but any other failure means the state is incomplete.
+func fetchFailureIsTransient(err error) bool {
+	var validationErr gomatrixserverlib.EventValidationError
+	var sigErr verifySigError
+	return !errors.As(err, &validationErr) && !errors.As(err, &sigErr)
 }

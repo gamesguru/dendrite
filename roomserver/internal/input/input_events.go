@@ -507,7 +507,7 @@ func (r *Inputer) processRoomEvent(
 				// rejects the room's following events too. Fail the input
 				// instead: nothing is stored, and the next event in the room
 				// fetches this one again as a missing prev event.
-				if unavailableHere(ctx, err) {
+				if unavailableHere(ctx, err) || errors.Is(err, errStateUnavailable) {
 					return fmt.Errorf("missingState.processEventWithMissingState: %w", err)
 				}
 				// Something went wrong with retrieving the missing state, so we can't
@@ -929,6 +929,15 @@ func (r *Inputer) processStateBefore(
 		for _, entry := range stateEvents {
 			stateBeforeEvent = append(stateBeforeEvent, entry.PDU)
 		}
+	case missingPrev && input.Kind == api.KindOld:
+		// Without all of the prev events the state before the event cannot
+		// be worked out, so it cannot be authorised against that state
+		// either. Missing history is not a reason to reject an event, and a
+		// rejection is permanent: later state resolution would skip the
+		// event's whole branch. Leave it unstored so that a later event
+		// fetches it again as a missing prev event.
+		err = fmt.Errorf("event %q has missing prev events: %w", event.EventID(), errStateUnavailable)
+		return
 	case missingPrev:
 		// We don't know all of the prev events, so we can't work out
 		// the state before the event. Reject it in that case.
@@ -1520,6 +1529,12 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 // dependencies rather than on the event or the servers asked about it.
 // Generic network errors are not counted: while filling a gap they may as
 // well come from a remote server, whose failures the cooldown is for.
+// errStateUnavailable marks a failure to obtain the state before an event,
+// such as a remote server that timed out or is backing off. It says nothing
+// about whether the event is valid, so the event is left unstored rather
+// than rejected.
+var errStateUnavailable = errors.New("state before the event is unavailable")
+
 func unavailableHere(ctx context.Context, err error) bool {
 	return ctx.Err() != nil ||
 		sqlutil.IsDatabaseUnavailable(err) ||
