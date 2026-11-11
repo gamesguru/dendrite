@@ -636,6 +636,12 @@ func (rp *RequestPool) persistAccountDataRoomState(
 // the response will not be acknowledged, so the position it writes to is
 // discarded on the client's retry anyway.
 func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connState *V4ConnectionState) error {
+	return rp.copyForwardAccountDataStateReporting(ctx, connState, nil)
+}
+
+// copyForwardAccountDataStateReporting is copyForwardAccountDataState that also
+// stores the first genuine write failure in *firstFailure when it is not nil.
+func (rp *RequestPool) copyForwardAccountDataStateReporting(ctx context.Context, connState *V4ConnectionState, firstFailure *error) error {
 	if connState == nil || connState.ConnectionPosition == 0 {
 		return nil
 	}
@@ -656,6 +662,7 @@ func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connStat
 				return ctxErr
 			}
 			logrus.WithError(err).WithField("room_id", roomID).Warn("[ACCOUNT_DATA] Failed to copy forward account_data stream state")
+			recordFirstFailure(firstFailure, err)
 		}
 	}
 	return nil

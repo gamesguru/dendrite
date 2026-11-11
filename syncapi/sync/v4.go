@@ -323,6 +323,19 @@ func (rp *RequestPool) copyForwardStreamStates(
 	connState *V4ConnectionState,
 	roomsToPopulate map[string]types.RoomSubscriptionConfig,
 ) (int, error) {
+	return rp.copyForwardStreamStatesReporting(ctx, connState, roomsToPopulate, nil)
+}
+
+// copyForwardStreamStatesReporting is copyForwardStreamStates that also stores
+// the first genuine write failure in *firstFailure when it is not nil. The
+// failure is still logged and the remaining rooms still written; the caller
+// decides whether a response that lost a room's state may be acknowledged.
+func (rp *RequestPool) copyForwardStreamStatesReporting(
+	ctx context.Context,
+	connState *V4ConnectionState,
+	roomsToPopulate map[string]types.RoomSubscriptionConfig,
+	firstFailure *error,
+) (int, error) {
 	copiedCount := 0
 	for roomID, streams := range connState.PreviousStreamStates {
 		if err := ctx.Err(); err != nil {
@@ -344,6 +357,7 @@ func (rp *RequestPool) copyForwardStreamStates(
 				"room_id":             roomID,
 				"connection_position": connState.ConnectionPosition,
 			}).Error("[V4_STATE_DEBUG] Failed to copy forward stream state")
+			recordFirstFailure(firstFailure, updateErr)
 			continue
 		}
 		copiedCount++
@@ -369,6 +383,17 @@ func (rp *RequestPool) copyForwardRoomConfigs(
 	connState *V4ConnectionState,
 	roomsToPopulate map[string]types.RoomSubscriptionConfig,
 ) error {
+	return rp.copyForwardRoomConfigsReporting(ctx, connState, roomsToPopulate, nil)
+}
+
+// copyForwardRoomConfigsReporting is copyForwardRoomConfigs that also stores
+// the first genuine write failure in *firstFailure when it is not nil.
+func (rp *RequestPool) copyForwardRoomConfigsReporting(
+	ctx context.Context,
+	connState *V4ConnectionState,
+	roomsToPopulate map[string]types.RoomSubscriptionConfig,
+	firstFailure *error,
+) error {
 	copiedCount := 0
 	for roomID, prevConfig := range connState.PreviousRoomConfigs {
 		if err := ctx.Err(); err != nil {
@@ -386,6 +411,7 @@ func (rp *RequestPool) copyForwardRoomConfigs(
 				"room_id":             roomID,
 				"connection_position": connState.ConnectionPosition,
 			}).Error("[V4_STATE_DEBUG] Failed to copy forward room config")
+			recordFirstFailure(firstFailure, updateErr)
 			continue
 		}
 		copiedCount++
@@ -397,6 +423,13 @@ func (rp *RequestPool) copyForwardRoomConfigs(
 		}).Debug("[V4_STATE_DEBUG] Copied forward room configs for unchanged rooms")
 	}
 	return nil
+}
+
+// recordFirstFailure keeps the first error written to dst, when dst is set.
+func recordFirstFailure(dst *error, err error) {
+	if dst != nil && *dst == nil {
+		*dst = err
+	}
 }
 
 // abandonV4Sync answers a sliding sync request whose context ended while its
@@ -2408,11 +2441,21 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 	for roomID := range resp.Rooms {
 		emitted[roomID] = roomConfigs[roomID]
 	}
-	if _, err := rp.copyForwardStreamStates(ctx, &acknowledged, emitted); err != nil {
+	// Unlike a regular response, a failed copy-forward write must not be
+	// tolerated here. The ops are acknowledged with the new position, and the
+	// old position is cascade-deleted, so a room whose state was not carried over
+	// would be treated as never sent.
+	var copyFailure error
+	if _, err := rp.copyForwardStreamStatesReporting(ctx, &acknowledged, emitted, &copyFailure); err != nil {
 		discardOps()
 		return
 	}
-	if err := rp.copyForwardRoomConfigs(ctx, &acknowledged, emitted); err != nil {
+	if err := rp.copyForwardRoomConfigsReporting(ctx, &acknowledged, emitted, &copyFailure); err != nil {
+		discardOps()
+		return
+	}
+	if copyFailure != nil {
+		logrus.WithError(copyFailure).Warn("[V4_SYNC] Failed to carry room state forward for timeout response with list operations")
 		discardOps()
 		return
 	}
@@ -2441,7 +2484,10 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 			return
 		}
 	}
-	if err := rp.copyForwardAccountDataState(ctx, &acknowledged); err != nil {
+	if err := rp.copyForwardAccountDataStateReporting(ctx, &acknowledged, &copyFailure); err != nil || copyFailure != nil {
+		if copyFailure != nil {
+			logrus.WithError(copyFailure).Warn("[V4_SYNC] Failed to carry account_data state forward for timeout response with list operations")
+		}
 		discardOps()
 		return
 	}
