@@ -531,6 +531,9 @@ type JoinResponse struct {
 	// UnreadThreadNotifications holds per-thread counts, keyed by thread
 	// root, when the filter asks for them (MSC3773).
 	UnreadThreadNotifications map[string]*UnreadNotifications `json:"unread_thread_notifications,omitempty"`
+	// UnreadNotificationsChanged keeps an explicit zero count in an incremental
+	// response that contains only a notification-count update.
+	UnreadNotificationsChanged bool `json:"-"`
 }
 
 func (jr JoinResponse) MarshalJSON() ([]byte, error) {
@@ -566,9 +569,13 @@ func (jr JoinResponse) MarshalJSON() ([]byte, error) {
 		}
 	}
 	if jr.UnreadNotifications != nil {
-		// if everything else is nil, also remove UnreadNotifications
+		// If everything else is nil, drop an empty notification section, but keep
+		// non-zero counts: a room may be in the response only to deliver a count
+		// that changed without a new event.
 		emptyEphemeral := a.Ephemeral == nil || len(a.Ephemeral.Events) == 0
-		if a.State == nil && a.StateAfter.isEmpty() && a.UnstableStateAfter.isEmpty() &&
+		hasCounts := jr.UnreadNotificationsChanged || jr.NotificationCount != 0 ||
+			jr.HighlightCount != 0 || len(jr.UnreadThreadNotifications) > 0
+		if !hasCounts && a.State == nil && a.StateAfter.isEmpty() && a.UnstableStateAfter.isEmpty() &&
 			emptyEphemeral && a.AccountData == nil && a.Timeline == nil && a.Summary == nil && a.MSC4354Sticky == nil {
 			a.UnreadNotifications = nil
 			a.UnreadThreadNotifications = nil

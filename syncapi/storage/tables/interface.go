@@ -253,6 +253,9 @@ type Memberships interface {
 type NotificationData interface {
 	UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID string, data *eventutil.NotificationData) (types.StreamPosition, error)
 	SelectUserUnreadCountsForRooms(ctx context.Context, txn *sql.Tx, userID string, roomIDs []string) (map[string]*eventutil.NotificationData, error)
+	// SelectUserRoomIDsAfter returns the rooms whose notification counts for the
+	// user changed at a stream position in the range (after, upTo].
+	SelectUserRoomIDsAfter(ctx context.Context, txn *sql.Tx, userID string, after, upTo types.StreamPosition) ([]string, error)
 	SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error)
 	PurgeNotificationData(ctx context.Context, txn *sql.Tx, roomID string) error
 }

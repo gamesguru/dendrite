@@ -740,6 +740,10 @@ func (d *DatabaseTransaction) GetRoomReceipts(ctx context.Context, roomIDs []str
 	return receipts, err
 }
 
+func (d *DatabaseTransaction) GetUserNotificationRoomsAfter(ctx context.Context, userID string, after, upTo types.StreamPosition) ([]string, error) {
+	return d.NotificationData.SelectUserRoomIDsAfter(ctx, d.txn, userID, after, upTo)
+}
+
 func (d *DatabaseTransaction) GetUserUnreadNotificationCountsForRooms(ctx context.Context, userID string, rooms map[string]string) (map[string]*eventutil.NotificationData, error) {
 	roomIDs := make([]string, 0, len(rooms))
 	for roomID, membership := range rooms {
