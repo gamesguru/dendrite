@@ -29,9 +29,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          # docs/ is a submodule; without it the Jekyll source is empty.
-          submodules: true
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Build with Jekyll
