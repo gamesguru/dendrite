@@ -22,11 +22,15 @@ type stateLookupFedAPI struct {
 	errs map[spec.ServerName]error
 }
 
-func (f stateLookupFedAPI) LookupStateIDs(_ context.Context, _, s spec.ServerName, _, _ string) (gomatrixserverlib.StateIDResponse, error) {
+func (f stateLookupFedAPI) LookupStateIDs(
+	_ context.Context, _, s spec.ServerName, _, _ string,
+) (gomatrixserverlib.StateIDResponse, error) {
 	return nil, f.errs[s]
 }
 
-func (f stateLookupFedAPI) LookupState(_ context.Context, _, s spec.ServerName, _, _ string, _ gomatrixserverlib.RoomVersion) (gomatrixserverlib.StateResponse, error) {
+func (f stateLookupFedAPI) LookupState(
+	_ context.Context, _, s spec.ServerName, _, _ string, _ gomatrixserverlib.RoomVersion,
+) (gomatrixserverlib.StateResponse, error) {
 	return nil, f.errs[s]
 }
 
@@ -46,18 +50,36 @@ func TestBackfillStateLookupFailuresAreRecorded(t *testing.T) {
 			`"prev_events":["$p1","$p2"],"auth_events":[]}`), false)
 	require.NoError(t, err)
 
-	fed := stateLookupFedAPI{errs: map[spec.ServerName]error{
-		"flaky": spec.HTTPError{Code: http.StatusInternalServerError},
-		"gone":  spec.HTTPError{Code: http.StatusNotFound},
-	}}
 	servers := []spec.ServerName{"flaky", "gone"}
-	newRequester := func() *backfillRequester {
-		r := newBackfillRequester(noLocalEventsDB{}, fed, nil, "origin", nil, nil, nil, gomatrixserverlib.RoomVersionV10)
-		r.servers = servers
-		return r
+	cases := []struct {
+		name      string
+		errs      map[spec.ServerName]error
+		wantCodes []int
+		retryable bool
+	}{
+		{
+			name: "transient then not found",
+			errs: map[spec.ServerName]error{
+				"flaky": spec.HTTPError{Code: http.StatusInternalServerError},
+				"gone":  spec.HTTPError{Code: http.StatusNotFound},
+			},
+			wantCodes: []int{http.StatusInternalServerError, http.StatusNotFound},
+			retryable: true,
+		},
+		{
+			// If recording ever turned a definitive answer into a retryable
+			// one, pagination would never see the end of history.
+			name: "not found on every server",
+			errs: map[spec.ServerName]error{
+				"flaky": spec.HTTPError{Code: http.StatusNotFound},
+				"gone":  spec.HTTPError{Code: http.StatusNotFound},
+			},
+			wantCodes: []int{http.StatusNotFound, http.StatusNotFound},
+			retryable: false,
+		},
 	}
 
-	for name, lookup := range map[string]func(*backfillRequester) error{
+	lookups := map[string]func(*backfillRequester) error{
 		"StateIDsBeforeEvent": func(r *backfillRequester) error {
 			_, err := r.StateIDsBeforeEvent(context.Background(), ev)
 			return err
@@ -66,19 +88,33 @@ func TestBackfillStateLookupFailuresAreRecorded(t *testing.T) {
 			_, err := r.StateBeforeEvent(context.Background(), gomatrixserverlib.RoomVersionV10, ev, []string{"$s"})
 			return err
 		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := newRequester()
-			err := lookup(r)
-			// The last server's 404 is the returned error, but the earlier 500 must
-			// still count, so the failure stays retryable.
-			var httpErr spec.HTTPError
-			require.ErrorAs(t, err, &httpErr)
-			require.Equal(t, http.StatusNotFound, httpErr.Code)
-			require.Len(t, r.backfillErrors, 2)
-			require.True(t, backfillFailuresRetryable(r.backfillErrors))
-			require.False(t, backfillFailuresRetryable([]error{err}), "the 404 alone would be terminal")
-		})
+	}
+
+	for lookupName, lookup := range lookups {
+		for _, tc := range cases {
+			t.Run(lookupName+"/"+tc.name, func(t *testing.T) {
+				r := newBackfillRequester(
+					noLocalEventsDB{}, stateLookupFedAPI{errs: tc.errs},
+					nil, "origin", nil, nil, nil, gomatrixserverlib.RoomVersionV10,
+				)
+				r.servers = servers
+
+				err := lookup(r)
+				// The last server's error is returned; earlier ones must still
+				// count towards classification.
+				var httpErr spec.HTTPError
+				require.ErrorAs(t, err, &httpErr)
+				require.Equal(t, tc.wantCodes[len(tc.wantCodes)-1], httpErr.Code)
+
+				require.Len(t, r.backfillErrors, len(tc.wantCodes))
+				for i, wantCode := range tc.wantCodes {
+					var recorded spec.HTTPError
+					require.ErrorAs(t, r.backfillErrors[i], &recorded)
+					require.Equal(t, wantCode, recorded.Code, "recorded error %d", i)
+				}
+				require.Equal(t, tc.retryable, backfillFailuresRetryable(r.backfillErrors))
+			})
+		}
 	}
 }
 
@@ -151,124 +187,5 @@ func TestPrioritiseBackfillFromEventIDsKeepsOrderWhenNoBetterCandidate(t *testin
 
 	if got[0] != "$one" || got[1] != "$two" {
 		t.Fatalf("expected original ordering to be preserved, got %v", got)
-	}
-}
-
-type fakeStateIDResponse struct{}
-
-func (fakeStateIDResponse) GetStateEventIDs() []string { return nil }
-func (fakeStateIDResponse) GetAuthEventIDs() []string  { return nil }
-
-type fakeStateResponse struct{}
-
-func (fakeStateResponse) GetAuthEvents() gomatrixserverlib.EventJSONs  { return nil }
-func (fakeStateResponse) GetStateEvents() gomatrixserverlib.EventJSONs { return nil }
-
-// fakeStateLookupAPI returns a per-server error for both state lookups.
-type fakeStateLookupAPI struct {
-	federationAPI.RoomserverFederationAPI
-	errs map[spec.ServerName]error
-}
-
-func (f *fakeStateLookupAPI) LookupStateIDs(
-	_ context.Context, _, s spec.ServerName, _, _ string,
-) (gomatrixserverlib.StateIDResponse, error) {
-	if err := f.errs[s]; err != nil {
-		return nil, err
-	}
-	return fakeStateIDResponse{}, nil
-}
-
-func (f *fakeStateLookupAPI) LookupState(
-	_ context.Context, _, s spec.ServerName, _, _ string, _ gomatrixserverlib.RoomVersion,
-) (gomatrixserverlib.StateResponse, error) {
-	if err := f.errs[s]; err != nil {
-		return nil, err
-	}
-	return fakeStateResponse{}, nil
-}
-
-// failingEventNIDsDB makes ProvideEventsContext fall through to federation.
-type failingEventNIDsDB struct {
-	storage.Database
-}
-
-func (failingEventNIDsDB) EventNIDs(_ context.Context, _ []string) (map[string]types.EventMetadata, error) {
-	return nil, errors.New("database unavailable")
-}
-
-func TestStateLookupFailuresAreRecorded(t *testing.T) {
-	roomVer := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
-	event, err := roomVer.NewEventFromTrustedJSON([]byte(`{
-		"event_id": "$target",
-		"room_id": "!room:test",
-		"sender": "@alice:test",
-		"type": "m.room.message",
-		"content": {"body": "x"},
-		"depth": 5,
-		"origin_server_ts": 1,
-		"prev_events": ["$prev"],
-		"auth_events": []
-	}`), false)
-	if err != nil {
-		t.Fatalf("failed to build event: %v", err)
-	}
-
-	notFound := spec.HTTPError{Code: http.StatusNotFound}
-	serverError := spec.HTTPError{Code: http.StatusInternalServerError}
-
-	lookups := map[string]func(*backfillRequester, context.Context) error{
-		"StateIDsBeforeEvent": func(b *backfillRequester, ctx context.Context) error {
-			_, err := b.StateIDsBeforeEvent(ctx, event)
-			return err
-		},
-		"StateBeforeEvent": func(b *backfillRequester, ctx context.Context) error {
-			_, err := b.StateBeforeEvent(ctx, gomatrixserverlib.RoomVersionV10, event, []string{"$a"})
-			return err
-		},
-	}
-
-	cases := []struct {
-		name  string
-		errs  map[spec.ServerName]error
-		want  []error
-		retry bool
-	}{
-		{"transient then not found", map[spec.ServerName]error{"hs1": serverError, "hs2": notFound}, []error{serverError, notFound}, true},
-		{"not found on every server", map[spec.ServerName]error{"hs1": notFound, "hs2": notFound}, []error{notFound, notFound}, false},
-	}
-
-	for lookupName, lookup := range lookups {
-		for _, tc := range cases {
-			t.Run(lookupName+"/"+tc.name, func(t *testing.T) {
-				b := &backfillRequester{
-					db:                      failingEventNIDsDB{},
-					fsAPI:                   &fakeStateLookupAPI{errs: tc.errs},
-					virtualHost:             "origin.test",
-					servers:                 []spec.ServerName{"hs1", "hs2"},
-					eventIDToBeforeStateIDs: make(map[string][]string),
-					eventIDMap:              make(map[string]gomatrixserverlib.PDU),
-				}
-				lastErr := lookup(b, context.Background())
-				if lastErr == nil {
-					t.Fatal("expected a lookup error")
-				}
-				if len(b.backfillErrors) != len(tc.want) {
-					t.Fatalf("recorded %d errors, want %d: %v", len(b.backfillErrors), len(tc.want), b.backfillErrors)
-				}
-				for i, want := range tc.want {
-					var wantHTTP, gotHTTP spec.HTTPError
-					if !errors.As(want, &wantHTTP) || !errors.As(b.backfillErrors[i], &gotHTTP) {
-						t.Fatalf("error %d = %v, want %v", i, b.backfillErrors[i], want)
-					}
-					if gotHTTP.Code != wantHTTP.Code {
-						t.Fatalf("error %d code = %d, want %d", i, gotHTTP.Code, wantHTTP.Code)
-					}
-				}
-				if got := backfillFailuresRetryable(b.backfillErrors); got != tc.retry {
-					t.Fatalf("backfillFailuresRetryable = %v, want %v", got, tc.retry)
-				}
-			})
-		}
 	}
 }
