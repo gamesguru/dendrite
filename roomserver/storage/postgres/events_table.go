@@ -10,6 +10,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"sort"
@@ -237,7 +238,12 @@ func initEventsTable(ctx context.Context, db *sql.DB) error {
 		// so a stalled connection cannot hang startup during cleanup.
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
 		defer cancel()
-		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)")
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)"); err != nil {
+			// The session may still hold the lock. Mark it bad so database/sql
+			// closes it on Close instead of returning it to the pool, which
+			// releases the lock server-side.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 	}()
 
 	if _, err = conn.ExecContext(ctx, eventsSchema); err != nil {

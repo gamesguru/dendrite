@@ -65,7 +65,9 @@ type acknowledgeDB struct {
 	*cancellingWriteDB
 }
 
-func (acknowledgeDB) CreateConnectionPosition(context.Context, int64) (int64, error) { return 2, nil }
+func (acknowledgeDB) CreateConnectionPosition(context.Context, int64) (int64, error) {
+	return 2, nil
+}
 
 func (acknowledgeDB) UpdateConnectionListWindow(context.Context, int64, string, int64, string) error {
 	return nil
