@@ -67,11 +67,17 @@ jobs:
   lint:
     timeout-minutes: 5
     name: Linting
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        run: sudo apt-get install libolm-dev libolm3
+        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        run: |
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
+            sleep 20
+          done
+          exit 1
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -85,7 +91,7 @@ jobs:
   test:
     timeout-minutes: 10
     name: Unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -109,7 +115,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        run: sudo apt-get install libolm-dev libolm3
+        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        run: |
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
+            sleep 20
+          done
+          exit 1
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -139,7 +151,7 @@ jobs:
   build:
     name: Build for Linux
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -218,7 +230,7 @@ jobs:
     timeout-minutes: 20
     needs: initial-tests-done
     name: Integration tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -242,7 +254,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
-        run: sudo apt-get install libolm-dev libolm3
+        # Retry: hosted runners occasionally fail to resolve the Ubuntu mirrors.
+        run: |
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libolm-dev libolm3 && exit 0
+            sleep 20
+          done
+          exit 1
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -278,7 +296,7 @@ jobs:
     name: "Complement (${{ matrix.label }})"
     timeout-minutes: 35
     needs: initial-tests-done
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
