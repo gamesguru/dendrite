@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -512,11 +513,18 @@ func (rp *RequestPool) processE2EEExtension(
 			if catchupErr != nil {
 				logrus.WithError(catchupErr).Error("DeviceListCatchup failed")
 				deviceListsFailed = true
-				// Continue anyway - device lists are optional
-				// IMPORTANT: Still set DeviceLists even on error (Synapse always includes it)
-				resp.DeviceLists = &types.DeviceLists{
-					Changed: []string{},
-					Left:    []string{},
+				if errors.Is(catchupErr, internal.ErrKeyChangeQueryIncomplete) {
+					// Keep membership-derived changes gathered before the failed key
+					// query. The caller retains the old device-list cursor so the
+					// unread key changes are retried on the next sync.
+					resp.DeviceLists = tempResponse.DeviceLists
+				} else {
+					// Continue anyway - device lists are optional. Still include an
+					// empty field for other failures, matching normal responses.
+					resp.DeviceLists = &types.DeviceLists{
+						Changed: []string{},
+						Left:    []string{},
+					}
 				}
 			} else {
 				// CRITICAL: Always set DeviceLists for incremental sync, even if empty

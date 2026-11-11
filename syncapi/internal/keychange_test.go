@@ -620,6 +620,9 @@ func TestKeyChangeCatchupQueryFailureDoesNotAdvance(t *testing.T) {
 			if err == nil {
 				t.Fatal("a failed key-change query must be reported")
 			}
+			if !errors.Is(err, ErrKeyChangeQueryIncomplete) {
+				t.Fatalf("error %v does not identify an incomplete key-change query", err)
+			}
 			if newPos != from {
 				t.Fatalf("position advanced to %d past unread key changes, want %d", newPos, from)
 			}

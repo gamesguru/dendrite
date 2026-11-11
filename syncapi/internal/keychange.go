@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -23,6 +24,11 @@ import (
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	keytypes "codefloe.com/pat-s/zendrite/userapi/types"
 )
+
+// ErrKeyChangeQueryIncomplete marks a failed query for users' changed device
+// keys. Callers must retain the old device-list position and may still use
+// membership-derived results collected before the query.
+var ErrKeyChangeQueryIncomplete = errors.New("key-change query incomplete")
 
 // DeviceOTKCounts adds one-time key counts to the /sync response.
 func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceID string, res *types.Response) error {
@@ -88,10 +94,10 @@ func DeviceListCatchup(
 		Offset:   offset,
 		ToOffset: toOffset,
 	}, &queryRes); err != nil {
-		return from, hasNew, fmt.Errorf("userAPI.QueryKeyChanges: %w", err)
+		return from, hasNew, fmt.Errorf("%w: userAPI.QueryKeyChanges: %w", ErrKeyChangeQueryIncomplete, err)
 	}
 	if queryRes.Error != nil {
-		return from, hasNew, fmt.Errorf("QueryKeyChanges: %w", queryRes.Error)
+		return from, hasNew, fmt.Errorf("%w: QueryKeyChanges: %w", ErrKeyChangeQueryIncomplete, queryRes.Error)
 	}
 
 	util.GetLogger(ctx).WithFields(logrus.Fields{
