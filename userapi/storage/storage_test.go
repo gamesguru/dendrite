@@ -141,6 +141,8 @@ func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make(chan error, workers)
 		start := make(chan struct{})
+		var firstRead sync.WaitGroup
+		firstRead.Add(workers)
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
 			go func() {
@@ -148,6 +150,11 @@ func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
 				<-start
 				for attempt := 0; attempt < 100; attempt++ {
 					stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
+					if attempt == 0 {
+						// Every worker reads before any writes, so the first writes carry stale values.
+						firstRead.Done()
+						firstRead.Wait()
+					}
 					if err != nil {
 						errs <- err
 						return

@@ -1145,11 +1145,6 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 						roomsToKeep[roomID] = true
 						continue
 					}
-					membership, _, membershipErr := filterSnapshot.SelectMembershipForUser(ctx, roomID, device.UserID, math.MaxInt64)
-					if membershipErr == nil && (membership == spec.Leave || membership == spec.Ban) &&
-						roomLeaveIsNew(ctx, filterSnapshot, connState, roomID, device.UserID) {
-						roomsToKeep[roomID] = true
-					}
 				}
 				// A previously sent room must be returned once when the user leaves,
 				// even if its leave event is absent from the stream-change query.
@@ -2324,6 +2319,22 @@ func interruptStreamToken(
 	return previous.LastToken
 }
 
+// interruptListsHaveRoomData reports whether every room named by a list
+// operation is present in the response. An omitted room means its data could
+// not be built, so its operation must not be acknowledged.
+func interruptListsHaveRoomData(resp *types.SlidingSyncResponse) bool {
+	for _, list := range resp.Lists {
+		for _, op := range list.Ops {
+			for _, roomID := range op.RoomIDs {
+				if _, ok := resp.Rooms[roomID]; !ok {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 // acknowledgeInterruptLists gives a timeout response that sent list operations
 // a connection position of its own, with the windows it sent saved against it.
 // Without one the client applies the operations, but the next request is still
@@ -2359,6 +2370,15 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 			list.Ops = nil
 			resp.Lists[listName] = list
 		}
+	}
+	// An operation that names a room needs that room's data in the response.
+	// A room whose data could not be built was omitted, so acknowledging its
+	// operation would advance the position without the client ever receiving
+	// the room. Drop the operations instead; the next request replays them.
+	if !interruptListsHaveRoomData(resp) {
+		logrus.Warn("[V4_SYNC] Dropping timeout response list operations for rooms without room data")
+		discardOps()
+		return
 	}
 	position, err := rp.db.CreateConnectionPosition(ctx, connState.ConnectionKey)
 	if err != nil {

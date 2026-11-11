@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS roomserver_events (
 
 -- Create an index which helps in resolving membership events (event_type_nid = 5) - (used for history visibility)
 CREATE INDEX IF NOT EXISTS roomserver_events_memberships_idx ON roomserver_events (room_nid, event_state_key_nid) WHERE (event_type_nid = 5);
-CREATE INDEX IF NOT EXISTS roomserver_events_room_event_nid_idx ON roomserver_events (room_nid, event_nid);
 
 -- The following indexes are used by bulkSelectStateEventByNIDSQL
 CREATE INDEX IF NOT EXISTS roomserver_event_event_type_nid_idx ON roomserver_events (event_type_nid);
@@ -177,6 +176,9 @@ func CreateEventsTable(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err = createRoomEventNIDIndex(db); err != nil {
+		return err
+	}
 
 	m := sqlutil.NewMigrator(db)
 	m.AddMigrations([]sqlutil.Migration{
@@ -186,6 +188,39 @@ func CreateEventsTable(db *sql.DB) error {
 		},
 	}...)
 	return m.Up(context.Background())
+}
+
+// createRoomEventNIDIndex builds the (room_nid, event_nid) index without
+// blocking event writes. CREATE INDEX CONCURRENTLY cannot run in a
+// transaction, so it is issued here rather than in eventsSchema, whose
+// statements the driver may batch into one implicit transaction.
+//
+// A concurrent build that is interrupted leaves an invalid index behind, which
+// IF NOT EXISTS would then keep. Drop such an index before retrying so the
+// next startup can finish the build.
+func createRoomEventNIDIndex(db *sql.DB) error {
+	const indexName = "roomserver_events_room_event_nid_idx"
+	var valid bool
+	err := db.QueryRow(
+		`SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)`,
+		indexName,
+	).Scan(&valid)
+	switch {
+	case err == nil && valid:
+		return nil
+	case err == nil && !valid:
+		if _, err = db.Exec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName); err != nil {
+			return fmt.Errorf("drop invalid %s: %w", indexName, err)
+		}
+	case err != nil && err != sql.ErrNoRows:
+		return fmt.Errorf("look up %s: %w", indexName, err)
+	}
+	if _, err = db.Exec(
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS " + indexName + " ON roomserver_events (room_nid, event_nid)",
+	); err != nil {
+		return fmt.Errorf("create %s: %w", indexName, err)
+	}
+	return nil
 }
 
 func PrepareEventsTable(db *sql.DB) (tables.Events, error) {

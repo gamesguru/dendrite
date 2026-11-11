@@ -37,3 +37,22 @@ func TestInterruptStreamTokenKeepsLaggingRoomToken(t *testing.T) {
 	require.Equal(t, since.StreamToken.String(), interruptStreamToken(connState, "!new:test", since))
 	require.Equal(t, since.StreamToken.String(), interruptStreamToken(nil, "!new:test", since))
 }
+
+func TestInterruptListsRequireRoomData(t *testing.T) {
+	index := 0
+	resp := &types.SlidingSyncResponse{
+		Lists: map[string]types.SlidingList{
+			"list": {
+				Ops: []types.SlidingOperation{
+					{Op: "INSERT", Index: &index, RoomIDs: []string{"!present:test", "!missing:test"}},
+					{Op: "DELETE", Index: &index},
+				},
+			},
+		},
+		Rooms: map[string]types.SlidingRoomData{"!present:test": {}},
+	}
+	require.False(t, interruptListsHaveRoomData(resp))
+
+	resp.Rooms["!missing:test"] = types.SlidingRoomData{}
+	require.True(t, interruptListsHaveRoomData(resp))
+}
