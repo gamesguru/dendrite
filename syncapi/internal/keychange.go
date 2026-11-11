@@ -45,7 +45,8 @@ func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceI
 // be already filled in with join/leave information. It returns the key-change
 // position and whether room tracking found changes or device_lists.changed grew.
 // Room-tracking errors propagate. Key-change query failures preserve membership
-// results and return to as the position without an error.
+// results and return `to` as the position without an error. A filterSharedUsers
+// failure returns `from` with the error.
 func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
@@ -117,10 +118,10 @@ func DeviceListCatchup(
 	for _, leaveUserID := range leaveUserIDs {
 		leaveSet[leaveUserID] = struct{}{}
 	}
-	failOpenUserIDs := make([]string, 0, len(joinUserIDs))
-	for _, joinUserID := range joinUserIDs {
-		if _, leaving := leaveSet[joinUserID]; !leaving {
-			failOpenUserIDs = append(failOpenUserIDs, joinUserID)
+	failOpenUserIDs := make([]string, 0, len(queryRes.UserIDs))
+	for _, changedUserID := range queryRes.UserIDs {
+		if _, left := leaveSet[changedUserID]; !left {
+			failOpenUserIDs = append(failOpenUserIDs, changedUserID)
 		}
 	}
 	sharedUsersMap, err := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs, failOpenUserIDs)
@@ -275,9 +276,10 @@ func TrackChangedUsers(
 
 // filterSharedUsers returns shared-room counts for usersWithChangedKeys,
 // retaining zero-count entries and treating the requesting user as shared with
-// itself. Only zero-count users in failOpenUserIDs are checked against the
-// roomserver; if that query fails, their counts become one. Database lookup
-// failures use the same fallback, leaving other users at their initial counts.
+// itself. Every zero-count user is checked against the roomserver. If that
+// query fails, users in failOpenUserIDs are counted as shared (one), while
+// users who left in this response remain at zero. Database lookup failures
+// fall through to the same roomserver check.
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, usersWithChangedKeys, failOpenUserIDs []string,
@@ -304,11 +306,6 @@ func filterSharedUsers(
 			sharedUsersMap[userID]++
 		}
 	}
-	failOpenSet := make(map[string]struct{}, len(failOpenUserIDs))
-	for _, candidate := range failOpenUserIDs {
-		failOpenSet[candidate] = struct{}{}
-	}
-
 	// The sync API's current_room_state table can lag behind the roomserver,
 	// notably just after a partial-state resync has completed. A device list
 	// update for a user who has just become visible would otherwise be
@@ -322,6 +319,10 @@ func filterSharedUsers(
 			missingSet[changedUserID] = struct{}{}
 		}
 	}
+	failOpenSet := make(map[string]struct{}, len(failOpenUserIDs))
+	for _, changedUserID := range failOpenUserIDs {
+		failOpenSet[changedUserID] = struct{}{}
+	}
 	if len(missing) > 0 {
 		// This live roomserver view may be ahead of the sync snapshot. Prefer a
 		// harmless extra device-list notification over dropping a key change and
@@ -332,14 +333,11 @@ func filterSharedUsers(
 			OtherUserIDs: missing,
 		}, &sharedRes); err != nil {
 			util.GetLogger(ctx).WithError(err).Warn("QuerySharedUsers fallback failed")
-			// Only users the caller expects to share a room are assumed to
-			// when the check fails. For anyone else the answer is unknown, so
-			// fail rather than report them as unshared or advance past a change.
+			// Keep key changes by failing open for users who have not just left;
+			// an extra notification is safer than advancing past a change.
 			for _, changedUserID := range missing {
-				if _, eligible := failOpenSet[changedUserID]; eligible {
+				if _, shouldFailOpen := failOpenSet[changedUserID]; shouldFailOpen {
 					sharedUsersMap[changedUserID] = 1
-				} else {
-					return nil, fmt.Errorf("QuerySharedUsers for %s: %w", changedUserID, err)
 				}
 			}
 		} else {

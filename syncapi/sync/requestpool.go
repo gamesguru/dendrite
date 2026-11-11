@@ -866,7 +866,8 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, deviceUserID stri
 		if ctx.Err() != nil {
 			break
 		}
-		if _, posErr := snapshot.EventPositionInTopology(ctx, eventID); errors.Is(posErr, sql.ErrNoRows) {
+		// Any lookup error leaves presence uncertain, so wait for it too.
+		if _, posErr := snapshot.EventPositionInTopology(ctx, eventID); posErr != nil {
 			missing = append(missing, eventID)
 		}
 	}

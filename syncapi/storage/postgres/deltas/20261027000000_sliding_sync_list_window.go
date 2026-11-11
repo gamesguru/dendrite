@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS syncapi_sliding_sync_connection_list_windows (
     room_ids TEXT NOT NULL,
     PRIMARY KEY (connection_key, list_name, connection_position)
 );
+CREATE INDEX IF NOT EXISTS syncapi_sliding_sync_connection_list_windows_position_idx
+    ON syncapi_sliding_sync_connection_list_windows(connection_position);
 `)
 	return err
 }

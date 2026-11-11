@@ -229,7 +229,13 @@ func (rp *RequestPool) ProcessExtensions(
 
 	// Process e2ee extension (PreProcess, MSC3884)
 	if req.Extensions.E2EE != nil && req.Extensions.E2EE.Enabled {
-		e2eeResp, err := rp.processE2EEExtension(ctx, snapshot, userID, deviceID, isInitialSync, fromPos, toPos)
+		e2eeResp, deviceListsFailed, err := rp.processE2EEExtension(ctx, snapshot, userID, deviceID, isInitialSync, fromPos, toPos)
+		if deviceListsFailed && fromPos != nil {
+			// device_lists for this window could not be computed; hold the
+			// device-list position so the next response retries the window
+			// rather than skipping its key changes.
+			updatedPos.DeviceListPosition = fromPos.DeviceListPosition
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, toPos, nil, ctx.Err()
@@ -440,8 +446,8 @@ func (rp *RequestPool) processE2EEExtension(
 	isInitialSync bool,
 	fromPos *types.StreamingToken,
 	toPos types.StreamingToken,
-) (*types.E2EEResponse, error) { //nolint:unparam // error kept for interface compatibility
-	resp := &types.E2EEResponse{
+) (resp *types.E2EEResponse, deviceListsFailed bool, err error) { //nolint:unparam // error kept for interface compatibility
+	resp = &types.E2EEResponse{
 		// CRITICAL: Android compatibility - always include signed_curve25519: 0
 		// This will be overwritten if we actually have keys, but ensures the field is present
 		DeviceOneTimeKeysCount:             map[string]int{"signed_curve25519": 0},
@@ -452,7 +458,7 @@ func (rp *RequestPool) processE2EEExtension(
 
 	// Get OTK counts and fallback key types
 	var queryRes userapi.QueryOneTimeKeysResponse
-	err := rp.userAPI.QueryOneTimeKeys(ctx, &userapi.QueryOneTimeKeysRequest{
+	err = rp.userAPI.QueryOneTimeKeys(ctx, &userapi.QueryOneTimeKeysRequest{
 		UserID:   userID,
 		DeviceID: deviceID,
 	}, &queryRes)
@@ -498,13 +504,14 @@ func (rp *RequestPool) processE2EEExtension(
 			}
 
 			// Call DeviceListCatchup to get device list changes
-			_, _, err := internal.DeviceListCatchup(
+			_, _, catchupErr := internal.DeviceListCatchup(
 				ctx, snapshot, rp.userAPI, rp.rsAPI,
 				userID, tempResponse,
 				fromPos.DeviceListPosition, toPos.DeviceListPosition,
 			)
-			if err != nil {
-				logrus.WithError(err).Error("DeviceListCatchup failed")
+			if catchupErr != nil {
+				logrus.WithError(catchupErr).Error("DeviceListCatchup failed")
+				deviceListsFailed = true
 				// Continue anyway - device lists are optional
 				// IMPORTANT: Still set DeviceLists even on error (Synapse always includes it)
 				resp.DeviceLists = &types.DeviceLists{
@@ -522,7 +529,7 @@ func (rp *RequestPool) processE2EEExtension(
 
 	// Always return e2ee extension if requested
 	// Synapse behavior: always returns OTK counts and device lists (even if empty arrays)
-	return resp, nil
+	return resp, deviceListsFailed, nil
 }
 
 // accountDataStream is the SlidingSyncConnectionStream "stream" tag for

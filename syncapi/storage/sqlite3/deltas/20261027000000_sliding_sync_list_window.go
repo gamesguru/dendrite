@@ -22,6 +22,20 @@ CREATE TABLE IF NOT EXISTS syncapi_sliding_sync_connection_list_windows (
     room_ids TEXT NOT NULL,
     PRIMARY KEY (connection_key, list_name, connection_position)
 );
+CREATE INDEX IF NOT EXISTS syncapi_sliding_sync_connection_list_windows_position_idx
+    ON syncapi_sliding_sync_connection_list_windows(connection_position);
+-- SQLite foreign keys are not enabled, so ON DELETE CASCADE is not enforced;
+-- emulate it with triggers.
+CREATE TRIGGER IF NOT EXISTS syncapi_sliding_sync_list_windows_conn_delete
+AFTER DELETE ON syncapi_sliding_sync_connections
+BEGIN
+    DELETE FROM syncapi_sliding_sync_connection_list_windows WHERE connection_key = OLD.connection_key;
+END;
+CREATE TRIGGER IF NOT EXISTS syncapi_sliding_sync_list_windows_pos_delete
+AFTER DELETE ON syncapi_sliding_sync_connection_positions
+BEGIN
+    DELETE FROM syncapi_sliding_sync_connection_list_windows WHERE connection_position = OLD.connection_position;
+END;
 `)
 	return err
 }

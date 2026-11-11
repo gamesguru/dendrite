@@ -118,6 +118,12 @@ func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Re
 			Up:      deltas.UpAddConnectionReceipts,
 		},
 		sqlutil.Migration{Version: "syncapi: threaded receipts", Up: deltas.UpThreadedReceipts},
+		// Must run after threaded receipts, which drops and recreates the
+		// receipts table that this trigger references.
+		sqlutil.Migration{
+			Version: "syncapi: enforce sqlite sliding sync receipt cleanup",
+			Up:      deltas.UpEnsureConnectionReceiptCleanup,
+		},
 	)
 	err = m.Up(context.Background())
 	if err != nil {

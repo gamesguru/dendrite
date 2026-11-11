@@ -106,15 +106,6 @@ func (d *DatabaseTransaction) Events(ctx context.Context, eventIDs []string) ([]
 	return d.StreamEventsToEvents(ctx, nil, streamEvents, nil), nil
 }
 
-func (d *DatabaseTransaction) PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, eventIDs []string) error {
-	for _, eventID := range eventIDs {
-		if err := d.BackwardExtremities.DeleteBackwardExtremity(ctx, d.txn, roomID, eventID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (d *DatabaseTransaction) RoomIDsWithMembership(ctx context.Context, userID string, membership string) ([]string, error) {
 	return d.CurrentRoomState.SelectRoomIDsWithMembership(ctx, d.txn, userID, membership)
 }

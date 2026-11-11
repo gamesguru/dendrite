@@ -706,8 +706,8 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 
 	// Incremental timelines are in the order events arrived, which the storage
 	// layer returns as ascending stream position. Rooms shown as a historical
-	// section (a complete sync, a newly joined room, or a left room) are ordered
-	// by the room DAG instead, as /messages is: an event received late but deep
+	// section (a complete sync or a newly joined room) are ordered by the room
+	// DAG instead, as /messages is: an event received late but deep
 	// in the past belongs in history, not at the end of the timeline.
 	var recentEvents []*rstypes.HeaderedEvent
 	if r.Backwards {

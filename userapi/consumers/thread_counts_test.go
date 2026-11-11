@@ -17,7 +17,33 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/userapi/producers"
+	"codefloe.com/pat-s/zendrite/userapi/storage"
 )
+
+type failingNotificationStore struct{ storage.UserDatabase }
+
+func (failingNotificationStore) StoreNotificationEvent(context.Context, string, string, string, uint64) ([]string, error) {
+	return nil, errors.New("notification event storage failed")
+}
+
+type retryCopyRoomserver struct {
+	rsapi.UserRoomserverAPI
+	currentStateCalls int
+}
+
+func (r *retryCopyRoomserver) QueryMembershipsForRoom(context.Context, *rsapi.QueryMembershipsForRoomRequest, *rsapi.QueryMembershipsForRoomResponse) error {
+	return nil
+}
+
+func (r *retryCopyRoomserver) JoinedUserCount(context.Context, string) (int, error) { return 0, nil }
+
+func (r *retryCopyRoomserver) QueryCurrentState(context.Context, *rsapi.QueryCurrentStateRequest, *rsapi.QueryCurrentStateResponse) error {
+	r.currentStateCalls++
+	if r.currentStateCalls == 1 {
+		return errors.New("predecessor state unavailable")
+	}
+	return nil
+}
 
 // threadRoomserver serves a two-member room for push rule evaluation.
 type threadRoomserver struct {
@@ -106,4 +132,21 @@ func TestThreadReplyCountedInThread(t *testing.T) {
 		require.NoError(t, json.Unmarshal(publisher.msgs[len(publisher.msgs)-1].Data, &last))
 		require.Equal(t, 3, last.UnreadNotificationCount)
 	})
+}
+
+func TestProcessMessageRetriesWhenPushRuleCopyAndLaterStepFail(t *testing.T) {
+	user := test.NewUser(t)
+	room := test.NewRoom(t, user)
+	join := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
+
+	rsAPI := &retryCopyRoomserver{}
+	consumer := OutputRoomEventConsumer{
+		cfg:   &config.UserAPI{Matrix: &config.Global{ServerName: "test"}},
+		db:    failingNotificationStore{},
+		rsAPI: rsAPI,
+	}
+
+	err := consumer.processMessage(t.Context(), join, 1)
+	require.ErrorIs(t, err, errRetryPushRuleCopy)
+	require.ErrorContains(t, err, "notification event storage failed")
 }

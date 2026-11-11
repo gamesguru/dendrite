@@ -665,9 +665,7 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 				return
 			}
 			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning local events where available")
-			// The caller can still return events withheld at the extremity. With
-			// no local events, return an empty page rather than failing the request.
-			return []*rstypes.HeaderedEvent{}, nil
+			return nil, err
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0

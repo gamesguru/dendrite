@@ -86,9 +86,10 @@ type AccountData interface {
 	// SaveAccountDataIfUnchanged saves account data only if the stored value
 	// still matches expected. An empty expected value requires that no account
 	// data is currently stored. It reports whether the write was applied.
+	// JSON null content is rejected with an error.
 	SaveAccountDataIfUnchanged(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string, expected, content json.RawMessage) (bool, error)
 	// DeleteAccountDataByType removes the account data for the given user,
-	// room and type.
+	// room and type. It succeeds when no matching row exists.
 	DeleteAccountDataByType(ctx context.Context, localpart string, serverName spec.ServerName, roomID, dataType string) error
 	GetAccountData(ctx context.Context, localpart string, serverName spec.ServerName) (global map[string]json.RawMessage, rooms map[string]map[string]json.RawMessage, err error)
 	// GetAccountDataByType returns account data matching a given

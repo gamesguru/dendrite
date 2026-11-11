@@ -2290,7 +2290,7 @@ func (rp *RequestPool) buildInterruptResponse(
 		}
 	}()
 
-	rp.acknowledgeInterruptLists(ctx, resp, connState, since)
+	rp.acknowledgeInterruptLists(ctx, resp, connState, since, roomsInLists)
 	return resp
 }
 
@@ -2306,6 +2306,7 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 	resp *types.SlidingSyncResponse,
 	connState *V4ConnectionState,
 	since *types.SlidingSyncStreamToken,
+	roomConfigs map[string]types.RoomSubscriptionConfig,
 ) {
 	if connState == nil || since == nil || ctx.Err() != nil {
 		return
@@ -2349,13 +2350,47 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 			return
 		}
 	}
-	if _, err := rp.copyForwardStreamStates(ctx, &acknowledged, nil); err != nil {
+	// Rooms emitted in this response were built up to since.StreamToken, so
+	// record them as sent at that token; older state is copied forward for the
+	// rest. Without this the next request treats a newly inserted room as never
+	// sent although the list operations naming it have been acknowledged.
+	emitted := make(map[string]types.RoomSubscriptionConfig, len(resp.Rooms))
+	for roomID := range resp.Rooms {
+		emitted[roomID] = roomConfigs[roomID]
+	}
+	if _, err := rp.copyForwardStreamStates(ctx, &acknowledged, emitted); err != nil {
 		discardOps()
 		return
 	}
-	if err := rp.copyForwardRoomConfigs(ctx, &acknowledged, nil); err != nil {
+	if err := rp.copyForwardRoomConfigs(ctx, &acknowledged, emitted); err != nil {
 		discardOps()
 		return
+	}
+	sentToken := since.StreamToken.String()
+	for roomID, config := range emitted {
+		if err := rp.db.UpdateConnectionStream(ctx, position, roomID, "events", types.HaveSentRoomLive.String(), sentToken); err != nil {
+			logrus.WithError(err).WithField("room_id", roomID).Warn("[V4_SYNC] Failed to save stream state for timeout response")
+			discardOps()
+			return
+		}
+		requiredStateJSON := "[]"
+		if rs := config.RequiredState; len(rs.Include) > 0 || len(rs.Exclude) > 0 || rs.LazyMembers {
+			b, err := json.Marshal(rs)
+			if err != nil {
+				discardOps()
+				return
+			}
+			requiredStateJSON = string(b)
+		}
+		requiredStateID, err := rp.db.GetOrCreateRequiredStateID(ctx, connState.ConnectionKey, requiredStateJSON)
+		if err == nil {
+			err = rp.db.UpdateRoomConfig(ctx, position, roomID, config.TimelineLimit, requiredStateID)
+		}
+		if err != nil {
+			logrus.WithError(err).WithField("room_id", roomID).Warn("[V4_SYNC] Failed to save room config for timeout response")
+			discardOps()
+			return
+		}
 	}
 	if err := rp.copyForwardAccountDataState(ctx, &acknowledged); err != nil {
 		discardOps()

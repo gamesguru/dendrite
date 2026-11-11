@@ -133,6 +133,9 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 		return updated > 0, err
 	case err != nil:
 		return false, err
+	case len(expected) == 0:
+		// An empty expected value requires that no row exists.
+		return false, nil
 	case string(current) != string(expected):
 		return false, nil
 	}

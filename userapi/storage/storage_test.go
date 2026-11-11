@@ -140,10 +140,12 @@ func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
 		const workers = 8
 		var wg sync.WaitGroup
 		errs := make(chan error, workers)
+		start := make(chan struct{})
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				<-start
 				for attempt := 0; attempt < 100; attempt++ {
 					stored, err := db.GetAccountDataByType(ctx, localpart, domain, "", "test.concurrent")
 					if err != nil {
@@ -173,6 +175,7 @@ func Test_AccountDataConditionalWritesConcurrent(t *testing.T) {
 				errs <- errors.New("conditional write did not succeed after retries")
 			}()
 		}
+		close(start)
 		wg.Wait()
 		close(errs)
 		for err := range errs {

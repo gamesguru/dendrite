@@ -174,14 +174,18 @@ func TestFilterSharedUsersFailsOpenWhenFallbackFails(t *testing.T) {
 	}
 }
 
-func TestFilterSharedUsersErrorsWhenUnverifiableUserHasNoJoin(t *testing.T) {
+func TestFilterSharedUsersFailsOpenWhenUnverifiableUserHasNoJoin(t *testing.T) {
 	t.Parallel()
 	otherUser := "@bob:localhost"
 	unrelatedUser := "@carol:localhost"
 	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
 
-	if _, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser, unrelatedUser}, []string{otherUser}); err == nil {
-		t.Fatal("expected an error for a user that cannot be verified")
+	shared, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser, unrelatedUser}, []string{otherUser, unrelatedUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared[unrelatedUser] == 0 {
+		t.Fatalf("expected key change to fail open for unverifiable user, got %v", shared)
 	}
 }
 

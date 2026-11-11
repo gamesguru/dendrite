@@ -65,8 +65,9 @@ var release = Contract{Protocol: 1, Level: releaseLevel, UpgradeFrom: 1, Rollbac
 // level 15 uniquely indexes invite event IDs, level 16 tracks notary key
 // retention (MSC4499), level 17 drops the redundant invite event ID index,
 // level 18 stores sliding-sync list windows by connection position, and level
-// 19 retains every membership transition for position-bounded lookups.
-const releaseLevel = 19
+// 19 retains every membership transition for position-bounded lookups, and
+// level 20 indexes roomserver events by (room_nid, event_nid).
+const releaseLevel = 20
 
 // rollbackToLevel is the oldest level that may take over from state this build
 // writes. It stays behind releaseLevel while the changes between them remain

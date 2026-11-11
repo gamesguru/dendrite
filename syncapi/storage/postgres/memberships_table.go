@@ -51,8 +51,15 @@ CREATE TABLE IF NOT EXISTS syncapi_membership_history (
     stream_pos BIGINT NOT NULL,
     PRIMARY KEY (room_id, user_id, stream_pos)
 );
-CREATE INDEX IF NOT EXISTS syncapi_membership_history_pos_idx
-    ON syncapi_membership_history(room_id, user_id, stream_pos DESC);
+-- The primary key already serves "stream_pos DESC LIMIT 1" lookups.
+DROP INDEX IF EXISTS syncapi_membership_history_pos_idx;
+-- One-off backfill from the current-state table when the history table is
+-- first created, so lookups before the upgrade don't fall back to the lossy
+-- current table. Skipped once the history table holds any rows.
+INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
+SELECT room_id, user_id, membership, event_id, stream_pos FROM syncapi_memberships
+WHERE NOT EXISTS (SELECT 1 FROM syncapi_membership_history)
+ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING;
 `
 
 const insertMembershipHistorySQL = `
@@ -75,6 +82,7 @@ SELECT membership, event_id, stream_pos FROM syncapi_membership_history
 WHERE room_id = $1 AND user_id = $2 AND stream_pos <= $3
 ORDER BY stream_pos DESC LIMIT 1
 `
+
 const purgeMembershipHistorySQL = "DELETE FROM syncapi_membership_history WHERE room_id = $1"
 
 const upsertMembershipSQL = "" +

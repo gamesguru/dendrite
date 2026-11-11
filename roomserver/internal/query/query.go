@@ -234,6 +234,9 @@ func (r *Queryer) QueryEventsByID(
 	for _, event := range events {
 		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU, EventNID: event.EventNID})
 	}
+	// EventNIDs is the authoritative source of event NIDs for callers:
+	// HeaderedEvent.MarshalJSON drops EventNID, so Events[i].EventNID does
+	// not survive an HTTP round trip.
 	response.EventNIDs = make(map[string]types.EventNID, len(events))
 	for _, event := range events {
 		response.EventNIDs[event.EventID()] = event.EventNID

@@ -148,7 +148,6 @@ type DatabaseTransaction interface {
 	// SelectMembershipForUserAtStreamPosition returns the membership of the
 	// user at or before the given stream position.
 	SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error)
-	PurgeBackwardExtremitiesForEvents(ctx context.Context, roomID string, prevEventIDs []string) error
 	// getUserUnreadNotificationCountsForRooms returns the unread notifications for the given rooms
 	GetUserUnreadNotificationCountsForRooms(ctx context.Context, userID string, roomIDs map[string]string) (map[string]*eventutil.NotificationData, error)
 	GetPresences(ctx context.Context, userID []string) ([]*types.PresenceInternal, error)

@@ -298,7 +298,9 @@ func putThreadSubscription(req *http.Request, device *userapi.Device, roomID, th
 
 // maxRoomOrdering returns an upper bound on the locally assigned orderings of
 // all events stored for the room, including events that are no longer forward
-// extremities. Unlike depth, it cannot be chosen by a remote sender. It is
+// extremities, when the roomserver reports MaxEventNID. Otherwise it falls
+// back to the maximum ordering of the current forward extremities, which is a
+// weaker bound. Unlike depth, it cannot be chosen by a remote sender. It is
 // scoped to this database's event sequence, so account data and the roomserver
 // database must be restored together. It returns zero when no positive
 // ordering is available and propagates roomserver query errors.

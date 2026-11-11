@@ -562,7 +562,7 @@ func QueryLatestEventsAndState(
 		return err
 	}
 	if request.IncludeMaxEventNID {
-		response.MaxEventNID, err = db.MaxEventNIDInRoom(ctx, request.RoomID)
+		response.MaxEventNID, err = db.MaxEventNIDInRoom(ctx, roomInfo.RoomNID)
 		if err != nil {
 			return err
 		}

@@ -201,7 +201,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		// and look up the state before the event from its prev_events, fetching
 		// unknown ones via /state_ids and /event, as Synapse does. The missing
 		// history becomes a backward extremity for /messages to backfill.
-		t.log.WithError(err).Warn("Leaving the gap before the event and looking up the state at its prev_events instead")
+		t.log.WithError(err).Debug("Leaving the gap before the event and looking up the state at its prev_events instead")
 		return t.stateBeforeNewEvent(ctx, e, roomVersion, t.copyHadEvents())
 	}
 	if err != nil {
