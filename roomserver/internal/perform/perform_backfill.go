@@ -408,6 +408,7 @@ FederationHit:
 		res, err := c.StateIDsBeforeEvent(ctx, targetEvent)
 		if err != nil {
 			lastErr = err
+			b.backfillErrors = append(b.backfillErrors, err)
 			continue
 		}
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = res
@@ -484,6 +485,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 		result, err := c.StateBeforeEvent(ctx, roomVer, event, eventIDs)
 		if err != nil {
 			lastErr = err
+			b.backfillErrors = append(b.backfillErrors, err)
 			continue
 		}
 		for eventID, ev := range result {
