@@ -28,7 +28,7 @@ func openEventsTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestCreateRoomEventNIDIndexRecoversInvalidIndex(t *testing.T) {
+func TestInitEventsTableRecoversInvalidIndex(t *testing.T) {
 	db := openEventsTestDB(t)
 	ctx := context.Background()
 	_, err := db.ExecContext(ctx, eventsSchema)
@@ -48,14 +48,14 @@ ON roomserver_events ((1 / room_nid))`)
 	).Scan(&valid))
 	require.False(t, valid)
 
-	require.NoError(t, createRoomEventNIDIndex(ctx, db))
+	require.NoError(t, initEventsTable(ctx, db))
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('roomserver_events_room_event_nid_idx')`,
 	).Scan(&valid))
 	require.True(t, valid)
 }
 
-func TestCreateRoomEventNIDIndexLockCanBeCanceled(t *testing.T) {
+func TestInitEventsTableLockCanBeCanceled(t *testing.T) {
 	db := openEventsTestDB(t)
 	lockConn, err := db.Conn(context.Background())
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestCreateRoomEventNIDIndexLockCanBeCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	started := make(chan error, 1)
-	go func() { started <- createRoomEventNIDIndex(ctx, db) }()
+	go func() { started <- initEventsTable(ctx, db) }()
 	// Wait until the initializer is actually polling for the lock: a session
 	// other than ours whose last statement is its pg_try_advisory_lock call.
 	require.Eventually(t, func() bool {

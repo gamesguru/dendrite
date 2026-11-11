@@ -174,11 +174,7 @@ type eventStatements struct {
 }
 
 func CreateEventsTable(ctx context.Context, db *sql.DB) error {
-	_, err := db.Exec(eventsSchema)
-	if err != nil {
-		return err
-	}
-	if err = createRoomEventNIDIndex(ctx, db); err != nil {
+	if err := initEventsTable(ctx, db); err != nil {
 		return err
 	}
 
@@ -192,17 +188,23 @@ func CreateEventsTable(ctx context.Context, db *sql.DB) error {
 	return m.Up(ctx)
 }
 
-// createRoomEventNIDIndex builds the (room_nid, event_nid) index without
-// blocking event writes. CREATE INDEX CONCURRENTLY cannot run in a
-// transaction, so it is issued here rather than in eventsSchema, whose
-// statements the driver may batch into one implicit transaction.
+// initEventsTable creates the events table and its indexes, including the
+// (room_nid, event_nid) index, which is built without blocking event writes.
+// CREATE INDEX CONCURRENTLY cannot run in a transaction, so it is issued
+// separately from eventsSchema, whose statements the driver may batch into one
+// implicit transaction.
 //
 // A concurrent build that is interrupted leaves an invalid index behind, which
 // IF NOT EXISTS would then keep. Drop such an index before retrying so the
 // next startup can finish the build. PostgreSQL also marks an index invalid
 // while its build is still running, so a session advisory lock serializes
 // overlapping initializations: whoever holds it knows no other build is active.
-func createRoomEventNIDIndex(ctx context.Context, db *sql.DB) error {
+//
+// The lock is taken before eventsSchema, not just around the index build.
+// Even when the indexes exist, CREATE INDEX IF NOT EXISTS takes a ShareLock on
+// the table before checking for them. That conflicts with a running concurrent
+// build and, while queued, would block every event write behind it.
+func initEventsTable(ctx context.Context, db *sql.DB) error {
 	const (
 		indexName     = "roomserver_events_room_event_nid_idx"
 		unlockTimeout = 5 * time.Second
@@ -237,6 +239,10 @@ func createRoomEventNIDIndex(ctx context.Context, db *sql.DB) error {
 		defer cancel()
 		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)")
 	}()
+
+	if _, err = conn.ExecContext(ctx, eventsSchema); err != nil {
+		return err
+	}
 
 	var valid bool
 	err = conn.QueryRowContext(ctx,
