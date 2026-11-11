@@ -135,7 +135,7 @@
   {
     "protocol": 1,
     "level": 20,
-    "upgrade_from": 19,
+    "upgrade_from": 1,
     "rollback_to": 19,
     "surface": "c65476c542fcdb8e71870ceb1e7d751e3bccbdcb75e541818737030c31921e47"
   }

@@ -48,18 +48,21 @@ type Contract struct {
 // Level 17 only drops a redundant index. A level 16 build recreates it from
 // its own schema on startup, so rolling back to level 16 stays supported.
 // Level 18 adds the sliding sync list-window table. Level 19 adds retained
-// membership history. An older build ignores both, so rolling back to level 16
-// remains supported. Such a build records memberships in the current table
-// only; when a level 19 or later build takes over again, it copies every
-// membership newer than its history into the history on startup, so the
-// rollback-then-upgrade sequence keeps what the older build stored. Transitions
-// the older build itself overwrote are not stored anywhere, and lookups for
-// them fall back to the current table as before level 19. Level 20 only adds
-// an index, which an older build ignores.
+// membership history.
+//
+// Level 20 rolls back only to level 19. A build below level 19 records
+// memberships in the current table only, which keeps one row per membership,
+// so a rollback to it would overwrite transitions that no later build can
+// recover. Upgrading from any level stays supported: takeover is exclusive,
+// this build writes the history from its first event, and on startup it
+// copies every membership newer than its history from the current table. That
+// fills the history when it is first created, as at level 19, and recovers
+// what an older build stored after a deployment that reached level 19 rolled
+// back to it, as level 19 still allowed.
 var release = Contract{
 	Protocol:    1,
 	Level:       releaseLevel,
-	UpgradeFrom: membershipHistoryLevel,
+	UpgradeFrom: 1,
 	RollbackTo:  rollbackToLevel,
 }
 
@@ -77,18 +80,14 @@ var release = Contract{
 // retention (MSC4499), level 17 drops the redundant invite event ID index,
 // level 18 stores sliding-sync list windows by connection position, level 19
 // retains membership transitions for position-bounded lookups, and level 20
-// indexes roomserver events by (room_nid, event_nid). Level 20 requires level
-// 19 in both directions: older builds do not maintain membership history, so
-// they cannot safely upgrade into or roll back from a deployment that relies
-// on it.
+// indexes roomserver events by (room_nid, event_nid).
 const (
 	releaseLevel           = 20
 	membershipHistoryLevel = 19
 )
 
 // rollbackToLevel is the oldest level that may take over from state this build
-// writes. It stays behind releaseLevel while the changes between them remain
-// backward compatible.
+// writes: the first level that maintains membership history.
 const rollbackToLevel = membershipHistoryLevel
 
 // contractOverride replaces the release contract in qualification builds,
