@@ -44,9 +44,11 @@ func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceI
 // DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. The response MUST
 // be already filled in with join/leave information. It returns the key-change
 // position and whether room tracking found changes or device_lists.changed grew.
-// Room-tracking errors propagate. Key-change query failures preserve membership
-// results and return `to` as the position without an error. A filterSharedUsers
-// failure returns `from` with the error.
+// Room-tracking errors propagate. A key-change query failure returns `from` with
+// the error, so the caller does not advance past key changes it never read; the
+// membership results already added to res are kept, and a retry of the window
+// can only repeat them. A filterSharedUsers failure likewise returns `from`
+// with the error.
 func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
@@ -86,13 +88,10 @@ func DeviceListCatchup(
 		Offset:   offset,
 		ToOffset: toOffset,
 	}, &queryRes); err != nil {
-		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryKeyChanges failed")
-		return to, hasNew, nil
+		return from, hasNew, fmt.Errorf("userAPI.QueryKeyChanges: %w", err)
 	}
 	if queryRes.Error != nil {
-		// don't fail the catchup because we may have got useful information by tracking membership
-		util.GetLogger(ctx).WithError(queryRes.Error).Error("QueryKeyChanges failed")
-		return to, hasNew, nil
+		return from, hasNew, fmt.Errorf("QueryKeyChanges: %w", queryRes.Error)
 	}
 
 	util.GetLogger(ctx).WithFields(logrus.Fields{

@@ -577,3 +577,53 @@ func TestKeyChangeCatchupChangeAndLeftSameRoom(t *testing.T) {
 		left:   []string{newShareUser, newShareUser2},
 	})
 }
+
+// failingKeyChangesAPI fails the key-change query the way userapi does, either
+// by returning an error or by reporting one in the response.
+type failingKeyChangesAPI struct {
+	mockKeyAPI
+	inResponse bool
+}
+
+func (k *failingKeyChangesAPI) QueryKeyChanges(_ context.Context, _ *userapi.QueryKeyChangesRequest, res *userapi.QueryKeyChangesResponse) error {
+	if k.inResponse {
+		res.Error = &userapi.KeyError{Err: "key changes unavailable"}
+		return nil
+	}
+	return errors.New("key changes unavailable")
+}
+
+// A failed key-change query must not be reported as "no changes": the caller
+// would advance the device-list position past changes it never read and the
+// client would never hear of them. The membership results gathered before the
+// query are kept.
+func TestKeyChangeCatchupQueryFailureDoesNotAdvance(t *testing.T) {
+	t.Parallel()
+	const from, to = types.StreamPosition(5), types.StreamPosition(9)
+	for name, keyAPI := range map[string]*failingKeyChangesAPI{
+		"query error":    {},
+		"response error": {inResponse: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			newShareUser := "@bill:localhost"
+			newlyJoinedRoom := "!TestKeyChangeCatchupQueryFailure:bar"
+			syncResponse := joinResponseWithRooms(types.NewResponse(), syncingUser, []string{newlyJoinedRoom})
+			rsAPI := &keyChangeMockRoomserverAPI{
+				roomIDToJoinedMembers: map[string][]string{
+					newlyJoinedRoom: {syncingUser, newShareUser},
+					"!another:room": {syncingUser},
+				},
+			}
+
+			newPos, hasNew, err := DeviceListCatchup(context.Background(), rsAPI, keyAPI, rsAPI, syncingUser, syncResponse, from, to)
+
+			if err == nil {
+				t.Fatal("a failed key-change query must be reported")
+			}
+			if newPos != from {
+				t.Fatalf("position advanced to %d past unread key changes, want %d", newPos, from)
+			}
+			assertCatchup(t, hasNew, syncResponse, wantCatchup{hasNew: true, changed: []string{newShareUser}})
+		})
+	}
+}
