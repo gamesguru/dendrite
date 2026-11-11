@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+
 	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
@@ -21,9 +23,10 @@ const backfillBatchSize = 1000
 // from retained output events, including transitions overwritten in the
 // compact membership table before history was introduced.
 //
-// Only events that the live path records are backfilled: those listed in their
-// own add_state_ids. Old (backfilled) events carry empty lists and never
-// reach the history table. The event JSON is parsed here rather than cast to
+// Like the live writer, it records every membership event that an output event
+// adds to room state (its add_state_ids) at that output event's position,
+// which includes older events restored by a later one. Old (backfilled)
+// events carry empty lists and never reach the history table. The event JSON is parsed here rather than cast to
 // jsonb in SQL, because jsonb rejects \u0000 and lone-surrogate escapes that
 // stored event content may contain, and one such event must not block startup.
 //
@@ -32,46 +35,40 @@ const backfillBatchSize = 1000
 // is already resolved by the live path; a key with no current-state row keeps
 // its raw value as a fallback.
 func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
+	// Resolved pseudo-ID maps are loaded once per room and kept across batches.
+	resolvers := make(map[string]map[string]string)
 	lastID := int64(-1)
 	for {
 		// Keyset pages keep memory bounded: the rows of a page are read and
 		// closed before the next statement runs on the transaction.
 		rows, err := tx.QueryContext(ctx, `
-SELECT id, room_id, event_id, headered_event_json
+SELECT id, room_id, add_state_ids
 FROM syncapi_output_room_events
-WHERE type = 'm.room.member' AND event_id = ANY(add_state_ids) AND id > $1
+WHERE cardinality(add_state_ids) > 0 AND id > $1
 ORDER BY id
 LIMIT $2
 `, lastID, backfillBatchSize)
 		if err != nil {
 			return err
 		}
-		var pos []int64
-		var rooms, users, states, events []string
-		scanned := 0
+		type added struct {
+			pos    int64
+			roomID string
+			ids    []string
+		}
+		var page []added
+		var wanted []string
 		for rows.Next() {
-			var p int64
-			var roomID, eventID, raw string
-			if err = rows.Scan(&p, &roomID, &eventID, &raw); err != nil {
+			var a added
+			var ids sqlutil.StringArray
+			if err = rows.Scan(&a.pos, &a.roomID, &ids); err != nil {
 				_ = rows.Close()
 				return err
 			}
-			scanned++
-			lastID = p
-			var ev struct {
-				StateKey *string `json:"state_key"`
-				Content  struct {
-					Membership *string `json:"membership"`
-				} `json:"content"`
-			}
-			if json.Unmarshal([]byte(raw), &ev) != nil || ev.StateKey == nil || ev.Content.Membership == nil {
-				continue
-			}
-			pos = append(pos, p)
-			rooms = append(rooms, roomID)
-			users = append(users, *ev.StateKey)
-			states = append(states, *ev.Content.Membership)
-			events = append(events, eventID)
+			a.ids = ids
+			lastID = a.pos
+			page = append(page, a)
+			wanted = append(wanted, ids...)
 		}
 		if err = rows.Err(); err != nil {
 			_ = rows.Close()
@@ -80,12 +77,41 @@ LIMIT $2
 		if err = rows.Close(); err != nil {
 			return err
 		}
-		if scanned == 0 {
+		if len(page) == 0 {
 			return nil
 		}
-		// Keep the pseudo-ID mapping cache scoped to this batch so memory stays
-		// bounded as the migration advances through rooms.
-		resolvers := make(map[string]map[string]string)
+
+		// The added state events are stored as output events of their own,
+		// possibly at an earlier position than the event that added them back.
+		bodies, err := loadMemberBodies(ctx, tx, wanted)
+		if err != nil {
+			return err
+		}
+		var pos []int64
+		var rooms, users, states, events []string
+		for _, a := range page {
+			// The live writer keeps the last added event per user at a position.
+			latest := make(map[string]string)
+			var order []string
+			for _, id := range a.ids {
+				m, ok := bodies[id]
+				if !ok {
+					continue
+				}
+				if _, seen := latest[m.user]; !seen {
+					order = append(order, m.user)
+				}
+				latest[m.user] = id
+			}
+			for _, user := range order {
+				id := latest[user]
+				pos = append(pos, a.pos)
+				rooms = append(rooms, a.roomID)
+				users = append(users, user)
+				states = append(states, bodies[id].membership)
+				events = append(events, id)
+			}
+		}
 		if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
 			return err
 		}
@@ -100,6 +126,46 @@ ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING
 			return err
 		}
 	}
+}
+
+type memberBody struct{ user, membership string }
+
+// loadMemberBodies returns the state key and membership of each retained
+// membership event among eventIDs. The JSON is parsed here rather than cast to
+// jsonb in SQL, because jsonb rejects \u0000 and lone-surrogate escapes that
+// stored event content may contain, and one such event must not block startup.
+func loadMemberBodies(ctx context.Context, tx *sql.Tx, eventIDs []string) (map[string]memberBody, error) {
+	out := make(map[string]memberBody, len(eventIDs))
+	rows, err := tx.QueryContext(ctx, `
+SELECT event_id, headered_event_json
+FROM syncapi_output_room_events
+WHERE type = 'm.room.member' AND event_id = ANY($1)
+`, sqlutil.StringArray(eventIDs))
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var eventID, raw string
+		if err = rows.Scan(&eventID, &raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		var ev struct {
+			StateKey *string `json:"state_key"`
+			Content  struct {
+				Membership *string `json:"membership"`
+			} `json:"content"`
+		}
+		if json.Unmarshal([]byte(raw), &ev) != nil || ev.StateKey == nil || ev.Content.Membership == nil {
+			continue
+		}
+		out[eventID] = memberBody{*ev.StateKey, *ev.Content.Membership}
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	return out, rows.Close()
 }
 
 // This helper replaces pseudo-ID state keys with the user IDs the live path

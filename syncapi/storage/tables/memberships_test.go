@@ -101,6 +101,18 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 		)
 		require.NoError(t, err)
 
+		// A later output event may add an older membership event back to room
+		// state. The live writer records it at the later event's position.
+		var restoreIDs any = []string{joinAt10.EventID()}
+		if dbType == test.DBTypeSQLite {
+			restoreIDs = `["` + joinAt10.EventID() + `"]`
+		}
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type, add_state_ids) VALUES ($1, $2, $3, $4, $5, $6)`,
+			60, room.ID, "$restorer", `{"content":{}}`, "m.room.power_levels", restoreIDs,
+		)
+		require.NoError(t, err)
+
 		// Simulate the compact rows and incomplete history left by the old
 		// backfill: only the latest row for each membership survives.
 		for i, event := range []*rstypes.HeaderedEvent{joinAt20, leaveAt30} {
@@ -134,6 +146,15 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, spec.Join, membership)
 		require.Equal(t, joinAt10.EventID(), eventID)
+
+		// Bob's join was restored at position 60, after his leave at 30.
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 65)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, joinAt10.EventID(), eventID, "restored membership must be recorded at the adding event's position")
+		membership, _, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 35)
+		require.NoError(t, err)
+		require.Equal(t, spec.Leave, membership)
 
 		oldMembership, _, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, "@old:test", 100)
 		require.NoError(t, err)
