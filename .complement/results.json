@@ -612,6 +612,7 @@
 {"Action":"pass","Test":"TestMessagesPaginationStress/TokenStability/limit=100"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/TokenStability/limit=25"}
 {"Action":"pass","Test":"TestMessagesPaginationStress/TokenStability/limit=5"}
+{"Action":"pass","Test":"TestMissingStateEventUnavailableDoesNotAcceptEvent"}
 {"Action":"pass","Test":"TestNetworkPartitionOrdering"}
 {"Action":"pass","Test":"TestNotPresentUserCannotBanOthers"}
 {"Action":"pass","Test":"TestOlderLeftRoomsNotInLeaveSection"}
