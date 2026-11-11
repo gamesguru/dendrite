@@ -38,36 +38,53 @@ func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
 	// Resolved pseudo-ID maps are loaded once per room and kept across batches.
 	resolvers := make(map[string]map[string]string)
 	lastID := int64(-1)
+	lastOrdinal := int64(0)
 	for {
-		// Keyset pages keep the number of output events bounded: the rows of a
-		// page are read and closed before the next statement runs on the
-		// transaction, and each event is written before the next is loaded.
+		// Page expanded state additions rather than output events. One rewrite
+		// can add an arbitrarily large room state, so limiting output events
+		// would not bound memory.
 		rows, err := tx.QueryContext(ctx, `
-SELECT id, room_id, add_state_ids
-FROM syncapi_output_room_events
-WHERE cardinality(add_state_ids) > 0 AND id > $1
-ORDER BY id
-LIMIT $2
-`, lastID, backfillBatchSize)
+			SELECT output_event.id, added.ordinal, output_event.room_id,
+			       member_event.event_id, member_event.headered_event_json
+			FROM syncapi_output_room_events AS output_event
+			CROSS JOIN LATERAL unnest(output_event.add_state_ids)
+			    WITH ORDINALITY AS added(state_event_id, ordinal)
+			JOIN syncapi_output_room_events AS member_event
+			  ON member_event.event_id = added.state_event_id
+			 AND member_event.type = 'm.room.member'
+			WHERE (output_event.id, added.ordinal) > ($1, $2)
+			ORDER BY output_event.id, added.ordinal
+			LIMIT $3
+		`, lastID, lastOrdinal, backfillBatchSize)
 		if err != nil {
 			return err
 		}
-		type added struct {
-			pos    int64
-			roomID string
-			ids    []string
-		}
-		var page []added
+		var positions []int64
+		var rooms, users, memberships, eventIDs []string
+		scanned := 0
 		for rows.Next() {
-			var a added
-			var ids sqlutil.StringArray
-			if err = rows.Scan(&a.pos, &a.roomID, &ids); err != nil {
+			var position, ordinal int64
+			var roomID, eventID, raw string
+			if err = rows.Scan(&position, &ordinal, &roomID, &eventID, &raw); err != nil {
 				_ = rows.Close()
 				return err
 			}
-			a.ids = ids
-			lastID = a.pos
-			page = append(page, a)
+			scanned++
+			lastID, lastOrdinal = position, ordinal
+			var event struct {
+				StateKey *string `json:"state_key"`
+				Content  struct {
+					Membership *string `json:"membership"`
+				} `json:"content"`
+			}
+			if json.Unmarshal([]byte(raw), &event) != nil || event.StateKey == nil || event.Content.Membership == nil {
+				continue
+			}
+			positions = append(positions, position)
+			rooms = append(rooms, roomID)
+			users = append(users, *event.StateKey)
+			memberships = append(memberships, *event.Content.Membership)
+			eventIDs = append(eventIDs, eventID)
 		}
 		if err = rows.Err(); err != nil {
 			_ = rows.Close()
@@ -76,57 +93,49 @@ LIMIT $2
 		if err = rows.Close(); err != nil {
 			return err
 		}
-		if len(page) == 0 {
+		if scanned == 0 {
 			return nil
 		}
-
-		// Process one output event at a time. A rewrite (such as a federated
-		// join) can add the whole room state at once, so batching whole pages
-		// would let one event pull every other event's state into memory.
-		for _, a := range page {
-			// The added state events are stored as output events of their own,
-			// possibly at an earlier position than the event that added them
-			// back.
-			bodies, err := loadMemberBodies(ctx, tx, a.ids)
-			if err != nil {
-				return err
-			}
-			// The live writer keeps the last added event per user at a position.
-			latest := make(map[string]string)
-			var order []string
-			for _, id := range a.ids {
-				m, ok := bodies[id]
-				if !ok {
-					continue
-				}
-				if _, seen := latest[m.user]; !seen {
-					order = append(order, m.user)
-				}
-				latest[m.user] = id
-			}
-			if len(order) == 0 {
+		// Entries for one output event can span pages. Updating conflicts in
+		// ordinal order keeps the same last-added event as the live writer.
+		if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
+			return err
+		}
+		if len(positions) == 0 {
+			continue
+		}
+		type historyKey struct {
+			roomID, userID string
+			position       int64
+		}
+		lastForKey := make(map[historyKey]int, len(positions))
+		keys := make([]historyKey, len(positions))
+		for i := range positions {
+			keys[i] = historyKey{rooms[i], users[i], positions[i]}
+			lastForKey[keys[i]] = i
+		}
+		uniquePositions := make([]int64, 0, len(lastForKey))
+		uniqueRooms := make([]string, 0, len(lastForKey))
+		uniqueUsers := make([]string, 0, len(lastForKey))
+		uniqueMemberships := make([]string, 0, len(lastForKey))
+		uniqueEventIDs := make([]string, 0, len(lastForKey))
+		for i := range positions {
+			if lastForKey[keys[i]] != i {
 				continue
 			}
-			var pos []int64
-			var rooms, users, states, events []string
-			for _, user := range order {
-				id := latest[user]
-				pos = append(pos, a.pos)
-				rooms = append(rooms, a.roomID)
-				users = append(users, user)
-				states = append(states, bodies[id].membership)
-				events = append(events, id)
-			}
-			if err = resolvePseudoStateKeys(ctx, tx, resolvers, rooms, users); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `
+			uniquePositions = append(uniquePositions, positions[i])
+			uniqueRooms = append(uniqueRooms, rooms[i])
+			uniqueUsers = append(uniqueUsers, users[i])
+			uniqueMemberships = append(uniqueMemberships, memberships[i])
+			uniqueEventIDs = append(uniqueEventIDs, eventIDs[i])
+		}
+		if _, err = tx.ExecContext(ctx, `
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[])
-ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING
-`, rooms, users, states, events, pos); err != nil {
-				return err
-			}
+			ON CONFLICT (room_id, user_id, stream_pos) DO UPDATE
+			SET membership = EXCLUDED.membership, event_id = EXCLUDED.event_id
+		`, uniqueRooms, uniqueUsers, uniqueMemberships, uniqueEventIDs, uniquePositions); err != nil {
+			return err
 		}
 	}
 }
