@@ -48,7 +48,8 @@ func UpBackfillMembershipHistory(ctx context.Context, tx *sql.Tx) error {
 			JOIN syncapi_output_room_events AS member_event
 			  ON member_event.event_id = added.state_event_id
 			 AND member_event.type = 'm.room.member'
-			WHERE (output_event.id, added.ordinal) > ($1, $2)
+			WHERE output_event.id >= $1
+			  AND (output_event.id, added.ordinal) > ($1, $2)
 			ORDER BY output_event.id, added.ordinal
 			LIMIT $3
 		`, lastID, lastOrdinal, backfillBatchSize)
