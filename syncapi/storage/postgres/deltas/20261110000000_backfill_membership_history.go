@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"strings"
 
-	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-
 	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
@@ -138,46 +136,6 @@ SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[
 			return err
 		}
 	}
-}
-
-type memberBody struct{ user, membership string }
-
-// loadMemberBodies returns the state key and membership of each retained
-// membership event among eventIDs. The JSON is parsed here rather than cast to
-// jsonb in SQL, because jsonb rejects \u0000 and lone-surrogate escapes that
-// stored event content may contain, and one such event must not block startup.
-func loadMemberBodies(ctx context.Context, tx *sql.Tx, eventIDs []string) (map[string]memberBody, error) {
-	out := make(map[string]memberBody, len(eventIDs))
-	rows, err := tx.QueryContext(ctx, `
-SELECT event_id, headered_event_json
-FROM syncapi_output_room_events
-WHERE type = 'm.room.member' AND event_id = ANY($1)
-`, sqlutil.StringArray(eventIDs))
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var eventID, raw string
-		if err = rows.Scan(&eventID, &raw); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		var ev struct {
-			StateKey *string `json:"state_key"`
-			Content  struct {
-				Membership *string `json:"membership"`
-			} `json:"content"`
-		}
-		if json.Unmarshal([]byte(raw), &ev) != nil || ev.StateKey == nil || ev.Content.Membership == nil {
-			continue
-		}
-		out[eventID] = memberBody{*ev.StateKey, *ev.Content.Membership}
-	}
-	if err = rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	return out, rows.Close()
 }
 
 // This helper replaces pseudo-ID state keys with the user IDs the live path
