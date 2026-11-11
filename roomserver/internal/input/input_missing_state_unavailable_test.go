@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,12 +35,14 @@ import (
 type unreachableStateFederation struct {
 	hiddenPrevFederation
 	unreachable map[string]bool
+	failedHits  atomic.Int32
 }
 
 func (f *unreachableStateFederation) GetEvent(
 	ctx context.Context, origin, s spec.ServerName, eventID string,
 ) (gomatrixserverlib.Transaction, error) {
 	if f.unreachable[eventID] {
+		f.failedHits.Add(1)
 		return gomatrixserverlib.Transaction{}, errors.New("server \"remote.test\" is backing off")
 	}
 	return f.hiddenPrevFederation.GetEvent(ctx, origin, s, eventID)
@@ -102,6 +105,7 @@ func TestMissingStateEventLeavesEventUnaccepted(t *testing.T) {
 		// The input may fail; what matters is what was stored.
 		_ = api.SendEvents(ctx, rsAPI, api.KindNew, []*types.HeaderedEvent{live}, "test", remoteServer, api.DoNotSendToOtherServers, nil, false)
 		require.Positive(t, federation.stateHits.Load(), "the state at the missing prev event was not looked up via /state_ids")
+		require.Positive(t, federation.failedHits.Load(), "the unreachable state event was not requested via /event")
 
 		roomInfo, err := internalAPI.DB.RoomInfo(ctx, room.ID)
 		require.NoError(t, err)

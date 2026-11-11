@@ -1018,13 +1018,32 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 				for id := range pending {
 					h, herr := t.lookupEvent(ctx, roomVersion, roomID, id, false)
 					if herr != nil {
-						if fetchFailureIsTransient(herr) {
+						var validationErr gomatrixserverlib.EventValidationError
+						var sigErr verifySigError
+						switch {
+						case errors.As(herr, &validationErr) && validationErr.Persistable:
+							// A persistable auth failure still carries an event that
+							// may be valid after state resolution. Keep it for the
+							// same outlier processing used by the non-chunked path.
+						case errors.As(herr, &validationErr), errors.As(herr, &sigErr):
+							// Non-persistable events and bad signatures cannot be
+							// part of valid state.
+							continue
+						default:
 							mu.Lock()
 							if fetchErr == nil {
 								fetchErr = fmt.Errorf("fetching state event %s: %w: %w", id, errStateUnavailable, herr)
 							}
 							mu.Unlock()
+							continue
 						}
+					}
+					if h == nil {
+						mu.Lock()
+						if fetchErr == nil {
+							fetchErr = fmt.Errorf("fetching state event %s: %w: lookup returned no event", id, errStateUnavailable)
+						}
+						mu.Unlock()
 						continue
 					}
 					mu.Lock()
@@ -1410,13 +1429,4 @@ func (e missingPrevEventsError) Error() string {
 
 func (e missingPrevEventsError) Unwrap() error {
 	return e.err
-}
-
-// fetchFailureIsTransient reports whether a failed /event fetch might succeed
-// later. An event that fails validation or signature checks is left out of
-// the state for good, but any other failure means the state is incomplete.
-func fetchFailureIsTransient(err error) bool {
-	var validationErr gomatrixserverlib.EventValidationError
-	var sigErr verifySigError
-	return !errors.As(err, &validationErr) && !errors.As(err, &sigErr)
 }
