@@ -198,11 +198,29 @@ func CreateEventsTable(db *sql.DB) error {
 //
 // A concurrent build that is interrupted leaves an invalid index behind, which
 // IF NOT EXISTS would then keep. Drop such an index before retrying so the
-// next startup can finish the build.
+// next startup can finish the build. PostgreSQL also marks an index invalid
+// while its build is still running, so a session advisory lock serializes
+// overlapping initializations: whoever holds it knows no other build is active.
 func createRoomEventNIDIndex(db *sql.DB) error {
 	const indexName = "roomserver_events_room_event_nid_idx"
+	ctx := context.Background()
+	// The lock belongs to a session, so every statement must use one connection.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connect for %s: %w", indexName, err)
+	}
+	defer conn.Close() // nolint: errcheck
+	if _, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock(351, 1)"); err != nil {
+		return fmt.Errorf("lock for %s: %w", indexName, err)
+	}
+	defer func() {
+		// Closing the connection would also release it, but a pooled session
+		// outlives this call.
+		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock(351, 1)")
+	}()
+
 	var valid bool
-	err := db.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		`SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)`,
 		indexName,
 	).Scan(&valid)
@@ -210,14 +228,14 @@ func createRoomEventNIDIndex(db *sql.DB) error {
 	case err == nil && valid:
 		return nil
 	case err == nil && !valid:
-		if _, err = db.Exec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName); err != nil {
+		if _, err = conn.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+indexName); err != nil {
 			return fmt.Errorf("drop invalid %s: %w", indexName, err)
 		}
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("look up %s: %w", indexName, err)
 	}
-	if _, err = db.Exec(
-		"CREATE INDEX CONCURRENTLY IF NOT EXISTS " + indexName + " ON roomserver_events (room_nid, event_nid)",
+	if _, err = conn.ExecContext(ctx,
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS "+indexName+" ON roomserver_events (room_nid, event_nid)",
 	); err != nil {
 		return fmt.Errorf("create %s: %w", indexName, err)
 	}
