@@ -8,6 +8,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -650,7 +651,10 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 // the set is empty because we've reached a backward extremity, and if that is
 // the case, by retrieving as much events as requested by backfilling from
 // another homeserver.
-// Returns an error if there was an issue talking with the database.
+// Returns an error if there was an issue talking with the database or a
+// transient failure prevented the backfill. A definitive "no server has these
+// events" answer is not an error: it is the end of the history this server can
+// reach and is returned as an empty page.
 func (r *messagesReq) handleEmptyEventsSlice() (
 	events []*rstypes.HeaderedEvent, err error,
 ) {
@@ -664,11 +668,17 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			if r.ctx.Err() != nil {
 				return
 			}
-			// Nothing is stored locally before this point, so the page is
-			// empty rather than failed: the client sees the end of the
-			// history this server can reach instead of a 500.
-			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning an empty page")
-			return []*rstypes.HeaderedEvent{}, nil
+			if isTerminalBackfillFailure(err) {
+				// Every server answered that it has no earlier events, so the
+				// client has reached the end of the history this server can
+				// reach. There is nothing to retry.
+				util.GetLogger(r.ctx).WithError(err).Debug("Backfill found no events on the attempted servers")
+				return []*rstypes.HeaderedEvent{}, nil
+			}
+			// A transient failure must not look like the end of history: the
+			// client would stop paginating and never retry the extremity.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed; returning an error so the client can retry")
+			return nil, err
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0
@@ -689,6 +699,13 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 	}
 
 	return
+}
+
+// isTerminalBackfillFailure reports whether attempted backfill servers
+// definitively lacked the requested events, rather than a transient failure.
+func isTerminalBackfillFailure(err error) bool {
+	var unavailable *api.BackfillUnavailableError
+	return errors.As(err, &unavailable) && !unavailable.Retryable
 }
 
 // handleNonEmptyEventsSlice handles the case where the initial request to the

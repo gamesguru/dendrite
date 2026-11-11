@@ -2,10 +2,39 @@ package perform
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 )
+
+func TestBackfillFailuresRetryable(t *testing.T) {
+	notFound := spec.HTTPError{Code: http.StatusNotFound}
+	cases := []struct {
+		name string
+		errs []error
+		want bool
+	}{
+		{"no server responses", nil, true},
+		{"not found", []error{notFound}, false},
+		{"not found from every server", []error{notFound, notFound}, false},
+		{"wrapped not found", []error{fmt.Errorf("backfill: %w", notFound)}, false},
+		{"forbidden", []error{spec.HTTPError{Code: http.StatusForbidden}}, true},
+		{"bad request", []error{spec.HTTPError{Code: http.StatusBadRequest}}, true},
+		{"server error", []error{spec.HTTPError{Code: http.StatusInternalServerError}}, true},
+		{"rate limited", []error{spec.HTTPError{Code: http.StatusTooManyRequests}}, true},
+		{"mixed definitive and transient", []error{notFound, spec.HTTPError{Code: http.StatusBadGateway}}, true},
+		{"network failure", []error{context.DeadlineExceeded}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := backfillFailuresRetryable(tc.errs); got != tc.want {
+				t.Fatalf("backfillFailuresRetryable(%v) = %v, want %v", tc.errs, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestPrioritiseBackfillFromEventIDsPrefersMostServers(t *testing.T) {
 	fromEventIDs := []string{"$one", "$two", "$three"}
