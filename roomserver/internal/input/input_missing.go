@@ -452,6 +452,14 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			states = append(states, &respState{false, fallbackState})
 		} else {
 			t.log.WithError(err).Warnf("Federation state fallback also failed for event %s", e.EventID())
+			// Without any state the event cannot be authorised. A fetch
+			// failure says nothing about the event, so leave it unstored for
+			// a later event to fetch again rather than rejecting it.
+			var validationErr gomatrixserverlib.EventValidationError
+			if !errors.As(err, &validationErr) {
+				return nil, fmt.Errorf("federation state fallback: %w: %w", errStateUnavailable, err)
+			}
+			return nil, err
 		}
 	}
 

@@ -38,6 +38,16 @@ type unreachableStateFederation struct {
 	failedHits  atomic.Int32
 }
 
+func (f *unreachableStateFederation) LookupStateIDs(
+	ctx context.Context, origin, s spec.ServerName, roomID, eventID string,
+) (gomatrixserverlib.StateIDResponse, error) {
+	if f.unreachable[eventID] {
+		f.failedHits.Add(1)
+		return nil, errors.New("server \"remote.test\" is backing off")
+	}
+	return f.hiddenPrevFederation.LookupStateIDs(ctx, origin, s, roomID, eventID)
+}
+
 func (f *unreachableStateFederation) GetEvent(
 	ctx context.Context, origin, s spec.ServerName, eventID string,
 ) (gomatrixserverlib.Transaction, error) {
@@ -130,4 +140,58 @@ func stateKeys(events []*types.HeaderedEvent) map[string]string {
 		keys[string(raw)] = ev.EventID()
 	}
 	return keys
+}
+
+// A live event E2 whose missing parent E1 is returned by /get_missing_events,
+// but whose grandparent E0 cannot be fetched, must not be stored as rejected,
+// and neither must E1: the failure is transient and says nothing about them.
+func TestUnavailableGrandparentLeavesChainUnrejected(t *testing.T) {
+	alice := test.NewUser(t, test.WithSigningServer("test", "ed25519:test", test.PrivateKeyB))
+	bob := test.NewUser(t, test.WithSigningServer(remoteServer, "ed25519:remote", test.PrivateKeyA))
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		room := test.NewRoom(t, alice, test.RoomPreset(test.PresetPublicChat))
+		room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		known := len(room.Events())
+		e0 := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "e0"})
+		e1 := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "e1"})
+		e2 := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "e2"})
+
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		caches := caching.NewRistrettoCache(128*1024*1024, time.Hour, caching.DisableMetrics)
+		natsInstance := jetstream.NATSInstance{}
+		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, &natsInstance, caches, caching.DisableMetrics)
+		keyRing := &gomatrixserverlib.KeyRing{KeyDatabase: serverKeys{"test": test.PrivateKeyB, remoteServer: test.PrivateKeyA}}
+		federation := &unreachableStateFederation{
+			hiddenPrevFederation: hiddenPrevFederation{
+				remoteFederation: remoteFederation{room: room, keyRing: keyRing, missing: []*types.HeaderedEvent{e1}},
+				hidden:           map[string]*types.HeaderedEvent{e1.EventID(): e1},
+			},
+			unreachable: map[string]bool{e0.EventID(): true},
+		}
+		rsAPI.SetFederationAPI(federation, keyRing)
+		require.NoError(t, api.SendEvents(ctx, rsAPI, api.KindNew, room.Events()[:known], "test", "test", "test", nil, false))
+		internalAPI, ok := rsAPI.(*rsinternal.RoomserverInternalAPI)
+		require.True(t, ok)
+
+		sendErr := api.SendEvents(ctx, rsAPI, api.KindNew, []*types.HeaderedEvent{e2}, "test", remoteServer, api.DoNotSendToOtherServers, nil, false)
+		require.ErrorContains(t, sendErr, "state before the event is unavailable")
+		require.Positive(t, federation.failedHits.Load(), "the unavailable grandparent lookup was not attempted")
+
+		roomInfo, err := internalAPI.DB.RoomInfo(ctx, room.ID)
+		require.NoError(t, err)
+		for _, ev := range []*types.HeaderedEvent{e1, e2} {
+			rejected, rerr := internalAPI.DB.IsEventRejected(ctx, roomInfo.RoomNID, ev.EventID())
+			if !errors.Is(rerr, sql.ErrNoRows) {
+				require.NoError(t, rerr)
+			}
+			require.False(t, rejected, "%s was stored as rejected", ev.EventID())
+		}
+		var res api.QueryLatestEventsAndStateResponse
+		require.NoError(t, rsAPI.QueryLatestEventsAndState(ctx, &api.QueryLatestEventsAndStateRequest{RoomID: room.ID}, &res))
+		require.False(t, slices.Contains(res.LatestEvents, e2.EventID()), "E2 was accepted without the state before it")
+	})
 }
