@@ -116,6 +116,66 @@ malice) is still trusted, because nothing in the protocol lets the receiver
 check that a list of event IDs is really S′(Eᵢ). Different servers can give
 different answers, and the receiver cannot tell which is right.
 
+### 2.1 Status: what is argued, what is tested, what is unproven
+
+This is an argument and a set of tests, not a proof.
+
+**Invariant (I).** An event is stored as accepted only if the state before it
+was computed from a complete set of inputs. When the inputs cannot be
+obtained for a reason that may pass, the event is left unstored
+(`errStateUnavailable`), never accepted on partial state and never rejected.
+
+**Safety argument.**
+
+1. Auth and resolved state are functions of the state before the event, so a
+   wrong state before can wrongly allow or reject an event.
+2. Under (I) every stored accepted event was authorised against the state it
+   should have been, so this path cannot reset room state.
+3. An unstored event changes nothing, so a transient failure cannot corrupt
+   the room.
+4. Unavailable is not rejected, because a rejection is permanent and makes
+   resolution skip the event's whole branch (step 5 of the incident).
+
+**Follow-up fixes made after the incident** (same invariant, review findings):
+
+- Retry classification (`input_retry.go`): a local failure (database down,
+  context) is retried inline even when wrapped in `errStateUnavailable`; a
+  remote server being unavailable is not retried inline, because that would
+  hold up the room for minutes while the remote backs off.
+- `unavailableHere` counts only this server's own failures when deciding the
+  retry, so a remote outage cannot trigger it.
+- `/messages`: when backfill at a backward extremity fails and nothing is
+  stored locally, the page is returned empty instead of a 500
+  (`handleEmptyEventsSlice`). This is a client-facing bug, not part of (I).
+  Cost: a client cannot tell "end of reachable history" from "backfill
+  failed".
+- Membership history backfill (HA contract level 21) and the rollback floor
+  (level 19) are separate from (I) and are covered by the HA contract tests.
+
+**Tested.** The two unit tests and the Complement test listed in section 2.
+The retry classification has unit tests in `roomserver/internal/input`.
+
+**Not yet proven.**
+
+- *Completeness of (I).* No enumeration of every code path that stores an
+  accepted event. Needed: a table of paths (live, `KindOld`, outlier, state
+  snapshot from send_join, local leave with `SkipMissingEvents`, gap fill,
+  backfill), the check guarding each, and a test per row.
+- *The gap-fill abort concern (`7b4af5f9`).* Whether a skipped `KindOld`
+  parent can ever lead to a live event passing through the `missingPrev`
+  rejection after a transient failure. The paragraph above argues no; it has
+  not been exercised by a test that skips a parent mid-loop.
+- *Liveness.* Nothing guarantees an unstored event is eventually stored. If
+  the remote never serves the missing event, the gap stays. Needed: a bound or
+  a recovery path (for example retry on the next event in the room, with an
+  upper limit) and a test of it.
+- *Trusted but wrong answers.* See "What these fixes cannot do". Only state
+  commitments (section 4) address this.
+- *Complement.* `TestFederationLateSameDepthEventPagination` has not been
+  re-run after the `/messages` fix.
+- *Shape coverage.* Tests are example-based. No property test over gap shapes
+  (number of prevs, which are missing, which fetches fail).
+
 ## 3. Why "state at the deepest parent" does not help
 
 Using only the state after the deepest prev event instead of resolving over
