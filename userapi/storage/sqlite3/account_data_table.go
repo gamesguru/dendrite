@@ -47,6 +47,11 @@ const insertAccountDataIfAbsentSQL = `
 	ON CONFLICT (localpart, server_name, room_id, type) DO NOTHING
 `
 
+const updateAccountDataIfUnchangedSQL = `
+	UPDATE userapi_account_datas SET content = $1
+	WHERE localpart = $2 AND server_name = $3 AND room_id = $4 AND type = $5 AND content = $6
+`
+
 const selectAccountDataSQL = "" +
 	"SELECT room_id, type, content FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2"
 
@@ -60,13 +65,14 @@ const deleteAccountDataByTypeSQL = "" +
 	"DELETE FROM userapi_account_datas WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND type = $4"
 
 type accountDataStatements struct {
-	db                            *sql.DB
-	insertAccountDataStmt         *sql.Stmt
-	insertAccountDataIfAbsentStmt *sql.Stmt
-	selectAccountDataStmt         *sql.Stmt
-	selectAccountDataByTypeStmt   *sql.Stmt
-	deleteAccountDataStmt         *sql.Stmt
-	deleteAccountDataByTypeStmt   *sql.Stmt
+	db                               *sql.DB
+	insertAccountDataStmt            *sql.Stmt
+	insertAccountDataIfAbsentStmt    *sql.Stmt
+	updateAccountDataIfUnchangedStmt *sql.Stmt
+	selectAccountDataStmt            *sql.Stmt
+	selectAccountDataByTypeStmt      *sql.Stmt
+	deleteAccountDataStmt            *sql.Stmt
+	deleteAccountDataByTypeStmt      *sql.Stmt
 }
 
 // NewSQLiteAccountDataTable creates account-data storage if needed and prepares
@@ -82,6 +88,7 @@ func NewSQLiteAccountDataTable(db *sql.DB) (tables.AccountDataTable, error) {
 	return s, sqlutil.StatementList{
 		{&s.insertAccountDataStmt, insertAccountDataSQL},
 		{&s.insertAccountDataIfAbsentStmt, insertAccountDataIfAbsentSQL},
+		{&s.updateAccountDataIfUnchangedStmt, updateAccountDataIfUnchangedSQL},
 		{&s.selectAccountDataStmt, selectAccountDataSQL},
 		{&s.selectAccountDataByTypeStmt, selectAccountDataByTypeSQL},
 		{&s.deleteAccountDataStmt, deleteAccountDataSQL},
@@ -118,31 +125,22 @@ func (s *accountDataStatements) UpdateAccountDataIfUnchanged(
 	if strings.TrimSpace(string(content)) == "null" {
 		return false, errors.New("account data content must not be null")
 	}
-	var current []byte
-	err := sqlutil.TxStmt(txn, s.selectAccountDataByTypeStmt).QueryRowContext(ctx, localpart, serverName, roomID, dataType).Scan(&current)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		if len(expected) != 0 {
-			return false, nil
-		}
+	if len(expected) == 0 {
 		result, err := sqlutil.TxStmt(txn, s.insertAccountDataIfAbsentStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content)
 		if err != nil {
 			return false, err
 		}
 		updated, err := result.RowsAffected()
 		return updated > 0, err
-	case err != nil:
-		return false, err
-	case len(expected) == 0:
-		// An empty expected value requires that no row exists.
-		return false, nil
-	case string(current) != string(expected):
-		return false, nil
 	}
-	if _, err = sqlutil.TxStmt(txn, s.insertAccountDataStmt).ExecContext(ctx, localpart, serverName, roomID, dataType, content); err != nil {
+	// Keep the comparison and write in one statement so concurrent writers
+	// cannot both pass a separate read-then-write check.
+	result, err := sqlutil.TxStmt(txn, s.updateAccountDataIfUnchangedStmt).ExecContext(ctx, content, localpart, serverName, roomID, dataType, expected)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	updated, err := result.RowsAffected()
+	return updated > 0, err
 }
 
 // DeleteAccountDataByType removes the user's account data for a room and type.
