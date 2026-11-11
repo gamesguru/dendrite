@@ -72,7 +72,7 @@ jobs:
   lint:
     timeout-minutes: 5
     name: Linting
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Install libolm
@@ -102,7 +102,7 @@ jobs:
   test:
     timeout-minutes: 10
     name: Unit tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -168,7 +168,7 @@ jobs:
   build:
     name: Build for Linux
     timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -247,7 +247,7 @@ jobs:
     timeout-minutes: 20
     needs: initial-tests-done
     name: Integration tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     # Service containers to run with `container-job`
     services:
       # Label used to access the service container
@@ -319,7 +319,7 @@ jobs:
     name: "Complement (${{ matrix.label }})"
     timeout-minutes: 35
     needs: initial-tests-done
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
