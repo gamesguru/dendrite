@@ -940,8 +940,8 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 // backfillEvents asks the roomserver to backfill events over federation and
 // stores them as backfilled events, which keeps them out of sync responses.
 // It continues independently of ctx cancellation and deadlines. The result contains
-// at most limit events in ascending depth order after storing the full batch. limit must
-// be nonnegative. Backfill and event-write errors propagate; backward-extremity
+// At most limit events are returned in ascending depth order after storing the full batch. The
+// limit must be nonnegative. Backfill and event-write errors propagate; backward-extremity
 // cleanup failures do not fail the request. Earlier writes may remain when a
 // later write fails.
 func backfillEvents(

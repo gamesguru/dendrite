@@ -95,8 +95,8 @@ type receiptStatements struct {
 }
 
 // NewSqliteReceiptsTable creates and migrates receipt and Sliding Sync storage,
-// Then prepares receipt queries. streamID supplies receipt stream positions. Schema, migration,
-// and statement preparation errors are returned.
+// then prepares receipt queries, taking receipt stream positions from streamID.
+// Schema, migration, and statement preparation errors are returned.
 func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Receipts, error) {
 	_, err := db.Exec(receiptsSchema)
 	if err != nil {
