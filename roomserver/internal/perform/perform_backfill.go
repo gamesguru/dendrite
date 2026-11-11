@@ -135,9 +135,9 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// Only return an error if we really couldn't get any events.
 	if err != nil && len(events) == 0 {
 		logrus.WithError(err).Errorf("gomatrixserverlib.RequestBackfill failed")
-		backfillErrors := append(requester.backfillErrors, err)
+		requester.backfillErrors = append(requester.backfillErrors, err)
 		return &api.BackfillUnavailableError{
-			Retryable: backfillFailuresRetryable(backfillErrors),
+			Retryable: backfillFailuresRetryable(requester.backfillErrors),
 			Err:       err,
 		}
 	}
