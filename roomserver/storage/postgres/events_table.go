@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/depth"
@@ -172,12 +173,12 @@ type eventStatements struct {
 	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
 }
 
-func CreateEventsTable(db *sql.DB) error {
+func CreateEventsTable(ctx context.Context, db *sql.DB) error {
 	_, err := db.Exec(eventsSchema)
 	if err != nil {
 		return err
 	}
-	if err = createRoomEventNIDIndex(db); err != nil {
+	if err = createRoomEventNIDIndex(ctx, db); err != nil {
 		return err
 	}
 
@@ -188,7 +189,7 @@ func CreateEventsTable(db *sql.DB) error {
 			Up:      deltas.UpDropEventReferenceSHAEvents,
 		},
 	}...)
-	return m.Up(context.Background())
+	return m.Up(ctx)
 }
 
 // createRoomEventNIDIndex builds the (room_nid, event_nid) index without
@@ -201,22 +202,34 @@ func CreateEventsTable(db *sql.DB) error {
 // next startup can finish the build. PostgreSQL also marks an index invalid
 // while its build is still running, so a session advisory lock serializes
 // overlapping initializations: whoever holds it knows no other build is active.
-func createRoomEventNIDIndex(db *sql.DB) error {
+func createRoomEventNIDIndex(ctx context.Context, db *sql.DB) error {
 	const indexName = "roomserver_events_room_event_nid_idx"
-	ctx := context.Background()
 	// The lock belongs to a session, so every statement must use one connection.
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("connect for %s: %w", indexName, err)
 	}
-	defer conn.Close() // nolint: errcheck
-	if _, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock(351, 1)"); err != nil {
-		return fmt.Errorf("lock for %s: %w", indexName, err)
+	defer func() { _ = conn.Close() }()
+	locked := false
+	for !locked {
+		if err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(351, 1)").Scan(&locked); err != nil {
+			return fmt.Errorf("lock for %s: %w", indexName, err)
+		}
+		if !locked {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return fmt.Errorf("lock for %s: %w", indexName, ctx.Err())
+			case <-timer.C:
+			}
+		}
 	}
 	defer func() {
 		// Closing the connection would also release it, but a pooled session
-		// outlives this call.
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock(351, 1)")
+		// outlives this call. The caller's context may already be canceled, so
+		// release the lock with a context that cannot be canceled.
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock(351, 1)")
 	}()
 
 	var valid bool

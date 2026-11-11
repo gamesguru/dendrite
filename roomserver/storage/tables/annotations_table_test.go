@@ -39,7 +39,7 @@ func mustCreateAnnotationDependencies(t *testing.T, dbType test.DBType) (*annota
 	switch dbType {
 	case test.DBTypePostgres:
 		require.NoError(t, postgres.CreateEventTypesTable(db))
-		require.NoError(t, postgres.CreateEventsTable(db))
+		require.NoError(t, postgres.CreateEventsTable(context.Background(), db))
 		require.NoError(t, postgres.CreateEventJSONTable(db))
 		require.NoError(t, postgres.CreateRedactionsTable(db))
 		tabs.eventTypes, err = postgres.PrepareEventTypesTable(db)

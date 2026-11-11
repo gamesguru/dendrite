@@ -38,7 +38,7 @@ func Open(ctx context.Context, conMan *sqlutil.Connections, dbProperties *config
 	}
 
 	// Create the tables.
-	if err = d.create(db); err != nil { //nolint:contextcheck
+	if err = d.create(ctx, db); err != nil {
 		return nil, err
 	}
 
@@ -83,7 +83,7 @@ func executeMigration(ctx context.Context, db *sql.DB) error {
 	return m.Up(ctx)
 }
 
-func (d *Database) create(db *sql.DB) error {
+func (d *Database) create(ctx context.Context, db *sql.DB) error {
 	if err := CreateEventStateKeysTable(db); err != nil {
 		return err
 	}
@@ -93,10 +93,10 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateEventJSONTable(db); err != nil {
 		return err
 	}
-	if err := CreateEventsTable(db); err != nil {
+	if err := CreateEventsTable(ctx, db); err != nil {
 		return err
 	}
-	if err := CreateRoomsTable(db); err != nil {
+	if err := CreateRoomsTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
 	if err := CreateStateBlockTable(db); err != nil {
@@ -105,7 +105,7 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateStateSnapshotTable(db); err != nil {
 		return err
 	}
-	if err := CreatePrevEventsTable(db); err != nil {
+	if err := CreatePrevEventsTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
 	if err := CreateRoomAliasesTable(db); err != nil {
@@ -114,10 +114,10 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateInvitesTable(db); err != nil {
 		return err
 	}
-	if err := CreateMembershipTable(db); err != nil {
+	if err := CreateMembershipTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
-	if err := CreatePublishedTable(db); err != nil {
+	if err := CreatePublishedTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
 	if err := CreateRedactionsTable(db); err != nil {
@@ -132,7 +132,7 @@ func (d *Database) create(db *sql.DB) error {
 	if err := CreateClientTransactionsTable(db); err != nil {
 		return err
 	}
-	if err := CreatePartialStateTable(db); err != nil {
+	if err := CreatePartialStateTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
 	if err := CreateErasedUsersTable(db); err != nil {
@@ -142,7 +142,7 @@ func (d *Database) create(db *sql.DB) error {
 		return err
 	}
 	// Last, as its migration reads the events tables.
-	if err := CreateAnnotationsTable(db); err != nil {
+	if err := CreateAnnotationsTable(db); err != nil { //nolint:contextcheck
 		return err
 	}
 
