@@ -1426,11 +1426,27 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 			return gjson.Get(syncBody, path).Exists()
 		})
 
-		// We search that event is the only one nad is the exact event we sent
-		searchResult := searchRequest(t, routers.Client, alice.AccessToken, "first", []string{room.ID})
-		results := gjson.GetBytes(searchResult, fmt.Sprintf(`search_categories.room_events.groups.room_id.%s.results`, room.ID))
-		assert.True(t, results.Exists(), "Should be a search response")
-		assert.Equal(t, 1, len(results.Array()), "Should be exactly one result")
+		// Check that the event we sent is the only search result.
+		// The event becomes visible to sync once it is written to the database,
+		// which is slightly before the consumer has indexed it for search, so
+		// wait for the index to catch up with the event we just sent
+		// (including the removal of the event it edits).
+		resultsPath := fmt.Sprintf(`search_categories.room_events.groups.room_id.%s.results`, room.ID)
+		var results gjson.Result
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			searchResult := searchRequest(t, routers.Client, alice.AccessToken, "first", []string{room.ID})
+			results = gjson.GetBytes(searchResult, resultsPath)
+			hits := results.Array()
+			if (len(hits) == 1 && hits[0].String() == e.EventID()) || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !assert.True(t, results.Exists(), "Should be a search response") ||
+			!assert.Equal(t, 1, len(results.Array()), "Should be exactly one result") {
+			return
+		}
 		assert.Equal(t, e.EventID(), results.Array()[0].String(), "Should be only found exact event")
 	}
 }
