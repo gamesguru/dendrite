@@ -56,19 +56,50 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 		table, db, close := newMembershipsTable(t, dbType)
 		defer close()
 		ctx := context.Background()
-		outputEventsSchema := `CREATE TABLE syncapi_output_room_events (id BIGINT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL)`
+		outputEventsSchema := `CREATE TABLE syncapi_output_room_events (id BIGINT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT[])`
 		if dbType == test.DBTypeSQLite {
-			outputEventsSchema = `CREATE TABLE syncapi_output_room_events (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL)`
+			outputEventsSchema = `CREATE TABLE syncapi_output_room_events (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT)`
 		}
 		_, err := db.ExecContext(ctx, outputEventsSchema)
 		require.NoError(t, err)
-		for i, event := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
-			_, err = db.ExecContext(ctx,
-				`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type) VALUES ($1, $2, $3, $4, $5)`,
-				(i+1)*10, room.ID, event.EventID(), string(event.JSON()), event.Type(),
+		_, err = db.ExecContext(ctx, `CREATE TABLE syncapi_current_room_state (room_id TEXT NOT NULL, type TEXT NOT NULL, state_key TEXT NOT NULL, headered_event_json TEXT NOT NULL)`)
+		require.NoError(t, err)
+		insertOutput := func(id int, eventID, raw string, addState bool) {
+			var addIDs any
+			switch {
+			case dbType == test.DBTypeSQLite && addState:
+				addIDs = `["` + eventID + `"]`
+			case dbType == test.DBTypeSQLite:
+				addIDs = `[]`
+			case addState:
+				addIDs = []string{eventID}
+			default:
+				addIDs = []string{}
+			}
+			_, insertErr := db.ExecContext(ctx,
+				`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type, add_state_ids) VALUES ($1, $2, $3, $4, $5, $6)`,
+				id, room.ID, eventID, raw, spec.MRoomMember, addIDs,
 			)
-			require.NoError(t, err)
+			require.NoError(t, insertErr)
 		}
+		for i, event := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
+			insertOutput((i+1)*10, event.EventID(), string(event.JSON()), true)
+		}
+		// An old (backfilled) event is never recorded by the live path, so the
+		// backfill must not invent history for it.
+		insertOutput(5, "$old", `{"state_key":"@old:test","content":{"membership":"join"}}`, false)
+		// Stored content may hold \u0000, which a jsonb cast would reject.
+		insertOutput(40, "$nul", `{"state_key":"@nul:test","content":{"membership":"join","displayname":"a\u0000b"}}`, true)
+		// Pseudo-ID rooms (MSC4014) store a sender key in state_key, while the
+		// live path records the resolved user ID in history and the current
+		// state table. The backfill must use the same key.
+		carol := test.NewUser(t)
+		insertOutput(50, "$pseudo", `{"state_key":"AAAApseudo","content":{"membership":"join"}}`, true)
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO syncapi_current_room_state (room_id, type, state_key, headered_event_json) VALUES ($1, $2, $3, $4)`,
+			room.ID, spec.MRoomMember, carol.ID, `{"state_key":"AAAApseudo","content":{"membership":"join"}}`,
+		)
+		require.NoError(t, err)
 
 		// Simulate the compact rows and incomplete history left by the old
 		// backfill: only the latest row for each membership survives.
@@ -103,6 +134,17 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, spec.Join, membership)
 		require.Equal(t, joinAt10.EventID(), eventID)
+
+		oldMembership, _, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, "@old:test", 100)
+		require.NoError(t, err)
+		require.NotEqual(t, spec.Join, oldMembership, "old events must not be backfilled")
+		membership, _, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, "@nul:test", 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, carol.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, "$pseudo", eventID, "pseudo-ID history must use the resolved user ID")
 	})
 }
 
