@@ -66,9 +66,11 @@ type acknowledgeDB struct {
 }
 
 func (acknowledgeDB) CreateConnectionPosition(context.Context, int64) (int64, error) { return 2, nil }
+
 func (acknowledgeDB) UpdateConnectionListWindow(context.Context, int64, string, int64, string) error {
 	return nil
 }
+
 func (acknowledgeDB) GetOrCreateRequiredStateID(context.Context, int64, string) (int64, error) {
 	return 1, nil
 }
