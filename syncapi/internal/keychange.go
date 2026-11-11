@@ -277,9 +277,10 @@ func TrackChangedUsers(
 // filterSharedUsers returns shared-room counts for usersWithChangedKeys,
 // retaining zero-count entries and treating the requesting user as shared with
 // itself. Every zero-count user is checked against the roomserver. If that
-// query fails, users in failOpenUserIDs are counted as shared (one), while
-// users who left in this response remain at zero. Database lookup failures
-// fall through to the same roomserver check.
+// query fails, users in failOpenUserIDs are counted as shared (one); for any
+// other user the answer is unknown, so the call returns an error instead of
+// reporting a false leave. Database lookup failures fall through to the same
+// roomserver check.
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, usersWithChangedKeys, failOpenUserIDs []string,
@@ -334,11 +335,16 @@ func filterSharedUsers(
 		}, &sharedRes); err != nil {
 			util.GetLogger(ctx).WithError(err).Warn("QuerySharedUsers fallback failed")
 			// Keep key changes by failing open for users who have not just left;
-			// an extra notification is safer than advancing past a change.
+			// an extra notification is safer than advancing past a change. For
+			// a user who left in this response the count decides whether they
+			// go into device_lists.left, so an unknown count must not become
+			// zero: report the error and let the caller retry.
 			for _, changedUserID := range missing {
 				if _, shouldFailOpen := failOpenSet[changedUserID]; shouldFailOpen {
 					sharedUsersMap[changedUserID] = 1
+					continue
 				}
+				return nil, fmt.Errorf("QuerySharedUsers for %s: %w", changedUserID, err)
 			}
 		} else {
 			for changedUserID, count := range sharedRes.UserIDsToCount {

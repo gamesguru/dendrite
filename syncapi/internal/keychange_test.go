@@ -205,6 +205,16 @@ func TestFilterSharedUsersChecksRoomserverForUsersWithoutJoin(t *testing.T) {
 	}
 }
 
+func TestFilterSharedUsersErrorsWhenLeaveUserCannotBeVerified(t *testing.T) {
+	t.Parallel()
+	otherUser := "@bob:localhost"
+	rsAPI := &keyChangeMockRoomserverAPI{querySharedUsersErr: errors.New("roomserver unavailable")}
+
+	if _, err := filterSharedUsers(context.Background(), failingSharedUsers{}, rsAPI, syncingUser, []string{otherUser}, nil); err == nil {
+		t.Fatal("expected an error for a leave user whose sharing status cannot be verified")
+	}
+}
+
 // This is actually a database function, but seeing as we track the state inside the
 // *mockRoomserverAPI, we'll just comply with the interface here instead.
 func (s *keyChangeMockRoomserverAPI) SharedUsers(ctx context.Context, userID string, otherUserIDs []string) ([]string, error) {

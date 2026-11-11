@@ -6,7 +6,8 @@ a room-version design (signed LtHash state commitments plus state-resolution
 rule changes) that would make the remaining failure modes detectable or
 impossible.
 
-Spec references are to `../spec/spec`.
+Spec references are to the Matrix specification at https://spec.matrix.org/latest/.
+The room-version fragments cited below are under https://spec.matrix.org/latest/rooms/.
 
 ## 1. The definition
 
@@ -77,7 +78,7 @@ These need no spec change.
   `/state_ids` cannot be fetched for a reason that may pass (timeout,
   backoff, 5xx), the lookup fails with `errStateUnavailable`, in both the
   chunked and non-chunked fetch paths. Events that fail signature or format
-  checks are still left out, as before. (`bbe01da7`, `c838580d`)
+  checks are still left out, as before. (`bbe01da7`, `436b7823`)
 - **Unavailable is not rejected.** An event whose state could not be
   obtained is left unstored, like the existing database-outage path, so the
   next event in the room fetches it again as a missing prev event. This
@@ -211,8 +212,8 @@ starts from the join:
   to `J.state_commit`, and cross-check `J.state_commit` with several resident
   servers (the join server plus at least two others). S(J) is then the anchor.
 - **Forward.** Events after J are verified by §4.4.
-- **Backward (backfill).** For a parent P whose single child C is verified,
-  `S(C) = S′(P)`, so
+- **Backward (backfill).** For a parent P that is the only prev event of a
+  verified child C (`C.prev_events == [P]`), `S(C) = S′(P)`, so
 
   ```text
   L(S(P)) = L(S(C)) − h(P.event_id) + h(P.replaces_state)   (P a state event)
@@ -220,8 +221,10 @@ starts from the join:
   ```
 
   and `BLAKE3-256(L(S(P)))` must equal `P.state_commit`. That is O(1) per step
-  with no fetches. At a merge, the parents' S′ must resolve to the child's
-  verified S(C).
+  with no fetches. A child with multiple prev events is a merge: its S′(Pᵢ)
+  cannot be obtained by inverting S(C) from one parent. Verify each parent
+  from its own single-prev chain, or mark it unverified and require the merge
+  parents' S′ to resolve to the child's verified S(C) before accepting it.
 
 Each backfilled event is then **verified**, **contradicted** (never used as a
 state source), or **unverified** (a parent is missing; display only).

@@ -70,13 +70,10 @@ func TestRetryWhileUnavailable(t *testing.T) {
 	calls = 0
 	err = retryWhileUnavailable(t.Context(), nil, logger, func(int) error {
 		calls++
-		if calls == 1 {
-			return fmt.Errorf("remote state fetch: %w", errStateUnavailable)
-		}
-		return nil
+		return fmt.Errorf("remote state fetch: %w", errStateUnavailable)
 	})
-	require.NoError(t, err)
-	require.Equal(t, 2, calls, "an unavailable remote state fetch is retried")
+	require.ErrorIs(t, err, errStateUnavailable)
+	require.Equal(t, 1, calls, "an unavailable remote state fetch is not retried in line")
 
 	for name, failure := range map[string]error{
 		"rejection":         types.RejectedError("state resolution cooldown active"),

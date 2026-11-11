@@ -2294,6 +2294,36 @@ func (rp *RequestPool) buildInterruptResponse(
 	return resp
 }
 
+// interruptStreamToken returns the stream token to persist for a room emitted
+// by an interrupt response. A room whose stored token was behind since had its
+// timeline built from a pinned token, so nothing in (old token, since] was
+// sent. Keep the old token so the next response catches that gap up. A room
+// without previous state was newly inserted and has no gap to keep.
+func interruptStreamToken(
+	connState *V4ConnectionState, roomID string, since *types.SlidingSyncStreamToken,
+) string {
+	if since == nil {
+		return ""
+	}
+	sentToken := since.StreamToken.String()
+	if connState == nil || connState.PreviousStreamStates == nil {
+		return sentToken
+	}
+	streams, ok := connState.PreviousStreamStates[roomID]
+	if !ok {
+		return sentToken
+	}
+	previous := streams["events"]
+	if previous == nil || previous.LastToken == "" {
+		return sentToken
+	}
+	previousToken, err := types.NewStreamTokenFromString(previous.LastToken)
+	if err != nil || previousToken.PDUPosition >= since.StreamToken.PDUPosition {
+		return sentToken
+	}
+	return previous.LastToken
+}
+
 // acknowledgeInterruptLists gives a timeout response that sent list operations
 // a connection position of its own, with the windows it sent saved against it.
 // Without one the client applies the operations, but the next request is still
@@ -2366,9 +2396,8 @@ func (rp *RequestPool) acknowledgeInterruptLists(
 		discardOps()
 		return
 	}
-	sentToken := since.StreamToken.String()
 	for roomID, config := range emitted {
-		if err := rp.db.UpdateConnectionStream(ctx, position, roomID, "events", types.HaveSentRoomLive.String(), sentToken); err != nil {
+		if err := rp.db.UpdateConnectionStream(ctx, position, roomID, "events", types.HaveSentRoomLive.String(), interruptStreamToken(connState, roomID, since)); err != nil {
 			logrus.WithError(err).WithField("room_id", roomID).Warn("[V4_SYNC] Failed to save stream state for timeout response")
 			discardOps()
 			return

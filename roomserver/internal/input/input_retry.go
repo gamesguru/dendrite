@@ -141,13 +141,20 @@ func retryWhileUnavailable(ctx context.Context, owner jetstream.Ownership, logge
 // Unlike the missing-state lookup, which counts only errors the database
 // driver reports itself, this also counts dropped connections: a query cut
 // off by a PostgreSQL failover fails with a plain network error, as in #426.
-// It also retries errStateUnavailable: a state or auth event that another
-// server could not provide may become available, and accepting the event
-// without it would authorise it against the wrong state.
+// Failures of remote servers are not retried here. Processing turns them
+// into a rejection or into an error of its own. The errStateUnavailable error in
+// particular is not retried: a remote server that timed out or is backing off
+// stays so for minutes, far longer than this budget, and retrying in line
+// would hold up every other event in the room meanwhile. The event is left
+// unstored instead, and the room's next event fetches it again as a missing
+// prev event.
 func retryableInputError(ctx context.Context, err error) bool {
 	var rejected types.RejectedError
 	if errors.As(err, &rejected) {
 		return false
 	}
-	return unavailableHere(ctx, err) || errors.Is(err, errStateUnavailable) || sqlutil.IsTransient(err)
+	if errors.Is(err, errStateUnavailable) {
+		return false
+	}
+	return unavailableHere(ctx, err) || sqlutil.IsTransient(err)
 }

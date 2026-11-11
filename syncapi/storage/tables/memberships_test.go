@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
@@ -176,5 +177,53 @@ func testUpsert(t *testing.T, ctx context.Context, table tables.Memberships, mem
 		if membership != spec.Join || eventID != joinAt10.EventID() {
 			t.Fatalf("expected join at position 10 when reading at 15, got %s (%s)", membership, eventID)
 		}
+	})
+}
+
+// A rollback to a build that predates the membership history writes only the
+// current-state table. When this build takes over again, it must copy those
+// transitions into the history before later transitions overwrite them in the
+// current table, which keeps one row per membership.
+func TestMembershipHistoryCatchesUpAfterRollback(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		join := func() *rstypes.HeaderedEvent {
+			return room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": "join"}, test.WithStateKey(bob.ID))
+		}
+		leave := func() *rstypes.HeaderedEvent {
+			return room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": "leave"}, test.WithStateKey(bob.ID))
+		}
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		require.NoError(t, table.UpsertMembership(ctx, nil, join(), 5, 5))
+
+		// The older build records a leave in the current table only.
+		rolledBack := leave()
+		_, err := db.ExecContext(ctx,
+			"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos) VALUES ($1, $2, $3, $4, $5, $6)",
+			room.ID, bob.ID, "leave", rolledBack.EventID(), 10, 10)
+		require.NoError(t, err)
+
+		// This build takes over again, then bob rejoins and leaves, which
+		// overwrites the leave row in the current table.
+		switch dbType {
+		case test.DBTypePostgres:
+			table, err = postgres.NewPostgresMembershipsTable(db)
+		case test.DBTypeSQLite:
+			table, err = sqlite3.NewSqliteMembershipsTable(db)
+		}
+		require.NoError(t, err)
+		require.NoError(t, table.UpsertMembership(ctx, nil, join(), 20, 20))
+		require.NoError(t, table.UpsertMembership(ctx, nil, leave(), 30, 30))
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 12)
+		require.NoError(t, err)
+		require.Equal(t, "leave", membership)
+		require.Equal(t, rolledBack.EventID(), eventID)
 	})
 }
