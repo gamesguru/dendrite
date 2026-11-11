@@ -13,7 +13,9 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	postgresdeltas "codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	sqlitedeltas "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -40,6 +42,68 @@ func newMembershipsTable(t *testing.T, dbType test.DBType) (tables.Memberships, 
 		t.Fatalf("failed to make new table: %s", err)
 	}
 	return tab, db, close
+}
+
+func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		joinAt10 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		joinAt20 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join, "displayname": "updated"}, test.WithStateKey(bob.ID))
+		leaveAt30 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(bob.ID))
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+		outputEventsSchema := `CREATE TABLE syncapi_output_room_events (id BIGINT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL)`
+		if dbType == test.DBTypeSQLite {
+			outputEventsSchema = `CREATE TABLE syncapi_output_room_events (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL)`
+		}
+		_, err := db.ExecContext(ctx, outputEventsSchema)
+		require.NoError(t, err)
+		for i, event := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
+			_, err = db.ExecContext(ctx,
+				`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type) VALUES ($1, $2, $3, $4, $5)`,
+				(i+1)*10, room.ID, event.EventID(), string(event.JSON()), event.Type(),
+			)
+			require.NoError(t, err)
+		}
+
+		// Simulate the compact rows and incomplete history left by the old
+		// backfill: only the latest row for each membership survives.
+		for i, event := range []*rstypes.HeaderedEvent{joinAt20, leaveAt30} {
+			membership, membershipErr := event.Membership()
+			require.NoError(t, membershipErr)
+			streamPos := (i + 2) * 10
+			_, err = db.ExecContext(ctx,
+				`INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos) VALUES ($1, $2, $3, $4, $5, $5)`,
+				room.ID, bob.ID, membership, event.EventID(), streamPos,
+			)
+			require.NoError(t, err)
+			_, err = db.ExecContext(ctx,
+				`INSERT INTO syncapi_membership_history (room_id, user_id, membership, event_id, stream_pos) VALUES ($1, $2, $3, $4, $5)`,
+				room.ID, bob.ID, membership, event.EventID(), streamPos,
+			)
+			require.NoError(t, err)
+		}
+
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var backfillErr error
+		if dbType == test.DBTypePostgres {
+			backfillErr = postgresdeltas.UpBackfillMembershipHistory(ctx, tx)
+		} else {
+			backfillErr = sqlitedeltas.UpBackfillMembershipHistory(ctx, tx)
+		}
+		require.NoError(t, backfillErr)
+		require.NoError(t, tx.Commit())
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 15)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, joinAt10.EventID(), eventID)
+	})
 }
 
 func TestMembershipsTable(t *testing.T) {
@@ -177,53 +241,5 @@ func testUpsert(t *testing.T, ctx context.Context, table tables.Memberships, mem
 		if membership != spec.Join || eventID != joinAt10.EventID() {
 			t.Fatalf("expected join at position 10 when reading at 15, got %s (%s)", membership, eventID)
 		}
-	})
-}
-
-// A rollback to a build that predates the membership history writes only the
-// current-state table. When this build takes over again, it must copy those
-// transitions into the history before later transitions overwrite them in the
-// current table, which keeps one row per membership.
-func TestMembershipHistoryCatchesUpAfterRollback(t *testing.T) {
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		alice := test.NewUser(t)
-		bob := test.NewUser(t)
-		room := test.NewRoom(t, alice)
-		join := func() *rstypes.HeaderedEvent {
-			return room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": "join"}, test.WithStateKey(bob.ID))
-		}
-		leave := func() *rstypes.HeaderedEvent {
-			return room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": "leave"}, test.WithStateKey(bob.ID))
-		}
-
-		table, db, close := newMembershipsTable(t, dbType)
-		defer close()
-		ctx := context.Background()
-
-		require.NoError(t, table.UpsertMembership(ctx, nil, join(), 5, 5))
-
-		// The older build records a leave in the current table only.
-		rolledBack := leave()
-		_, err := db.ExecContext(ctx,
-			"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos) VALUES ($1, $2, $3, $4, $5, $6)",
-			room.ID, bob.ID, "leave", rolledBack.EventID(), 10, 10)
-		require.NoError(t, err)
-
-		// This build takes over again, then bob rejoins and leaves, which
-		// overwrites the leave row in the current table.
-		switch dbType {
-		case test.DBTypePostgres:
-			table, err = postgres.NewPostgresMembershipsTable(db)
-		case test.DBTypeSQLite:
-			table, err = sqlite3.NewSqliteMembershipsTable(db)
-		}
-		require.NoError(t, err)
-		require.NoError(t, table.UpsertMembership(ctx, nil, join(), 20, 20))
-		require.NoError(t, table.UpsertMembership(ctx, nil, leave(), 30, 30))
-
-		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 12)
-		require.NoError(t, err)
-		require.Equal(t, "leave", membership)
-		require.Equal(t, rolledBack.EventID(), eventID)
 	})
 }

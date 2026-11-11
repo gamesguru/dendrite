@@ -119,6 +119,10 @@ func NewDatabase(ctx context.Context, cm *sqlutil.Connections, dbProperties *con
 			Version: "syncapi: create sliding sync room metadata tables",
 			Up:      deltas.UpCreateSlidingSyncRoomMetadata,
 		},
+		sqlutil.Migration{
+			Version: "syncapi: backfill membership history from output events",
+			Up:      deltas.UpBackfillMembershipHistory,
+		},
 	)
 	err = m.Up(ctx)
 	if err != nil {

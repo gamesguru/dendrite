@@ -1518,23 +1518,16 @@ func stateSnapshotEventIDs(s *parsedRespState) []string {
 	return ids
 }
 
-// withoutBackingOffServers drops the servers we are backing off from, so that
-// missing-state resolution does not iterate hundreds of dead servers. Two
-// servers are known to be alive and are kept regardless: the origin, which just
-// sent us the event, and the partial state join server, which recently
-// processed our join. Our backoff towards the origin only reflects our own
-// failed sends, for example while it was restarting, and dropping it would
-// reject every event that arrives ahead of its prev events.
-// UnavailableHere reports whether processing failed on this server's own
-// dependencies rather than on the event or the servers asked about it.
-// Generic network errors are not counted: while filling a gap they may as
-// well come from a remote server, whose failures the cooldown is for.
-// The errStateUnavailable error marks a failure to obtain the state before an event,
+// errStateUnavailable marks a failure to obtain the state before an event,
 // such as a remote server that timed out or is backing off. It says nothing
 // about whether the event is valid, so the event is left unstored rather
 // than rejected.
 var errStateUnavailable = errors.New("state before the event is unavailable")
 
+// unavailableHere reports whether processing failed on this server's own
+// dependencies rather than on the event or the servers asked about it.
+// Generic network errors are not counted: while filling a gap they may as
+// well come from a remote server, whose failures the cooldown is for.
 func unavailableHere(ctx context.Context, err error) bool {
 	return ctx.Err() != nil ||
 		sqlutil.IsDatabaseUnavailable(err) ||
@@ -1544,6 +1537,13 @@ func unavailableHere(ctx context.Context, err error) bool {
 		jetstream.IsTransientFetchError(err)
 }
 
+// withoutBackingOffServers drops the servers we are backing off from, so that
+// missing-state resolution does not iterate hundreds of dead servers. Two
+// servers are known to be alive and are kept regardless: the origin, which just
+// sent us the event, and the partial state join server, which recently
+// processed our join. Our backoff towards the origin only reflects our own
+// failed sends, for example while it was restarting, and dropping it would
+// reject every event that arrives ahead of its prev events.
 func withoutBackingOffServers(
 	servers []spec.ServerName, origin, joinServer spec.ServerName,
 	isBackingOff func(spec.ServerName) bool,

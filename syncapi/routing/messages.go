@@ -664,8 +664,11 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			if r.ctx.Err() != nil {
 				return
 			}
-			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning local events where available")
-			return nil, err
+			// Nothing is stored locally before this point, so the page is
+			// empty rather than failed: the client sees the end of the
+			// history this server can reach instead of a 500.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning an empty page")
+			return []*rstypes.HeaderedEvent{}, nil
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0

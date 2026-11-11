@@ -58,22 +58,22 @@ func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	require.Equal(t, membershipHistoryLevel, current.RollbackTo)
 
 	// A direct upgrade from a build without membership history is admitted:
-	// the history is filled from the current table on startup.
+	// level 21 reconstructs all retained transitions from output events.
 	preHistory := Recorded{Fingerprint: "deployment", Protocol: 1, Level: 18, Floor: 16}
 	require.NoError(t, current.Admit("deployment", preHistory))
 
-	// Once level 20 has run, a build without membership history may not take
+	// Once level 21 has run, a build without membership history may not take
 	// over, since it would overwrite transitions nothing can recover.
-	level20 := current.Next("deployment", "v20", preHistory)
-	require.Equal(t, membershipHistoryLevel, level20.Floor)
+	level21 := current.Next("deployment", "v21", preHistory)
+	require.Equal(t, membershipHistoryLevel, level21.Floor)
 	level18 := Contract{Protocol: 1, Level: 18, UpgradeFrom: 1, RollbackTo: 16}
-	require.ErrorIs(t, level18.Admit("deployment", level20), ErrIncompatibleBuild)
+	require.ErrorIs(t, level18.Admit("deployment", level21), ErrIncompatibleBuild)
 
 	// Rolling back to level 19, which keeps the history, and upgrading again
-	// stays supported.
+	// stays supported. A rollback below level 19 remains refused by the floor.
 	level19 := Contract{Protocol: 1, Level: membershipHistoryLevel, UpgradeFrom: 1, RollbackTo: 16}
-	require.NoError(t, level19.Admit("deployment", level20))
-	afterRollback := level19.Next("deployment", "v19", level20)
+	require.NoError(t, level19.Admit("deployment", level21))
+	afterRollback := level19.Next("deployment", "v19", level21)
 	require.Equal(t, membershipHistoryLevel, afterRollback.Floor)
 	require.NoError(t, current.Admit("deployment", afterRollback))
 }

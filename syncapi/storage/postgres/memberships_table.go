@@ -53,16 +53,14 @@ CREATE TABLE IF NOT EXISTS syncapi_membership_history (
 );
 -- The primary key already serves "stream_pos DESC LIMIT 1" lookups.
 DROP INDEX IF EXISTS syncapi_membership_history_pos_idx;
--- Backfill from the current-state table every transition newer than the
--- history holds. On first creation that is every row, so lookups before the
--- upgrade don't fall back to the lossy current table. After a rollback to a
--- build that predates the history table and a later upgrade, it is the rows
--- that build wrote meanwhile: stream positions only grow, and this build
--- writes both tables. Transitions that build overwrote in the current table
--- are lost; lookups for them fall back to the current table as before.
+-- Backfill from the current-state table once, when the history is first
+-- created, so lookups before the upgrade don't fall back to the lossy current
+-- table. The emptiness probe keeps this cheap on every later startup. Builds
+-- that predate the history may not take over again afterwards (the HA
+-- contract's rollback floor), so no later catch-up is needed.
 INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
 SELECT room_id, user_id, membership, event_id, stream_pos FROM syncapi_memberships
-WHERE stream_pos > (SELECT COALESCE(MAX(stream_pos), -1) FROM syncapi_membership_history)
+WHERE NOT EXISTS (SELECT 1 FROM syncapi_membership_history)
 ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING;
 `
 

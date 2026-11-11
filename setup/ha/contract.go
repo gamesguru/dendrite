@@ -45,20 +45,14 @@ type Contract struct {
 // fields. Raise UpgradeFrom when this build cannot take over from an older
 // one, and RollbackTo when an older build cannot take over from this one;
 // either turns the transition into an offline upgrade.
-// Level 17 only drops a redundant index. A level 16 build recreates it from
-// its own schema on startup, so rolling back to level 16 stays supported.
-// Level 18 adds the sliding sync list-window table. Level 19 adds retained
-// membership history.
-//
-// Level 20 rolls back only to level 19. A build below level 19 records
-// memberships in the current table only, which keeps one row per membership,
-// so a rollback to it would overwrite transitions that no later build can
-// recover. Upgrading from any level stays supported: takeover is exclusive,
-// this build writes the history from its first event, and on startup it
-// copies every membership newer than its history from the current table. That
-// fills the history when it is first created, as at level 19, and recovers
-// what an older build stored after a deployment that reached level 19 rolled
-// back to it, as level 19 still allowed.
+// Level 17 only drops a redundant index. Level 18 adds the sliding sync
+// list-window table. Level 19 adds retained
+// membership history. Level 21 backfills that history from retained room
+// events, including transitions that the compact current-membership table
+// had overwritten before the history table existed. Level 21 can therefore
+// upgrade directly from older levels. It can roll back to level 19, whose
+// builds retain membership transitions; rolling back below level 19 would
+// lose transitions written after the upgrade.
 var release = Contract{
 	Protocol:    1,
 	Level:       releaseLevel,
@@ -80,9 +74,10 @@ var release = Contract{
 // retention (MSC4499), level 17 drops the redundant invite event ID index,
 // level 18 stores sliding-sync list windows by connection position, level 19
 // retains membership transitions for position-bounded lookups, and level 20
-// indexes roomserver events by (room_nid, event_nid).
+// indexes roomserver events by (room_nid, event_nid), and level 21 recovers
+// membership history from retained output events.
 const (
-	releaseLevel           = 20
+	releaseLevel           = 21
 	membershipHistoryLevel = 19
 )
 
