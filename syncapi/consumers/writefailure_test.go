@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,12 +25,16 @@ import (
 // PostgreSQL primary is being replaced.
 type unavailableDatabase struct {
 	storage.Database
+	writeCalls *atomic.Int32
 }
 
 // errDatabaseUnavailable is transient: the connection failed, not the write.
 var errDatabaseUnavailable = fmt.Errorf("failed to connect to the database: %w", driver.ErrBadConn)
 
-func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string) (types.StreamPosition, error) {
+func (d unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string) (types.StreamPosition, error) {
+	if d.writeCalls != nil {
+		d.writeCalls.Add(1)
+	}
 	return 0, errDatabaseUnavailable
 }
 
@@ -64,13 +69,15 @@ func TestWriteFailureStopsOnShutdown(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	ev := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello"})
-	s := &OutputRoomEventConsumer{db: unavailableDatabase{}, rsAPI: senderResolver{user: alice}}
+	writeCalls := &atomic.Int32{}
+	s := &OutputRoomEventConsumer{db: unavailableDatabase{writeCalls: writeCalls}, rsAPI: senderResolver{user: alice}}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	require.NotPanics(t, func() {
 		require.ErrorIs(t, s.onNewRoomEvent(ctx, api.OutputNewRoomEvent{Event: ev}), errDatabaseUnavailable)
 	})
+	require.Positive(t, writeCalls.Load(), "the test must reach WriteEvent")
 }
 
 // TestReceiptWriteFailureIsRedelivered checks that a receipt the database
