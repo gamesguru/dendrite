@@ -455,10 +455,7 @@ func (d *Database) GetNotaryKeys(
 	serverName spec.ServerName,
 	optKeyIDs []gomatrixserverlib.KeyID,
 ) (sks []gomatrixserverlib.ServerKeys, err error) {
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
-		return err
-	})
+	sks, err = d.GetNotaryKeysIncludingExpired(ctx, serverName, optKeyIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -470,6 +467,20 @@ func (d *Database) GetNotaryKeys(
 		}
 	}
 	return valid, nil
+}
+
+// GetNotaryKeysIncludingExpired returns the stored responses for the server,
+// whether or not their valid_until_ts has passed.
+func (d *Database) GetNotaryKeysIncludingExpired(
+	ctx context.Context,
+	serverName spec.ServerName,
+	optKeyIDs []gomatrixserverlib.KeyID,
+) (sks []gomatrixserverlib.ServerKeys, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
+		return err
+	})
+	return sks, err
 }
 
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {

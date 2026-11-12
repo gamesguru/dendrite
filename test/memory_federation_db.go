@@ -501,6 +501,10 @@ func (d *InMemoryFederationDatabase) GetNotaryKeys(ctx context.Context, serverNa
 	return nil, nil
 }
 
+func (d *InMemoryFederationDatabase) GetNotaryKeysIncludingExpired(ctx context.Context, serverName spec.ServerName, optKeyIDs []gomatrixserverlib.KeyID) ([]gomatrixserverlib.ServerKeys, error) {
+	return nil, nil
+}
+
 func (d *InMemoryFederationDatabase) DeleteExpiredEDUs(ctx context.Context) error {
 	return nil
 }

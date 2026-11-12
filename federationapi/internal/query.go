@@ -213,6 +213,28 @@ func walkJSONValue(dec *json.Decoder) error {
 	}
 }
 
+// storedNotaryKeys returns the stored responses that answer req once a direct
+// fetch has been tried. A request that names its keys and sets no
+// minimum_valid_until_ts for any of them also gets responses that have
+// expired: the requester has said it has no validity requirement. An expired
+// response is never returned without that fetch attempt, so it cannot stand
+// in for a refresh.
+func (a *FederationInternalAPI) storedNotaryKeys(
+	ctx context.Context, req *api.QueryServerKeysRequest,
+) ([]gomatrixserverlib.ServerKeys, error) {
+	anyValidity := len(req.KeyIDToCriteria) > 0
+	for _, criteria := range req.KeyIDToCriteria {
+		if criteria.MinimumValidUntilTS != 0 {
+			anyValidity = false
+			break
+		}
+	}
+	if anyValidity {
+		return a.db.GetNotaryKeysIncludingExpired(ctx, req.ServerName, req.KeyIDs())
+	}
+	return a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+}
+
 func (a *FederationInternalAPI) fetchServerKeysFromCache(
 	ctx context.Context, req *api.QueryServerKeysRequest,
 ) ([]gomatrixserverlib.ServerKeys, error) {
@@ -264,7 +286,7 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	if err != nil {
 		// try to load as much as we can from the cache in a best effort basis
 		util.GetLogger(ctx).WithField("server", req.ServerName).WithError(err).Warn("notary: failed to ask server for keys, returning best effort keys")
-		serverKeysResponses, dbErr := a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+		serverKeysResponses, dbErr := a.storedNotaryKeys(ctx, req)
 		if dbErr != nil {
 			return fmt.Errorf("notary: server returned %w, and db returned %w", err, dbErr)
 		}
@@ -280,7 +302,7 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	}
 	// Return the database's selected responses. In particular, this preserves
 	// the first-seen binding when a remote reuses a key ID for another key.
-	res.ServerKeys, err = a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	res.ServerKeys, err = a.storedNotaryKeys(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to read selected notary keys: %w", err)
 	}
