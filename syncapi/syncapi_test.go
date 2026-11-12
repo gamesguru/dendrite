@@ -124,6 +124,11 @@ type syncUserAPI struct {
 	accounts []userapi.Device
 }
 
+// QueryAccountData has no data to report; a complete sync asks for push rules.
+func (s *syncUserAPI) QueryAccountData(context.Context, *userapi.QueryAccountDataRequest, *userapi.QueryAccountDataResponse) error {
+	return nil
+}
+
 func (s *syncUserAPI) QueryAccessToken(ctx context.Context, req *userapi.QueryAccessTokenRequest, res *userapi.QueryAccessTokenResponse) error {
 	for _, acc := range s.accounts {
 		if acc.AccessToken == req.AccessToken {

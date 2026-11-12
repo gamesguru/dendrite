@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -48,7 +49,41 @@ func (p *AccountDataStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	return p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	pos := p.IncrementalSync(ctx, snapshot, req, 0, p.LatestPosition(ctx))
+	p.ensurePushRules(ctx, req)
+	return pos
+}
+
+// ensurePushRules adds the user's push rules to a complete sync when the sync
+// API has not yet recorded them. Registration creates the rules in the user API
+// and tells the sync API asynchronously, so a sync straight after registering
+// can run first and would otherwise come back without them.
+func (p *AccountDataStreamProvider) ensurePushRules(ctx context.Context, req *types.SyncRequest) {
+	for _, ev := range req.Response.AccountData.Events {
+		if ev.Type == "m.push_rules" {
+			return
+		}
+	}
+	if !accountDataTypeMatches("m.push_rules", &req.Filter.AccountData) || req.Filter.AccountData.Limit == 0 {
+		return
+	}
+	dataReq := userapi.QueryAccountDataRequest{
+		UserID:   req.Device.UserID,
+		DataType: "m.push_rules",
+	}
+	dataRes := userapi.QueryAccountDataResponse{}
+	if err := p.userAPI.QueryAccountData(ctx, &dataReq, &dataRes); err != nil {
+		req.Log.WithError(err).Error("p.userAPI.QueryAccountData failed for push rules")
+		return
+	}
+	data, ok := dataRes.GlobalAccountData["m.push_rules"]
+	if !ok || isEmptyAccountData(data) {
+		return
+	}
+	req.Response.AccountData.Events = append(
+		req.Response.AccountData.Events,
+		synctypes.ClientEvent{Type: "m.push_rules", Content: spec.RawJSON(data)},
+	)
 }
 
 func (p *AccountDataStreamProvider) IncrementalSync(
@@ -152,4 +187,20 @@ func (p *AccountDataStreamProvider) IncrementalSync(
 	}
 
 	return pos
+}
+
+func accountDataTypeMatches(dataType string, filter *synctypes.EventFilter) bool {
+	matches := func(patterns *[]string) bool {
+		if patterns == nil {
+			return false
+		}
+		for _, pattern := range *patterns {
+			expression := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
+			if matched, _ := regexp.MatchString(expression, dataType); matched {
+				return true
+			}
+		}
+		return false
+	}
+	return (filter.Types == nil || matches(filter.Types)) && !matches(filter.NotTypes)
 }
