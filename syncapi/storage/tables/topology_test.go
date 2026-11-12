@@ -53,7 +53,7 @@ func TestTopologyTable(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, db, close := newTopologyTable(t, dbType)
+		tab, db, close := newTopologyTable(t, dbType) //nolint:contextcheck
 		defer close()
 		events := room.Events()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
@@ -120,7 +120,7 @@ func TestTopologyTablePagesPastForkedDepth(t *testing.T) {
 	local := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "local"})
 	remote := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "remote"})
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, db, close := newTopologyTable(t, dbType)
+		tab, db, close := newTopologyTable(t, dbType) //nolint:contextcheck
 		defer close()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for i, ev := range room.Events() {
@@ -166,7 +166,7 @@ func TestTopologyTablePagesForwardPastForkedDepth(t *testing.T) {
 	remote := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "remote"})
 
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, db, close := newTopologyTable(t, dbType)
+		tab, db, close := newTopologyTable(t, dbType) //nolint:contextcheck
 		defer close()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			if _, err := tab.InsertEventInTopology(ctx, txn, local, 10); err != nil {

@@ -85,7 +85,7 @@ const (
 func TestRelationsTable(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, _, close := newRelationsTable(t, dbType)
+		tab, _, close := newRelationsTable(t, dbType) //nolint:contextcheck
 		defer close()
 
 		// Insert some relations
