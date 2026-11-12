@@ -25,10 +25,6 @@ env:
   OLM_VERSION: "3.2.16"
   OLM_SHA256: "1e90f9891009965fd064be747616da46b232086fe270b77605ec9bda34272a68"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   wasm:
     name: WASM build test
