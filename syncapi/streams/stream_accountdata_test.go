@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -32,6 +33,7 @@ func (pendingAccountDataUserAPI) QueryAccountData(_ context.Context, req *userap
 	res.GlobalAccountData = map[string]json.RawMessage{
 		"m.push_rules": json.RawMessage(`{"global":{"room":[]}}`),
 		"deleted":      json.RawMessage(`{}`),
+		"m.direct":     json.RawMessage(`{"@bob:test":["!room:test"]}`),
 	}
 	res.RoomAccountData = map[string]map[string]json.RawMessage{
 		"!joined:test": {"m.tag": json.RawMessage(`{"tags":{}}`)},
@@ -85,3 +87,33 @@ func TestCompleteAccountDataBeforeConsumer(t *testing.T) {
 }
 
 func stringList(values ...string) *[]string { return &values }
+
+type globalAccountDataSnapshot struct{ pendingAccountDataSnapshot }
+
+func (globalAccountDataSnapshot) GetAccountDataInRange(_ context.Context, _ string, _ types.Range, filter *synctypes.EventFilter) (map[string][]string, types.StreamPosition, error) {
+	if filter.Limit == 0 {
+		return nil, 0, nil
+	}
+	return map[string][]string{"": {"m.direct"}}, 1, nil
+}
+
+func TestCompleteAccountDataPushRulesRespectsLimit(t *testing.T) {
+	for _, limit := range []int{0, 1, 2} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			req := &types.SyncRequest{
+				Device:   &userapi.Device{UserID: "@alice:test"},
+				Response: types.NewResponse(), Filter: synctypes.DefaultFilter(), Log: logrus.NewEntry(logrus.New()),
+			}
+			req.Filter.AccountData.Limit = limit
+			p := AccountDataStreamProvider{userAPI: pendingAccountDataUserAPI{}}
+			p.CompleteSync(t.Context(), globalAccountDataSnapshot{}, req)
+			require.Len(t, req.Response.AccountData.Events, limit)
+			if limit > 0 {
+				require.Equal(t, "m.direct", req.Response.AccountData.Events[0].Type)
+			}
+			if limit == 2 {
+				require.Equal(t, "m.push_rules", req.Response.AccountData.Events[1].Type)
+			}
+		})
+	}
+}

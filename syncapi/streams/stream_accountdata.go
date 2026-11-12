@@ -64,7 +64,7 @@ func (p *AccountDataStreamProvider) ensurePushRules(ctx context.Context, req *ty
 			return
 		}
 	}
-	if !accountDataTypeMatches("m.push_rules", &req.Filter.AccountData) || req.Filter.AccountData.Limit == 0 {
+	if !accountDataTypeMatches("m.push_rules", &req.Filter.AccountData) || len(req.Response.AccountData.Events) >= req.Filter.AccountData.Limit {
 		return
 	}
 	dataReq := userapi.QueryAccountDataRequest{
