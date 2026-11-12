@@ -85,6 +85,9 @@ const (
 	redeliveryMaxDelay = 30 * time.Second
 )
 
+// defaultAckTimeout is the default for ackTimeout.
+const defaultAckTimeout = 10 * time.Second
+
 // ackTimeout bounds each acknowledgement request a consumer makes. With a
 // context, nats.go sends an acknowledgement as a request and waits for the
 // server's reply. A reply lost while the stream elects a new leader would
@@ -93,8 +96,8 @@ const (
 // consumer's ack wait, which consumers already handle.
 var ackTimeout atomic.Int64
 
-func init() {
-	ackTimeout.Store(int64(10 * time.Second))
+func init() { //nolint:gochecknoinits // A default for an atomic, which has no literal form.
+	ackTimeout.Store(int64(defaultAckTimeout))
 }
 
 // ackWithin sends one acknowledgement request, giving up after ackTimeout.
