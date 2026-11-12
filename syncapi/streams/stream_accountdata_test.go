@@ -16,13 +16,14 @@ import (
 
 type pendingAccountDataSnapshot struct{ storage.DatabaseTransaction }
 
-func (pendingAccountDataSnapshot) GetAccountDataInRange(context.Context, string, types.Range, *synctypes.EventFilter) (map[string][]string, types.StreamPosition, error) {
-	// The user has tags in a room they are in and one they are not in; the
-	// consumer has not recorded any global account data yet.
-	return map[string][]string{
-		"!joined:test": {"m.tag"},
-		"!other:test":  {"m.tag"},
-	}, 0, nil
+func (pendingAccountDataSnapshot) GetAccountDataInRange(_ context.Context, _ string, _ types.Range, filter *synctypes.EventFilter) (map[string][]string, types.StreamPosition, error) {
+	// Room data has been consumed, but global push rules are still pending.
+	data := map[string][]string{}
+	if accountDataTypeMatches("m.tag", filter) {
+		data["!joined:test"] = []string{"m.tag"}
+		data["!other:test"] = []string{"m.tag"}
+	}
+	return data, 0, nil
 }
 
 type pendingAccountDataUserAPI struct{ userapi.SyncUserAPI }
@@ -44,10 +45,11 @@ func TestCompleteAccountDataBeforeConsumer(t *testing.T) {
 		name             string
 		include, exclude *[]string
 		wantPushRules    bool
+		wantRoomData     bool
 	}{
-		{name: "unfiltered", wantPushRules: true},
-		{name: "wildcard", include: stringList("m.*"), wantPushRules: true},
-		{name: "excluded", exclude: stringList("m.push_*")},
+		{name: "unfiltered", wantPushRules: true, wantRoomData: true},
+		{name: "wildcard", include: stringList("m.*"), wantPushRules: true, wantRoomData: true},
+		{name: "excluded", exclude: stringList("m.push_*"), wantRoomData: true},
 		{name: "empty inclusion", include: stringList()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,12 +69,17 @@ func TestCompleteAccountDataBeforeConsumer(t *testing.T) {
 			} else {
 				require.Empty(t, req.Response.AccountData.Events)
 			}
-			require.Contains(t, req.Response.Rooms.Join, "!joined:test")
-			joined := req.Response.Rooms.Join["!joined:test"]
-			require.NotNil(t, joined.AccountData)
-			require.Len(t, joined.AccountData.Events, 1)
-			require.Equal(t, "m.tag", joined.AccountData.Events[0].Type)
 			require.NotContains(t, req.Response.Rooms.Join, "!other:test")
+			if !tc.wantRoomData {
+				require.NotContains(t, req.Response.Rooms.Join, "!joined:test")
+				return
+			}
+			require.Contains(t, req.Response.Rooms.Join, "!joined:test")
+			roomData := req.Response.Rooms.Join["!joined:test"].AccountData
+			require.NotNil(t, roomData)
+			require.Len(t, roomData.Events, 1)
+			require.Equal(t, "m.tag", roomData.Events[0].Type)
+			require.JSONEq(t, `{"tags":{}}`, string(roomData.Events[0].Content))
 		})
 	}
 }
