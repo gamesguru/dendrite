@@ -100,6 +100,9 @@ func main() {
 			// Complement restarts servers and expects delivery to resume
 			// within seconds, as Synapse's Complement config does.
 			cfg.FederationAPI.FederationMinRetryExponent = 0
+			// Complement waits out a failed key fetch before checking that a
+			// success clears it. The transport backoff still spaces retries.
+			cfg.FederationAPI.ServerKeyFetchBackoff = time.Second
 			// Complement joins rooms whose servers all fail to give state, and expects the
 			// join to be abandoned within seconds.
 			cfg.FederationAPI.PartialStateResyncGiveUpAfter = 5 * time.Second //nolint:mnd

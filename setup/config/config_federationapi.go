@@ -27,6 +27,12 @@ type FederationAPI struct {
 	// which restart servers and expect delivery to resume quickly.
 	FederationMinRetryExponent uint32 `yaml:"send_min_retry_exponent"`
 
+	// How long a failed direct fetch of a remote server's signing keys stops
+	// further fetches from that server (MSC4499 §3). A successful fetch clears
+	// it. The transport backoff above applies as well, so a value below its
+	// first step has no further effect. The default is 2s; 0 uses the default.
+	ServerKeyFetchBackoff time.Duration `yaml:"server_key_fetch_backoff"`
+
 	// How long a partial state resync (MSC3706) may keep failing to get usable state from
 	// any server before the join is abandoned: the local users leave the room again.
 	// Failures on our side do not count, and neither does a server that gives the IDs of
@@ -86,9 +92,13 @@ func (c *FederationAPI) UnmarshalYAML(unmarshal func(any) error) error {
 	return nil
 }
 
+// DefaultServerKeyFetchBackoff is used when server_key_fetch_backoff is unset.
+const DefaultServerKeyFetchBackoff = 2 * time.Second
+
 func (c *FederationAPI) Defaults(opts DefaultOpts) {
 	c.FederationMaxRetries = 11
 	c.FederationMinRetryExponent = 8
+	c.ServerKeyFetchBackoff = DefaultServerKeyFetchBackoff
 	c.P2PFederationRetriesUntilAssumedOffline = 1
 	c.DisableTLSValidation = false
 	c.DisableHTTPKeepalives = false

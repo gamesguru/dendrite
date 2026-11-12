@@ -13,6 +13,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 const (
@@ -36,8 +37,6 @@ func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 
 	return
 }
-
-const serverKeyFetchFailureBackoff = 2 * time.Second
 
 func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, serverName spec.ServerName) (*gomatrixserverlib.ServerKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
@@ -93,7 +92,11 @@ func (a *FederationInternalAPI) recordServerKeyFetchFailure(serverName spec.Serv
 	if a.serverKeyFetchBackoff == nil {
 		a.serverKeyFetchBackoff = make(map[spec.ServerName]time.Time)
 	}
-	a.serverKeyFetchBackoff[serverName] = time.Now().Add(serverKeyFetchFailureBackoff)
+	backoff := config.DefaultServerKeyFetchBackoff
+	if a.cfg != nil && a.cfg.ServerKeyFetchBackoff > 0 {
+		backoff = a.cfg.ServerKeyFetchBackoff
+	}
+	a.serverKeyFetchBackoff[serverName] = time.Now().Add(backoff)
 }
 
 func (a *FederationInternalAPI) clearServerKeyFetchFailure(serverName spec.ServerName) {
