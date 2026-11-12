@@ -347,17 +347,16 @@ func (a *FederationInternalAPI) QueryServerKeys(
 			}
 			return nil
 		}
-		for keyID, criteria := range req.KeyIDToCriteria {
+		for keyID := range req.KeyIDToCriteria {
 			if _, ok := serverKeys.VerifyKeys[keyID]; !ok {
 				if _, ok = serverKeys.OldVerifyKeys[keyID]; !ok {
 					return fmt.Errorf("fetched server key response does not contain requested key ID %s", keyID)
 				}
 			}
-			if criteria.MinimumValidUntilTS != 0 && serverKeys.ValidUntilTS < criteria.MinimumValidUntilTS {
-				return fmt.Errorf("fetched server key response is not valid until %d", criteria.MinimumValidUntilTS)
-			}
 		}
-		res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+		if notaryResponseAnswersRequest(*serverKeys, req.KeyIDToCriteria, time.Now()) {
+			res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+		}
 		return nil
 	}
 	// Return the database's selected responses. In particular, this preserves
