@@ -447,6 +447,12 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 			// message for redelivery.
 			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
 		}
+		if errors.Is(err, types.ErrStoreRelation) {
+			// Nothing was written, so redelivery can try again, as it did
+			// when the relation was stored after the event.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -485,14 +491,6 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	if pduPos, err = s.notifyJoinedPeeks(ctx, ev, pduPos); err != nil {
 		log.WithError(err).Errorf("Failed to notifyJoinedPeeks for PDU pos %d", pduPos)
-		return err
-	}
-
-	if err = s.db.UpdateRelations(ctx, ev); err != nil {
-		log.WithFields(log.Fields{
-			"event_id": ev.EventID(),
-			"type":     ev.Type(),
-		}).WithError(err).Warn("Failed to update relations")
 		return err
 	}
 
@@ -540,6 +538,12 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		if ctx.Err() != nil {
 			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
 		}
+		if errors.Is(err, types.ErrStoreRelation) {
+			// Nothing was written, so redelivery can try again, as it did
+			// when the relation was stored after the event.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -567,15 +571,6 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
 		}).WithError(err).Warn("failed to index fulltext element")
-	}
-
-	if err = s.db.UpdateRelations(ctx, ev); err != nil {
-		log.WithFields(log.Fields{
-			"room_id":  ev.RoomID().String(),
-			"event_id": ev.EventID(),
-			"type":     ev.Type(),
-		}).WithError(err).Warn("Failed to update relations")
-		return err
 	}
 
 	if pduPos, err = s.notifyJoinedPeeks(ctx, ev, pduPos); err != nil {

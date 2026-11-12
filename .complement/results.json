@@ -489,7 +489,7 @@
 {"Action":"pass","Test":"TestMSC4499Key/System/§6"}
 {"Action":"skip","Test":"TestMSC4499Key/System/§6/AdminStartupGuardrails"}
 {"Action":"pass","Test":"TestMSC4499Key/System/§9"}
-{"Action":"skip","Test":"TestMSC4499Key/System/§9/CorroborationTierRetention"}
+{"Action":"pass","Test":"TestMSC4499Key/System/§9/CorroborationTierRetention"}
 {"Action":"pass","Test":"TestMSC4499Key/System/§9/StorageQuotaResilience"}
 {"Action":"pass","Test":"TestMSC4499Key/Temporal"}
 {"Action":"pass","Test":"TestMSC4499Key/Temporal/§5"}

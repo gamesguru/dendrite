@@ -24,9 +24,14 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
-// This error is returned when parsing sync tokens if the token is invalid. Callers can use this
-// error to detect whether to 400 or 401 the client. It is recommended to 401 them to force a
-// logout.
+// ErrStoreRelation marks a failure to store an event's relation while
+// writing the event. The write is rolled back as a whole, so it can be
+// retried.
+var ErrStoreRelation = errors.New("failed to store event relation")
+
+// ErrMalformedSyncToken is returned when parsing sync tokens if the token is invalid. Callers can
+// use this error to detect whether to 400 or 401 the client. It is recommended to 401 them to force
+// a logout.
 var ErrMalformedSyncToken = errors.New("malformed sync token")
 
 type StateDelta struct {

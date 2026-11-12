@@ -323,7 +323,7 @@ func (d *Database) WriteEvent(
 		// consumer has not finished processing. Store the relation with the
 		// event, so that /relations has it as soon as /sync returns the event.
 		if err = d.insertRelation(ctx, txn, ev); err != nil {
-			return fmt.Errorf("d.insertRelation: %w", err)
+			return fmt.Errorf("%w: %w", types.ErrStoreRelation, err)
 		}
 
 		if len(addStateEvents) == 0 && len(removeStateEventIDs) == 0 {
