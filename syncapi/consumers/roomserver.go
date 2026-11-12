@@ -1186,23 +1186,29 @@ func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *
 	return prevIDs, nil
 }
 
+// prevEventIsRejected reports whether the roomserver holds prevID but only as
+// a rejected event. It asks for the accepted event first, because that is the
+// common case and settles it in one lookup; only a prev event that is held at
+// all but is not accepted needs the second query to tell a rejected event from
+// one the roomserver does not know.
 func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) (bool, error) {
 	if s.rsAPI == nil {
 		return false, nil
 	}
-	var known, accepted api.QueryEventsByIDResponse
-	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
-		RoomID: roomID, EventIDs: []string{prevID},
-	}, &known); err != nil {
-		return false, err
-	}
-	if len(known.Events) == 0 {
-		return false, nil
-	}
+	var accepted api.QueryEventsByIDResponse
 	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
 	}, &accepted); err != nil {
 		return false, err
 	}
-	return len(accepted.Events) == 0, nil
+	if len(accepted.Events) > 0 {
+		return false, nil
+	}
+	var known api.QueryEventsByIDResponse
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID},
+	}, &known); err != nil {
+		return false, err
+	}
+	return len(known.Events) > 0, nil
 }
