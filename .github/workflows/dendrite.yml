@@ -355,28 +355,23 @@ jobs:
         with:
           path: dendrite
 
-      # Attempt to check out the same branch of Complement as the PR. If it
-      # doesn't exist, fallback to main.
+      # Run the Complement suite maintained on the fork's dev branch. A PR may
+      # carry its own matching Complement branch; otherwise (including a push to
+      # main) fall back to dev, which is where Zendrite's test fixes land. The
+      # fork's main branch lags behind dev and lacks those fixes, so selecting it
+      # from the Dendrite branch name makes an identical build fail after a merge.
       - name: Checkout complement
         shell: bash
         run: |
           mkdir -p complement
-          # Attempt to use the version of complement which best matches the current
-          # build. Depending on whether this is a PR or release, etc. we need to
-          # use different fallbacks.
-          #
-          # 1. First check if there's a similarly named branch (GITHUB_HEAD_REF
-          #    for pull requests, otherwise GITHUB_REF).
-          # 2. Attempt to use the base branch, e.g. when merging into release-vX.Y
-          #    (GITHUB_BASE_REF for pull requests).
-          # 3. Use the Zendrite complement fork's default branch ("dev").
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "$GITHUB_BASE_REF" "${GITHUB_REF#refs/heads/}" "dev"; do
+          for BRANCH_NAME in "$GITHUB_HEAD_REF" "dev"; do
             # Skip empty branch names and merge commits.
             if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
               continue
             fi
             (wget -O - "https://github.com/gamesguru/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
           done
+          test -f complement/go.mod || { echo "failed to check out a Complement suite"; exit 1; }
       # Build initial Dendrite image
       - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
         working-directory: dendrite
