@@ -616,7 +616,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 				logrus.ErrorKey: err,
 				"user_id":       userID,
 				"server":        serverName,
-			}).Error("Failed to manually update device lists for user")
+			}).Debug("Failed to manually update device lists for user, falling back to /keys/query")
 			// try to do it via /keys/query
 			devKeys[userID] = []string{}
 			continue
@@ -632,7 +632,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 				logrus.ErrorKey: err,
 				"user_id":       userID,
 				"server":        serverName,
-			}).Error("Failed to manually update device lists for user")
+			}).Debug("Failed to manually update device lists for user, falling back to /keys/query")
 			// try to do it via /keys/query
 			devKeys[userID] = []string{}
 			continue
