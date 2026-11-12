@@ -20,17 +20,6 @@ RUN cat > /build/run_complement.sh <<'EOF'
 #!/bin/bash
 set -eu
 
-pg_lsclusters
-pg_ctlcluster 17 main start
-
-until pg_isready
-do
-    echo "Waiting for postgres"
-    sleep 1
-done
-
-cd /zendrite
-
 stop() {
     trap - TERM INT
     if [ -n "${zendrite_pid:-}" ]; then
@@ -41,6 +30,17 @@ stop() {
     exit 0
 }
 trap stop TERM INT
+
+pg_lsclusters
+pg_ctlcluster 17 main start
+
+until pg_isready
+do
+    echo "Waiting for postgres"
+    sleep 1
+done
+
+cd /zendrite
 
 ./generate-keys --keysize 1024 --server "$SERVER_NAME" --tls-cert server.crt --tls-key server.key --tls-authority-cert /complement/ca/ca.crt --tls-authority-key /complement/ca/ca.key
 ./generate-config -server "$SERVER_NAME" --ci --db "user=postgres database=postgres host=/var/run/postgresql/" > zendrite.yaml
