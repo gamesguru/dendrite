@@ -319,6 +319,13 @@ func (d *Database) WriteEvent(
 			return fmt.Errorf("d.handleBackwardExtremities: %w", err)
 		}
 
+		// A sync request reads every committed event, including one the
+		// consumer has not finished processing. Store the relation with the
+		// event, so that /relations has it as soon as /sync returns the event.
+		if err = d.insertRelation(ctx, txn, ev); err != nil {
+			return fmt.Errorf("d.insertRelation: %w", err)
+		}
+
 		if len(addStateEvents) == 0 && len(removeStateEventIDs) == 0 {
 			// Nothing to do, the event may have just been a message event.
 			return nil
@@ -808,6 +815,17 @@ func (d *Database) ReIndex(ctx context.Context, limit, afterID int64) (map[int64
 }
 
 func (d *Database) UpdateRelations(ctx context.Context, event *rstypes.HeaderedEvent) error {
+	if relationOf(event) == nil {
+		return nil
+	}
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.insertRelation(ctx, txn, event)
+	})
+}
+
+// relationOf returns the relation that event declares, or nil if it declares
+// none that is stored. Redactions are not stored as relations.
+func relationOf(event *rstypes.HeaderedEvent) *gomatrixserverlib.RelatesTo {
 	// No need to unmarshal if the event is a redaction
 	if event.Type() == spec.MRoomRedaction {
 		return nil
@@ -817,21 +835,22 @@ func (d *Database) UpdateRelations(ctx context.Context, event *rstypes.HeaderedE
 		logrus.WithError(err).Error("unable to unmarshal relation content")
 		return nil
 	}
-	switch {
-	case content.Relations == nil:
+	if content.Relations == nil || content.Relations.EventID == "" || content.Relations.RelationType == "" {
 		return nil
-	case content.Relations.EventID == "":
-		return nil
-	case content.Relations.RelationType == "":
-		return nil
-	default:
-		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-			return d.Relations.InsertRelation(
-				ctx, txn, event.RoomID().String(), content.Relations.EventID,
-				event.EventID(), event.Type(), content.Relations.RelationType,
-			)
-		})
 	}
+	return content.Relations
+}
+
+// insertRelation stores the relation that event declares, if any.
+func (d *Database) insertRelation(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) error {
+	relation := relationOf(event)
+	if relation == nil {
+		return nil
+	}
+	return d.Relations.InsertRelation(
+		ctx, txn, event.RoomID().String(), relation.EventID,
+		event.EventID(), event.Type(), relation.RelationType,
+	)
 }
 
 func (d *Database) RedactRelations(ctx context.Context, roomID, redactedEventID string) error {
