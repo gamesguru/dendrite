@@ -139,6 +139,11 @@ func validateServerKeyJSON(raw json.RawMessage, now time.Time) (gomatrixserverli
 	if len(keys.VerifyKeys) > maxVerifyKeys {
 		return keys, fmt.Errorf("server key response has %d verify_keys, exceeding the %d-key ceiling", len(keys.VerifyKeys), maxVerifyKeys)
 	}
+	// A missing or null valid_until_ts decodes as zero. Such a response makes
+	// no validity claim at all and must not be stored.
+	if keys.ValidUntilTS <= 0 {
+		return keys, fmt.Errorf("server key response has no valid_until_ts")
+	}
 	// An expired valid_until_ts is not a fetch failure. The response is stored
 	// with its validity, and each notary request applies its own
 	// minimum_valid_until_ts when deciding whether the stored copy will do.
@@ -222,14 +227,14 @@ func walkJSONValue(dec *json.Decoder) error {
 func (a *FederationInternalAPI) storedNotaryKeys(
 	ctx context.Context, req *api.QueryServerKeysRequest,
 ) ([]gomatrixserverlib.ServerKeys, error) {
-	anyValidity := len(req.KeyIDToCriteria) > 0
+	noValidityRequired := len(req.KeyIDToCriteria) > 0
 	for _, criteria := range req.KeyIDToCriteria {
 		if criteria.MinimumValidUntilTS != 0 {
-			anyValidity = false
+			noValidityRequired = false
 			break
 		}
 	}
-	if anyValidity {
+	if noValidityRequired {
 		return a.db.GetNotaryKeysIncludingExpired(ctx, req.ServerName, req.KeyIDs())
 	}
 	return a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
@@ -297,6 +302,24 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil { //nolint:contextcheck
 		// non-fatal, still return the response
 		util.GetLogger(ctx).WithError(err).Warn("failed to UpdateNotaryKeys")
+		if len(req.KeyIDToCriteria) == 0 {
+			// A request for all of a server's keys only gets a response
+			// that is currently valid, as it does from storage.
+			if serverKeys.ValidUntilTS.Time().After(time.Now()) {
+				res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+			}
+			return nil
+		}
+		for keyID, criteria := range req.KeyIDToCriteria {
+			if _, ok := serverKeys.VerifyKeys[keyID]; !ok {
+				if _, ok = serverKeys.OldVerifyKeys[keyID]; !ok {
+					return fmt.Errorf("fetched server key response does not contain requested key ID %s", keyID)
+				}
+			}
+			if criteria.MinimumValidUntilTS != 0 && serverKeys.ValidUntilTS < criteria.MinimumValidUntilTS {
+				return fmt.Errorf("fetched server key response is not valid until %d", criteria.MinimumValidUntilTS)
+			}
+		}
 		res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
 		return nil
 	}
