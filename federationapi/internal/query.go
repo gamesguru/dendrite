@@ -225,26 +225,54 @@ func walkJSONValue(dec *json.Decoder) error {
 	}
 }
 
-// storedNotaryKeys returns the stored responses that answer req once a direct
-// fetch has been tried. A request that names its keys and sets no
-// minimum_valid_until_ts for any of them also gets responses that have
-// expired: the requester has said it has no validity requirement. An expired
-// response is never returned without that fetch attempt, so it cannot stand
-// in for a refresh.
+// storedNotaryKeys returns stored responses after a direct fetch attempt. A key
+// whose criterion sets no minimum_valid_until_ts accepts an expired response;
+// every other requested key needs a currently valid response that is also valid
+// until its minimum. Keys are considered separately, so a request that mixes an
+// explicit zero minimum with an omitted one can still be answered.
 func (a *FederationInternalAPI) storedNotaryKeys(
 	ctx context.Context, req *api.QueryServerKeysRequest,
 ) ([]gomatrixserverlib.ServerKeys, error) {
-	noValidityRequired := len(req.KeyIDToCriteria) > 0
-	for _, criteria := range req.KeyIDToCriteria {
-		if criteria.MinimumValidUntilTS != 0 {
-			noValidityRequired = false
-			break
+	if len(req.KeyIDToCriteria) == 0 {
+		return a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	}
+	stored, err := a.db.GetNotaryKeysIncludingExpired(ctx, req.ServerName, req.KeyIDs())
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	results := make([]gomatrixserverlib.ServerKeys, 0, len(stored))
+	for _, serverKeys := range stored {
+		if notaryResponseAnswersRequest(serverKeys, req.KeyIDToCriteria, now) {
+			results = append(results, serverKeys)
 		}
 	}
-	if noValidityRequired {
-		return a.db.GetNotaryKeysIncludingExpired(ctx, req.ServerName, req.KeyIDs())
+	return results, nil
+}
+
+// notaryResponseAnswersRequest reports whether a stored response satisfies the
+// criterion of at least one requested key it contains. A response that contains
+// such a key can answer the request, even though its validity is a property of
+// the whole response rather than of one key.
+func notaryResponseAnswersRequest(
+	serverKeys gomatrixserverlib.ServerKeys,
+	criteria map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria,
+	now time.Time,
+) bool {
+	for keyID, criterion := range criteria {
+		_, current := serverKeys.VerifyKeys[keyID]
+		_, old := serverKeys.OldVerifyKeys[keyID]
+		if !current && !old {
+			continue
+		}
+		if criterion.MinimumValidUntilTS == 0 {
+			return true
+		}
+		if serverKeys.ValidUntilTS >= criterion.MinimumValidUntilTS && serverKeys.ValidUntilTS.Time().After(now) {
+			return true
+		}
 	}
-	return a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	return false
 }
 
 func (a *FederationInternalAPI) fetchServerKeysFromCache(
