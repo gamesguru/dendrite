@@ -1398,12 +1398,11 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 	rsAPI.SetFederationAPI(nil, nil)
 
 	room := test.NewRoom(t, user)
-	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
-
-	if err := rsapi.SendEvents(processCtx.Context(), rsAPI, rsapi.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
-		t.Fatalf("failed to send events: %v", err)
-	}
-
+	// Build every event before the sync API consumers start. A consumer can
+	// call QueryEventsByID, which reads the test room's events through the
+	// fake roomserver below, while the test goroutine builds the next event.
+	// test.Room is not safe for that concurrent use.
+	initialEvents := append([]*rstypes.HeaderedEvent(nil), room.Events()...)
 	ev1 := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "first"})
 	ev2 := room.CreateAndInsert(t, user, "m.room.message", map[string]any{
 		"body": " * first",
@@ -1416,6 +1415,13 @@ func TestRemoveEditedEventFromSearchIndex(t *testing.T) {
 			"rel_type": "m.replace",
 		},
 	})
+
+	AddPublicRoutes(processCtx, routers, cfg, cm, &natsInstance, &syncUserAPI{accounts: []userapi.Device{alice}}, &syncRoomserverAPI{rooms: []*test.Room{room}}, caches, caching.DisableMetrics, nil, nil)
+
+	if err := rsapi.SendEvents(processCtx.Context(), rsAPI, rsapi.KindNew, initialEvents, "test", "test", "test", nil, false); err != nil {
+		t.Fatalf("failed to send events: %v", err)
+	}
+
 	events := []*rstypes.HeaderedEvent{ev1, ev2}
 
 	for _, e := range events {
