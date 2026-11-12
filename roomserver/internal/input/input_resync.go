@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -153,7 +152,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
 	var newlyRejected []string
-	var newlyAccepted []*types.HeaderedEvent
+	var newlyAccepted []*acceptedWindowEvent
 	recomputed := false
 	if len(anchorStateIDs) > 0 {
 		var skipped []string
@@ -408,14 +407,14 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// are now accepted. The sync API may have dropped their backward marker
 	// while the roomserver held them as rejected, so send them downstream to be
 	// stored: writing one removes the markers that cite it and restores the
-	// history behind the gap. A default visibility keeps this consistent with
-	// events first received as old, which use shared when none is known.
-	for _, event := range newlyAccepted {
+	// history behind the gap. Each carries the history visibility from before
+	// it, so events are not exposed under a wider rule than applied then.
+	for _, accepted := range newlyAccepted {
 		outputEvents = append(outputEvents, api.OutputEvent{
 			Type: api.OutputTypeOldRoomEvent,
 			OldRoomEvent: &api.OutputOldRoomEvent{
-				Event:             event,
-				HistoryVisibility: gomatrixserverlib.HistoryVisibilityShared,
+				Event:             accepted.event,
+				HistoryVisibility: accepted.historyVisibility,
 			},
 		})
 	}

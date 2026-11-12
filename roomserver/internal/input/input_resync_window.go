@@ -31,6 +31,13 @@ type windowEvent struct {
 	prevIDs []string
 }
 
+// acceptedWindowEvent is an event whose rejection the resync cleared, together
+// with the history visibility in force before it.
+type acceptedWindowEvent struct {
+	event             *types.HeaderedEvent
+	historyVisibility gomatrixserverlib.HistoryVisibility
+}
+
 // recomputeWindowState gives every event received since the partial state join
 // the state it would have had with the room's full state, as Synapse does when it
 // de-partial-states an event. The events were stored with state that lacked the
@@ -50,7 +57,7 @@ func (r *Inputer) recomputeWindowState(
 	joinEventID string,
 	anchorEntries []types.StateEntry,
 	latestIDs []string,
-) (done bool, skipped []string, newlyRejected []string, newlyAccepted []*types.HeaderedEvent, err error) {
+) (done bool, skipped []string, newlyRejected []string, newlyAccepted []*acceptedWindowEvent, err error) {
 	roomNID := roomInfo.RoomNID
 	joinEvents, err := updater.EventsFromIDs(ctx, roomInfo, []string{joinEventID})
 	if err != nil {
@@ -135,7 +142,7 @@ func (r *Inputer) recheckWindowEvent(
 	roomState *state.StateResolution,
 	ev windowEvent,
 	stateBefore types.StateSnapshotNID,
-) (becameRejected bool, accepted *types.HeaderedEvent, err error) {
+) (becameRejected bool, accepted *acceptedWindowEvent, err error) {
 	stored, err := updater.EventsFromIDs(ctx, roomInfo, []string{ev.id})
 	if err != nil {
 		return false, nil, fmt.Errorf("updater.EventsFromIDs (window event): %w", err)
@@ -146,8 +153,13 @@ func (r *Inputer) recheckWindowEvent(
 
 	// Load only the state needed to authenticate this event, not the whole
 	// snapshot. The complete state is still materialized separately by
-	// flatStateAfterEvents for the new snapshot.
+	// flatStateAfterEvents for the new snapshot. Also fetch the history
+	// visibility, since it travels with an event that may be recovered below.
 	tuples := gomatrixserverlib.StateNeededForAuth([]gomatrixserverlib.PDU{stored[0].PDU}).Tuples()
+	tuples = append(tuples, gomatrixserverlib.StateKeyTuple{
+		EventType: spec.MRoomHistoryVisibility,
+		StateKey:  "",
+	})
 	entries, err := roomState.LoadStateAtSnapshotForStringTuples(ctx, stateBefore, tuples)
 	if err != nil {
 		return false, nil, fmt.Errorf("roomState.LoadStateAtSnapshotForStringTuples: %w", err)
@@ -160,6 +172,7 @@ func (r *Inputer) recheckWindowEvent(
 	if err != nil {
 		return false, nil, fmt.Errorf("updater.Events (state before event): %w", err)
 	}
+	historyVisibility := historyVisibilityBefore(stateEvents)
 	authEvents, err := gomatrixserverlib.NewAuthEvents(gomatrixserverlib.ToPDUs(stateEvents))
 	if err != nil {
 		return false, nil, fmt.Errorf("gomatrixserverlib.NewAuthEvents: %w", err)
@@ -199,10 +212,29 @@ func (r *Inputer) recheckWindowEvent(
 	if wasRejected && !rejected {
 		// The sync API may have dropped this event's backward marker while the
 		// roomserver still held it as rejected. Return it so the caller can send
-		// it downstream and close the gap now that it is accepted.
-		return false, &types.HeaderedEvent{PDU: stored[0].PDU}, nil
+		// it downstream and close the gap now that it is accepted. The history
+		// visibility is the one in force before it, as for a normally accepted
+		// event, so later readers are filtered by the rules of its time.
+		return false, &acceptedWindowEvent{
+			event:             &types.HeaderedEvent{PDU: stored[0].PDU},
+			historyVisibility: historyVisibility,
+		}, nil
 	}
 	return !wasRejected && rejected, nil, nil
+}
+
+// historyVisibilityBefore returns the history visibility in force in a state
+// snapshot, defaulting to shared when it holds no visibility event.
+func historyVisibilityBefore(stateEvents []types.Event) gomatrixserverlib.HistoryVisibility {
+	for _, stateEvent := range stateEvents {
+		if stateEvent.Type() != spec.MRoomHistoryVisibility || !stateEvent.StateKeyEquals("") {
+			continue
+		}
+		if hisVis, err := stateEvent.HistoryVisibility(); err == nil {
+			return hisVis
+		}
+	}
+	return gomatrixserverlib.HistoryVisibilityShared
 }
 
 func hasUnknownState(states []types.StateAtEvent) bool {
@@ -320,7 +352,7 @@ func (r *Inputer) recomputeStateSinceJoin(
 	roomState *state.StateResolution,
 	roomInfo *types.RoomInfo,
 	anchorStateIDs []string,
-) (done bool, skipped []string, newlyRejected []string, newlyAccepted []*types.HeaderedEvent, err error) {
+) (done bool, skipped []string, newlyRejected []string, newlyAccepted []*acceptedWindowEvent, err error) {
 	logger := logrus.WithField("room_nid", roomInfo.RoomNID)
 	joinEventID, err := r.DB.GetPartialStateJoinEventID(ctx, roomInfo.RoomNID)
 	if err != nil {
