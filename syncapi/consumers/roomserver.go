@@ -437,8 +437,8 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	// inserts, so repeating it is safe.
 	writeStarted := time.Now()
 	var pduPos types.StreamPosition
-	noBackfill := s.noBackfillPrevEventIDs(ctx, ev)
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		noBackfill := s.rejectedPrevEventIDs(ctx, ev)
 		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
@@ -530,8 +530,8 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
-	noBackfill := s.noBackfillPrevEventIDs(ctx, ev)
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
+		noBackfill := s.rejectedPrevEventIDs(ctx, ev)
 		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
@@ -1150,26 +1150,21 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 	return nil
 }
 
-// noBackfillPrevEventIDs returns the prev_events of ev that /messages can never
-// paginate to, so that their backward extremity markers can be removed in the
-// same transaction as the event: events the sync API stored, and events the
-// roomserver only holds as rejected. Non-rejected outliers, such as events
+// rejectedPrevEventIDs returns prev_events that the roomserver only holds as
+// rejected. Non-rejected outliers, such as events
 // fetched while resyncing partial state, are in the roomserver but not the sync
 // API timeline, so their marker stays and /messages backfills them.
-func (s *OutputRoomEventConsumer) noBackfillPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) []string {
+func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) []string {
 	var prevIDs []string
 	for _, prevID := range ev.PrevEventIDs() {
-		if s.prevEventNeedsNoBackfill(ctx, ev.RoomID().String(), prevID) {
+		if s.prevEventIsRejected(ctx, ev.RoomID().String(), prevID) {
 			prevIDs = append(prevIDs, prevID)
 		}
 	}
 	return prevIDs
 }
 
-func (s *OutputRoomEventConsumer) prevEventNeedsNoBackfill(ctx context.Context, roomID, prevID string) bool {
-	if stored, err := s.db.Events(ctx, []string{prevID}); err == nil && len(stored) > 0 && stored[0] != nil {
-		return true
-	}
+func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) bool {
 	if s.rsAPI == nil {
 		return false
 	}

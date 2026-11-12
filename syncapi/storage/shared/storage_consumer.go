@@ -322,7 +322,21 @@ func (d *Database) WriteEvent(
 		// that records them. A sync snapshot may see this event as soon as it
 		// commits, and a marker left until after the commit would make it drop
 		// the earlier events of the same response.
+		// Derive previous events already present in the sync timeline from this
+		// transaction. The consumer's roomserver checks can be stale by the time
+		// a retry runs, and a concurrent backfill may have stored the event.
+		storedPrevEvents, err := d.OutputEvents.SelectEvents(ctx, txn, ev.PrevEventIDs(), nil, false)
+		if err != nil {
+			return fmt.Errorf("d.OutputEvents.SelectEvents: %w", err)
+		}
+		purgePrevIDs := make(map[string]struct{}, len(purgePrevEventIDs)+len(storedPrevEvents))
 		for _, prevEventID := range purgePrevEventIDs {
+			purgePrevIDs[prevEventID] = struct{}{}
+		}
+		for _, prevEvent := range storedPrevEvents {
+			purgePrevIDs[prevEvent.EventID()] = struct{}{}
+		}
+		for prevEventID := range purgePrevIDs {
 			if err = d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, ev.RoomID().String(), prevEventID); err != nil {
 				return fmt.Errorf("d.BackwardExtremities.DeleteBackwardExtremity: %w", err)
 			}
