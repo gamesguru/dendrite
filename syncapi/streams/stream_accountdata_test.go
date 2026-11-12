@@ -17,7 +17,12 @@ import (
 type pendingAccountDataSnapshot struct{ storage.DatabaseTransaction }
 
 func (pendingAccountDataSnapshot) GetAccountDataInRange(context.Context, string, types.Range, *synctypes.EventFilter) (map[string][]string, types.StreamPosition, error) {
-	return map[string][]string{}, 0, nil
+	// The user has tags in a room they are in and one they are not in; the
+	// consumer has not recorded any global account data yet.
+	return map[string][]string{
+		"!joined:test": {"m.tag"},
+		"!other:test":  {"m.tag"},
+	}, 0, nil
 }
 
 type pendingAccountDataUserAPI struct{ userapi.SyncUserAPI }
@@ -62,6 +67,11 @@ func TestCompleteAccountDataBeforeConsumer(t *testing.T) {
 			} else {
 				require.Empty(t, req.Response.AccountData.Events)
 			}
+			require.Contains(t, req.Response.Rooms.Join, "!joined:test")
+			joined := req.Response.Rooms.Join["!joined:test"]
+			require.NotNil(t, joined.AccountData)
+			require.Len(t, joined.AccountData.Events, 1)
+			require.Equal(t, "m.tag", joined.AccountData.Events[0].Type)
 			require.NotContains(t, req.Response.Rooms.Join, "!other:test")
 		})
 	}
