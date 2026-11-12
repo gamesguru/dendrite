@@ -314,7 +314,6 @@ jobs:
   complement:
     name: "Complement (${{ matrix.label }})"
     timeout-minutes: 35
-    needs: initial-tests-done
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
