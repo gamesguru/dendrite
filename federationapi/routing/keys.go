@@ -9,6 +9,7 @@ package routing
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -213,10 +214,41 @@ func NotaryKeys(
 		}
 	}
 
+	// An omitted minimum_valid_until_ts means the current time. Fill it in
+	// here, so that a zero reaching the federation API is one the requester
+	// sent explicitly.
+	now := spec.AsTimestamp(time.Now())
 	if req == nil {
+		body, readErr := io.ReadAll(httpReq.Body)
+		if readErr != nil {
+			util.GetLogger(httpReq.Context()).WithError(readErr).Error("io.ReadAll failed")
+			return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+		}
 		req = &gomatrixserverlib.PublicKeyNotaryLookupRequest{}
-		if reqErr := clienthttputil.UnmarshalJSONRequest(httpReq, &req); reqErr != nil {
+		if reqErr := clienthttputil.UnmarshalJSON(body, &req); reqErr != nil {
 			return *reqErr
+		}
+		var sent struct {
+			ServerKeys map[spec.ServerName]map[gomatrixserverlib.KeyID]map[string]json.RawMessage `json:"server_keys"`
+		}
+		// The body decoded above, so a failure here only means a criteria
+		// value that is not an object; treat its minimum as omitted.
+		_ = json.Unmarshal(body, &sent)
+		for serverName, criteria := range req.ServerKeys {
+			for keyID, criterion := range criteria {
+				if raw, ok := sent.ServerKeys[serverName][keyID]["minimum_valid_until_ts"]; !ok || string(raw) == "null" {
+					criterion.MinimumValidUntilTS = now
+					criteria[keyID] = criterion
+				}
+			}
+		}
+	} else {
+		// The path form of the request carries no criteria.
+		for _, criteria := range req.ServerKeys {
+			for keyID, criterion := range criteria {
+				criterion.MinimumValidUntilTS = now
+				criteria[keyID] = criterion
+			}
 		}
 	}
 

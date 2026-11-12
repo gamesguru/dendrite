@@ -71,10 +71,17 @@ func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, ser
 		a.recordServerKeyFetchFailure(serverName)
 		return nil, err
 	}
-	a.clearServerKeyFetchFailure(serverName)
 	sks, ok := res.(*gomatrixserverlib.ServerKeys)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetServerKeys")
+	}
+	if sks.ValidUntilTS.Time().After(time.Now()) {
+		a.clearServerKeyFetchFailure(serverName)
+	} else {
+		// An expired response is returned and stored, but it never satisfies
+		// the cache, so every later request would fetch again. Back off as
+		// for a failed fetch.
+		a.recordServerKeyFetchFailure(serverName)
 	}
 	return sks, nil
 }
