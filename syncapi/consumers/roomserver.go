@@ -437,8 +437,9 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	// inserts, so repeating it is safe.
 	writeStarted := time.Now()
 	var pduPos types.StreamPosition
+	noBackfill := s.noBackfillPrevEventIDs(ctx, ev)
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
@@ -463,7 +464,6 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
 	}
-	s.cleanKnownBackwardExtremities(ctx, ev)
 	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
 		log.WithFields(log.Fields{
 			"room_id":        ev.RoomID().String(),
@@ -530,8 +530,9 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
+	noBackfill := s.noBackfillPrevEventIDs(ctx, ev)
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
@@ -552,7 +553,6 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		}).Panicf("roomserver output log: write old event failure")
 		return nil
 	}
-	s.cleanKnownBackwardExtremities(ctx, ev)
 
 	// Old state events are kept from sync, so they are not delivered as
 	// sticky events either.
@@ -1150,19 +1150,20 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 	return nil
 }
 
-// cleanKnownBackwardExtremities removes the backward extremity marker of each
-// prev_event of ev that /messages can never paginate to, so it does not try to
-// backfill it: events the sync API stored, and events the roomserver only holds
-// as rejected. Non-rejected outliers, such as events fetched while resyncing
-// partial state, are in the roomserver but not the sync API timeline, so their
-// marker stays and /messages backfills them.
-func (s *OutputRoomEventConsumer) cleanKnownBackwardExtremities(ctx context.Context, ev *rstypes.HeaderedEvent) {
+// noBackfillPrevEventIDs returns the prev_events of ev that /messages can never
+// paginate to, so that their backward extremity markers can be removed in the
+// same transaction as the event: events the sync API stored, and events the
+// roomserver only holds as rejected. Non-rejected outliers, such as events
+// fetched while resyncing partial state, are in the roomserver but not the sync
+// API timeline, so their marker stays and /messages backfills them.
+func (s *OutputRoomEventConsumer) noBackfillPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) []string {
+	var prevIDs []string
 	for _, prevID := range ev.PrevEventIDs() {
-		if !s.prevEventNeedsNoBackfill(ctx, ev.RoomID().String(), prevID) {
-			continue
+		if s.prevEventNeedsNoBackfill(ctx, ev.RoomID().String(), prevID) {
+			prevIDs = append(prevIDs, prevID)
 		}
-		_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
 	}
+	return prevIDs
 }
 
 func (s *OutputRoomEventConsumer) prevEventNeedsNoBackfill(ctx context.Context, roomID, prevID string) bool {

@@ -29,12 +29,16 @@ type unavailableDatabase struct {
 // errDatabaseUnavailable is transient: the connection failed, not the write.
 var errDatabaseUnavailable = fmt.Errorf("failed to connect to the database: %w", driver.ErrBadConn)
 
-func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility) (types.StreamPosition, error) {
+func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string) (types.StreamPosition, error) {
 	return 0, errDatabaseUnavailable
 }
 
 func (unavailableDatabase) StoreReceipt(context.Context, string, string, string, string, string, spec.Timestamp) (types.StreamPosition, bool, error) {
 	return 0, false, errDatabaseUnavailable
+}
+
+func (unavailableDatabase) Events(context.Context, []string) ([]*rstypes.HeaderedEvent, error) {
+	return nil, errDatabaseUnavailable
 }
 
 type senderResolver struct {
@@ -44,6 +48,10 @@ type senderResolver struct {
 
 func (r senderResolver) QueryUserIDForSender(context.Context, spec.RoomID, spec.SenderID) (*spec.UserID, error) {
 	return spec.NewUserID(r.user.ID, true)
+}
+
+func (r senderResolver) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	return errDatabaseUnavailable
 }
 
 // TestWriteFailureStopsOnShutdown checks that a write failing because the

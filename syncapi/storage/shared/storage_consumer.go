@@ -298,7 +298,7 @@ func (d *Database) WriteEvent(
 	addStateEvents []*rstypes.HeaderedEvent,
 	addStateEventIDs, removeStateEventIDs []string,
 	transactionID *api.TransactionID, excludeFromSync bool,
-	historyVisibility gomatrixserverlib.HistoryVisibility,
+	historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 ) (pduPosition types.StreamPosition, returnErr error) {
 	returnErr = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		var err error
@@ -317,6 +317,15 @@ func (d *Database) WriteEvent(
 
 		if err = d.handleBackwardExtremities(ctx, txn, ev); err != nil {
 			return fmt.Errorf("d.handleBackwardExtremities: %w", err)
+		}
+		// Remove the gaps that can never be backfilled in the same transaction
+		// that records them. A sync snapshot may see this event as soon as it
+		// commits, and a marker left until after the commit would make it drop
+		// the earlier events of the same response.
+		for _, prevEventID := range purgePrevEventIDs {
+			if err = d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, ev.RoomID().String(), prevEventID); err != nil {
+				return fmt.Errorf("d.BackwardExtremities.DeleteBackwardExtremity: %w", err)
+			}
 		}
 
 		// A sync request reads every committed event, including one the
