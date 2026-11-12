@@ -18,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
+	federationapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 )
@@ -85,6 +86,17 @@ func TestRetryWhileUnavailable(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, calls, "a local failure during the state lookup is retried")
+
+	calls = 0
+	err = retryWhileUnavailable(t.Context(), nil, logger, func(int) error {
+		calls++
+		return fmt.Errorf("lookup state: %w: %w", errStateUnavailable, federationapi.FederationClientError{
+			Err:   "remote state fetch failed",
+			Cause: errConnectionReset,
+		})
+	})
+	require.Error(t, err)
+	require.Equal(t, 1, calls, "a remote network failure during the state lookup is not retried in line")
 
 	for name, failure := range map[string]error{
 		"rejection":         types.RejectedError("state resolution cooldown active"),

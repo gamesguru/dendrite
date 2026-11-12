@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
+	federationapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -156,6 +157,18 @@ func retryableInputError(ctx context.Context, err error) bool {
 	}
 	if unavailableHere(ctx, err) {
 		return true
+	}
+	// A federation failure can wrap a transport error, which IsTransient would
+	// otherwise count. Retrying it in line would hold up the rest of the room
+	// until the budget runs out while the remote server remains unavailable;
+	// leave the event unstored instead, so a later event fetches it again.
+	var federationErr federationapi.FederationClientError
+	if errors.As(err, &federationErr) {
+		return false
+	}
+	var federationErrPtr *federationapi.FederationClientError
+	if errors.As(err, &federationErrPtr) {
+		return false
 	}
 	return sqlutil.IsTransient(err)
 }
