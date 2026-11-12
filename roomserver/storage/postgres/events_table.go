@@ -16,6 +16,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrix-org/util"
+
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -239,6 +241,7 @@ func initEventsTable(ctx context.Context, db *sql.DB) error {
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
 		defer cancel()
 		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)"); err != nil {
+			util.GetLogger(ctx).WithError(err).Error("Failed to release event index advisory lock; discarding connection")
 			// The session may still hold the lock. Mark it bad so database/sql
 			// closes it on Close instead of returning it to the pool, which
 			// releases the lock server-side.
