@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -152,10 +153,11 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 	// join would be lost when we replace the state, breaking membership table updates.
 	roomState := state.NewStateResolution(updater, roomInfo, r.Queryer)
 	var newlyRejected []string
+	var newlyAccepted []*types.HeaderedEvent
 	recomputed := false
 	if len(anchorStateIDs) > 0 {
 		var skipped []string
-		recomputed, skipped, newlyRejected, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
+		recomputed, skipped, newlyRejected, newlyAccepted, err = r.recomputeStateSinceJoin(ctx, updater, &roomState, roomInfo, anchorStateIDs)
 		if err != nil {
 			return false, nil, err
 		}
@@ -399,6 +401,22 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		outputEvents = append(outputEvents, api.OutputEvent{
 			Type:           api.OutputTypeRejectedEvents,
 			RejectedEvents: &api.OutputRejectedEvents{RoomID: roomID, EventIDs: newlyRejected},
+		})
+	}
+
+	// Events that were only rejected because the partial state was incomplete
+	// are now accepted. The sync API may have dropped their backward marker
+	// while the roomserver held them as rejected, so send them downstream to be
+	// stored: writing one removes the markers that cite it and restores the
+	// history behind the gap. A default visibility keeps this consistent with
+	// events first received as old, which use shared when none is known.
+	for _, event := range newlyAccepted {
+		outputEvents = append(outputEvents, api.OutputEvent{
+			Type: api.OutputTypeOldRoomEvent,
+			OldRoomEvent: &api.OutputOldRoomEvent{
+				Event:             event,
+				HistoryVisibility: gomatrixserverlib.HistoryVisibilityShared,
+			},
 		})
 	}
 
