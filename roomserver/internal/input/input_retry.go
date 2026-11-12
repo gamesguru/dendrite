@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 
+	federationapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -141,13 +142,33 @@ func retryWhileUnavailable(ctx context.Context, owner jetstream.Ownership, logge
 // Unlike the missing-state lookup, which counts only errors the database
 // driver reports itself, this also counts dropped connections: a query cut
 // off by a PostgreSQL failover fails with a plain network error, as in #426.
-// Failures of remote servers do not reach here as such. Processing turns them
-// into a rejection or into an error of its own, and a rejection is never
-// retried.
+// Failures of remote servers are not retried here. Processing turns them
+// into a rejection or into an error of its own. The errStateUnavailable error in
+// particular is not retried, unless it wraps a local failure such as a
+// database that went away during the state lookup: a remote server that timed out or is backing off
+// stays so for minutes, far longer than this budget, and retrying in line
+// would hold up every other event in the room meanwhile. The event is left
+// unstored instead, and the room's next event fetches it again as a missing
+// prev event.
 func retryableInputError(ctx context.Context, err error) bool {
 	var rejected types.RejectedError
 	if errors.As(err, &rejected) {
 		return false
 	}
-	return unavailableHere(ctx, err) || sqlutil.IsTransient(err)
+	if unavailableHere(ctx, err) {
+		return true
+	}
+	// A federation failure can wrap a transport error, which IsTransient would
+	// otherwise count. Retrying it in line would hold up the rest of the room
+	// until the budget runs out while the remote server remains unavailable;
+	// leave the event unstored instead, so a later event fetches it again.
+	var federationErr federationapi.FederationClientError
+	if errors.As(err, &federationErr) {
+		return false
+	}
+	var federationErrPtr *federationapi.FederationClientError
+	if errors.As(err, &federationErrPtr) {
+		return false
+	}
+	return sqlutil.IsTransient(err)
 }

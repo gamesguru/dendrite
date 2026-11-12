@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -134,7 +135,11 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// Only return an error if we really couldn't get any events.
 	if err != nil && len(events) == 0 {
 		logrus.WithError(err).Errorf("gomatrixserverlib.RequestBackfill failed")
-		return err
+		requester.backfillErrors = append(requester.backfillErrors, err)
+		return &api.BackfillUnavailableError{
+			Retryable: backfillFailuresRetryable(requester.backfillErrors),
+			Err:       err,
+		}
 	}
 	// If we got an error but still got events, that's fine, because a server might have returned a 404 (or something)
 	// but other servers could provide the missing event.
@@ -182,6 +187,28 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
+}
+
+// backfillFailuresRetryable reports whether a failed backfill might succeed
+// later. Only a 404 definitively means that a server does not have the
+// requested events. Other responses and errors may be transient or indicate
+// that another server can provide the events.
+func backfillFailuresRetryable(errs []error) bool {
+	if len(errs) == 0 {
+		// No server error was recorded, so the failure came from event loading
+		// or another local step. Treat it as transient rather than ending
+		// history. A request with no servers to ask produces no error at all,
+		// so it never reaches this helper.
+		return true
+	}
+	for _, err := range errs {
+		var httpErr spec.HTTPError
+		if errors.As(err, &httpErr) && httpErr.Code == http.StatusNotFound {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func prioritiseBackfillFromEventIDs(
@@ -303,6 +330,7 @@ type backfillRequester struct {
 
 	// per-request state
 	servers                 []spec.ServerName
+	backfillErrors          []error
 	eventIDToBeforeStateIDs map[string][]string
 	eventIDMap              map[string]gomatrixserverlib.PDU
 	historyVisiblity        gomatrixserverlib.HistoryVisibility
@@ -380,6 +408,7 @@ FederationHit:
 		res, err := c.StateIDsBeforeEvent(ctx, targetEvent)
 		if err != nil {
 			lastErr = err
+			b.backfillErrors = append(b.backfillErrors, err)
 			continue
 		}
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = res
@@ -456,6 +485,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 		result, err := c.StateBeforeEvent(ctx, roomVer, event, eventIDs)
 		if err != nil {
 			lastErr = err
+			b.backfillErrors = append(b.backfillErrors, err)
 			continue
 		}
 		for eventID, ev := range result {
@@ -564,6 +594,9 @@ func (b *backfillRequester) Backfill(ctx context.Context, origin, server spec.Se
 	limit int, fromEventIDs []string,
 ) (gomatrixserverlib.Transaction, error) {
 	tx, err := b.fsAPI.Backfill(ctx, origin, server, roomID, limit, fromEventIDs)
+	if err != nil {
+		b.backfillErrors = append(b.backfillErrors, err)
+	}
 	return tx, err
 }
 

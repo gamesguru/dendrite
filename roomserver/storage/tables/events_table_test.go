@@ -26,7 +26,7 @@ func mustCreateEventsTable(t *testing.T, dbType test.DBType) (tables.Events, fun
 	var tab tables.Events
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreateEventsTable(db)
+		err = postgres.CreateEventsTable(context.Background(), db)
 		assert.NoError(t, err)
 		tab, err = postgres.PrepareEventsTable(db)
 	case test.DBTypeSQLite:

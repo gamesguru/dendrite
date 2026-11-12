@@ -472,12 +472,18 @@ func (s *OutputRoomEventConsumer) copyTags(ctx context.Context, oldRoomID, newRo
 	return true, nil
 }
 
-func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rstypes.HeaderedEvent, streamPos uint64) error {
+func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rstypes.HeaderedEvent, streamPos uint64) (retErr error) {
 	members, roomSize, err := s.localRoomMembers(ctx, event.RoomID().String())
 	if err != nil {
 		return fmt.Errorf("s.localRoomMembers: %w", err)
 	}
 	var pushRuleCopyErr error
+	// Keep a copy failure even when a later step also fails: onMessage only
+	// refuses the message while this error is present, so acknowledging it
+	// would permanently drop the predecessor push rule.
+	defer func() {
+		retErr = errors.Join(pushRuleCopyErr, retErr)
+	}()
 
 	switch {
 	case event.Type() == spec.MRoomMember:
@@ -576,7 +582,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 		}
 	}
 	if err != nil {
-		return errors.Join(pushRuleCopyErr, err)
+		return err
 	}
 	for _, userID := range users {
 		if err = s.syncProducer.GetAndSendNotificationData(ctx, userID, event.RoomID().String()); err != nil {
@@ -590,7 +596,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 			return err
 		}
 	}
-	return pushRuleCopyErr
+	return nil
 }
 
 type localMembership struct {

@@ -41,7 +41,46 @@ CREATE TABLE IF NOT EXISTS syncapi_memberships (
 	-- Unique index
 	UNIQUE (room_id, user_id, membership)
 );
+
+CREATE TABLE IF NOT EXISTS syncapi_membership_history (
+    room_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    membership TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    stream_pos BIGINT NOT NULL,
+    PRIMARY KEY (room_id, user_id, stream_pos)
+);
+-- The primary key serves per-user "stream_pos DESC LIMIT 1" lookups. The
+-- catch-up below needs the global maximum and the rows past it, which only a
+-- stream_pos index answers without scanning either table on every startup.
+DROP INDEX IF EXISTS syncapi_membership_history_pos_idx;
+CREATE INDEX IF NOT EXISTS syncapi_membership_history_stream_pos_idx ON syncapi_membership_history (stream_pos);
+CREATE INDEX IF NOT EXISTS syncapi_memberships_stream_pos_idx ON syncapi_memberships (stream_pos);
+-- Backfill from the current-state table so lookups before the upgrade don't
+-- fall back to the lossy current table. Catch up rows beyond the history floor
+-- on later startups as well. That recovers only the latest transition per
+-- membership type written after a downgrade to a build that predates
+-- membership history, because syncapi_memberships keeps one row per
+-- (room, user, membership).
+INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
+SELECT room_id, user_id, membership, event_id, stream_pos FROM syncapi_memberships
+WHERE stream_pos > COALESCE((SELECT MAX(stream_pos) FROM syncapi_membership_history), 0)
+ON CONFLICT (room_id, user_id, stream_pos) DO NOTHING;
 `
+
+const insertMembershipHistorySQL = `
+INSERT INTO syncapi_membership_history(room_id, user_id, membership, event_id, stream_pos)
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT (room_id, user_id, stream_pos) DO UPDATE
+SET membership = excluded.membership, event_id = excluded.event_id
+`
+
+const selectMembershipHistoryAtStreamSQL = `
+SELECT membership, event_id, stream_pos FROM syncapi_membership_history
+WHERE room_id = $1 AND user_id = $2 AND stream_pos <= $3
+ORDER BY stream_pos DESC LIMIT 1
+`
+
+const purgeMembershipHistorySQL = "DELETE FROM syncapi_membership_history WHERE room_id = $1"
 
 const upsertMembershipSQL = "" +
 	"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos)" +
@@ -56,6 +95,9 @@ const selectMembershipCountSQL = "" +
 
 const selectMembershipBeforeSQL = "" +
 	"SELECT membership, topological_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND topological_pos <= $3 ORDER BY topological_pos DESC LIMIT 1"
+
+const selectMembershipAtStreamSQL = "" +
+	"SELECT membership, event_id, stream_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
 
 const selectMembersSQL = `
 SELECT event_id FROM
@@ -76,11 +118,17 @@ type membershipsStatements struct {
 	upsertMembershipStmt      *sql.Stmt
 	selectMembershipCountStmt *sql.Stmt
 	// selectHeroesStmt          *sql.Stmt - prepared at runtime due to variadic
-	selectMembershipForUserStmt *sql.Stmt
-	selectMembersStmt           *sql.Stmt
-	purgeMembershipsStmt        *sql.Stmt
+	selectMembershipForUserStmt         *sql.Stmt
+	selectMembershipAtStreamStmt        *sql.Stmt
+	selectMembersStmt                   *sql.Stmt
+	purgeMembershipsStmt                *sql.Stmt
+	insertMembershipHistoryStmt         *sql.Stmt
+	selectMembershipHistoryAtStreamStmt *sql.Stmt
+	purgeMembershipHistoryStmt          *sql.Stmt
 }
 
+// NewSqliteMembershipsTable creates the membership table if needed and prepares
+// its queries, returning schema or statement preparation errors.
 func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 	s := &membershipsStatements{
 		db: db,
@@ -93,8 +141,12 @@ func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 		{&s.upsertMembershipStmt, upsertMembershipSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCountSQL},
 		{&s.selectMembershipForUserStmt, selectMembershipBeforeSQL},
+		{&s.selectMembershipAtStreamStmt, selectMembershipAtStreamSQL},
 		{&s.selectMembersStmt, selectMembersSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
+		{&s.insertMembershipHistoryStmt, insertMembershipHistorySQL},
+		{&s.selectMembershipHistoryAtStreamStmt, selectMembershipHistoryAtStreamSQL},
+		{&s.purgeMembershipHistoryStmt, purgeMembershipHistorySQL},
 	}.Prepare(db)
 }
 
@@ -116,6 +168,11 @@ func (s *membershipsStatements) UpsertMembership(
 		streamPos,
 		topologicalPos,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = sqlutil.TxStmt(txn, s.insertMembershipHistoryStmt).ExecContext(ctx,
+		event.RoomID().String(), event.StateKeyResolved, membership, event.EventID(), streamPos)
 	return err
 }
 
@@ -158,9 +215,42 @@ func (s *membershipsStatements) SelectMembershipForUser(
 	return membership, topologyPos, nil
 }
 
+// SelectMembershipForUserAtStreamPosition returns the latest membership
+// at or before streamPos, using sync stream order rather than room topology.
+// Membership history retains every transition. No matching
+// row returns "leave" without an error; other query or scan errors propagate.
+func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
+	ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64,
+) (membership, eventID string, err error) {
+	var historyMembership, historyEventID string
+	var historyPos int64
+	historyStmt := sqlutil.TxStmt(txn, s.selectMembershipHistoryAtStreamStmt)
+	historyErr := historyStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&historyMembership, &historyEventID, &historyPos)
+	if historyErr != nil && historyErr != sql.ErrNoRows {
+		return "", "", historyErr
+	}
+	var currentMembership, currentEventID string
+	var currentPos int64
+	currentStmt := sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
+	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos)
+	if currentErr != nil && currentErr != sql.ErrNoRows {
+		return "", "", currentErr
+	}
+	if historyErr == nil && (currentErr == sql.ErrNoRows || historyPos >= currentPos) {
+		return historyMembership, historyEventID, nil
+	}
+	if currentErr == nil {
+		return currentMembership, currentEventID, nil
+	}
+	return "leave", "", nil
+}
+
 func (s *membershipsStatements) PurgeMemberships(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) error {
+	if _, err := sqlutil.TxStmt(txn, s.purgeMembershipHistoryStmt).ExecContext(ctx, roomID); err != nil {
+		return err
+	}
 	purgeMembershipsStmt := sqlutil.TxStmt(txn, s.purgeMembershipsStmt)
 	_, err := purgeMembershipsStmt.ExecContext(ctx, roomID)
 	return err

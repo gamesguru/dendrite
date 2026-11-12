@@ -1,0 +1,3 @@
+[submodule "docs"]
+	path = docs
+	url = https://git.nutra.tk/wombat-foundation/dendrite-docs.git

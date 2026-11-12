@@ -40,6 +40,13 @@ type parsedRespState struct {
 // not put the room on the missing-state cooldown.
 var errNoValidMissingEvents = errors.New("/get_missing_events returned no valid events")
 
+// errNoPrevEventsReturned says that a server answered /get_missing_events but
+// the response held none of the event's prev_events, for instance because it
+// was empty. The server is reachable, so the state before the event can still
+// be had from /state_ids and /event. Any other events the response held are not
+// used: without a prev_event of e they do not connect it to our history.
+var errNoPrevEventsReturned = errors.New("/get_missing_events returned none of the prev_events")
+
 // isMalformedJSONError reports whether err came from decoding a response body
 // that was empty or not valid JSON. Those responses are worth retrying once,
 // unlike a connection failure or an HTTP error status.
@@ -121,7 +128,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) {
+			if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 				return fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 			}
 		}
@@ -180,12 +187,23 @@ func (t *missingStateReq) processEventWithMissingState(
 		"txn_prev_events": e.PrevEventIDs(),
 	})
 
-	// Attempt to fill in the gap using /get_missing_events
-	// This will either:
-	// - fill in the gap completely then process event `e` returning no backwards extremity
-	// - fail to fill in the gap and tell us to terminate the transaction err=not nil
-	// - fail to fill in the gap and tell us to fetch state at the new backwards extremity, and to not terminate the transaction
+	// Attempt to fill in the gap using /get_missing_events. This will either:
+	//   - fill the gap: inject the events and process e normally;
+	//   - return none of e's prev_events: leave the gap and resolve the state
+	//     before e from its prev_events;
+	//   - partly fill the gap: resolve the state at the new backward extremity,
+	//     roll it forward, then process e;
+	//   - fail outright (e.g. no server answers): reject the event.
 	newEvents, isGapFilled, prevStatesKnown, err := t.getMissingEvents(ctx, e, roomVersion)
+	if errors.Is(err, errNoPrevEventsReturned) {
+		// The server answered but gave us nothing to close the gap with, as
+		// Synapse may for history it only serves via /backfill. Leave the gap
+		// and look up the state before the event from its prev_events, fetching
+		// unknown ones via /state_ids and /event, as Synapse does. The missing
+		// history becomes a backward extremity for /messages to backfill.
+		t.log.WithError(err).Debug("Leaving the gap before the event and looking up the state at its prev_events instead")
+		return t.stateBeforeNewEvent(ctx, e, roomVersion, t.copyHadEvents())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("t.getMissingEvents: %w", err)
 	}
@@ -205,7 +223,7 @@ func (t *missingStateReq) processEventWithMissingState(
 			})
 			if err != nil {
 				var rejErr types.RejectedError
-				if !errors.As(err, &rejErr) {
+				if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 					return nil, fmt.Errorf("t.inputer.processRoomEvent (filling gap): %w", err)
 				}
 			}
@@ -233,42 +251,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		return nil, fmt.Errorf("t.lookupState (backwards extremity): %w", err)
 	}
 
-	hadEvents := map[string]bool{}
-	t.hadEventsMutex.Lock()
-	for k, v := range t.hadEvents {
-		hadEvents[k] = v
-	}
-	t.hadEventsMutex.Unlock()
-
-	// sendOutliers stores the state events in the database as outliers.
-	// When OutliersStored is set, the events were already stored during
-	// a chunked fetch, so this is a no-op.
-	sendOutliers := func(rs *parsedRespState) error {
-		if rs.OutliersStored {
-			return nil
-		}
-		outliers := rs.Events()
-		outlierRoomEvents := make([]api.InputRoomEvent, 0, len(outliers))
-		for _, outlier := range outliers {
-			if hadEvents[outlier.EventID()] {
-				continue
-			}
-			outlierRoomEvents = append(outlierRoomEvents, api.InputRoomEvent{
-				Kind:   api.KindOutlier,
-				Event:  &types.HeaderedEvent{PDU: outlier},
-				Origin: t.origin,
-			})
-		}
-		for _, ire := range outlierRoomEvents {
-			if err = t.inputer.processRoomEvent(ctx, t.virtualHost, &ire); err != nil {
-				var rejErr types.RejectedError
-				if !errors.As(err, &rejErr) {
-					return fmt.Errorf("t.inputer.processRoomEvent (outlier): %w", err)
-				}
-			}
-		}
-		return nil
-	}
+	hadEvents := t.copyHadEvents()
 
 	// stateEventIDs extracts the state event IDs from the resolved state.
 	// When OutliersStored is set, returns the pre-computed IDs.
@@ -285,7 +268,7 @@ func (t *missingStateReq) processEventWithMissingState(
 
 	// Send outliers first so we can send the state along with the new backwards
 	// extremity without any missing auth events.
-	if err = sendOutliers(resolvedState); err != nil {
+	if err = t.sendOutliers(ctx, resolvedState, hadEvents); err != nil {
 		return nil, fmt.Errorf("sendOutliers: %w", err)
 	}
 
@@ -319,7 +302,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		})
 		if err != nil {
 			var rejErr types.RejectedError
-			if !errors.As(err, &rejErr) {
+			if errors.Is(err, errStateUnavailable) || !errors.As(err, &rejErr) {
 				return nil, fmt.Errorf("t.inputer.processRoomEvent (fast forward): %w", err)
 			}
 		}
@@ -336,13 +319,23 @@ func (t *missingStateReq) processEventWithMissingState(
 
 	// If we still haven't got the state for the prev events then we'll go and
 	// ask the federation for it if needed.
-	resolvedState, err = t.lookupResolvedStateBeforeEvent(ctx, e, roomVersion)
+	return t.stateBeforeNewEvent(ctx, e, roomVersion, hadEvents)
+}
+
+// stateBeforeNewEvent resolves the state before e from the state after each of
+// its prev_events, asking federation for prev_events we don't know, and stores
+// that state's events as outliers, skipping those in hadEvents. The caller
+// processes e with the returned state. Lookup and storage errors propagate.
+func (t *missingStateReq) stateBeforeNewEvent(
+	ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion, hadEvents map[string]bool,
+) (*parsedRespState, error) {
+	resolvedState, err := t.lookupResolvedStateBeforeEvent(ctx, e, roomVersion)
 	if err != nil {
 		return nil, fmt.Errorf("t.lookupState (new event): %w", err)
 	}
 
 	// Send the outliers for the retrieved state.
-	if err = sendOutliers(resolvedState); err != nil {
+	if err = t.sendOutliers(ctx, resolvedState, hadEvents); err != nil {
 		return nil, fmt.Errorf("sendOutliers: %w", err)
 	}
 
@@ -350,6 +343,43 @@ func (t *missingStateReq) processEventWithMissingState(
 	// HasState with the event IDs to create a new state snapshot when we
 	// process the new event.
 	return resolvedState, nil
+}
+
+// copyHadEvents returns a copy of the events this request already had.
+func (t *missingStateReq) copyHadEvents() map[string]bool {
+	t.hadEventsMutex.Lock()
+	defer t.hadEventsMutex.Unlock()
+	hadEvents := make(map[string]bool, len(t.hadEvents))
+	for k, v := range t.hadEvents {
+		hadEvents[k] = v
+	}
+	return hadEvents
+}
+
+// sendOutliers stores rs's events in the database as outliers, skipping those
+// in hadEvents. When OutliersStored is set, the events were already stored
+// during a chunked fetch, so this is a no-op. Rejections are ignored; other
+// errors propagate.
+func (t *missingStateReq) sendOutliers(ctx context.Context, rs *parsedRespState, hadEvents map[string]bool) error {
+	if rs.OutliersStored {
+		return nil
+	}
+	for _, outlier := range rs.Events() {
+		if hadEvents[outlier.EventID()] {
+			continue
+		}
+		if err := t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
+			Kind:   api.KindOutlier,
+			Event:  &types.HeaderedEvent{PDU: outlier},
+			Origin: t.origin,
+		}); err != nil {
+			var rejErr types.RejectedError
+			if !errors.As(err, &rejErr) {
+				return fmt.Errorf("t.inputer.processRoomEvent (outlier): %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e gomatrixserverlib.PDU, roomVersion gomatrixserverlib.RoomVersion) (*parsedRespState, error) {
@@ -392,7 +422,7 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			}
 			validationError = err2
 		default:
-			return nil, fmt.Errorf("t.lookupStateAfterEvent: %w", err)
+			return nil, fmt.Errorf("t.lookupStateAfterEvent: %w: %w", errStateUnavailable, err)
 		}
 		// Append the state onto the collected state. We'll run this through the
 		// state resolution next.
@@ -422,6 +452,14 @@ func (t *missingStateReq) lookupResolvedStateBeforeEvent(ctx context.Context, e 
 			states = append(states, &respState{false, fallbackState})
 		} else {
 			t.log.WithError(err).Warnf("Federation state fallback also failed for event %s", e.EventID())
+			// Without any state the event cannot be authorized. A fetch
+			// failure says nothing about the event, so leave it unstored for
+			// a later event to fetch again rather than rejecting it.
+			var validationErr gomatrixserverlib.EventValidationError
+			if !errors.As(err, &validationErr) {
+				return nil, fmt.Errorf("federation state fallback: %w: %w", errStateUnavailable, err)
+			}
+			return nil, err
 		}
 	}
 
@@ -817,9 +855,9 @@ Event:
 		}
 	}
 	if !hasPrevEvent {
-		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v", t.origin, shouldHaveSomeEventIDs)
+		err = fmt.Errorf("called /get_missing_events but server %s didn't return any prev_events with IDs %v: %w", t.origin, shouldHaveSomeEventIDs, errNoPrevEventsReturned)
 		logger.WithError(err).Warnf(
-			"%s pushed us an event but couldn't give us details about prev_events via /get_missing_events - dropping this event until it can",
+			"%s pushed us an event but /get_missing_events returned no prev_events; will resolve state from the prev_events instead",
 			t.origin,
 		)
 		return nil, false, false, missingPrevEventsError{
@@ -978,6 +1016,7 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 		close(pending)
 
 		var batchEvents []gomatrixserverlib.PDU
+		var fetchErr error
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		wg.Add(workers)
@@ -987,6 +1026,32 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 				for id := range pending {
 					h, herr := t.lookupEvent(ctx, roomVersion, roomID, id, false)
 					if herr != nil {
+						var validationErr gomatrixserverlib.EventValidationError
+						var sigErr verifySigError
+						switch {
+						case errors.As(herr, &validationErr) && validationErr.Persistable:
+							// A persistable auth failure still carries an event that
+							// may be valid after state resolution. Keep it for the
+							// same outlier processing used by the non-chunked path.
+						case errors.As(herr, &validationErr), errors.As(herr, &sigErr):
+							// Non-persistable events and bad signatures cannot be
+							// part of valid state.
+							continue
+						default:
+							mu.Lock()
+							if fetchErr == nil {
+								fetchErr = fmt.Errorf("fetching state event %s: %w: %w", id, errStateUnavailable, herr)
+							}
+							mu.Unlock()
+							continue
+						}
+					}
+					if h == nil {
+						mu.Lock()
+						if fetchErr == nil {
+							fetchErr = fmt.Errorf("fetching state event %s: %w: lookup returned no event", id, errStateUnavailable)
+						}
+						mu.Unlock()
 						continue
 					}
 					mu.Lock()
@@ -996,6 +1061,9 @@ func (t *missingStateReq) fetchAndStoreStateInChunks(
 			}()
 		}
 		wg.Wait()
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
 
 		// Store this batch as outliers immediately.
 		for _, ev := range batchEvents {
@@ -1135,6 +1203,7 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 		// multiple goroutines, and everywhere else is blocked on this
 		// synchronous function anyway.
 		var haveEventsMutex sync.Mutex
+		var fetchErr error
 
 		// Define what we'll do in order to fetch the missing event ID.
 		fetch := func(missingEventID string) {
@@ -1153,6 +1222,14 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 					break
 				default:
 					t.log.WithFields(logrus.Fields{"missing_event_id": missingEventID}).WithError(herr).Warn("Failed to fetch missing event")
+					// The state cannot be built without this event. Leaving
+					// it out would authorize the new event against the
+					// wrong state and could reset the room's state.
+					haveEventsMutex.Lock()
+					if fetchErr == nil {
+						fetchErr = fmt.Errorf("fetching state event %s: %w: %w", missingEventID, errStateUnavailable, herr)
+					}
+					haveEventsMutex.Unlock()
 					return
 				}
 			}
@@ -1176,6 +1253,9 @@ func (t *missingStateReq) lookupMissingStateViaStateIDs(ctx context.Context, roo
 
 		// Wait for the workers to finish.
 		fetchgroup.Wait()
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
 	}
 
 	resp, err := t.createRespStateFromStateIDs(stateIDs)
@@ -1353,4 +1433,8 @@ func (e verifySigError) Error() string {
 
 func (e missingPrevEventsError) Error() string {
 	return fmt.Sprintf("unable to get prev_events for event %q: %s", e.eventID, e.err)
+}
+
+func (e missingPrevEventsError) Unwrap() error {
+	return e.err
 }

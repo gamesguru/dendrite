@@ -24,7 +24,7 @@ func mustCreatePreviousEventsTable(t *testing.T, dbType test.DBType) (tab tables
 	assert.NoError(t, err)
 	switch dbType {
 	case test.DBTypePostgres:
-		err = postgres.CreatePrevEventsTable(db)
+		err = postgres.CreatePrevEventsTable(context.Background(), db)
 		assert.NoError(t, err)
 		tab, err = postgres.PreparePrevEventsTable(db)
 	case test.DBTypeSQLite:

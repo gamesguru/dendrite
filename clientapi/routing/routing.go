@@ -56,8 +56,9 @@ type WellKnownClientResponse struct {
 	RTCFoci          []config.RTCFocus          `json:"org.matrix.msc4143.rtc_foci,omitempty"`
 }
 
-// Setup registers HTTP handlers with the given ServeMux. It also supplies the given http.Client
-// to clients which need to make outbound HTTP requests.
+// Setup registers HTTP handlers with the supplied routers and returns their
+// shared delayed-event manager. The first optional context controls background
+// work; when omitted, context.Background is used.
 //
 // Due to Setup being used to call many other functions, a gocyclo nolint is
 // applied:
@@ -502,7 +503,7 @@ func Setup(
 			case http.MethodPut:
 				return putThreadSubscription(req, device, vars["roomID"], vars["threadID"], req.Body, userAPI, rsAPI)
 			case http.MethodDelete:
-				return deleteThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI)
+				return deleteThreadSubscription(req, device, vars["roomID"], vars["threadID"], userAPI, rsAPI)
 			default:
 				return util.JSONResponse{Code: http.StatusMethodNotAllowed, JSON: spec.NotFound("Unsupported method")}
 			}

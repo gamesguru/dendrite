@@ -96,6 +96,13 @@ func (a *UserInternalAPI) PerformAdminUpdateRegistrationToken(ctx context.Contex
 	return a.DB.UpdateRegistrationToken(ctx, tokenString, newAttributes)
 }
 
+// InputAccountData stores account data for a local user and publishes an update.
+// CompareAccountData makes the write conditional on ExpectedAccountData; a
+// mismatch returns without an error or notification and sets res.Updated to false.
+// Invalid user IDs, remote users, empty types, JSON null content, and storage
+// failures return errors. Successful writes set res.Updated before fully-read
+// processing and publication, whose errors propagate even though data is stored.
+// Malformed ignored-user data does not prevent publication.
 func (a *UserInternalAPI) InputAccountData(ctx context.Context, req *api.InputAccountDataRequest, res *api.InputAccountDataResponse) error {
 	local, domain, err := gomatrixserverlib.SplitID('@', req.UserID)
 	if err != nil {
@@ -107,9 +114,21 @@ func (a *UserInternalAPI) InputAccountData(ctx context.Context, req *api.InputAc
 	if req.DataType == "" {
 		return fmt.Errorf("data type must not be empty")
 	}
-	if err := a.DB.SaveAccountData(ctx, local, domain, req.RoomID, req.DataType, req.AccountData); err != nil {
+	if req.CompareAccountData {
+		updated, saveErr := a.DB.SaveAccountDataIfUnchanged(ctx, local, domain, req.RoomID, req.DataType, req.ExpectedAccountData, req.AccountData)
+		if saveErr != nil {
+			util.GetLogger(ctx).WithError(saveErr).Error("a.DB.SaveAccountDataIfUnchanged failed")
+			return fmt.Errorf("failed to save account data: %w", saveErr)
+		}
+		res.Updated = updated
+		if !updated {
+			return nil
+		}
+	} else if err := a.DB.SaveAccountData(ctx, local, domain, req.RoomID, req.DataType, req.AccountData); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("a.DB.SaveAccountData failed")
 		return fmt.Errorf("failed to save account data: %w", err)
+	} else {
+		res.Updated = true
 	}
 	var ignoredUsers *synctypes.IgnoredUsers
 	if req.DataType == "m.ignored_user_list" {
@@ -373,6 +392,13 @@ func hashRefreshToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// PerformDeviceDeletion removes a local user's requested devices, their local
+// notification settings, and keys, then publishes device-list updates. An empty
+// DeviceIDs removes all devices except ExceptDeviceID. Invalid user IDs, remote
+// users, and device-removal errors stop processing. Notification-setting cleanup
+// errors are combined with later errors and do not prevent key cleanup; key
+// cleanup errors prevent the final device-list update. Completed deletions are
+// not rolled back by later failures.
 func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.PerformDeviceDeletionRequest, res *api.PerformDeviceDeletionResponse) error {
 	util.GetLogger(ctx).WithField("user_id", req.UserID).WithField("devices", req.DeviceIDs).Info("PerformDeviceDeletion")
 	local, domain, err := gomatrixserverlib.SplitID('@', req.UserID)
@@ -401,8 +427,8 @@ func (a *UserInternalAPI) PerformDeviceDeletion(ctx context.Context, req *api.Pe
 	var accountDataErrs []error
 	for _, deviceID := range deletedDeviceIDs {
 		dataType := "org.matrix.msc3890.local_notification_settings." + deviceID
-		if err = a.DB.SaveAccountData(ctx, local, domain, "", dataType, json.RawMessage("null")); err != nil {
-			accountDataErrs = append(accountDataErrs, fmt.Errorf("a.DB.SaveAccountData(%s): %w", dataType, err))
+		if err = a.DB.DeleteAccountDataByType(ctx, local, domain, "", dataType); err != nil {
+			accountDataErrs = append(accountDataErrs, fmt.Errorf("a.DB.DeleteAccountDataByType(%s): %w", dataType, err))
 		}
 	}
 	// Ask the keyserver to delete device keys and signatures for those devices

@@ -145,8 +145,15 @@ type DatabaseTransaction interface {
 	// returns "leave", the topological position and no error. If an error occurs, other than sql.ErrNoRows, returns that and an empty
 	// string as the membership.
 	SelectMembershipForUser(ctx context.Context, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error)
+	// SelectMembershipForUserAtStreamPosition returns the membership of the
+	// user at or before the given stream position.
+	SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error)
 	// getUserUnreadNotificationCountsForRooms returns the unread notifications for the given rooms
 	GetUserUnreadNotificationCountsForRooms(ctx context.Context, userID string, roomIDs map[string]string) (map[string]*eventutil.NotificationData, error)
+	// GetUserNotificationRoomsAfter returns the rooms with a notification
+	// row for the user written at a stream position in the range (after, upTo].
+	// A row can be rewritten with identical counts.
+	GetUserNotificationRoomsAfter(ctx context.Context, userID string, after, upTo types.StreamPosition) ([]string, error)
 	GetPresences(ctx context.Context, userID []string) ([]*types.PresenceInternal, error)
 	PresenceAfter(ctx context.Context, after types.StreamPosition, filter synctypes.EventFilter) (map[string]*types.PresenceInternal, error)
 	ThreadRelations(ctx context.Context, roomID string, watermark types.StreamPosition, before types.TopologyToken, limit int) ([]types.ThreadRelation, error)
@@ -183,7 +190,7 @@ type Database interface {
 	// Returns an error if there was a problem inserting this event.
 	WriteEvent(ctx context.Context, ev *rstypes.HeaderedEvent, addStateEvents []*rstypes.HeaderedEvent,
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
-		historyVisibility gomatrixserverlib.HistoryVisibility,
+		historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 	) (types.StreamPosition, error)
 	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
 	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
@@ -334,4 +341,8 @@ type SlidingSync interface {
 	GetConnectionList(ctx context.Context, connectionKey int64, listName string) (roomIDsJSON string, exists bool, err error)
 	// UpdateConnectionList stores the current room IDs for a list (JSON array)
 	UpdateConnectionList(ctx context.Context, connectionKey int64, listName string, roomIDsJSON string) error
+	// GetConnectionListWindow retrieves the room IDs a list had at a connection position.
+	GetConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64) (roomIDsJSON string, exists bool, err error)
+	// UpdateConnectionListWindow stores the room IDs a list had at a connection position.
+	UpdateConnectionListWindow(ctx context.Context, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string) error
 }

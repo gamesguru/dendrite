@@ -117,5 +117,33 @@
     "upgrade_from": 1,
     "rollback_to": 16,
     "surface": "401c91abb12c6884d5aa9beb1ae26093c831c97dd98ccf3245b9a1aaafdb49b4"
+  },
+  {
+    "protocol": 1,
+    "level": 18,
+    "upgrade_from": 1,
+    "rollback_to": 16,
+    "surface": "2d8888a7f6196cb0f1dbe664caef726a1ca867366446ec3a508c1a97192f2db0"
+  },
+  {
+    "protocol": 1,
+    "level": 19,
+    "upgrade_from": 1,
+    "rollback_to": 16,
+    "surface": "042e016f5a93e6d543a40e7b000ad1d2fc020f2ea06eaae07415ecb904e25f39"
+  },
+  {
+    "protocol": 1,
+    "level": 20,
+    "upgrade_from": 1,
+    "rollback_to": 19,
+    "surface": "c65476c542fcdb8e71870ceb1e7d751e3bccbdcb75e541818737030c31921e47"
+  },
+  {
+    "protocol": 1,
+    "level": 21,
+    "upgrade_from": 1,
+    "rollback_to": 19,
+    "surface": "69e39aff7e2f6687594c77ec38bce0672b5b004cf8bd84d0d5de435a4410197b"
   }
 ]

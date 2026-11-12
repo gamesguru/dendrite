@@ -94,6 +94,9 @@ type receiptStatements struct {
 	deleteConnectionReceiptsForRoom *sql.Stmt
 }
 
+// NewSqliteReceiptsTable creates and migrates receipt and Sliding Sync storage,
+// then prepares receipt queries, taking receipt stream positions from streamID.
+// Schema, migration, and statement preparation errors are returned.
 func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Receipts, error) {
 	_, err := db.Exec(receiptsSchema)
 	if err != nil {
@@ -109,11 +112,18 @@ func NewSqliteReceiptsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Re
 			Version: "syncapi: create sliding sync tables",
 			Up:      deltas.UpCreateSlidingSyncTables,
 		},
+		sqlutil.Migration{Version: "syncapi: create sliding sync list windows", Up: deltas.UpCreateSlidingSyncListWindows},
 		sqlutil.Migration{
 			Version: "syncapi: add connection receipts table for sliding sync",
 			Up:      deltas.UpAddConnectionReceipts,
 		},
 		sqlutil.Migration{Version: "syncapi: threaded receipts", Up: deltas.UpThreadedReceipts},
+		// Must run after threaded receipts, which drops and recreates the
+		// receipts table that this trigger references.
+		sqlutil.Migration{
+			Version: "syncapi: enforce sqlite sliding sync receipt cleanup",
+			Up:      deltas.UpEnsureConnectionReceiptCleanup,
+		},
 	)
 	err = m.Up(context.Background())
 	if err != nil {

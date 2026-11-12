@@ -13,6 +13,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/federationapi/api"
+	"codefloe.com/pat-s/zendrite/setup/config"
 )
 
 const (
@@ -36,8 +37,6 @@ func (f *FederationInternalAPI) QueryJoinedHostServerNamesInRoom(
 
 	return
 }
-
-const serverKeyFetchFailureBackoff = 2 * time.Second
 
 func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, serverName spec.ServerName) (*gomatrixserverlib.ServerKeys, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30) //nolint:mnd
@@ -72,10 +71,17 @@ func (a *FederationInternalAPI) fetchServerKeysDirectly(ctx context.Context, ser
 		a.recordServerKeyFetchFailure(serverName)
 		return nil, err
 	}
-	a.clearServerKeyFetchFailure(serverName)
 	sks, ok := res.(*gomatrixserverlib.ServerKeys)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetServerKeys")
+	}
+	if sks.ValidUntilTS.Time().After(time.Now()) {
+		a.clearServerKeyFetchFailure(serverName)
+	} else {
+		// An expired response is returned and stored, but it never satisfies
+		// the cache, so every later request would fetch again. Back off as
+		// for a failed fetch.
+		a.recordServerKeyFetchFailure(serverName)
 	}
 	return sks, nil
 }
@@ -93,7 +99,11 @@ func (a *FederationInternalAPI) recordServerKeyFetchFailure(serverName spec.Serv
 	if a.serverKeyFetchBackoff == nil {
 		a.serverKeyFetchBackoff = make(map[spec.ServerName]time.Time)
 	}
-	a.serverKeyFetchBackoff[serverName] = time.Now().Add(serverKeyFetchFailureBackoff)
+	backoff := config.DefaultServerKeyFetchBackoff
+	if a.cfg != nil && a.cfg.ServerKeyFetchBackoff > 0 {
+		backoff = a.cfg.ServerKeyFetchBackoff
+	}
+	a.serverKeyFetchBackoff[serverName] = time.Now().Add(backoff)
 }
 
 func (a *FederationInternalAPI) clearServerKeyFetchFailure(serverName spec.ServerName) {
@@ -136,9 +146,14 @@ func validateServerKeyJSON(raw json.RawMessage, now time.Time) (gomatrixserverli
 	if len(keys.VerifyKeys) > maxVerifyKeys {
 		return keys, fmt.Errorf("server key response has %d verify_keys, exceeding the %d-key ceiling", len(keys.VerifyKeys), maxVerifyKeys)
 	}
-	if !keys.ValidUntilTS.Time().After(now) {
-		return keys, fmt.Errorf("server key response expired at %s", keys.ValidUntilTS.Time().Format(time.RFC3339))
+	// A missing or null valid_until_ts decodes as zero. Such a response makes
+	// no validity claim at all and must not be stored.
+	if keys.ValidUntilTS <= 0 {
+		return keys, fmt.Errorf("server key response has no valid_until_ts")
 	}
+	// An expired valid_until_ts is not a fetch failure. The response is stored
+	// with its validity, and each notary request applies its own
+	// minimum_valid_until_ts when deciding whether the stored copy will do.
 
 	// A key ID is a permanent identity. It must not be bound to different key
 	// material in verify_keys and old_verify_keys in the same response.
@@ -210,6 +225,58 @@ func walkJSONValue(dec *json.Decoder) error {
 	}
 }
 
+// storedNotaryKeys returns stored responses after a direct fetch attempt. A key
+// whose criterion sets no minimum_valid_until_ts accepts an expired response;
+// every other requested key needs a currently valid response. The requested
+// minimum triggers a refresh in fetchServerKeysFromCache; after that attempt,
+// return the best available response even if it falls short of the minimum.
+// Keys are considered separately, so a request that mixes an explicit zero
+// minimum with an omitted one can still be answered.
+func (a *FederationInternalAPI) storedNotaryKeys(
+	ctx context.Context, req *api.QueryServerKeysRequest,
+) ([]gomatrixserverlib.ServerKeys, error) {
+	if len(req.KeyIDToCriteria) == 0 {
+		return a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	}
+	stored, err := a.db.GetNotaryKeysIncludingExpired(ctx, req.ServerName, req.KeyIDs())
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	results := make([]gomatrixserverlib.ServerKeys, 0, len(stored))
+	for _, serverKeys := range stored {
+		if notaryResponseAnswersRequest(serverKeys, req.KeyIDToCriteria, now) {
+			results = append(results, serverKeys)
+		}
+	}
+	return results, nil
+}
+
+// notaryResponseAnswersRequest reports whether a stored response satisfies the
+// criterion of at least one requested key it contains. A response that contains
+// such a key can answer the request, even though its validity is a property of
+// the whole response rather than of one key.
+func notaryResponseAnswersRequest(
+	serverKeys gomatrixserverlib.ServerKeys,
+	criteria map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria,
+	now time.Time,
+) bool {
+	for keyID, criterion := range criteria {
+		_, current := serverKeys.VerifyKeys[keyID]
+		_, old := serverKeys.OldVerifyKeys[keyID]
+		if !current && !old {
+			continue
+		}
+		if criterion.MinimumValidUntilTS == 0 {
+			return true
+		}
+		if serverKeys.ValidUntilTS.Time().After(now) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *FederationInternalAPI) fetchServerKeysFromCache(
 	ctx context.Context, req *api.QueryServerKeysRequest,
 ) ([]gomatrixserverlib.ServerKeys, error) {
@@ -261,7 +328,7 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	if err != nil {
 		// try to load as much as we can from the cache in a best effort basis
 		util.GetLogger(ctx).WithField("server", req.ServerName).WithError(err).Warn("notary: failed to ask server for keys, returning best effort keys")
-		serverKeysResponses, dbErr := a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+		serverKeysResponses, dbErr := a.storedNotaryKeys(ctx, req)
 		if dbErr != nil {
 			return fmt.Errorf("notary: server returned %w, and db returned %w", err, dbErr)
 		}
@@ -272,12 +339,29 @@ func (a *FederationInternalAPI) QueryServerKeys(
 	if err = a.db.UpdateNotaryKeys(context.Background(), req.ServerName, *serverKeys); err != nil { //nolint:contextcheck
 		// non-fatal, still return the response
 		util.GetLogger(ctx).WithError(err).Warn("failed to UpdateNotaryKeys")
-		res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+		if len(req.KeyIDToCriteria) == 0 {
+			// A request for all of a server's keys only gets a response
+			// that is currently valid, as it does from storage.
+			if serverKeys.ValidUntilTS.Time().After(time.Now()) {
+				res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+			}
+			return nil
+		}
+		for keyID := range req.KeyIDToCriteria {
+			if _, ok := serverKeys.VerifyKeys[keyID]; !ok {
+				if _, ok = serverKeys.OldVerifyKeys[keyID]; !ok {
+					return fmt.Errorf("fetched server key response does not contain requested key ID %s", keyID)
+				}
+			}
+		}
+		if notaryResponseAnswersRequest(*serverKeys, req.KeyIDToCriteria, time.Now()) {
+			res.ServerKeys = []gomatrixserverlib.ServerKeys{*serverKeys}
+		}
 		return nil
 	}
 	// Return the database's selected responses. In particular, this preserves
 	// the first-seen binding when a remote reuses a key ID for another key.
-	res.ServerKeys, err = a.db.GetNotaryKeys(ctx, req.ServerName, req.KeyIDs())
+	res.ServerKeys, err = a.storedNotaryKeys(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to read selected notary keys: %w", err)
 	}

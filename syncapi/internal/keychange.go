@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -23,6 +24,11 @@ import (
 	"codefloe.com/pat-s/zendrite/userapi/api"
 	keytypes "codefloe.com/pat-s/zendrite/userapi/types"
 )
+
+// ErrKeyChangeQueryIncomplete marks a failed query for users' changed device
+// keys. Callers must retain the old device-list position and may still use
+// membership-derived results collected before the query.
+var ErrKeyChangeQueryIncomplete = errors.New("key-change query incomplete")
 
 // DeviceOTKCounts adds one-time key counts to the /sync response.
 func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceID string, res *types.Response) error {
@@ -41,9 +47,14 @@ func DeviceOTKCounts(ctx context.Context, keyAPI api.SyncKeyAPI, userID, deviceI
 	return nil
 }
 
-// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. HasNew=true if the response
-// was filled in, else false if there are no new device list changes because there is nothing to catch up on. The response MUST
-// be already filled in with join/leave information.
+// DeviceListCatchup fills in the given response for the given user ID to bring it up-to-date with device lists. The response MUST
+// be already filled in with join/leave information. It returns the key-change
+// position and whether room tracking found changes or device_lists.changed grew.
+// Room-tracking errors propagate. A key-change query failure returns `from` with
+// the error, so the caller does not advance past key changes it never read; the
+// membership results already added to res are kept, and a retry of the window
+// can only repeat them. A filterSharedUsers failure likewise returns `from`
+// with the error.
 func DeviceListCatchup(
 	ctx context.Context, db storage.SharedUsers, userAPI api.SyncKeyAPI, rsAPI roomserverAPI.SyncRoomserverAPI,
 	userID string, res *types.Response, from, to types.StreamPosition,
@@ -83,13 +94,10 @@ func DeviceListCatchup(
 		Offset:   offset,
 		ToOffset: toOffset,
 	}, &queryRes); err != nil {
-		util.GetLogger(ctx).WithError(err).Error("userAPI.QueryKeyChanges failed")
-		return to, hasNew, nil
+		return from, hasNew, fmt.Errorf("%w: userAPI.QueryKeyChanges: %w", ErrKeyChangeQueryIncomplete, err)
 	}
 	if queryRes.Error != nil {
-		// don't fail the catchup because we may have got useful information by tracking membership
-		util.GetLogger(ctx).WithError(queryRes.Error).Error("QueryKeyChanges failed")
-		return to, hasNew, nil
+		return from, hasNew, fmt.Errorf("%w: QueryKeyChanges: %w", ErrKeyChangeQueryIncomplete, queryRes.Error)
 	}
 
 	util.GetLogger(ctx).WithFields(logrus.Fields{
@@ -109,7 +117,22 @@ func DeviceListCatchup(
 	queryRes.UserIDs = append(queryRes.UserIDs, joinUserIDs...)
 	queryRes.UserIDs = append(queryRes.UserIDs, leaveUserIDs...)
 	queryRes.UserIDs = util.UniqueStrings(queryRes.UserIDs)
-	sharedUsersMap := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs)
+	// Leave users must stay at zero even if the same user also appears in a
+	// join event in this response.
+	leaveSet := make(map[string]struct{}, len(leaveUserIDs))
+	for _, leaveUserID := range leaveUserIDs {
+		leaveSet[leaveUserID] = struct{}{}
+	}
+	failOpenUserIDs := make([]string, 0, len(queryRes.UserIDs))
+	for _, changedUserID := range queryRes.UserIDs {
+		if _, left := leaveSet[changedUserID]; !left {
+			failOpenUserIDs = append(failOpenUserIDs, changedUserID)
+		}
+	}
+	sharedUsersMap, err := filterSharedUsers(ctx, db, rsAPI, userID, queryRes.UserIDs, failOpenUserIDs)
+	if err != nil {
+		return from, false, err
+	}
 	userSet := make(map[string]bool)
 	for _, userID := range res.DeviceLists.Changed {
 		userSet[userID] = true
@@ -256,12 +279,17 @@ func TrackChangedUsers(
 	return changed, left, nil
 }
 
-// filterSharedUsers takes a list of remote users whose keys have changed and filters
-// it down to include only users who the requesting user shares a room with.
+// filterSharedUsers returns shared-room counts for usersWithChangedKeys,
+// retaining zero-count entries and treating the requesting user as shared with
+// itself. Every zero-count user is checked against the roomserver. If that
+// query fails, users in failOpenUserIDs are counted as shared (one); for any
+// other user the answer is unknown, so the call returns an error instead of
+// reporting a false leave. Database lookup failures fall through to the same
+// roomserver check.
 func filterSharedUsers(
 	ctx context.Context, db storage.SharedUsers, rsAPI roomserverAPI.SyncRoomserverAPI,
-	userID string, usersWithChangedKeys []string,
-) map[string]int {
+	userID string, usersWithChangedKeys, failOpenUserIDs []string,
+) (map[string]int, error) {
 	sharedUsersMap := make(map[string]int, len(usersWithChangedKeys))
 	for _, changedUserID := range usersWithChangedKeys {
 		sharedUsersMap[changedUserID] = 0
@@ -284,12 +312,11 @@ func filterSharedUsers(
 			sharedUsersMap[userID]++
 		}
 	}
-
 	// The sync API's current_room_state table can lag behind the roomserver,
 	// notably just after a partial-state resync has completed. A device list
 	// update for a user who has just become visible would otherwise be
 	// discarded and its key-change position advanced past. Ask the authoritative
-	// roomserver about the users we believe we share no room with.
+	// roomserver about every user we believe we share no room with.
 	var missing []string
 	missingSet := make(map[string]struct{}, len(sharedUsersMap))
 	for changedUserID, count := range sharedUsersMap {
@@ -297,6 +324,10 @@ func filterSharedUsers(
 			missing = append(missing, changedUserID)
 			missingSet[changedUserID] = struct{}{}
 		}
+	}
+	failOpenSet := make(map[string]struct{}, len(failOpenUserIDs))
+	for _, changedUserID := range failOpenUserIDs {
+		failOpenSet[changedUserID] = struct{}{}
 	}
 	if len(missing) > 0 {
 		// This live roomserver view may be ahead of the sync snapshot. Prefer a
@@ -308,8 +339,17 @@ func filterSharedUsers(
 			OtherUserIDs: missing,
 		}, &sharedRes); err != nil {
 			util.GetLogger(ctx).WithError(err).Warn("QuerySharedUsers fallback failed")
+			// Keep key changes by failing open for users who have not just left;
+			// an extra notification is safer than advancing past a change. For
+			// a user who left in this response the count decides whether they
+			// go into device_lists.left, so an unknown count must not become
+			// zero: report the error and let the caller retry.
 			for _, changedUserID := range missing {
-				sharedUsersMap[changedUserID] = 1
+				if _, shouldFailOpen := failOpenSet[changedUserID]; shouldFailOpen {
+					sharedUsersMap[changedUserID] = 1
+					continue
+				}
+				return nil, fmt.Errorf("QuerySharedUsers for %s: %w", changedUserID, err)
 			}
 		} else {
 			for changedUserID, count := range sharedRes.UserIDsToCount {
@@ -322,7 +362,7 @@ func filterSharedUsers(
 			}
 		}
 	}
-	return sharedUsersMap
+	return sharedUsersMap, nil
 }
 
 func joinedRooms(res *types.Response, userID string) []string {

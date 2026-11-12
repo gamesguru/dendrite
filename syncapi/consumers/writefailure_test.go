@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,17 +25,25 @@ import (
 // PostgreSQL primary is being replaced.
 type unavailableDatabase struct {
 	storage.Database
+	writeCalls *atomic.Int32
 }
 
 // errDatabaseUnavailable is transient: the connection failed, not the write.
 var errDatabaseUnavailable = fmt.Errorf("failed to connect to the database: %w", driver.ErrBadConn)
 
-func (unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility) (types.StreamPosition, error) {
+func (d unavailableDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string) (types.StreamPosition, error) {
+	if d.writeCalls != nil {
+		d.writeCalls.Add(1)
+	}
 	return 0, errDatabaseUnavailable
 }
 
 func (unavailableDatabase) StoreReceipt(context.Context, string, string, string, string, string, spec.Timestamp) (types.StreamPosition, bool, error) {
 	return 0, false, errDatabaseUnavailable
+}
+
+func (unavailableDatabase) Events(context.Context, []string) ([]*rstypes.HeaderedEvent, error) {
+	return nil, errDatabaseUnavailable
 }
 
 type senderResolver struct {
@@ -46,6 +55,12 @@ func (r senderResolver) QueryUserIDForSender(context.Context, spec.RoomID, spec.
 	return spec.NewUserID(r.user.ID, true)
 }
 
+// QueryEventsByID succeeds but finds no predecessor, so the write reaches
+// WriteEvent instead of stopping at the predecessor lookup.
+func (r senderResolver) QueryEventsByID(_ context.Context, _ *api.QueryEventsByIDRequest, _ *api.QueryEventsByIDResponse) error {
+	return nil
+}
+
 // TestWriteFailureStopsOnShutdown checks that a write failing because the
 // database is unreachable is retried rather than crashing the process, and
 // that it ends when the process shuts down, leaving the message for
@@ -54,13 +69,15 @@ func TestWriteFailureStopsOnShutdown(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	ev := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hello"})
-	s := &OutputRoomEventConsumer{db: unavailableDatabase{}, rsAPI: senderResolver{user: alice}}
+	writeCalls := &atomic.Int32{}
+	s := &OutputRoomEventConsumer{db: unavailableDatabase{writeCalls: writeCalls}, rsAPI: senderResolver{user: alice}}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	require.NotPanics(t, func() {
 		require.ErrorIs(t, s.onNewRoomEvent(ctx, api.OutputNewRoomEvent{Event: ev}), errDatabaseUnavailable)
 	})
+	require.Positive(t, writeCalls.Load(), "the test must reach WriteEvent")
 }
 
 // TestReceiptWriteFailureIsRedelivered checks that a receipt the database

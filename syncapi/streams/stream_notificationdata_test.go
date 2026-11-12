@@ -52,7 +52,7 @@ func TestThreadNotificationCounts(t *testing.T) {
 				jr.Timeline.Events = []synctypes.ClientEvent{{EventID: "$event", Content: []byte(`{}`)}}
 				req.Response.Rooms.Join[roomID] = jr
 			}
-			provider := &NotificationDataStreamProvider{DefaultStreamProvider{DB: db}}
+			provider := &NotificationDataStreamProvider{DefaultStreamProvider: DefaultStreamProvider{DB: db}}
 			provider.IncrementalSync(ctx, snapshot, req, 0, 0)
 			rooms := map[string]json.RawMessage{}
 			for roomID, jr := range req.Response.Rooms.Join {

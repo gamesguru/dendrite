@@ -8,6 +8,13 @@ package input
 import (
 	"slices"
 	"testing"
+
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
+
+	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/test"
 )
 
 func TestWindowOrder(t *testing.T) {
@@ -57,4 +64,19 @@ func TestWindowOrder(t *testing.T) {
 			t.Fatalf("got %v, want none", ids(got))
 		}
 	})
+}
+
+func TestHistoryVisibilityBefore(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	joined := room.CreateAndInsert(t, alice, spec.MRoomHistoryVisibility,
+		map[string]any{"history_visibility": "joined"}, test.WithStateKey(""))
+
+	require.Equal(t, gomatrixserverlib.HistoryVisibilityJoined,
+		historyVisibilityBefore([]types.Event{{PDU: joined.PDU}}))
+	require.Equal(t, gomatrixserverlib.HistoryVisibilityShared,
+		historyVisibilityBefore(nil), "a state without a visibility event keeps shared")
+	require.Equal(t, gomatrixserverlib.HistoryVisibilityShared,
+		historyVisibilityBefore([]types.Event{{PDU: room.Events()[0].PDU}}),
+		"other state events do not change the visibility")
 }

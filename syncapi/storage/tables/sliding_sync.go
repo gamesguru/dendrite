@@ -164,6 +164,19 @@ type SlidingSync interface {
 
 	// SelectConnectionList retrieves the stored room IDs for a list (JSON array)
 	SelectConnectionList(ctx context.Context, txn *sql.Tx, connectionKey int64, listName string) (roomIDsJSON string, exists bool, err error)
+
+	// UpsertConnectionListWindow stores the room IDs a list window had at a
+	// specific connection position, so a retry from that position compares
+	// against the window the client actually received.
+	UpsertConnectionListWindow(ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64, roomIDsJSON string) error
+
+	// SelectConnectionListWindow retrieves the room IDs a list window had at a
+	// specific connection position.
+	SelectConnectionListWindow(ctx context.Context, txn *sql.Tx, connectionKey int64, listName string, connectionPosition int64) (roomIDsJSON string, exists bool, err error)
+
+	// DeleteOtherConnectionListWindows removes list windows for a connection
+	// other than the one at the retained position.
+	DeleteOtherConnectionListWindows(ctx context.Context, txn *sql.Tx, connectionKey int64, keepPosition int64) error
 }
 
 // SlidingSyncJoinedRoom represents cached room metadata for rooms with local members

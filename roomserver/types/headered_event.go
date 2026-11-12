@@ -18,6 +18,9 @@ import (
 type HeaderedEvent struct {
 	gomatrixserverlib.PDU
 	Visibility gomatrixserverlib.HistoryVisibility
+	// EventNID is the locally assigned insertion order of the event. It is
+	// populated by roomserver queries and is never serialized.
+	EventNID EventNID
 	// TODO: Remove this. This is a temporary workaround to store the userID in the syncAPI.
 	// 		It really should be the userKey instead.
 	UserID           spec.UserID

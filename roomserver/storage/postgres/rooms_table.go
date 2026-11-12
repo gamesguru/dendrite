@@ -100,8 +100,8 @@ type roomStatements struct {
 	updateResyncStateNIDStmt           *sql.Stmt
 }
 
-func CreateRoomsTable(db *sql.DB) error {
-	_, err := db.Exec(roomsSchema)
+func CreateRoomsTable(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, roomsSchema)
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func CreateRoomsTable(db *sql.DB) error {
 		Version: "roomserver: add resync_state_nid to rooms",
 		Up:      deltas.UpResyncStateNID,
 	})
-	return m.Up(context.Background())
+	return m.Up(ctx)
 }
 
 func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {

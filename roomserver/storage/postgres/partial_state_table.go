@@ -89,8 +89,8 @@ type partialStateStatements struct {
 	deletePartialStateRoomStmt         *sql.Stmt
 }
 
-func CreatePartialStateTable(db *sql.DB) error {
-	_, err := db.Exec(partialStateSchema)
+func CreatePartialStateTable(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, partialStateSchema)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func CreatePartialStateTable(db *sql.DB) error {
 		Version: "roomserver: add device_lists_stream_id to partial state rooms",
 		Up:      deltas.UpPartialStateDeviceListStreamID,
 	})
-	return m.Up(context.Background())
+	return m.Up(ctx)
 }
 
 func PreparePartialStateTable(db *sql.DB) (tables.PartialState, error) {

@@ -7,6 +7,8 @@ package routing
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -30,6 +32,18 @@ func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackf
 	res.Events = f.events
 	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared
 	return nil
+}
+
+func TestIsTerminalBackfillFailure(t *testing.T) {
+	terminal := &api.BackfillUnavailableError{Retryable: false, Err: errors.New("not found")}
+	transient := &api.BackfillUnavailableError{Retryable: true, Err: errors.New("timeout")}
+
+	assert.True(t, isTerminalBackfillFailure(terminal))
+	assert.True(t, isTerminalBackfillFailure(fmt.Errorf("PerformBackfill failed: %w", terminal)))
+	assert.False(t, isTerminalBackfillFailure(transient))
+	assert.False(t, isTerminalBackfillFailure(fmt.Errorf("PerformBackfill failed: %w", transient)))
+	assert.False(t, isTerminalBackfillFailure(errors.New("database unavailable")))
+	assert.False(t, isTerminalBackfillFailure(nil))
 }
 
 func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {

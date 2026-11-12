@@ -35,6 +35,7 @@ func NewSqliteNotificationDataTable(ctx context.Context, db *sql.DB, streamID *S
 	}
 	return r, sqlutil.StatementList{
 		{&r.upsertRoomUnreadCounts, upsertRoomUnreadNotificationCountsSQL},
+		{&r.selectUserRoomIDsAfter, selectUserRoomIDsAfterSQL},
 		{&r.selectMaxID, selectMaxNotificationIDSQL},
 		{&r.purgeNotificationData, purgeNotificationDataSQL},
 		// {&r.selectUserUnreadCountsForRooms, selectUserUnreadNotificationsForRooms}, // used at runtime
@@ -46,6 +47,7 @@ type notificationDataStatements struct {
 	streamIDStatements     *StreamIDStatements
 	upsertRoomUnreadCounts *sql.Stmt
 	selectMaxID            *sql.Stmt
+	selectUserRoomIDsAfter *sql.Stmt
 	purgeNotificationData  *sql.Stmt
 	// selectUserUnreadCountsForRooms *sql.Stmt
 }
@@ -70,6 +72,9 @@ const selectUserUnreadNotificationsForRooms = `SELECT room_id, notification_coun
 	FROM syncapi_notification_data
 	WHERE user_id = $1 AND
 	      room_id IN ($2)`
+
+const selectUserRoomIDsAfterSQL = `SELECT room_id FROM syncapi_notification_data
+	WHERE user_id = $1 AND id > $2 AND id <= $3`
 
 const selectMaxNotificationIDSQL = `SELECT CASE COUNT(*) WHEN 0 THEN 0 ELSE MAX(id) END FROM syncapi_notification_data`
 
@@ -124,6 +129,25 @@ func (r *notificationDataStatements) SelectUserUnreadCountsForRooms(
 		}
 	}
 	return roomCounts, rows.Err()
+}
+
+func (r *notificationDataStatements) SelectUserRoomIDsAfter(
+	ctx context.Context, txn *sql.Tx, userID string, after, upTo types.StreamPosition,
+) ([]string, error) {
+	rows, err := sqlutil.TxStmt(txn, r.selectUserRoomIDsAfter).QueryContext(ctx, userID, after, upTo)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectUserRoomIDsAfter: rows.close() failed")
+	var roomIDs []string
+	for rows.Next() {
+		var roomID string
+		if err = rows.Scan(&roomID); err != nil {
+			return nil, err
+		}
+		roomIDs = append(roomIDs, roomID)
+	}
+	return roomIDs, rows.Err()
 }
 
 func (r *notificationDataStatements) SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error) {

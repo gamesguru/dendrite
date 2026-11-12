@@ -7,12 +7,15 @@ import (
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
+	postgresdeltas "codefloe.com/pat-s/zendrite/syncapi/storage/postgres/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
+	sqlitedeltas "codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3/deltas"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -39,6 +42,131 @@ func newMembershipsTable(t *testing.T, dbType test.DBType) (tables.Memberships, 
 		t.Fatalf("failed to make new table: %s", err)
 	}
 	return tab, db, close
+}
+
+func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		joinAt10 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		joinAt20 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join, "displayname": "updated"}, test.WithStateKey(bob.ID))
+		leaveAt30 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(bob.ID))
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+		outputEventsSchema := `CREATE TABLE syncapi_output_room_events (id BIGINT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT[])`
+		if dbType == test.DBTypeSQLite {
+			outputEventsSchema = `CREATE TABLE syncapi_output_room_events (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT)`
+		}
+		_, err := db.ExecContext(ctx, outputEventsSchema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `CREATE TABLE syncapi_current_room_state (room_id TEXT NOT NULL, type TEXT NOT NULL, state_key TEXT NOT NULL, headered_event_json TEXT NOT NULL)`)
+		require.NoError(t, err)
+		insertOutput := func(id int, eventID, raw string, addState bool) {
+			var addIDs any
+			switch {
+			case dbType == test.DBTypeSQLite && addState:
+				addIDs = `["` + eventID + `"]`
+			case dbType == test.DBTypeSQLite:
+				addIDs = "" // InsertEvent stores an empty list as an empty string
+			case addState:
+				addIDs = []string{eventID}
+			default:
+				addIDs = []string{}
+			}
+			_, insertErr := db.ExecContext(ctx,
+				`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type, add_state_ids) VALUES ($1, $2, $3, $4, $5, $6)`,
+				id, room.ID, eventID, raw, spec.MRoomMember, addIDs,
+			)
+			require.NoError(t, insertErr)
+		}
+		for i, event := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
+			insertOutput((i+1)*10, event.EventID(), string(event.JSON()), true)
+		}
+		// An old (backfilled) event is never recorded by the live path, so the
+		// backfill must not invent history for it.
+		insertOutput(5, "$old", `{"state_key":"@old:test","content":{"membership":"join"}}`, false)
+		// Stored content may hold \u0000, which a jsonb cast would reject.
+		insertOutput(40, "$nul", `{"state_key":"@nul:test","content":{"membership":"join","displayname":"a\u0000b"}}`, true)
+		// Pseudo-ID rooms (MSC4014) store a sender key in state_key, while the
+		// live path records the resolved user ID in history and the current
+		// state table. The backfill must use the same key.
+		carol := test.NewUser(t)
+		insertOutput(50, "$pseudo", `{"state_key":"AAAApseudo","content":{"membership":"join"}}`, true)
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO syncapi_current_room_state (room_id, type, state_key, headered_event_json) VALUES ($1, $2, $3, $4)`,
+			room.ID, spec.MRoomMember, carol.ID, `{"state_key":"AAAApseudo","content":{"membership":"join"}}`,
+		)
+		require.NoError(t, err)
+
+		// A later output event may add an older membership event back to room
+		// state. The live writer records it at the later event's position.
+		var restoreIDs any = []string{joinAt10.EventID()}
+		if dbType == test.DBTypeSQLite {
+			restoreIDs = `["` + joinAt10.EventID() + `"]`
+		}
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO syncapi_output_room_events (id, room_id, event_id, headered_event_json, type, add_state_ids) VALUES ($1, $2, $3, $4, $5, $6)`,
+			60, room.ID, "$restorer", `{"content":{}}`, "m.room.power_levels", restoreIDs,
+		)
+		require.NoError(t, err)
+
+		// Simulate the compact rows and incomplete history left by the old
+		// backfill: only the latest row for each membership survives.
+		for i, event := range []*rstypes.HeaderedEvent{joinAt20, leaveAt30} {
+			membership, membershipErr := event.Membership()
+			require.NoError(t, membershipErr)
+			streamPos := (i + 2) * 10
+			_, err = db.ExecContext(ctx,
+				`INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos) VALUES ($1, $2, $3, $4, $5, $5)`,
+				room.ID, bob.ID, membership, event.EventID(), streamPos,
+			)
+			require.NoError(t, err)
+			_, err = db.ExecContext(ctx,
+				`INSERT INTO syncapi_membership_history (room_id, user_id, membership, event_id, stream_pos) VALUES ($1, $2, $3, $4, $5)`,
+				room.ID, bob.ID, membership, event.EventID(), streamPos,
+			)
+			require.NoError(t, err)
+		}
+
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var backfillErr error
+		if dbType == test.DBTypePostgres {
+			backfillErr = postgresdeltas.UpBackfillMembershipHistory(ctx, tx)
+		} else {
+			backfillErr = sqlitedeltas.UpBackfillMembershipHistory(ctx, tx)
+		}
+		require.NoError(t, backfillErr)
+		require.NoError(t, tx.Commit())
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 15)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, joinAt10.EventID(), eventID)
+
+		// Bob's join was restored at position 60, after his leave at 30.
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 65)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, joinAt10.EventID(), eventID, "restored membership must be recorded at the adding event's position")
+		membership, _, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 35)
+		require.NoError(t, err)
+		require.Equal(t, spec.Leave, membership)
+
+		oldMembership, _, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, "@old:test", 100)
+		require.NoError(t, err)
+		require.NotEqual(t, spec.Join, oldMembership, "old events must not be backfilled")
+		membership, _, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, "@nul:test", 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, carol.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, "$pseudo", eventID, "pseudo-ID history must use the resolved user ID")
+	})
 }
 
 func TestMembershipsTable(t *testing.T) {
@@ -83,8 +211,8 @@ func TestMembershipsTable(t *testing.T) {
 			}
 		}
 
-		testUpsert(t, ctx, table, userEvents[0], alice, room)
 		testMembershipCount(t, ctx, table, room)
+		testUpsert(t, ctx, table, userEvents[0], alice, room)
 	})
 }
 
@@ -156,6 +284,25 @@ func testUpsert(t *testing.T, ctx context.Context, table tables.Memberships, mem
 		}
 		if membership != spec.Leave {
 			t.Fatalf("expected membership to be leave, got %s", membership)
+		}
+
+		// Position-bounded membership reads must retain transitions even when
+		// a later event with the same membership overwrites the compact row.
+		joinAt10 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
+		joinAt20 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
+		leaveAt30 := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(user.ID))
+		for i, ev := range []*rstypes.HeaderedEvent{joinAt10, joinAt20, leaveAt30} {
+			position := types.StreamPosition((i + 1) * 10)
+			if err = table.UpsertMembership(ctx, nil, ev, position, position); err != nil {
+				t.Fatalf("failed to upsert membership history: %s", err)
+			}
+		}
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, user.ID, 15)
+		if err != nil {
+			t.Fatalf("failed to select membership history: %s", err)
+		}
+		if membership != spec.Join || eventID != joinAt10.EventID() {
+			t.Fatalf("expected join at position 10 when reading at 15, got %s (%s)", membership, eventID)
 		}
 	})
 }

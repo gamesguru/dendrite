@@ -260,10 +260,19 @@ type InputAccountDataRequest struct {
 	RoomID      string          // optional: the room to associate the account data with
 	DataType    string          // required: the data type of the data
 	AccountData json.RawMessage // required: the message content
+	// CompareAccountData makes the write conditional on the stored value
+	// matching ExpectedAccountData. An empty ExpectedAccountData requires that
+	// no account data is currently stored for this user, room and type.
+	CompareAccountData  bool
+	ExpectedAccountData json.RawMessage
 }
 
 // InputAccountDataResponse is the response for InputAccountData.
-type InputAccountDataResponse struct{}
+type InputAccountDataResponse struct {
+	// Updated reports whether a conditional write was applied. It is always
+	// true for unconditional writes.
+	Updated bool
+}
 
 type PerformDeviceUpdateRequest struct {
 	RequestingUserID string

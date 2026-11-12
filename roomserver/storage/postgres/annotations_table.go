@@ -60,8 +60,8 @@ type annotationsStatements struct {
 
 // CreateAnnotationsTable creates the table and fills it from the stored
 // events, so it needs the events, event JSON and event types tables.
-func CreateAnnotationsTable(db *sql.DB) error {
-	if _, err := db.Exec(annotationsSchema); err != nil {
+func CreateAnnotationsTable(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, annotationsSchema); err != nil {
 		return err
 	}
 	m := sqlutil.NewMigrator(db)
@@ -69,7 +69,7 @@ func CreateAnnotationsTable(db *sql.DB) error {
 		Version: "roomserver: backfill annotations",
 		Up:      deltas.UpBackfillAnnotations,
 	})
-	return m.Up(context.Background())
+	return m.Up(ctx)
 }
 
 func PrepareAnnotationsTable(db *sql.DB) (tables.Annotations, error) {

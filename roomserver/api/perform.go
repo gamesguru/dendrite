@@ -147,6 +147,26 @@ outerLoop:
 	return result
 }
 
+// BackfillUnavailableError reports that a backfill returned no events.
+// Retryable is true if an attempt failed in a way that could succeed later.
+// It is false when all attempted servers definitively reported that they do
+// not have the requested events.
+type BackfillUnavailableError struct {
+	Retryable bool
+	Err       error
+}
+
+// Error implements error.
+func (e *BackfillUnavailableError) Error() string {
+	if e.Err == nil {
+		return "backfill returned no events"
+	}
+	return "backfill returned no events: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying backfill error.
+func (e *BackfillUnavailableError) Unwrap() error { return e.Err }
+
 // PerformBackfillResponse is a response to PerformBackfill.
 type PerformBackfillResponse struct {
 	// Missing events, arbritrary order.

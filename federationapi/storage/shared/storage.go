@@ -337,23 +337,12 @@ func (d *Database) UpdateNotaryKeys(
 		// Reject the entire response before it can be indexed through another
 		// key ID. A response with one conflicting key must not expose that key
 		// when a caller asks for one of its otherwise non-conflicting IDs.
-		for keyID := range serverKeys.OldVerifyKeys {
-			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
-			if conflictErr != nil {
-				return conflictErr
-			}
-			if conflict {
-				return nil
-			}
+		conflict, conflictErr := d.notaryResponseConflicts(ctx, txn, serverName, serverKeys)
+		if conflictErr != nil {
+			return conflictErr
 		}
-		for keyID := range serverKeys.VerifyKeys {
-			conflict, conflictErr := d.notaryKeyConflicts(ctx, txn, serverName, keyID, serverKeys)
-			if conflictErr != nil {
-				return conflictErr
-			}
-			if conflict {
-				return nil
-			}
+		if conflict {
+			return nil
 		}
 		notaryID, err := d.NotaryServerKeysJSON.InsertJSONResponse(ctx, txn, serverKeys, serverName, validUntil)
 		if err != nil {
@@ -413,6 +402,52 @@ func (d *Database) UpdateNotaryKeys(
 	})
 }
 
+// notaryKeyLookupBatch bounds the key IDs in one stored-response lookup.
+const notaryKeyLookupBatch = 500
+
+// notaryResponseConflicts reports whether any key in candidate is bound to a
+// different public key by a stored response for the same server. It loads the
+// stored responses once for the whole candidate: a response may carry
+// thousands of retired keys, and looking each one up separately parses the
+// same stored responses again for every key.
+func (d *Database) notaryResponseConflicts(
+	ctx context.Context, txn *sql.Tx, serverName spec.ServerName,
+	candidate gomatrixserverlib.ServerKeys,
+) (bool, error) {
+	keys := make(map[gomatrixserverlib.KeyID]spec.Base64Bytes, len(candidate.VerifyKeys)+len(candidate.OldVerifyKeys))
+	for keyID, key := range candidate.OldVerifyKeys {
+		keys[keyID] = key.Key
+	}
+	// notaryKeyConflicts compares the active key when an ID is in both maps.
+	for keyID, key := range candidate.VerifyKeys {
+		keys[keyID] = key.Key
+	}
+	keyIDs := make([]gomatrixserverlib.KeyID, 0, len(keys))
+	for keyID := range keys {
+		keyIDs = append(keyIDs, keyID)
+	}
+	for start := 0; start < len(keyIDs); start += notaryKeyLookupBatch {
+		end := min(start+notaryKeyLookupBatch, len(keyIDs))
+		existing, err := d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, keyIDs[start:end])
+		if err != nil {
+			return false, err
+		}
+		for _, response := range existing {
+			for keyID, key := range response.VerifyKeys {
+				if candidateKey, ok := keys[keyID]; ok && string(candidateKey) != string(key.Key) {
+					return true, nil
+				}
+			}
+			for keyID, key := range response.OldVerifyKeys {
+				if candidateKey, ok := keys[keyID]; ok && string(candidateKey) != string(key.Key) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 // notaryKeyConflicts reports whether an existing notary response binds this
 // server/key ID pair to a different public key. A key ID is a permanent
 // identity: a later response cannot replace the first value seen for it.
@@ -455,10 +490,7 @@ func (d *Database) GetNotaryKeys(
 	serverName spec.ServerName,
 	optKeyIDs []gomatrixserverlib.KeyID,
 ) (sks []gomatrixserverlib.ServerKeys, err error) {
-	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
-		return err
-	})
+	sks, err = d.GetNotaryKeysIncludingExpired(ctx, serverName, optKeyIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -470,6 +502,20 @@ func (d *Database) GetNotaryKeys(
 		}
 	}
 	return valid, nil
+}
+
+// GetNotaryKeysIncludingExpired returns the stored responses for the server,
+// whether or not their valid_until_ts has passed.
+func (d *Database) GetNotaryKeysIncludingExpired(
+	ctx context.Context,
+	serverName spec.ServerName,
+	optKeyIDs []gomatrixserverlib.KeyID,
+) (sks []gomatrixserverlib.ServerKeys, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		sks, err = d.NotaryServerKeysMetadata.SelectKeys(ctx, txn, serverName, optKeyIDs)
+		return err
+	})
+	return sks, err
 }
 
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {

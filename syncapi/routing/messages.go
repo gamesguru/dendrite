@@ -8,6 +8,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -650,8 +651,10 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 // the set is empty because we've reached a backward extremity, and if that is
 // the case, by retrieving as much events as requested by backfilling from
 // another homeserver.
-// Returns an error if there was an issue talking with the database or
-// backfilling.
+// Returns an error if there was an issue talking with the database or a
+// transient failure prevented the backfill. A definitive "no server has these
+// events" answer is not an error: it is the end of the history this server can
+// reach and is returned as an empty page.
 func (r *messagesReq) handleEmptyEventsSlice() (
 	events []*rstypes.HeaderedEvent, err error,
 ) {
@@ -665,9 +668,16 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			if r.ctx.Err() != nil {
 				return
 			}
-			// There are no local events to return, so suppressing a backfill
-			// failure would make the client treat an incomplete page as history's
-			// end. Return the error so the request can be retried.
+			if isTerminalBackfillFailure(err) {
+				// Every server answered that it has no earlier events, so the
+				// client has reached the end of the history this server can
+				// reach. There is nothing to retry.
+				util.GetLogger(r.ctx).WithError(err).Debug("Backfill found no events on the attempted servers")
+				return []*rstypes.HeaderedEvent{}, nil
+			}
+			// A transient failure must not look like the end of history: the
+			// client would stop paginating and never retry the extremity.
+			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed; returning an error so the client can retry")
 			return nil, err
 		}
 		r.didBackfill = true
@@ -689,6 +699,13 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 	}
 
 	return
+}
+
+// isTerminalBackfillFailure reports whether attempted backfill servers
+// definitively lacked the requested events, rather than a transient failure.
+func isTerminalBackfillFailure(err error) bool {
+	var unavailable *api.BackfillUnavailableError
+	return errors.As(err, &unavailable) && !unavailable.Retryable
 }
 
 // handleNonEmptyEventsSlice handles the case where the initial request to the
@@ -940,6 +957,11 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 
 // backfillEvents asks the roomserver to backfill events over federation and
 // stores them as backfilled events, which keeps them out of sync responses.
+// It continues independently of ctx cancellation and deadlines. The result contains
+// At most limit events are returned in ascending depth order after storing the full batch. The
+// limit must be nonnegative. Backfill and event-write errors propagate; backward-extremity
+// cleanup failures do not fail the request. Earlier writes may remain when a
+// later write fails.
 func backfillEvents(
 	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
 	serverName, virtualHost spec.ServerName,
@@ -947,6 +969,15 @@ func backfillEvents(
 ) ([]*rstypes.HeaderedEvent, error) {
 	// Finish the backfill even if the client goes away, so the events are stored.
 	ctx = context.WithoutCancel(ctx)
+
+	// Backward-extremity rows persist failed cleanup work: if a previous lookup
+	// or purge failed, retry it on the next /messages backfill attempt.
+	var pendingPrevIDs []string
+	for _, prevIDs := range backwardsExtremities {
+		pendingPrevIDs = append(pendingPrevIDs, prevIDs...)
+	}
+	retryBackwardExtremityCleanup(ctx, db, roomID, pendingPrevIDs)
+
 	var res api.PerformBackfillResponse
 	err := rsAPI.PerformBackfill(ctx, &api.PerformBackfillRequest{
 		RoomID:               roomID,
@@ -1008,18 +1039,7 @@ func backfillEvents(
 		for eventID := range prevEventIDs {
 			ids = append(ids, eventID)
 		}
-		// The events are already stored, so a failed cleanup must not discard them.
-		stored, selectErr := db.Events(ctx, ids)
-		if selectErr != nil {
-			util.GetLogger(ctx).WithError(selectErr).Warn("Failed to look up backfilled prev events")
-		}
-		storedIDs := make([]string, 0, len(stored))
-		for _, ev := range stored {
-			storedIDs = append(storedIDs, ev.EventID())
-		}
-		if purgeErr := db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs); purgeErr != nil {
-			util.GetLogger(ctx).WithError(purgeErr).Warn("Failed to purge stale backward extremities")
-		}
+		retryBackwardExtremityCleanup(ctx, db, roomID, ids)
 	}
 
 	// we may have got more than the requested limit so resize now
@@ -1029,4 +1049,32 @@ func backfillEvents(
 	}
 
 	return events, nil
+}
+
+// retryBackwardExtremityCleanup removes markers for candidate events that are
+// now stored, in an independent write transaction. Empty candidates do nothing. Lookup or purge
+// failures are not returned; the markers themselves persist failed work for a
+// later backfill.
+func retryBackwardExtremityCleanup(ctx context.Context, db storage.Database, roomID string, candidateIDs []string) {
+	if len(candidateIDs) == 0 {
+		return
+	}
+	candidateIDs = util.UniqueStrings(candidateIDs)
+	// Read on a fresh view so events just written by the backfill are visible.
+	stored, err := db.Events(ctx, candidateIDs)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to look up events for backward-extremity cleanup")
+		return
+	}
+	storedIDs := make([]string, 0, len(stored))
+	for _, ev := range stored {
+		storedIDs = append(storedIDs, ev.EventID())
+	}
+	if len(storedIDs) == 0 {
+		return
+	}
+	err = db.PurgeBackwardExtremitiesForEvents(ctx, roomID, storedIDs)
+	if err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("Failed to purge stale backward extremities")
+	}
 }

@@ -10,8 +10,13 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"sort"
+	"time"
+
+	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/depth"
@@ -171,9 +176,8 @@ type eventStatements struct {
 	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
 }
 
-func CreateEventsTable(db *sql.DB) error {
-	_, err := db.Exec(eventsSchema)
-	if err != nil {
+func CreateEventsTable(ctx context.Context, db *sql.DB) error {
+	if err := initEventsTable(ctx, db); err != nil {
 		return err
 	}
 
@@ -184,7 +188,92 @@ func CreateEventsTable(db *sql.DB) error {
 			Up:      deltas.UpDropEventReferenceSHAEvents,
 		},
 	}...)
-	return m.Up(context.Background())
+	return m.Up(ctx)
+}
+
+// initEventsTable creates the events table and its indexes, including the
+// (room_nid, event_nid) index, which is built without blocking event writes.
+// CREATE INDEX CONCURRENTLY cannot run in a transaction, so it is issued
+// separately from eventsSchema, whose statements the driver may batch into one
+// implicit transaction.
+//
+// A concurrent build that is interrupted leaves an invalid index behind, which
+// IF NOT EXISTS would then keep. Drop such an index before retrying so the
+// next startup can finish the build. PostgreSQL also marks an index invalid
+// while its build is still running, so a session advisory lock serializes
+// overlapping initializations: whoever holds it knows no other build is active.
+//
+// The lock is taken before eventsSchema, not just around the index build.
+// Even when the indexes exist, CREATE INDEX IF NOT EXISTS takes a ShareLock on
+// the table before checking for them. That conflicts with a running concurrent
+// build and, while queued, would block every event write behind it.
+func initEventsTable(ctx context.Context, db *sql.DB) error {
+	const (
+		indexName     = "roomserver_events_room_event_nid_idx"
+		unlockTimeout = 5 * time.Second
+	)
+	// The lock belongs to a session, so every statement must use one connection.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connect for %s: %w", indexName, err)
+	}
+	defer func() { _ = conn.Close() }()
+	locked := false
+	for !locked {
+		if err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(351, 1)").Scan(&locked); err != nil {
+			return fmt.Errorf("lock for %s: %w", indexName, err)
+		}
+		if !locked {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return fmt.Errorf("lock for %s: %w", indexName, ctx.Err())
+			case <-timer.C:
+			}
+		}
+	}
+	defer func() {
+		// Closing the connection would also release it, but a pooled session
+		// outlives this call. The caller's context may already be canceled, so
+		// release the lock with a context that cannot be canceled, but bound it
+		// so a stalled connection cannot hang startup during cleanup.
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+		defer cancel()
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(351, 1)"); err != nil {
+			util.GetLogger(ctx).WithError(err).Error("Failed to release event index advisory lock; discarding connection")
+			// The session may still hold the lock. Mark it bad so database/sql
+			// closes it on Close instead of returning it to the pool, which
+			// releases the lock server-side.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, eventsSchema); err != nil {
+		return err
+	}
+
+	var valid bool
+	err = conn.QueryRowContext(ctx,
+		`SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)`,
+		indexName,
+	).Scan(&valid)
+	switch {
+	case err == nil && valid:
+		return nil
+	case err == nil && !valid:
+		if _, err = conn.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+indexName); err != nil {
+			return fmt.Errorf("drop invalid %s: %w", indexName, err)
+		}
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("look up %s: %w", indexName, err)
+	}
+	if _, err = conn.ExecContext(ctx,
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS "+indexName+" ON roomserver_events (room_nid, event_nid)",
+	); err != nil {
+		return fmt.Errorf("create %s: %w", indexName, err)
+	}
+	return nil
 }
 
 func PrepareEventsTable(db *sql.DB) (tables.Events, error) {

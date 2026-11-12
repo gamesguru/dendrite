@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -84,17 +85,24 @@ const (
 	redeliveryMaxDelay = 30 * time.Second
 )
 
+// defaultAckTimeout is the default for ackTimeout.
+const defaultAckTimeout = 10 * time.Second
+
 // ackTimeout bounds each acknowledgement request a consumer makes. With a
 // context, nats.go sends an acknowledgement as a request and waits for the
 // server's reply. A reply lost while the stream elects a new leader would
 // otherwise block the consumer for good, and every message queued behind it.
 // An acknowledgement that times out costs at most a redelivery after the
 // consumer's ack wait, which consumers already handle.
-var ackTimeout = 10 * time.Second
+var ackTimeout atomic.Int64
+
+func init() { //nolint:gochecknoinits // A default for an atomic, which has no literal form.
+	ackTimeout.Store(int64(defaultAckTimeout))
+}
 
 // ackWithin sends one acknowledgement request, giving up after ackTimeout.
 func ackWithin(ctx context.Context, ack func(opts ...nats.AckOpt) error) error {
-	ctx, cancel := context.WithTimeout(ctx, ackTimeout)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(ackTimeout.Load()))
 	defer cancel()
 	return ack(nats.Context(ctx))
 }

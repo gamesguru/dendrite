@@ -438,13 +438,29 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	writeStarted := time.Now()
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
+		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
+		if err != nil {
+			return err
+		}
+		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
 		if ctx.Err() != nil {
 			// Shutting down: the transaction was rolled back, so leave the
 			// message for redelivery.
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrStoreRelation) {
+			// Nothing was written, so redelivery can try again, as it did
+			// when the relation was stored after the event.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrPrevEventLookup) {
+			// Nothing was written, so redelivery recalculates the prev events
+			// to purge instead of leaving a false marker behind.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to look up the prev events of the event, returning it for redelivery")
 			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
 		}
 		// panic rather than continue with an inconsistent database
@@ -457,7 +473,6 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		}).Panicf("roomserver output log: write new event failure")
 		return nil
 	}
-	s.cleanKnownBackwardExtremities(ctx, ev)
 	if len(msg.AddsStateEventIDs)+len(msg.RemovesStateEventIDs) >= largeStateUpdate {
 		log.WithFields(log.Fields{
 			"room_id":        ev.RoomID().String(),
@@ -485,14 +500,6 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	if pduPos, err = s.notifyJoinedPeeks(ctx, ev, pduPos); err != nil {
 		log.WithError(err).Errorf("Failed to notifyJoinedPeeks for PDU pos %d", pduPos)
-		return err
-	}
-
-	if err = s.db.UpdateRelations(ctx, ev); err != nil {
-		log.WithFields(log.Fields{
-			"event_id": ev.EventID(),
-			"type":     ev.Type(),
-		}).WithError(err).Warn("Failed to update relations")
 		return err
 	}
 
@@ -533,11 +540,27 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility)
+		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
+		if err != nil {
+			return err
+		}
+		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
 		if ctx.Err() != nil {
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrStoreRelation) {
+			// Nothing was written, so redelivery can try again, as it did
+			// when the relation was stored after the event.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrPrevEventLookup) {
+			// Nothing was written, so redelivery recalculates the prev events
+			// to purge instead of leaving a false marker behind.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to look up the prev events of the event, returning it for redelivery")
 			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
 		}
 		// panic rather than continue with an inconsistent database
@@ -548,7 +571,6 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		}).Panicf("roomserver output log: write old event failure")
 		return nil
 	}
-	s.cleanKnownBackwardExtremities(ctx, ev)
 
 	// Old state events are kept from sync, so they are not delivered as
 	// sticky events either.
@@ -567,15 +589,6 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 			"event_id": ev.EventID(),
 			"type":     ev.Type(),
 		}).WithError(err).Warn("failed to index fulltext element")
-	}
-
-	if err = s.db.UpdateRelations(ctx, ev); err != nil {
-		log.WithFields(log.Fields{
-			"room_id":  ev.RoomID().String(),
-			"event_id": ev.EventID(),
-			"type":     ev.Type(),
-		}).WithError(err).Warn("Failed to update relations")
-		return err
 	}
 
 	if pduPos, err = s.notifyJoinedPeeks(ctx, ev, pduPos); err != nil {
@@ -1155,38 +1168,66 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 	return nil
 }
 
-// cleanKnownBackwardExtremities removes the backward extremity marker of each
-// prev_event of ev that /messages can never paginate to, so it does not try to
-// backfill it: events the sync API stored, and events the roomserver only holds
-// as rejected. Non-rejected outliers, such as events fetched while resyncing
-// partial state, are in the roomserver but not the sync API timeline, so their
-// marker stays and /messages backfills them.
-func (s *OutputRoomEventConsumer) cleanKnownBackwardExtremities(ctx context.Context, ev *rstypes.HeaderedEvent) {
+// rejectedPrevEventIDs returns prev_events that the roomserver only holds as
+// rejected. Non-rejected outliers, such as events
+// fetched while resyncing partial state, are in the roomserver but not the sync
+// API timeline, so their marker stays and /messages backfills them.
+func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) ([]string, error) {
+	var prevIDs []string
 	for _, prevID := range ev.PrevEventIDs() {
-		if !s.prevEventNeedsNoBackfill(ctx, ev.RoomID().String(), prevID) {
-			continue
+		rejected, err := s.prevEventIsRejected(ctx, ev.RoomID().String(), prevID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", types.ErrPrevEventLookup, prevID, err)
 		}
-		_ = s.db.PurgeBackwardExtremitiesForEvent(ctx, ev.RoomID().String(), prevID)
+		if rejected {
+			prevIDs = append(prevIDs, prevID)
+		}
 	}
+	return prevIDs, nil
 }
 
-func (s *OutputRoomEventConsumer) prevEventNeedsNoBackfill(ctx context.Context, roomID, prevID string) bool {
-	if stored, err := s.db.Events(ctx, []string{prevID}); err == nil && len(stored) > 0 && stored[0] != nil {
-		return true
-	}
+// prevEventIsRejected reports whether the roomserver holds prevID but only as
+// a rejected event. It asks for the accepted event first, because that is the
+// common case and settles it in one lookup; only a prev event that is held at
+// all but is not accepted needs the second query to tell a rejected event from
+// one the roomserver does not know.
+//
+// The roomserver may accept a rejected event while these queries run: the
+// partial-state resync re-fetches rejected state events and clears the
+// rejection once it can verify them. An event accepted between the filtered and
+// unfiltered lookups would be present in the latter but absent from the former,
+// so the filtered lookup is repeated before reporting the event as rejected.
+// Purging the marker of an accepted event would lose the backfill /messages
+// needs while that event is still missing from the sync API timeline.
+func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) (bool, error) {
 	if s.rsAPI == nil {
-		return false
+		return false, nil
 	}
-	var known, accepted api.QueryEventsByIDResponse
-	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
-		RoomID: roomID, EventIDs: []string{prevID},
-	}, &known); err != nil || len(known.Events) == 0 {
-		return false
-	}
+	var accepted api.QueryEventsByIDResponse
 	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
 	}, &accepted); err != nil {
-		return false
+		return false, err
 	}
-	return len(accepted.Events) == 0
+	if len(accepted.Events) > 0 {
+		return false, nil
+	}
+	var known api.QueryEventsByIDResponse
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID},
+	}, &known); err != nil {
+		return false, err
+	}
+	if len(known.Events) == 0 {
+		return false, nil
+	}
+	// The event may have become accepted between the filtered and unfiltered
+	// lookups. Recheck before using this result to purge its backward marker.
+	accepted = api.QueryEventsByIDResponse{}
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
+	}, &accepted); err != nil {
+		return false, err
+	}
+	return len(accepted.Events) == 0, nil
 }

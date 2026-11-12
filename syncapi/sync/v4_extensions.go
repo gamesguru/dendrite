@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -229,7 +230,13 @@ func (rp *RequestPool) ProcessExtensions(
 
 	// Process e2ee extension (PreProcess, MSC3884)
 	if req.Extensions.E2EE != nil && req.Extensions.E2EE.Enabled {
-		e2eeResp, err := rp.processE2EEExtension(ctx, snapshot, userID, deviceID, isInitialSync, fromPos, toPos)
+		e2eeResp, deviceListsFailed, err := rp.processE2EEExtension(ctx, snapshot, userID, deviceID, isInitialSync, fromPos, toPos)
+		if deviceListsFailed && fromPos != nil {
+			// device_lists for this window could not be computed; hold the
+			// device-list position so the next response retries the window
+			// rather than skipping its key changes.
+			updatedPos.DeviceListPosition = fromPos.DeviceListPosition
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, toPos, nil, ctx.Err()
@@ -440,8 +447,8 @@ func (rp *RequestPool) processE2EEExtension(
 	isInitialSync bool,
 	fromPos *types.StreamingToken,
 	toPos types.StreamingToken,
-) (*types.E2EEResponse, error) { //nolint:unparam // error kept for interface compatibility
-	resp := &types.E2EEResponse{
+) (resp *types.E2EEResponse, deviceListsFailed bool, err error) { //nolint:unparam // error kept for interface compatibility
+	resp = &types.E2EEResponse{
 		// CRITICAL: Android compatibility - always include signed_curve25519: 0
 		// This will be overwritten if we actually have keys, but ensures the field is present
 		DeviceOneTimeKeysCount:             map[string]int{"signed_curve25519": 0},
@@ -452,7 +459,7 @@ func (rp *RequestPool) processE2EEExtension(
 
 	// Get OTK counts and fallback key types
 	var queryRes userapi.QueryOneTimeKeysResponse
-	err := rp.userAPI.QueryOneTimeKeys(ctx, &userapi.QueryOneTimeKeysRequest{
+	err = rp.userAPI.QueryOneTimeKeys(ctx, &userapi.QueryOneTimeKeysRequest{
 		UserID:   userID,
 		DeviceID: deviceID,
 	}, &queryRes)
@@ -498,18 +505,26 @@ func (rp *RequestPool) processE2EEExtension(
 			}
 
 			// Call DeviceListCatchup to get device list changes
-			_, _, err := internal.DeviceListCatchup(
+			_, _, catchupErr := internal.DeviceListCatchup(
 				ctx, snapshot, rp.userAPI, rp.rsAPI,
 				userID, tempResponse,
 				fromPos.DeviceListPosition, toPos.DeviceListPosition,
 			)
-			if err != nil {
-				logrus.WithError(err).Error("DeviceListCatchup failed")
-				// Continue anyway - device lists are optional
-				// IMPORTANT: Still set DeviceLists even on error (Synapse always includes it)
-				resp.DeviceLists = &types.DeviceLists{
-					Changed: []string{},
-					Left:    []string{},
+			if catchupErr != nil {
+				logrus.WithError(catchupErr).Error("DeviceListCatchup failed")
+				deviceListsFailed = true
+				if errors.Is(catchupErr, internal.ErrKeyChangeQueryIncomplete) {
+					// Keep membership-derived changes gathered before the failed key
+					// query. The caller retains the old device-list cursor so the
+					// unread key changes are retried on the next sync.
+					resp.DeviceLists = tempResponse.DeviceLists
+				} else {
+					// Continue anyway - device lists are optional. Still include an
+					// empty field for other failures, matching normal responses.
+					resp.DeviceLists = &types.DeviceLists{
+						Changed: []string{},
+						Left:    []string{},
+					}
 				}
 			} else {
 				// CRITICAL: Always set DeviceLists for incremental sync, even if empty
@@ -522,7 +537,7 @@ func (rp *RequestPool) processE2EEExtension(
 
 	// Always return e2ee extension if requested
 	// Synapse behavior: always returns OTK counts and device lists (even if empty arrays)
-	return resp, nil
+	return resp, deviceListsFailed, nil
 }
 
 // accountDataStream is the SlidingSyncConnectionStream "stream" tag for
@@ -629,6 +644,12 @@ func (rp *RequestPool) persistAccountDataRoomState(
 // the response will not be acknowledged, so the position it writes to is
 // discarded on the client's retry anyway.
 func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connState *V4ConnectionState) error {
+	return rp.copyForwardAccountDataStateReporting(ctx, connState, nil)
+}
+
+// copyForwardAccountDataStateReporting is copyForwardAccountDataState that also
+// stores the first genuine write failure in *firstFailure when it is not nil.
+func (rp *RequestPool) copyForwardAccountDataStateReporting(ctx context.Context, connState *V4ConnectionState, firstFailure *error) error {
 	if connState == nil || connState.ConnectionPosition == 0 {
 		return nil
 	}
@@ -649,6 +670,7 @@ func (rp *RequestPool) copyForwardAccountDataState(ctx context.Context, connStat
 				return ctxErr
 			}
 			logrus.WithError(err).WithField("room_id", roomID).Warn("[ACCOUNT_DATA] Failed to copy forward account_data stream state")
+			recordFirstFailure(firstFailure, err)
 		}
 	}
 	return nil

@@ -239,6 +239,9 @@ type Memberships interface {
 	UpsertMemberships(ctx context.Context, txn *sql.Tx, events []*rstypes.HeaderedEvent, streamPos, topologicalPos types.StreamPosition) error
 	SelectMembershipCount(ctx context.Context, txn *sql.Tx, roomID, membership string, pos types.StreamPosition) (count int, err error)
 	SelectMembershipForUser(ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64) (membership string, topologicalPos int64, err error)
+	// SelectMembershipForUserAtStreamPosition returns the membership of the
+	// user at or before the given stream position.
+	SelectMembershipForUserAtStreamPosition(ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64) (membership, eventID string, err error)
 	PurgeMemberships(ctx context.Context, txn *sql.Tx, roomID string) error
 	SelectMemberships(
 		ctx context.Context, txn *sql.Tx,
@@ -250,6 +253,10 @@ type Memberships interface {
 type NotificationData interface {
 	UpsertRoomUnreadCounts(ctx context.Context, txn *sql.Tx, userID string, data *eventutil.NotificationData) (types.StreamPosition, error)
 	SelectUserUnreadCountsForRooms(ctx context.Context, txn *sql.Tx, userID string, roomIDs []string) (map[string]*eventutil.NotificationData, error)
+	// SelectUserRoomIDsAfter returns the rooms with a notification row for the
+	// user written at a stream position in the range (after, upTo]. A row can be
+	// rewritten with identical counts.
+	SelectUserRoomIDsAfter(ctx context.Context, txn *sql.Tx, userID string, after, upTo types.StreamPosition) ([]string, error)
 	SelectMaxID(ctx context.Context, txn *sql.Tx) (int64, error)
 	PurgeNotificationData(ctx context.Context, txn *sql.Tx, roomID string) error
 }

@@ -360,6 +360,10 @@ federation_api:
   # further failure. Default 8 is ~4 minutes. Only lower this for testing.
   send_min_retry_exponent: 8
 
+  # How long a failed fetch of a remote server's signing keys stops further
+  # fetches from that server. A successful fetch clears it. Default 2s.
+  server_key_fetch_backoff: 2s
+
   # Disable the validation of TLS certificates of remote federated homeservers. Do not
   # enable this option in production as it presents a security risk!
   disable_tls_validation: false

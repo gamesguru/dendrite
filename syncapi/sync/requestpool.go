@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -454,7 +455,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 			}); ok {
 				waiter.WaitForPendingPartialJoins(syncReq.Context, syncReq)
 			}
-			rp.waitForJoinedRooms(syncReq.Context, syncReq)
+			rp.waitForJoinedRooms(syncReq.Context, syncReq.Device.UserID)
 			syncReq.Response.NextBatch = types.StreamingToken{
 				// Get the current DeviceListPosition first, as the currentPosition
 				// might advance while processing other streams, resulting in flakey
@@ -807,11 +808,16 @@ func (rp *RequestPool) shouldReturnImmediately(syncReq *types.SyncRequest, curre
 	return false
 }
 
-func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRequest) {
-	if rp.rsAPI == nil || req.Device == nil {
+// waitForJoinedRooms makes a best-effort wait, before a complete sync picks its
+// token, for the sync API to catch up with each joined room's latest events and
+// the user's current membership event, so the token covers events the client
+// has already written. The shared wait context is limited to one second or the
+// caller's earlier cancellation or deadline. Lookup failures do not reach callers.
+func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, deviceUserID string) {
+	if rp.rsAPI == nil || deviceUserID == "" {
 		return
 	}
-	userID, err := spec.NewUserID(req.Device.UserID, true)
+	userID, err := spec.NewUserID(deviceUserID, true)
 	if err != nil {
 		return
 	}
@@ -822,21 +828,55 @@ func (rp *RequestPool) waitForJoinedRooms(ctx context.Context, req *types.SyncRe
 	if err != nil || len(rooms) == 0 {
 		return
 	}
+
+	// Collect the events the roomserver has: the forward extremities, plus the
+	// membership event, which may be a newer join for a rejoin.
+	var wanted []string
+	memberTuple := []gomatrixserverlib.StateKeyTuple{{EventType: spec.MRoomMember, StateKey: deviceUserID}}
 	for _, roomID := range rooms {
 		if ctx.Err() != nil {
 			return
 		}
 		var latestRes roomserverAPI.QueryLatestEventsAndStateResponse
 		if err := rp.rsAPI.QueryLatestEventsAndState(ctx, &roomserverAPI.QueryLatestEventsAndStateRequest{
-			RoomID: roomID.String(),
+			RoomID:       roomID.String(),
+			StateToFetch: memberTuple,
 		}, &latestRes); err != nil {
 			continue
 		}
-		for _, ev := range latestRes.LatestEvents {
-			if ctx.Err() != nil {
-				return
+		wanted = append(wanted, latestRes.LatestEvents...)
+		for _, ev := range latestRes.StateEvents {
+			if ev != nil {
+				wanted = append(wanted, ev.EventID())
 			}
-			internal.WaitForMembershipInTopology(ctx, rp.db, ev)
 		}
+	}
+	if len(wanted) == 0 {
+		return
+	}
+
+	// Check them on one snapshot, closed before waiting so the waits can take
+	// their own, and only wait for those the sync API does not have yet.
+	snapshot, err := rp.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, eventID := range util.UniqueStrings(wanted) {
+		if ctx.Err() != nil {
+			break
+		}
+		// Any lookup error leaves presence uncertain, so wait for it too.
+		if _, posErr := snapshot.EventPositionInTopology(ctx, eventID); posErr != nil {
+			missing = append(missing, eventID)
+		}
+	}
+	_ = snapshot.Rollback()
+
+	for _, eventID := range missing {
+		if ctx.Err() != nil {
+			return
+		}
+		internal.WaitForMembershipInTopology(ctx, rp.db, eventID)
 	}
 }

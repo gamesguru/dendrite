@@ -105,6 +105,9 @@ type receiptStatements struct {
 	deleteConnectionReceiptsForRoom *sql.Stmt
 }
 
+// NewPostgresReceiptsTable creates and migrates receipt and Sliding Sync storage,
+// then prepares receipt queries. Schema, migration,
+// and statement preparation errors are returned.
 func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 	_, err := db.Exec(receiptsSchema)
 	if err != nil {
@@ -120,6 +123,7 @@ func NewPostgresReceiptsTable(db *sql.DB) (tables.Receipts, error) {
 			Version: "syncapi: create sliding sync tables",
 			Up:      deltas.UpCreateSlidingSyncTables,
 		},
+		sqlutil.Migration{Version: "syncapi: create sliding sync list windows", Up: deltas.UpCreateSlidingSyncListWindows},
 		sqlutil.Migration{
 			Version: "syncapi: add connection receipts table for sliding sync",
 			Up:      deltas.UpAddConnectionReceipts,
