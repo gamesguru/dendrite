@@ -50,8 +50,10 @@ func (r senderResolver) QueryUserIDForSender(context.Context, spec.RoomID, spec.
 	return spec.NewUserID(r.user.ID, true)
 }
 
-func (r senderResolver) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
-	return errDatabaseUnavailable
+// QueryEventsByID succeeds but finds no predecessor, so the write reaches
+// WriteEvent instead of stopping at the predecessor lookup.
+func (r senderResolver) QueryEventsByID(_ context.Context, _ *api.QueryEventsByIDRequest, _ *api.QueryEventsByIDResponse) error {
+	return nil
 }
 
 // TestWriteFailureStopsOnShutdown checks that a write failing because the
