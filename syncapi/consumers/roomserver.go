@@ -1191,6 +1191,14 @@ func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *
 // common case and settles it in one lookup; only a prev event that is held at
 // all but is not accepted needs the second query to tell a rejected event from
 // one the roomserver does not know.
+//
+// The roomserver may accept a rejected event while these queries run: the
+// partial-state resync re-fetches rejected state events and clears the
+// rejection once it can verify them. An event accepted between the filtered and
+// unfiltered lookups would be present in the latter but absent from the former,
+// so the filtered lookup is repeated before reporting the event as rejected.
+// Purging the marker of an accepted event would lose the backfill /messages
+// needs while that event is still missing from the sync API timeline.
 func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) (bool, error) {
 	if s.rsAPI == nil {
 		return false, nil
@@ -1210,5 +1218,16 @@ func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomI
 	}, &known); err != nil {
 		return false, err
 	}
-	return len(known.Events) > 0, nil
+	if len(known.Events) == 0 {
+		return false, nil
+	}
+	// The event may have become accepted between the filtered and unfiltered
+	// lookups. Recheck before using this result to purge its backward marker.
+	accepted = api.QueryEventsByIDResponse{}
+	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
+	}, &accepted); err != nil {
+		return false, err
+	}
+	return len(accepted.Events) == 0, nil
 }
