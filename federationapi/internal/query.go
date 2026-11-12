@@ -139,9 +139,9 @@ func validateServerKeyJSON(raw json.RawMessage, now time.Time) (gomatrixserverli
 	if len(keys.VerifyKeys) > maxVerifyKeys {
 		return keys, fmt.Errorf("server key response has %d verify_keys, exceeding the %d-key ceiling", len(keys.VerifyKeys), maxVerifyKeys)
 	}
-	if !keys.ValidUntilTS.Time().After(now) {
-		return keys, fmt.Errorf("server key response expired at %s", keys.ValidUntilTS.Time().Format(time.RFC3339))
-	}
+	// An expired valid_until_ts is not a fetch failure. The response is stored
+	// with its validity, and each notary request applies its own
+	// minimum_valid_until_ts when deciding whether the stored copy will do.
 
 	// A key ID is a permanent identity. It must not be bound to different key
 	// material in verify_keys and old_verify_keys in the same response.
