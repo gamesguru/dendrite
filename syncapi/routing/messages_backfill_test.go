@@ -20,6 +20,8 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -87,5 +89,54 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, extremities, newer.EventID(), "filled extremity must be cleared")
 		assert.Contains(t, extremities, older.EventID(), "the new boundary extremity must remain")
+	})
+}
+
+// Events backfilled after a client's sync token get stream positions above that
+// token. Paginating back from the token must still return them, otherwise every
+// refresh finds nothing locally and backfills over federation again.
+func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		older := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "older"})
+		newer := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "newer"})
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		tokenPos, err := db.WriteEvent(ctx, newer, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		// Backfill happens after the client obtained its sync token.
+		_, err = backfillEvents(ctx, &backfillOnlyAPI{events: []*rstypes.HeaderedEvent{older}},
+			db, "hs2", "hs2", room.ID,
+			map[string][]string{newer.EventID(): {older.EventID()}}, 10)
+		require.NoError(t, err)
+
+		// The same event can be written again by the normal sync API path, for
+		// example when a gap is filled with /get_missing_events and the event is
+		// replayed as an old event with exclude_from_sync=false. That must not
+		// clear the backfill marker, or the history becomes unreachable again.
+		_, err = db.WriteEvent(ctx, older, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+		events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 10})
+		require.NoError(t, err)
+		ids := make([]string, 0, len(events))
+		for _, ev := range events {
+			ids = append(ids, ev.EventID())
+		}
+		assert.Contains(t, ids, older.EventID(), "backfilled event must not be hidden by the stream-position cap")
 	})
 }

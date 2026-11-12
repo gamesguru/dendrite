@@ -30,9 +30,17 @@ func newTopologyTable(t *testing.T, dbType test.DBType) (tables.Topology, *sql.D
 	var tab tables.Topology
 	switch dbType {
 	case test.DBTypePostgres:
-		tab, err = postgres.NewPostgresTopologyTable(db)
+		// The topology queries reference the output events table.
+		if _, err = postgres.NewPostgresEventsTable(context.Background(), db); err == nil {
+			tab, err = postgres.NewPostgresTopologyTable(db)
+		}
 	case test.DBTypeSQLite:
-		tab, err = sqlite3.NewSqliteTopologyTable(db)
+		var stream sqlite3.StreamIDStatements
+		if err = stream.Prepare(db); err == nil {
+			if _, err = sqlite3.NewSqliteEventsTable(db, &stream); err == nil {
+				tab, err = sqlite3.NewSqliteTopologyTable(db)
+			}
+		}
 	}
 	if err != nil {
 		t.Fatalf("failed to make new table: %s", err)

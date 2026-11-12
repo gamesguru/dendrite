@@ -59,7 +59,8 @@ const selectEventIDsInRangeDESCSQL = "" +
 // are still returned in topological order.
 const selectEventIDsBeforeStreamPositionSQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
-	" WHERE room_id = $1 AND topological_position > $2 AND stream_position <= $3" +
+	" WHERE room_id = $1 AND topological_position > $2 AND (stream_position <= $3 OR event_id IN" +
+	"  (SELECT event_id FROM syncapi_output_room_events WHERE room_id = $1 AND exclude_from_sync = TRUE))" +
 	" ORDER BY topological_position DESC, stream_position DESC LIMIT $4"
 
 const selectPositionInTopologySQL = "" +

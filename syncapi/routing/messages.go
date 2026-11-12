@@ -423,7 +423,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		filtered := streamEvents[:0]
 		for _, ev := range streamEvents {
 			if r.backwardOrdering {
-				if ev.StreamPosition <= r.fromStream.PDUPosition {
+				// Backfilled events are stored after the token was issued, so their
+				// stream positions are above it, but they belong to older history.
+				if ev.StreamPosition <= r.fromStream.PDUPosition || ev.ExcludeFromSync {
 					filtered = append(filtered, ev)
 				}
 			} else if ev.StreamPosition > r.fromStream.PDUPosition {

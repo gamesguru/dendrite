@@ -30,17 +30,25 @@ func newRelationsTable(t *testing.T, dbType test.DBType) (tables.Relations, *sql
 	var tab tables.Relations
 	switch dbType {
 	case test.DBTypePostgres:
+		// The topology queries reference the output events table.
+		if _, err = postgres.NewPostgresEventsTable(context.Background(), db); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = postgres.NewPostgresTopologyTable(db); err != nil {
 			t.Fatal(err)
 		}
 		tab, err = postgres.NewPostgresRelationsTable(db)
 	case test.DBTypeSQLite:
-		if _, err = sqlite3.NewSqliteTopologyTable(db); err != nil {
-			t.Fatal(err)
-		}
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {
 			t.Fatalf("failed to prepare stream stmts: %s", err)
+		}
+		// The topology queries reference the output events table.
+		if _, err = sqlite3.NewSqliteEventsTable(db, &stream); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = sqlite3.NewSqliteTopologyTable(db); err != nil {
+			t.Fatal(err)
 		}
 		tab, err = sqlite3.NewSqliteRelationsTable(db, &stream)
 	}
