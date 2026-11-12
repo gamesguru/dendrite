@@ -50,18 +50,18 @@ func TestStoredNotaryKeysMixedValidity(t *testing.T) {
 		}}
 	}
 	a := FederationInternalAPI{db: storedNotaryDatabase{keys: map[gomatrixserverlib.KeyID]gomatrixserverlib.ServerKeys{
-		"ed25519:zero":      makeKey("ed25519:zero", expired),
-		"ed25519:default":   makeKey("ed25519:default", expired),
-		"ed25519:future":    makeKey("ed25519:future", future),
-		"ed25519:too_short": makeKey("ed25519:too_short", future),
+		"ed25519:zero":        makeKey("ed25519:zero", expired),
+		"ed25519:default":     makeKey("ed25519:default", expired),
+		"ed25519:future":      makeKey("ed25519:future", future),
+		"ed25519:best_effort": makeKey("ed25519:best_effort", future),
 	}}}
 	keys, err := a.storedNotaryKeys(t.Context(), &api.QueryServerKeysRequest{
 		ServerName: "remote.test",
 		KeyIDToCriteria: map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{
-			"ed25519:zero":      {MinimumValidUntilTS: 0},
-			"ed25519:default":   {MinimumValidUntilTS: spec.AsTimestamp(now)},
-			"ed25519:future":    {MinimumValidUntilTS: future},
-			"ed25519:too_short": {MinimumValidUntilTS: spec.AsTimestamp(now.Add(2 * time.Hour))},
+			"ed25519:zero":        {MinimumValidUntilTS: 0},
+			"ed25519:default":     {MinimumValidUntilTS: spec.AsTimestamp(now)},
+			"ed25519:future":      {MinimumValidUntilTS: future},
+			"ed25519:best_effort": {MinimumValidUntilTS: spec.AsTimestamp(now.Add(2 * time.Hour))},
 		},
 	})
 	require.NoError(t, err)
@@ -71,5 +71,26 @@ func TestStoredNotaryKeysMixedValidity(t *testing.T) {
 			ids = append(ids, id)
 		}
 	}
-	require.ElementsMatch(t, []gomatrixserverlib.KeyID{"ed25519:zero", "ed25519:future"}, ids)
+	require.ElementsMatch(t, []gomatrixserverlib.KeyID{"ed25519:zero", "ed25519:future", "ed25519:best_effort"}, ids)
+}
+
+// A minimum beyond the origin's validity forces a refresh, but must not hide
+// the best available response once that refresh has been attempted.
+func TestNotaryMinimumForcesRefreshBeforeBestEffortFallback(t *testing.T) {
+	now := time.Now()
+	keyID := gomatrixserverlib.KeyID("ed25519:retired")
+	key := gomatrixserverlib.ServerKeys{ServerKeyFields: gomatrixserverlib.ServerKeyFields{
+		ServerName: "remote.test", ValidUntilTS: spec.AsTimestamp(now.Add(48 * time.Hour)),
+		OldVerifyKeys: map[gomatrixserverlib.KeyID]gomatrixserverlib.OldVerifyKey{keyID: {}},
+	}}
+	a := FederationInternalAPI{db: storedNotaryDatabase{keys: map[gomatrixserverlib.KeyID]gomatrixserverlib.ServerKeys{keyID: key}}}
+	req := &api.QueryServerKeysRequest{ServerName: "remote.test", KeyIDToCriteria: map[gomatrixserverlib.KeyID]gomatrixserverlib.PublicKeyNotaryQueryCriteria{
+		keyID: {MinimumValidUntilTS: spec.AsTimestamp(now.Add(49 * time.Hour))},
+	}}
+	_, err := a.fetchServerKeysFromCache(t.Context(), req)
+	require.Error(t, err, "a response below the minimum must trigger a direct fetch")
+	keys, err := a.storedNotaryKeys(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "after the fetch attempt, return the best available response")
+	require.Equal(t, key.ValidUntilTS, keys[0].ValidUntilTS)
 }

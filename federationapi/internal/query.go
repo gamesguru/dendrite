@@ -227,9 +227,11 @@ func walkJSONValue(dec *json.Decoder) error {
 
 // storedNotaryKeys returns stored responses after a direct fetch attempt. A key
 // whose criterion sets no minimum_valid_until_ts accepts an expired response;
-// every other requested key needs a currently valid response that is also valid
-// until its minimum. Keys are considered separately, so a request that mixes an
-// explicit zero minimum with an omitted one can still be answered.
+// every other requested key needs a currently valid response. The requested
+// minimum triggers a refresh in fetchServerKeysFromCache; after that attempt,
+// return the best available response even if it falls short of the minimum.
+// Keys are considered separately, so a request that mixes an explicit zero
+// minimum with an omitted one can still be answered.
 func (a *FederationInternalAPI) storedNotaryKeys(
 	ctx context.Context, req *api.QueryServerKeysRequest,
 ) ([]gomatrixserverlib.ServerKeys, error) {
@@ -268,7 +270,7 @@ func notaryResponseAnswersRequest(
 		if criterion.MinimumValidUntilTS == 0 {
 			return true
 		}
-		if serverKeys.ValidUntilTS >= criterion.MinimumValidUntilTS && serverKeys.ValidUntilTS.Time().After(now) {
+		if serverKeys.ValidUntilTS.Time().After(now) {
 			return true
 		}
 	}
