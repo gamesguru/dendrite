@@ -438,7 +438,10 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	writeStarted := time.Now()
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		noBackfill := s.rejectedPrevEventIDs(ctx, ev)
+		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
+		if err != nil {
+			return err
+		}
 		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
@@ -452,6 +455,12 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 			// Nothing was written, so redelivery can try again, as it did
 			// when the relation was stored after the event.
 			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrPrevEventLookup) {
+			// Nothing was written, so redelivery recalculates the prev events
+			// to purge instead of leaving a false marker behind.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to look up the prev events of the event, returning it for redelivery")
 			return fmt.Errorf("write new event %s: %w", ev.EventID(), err)
 		}
 		// panic rather than continue with an inconsistent database
@@ -531,7 +540,10 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
-		noBackfill := s.rejectedPrevEventIDs(ctx, ev)
+		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
+		if err != nil {
+			return err
+		}
 		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
@@ -543,6 +555,12 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 			// Nothing was written, so redelivery can try again, as it did
 			// when the relation was stored after the event.
 			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to store relation with event")
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, types.ErrPrevEventLookup) {
+			// Nothing was written, so redelivery recalculates the prev events
+			// to purge instead of leaving a false marker behind.
+			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to look up the prev events of the event, returning it for redelivery")
 			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
 		}
 		// panic rather than continue with an inconsistent database
@@ -1154,30 +1172,37 @@ func (s *OutputRoomEventConsumer) onRejectedEvents(ctx context.Context, msg api.
 // rejected. Non-rejected outliers, such as events
 // fetched while resyncing partial state, are in the roomserver but not the sync
 // API timeline, so their marker stays and /messages backfills them.
-func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) []string {
+func (s *OutputRoomEventConsumer) rejectedPrevEventIDs(ctx context.Context, ev *rstypes.HeaderedEvent) ([]string, error) {
 	var prevIDs []string
 	for _, prevID := range ev.PrevEventIDs() {
-		if s.prevEventIsRejected(ctx, ev.RoomID().String(), prevID) {
+		rejected, err := s.prevEventIsRejected(ctx, ev.RoomID().String(), prevID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", types.ErrPrevEventLookup, prevID, err)
+		}
+		if rejected {
 			prevIDs = append(prevIDs, prevID)
 		}
 	}
-	return prevIDs
+	return prevIDs, nil
 }
 
-func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) bool {
+func (s *OutputRoomEventConsumer) prevEventIsRejected(ctx context.Context, roomID, prevID string) (bool, error) {
 	if s.rsAPI == nil {
-		return false
+		return false, nil
 	}
 	var known, accepted api.QueryEventsByIDResponse
 	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: []string{prevID},
-	}, &known); err != nil || len(known.Events) == 0 {
-		return false
+	}, &known); err != nil {
+		return false, err
+	}
+	if len(known.Events) == 0 {
+		return false, nil
 	}
 	if err := s.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
 		RoomID: roomID, EventIDs: []string{prevID}, ExcludeRejected: true,
 	}, &accepted); err != nil {
-		return false
+		return false, err
 	}
-	return len(accepted.Events) == 0
+	return len(accepted.Events) == 0, nil
 }

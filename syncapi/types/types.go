@@ -29,6 +29,12 @@ import (
 // retried.
 var ErrStoreRelation = errors.New("failed to store event relation")
 
+// ErrPrevEventLookup marks a failure to ask the roomserver whether an event's
+// prev events are rejected while writing the event. Nothing has been written,
+// so the message can be redelivered and the purge recalculated, rather than
+// leaving a false backward-extremity marker behind.
+var ErrPrevEventLookup = errors.New("failed to look up an event's prev events")
+
 // ErrMalformedSyncToken is returned when parsing sync tokens if the token is invalid. Callers can
 // use this error to detect whether to 400 or 401 the client. It is recommended to 401 them to force
 // a logout.
