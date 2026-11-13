@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 
@@ -34,18 +36,27 @@ func NewMembershipUpdater(
 ) (*MembershipUpdater, error) {
 	var roomNID types.RoomNID
 	var targetUserNID types.EventStateKeyNID
+	assign := func() error {
+		return d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
+			var err error
+			roomNID, err = d.assignRoomNID(ctx, txn, roomID, roomVersion)
+			if err != nil {
+				return err
+			}
+			targetUserNID, err = d.assignStateKeyNID(ctx, txn, targetUserID)
+			return err
+		})
+	}
+	// The NID lookups read before they insert. On SQLite that read-then-write
+	// lock upgrade can fail at once with SQLITE_BUSY, ignoring the busy timeout,
+	// when another connection commits in between. When this call owns the
+	// transaction (txn == nil) it is safe to retry the whole thing.
 	var err error
-	err = d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
-		roomNID, err = d.assignRoomNID(ctx, txn, roomID, roomVersion)
-		if err != nil {
-			return err
-		}
-		targetUserNID, err = d.assignStateKeyNID(ctx, txn, targetUserID)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+	if txn == nil {
+		err = retrySQLiteBusy(ctx, assign)
+	} else {
+		err = assign()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -185,4 +196,36 @@ func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *
 // table: an invite or a knock waiting for the room to respond.
 func isPendingMembership(membership tables.MembershipState) bool {
 	return membership == tables.MembershipStateInvite || membership == tables.MembershipStateKnock
+}
+
+// retrySQLiteBusy runs fn, retrying a few times with a short backoff while it
+// fails with SQLite's lock-contention error.
+func retrySQLiteBusy(ctx context.Context, fn func() error) error {
+	const attempts = 10
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = fn()
+		if err == nil || attempt == attempts || !isSQLiteBusy(err) {
+			return err
+		}
+		delay := time.Duration(attempt) * 25 * time.Millisecond
+		if delay > 250*time.Millisecond {
+			delay = 250 * time.Millisecond
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+// isSQLiteBusy matches by text because the cgo and pure-Go drivers expose
+// different error types and only one is linked into a build.
+func isSQLiteBusy(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
