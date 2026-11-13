@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events_topology (
 );
 -- The topological order will be used in events selection and ordering
 CREATE UNIQUE INDEX IF NOT EXISTS syncapi_event_topological_position_idx ON syncapi_output_room_events_topology(topological_position, stream_position, room_id);
+-- Repair scans from a topological position within a room
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_topology_room_topo_idx ON syncapi_output_room_events_topology(room_id, topological_position);
+-- Lookups of an event by its stream position within a room
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_topology_room_stream_idx ON syncapi_output_room_events_topology(room_id, stream_position);
 `
 
 const insertEventInTopologySQL = "" +

@@ -114,7 +114,7 @@ const selectMembershipAtStreamSQL = "" +
 	"SELECT membership, event_id, stream_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
 
 const updateMembershipTopologicalPosSQL = "" +
-	"UPDATE syncapi_memberships SET topological_pos = $1 WHERE event_id = $2 AND topological_pos < $1"
+	"UPDATE syncapi_memberships SET topological_pos = $1 WHERE room_id = $2 AND event_id = $3 AND topological_pos < $1"
 
 const purgeMembershipsSQL = "" +
 	"DELETE FROM syncapi_memberships WHERE room_id = $1"
@@ -295,9 +295,9 @@ func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 }
 
 func (s *membershipsStatements) UpdateMembershipTopologicalPos(
-	ctx context.Context, txn *sql.Tx, eventID string, topologicalPos types.StreamPosition,
+	ctx context.Context, txn *sql.Tx, roomID, eventID string, topologicalPos types.StreamPosition,
 ) error {
-	_, err := sqlutil.TxStmt(txn, s.updateMembershipTopologicalPosStmt).ExecContext(ctx, topologicalPos, eventID)
+	_, err := sqlutil.TxStmt(txn, s.updateMembershipTopologicalPosStmt).ExecContext(ctx, topologicalPos, roomID, eventID)
 	return err
 }
 

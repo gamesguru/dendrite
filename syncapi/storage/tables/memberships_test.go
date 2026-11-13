@@ -321,12 +321,12 @@ func TestUpdateMembershipTopologicalPos(t *testing.T) {
 		ctx := context.Background()
 		require.NoError(t, table.UpsertMembership(ctx, nil, join, 5, 10))
 
-		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.EventID(), 20))
+		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.RoomID().String(), join.EventID(), 20))
 		_, pos, err := table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, 100)
 		require.NoError(t, err)
 		require.Equal(t, int64(20), pos)
 
-		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.EventID(), 15))
+		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.RoomID().String(), join.EventID(), 15))
 		_, pos, err = table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, 100)
 		require.NoError(t, err)
 		require.Equal(t, int64(20), pos, "a position is never lowered")

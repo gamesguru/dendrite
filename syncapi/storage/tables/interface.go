@@ -118,7 +118,8 @@ type Topology interface {
 	// events in one query. Events absent from topology are omitted.
 	SelectPositionsInTopology(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.TopologyToken, error)
 	// SelectPositionByStreamPosition returns the current topology position for
-	// an event in the room with this stable stream position.
+	// an event in the room with this stable stream position. It returns
+	// sql.ErrNoRows when no event in the room has that stream position.
 	SelectPositionByStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition) (depth, spos types.StreamPosition, err error)
 	// SelectStreamToTopologicalPosition converts a stream position to a topological position by finding the nearest topological position in the room.
 	SelectStreamToTopologicalPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition, forward bool) (topoPos types.StreamPosition, err error)
@@ -276,7 +277,7 @@ type Memberships interface {
 	// UpdateMembershipTopologicalPos raises the stored topological position of
 	// the membership rows last changed by the event, when the event is moved
 	// in the room's topology. It never lowers a position.
-	UpdateMembershipTopologicalPos(ctx context.Context, txn *sql.Tx, eventID string, topologicalPos types.StreamPosition) error
+	UpdateMembershipTopologicalPos(ctx context.Context, txn *sql.Tx, roomID, eventID string, topologicalPos types.StreamPosition) error
 	SelectMemberships(
 		ctx context.Context, txn *sql.Tx,
 		roomID string, pos types.TopologyToken,

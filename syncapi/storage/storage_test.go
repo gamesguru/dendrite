@@ -1608,6 +1608,7 @@ func TestGetEventsBeforeStreamPositionExcludesBackfilledAtTokenDepth(t *testing.
 			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, r.ID,
 				&synctypes.RoomEventFilter{Limit: 20}, true)
 			require.NoError(t, err)
+			require.NotEmpty(t, events)
 			for _, ev := range events {
 				assert.NotEqual(t, sameDepth.EventID(), ev.EventID(), "a backfilled event at the token's depth is newer than the token")
 			}

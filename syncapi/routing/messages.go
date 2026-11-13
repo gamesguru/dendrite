@@ -1558,12 +1558,12 @@ func (r *messagesReq) backfillBackwardUntilComplete(
 	for round := 0; round < maxBackwardBackfillRounds; round++ {
 		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
 		if backfillErr != nil {
-			if incomplete {
+			if errors.Is(backfillErr, errBackwardBackfillFetch) && incomplete {
 				// Events fetched in an earlier round are already stored, but the
 				// gap remains open. Keep the cursor in place for a retry.
 				return events, true, nil
 			}
-			return events, false, fmt.Errorf("%w: %w", errBackwardBackfillFetch, backfillErr)
+			return nil, false, backfillErr
 		}
 		if len(batch) == 0 {
 			return events, incomplete, nil
@@ -1792,7 +1792,7 @@ func backfillEvents(
 	// ago would only repeat the whole federation round, so answer from memory.
 	cacheKey := terminalBackfillKey(serverName, virtualHost, roomID, backwardsExtremities)
 	if defaultTerminalBackfillCache.recentlyFailed(cacheKey) {
-		return nil, &api.BackfillUnavailableError{Err: errBackfillRecentlyFailed}
+		return nil, fmt.Errorf("%w: %w", errBackwardBackfillFetch, &api.BackfillUnavailableError{Err: errBackfillRecentlyFailed})
 	}
 
 	var res api.PerformBackfillResponse
@@ -1808,7 +1808,7 @@ func backfillEvents(
 		if isTerminalBackfillFailure(wrapped) {
 			defaultTerminalBackfillCache.recordFailure(cacheKey)
 		}
-		return nil, wrapped
+		return nil, fmt.Errorf("%w: %w", errBackwardBackfillFetch, wrapped)
 	}
 	if len(res.Events) > 0 {
 		defaultTerminalBackfillCache.forget(cacheKey)

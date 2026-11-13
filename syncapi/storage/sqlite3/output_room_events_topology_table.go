@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -333,6 +334,19 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionsInTopology(
 	if len(eventIDs) == 0 {
 		return positions, nil
 	}
+	for chunk := range slices.Chunk(eventIDs, selectEventsChunkSize) {
+		if err := s.selectPositionsChunk(ctx, txn, chunk, positions); err != nil {
+			return nil, err
+		}
+	}
+	return positions, nil
+}
+
+// selectPositionsChunk reads one chunk of event IDs, kept under SQLite's limit
+// on bound variables per statement.
+func (s *outputRoomEventsTopologyStatements) selectPositionsChunk(
+	ctx context.Context, txn *sql.Tx, eventIDs []string, positions map[string]types.TopologyToken,
+) error {
 	args := make([]any, len(eventIDs))
 	for i, eventID := range eventIDs {
 		args[i] = eventID
@@ -346,18 +360,18 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionsInTopology(
 		rows, err = s.db.QueryContext(ctx, query, args...)
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer internal.CloseAndLogIfError(ctx, rows, "SelectPositionsInTopology: failed to close rows")
 	for rows.Next() {
 		var eventID string
 		var position types.TopologyToken
 		if err = rows.Scan(&eventID, &position.Depth, &position.PDUPosition); err != nil {
-			return nil, err
+			return err
 		}
 		positions[eventID] = position
 	}
-	return positions, rows.Err()
+	return rows.Err()
 }
 
 // SelectStreamToTopologicalPosition returns the closest position of a given event

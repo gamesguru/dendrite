@@ -127,7 +127,7 @@ func (d forwardGapDB) WriteEvent(_ context.Context, ev *rstypes.HeaderedEvent, _
 	d.state.store(ev)
 	for i, pending := range d.state.unstored {
 		if pending.EventID() == ev.EventID() {
-			d.state.unstored = append(d.state.unstored[:i], d.state.unstored[i+1:]...)
+			d.state.unstored = append(append([]*rstypes.HeaderedEvent(nil), d.state.unstored[:i]...), d.state.unstored[i+1:]...)
 			break
 		}
 	}

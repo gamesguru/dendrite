@@ -34,6 +34,8 @@ import (
 const (
 	relationsMaxLimit       = 50
 	relationsRecursionDepth = 3
+	// This bounds how many batches one stream-token request reads.
+	maxRelationsBatches = 8
 )
 
 type RelationsResponse struct {
@@ -206,7 +208,8 @@ func relationsPage(
 	bounded := params.backwards && fromStream != nil
 	var entries []types.TopologicalRelation
 	cursor := from
-	for {
+	capped := false
+	for batches := 0; ; batches++ {
 		batch, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, cursor, to, params.backwards, params.limit+1)
 		if err != nil {
 			return nil, err
@@ -222,6 +225,12 @@ func relationsPage(
 		// Tokens name the cursor after an event, so step back over the last one.
 		cursor = batch[len(batch)-1].Position
 		cursor.Decrement()
+		if batches+1 >= maxRelationsBatches {
+			// Each batch re-runs the recursive query. Return the short page
+			// with a token that resumes after the last row scanned.
+			capped = true
+			break
+		}
 	}
 	res := &RelationsResponse{Chunk: []synctypes.ClientEvent{}}
 	if params.recurse != nil {
@@ -235,6 +244,8 @@ func relationsPage(
 			next.Decrement()
 		}
 		res.NextBatch = next.String()
+	} else if capped {
+		res.NextBatch = cursor.String()
 	}
 
 	ids := make([]string, 0, len(entries))
