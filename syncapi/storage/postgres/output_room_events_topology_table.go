@@ -109,7 +109,7 @@ const updateEventPositionSQL = "" +
 const selectRoomEventTopologySQL = "" +
 	"SELECT e.headered_event_json, t.topological_position FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-	" WHERE t.room_id = $1 ORDER BY t.stream_position, t.event_id"
+	" WHERE t.room_id = $1 AND t.topological_position >= $2 ORDER BY t.stream_position, t.event_id"
 
 type outputRoomEventsTopologyStatements struct {
 	insertEventInTopologyStmt                     *sql.Stmt
@@ -162,9 +162,9 @@ func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(
 }
 
 func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
-	ctx context.Context, txn *sql.Tx, roomID string,
+	ctx context.Context, txn *sql.Tx, roomID string, minTopologicalPos types.StreamPosition,
 ) ([]tables.StoredEventTopology, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventTopologyStmt).QueryContext(ctx, roomID)
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventTopologyStmt).QueryContext(ctx, roomID, minTopologicalPos)
 	if err != nil {
 		return nil, err
 	}

@@ -30,8 +30,9 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events_topology (
 
 	UNIQUE(topological_position, room_id, stream_position)
 );
--- Whole-room reads (such as repairing the topology after a late parent) filter
--- on room_id alone, which the unique index above cannot serve.
+-- Late-parent repair filters by room and the lowest affected topology position.
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_topology_room_topo_idx ON syncapi_output_room_events_topology(room_id, topological_position);
+-- Room and stream-position lookups can use this index.
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_topology_room_stream_idx ON syncapi_output_room_events_topology(room_id, stream_position);
 -- The topological order will be used in events selection and ordering
 -- CREATE UNIQUE INDEX IF NOT EXISTS syncapi_event_topological_position_idx ON syncapi_output_room_events_topology(topological_position, stream_position, room_id);
@@ -106,7 +107,7 @@ const updateEventPositionSQL = "" +
 const selectRoomEventTopologySQL = "" +
 	"SELECT e.headered_event_json, t.topological_position FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-	" WHERE t.room_id = $1 ORDER BY t.stream_position, t.event_id"
+	" WHERE t.room_id = $1 AND t.topological_position >= $2 ORDER BY t.stream_position, t.event_id"
 
 type outputRoomEventsTopologyStatements struct {
 	db                                            *sql.DB
@@ -158,9 +159,9 @@ func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(
 }
 
 func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
-	ctx context.Context, txn *sql.Tx, roomID string,
+	ctx context.Context, txn *sql.Tx, roomID string, minTopologicalPos types.StreamPosition,
 ) ([]tables.StoredEventTopology, error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventTopologyStmt).QueryContext(ctx, roomID)
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventTopologyStmt).QueryContext(ctx, roomID, minTopologicalPos)
 	if err != nil {
 		return nil, err
 	}

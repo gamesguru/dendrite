@@ -98,8 +98,10 @@ type Topology interface {
 	// previously missing parent arrives after it.
 	UpdateEventPosition(ctx context.Context, txn *sql.Tx, eventID string, topoPos types.StreamPosition) error
 	// SelectRoomEventTopology returns the stored DAG and current topology positions
-	// for the room. It is used only when a late parent requires descendant repair.
-	SelectRoomEventTopology(ctx context.Context, txn *sql.Tx, roomID string) ([]StoredEventTopology, error)
+	// at or above minTopologicalPos. It is used only when a late parent requires
+	// descendant repair; lower positions cannot be descendants because stored
+	// children are lifted when their parent arrives.
+	SelectRoomEventTopology(ctx context.Context, txn *sql.Tx, roomID string, minTopologicalPos types.StreamPosition) ([]StoredEventTopology, error)
 	// SelectEventIDsInRange selects the IDs and the topological position of events whose depths are within a given range in a given room's topological order.
 	// Events with `minDepth` are *exclusive*, as is the event which has exactly `minDepth`,`maxStreamPos`. Returns the eventIDs and start/end topological tokens.
 	// `maxStreamPos` is only used when events have the same depth as `maxDepth`, which results in events less than `maxStreamPos` being returned.
