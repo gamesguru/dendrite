@@ -1671,8 +1671,9 @@ func (r *messagesReq) hasStoredEventsBelow(events []*rstypes.HeaderedEvent) (boo
 			if !exists {
 				// Backfilled events are often not in the local topology table.
 				// Their wire depth still bounds how far below the batch stored
-				// history can be considered.
-				position = types.TopologyToken{Depth: types.StreamPosition(ev.Depth())}
+				// history can be considered. Its arrival order is unknown, so use
+				// the maximum PDU position to keep same-depth history in range.
+				position = types.TopologyToken{Depth: types.StreamPosition(ev.Depth()), PDUPosition: types.StreamPosition(math.MaxInt64)}
 			}
 			if !found || topologyTokenLess(position, oldest) {
 				oldest = position
@@ -1691,7 +1692,8 @@ func (r *messagesReq) hasStoredEventsBelow(events []*rstypes.HeaderedEvent) (boo
 			}
 		}
 		if oldestDepth != int64(math.MaxInt64) {
-			oldest = types.TopologyToken{Depth: types.StreamPosition(oldestDepth)}
+			// Without per-event positions, keep every event at this depth in range.
+			oldest = types.TopologyToken{Depth: types.StreamPosition(oldestDepth), PDUPosition: types.StreamPosition(math.MaxInt64)}
 			found = true
 		}
 	}
