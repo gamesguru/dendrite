@@ -85,6 +85,12 @@ const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+// The highest topological position among the given events that are already in
+// the room's topology, or -1 if none is.
+const selectMaxTopologyPositionSQL = "" +
+	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
+	" WHERE room_id = $1 AND event_id = ANY($2)"
+
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
@@ -99,6 +105,7 @@ type outputRoomEventsTopologyStatements struct {
 	selectFirstSyncedDepthAfterStreamPositionStmt *sql.Stmt
 	purgeEventsTopologyStmt                       *sql.Stmt
 	deleteEventFromTopologyStmt                   *sql.Stmt
+	selectMaxTopologyPositionStmt                 *sql.Stmt
 }
 
 func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
@@ -118,6 +125,7 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectFirstSyncedDepthAfterStreamPositionStmt, selectFirstSyncedDepthAfterStreamPositionSQL},
 		{&s.purgeEventsTopologyStmt, purgeEventsTopologySQL},
 		{&s.deleteEventFromTopologyStmt, deleteEventFromTopologySQL},
+		{&s.selectMaxTopologyPositionStmt, selectMaxTopologyPositionSQL},
 	}.Prepare(db)
 }
 
@@ -129,6 +137,20 @@ func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	// Clamp the depth to prevent issues with events that have depth values
 	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
 	depth := depth.Clamp(event.Depth())
+	// An event must sort after its parents. A server that restarted its depth
+	// counter claims a depth below them, which would split the room into two
+	// depth ranges, so lift the position above the stored prev events.
+	var maxPrev int64
+	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
+		if err = sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
+			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
+		).Scan(&maxPrev); err != nil {
+			return 0, err
+		}
+		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > depth {
+			depth = lifted
+		}
+	}
 	err = sqlutil.TxStmt(txn, s.insertEventInTopologyStmt).QueryRowContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	).Scan(&topoPos)

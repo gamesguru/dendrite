@@ -182,12 +182,16 @@ func (r *Room) CreateEvent(t *testing.T, creator *User, eventType string, conten
 		}
 	}
 
+	eventDepth := int64(depth)
+	if mod.depth != nil {
+		eventDepth = *mod.depth
+	}
 	builder := gomatrixserverlib.MustGetRoomVersion(r.Version).NewEventBuilderFromProtoEvent(&gomatrixserverlib.ProtoEvent{
 		SenderID: creator.ID,
 		RoomID:   r.ID,
 		Type:     eventType,
 		StateKey: mod.stateKey,
-		Depth:    int64(depth),
+		Depth:    eventDepth,
 		Unsigned: unsigned,
 		Redacts:  mod.redacts,
 

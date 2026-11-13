@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/depth"
@@ -82,6 +83,12 @@ const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+// The highest topological position among the given events that are already in
+// the room's topology, or -1 if none is.
+const selectMaxTopologyPositionSQL = "" +
+	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
+	" WHERE room_id = $1 AND event_id IN ($2)"
+
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
@@ -129,6 +136,28 @@ func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	// Clamp the depth to prevent issues with events that have depth values
 	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
 	depth := depth.Clamp(event.Depth())
+	// An event must sort after its parents. A server that restarted its depth
+	// counter claims a depth below them, which would split the room into two
+	// depth ranges, so lift the position above the stored prev events.
+	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
+		args := make([]any, 0, len(prevs)+1)
+		args = append(args, event.RoomID().String())
+		for _, prev := range prevs {
+			args = append(args, prev)
+		}
+		query := strings.Replace(selectMaxTopologyPositionSQL, "($2)", sqlutil.QueryVariadicOffset(len(prevs), 1), 1)
+		var maxPrev int64
+		row := s.db.QueryRowContext
+		if txn != nil {
+			row = txn.QueryRowContext
+		}
+		if err := row(ctx, query, args...).Scan(&maxPrev); err != nil {
+			return 0, err
+		}
+		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > depth {
+			depth = lifted
+		}
+	}
 	insertEventInTopologyStmt := sqlutil.TxStmt(txn, s.insertEventInTopologyStmt)
 	_, err := insertEventInTopologyStmt.ExecContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
