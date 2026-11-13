@@ -254,3 +254,92 @@ func TestHandleEmptyEventsSliceDoesNotBackfillNewerGaps(t *testing.T) {
 		assert.Zero(t, probe.calls, "a depth-%d request must not backfill a depth-2800 gap", depth)
 	}
 }
+
+// fullPageSnapshot stubs the lookups handleNonEmptyEventsSlice makes for a
+// page that already contains a backward extremity.
+type fullPageSnapshot struct {
+	storage.DatabaseTransaction
+	extremities map[string][]string
+}
+
+func (s *fullPageSnapshot) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
+	return s.extremities, nil
+}
+
+func (s *fullPageSnapshot) StreamEventsToEvents(_ context.Context, _ *userapi.Device, in []types.StreamEvent, _ api.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
+	out := make([]*rstypes.HeaderedEvent, 0, len(in))
+	for _, ev := range in {
+		out = append(out, ev.HeaderedEvent)
+	}
+	return out
+}
+
+// stubWriteDB accepts the events backfill stores without persisting them.
+type stubWriteDB struct{ storage.Database }
+
+func (stubWriteDB) Events(context.Context, []string) ([]*rstypes.HeaderedEvent, error) {
+	return nil, nil
+}
+
+func (stubWriteDB) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent,
+	[]string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string,
+) (types.StreamPosition, error) {
+	return 0, nil
+}
+
+// A full page that contains the extremity can still have a gap just below it.
+// Backfilled events at or above the page's oldest event would be newer than the
+// page's end token, so a later page would start below them and skip them. They
+// must be returned with this page instead. Events older than the page come back
+// on a later page and are left out here.
+func TestFullPageBackfillKeepsGapEventsAboveThePageEnd(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	pageOldest := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "page oldest"})
+	pageMiddle := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "page middle"})
+	extremity := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "extremity"},
+		test.WithPrevEvents(pageMiddle.EventID()))
+	aboveGap := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "gap at the page end"})
+	belowGap := room.Events()[0]
+
+	page := []types.StreamEvent{
+		{HeaderedEvent: extremity},
+		{HeaderedEvent: pageMiddle},
+		{HeaderedEvent: pageOldest},
+	}
+	newReq := func(pdus ...*rstypes.HeaderedEvent) *messagesReq {
+		return &messagesReq{
+			ctx: context.Background(),
+			db:  stubWriteDB{},
+			snapshot: &fullPageSnapshot{
+				extremities: map[string][]string{extremity.EventID(): {"$missing"}},
+			},
+			rsAPI:            &backfillOnlyAPI{events: pdus},
+			cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
+			roomID:           room.ID,
+			from:             &types.TopologyToken{Depth: 0, PDUPosition: 100},
+			device:           &userapi.Device{UserID: "@alice:test"},
+			backwardOrdering: true,
+			filter:           &synctypes.RoomEventFilter{Limit: 3},
+		}
+	}
+
+	r := newReq(belowGap, aboveGap)
+	events, err := r.handleNonEmptyEventsSlice(page)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(events))
+	for _, ev := range events {
+		ids = append(ids, ev.EventID())
+	}
+	assert.Contains(t, ids, aboveGap.EventID(), "a gap event above the page end must not be skipped")
+	assert.NotContains(t, ids, belowGap.EventID(), "events older than the page belong to a later page")
+	assert.Contains(t, ids, extremity.EventID())
+	assert.Contains(t, ids, pageOldest.EventID())
+	assert.True(t, r.didBackfill)
+
+	r = newReq(belowGap)
+	events, err = r.handleNonEmptyEventsSlice(page)
+	require.NoError(t, err)
+	assert.Len(t, events, len(page), "only the page is returned when the gap is entirely older than it")
+	assert.False(t, r.didBackfill)
+}

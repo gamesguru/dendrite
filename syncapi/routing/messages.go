@@ -34,6 +34,11 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
+// maxBackfillReloads bounds how often one request reads a page again after a
+// backfill. Each reread follows a backfill that stored events, so a chain of
+// gaps makes progress; the bound only stops a marker that never clears.
+const maxBackfillReloads = 4
+
 type messagesReq struct {
 	ctx               context.Context
 	db                storage.Database
@@ -52,8 +57,8 @@ type messagesReq struct {
 	didBackfill       bool
 	backfillHadEvents bool
 	backfillEnd       *types.TopologyToken
-	// reloaded is set once the page has been read again after a backfill.
-	reloaded bool
+	// reloads counts how many times the page was read again after a backfill.
+	reloads int
 }
 
 type messagesResp struct {
@@ -322,9 +327,22 @@ func OnIncomingMessagesRequest(
 // extremityBranchEvents returns page events older than extremityDepth which
 // are ancestors of the given backwards-extremity event. Walking prev_events
 // keeps a depth boundary scoped to the DAG branch that owns that extremity.
+//
+// A page which contains the extremity itself is left alone. The older events
+// on it are newer than the gap unless the gap sits just below the extremity,
+// and handleNonEmptyEventsSlice keeps any backfilled gap event that sorts at
+// or above the page's end, so the cursor cannot pass one. Holding the page
+// back instead truncates it at the extremity, and the empty-page backfill that
+// follows moves the cursor past the events below, dropping them from the walk.
 func (r *messagesReq) extremityBranchEvents(
 	ctx context.Context, extremityID string, page []types.StreamEvent, extremityDepth int64,
 ) (map[string]struct{}, error) {
+	for _, ev := range page {
+		if ev.EventID() == extremityID {
+			return nil, nil
+		}
+	}
+
 	candidates := make(map[string]struct{})
 	minDepth := extremityDepth
 	for _, ev := range page {
@@ -372,27 +390,42 @@ func (r *messagesReq) extremityBranchEvents(
 	return ancestors, nil
 }
 
-// hasMissingPrevEvent reports whether any of the prev events a backward
-// extremity was recorded with is still absent from the database. Markers are
-// only removed when a backfill covers them, so one can outlive its gap.
-func (r *messagesReq) hasMissingPrevEvent(ctx context.Context, prevIDs []string) (bool, error) {
-	if len(prevIDs) == 0 {
-		return true, nil
+// openBackwardExtremities returns the extremities whose gap is still open: at
+// least one prev event they were recorded with is absent from the database.
+// Markers are only removed when a backfill covers them, so one can outlive its
+// gap. All prev events are looked up in a single query. An extremity recorded
+// with no prev events is kept.
+func (r *messagesReq) openBackwardExtremities(
+	ctx context.Context, backwardExtremities map[string][]string,
+) (map[string]struct{}, error) {
+	var all []string
+	for _, prevIDs := range backwardExtremities {
+		all = append(all, prevIDs...)
 	}
-	stored, err := r.snapshot.Events(ctx, prevIDs)
-	if err != nil {
-		return false, fmt.Errorf("load prev events of a backwards extremity: %w", err)
-	}
-	have := make(map[string]struct{}, len(stored))
-	for _, ev := range stored {
-		have[ev.EventID()] = struct{}{}
-	}
-	for _, id := range prevIDs {
-		if _, ok := have[id]; !ok {
-			return true, nil
+	have := make(map[string]struct{}, len(all))
+	if len(all) > 0 {
+		stored, err := r.snapshot.Events(ctx, util.UniqueStrings(all))
+		if err != nil {
+			return nil, fmt.Errorf("load prev events of the backwards extremities: %w", err)
+		}
+		for _, ev := range stored {
+			have[ev.EventID()] = struct{}{}
 		}
 	}
-	return false, nil
+	open := make(map[string]struct{}, len(backwardExtremities))
+	for extremityID, prevIDs := range backwardExtremities {
+		if len(prevIDs) == 0 {
+			open[extremityID] = struct{}{}
+			continue
+		}
+		for _, id := range prevIDs {
+			if _, ok := have[id]; !ok {
+				open[extremityID] = struct{}{}
+				break
+			}
+		}
+	}
+	return open, nil
 }
 
 func getMembershipForUser(ctx context.Context, roomID, userID string, rsAPI api.SyncRoomserverAPI) (resp api.QueryMembershipForUserResponse, err error) {
@@ -469,12 +502,12 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if r.backwardOrdering && len(streamEvents) > 0 {
 		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
 			excluded := make(map[string]struct{})
-			for extremityID, missingPrevs := range backwardExtremities {
-				open, openErr := r.hasMissingPrevEvent(ctx, missingPrevs)
-				if openErr != nil {
-					return nil, *r.from, emptyToken, openErr
-				}
-				if !open {
+			openExtremities, openErr := r.openBackwardExtremities(ctx, backwardExtremities)
+			if openErr != nil {
+				return nil, *r.from, emptyToken, openErr
+			}
+			for extremityID := range backwardExtremities {
+				if _, open := openExtremities[extremityID]; !open {
 					// Every prev event this marker was waiting for is stored now
 					// (for instance fetched with /event), so no gap is left here.
 					// Holding back the events below it would skip them.
@@ -551,13 +584,19 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		if events, err = r.handleEmptyEventsSlice(); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 		}
-		if extremityFilteredEmpty && r.backfillHadEvents && !r.reloaded {
+		if extremityFilteredEmpty && r.backfillHadEvents && r.reloads < maxBackfillReloads {
 			// The page was set aside because an extremity sat above older stored
-			// events. The backfill has filled that gap and cleared the marker, so
-			// read the page again from the same cursor. Returning only the
+			// events. This covers the case where the page lies entirely below the
+			// extremity; a page that contains the extremity is left intact by
+			// extremityBranchEvents instead. The backfill has filled the gap and
+			// cleared the marker, so read the page again from the same cursor.
+			// Returning only the
 			// backfilled events would move the cursor below the stored events
 			// that were set aside and skip them.
-			r.reloaded = true
+			r.reloads++
+			// The second read decides for itself whether it backfilled anything.
+			r.backfillHadEvents = false
+			r.backfillEnd = nil
 			return r.retrieveEvents(ctx, rsAPI)
 		}
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
@@ -819,16 +858,50 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	// A full page can still end at a backward extremity: backfill stores at most
 	// maxBackfillEvents per request, so the oldest events of a long gap may not
 	// have been fetched yet. Fetch them now so the next page does not skip them.
+	// Events backfilled at or above this page's oldest event are newer than the
+	// token it returns, so a later page would start below them and never return
+	// them; keep those on this page.
+	var backfilledAbovePageEnd []*rstypes.HeaderedEvent
 	if len(backwardExtremities) > 0 && isSetLargeEnough && r.backwardOrdering {
 		for i := range streamEvents {
 			if _, ok := backwardExtremities[streamEvents[i].EventID()]; !ok {
 				continue
 			}
-			if _, bfErr := r.backfill(r.roomID, backwardExtremities, r.filter.Limit); bfErr != nil {
+			pdus, bfErr := r.backfill(r.roomID, backwardExtremities, r.filter.Limit)
+			if bfErr != nil {
 				if r.ctx.Err() != nil {
 					return nil, bfErr
 				}
 				util.GetLogger(r.ctx).WithError(bfErr).Warn("Backfill at backward extremity failed")
+			} else {
+				// Backfilled events come from federation and are not pre-filtered
+				// by the database query, so apply the client's filter here too.
+				pdus = filterHeaderedEvents(pdus, r.filter)
+				pageEndDepth := streamEvents[0].Depth()
+				for _, ev := range streamEvents[1:] {
+					if ev.Depth() < pageEndDepth {
+						pageEndDepth = ev.Depth()
+					}
+				}
+				onPage := make(map[string]struct{}, len(streamEvents))
+				for _, ev := range streamEvents {
+					onPage[ev.EventID()] = struct{}{}
+				}
+				// The page can exceed the limit by the gap events kept here. A
+				// client tolerates a long page, and dropping them would skip them.
+				for _, ev := range pdus {
+					if ev.Depth() < pageEndDepth {
+						continue
+					}
+					if _, duplicate := onPage[ev.EventID()]; duplicate {
+						continue
+					}
+					onPage[ev.EventID()] = struct{}{}
+					backfilledAbovePageEnd = append(backfilledAbovePageEnd, ev)
+				}
+				if len(backfilledAbovePageEnd) > 0 {
+					r.didBackfill = true
+				}
 			}
 			break
 		}
@@ -883,6 +956,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		localEvents = kept
 	}
 	events = append(events, localEvents...)
+	events = append(events, backfilledAbovePageEnd...)
 	sort.Sort(eventsByDepth(events))
 
 	return

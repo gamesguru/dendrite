@@ -48,7 +48,6 @@ func TestExtremityBranchEventsOnlyExcludesAncestors(t *testing.T) {
 	req := messagesReq{snapshot: snapshot}
 
 	page := []types.StreamEvent{
-		{HeaderedEvent: fork},
 		{HeaderedEvent: mainB},
 		{HeaderedEvent: mainA},
 		{HeaderedEvent: branchPoint},
@@ -59,6 +58,47 @@ func TestExtremityBranchEventsOnlyExcludesAncestors(t *testing.T) {
 		"only ancestors on the extremity's branch are older than the extremity")
 	assert.NotContains(t, excluded, mainA.EventID())
 	assert.NotContains(t, excluded, mainB.EventID())
+}
+
+// TestExtremityBranchEventsWithStoredAndMissingPrev models a merge extremity
+// whose prev events are one stored event on the main line and one event that
+// was never backfilled. When the page reaches the extremity, the older events
+// on the main line must be returned with it: they sit above the missing
+// branch, so withholding them loses them from the walk.
+func TestExtremityBranchEventsWithStoredAndMissingPrev(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	branchPoint := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "shared"})
+	mainA := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "main A"})
+	mainB := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "main B"})
+	missing := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden"},
+		test.WithPrevEvents(branchPoint.EventID()))
+	extremity := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "merge"},
+		test.WithPrevEvents(mainB.EventID(), missing.EventID()))
+
+	snapshot := &eventMapSnapshot{events: map[string]*rstypes.HeaderedEvent{}}
+	for _, event := range room.Events() {
+		snapshot.events[event.EventID()] = event
+	}
+	// The hidden branch was fetched for state but never stored locally.
+	delete(snapshot.events, missing.EventID())
+	req := messagesReq{snapshot: snapshot}
+
+	withExtremity := []types.StreamEvent{
+		{HeaderedEvent: extremity},
+		{HeaderedEvent: mainB},
+		{HeaderedEvent: mainA},
+		{HeaderedEvent: branchPoint},
+	}
+	excluded, err := req.extremityBranchEvents(context.Background(), extremity.EventID(), withExtremity, extremity.Depth())
+	require.NoError(t, err)
+	assert.Empty(t, excluded, "a page that reaches the extremity keeps the main line with it")
+
+	withoutExtremity := withExtremity[1:]
+	excluded, err = req.extremityBranchEvents(context.Background(), extremity.EventID(), withoutExtremity, extremity.Depth())
+	require.NoError(t, err)
+	assert.Contains(t, excluded, mainB.EventID(), "below the extremity the main line is still held back")
+	assert.Contains(t, excluded, mainA.EventID())
 }
 
 func TestExtremityBranchEventsWithoutOlderPageEvents(t *testing.T) {
@@ -74,23 +114,22 @@ func TestExtremityBranchEventsWithoutOlderPageEvents(t *testing.T) {
 	assert.Empty(t, excluded)
 }
 
-func TestHasMissingPrevEvent(t *testing.T) {
+func TestOpenBackwardExtremities(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
 	stored := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "stored"})
 	missing := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "missing"})
 	req := messagesReq{snapshot: &eventMapSnapshot{events: map[string]*rstypes.HeaderedEvent{stored.EventID(): stored}}}
-	ctx := context.Background()
 
-	open, err := req.hasMissingPrevEvent(ctx, []string{stored.EventID()})
+	open, err := req.openBackwardExtremities(context.Background(), map[string][]string{
+		"$closed":  {stored.EventID()},
+		"$partial": {stored.EventID(), missing.EventID()},
+		"$absent":  {missing.EventID()},
+		"$empty":   nil,
+	})
 	require.NoError(t, err)
-	assert.False(t, open, "a marker whose prev event is stored has no gap left")
-
-	open, err = req.hasMissingPrevEvent(ctx, []string{stored.EventID(), missing.EventID()})
-	require.NoError(t, err)
-	assert.True(t, open, "one absent prev event keeps the gap open")
-
-	open, err = req.hasMissingPrevEvent(ctx, nil)
-	require.NoError(t, err)
-	assert.True(t, open, "a marker with no recorded prev events is kept")
+	assert.NotContains(t, open, "$closed", "a marker whose prev events are all stored has no gap left")
+	assert.Contains(t, open, "$partial", "one absent prev event keeps the gap open")
+	assert.Contains(t, open, "$absent")
+	assert.Contains(t, open, "$empty", "a marker with no recorded prev events is kept")
 }
