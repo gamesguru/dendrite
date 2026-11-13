@@ -637,6 +637,8 @@ index syncapi_output_room_events | syncapi_output_room_events_timestamp_idx | CR
 index syncapi_output_room_events | syncapi_output_room_events_type_idx | CREATE INDEX syncapi_output_room_events_type_idx ON public.syncapi_output_room_events USING btree (type)
 index syncapi_output_room_events_topology | syncapi_event_topological_position_idx | CREATE UNIQUE INDEX syncapi_event_topological_position_idx ON public.syncapi_output_room_events_topology USING btree (topological_position, stream_position, room_id)
 index syncapi_output_room_events_topology | syncapi_output_room_events_topology_pkey | CREATE UNIQUE INDEX syncapi_output_room_events_topology_pkey ON public.syncapi_output_room_events_topology USING btree (event_id)
+index syncapi_output_room_events_topology | syncapi_output_room_events_topology_room_stream_idx | CREATE INDEX syncapi_output_room_events_topology_room_stream_idx ON public.syncapi_output_room_events_topology USING btree (room_id, stream_position)
+index syncapi_output_room_events_topology | syncapi_output_room_events_topology_room_topo_idx | CREATE INDEX syncapi_output_room_events_topology_room_topo_idx ON public.syncapi_output_room_events_topology USING btree (room_id, topological_position)
 index syncapi_peeks | syncapi_peeks_room_id_idx | CREATE INDEX syncapi_peeks_room_id_idx ON public.syncapi_peeks USING btree (room_id)
 index syncapi_peeks | syncapi_peeks_room_id_user_id_device_id_key | CREATE UNIQUE INDEX syncapi_peeks_room_id_user_id_device_id_key ON public.syncapi_peeks USING btree (room_id, user_id, device_id)
 index syncapi_peeks | syncapi_peeks_user_id_device_id_idx | CREATE INDEX syncapi_peeks_user_id_device_id_idx ON public.syncapi_peeks USING btree (user_id, device_id)

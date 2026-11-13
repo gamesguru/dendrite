@@ -76,9 +76,10 @@ var release = Contract{
 // retains membership transitions for position-bounded lookups, and level 20
 // indexes roomserver events by (room_nid, event_nid), level 21 recovers
 // membership history from retained output events, and level 22 indexes
-// backward extremities by (room_id, prev_event_id).
+// backward extremities by (room_id, prev_event_id), and level 23 indexes
+// syncapi topology by room and topological or stream position.
 const (
-	releaseLevel           = 22
+	releaseLevel           = 23
 	membershipHistoryLevel = 19
 )
 
