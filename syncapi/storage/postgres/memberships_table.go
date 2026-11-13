@@ -113,6 +113,9 @@ const selectMembershipBeforeSQL = "" +
 const selectMembershipAtStreamSQL = "" +
 	"SELECT membership, event_id, stream_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
 
+const updateMembershipTopologicalPosSQL = "" +
+	"UPDATE syncapi_memberships SET topological_pos = $1 WHERE event_id = $2 AND topological_pos < $1"
+
 const purgeMembershipsSQL = "" +
 	"DELETE FROM syncapi_memberships WHERE room_id = $1"
 
@@ -134,6 +137,7 @@ type membershipsStatements struct {
 	selectMembershipCountStmt           *sql.Stmt
 	selectMembershipForUserStmt         *sql.Stmt
 	selectMembershipAtStreamStmt        *sql.Stmt
+	updateMembershipTopologicalPosStmt  *sql.Stmt
 	purgeMembershipsStmt                *sql.Stmt
 	selectMembersStmt                   *sql.Stmt
 	insertMembershipHistoryStmt         *sql.Stmt
@@ -159,6 +163,7 @@ func NewPostgresMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 		{&s.insertMembershipHistoryStmt, insertMembershipHistorySQL},
 		{&s.insertMembershipHistoryBatchStmt, insertMembershipHistoryBatchSQL},
 		{&s.selectMembershipHistoryAtStreamStmt, selectMembershipHistoryAtStreamSQL},
+		{&s.updateMembershipTopologicalPosStmt, updateMembershipTopologicalPosSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
 		{&s.purgeMembershipHistoryStmt, purgeMembershipHistorySQL},
 		{&s.selectMembersStmt, selectMembersSQL},
@@ -287,6 +292,13 @@ func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 		return currentMembership, currentEventID, nil
 	}
 	return "leave", "", nil
+}
+
+func (s *membershipsStatements) UpdateMembershipTopologicalPos(
+	ctx context.Context, txn *sql.Tx, eventID string, topologicalPos types.StreamPosition,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.updateMembershipTopologicalPosStmt).ExecContext(ctx, topologicalPos, eventID)
+	return err
 }
 
 func (s *membershipsStatements) PurgeMemberships(

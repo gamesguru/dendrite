@@ -608,6 +608,7 @@ index syncapi_account_data_type | syncapi_account_data_id_idx | CREATE UNIQUE IN
 index syncapi_account_data_type | syncapi_account_data_type_pkey | CREATE UNIQUE INDEX syncapi_account_data_type_pkey ON public.syncapi_account_data_type USING btree (id)
 index syncapi_account_data_type | syncapi_account_data_unique | CREATE UNIQUE INDEX syncapi_account_data_unique ON public.syncapi_account_data_type USING btree (user_id, room_id, type)
 index syncapi_backward_extremities | syncapi_backward_extremities_pkey | CREATE UNIQUE INDEX syncapi_backward_extremities_pkey ON public.syncapi_backward_extremities USING btree (room_id, event_id, prev_event_id)
+index syncapi_backward_extremities | syncapi_backward_extremities_prev_idx | CREATE INDEX syncapi_backward_extremities_prev_idx ON public.syncapi_backward_extremities USING btree (room_id, prev_event_id)
 index syncapi_current_room_state | syncapi_current_room_state_eventid_idx | CREATE UNIQUE INDEX syncapi_current_room_state_eventid_idx ON public.syncapi_current_room_state USING btree (event_id)
 index syncapi_current_room_state | syncapi_current_room_state_type_state_key_idx | CREATE INDEX syncapi_current_room_state_type_state_key_idx ON public.syncapi_current_room_state USING btree (type, state_key)
 index syncapi_current_room_state | syncapi_event_id_idx | CREATE UNIQUE INDEX syncapi_event_id_idx ON public.syncapi_current_room_state USING btree (event_id, room_id, type, sender, contains_url)

@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS syncapi_output_room_events_topology (
 
 	UNIQUE(topological_position, room_id, stream_position)
 );
+-- Whole-room reads (such as repairing the topology after a late parent) filter
+-- on room_id alone, which the unique index above cannot serve.
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_topology_room_stream_idx ON syncapi_output_room_events_topology(room_id, stream_position);
 -- The topological order will be used in events selection and ordering
 -- CREATE UNIQUE INDEX IF NOT EXISTS syncapi_event_topological_position_idx ON syncapi_output_room_events_topology(topological_position, stream_position, room_id);
 `

@@ -107,12 +107,7 @@ func (s *forwardGapState) takeBatch(limit int) []*rstypes.HeaderedEvent {
 		return nil
 	}
 	batch := append([]*rstypes.HeaderedEvent(nil), s.unstored[len(s.unstored)-limit:]...)
-	s.unstored = s.unstored[:len(s.unstored)-limit]
 	s.batches++
-	for _, ev := range batch {
-		s.store(ev)
-	}
-	s.recomputeExtremities()
 	return batch
 }
 
@@ -129,6 +124,13 @@ func (d forwardGapDB) WriteEvent(_ context.Context, ev *rstypes.HeaderedEvent, _
 	_ []string, _ []string, _ *api.TransactionID, _ bool, _ gomatrixserverlib.HistoryVisibility, _ ...string,
 ) (types.StreamPosition, error) {
 	d.state.store(ev)
+	for i, pending := range d.state.unstored {
+		if pending.EventID() == ev.EventID() {
+			d.state.unstored = append(d.state.unstored[:i], d.state.unstored[i+1:]...)
+			break
+		}
+	}
+	d.state.recomputeExtremities()
 	return 0, nil
 }
 

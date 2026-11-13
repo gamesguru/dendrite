@@ -19,7 +19,7 @@ import (
 func TestTerminalBackfillCacheExpires(t *testing.T) {
 	now := time.Unix(1000, 0)
 	c := &terminalBackfillCache{now: func() time.Time { return now }}
-	key := terminalBackfillKey("!r:test", map[string][]string{"$a": {"$b", "$c"}})
+	key := terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$a": {"$b", "$c"}})
 
 	assert.False(t, c.recentlyFailed(key))
 	c.recordFailure(key)
@@ -32,11 +32,11 @@ func TestTerminalBackfillCacheExpires(t *testing.T) {
 }
 
 func TestTerminalBackfillKeyIgnoresMapOrderButNotContent(t *testing.T) {
-	a := terminalBackfillKey("!r:test", map[string][]string{"$a": {"$p"}, "$b": {"$q"}})
-	b := terminalBackfillKey("!r:test", map[string][]string{"$b": {"$q"}, "$a": {"$p"}})
+	a := terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$a": {"$p"}, "$b": {"$q"}})
+	b := terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$b": {"$q"}, "$a": {"$p"}})
 	assert.Equal(t, a, b)
-	assert.NotEqual(t, a, terminalBackfillKey("!r:test", map[string][]string{"$a": {"$other"}}))
-	assert.NotEqual(t, a, terminalBackfillKey("!other:test", map[string][]string{"$a": {"$p"}, "$b": {"$q"}}))
+	assert.NotEqual(t, a, terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$a": {"$other"}}))
+	assert.NotEqual(t, a, terminalBackfillKey("s", "v", "!other:test", map[string][]string{"$a": {"$p"}, "$b": {"$q"}}))
 }
 
 type countingTerminalAPI struct {
@@ -55,8 +55,8 @@ func TestBackfillEventsSkipsRecentTerminalFailure(t *testing.T) {
 	rs := &countingTerminalAPI{}
 	extremities := map[string][]string{"$ext": {"$missing"}}
 	roomID := "!terminal-cache:test"
-	defaultTerminalBackfillCache.forget(terminalBackfillKey(roomID, extremities))
-	t.Cleanup(func() { defaultTerminalBackfillCache.forget(terminalBackfillKey(roomID, extremities)) })
+	defaultTerminalBackfillCache.forget(terminalBackfillKey("s", "v", roomID, extremities))
+	t.Cleanup(func() { defaultTerminalBackfillCache.forget(terminalBackfillKey("s", "v", roomID, extremities)) })
 
 	for i := 0; i < 3; i++ {
 		_, err := backfillEvents(context.Background(), rs, stubWriteDB{}, "hs", "hs", roomID, extremities, 10)
@@ -64,4 +64,12 @@ func TestBackfillEventsSkipsRecentTerminalFailure(t *testing.T) {
 		assert.True(t, isTerminalBackfillFailure(err), "the cached answer stays terminal so callers stop paginating")
 	}
 	assert.Equal(t, 1, rs.calls, "only the first request reaches federation")
+}
+
+func TestTerminalBackfillKeyIgnoresPrevOrderAndSeparatesHosts(t *testing.T) {
+	a := terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$a": {"$b", "$c"}})
+	b := terminalBackfillKey("s", "v", "!r:test", map[string][]string{"$a": {"$c", "$b"}})
+	assert.Equal(t, a, b)
+	assert.NotEqual(t, a, terminalBackfillKey("s", "other", "!r:test", map[string][]string{"$a": {"$b", "$c"}}))
+	assert.NotEqual(t, a, terminalBackfillKey("other", "v", "!r:test", map[string][]string{"$a": {"$b", "$c"}}))
 }

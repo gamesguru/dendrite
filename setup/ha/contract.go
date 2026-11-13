@@ -74,10 +74,11 @@ var release = Contract{
 // retention (MSC4499), level 17 drops the redundant invite event ID index,
 // level 18 stores sliding-sync list windows by connection position, level 19
 // retains membership transitions for position-bounded lookups, and level 20
-// indexes roomserver events by (room_nid, event_nid), and level 21 recovers
-// membership history from retained output events.
+// indexes roomserver events by (room_nid, event_nid), level 21 recovers
+// membership history from retained output events, and level 22 indexes
+// backward extremities by (room_id, prev_event_id).
 const (
-	releaseLevel           = 21
+	releaseLevel           = 22
 	membershipHistoryLevel = 19
 )
 

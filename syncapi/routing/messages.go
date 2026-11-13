@@ -7,6 +7,7 @@ package routing
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,19 +106,27 @@ type messagesReq struct {
 // server that restarted its counter, or a late parent, is stored above its
 // parents, so comparing a cursor against the wire depth misjudges the event.
 // It falls back to the wire depth when the event has no stored position.
-func (r *messagesReq) topologyDepth(ctx context.Context, ev types.StreamEvent) int64 {
+func (r *messagesReq) topologyDepth(ctx context.Context, ev types.StreamEvent) (int64, error) {
 	if depth, ok := r.topoDepths[ev.EventID()]; ok {
-		return depth
+		return depth, nil
 	}
 	depth := ev.Depth()
-	if pos, err := r.snapshot.EventPositionInTopology(ctx, ev.EventID()); err == nil {
+	pos, err := r.snapshot.EventPositionInTopology(ctx, ev.EventID())
+	switch {
+	case err == nil:
 		depth = int64(pos.Depth)
+	case errors.Is(err, sql.ErrNoRows):
+		// No stored position: the wire depth is the best there is.
+	default:
+		// Do not cache or guess: falling back would silently change how the
+		// whole request compares cursors.
+		return 0, fmt.Errorf("EventPositionInTopology(%s): %w", ev.EventID(), err)
 	}
 	if r.topoDepths == nil {
 		r.topoDepths = make(map[string]int64)
 	}
 	r.topoDepths[ev.EventID()] = depth
-	return depth
+	return depth, nil
 }
 
 type messagesResp struct {
@@ -416,7 +425,11 @@ func (r *messagesReq) extremityBranchEvents(
 	candidates := make(map[string]struct{})
 	minDepth := int64(math.MaxInt64)
 	for _, ev := range page {
-		if r.topologyDepth(ctx, ev) < extremityDepth {
+		evDepth, depthErr := r.topologyDepth(ctx, ev)
+		if depthErr != nil {
+			return nil, depthErr
+		}
+		if evDepth < extremityDepth {
 			candidates[ev.EventID()] = struct{}{}
 			if ev.Depth() < minDepth {
 				minDepth = ev.Depth()
@@ -542,7 +555,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		err = fmt.Errorf("GetEventsInRange: %w", err)
 		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 	}
-	topologyHadEvents := len(streamEvents) > 0
+	// The topology query returns its bounds before sender/type filtering, so a
+	// non-empty range can legitimately produce no stream events. Keep that
+	// distinction: the caller must return the range cursor for a filtered-empty
+	// page instead of treating it as the end of history.
+	topologyHadEvents := topologyStart != emptyToken
 	// A stream token is a position in stream order, not topology order. Events
 	// can be persisted in a different order than their DAG depth (for example
 	// room creation state events that arrive after the client's sync token), so
@@ -559,13 +576,20 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// client supplied a `to` bound, and for stream tokens, whose position is in
 	// stream order rather than topology order.
 	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
-		filled, fErr := r.fillForwardGap(ctx, r.topologyDepth(ctx, streamEvents[0]))
+		firstDepth, fErr := r.topologyDepth(ctx, streamEvents[0])
+		if fErr != nil {
+			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
+		}
+		filled, fErr := r.fillForwardGap(ctx, firstDepth)
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
 		}
 		if filled {
 			// The gap is closed; read the page again so the events just stored
 			// are returned in order instead of being skipped over.
+			// A late parent can lift positions that were cached while examining
+			// the first read, so reload them with the page.
+			r.topoDepths = nil
 			return r.retrieveEvents(ctx, rsAPI)
 		}
 		// A gap can also sit inside the page. Serve only the events before it;
@@ -650,7 +674,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 
 	// topologyHadEvents distinguishes "no events in topology range" (true end of history
 	// or backward extremity) from "events existed but the filter removed all of them".
-	topologyHadEvents = topologyHadEvents && topologyStart != emptyToken && !extremityFilteredEmpty
+	topologyHadEvents = topologyHadEvents && !extremityFilteredEmpty
 
 	var events []*rstypes.HeaderedEvent
 	util.GetLogger(r.ctx).WithFields(logrus.Fields{ //nolint:contextcheck
@@ -675,6 +699,8 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 			// backfilled events would move the cursor below the stored events
 			// that were set aside and skip them.
 			r.reloads++
+			// Backfill may have lifted stored positions; drop the cached ones.
+			r.topoDepths = nil
 			// The second read decides for itself whether it backfilled anything.
 			r.backfillHadEvents = false
 			r.backfillEnd = nil
@@ -796,20 +822,38 @@ func (r *messagesReq) filterByStreamToken(
 		return events, end, nil
 	}
 	filtered := events[:0]
+	droppedBackfilledSuffix := false
 	for _, ev := range events {
 		if r.backwardOrdering {
 			// Backfilled events are stored after the token was issued, so their
 			// stream positions are above it, but they belong to older history
 			// (no deeper than the token's own position in the topology).
-			if ev.StreamPosition <= r.fromStream.PDUPosition ||
-				(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || r.topologyDepth(ctx, ev) <= int64(r.from.Depth))) {
+			keep := ev.StreamPosition <= r.fromStream.PDUPosition
+			if !keep && ev.ExcludeFromSync {
+				if r.from == nil || r.from.Depth == 0 {
+					keep = true
+				} else {
+					evDepth, depthErr := r.topologyDepth(ctx, ev)
+					if depthErr != nil {
+						return nil, end, depthErr
+					}
+					keep = evDepth <= int64(r.from.Depth)
+				}
+			}
+			if keep {
 				filtered = append(filtered, ev)
+				droppedBackfilledSuffix = false
 			}
 		} else if ev.StreamPosition > r.fromStream.PDUPosition {
 			filtered = append(filtered, ev)
+			droppedBackfilledSuffix = false
+		} else if ev.ExcludeFromSync {
+			// This event was persisted as backfill and was not delivered by
+			// sync, so the topology cursor must not advance beyond it.
+			droppedBackfilledSuffix = true
 		}
 	}
-	if !r.backwardOrdering && len(filtered) > 0 {
+	if !r.backwardOrdering && droppedBackfilledSuffix && len(filtered) > 0 {
 		var err error
 		end, err = r.snapshot.EventPositionInTopology(ctx, filtered[len(filtered)-1].EventID())
 		if err != nil {
@@ -975,15 +1019,28 @@ func (r *messagesReq) truncateForwardPageAtGap(
 	if err != nil || len(open) == 0 {
 		return events, end, err
 	}
+	previous, err := r.snapshot.EventPositionInTopology(ctx, events[0].EventID())
+	if err != nil {
+		return events, end, err
+	}
 	for i := 1; i < len(events); i++ {
-		if _, isOpen := open[events[i].EventID()]; !isOpen {
-			continue
-		}
-		newEnd, posErr := r.snapshot.EventPositionInTopology(ctx, events[i-1].EventID())
+		current, posErr := r.snapshot.EventPositionInTopology(ctx, events[i].EventID())
 		if posErr != nil {
 			return events, end, posErr
 		}
-		return events[:i], newEnd, nil
+		for extremityID := range open {
+			gap, gapErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
+			if gapErr != nil {
+				continue
+			}
+			// The gap may be absent from events because sender/type filters
+			// removed its event. Stop before the first visible event whose
+			// topology position crosses that gap.
+			if gap.Depth > previous.Depth && gap.Depth <= current.Depth {
+				return events[:i], previous, nil
+			}
+		}
+		previous = current
 	}
 	return events, end, nil
 }
@@ -1414,7 +1471,7 @@ func backfillEvents(
 
 	// A request that every server already answered "no such events" a moment
 	// ago would only repeat the whole federation round, so answer from memory.
-	cacheKey := terminalBackfillKey(roomID, backwardsExtremities)
+	cacheKey := terminalBackfillKey(serverName, virtualHost, roomID, backwardsExtremities)
 	if defaultTerminalBackfillCache.recentlyFailed(cacheKey) {
 		return nil, &api.BackfillUnavailableError{Err: errBackfillRecentlyFailed}
 	}

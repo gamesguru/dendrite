@@ -374,6 +374,13 @@ func (d *Database) repairLateParentTopology(
 			if err != nil {
 				return err
 			}
+			// The membership table copies the topological position of the
+			// event that last changed a membership, so move it too.
+			if event.Type() == spec.MRoomMember {
+				if err = d.Memberships.UpdateMembershipTopologicalPos(ctx, txn, eventID, nextPosition); err != nil {
+					return err
+				}
+			}
 			positions[eventID] = nextPosition
 		}
 		for _, childID := range childEdges[eventID] {

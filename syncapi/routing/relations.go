@@ -83,22 +83,25 @@ func parseRelationsParams(req *http.Request) (relationsParams, error) {
 
 // parseRelationsToken accepts this endpoint's tokens as well as /messages and
 // /sync tokens. An empty token is the start of the pagination in the given
-// direction.
-func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards bool) (types.TopologyToken, error) {
+// direction. For a stream token it also returns the parsed token: a decoded
+// stream position bounds the page by stream order, which the converted
+// topology token alone cannot express.
+func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards bool) (types.TopologyToken, *types.StreamingToken, error) {
 	if token == "" {
 		if backwards {
-			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil
+			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil, nil
 		}
-		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil
+		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
-		return topology, nil
+		return topology, nil, nil
 	}
 	stream, err := types.NewStreamTokenFromString(token)
 	if err != nil {
-		return types.TopologyToken{}, errInvalidRelationsToken
+		return types.TopologyToken{}, nil, errInvalidRelationsToken
 	}
-	return snapshot.StreamToTopologicalPosition(ctx, roomID, stream.PDUPosition, backwards)
+	topology, err := snapshot.StreamToTopologicalPosition(ctx, roomID, stream.PDUPosition, backwards)
+	return topology, &stream, err
 }
 
 var errInvalidRelationsToken = errors.New("invalid pagination token")
@@ -163,11 +166,11 @@ func Relations(
 	}
 
 	q := req.URL.Query()
-	from, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards)
+	from, fromStream, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards)
 	var to types.TopologyToken
 	if err == nil {
 		// A to token bounds the opposite end of the page.
-		to, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards)
+		to, _, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards)
 	}
 	if errors.Is(err, errInvalidRelationsToken) {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam(err.Error())}
@@ -175,7 +178,7 @@ func Relations(
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	res, err := relationsPage(ctx, snapshot, rsAPI, *userID, *roomID, eventID, relType, eventType, params, from, to)
+	res, err := relationsPage(ctx, snapshot, rsAPI, *userID, *roomID, eventID, relType, eventType, params, from, to, fromStream)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -187,7 +190,7 @@ func Relations(
 func relationsPage(
 	ctx context.Context, snapshot storage.DatabaseTransaction, rsAPI api.SyncRoomserverAPI,
 	userID spec.UserID, roomID spec.RoomID, eventID, relType, eventType string,
-	params relationsParams, from, to types.TopologyToken,
+	params relationsParams, from, to types.TopologyToken, fromStream *types.StreamingToken,
 ) (*RelationsResponse, error) {
 	maxDepth := 1
 	if params.recurse != nil && *params.recurse {
@@ -197,6 +200,18 @@ func relationsPage(
 	entries, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, from, to, params.backwards, params.limit+1)
 	if err != nil {
 		return nil, err
+	}
+	// A stream token bounds pagination by stream order. Relations are selected
+	// by topology position, so children stored after the token can share a
+	// shallower position; drop them as /messages does.
+	if params.backwards && fromStream != nil {
+		kept := entries[:0]
+		for _, entry := range entries {
+			if entry.Position.PDUPosition <= fromStream.PDUPosition {
+				kept = append(kept, entry)
+			}
+		}
+		entries = kept
 	}
 	res := &RelationsResponse{Chunk: []synctypes.ClientEvent{}}
 	if params.recurse != nil {

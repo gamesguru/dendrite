@@ -6,6 +6,7 @@
 package routing
 
 import (
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"sort"
 	"strings"
 	"sync"
@@ -33,14 +34,18 @@ type terminalBackfillCache struct {
 
 var defaultTerminalBackfillCache = &terminalBackfillCache{now: time.Now}
 
-// terminalBackfillKey identifies a backfill request by room and extremity set.
-func terminalBackfillKey(roomID string, backwardsExtremities map[string][]string) string {
+// terminalBackfillKey identifies a backfill request by the requesting server
+// and virtual host, the room and the extremity set. The order of the previous
+// event IDs is not significant: storage returns them unordered.
+func terminalBackfillKey(serverName, virtualHost spec.ServerName, roomID string, backwardsExtremities map[string][]string) string {
 	ids := make([]string, 0, len(backwardsExtremities))
 	for extremityID, prevs := range backwardsExtremities {
-		ids = append(ids, extremityID+"<"+strings.Join(prevs, ","))
+		sorted := append([]string(nil), prevs...)
+		sort.Strings(sorted)
+		ids = append(ids, extremityID+"<"+strings.Join(sorted, ","))
 	}
 	sort.Strings(ids)
-	return roomID + "|" + strings.Join(ids, ";")
+	return string(serverName) + "|" + string(virtualHost) + "|" + roomID + "|" + strings.Join(ids, ";")
 }
 
 // recentlyFailed reports whether the same request definitively failed within

@@ -1491,8 +1491,8 @@ func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *test
 		alice := test.NewUser(t)
 		r := test.NewRoom(t, alice)
 		all := r.Events()
-		// The shape of a federated join: only the newest event (the join) is live,
-		// and the history below it arrives afterwards through backfill.
+		// The newest event is live, and the history below it arrives afterwards
+		// through backfill.
 		live := all[len(all)-1:]
 		_ = MustWriteEvents(t, db, live)
 

@@ -306,3 +306,29 @@ func testUpsert(t *testing.T, ctx context.Context, table tables.Memberships, mem
 		}
 	})
 }
+
+// Moving the event that last changed a membership in the topology moves the
+// membership's copy of that position too, and never lowers it.
+func TestUpdateMembershipTopologicalPos(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		join := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+
+		table, _, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 5, 10))
+
+		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.EventID(), 20))
+		_, pos, err := table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, int64(20), pos)
+
+		require.NoError(t, table.UpdateMembershipTopologicalPos(ctx, nil, join.EventID(), 15))
+		_, pos, err = table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, int64(20), pos, "a position is never lowered")
+	})
+}
