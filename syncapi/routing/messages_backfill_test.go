@@ -147,6 +147,31 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 	})
 }
 
+func TestForwardStreamTokenEndStaysAtLastIncludedEvent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	backfilled := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"}, test.WithDepth(1386))
+	live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "live low-depth event"}, test.WithDepth(79))
+
+	livePosition := types.TopologyToken{Depth: 79, PDUPosition: 127272}
+	snapshot := &extremitySnapshot{positions: map[string]types.TopologyToken{
+		live.EventID(): livePosition,
+	}}
+	req := messagesReq{
+		snapshot:   snapshot,
+		fromStream: &types.StreamingToken{PDUPosition: 127253},
+	}
+
+	filtered, end, err := req.filterByStreamToken(context.Background(), []types.StreamEvent{
+		{HeaderedEvent: backfilled, StreamPosition: 127092, ExcludeFromSync: true},
+		{HeaderedEvent: live, StreamPosition: 127272},
+	}, types.TopologyToken{Depth: 1386, PDUPosition: 127092})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, live.EventID(), filtered[0].EventID())
+	assert.Equal(t, livePosition, end, "the end cursor must not advance over filtered backfill")
+}
+
 // extremitySnapshot stubs the topology lookups used to decide which backward
 // extremities can hold events older than a request.
 type extremitySnapshot struct {

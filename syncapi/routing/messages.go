@@ -516,22 +516,9 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// can be persisted in a different order than their DAG depth (for example
 	// room creation state events that arrive after the client's sync token), so
 	// constrain the page by the token's stream position as well.
-	if r.fromStream != nil {
-		filtered := streamEvents[:0]
-		for _, ev := range streamEvents {
-			if r.backwardOrdering {
-				// Backfilled events are stored after the token was issued, so their
-				// stream positions are above it, but they belong to older history
-				// (no deeper than the token's own position in the topology).
-				if ev.StreamPosition <= r.fromStream.PDUPosition ||
-					(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
-					filtered = append(filtered, ev)
-				}
-			} else if ev.StreamPosition > r.fromStream.PDUPosition {
-				filtered = append(filtered, ev)
-			}
-		}
-		streamEvents = filtered
+	streamEvents, end, err = r.filterByStreamToken(ctx, streamEvents, end)
+	if err != nil {
+		return []synctypes.ClientEvent{}, *r.from, emptyToken, err
 	}
 	// A forward page can only backfill the gap that sits immediately ahead of
 	// its cursor. Forward pagination moves the token past every event it
@@ -765,6 +752,40 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		return []synctypes.ClientEvent{}, *r.from, *r.to, err
 	}
 	return clientEvents, start, end, nil
+}
+
+// filterByStreamToken applies the stream-position part of a /messages cursor.
+// If that removes a suffix from a forward topology page, keep the response
+// cursor on the last event the client actually received. The topology query's
+// original end may point past backfilled events removed by this filter.
+func (r *messagesReq) filterByStreamToken(
+	ctx context.Context, events []types.StreamEvent, end types.TopologyToken,
+) ([]types.StreamEvent, types.TopologyToken, error) {
+	if r.fromStream == nil {
+		return events, end, nil
+	}
+	filtered := events[:0]
+	for _, ev := range events {
+		if r.backwardOrdering {
+			// Backfilled events are stored after the token was issued, so their
+			// stream positions are above it, but they belong to older history
+			// (no deeper than the token's own position in the topology).
+			if ev.StreamPosition <= r.fromStream.PDUPosition ||
+				(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
+				filtered = append(filtered, ev)
+			}
+		} else if ev.StreamPosition > r.fromStream.PDUPosition {
+			filtered = append(filtered, ev)
+		}
+	}
+	if !r.backwardOrdering && len(filtered) > 0 {
+		var err error
+		end, err = r.snapshot.EventPositionInTopology(ctx, filtered[len(filtered)-1].EventID())
+		if err != nil {
+			return nil, end, err
+		}
+	}
+	return filtered, end, nil
 }
 
 func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.TopologyToken, err error) {
