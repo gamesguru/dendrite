@@ -63,6 +63,13 @@ const upsertRoomUnreadNotificationCountsSQL = `INSERT INTO syncapi_notification_
   DO UPDATE SET id = nextval('syncapi_notification_data_id_seq'), notification_count = $3, highlight_count = $4, thread_counts = $5
   RETURNING id`
 
+// lockNotificationIDsSQL serializes writers until their transaction ends. The
+// stream position is the row id, which a sequence hands out in call order but
+// which commits in any order: without this, a reader could see id 11, move its
+// cursor past 10, and never see 10 commit. Holding the lock from before
+// nextval until commit makes commit order match id order.
+const lockNotificationIDsSQL = `SELECT pg_advisory_xact_lock(351, 2)`
+
 const selectUserUnreadNotificationsForRooms = `SELECT room_id, notification_count, highlight_count, thread_counts
 	FROM syncapi_notification_data
 	WHERE user_id = $1 AND
@@ -80,6 +87,11 @@ func (r *notificationDataStatements) UpsertRoomUnreadCounts(ctx context.Context,
 	threads, err := tables.MarshalThreadCounts(data)
 	if err != nil {
 		return 0, err
+	}
+	if txn != nil {
+		if _, err = txn.ExecContext(ctx, lockNotificationIDsSQL); err != nil {
+			return 0, err
+		}
 	}
 	err = sqlutil.TxStmt(txn, r.upsertRoomUnreadCounts).QueryRowContext(ctx, userID, data.RoomID, data.UnreadNotificationCount, data.UnreadHighlightCount, threads).Scan(&pos)
 	return
