@@ -54,6 +54,14 @@ const maxForwardBackfillRounds = 10
 // the roomserver's maxBackfillEvents.
 const forwardBackfillBatch = 100
 
+// forwardBackfillRetryAfterMS is the retry hint, in milliseconds, sent with a
+// 429 while a forward history gap is still being fetched.
+const forwardBackfillRetryAfterMS = 2000
+
+// minBranchesForSelection is the fewest items for which choosing or cutting
+// among them is meaningful: with fewer than two there is nothing to choose.
+const minBranchesForSelection = 2
+
 // errForwardBackfillIncomplete is returned when a forward page cannot close the
 // gap ahead of its cursor within maxForwardBackfillRounds. The events fetched so
 // far are stored, so retrying the same cursor makes progress.
@@ -296,7 +304,7 @@ func OnIncomingMessagesRequest(
 		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: history gap not yet closed")
 		return util.JSONResponse{
 			Code: http.StatusTooManyRequests,
-			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", 2000),
+			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", forwardBackfillRetryAfterMS),
 		}
 	}
 	if err != nil {
@@ -825,7 +833,7 @@ func (r *messagesReq) reachableBackwardExtremities(
 func deepestExtremities(
 	ctx context.Context, snapshot storage.DatabaseTransaction, extremities map[string][]string,
 ) map[string][]string {
-	if len(extremities) < 2 {
+	if len(extremities) < minBranchesForSelection {
 		return extremities
 	}
 	best := types.StreamPosition(0)
@@ -904,7 +912,7 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventDepth i
 func (r *messagesReq) truncateForwardPageAtGap(
 	ctx context.Context, events []types.StreamEvent, end types.TopologyToken,
 ) ([]types.StreamEvent, types.TopologyToken, error) {
-	if len(events) < 2 {
+	if len(events) < minBranchesForSelection {
 		return events, end, nil
 	}
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
