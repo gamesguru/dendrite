@@ -266,6 +266,21 @@ func TestHasStoredEventsBelowFallsBackToWireDepth(t *testing.T) {
 		below, err := req.hasStoredEventsBelow([]*rstypes.HeaderedEvent{storedBatch, unstoredBatch})
 		require.NoError(t, err)
 		assert.False(t, below, "stored history above the unstored batch event is not stranded")
+		require.NoError(t, snapshot.Rollback())
+
+		// The arrival order of an unstored backfilled event is unknown. A
+		// stored event at the same depth must therefore remain in the range.
+		sameDepthStored := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "same depth"},
+			test.WithDepth(5), test.WithPrevEvents(parent.EventID()))
+		_, err = db.WriteEvent(ctx, sameDepthStored, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		snapshot, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		req.snapshot = snapshot
+		below, err = req.hasStoredEventsBelow([]*rstypes.HeaderedEvent{storedBatch, unstoredBatch})
+		require.NoError(t, err)
+		assert.True(t, below, "stored history at the unstored event's depth must not be skipped")
+		require.NoError(t, snapshot.Rollback())
 	})
 }
 
