@@ -148,6 +148,11 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// persist these new events - auth checks have already been done
 	roomNID, storedEvents := persistEvents(ctx, r.DB, r.Querier, events)
 
+	// The history visibility of a backfilled event comes from the state before
+	// that event, not from the backfill anchor: one batch can cross a
+	// visibility change, and the sync API's history filter applies each event's
+	// own value when the event is later read from /messages.
+	historyVisibilities := make(map[string]gomatrixserverlib.HistoryVisibility, len(storedEvents))
 	for _, ev := range storedEvents {
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
@@ -169,6 +174,8 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			}
 		}
 
+		historyVisibilities[ev.EventID()] = historyVisibilityBeforeEvent(ctx, r.DB, info, entries)
+
 		var beforeStateSnapshotNID types.StateSnapshotNID
 		if beforeStateSnapshotNID, err = r.DB.AddState(ctx, roomNID, nil, entries); err != nil {
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to persist state entries to get snapshot nid")
@@ -183,10 +190,49 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 
 	res.Events = make([]*types.HeaderedEvent, len(events))
 	for i := range events {
-		res.Events[i] = &types.HeaderedEvent{PDU: events[i]}
+		vis := historyVisibilities[events[i].EventID()]
+		if vis == "" {
+			// The state before this event was not available. Do not fall back to
+			// the anchor's visibility, which may be less restrictive.
+			vis = gomatrixserverlib.HistoryVisibilityJoined
+		}
+		res.Events[i] = &types.HeaderedEvent{PDU: events[i], Visibility: vis}
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
+}
+
+// historyVisibilityBeforeEvent returns the history visibility in force in the
+// state before an event. The state at a backfill anchor can differ from the
+// state an older event was sent in, so each backfilled event needs its own
+// value for the history visibility filter.
+func historyVisibilityBeforeEvent(
+	ctx context.Context, db storage.RoomDatabase, roomInfo *types.RoomInfo, entries []types.StateEntry,
+) gomatrixserverlib.HistoryVisibility {
+	var eventNIDs []types.EventNID
+	for _, entry := range entries {
+		if entry.EventTypeNID == types.MRoomHistoryVisibilityNID && entry.EventStateKeyNID == types.EmptyStateKeyNID {
+			eventNIDs = append(eventNIDs, entry.EventNID)
+			break
+		}
+	}
+	if len(eventNIDs) == 0 {
+		// No history_visibility event in the state: the default is shared.
+		return gomatrixserverlib.HistoryVisibilityShared
+	}
+	stateEvents, err := db.Events(ctx, roomInfo.RoomVersion, eventNIDs)
+	if err != nil || len(stateEvents) == 0 {
+		// Do not fall back to the anchor's visibility, which may be less
+		// restrictive: keep the history restricted instead of exposing it.
+		logrus.WithError(err).
+			Warn("backfill: failed to get the history_visibility state before an event, defaulting to joined")
+		return gomatrixserverlib.HistoryVisibilityJoined
+	}
+	visEvents := make([]gomatrixserverlib.PDU, len(stateEvents))
+	for i := range stateEvents {
+		visEvents[i] = stateEvents[i].PDU
+	}
+	return auth.HistoryVisibilityForRoom(visEvents)
 }
 
 // backfillFailuresRetryable reports whether a failed backfill might succeed

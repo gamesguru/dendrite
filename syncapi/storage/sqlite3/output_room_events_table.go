@@ -53,20 +53,22 @@ CREATE INDEX IF NOT EXISTS syncapi_output_room_events_type_idx ON syncapi_output
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_sender_idx ON syncapi_output_room_events (sender);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_room_id_idx ON syncapi_output_room_events (room_id);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_exclude_from_sync_idx ON syncapi_output_room_events (exclude_from_sync);
+CREATE INDEX IF NOT EXISTS syncapi_output_room_events_room_exclude_idx ON syncapi_output_room_events (room_id, exclude_from_sync);
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_add_state_ids_idx ON syncapi_output_room_events ((add_state_ids IS NOT NULL));
 CREATE INDEX IF NOT EXISTS syncapi_output_room_events_remove_state_ids_idx ON syncapi_output_room_events ((remove_state_ids IS NOT NULL));
 `
 
-// An event that was excluded from sync stays excluded. Backfilled history and
-// old state must never be published as a new timeline event just because the
-// same event is written a second time (for example when a gap is filled with
-// /get_missing_events). Keeping the marker also keeps the event reachable from
-// the stream token used as /messages prev_batch.
+// The exclusion marker is decided by the first write of an event and is kept
+// on conflict. A backfill write replaying an event that is already live must
+// not hide it from sync, and a later write of a backfilled event (for example
+// when a gap is filled with /get_missing_events) must not clear the marker:
+// the marker is also what keeps backfilled history reachable from the stream
+// token used as /messages prev_batch.
 const insertEventSQL = "" +
 	"INSERT INTO syncapi_output_room_events (" +
 	"id, room_id, event_id, headered_event_json, type, sender, contains_url, add_state_ids, remove_state_ids, session_id, transaction_id, exclude_from_sync, history_visibility" +
 	") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) " +
-	"ON CONFLICT (event_id) DO UPDATE SET exclude_from_sync = (exclude_from_sync OR excluded.exclude_from_sync)"
+	"ON CONFLICT (event_id) DO UPDATE SET exclude_from_sync = exclude_from_sync"
 
 const selectEventsSQL = "" +
 	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events WHERE event_id IN ($1)"

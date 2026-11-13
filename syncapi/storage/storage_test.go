@@ -1472,7 +1472,7 @@ func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
 
 		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
 			filter := &synctypes.RoomEventFilter{Limit: 4}
-			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter)
+			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter, true)
 			require.NoError(t, err)
 			gots := snapshot.StreamEventsToEvents(context.Background(), nil, paginated, nil)
 			test.AssertEventsEqual(t, gots, test.Reversed(local))

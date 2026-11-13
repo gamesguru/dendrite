@@ -6,6 +6,7 @@
 package streams
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -66,5 +67,48 @@ func TestTopologicalRecentEventsSkipsLateForkedEvent(t *testing.T) {
 		require.Len(t, events, 1)
 		require.Equal(t, e4.EventID(), events[0].EventID(), "the deepest matching event ends the timeline, not the late fork")
 		require.True(t, recent[r.ID].Limited)
+	})
+}
+
+// Backfilled events are excluded from sync. When they are the deepest events
+// in the room they must not fill the batch limit, which would leave a complete
+// sync with a short or empty timeline.
+func TestTopologicalRecentEventsSkipsBackfilledBatches(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+		ctx := t.Context()
+
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		setupEvents := len(r.Events())
+		// More excluded events than the three batches a complete sync walks
+		// through, all deeper than the sync-visible ones.
+		for i := range 40 {
+			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("backfilled %d", i)})
+		}
+
+		for i, ev := range r.Events() {
+			exclude := i >= setupEvents
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+		to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+		require.NoError(t, err)
+
+		filter := &synctypes.RoomEventFilter{Limit: 1}
+		recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, filter)
+		require.NoError(t, err)
+		events := recent[r.ID].Events
+		require.Len(t, events, 1, "excluded events must not consume the batch limit")
+		require.Equal(t, r.Events()[setupEvents-1].EventID(), events[0].EventID(),
+			"the deepest sync-visible event is returned")
 	})
 }

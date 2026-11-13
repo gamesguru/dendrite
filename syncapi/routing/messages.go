@@ -406,7 +406,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		// A stream token bounds the page by stream order alone, as in Synapse:
 		// events persisted before it can be deeper in the DAG than the event at
 		// the token, for instance after a network partition heals.
-		streamEvents, topologyStart, end, err = r.snapshot.GetEventsBeforeStreamPosition(r.ctx, r.fromStream.PDUPosition, r.to, r.roomID, r.filter) //nolint:contextcheck
+		streamEvents, topologyStart, end, err = r.snapshot.GetEventsBeforeStreamPosition(r.ctx, r.fromStream.PDUPosition, r.to, r.roomID, r.filter, true) //nolint:contextcheck
 	} else {
 		streamEvents, topologyStart, end, err = r.snapshot.GetEventsInTopologicalRange(r.ctx, r.from, r.to, r.roomID, r.filter, r.backwardOrdering) //nolint:contextcheck
 	}
@@ -424,8 +424,10 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		for _, ev := range streamEvents {
 			if r.backwardOrdering {
 				// Backfilled events are stored after the token was issued, so their
-				// stream positions are above it, but they belong to older history.
-				if ev.StreamPosition <= r.fromStream.PDUPosition || ev.ExcludeFromSync {
+				// stream positions are above it, but they belong to older history
+				// (no deeper than the token's own position in the topology).
+				if ev.StreamPosition <= r.fromStream.PDUPosition ||
+					(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
 					filtered = append(filtered, ev)
 				}
 			} else if ev.StreamPosition > r.fromStream.PDUPosition {
@@ -648,6 +650,27 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 	return
 }
 
+// reachableBackwardExtremities keeps the extremities whose gap can hold events
+// older than the request. Backfilling from an extremity deeper than the
+// requested position fills a different part of the history and returns events
+// newer than the client asked from, which the client then places on the wrong
+// side of its timeline. An extremity whose position cannot be read is kept.
+func (r *messagesReq) reachableBackwardExtremities(
+	backwardExtremities map[string][]string,
+) map[string][]string {
+	if !r.backwardOrdering || r.from == nil || r.from.Depth <= 0 {
+		return backwardExtremities
+	}
+	reachable := make(map[string][]string, len(backwardExtremities))
+	for extremityID, prevs := range backwardExtremities {
+		pos, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
+		if err != nil || pos.Depth <= r.from.Depth {
+			reachable[extremityID] = prevs
+		}
+	}
+	return reachable
+}
+
 // handleEmptyEventsSlice handles the case where the initial request to the
 // database returned an empty slice of events. It does so by checking whether
 // the set is empty because we've reached a backward extremity, and if that is
@@ -661,6 +684,9 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 	events []*rstypes.HeaderedEvent, err error,
 ) {
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID)
+	if err == nil {
+		backwardExtremities = r.reachableBackwardExtremities(backwardExtremities)
+	}
 
 	// Check if we have backward extremities for this room.
 	if len(backwardExtremities) > 0 {
@@ -740,6 +766,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	if err != nil {
 		return
 	}
+	backwardExtremities = r.reachableBackwardExtremities(backwardExtremities)
 
 	// A full page can still end at a backward extremity: backfill stores at most
 	// maxBackfillEvents per request, so the oldest events of a long gap may not
@@ -1010,7 +1037,11 @@ func backfillEvents(
 	}
 	events := res.Events
 	for i := range events {
-		events[i].Visibility = res.HistoryVisibility
+		// The roomserver reports the visibility in force before each event.
+		// Fall back to the batch value when it could not be determined.
+		if events[i].Visibility == "" {
+			events[i].Visibility = res.HistoryVisibility
+		}
 		_, err = db.WriteEvent(
 			ctx,
 			events[i],

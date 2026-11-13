@@ -31,11 +31,13 @@ func TestSetupHookLoggingDoesNotDuplicateStdOutput(t *testing.T) {
 	}
 	prevLevel := logger.Level
 	prevReportCaller := logger.ReportCaller
+	prevFormatter := logger.Formatter
 	t.Cleanup(func() {
 		logger.SetOutput(prevOut)
 		logger.ReplaceHooks(prevHooks)
 		logger.SetLevel(prevLevel)
 		logger.SetReportCaller(prevReportCaller)
+		logger.SetFormatter(prevFormatter)
 		stdLevelLogAdded = make(map[logrus.Level]bool)
 	})
 

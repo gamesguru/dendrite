@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 type backfillOnlyAPI struct {
@@ -101,6 +102,7 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 		room := test.NewRoom(t, alice)
 		older := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "older"})
 		newer := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "newer"})
+		after := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "after the token"})
 
 		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
 		defer closeDB()
@@ -112,6 +114,9 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 
 		ctx := context.Background()
 		tokenPos, err := db.WriteEvent(ctx, newer, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		_, err = db.WriteEvent(ctx, after, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 
 		// Backfill happens after the client obtained its sync token.
@@ -131,12 +136,117 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = snapshot.Rollback() }()
 		events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, room.ID,
-			&synctypes.RoomEventFilter{Limit: 10})
+			&synctypes.RoomEventFilter{Limit: 10}, true)
 		require.NoError(t, err)
 		ids := make([]string, 0, len(events))
 		for _, ev := range events {
 			ids = append(ids, ev.EventID())
 		}
 		assert.Contains(t, ids, older.EventID(), "backfilled event must not be hidden by the stream-position cap")
+		assert.NotContains(t, ids, after.EventID(), "ordinary events after the token must stay capped")
 	})
+}
+
+// extremitySnapshot stubs the topology lookups used to decide which backward
+// extremities can hold events older than a request.
+type extremitySnapshot struct {
+	storage.DatabaseTransaction
+	positions   map[string]types.TopologyToken
+	extremities map[string][]string
+}
+
+func (s *extremitySnapshot) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
+	pos, ok := s.positions[eventID]
+	if !ok {
+		return types.TopologyToken{}, errors.New("event not in topology")
+	}
+	return pos, nil
+}
+
+func (s *extremitySnapshot) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
+	return s.extremities, nil
+}
+
+// backfillProbe records whether a backfill was attempted at all.
+type backfillProbe struct {
+	api.SyncRoomserverAPI
+	calls int
+}
+
+func (p *backfillProbe) PerformBackfill(context.Context, *api.PerformBackfillRequest, *api.PerformBackfillResponse) error {
+	p.calls++
+	return nil
+}
+
+// emptyExtremityDB makes the backward-extremity cleanup a no-op.
+type emptyExtremityDB struct{ storage.Database }
+
+func (emptyExtremityDB) Events(context.Context, []string) ([]*rstypes.HeaderedEvent, error) {
+	return nil, nil
+}
+
+// Backfilling only from extremities at or below the requested depth keeps a
+// backward page from returning events newer than the token it starts from.
+// Extremities elsewhere in the room belong to different gaps.
+func TestReachableBackwardExtremities(t *testing.T) {
+	extremities := map[string][]string{
+		"$at-cursor": {"$a"},
+		"$older":     {"$b"},
+		"$newer":     {"$c"},
+		"$unknown":   {"$d"},
+	}
+	snapshot := &extremitySnapshot{
+		positions: map[string]types.TopologyToken{
+			"$at-cursor": {Depth: 2900},
+			"$older":     {Depth: 2800},
+			"$newer":     {Depth: 2901},
+		},
+	}
+	r := &messagesReq{
+		ctx:              context.Background(),
+		snapshot:         snapshot,
+		backwardOrdering: true,
+		from:             &types.TopologyToken{Depth: 2900, PDUPosition: 100},
+	}
+
+	assert.Equal(t, map[string][]string{
+		"$at-cursor": {"$a"},
+		"$older":     {"$b"},
+		"$unknown":   {"$d"},
+	}, r.reachableBackwardExtremities(extremities), "only gaps at or below the cursor can hold older events")
+
+	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
+	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
+		"a request near the room start reaches no known gap; an extremity with no readable position is kept")
+
+	r.backwardOrdering = false
+	assert.Equal(t, extremities, r.reachableBackwardExtremities(extremities), "forward requests are unaffected")
+}
+
+// A backward request at the room's start must end the history instead of
+// backfilling a newer gap and returning its events as if they were older.
+func TestHandleEmptyEventsSliceDoesNotBackfillNewerGaps(t *testing.T) {
+	snapshot := &extremitySnapshot{
+		positions:   map[string]types.TopologyToken{"$recent-gap": {Depth: 2800}},
+		extremities: map[string][]string{"$recent-gap": {"$prev"}},
+	}
+	for _, depth := range []types.StreamPosition{1, 2} {
+		probe := &backfillProbe{}
+		r := &messagesReq{
+			ctx:              context.Background(),
+			db:               emptyExtremityDB{},
+			snapshot:         snapshot,
+			rsAPI:            probe,
+			roomID:           "!room:test",
+			device:           &userapi.Device{UserID: "@alice:test"},
+			backwardOrdering: true,
+			from:             &types.TopologyToken{Depth: depth, PDUPosition: 10},
+			filter:           &synctypes.RoomEventFilter{Limit: 10},
+		}
+
+		events, err := r.handleEmptyEventsSlice()
+		require.NoError(t, err)
+		assert.Empty(t, events)
+		assert.Zero(t, probe.calls, "a depth-%d request must not backfill a depth-2800 gap", depth)
+	}
 }

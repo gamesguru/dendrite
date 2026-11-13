@@ -1072,7 +1072,9 @@ func topologicalRecentEvents(
 			var end types.TopologyToken
 			var err error
 			if batch == 0 {
-				matched, _, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, to, &types.TopologyToken{}, roomID, &batchFilter)
+				// Backfilled events are excluded from sync, so leave them out
+				// before the batch limit rather than after it.
+				matched, _, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, to, &types.TopologyToken{}, roomID, &batchFilter, false)
 			} else {
 				from := cursor
 				matched, _, end, err = snapshot.GetEventsInTopologicalRange(ctx, &from, &types.TopologyToken{}, roomID, &batchFilter, true)

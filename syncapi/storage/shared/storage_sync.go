@@ -340,9 +340,21 @@ func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 	to *types.TopologyToken,
 	roomID string,
 	filter *synctypes.RoomEventFilter,
+	includeBackfilled bool,
 ) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
 	var eIDs []string
-	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(ctx, d.txn, roomID, to.Depth, maxStreamPos, filter.Limit)
+	// Backfilled history is stored after the token was issued, but must not be
+	// newer than the position the token refers to. Depth 0 means no event sits
+	// at or below the token, so there is nothing to bound by.
+	maxBackfillDepth := types.StreamPosition(math.MaxInt64)
+	if includeBackfilled {
+		if pos, perr := d.StreamToTopologicalPosition(ctx, roomID, maxStreamPos, true); perr == nil && pos.Depth > 0 {
+			maxBackfillDepth = pos.Depth
+		}
+	}
+	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(
+		ctx, d.txn, roomID, to.Depth, maxStreamPos, maxBackfillDepth, filter.Limit, includeBackfilled,
+	)
 	if err != nil {
 		return
 	}

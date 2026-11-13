@@ -56,9 +56,12 @@ const selectEventIDsInRangeDESCSQL = "" +
 // are still returned in topological order.
 const selectEventIDsBeforeStreamPositionSQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
-	" WHERE room_id = $1 AND topological_position > $2 AND (stream_position <= $3 OR event_id IN" +
+	" WHERE room_id = $1 AND topological_position > $2" +
+	" AND (stream_position <= $3 OR ($4 AND topological_position <= $5 AND event_id IN" +
+	"  (SELECT event_id FROM syncapi_output_room_events WHERE room_id = $1 AND exclude_from_sync = TRUE)))" +
+	" AND ($4 OR event_id NOT IN" +
 	"  (SELECT event_id FROM syncapi_output_room_events WHERE room_id = $1 AND exclude_from_sync = TRUE))" +
-	" ORDER BY topological_position DESC, stream_position DESC LIMIT $4"
+	" ORDER BY topological_position DESC, stream_position DESC LIMIT $6"
 
 const selectPositionInTopologySQL = "" +
 	"SELECT topological_position, stream_position FROM syncapi_output_room_events_topology" +
@@ -181,10 +184,16 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 
 // SelectEventIDsBeforeStreamPosition selects, newest first in topological order,
 // the events of a room at or before a stream position and deeper than minDepth.
+// When includeBackfilled is set, events excluded from sync (backfilled history)
+// are also returned when they were persisted after the position, but only up to
+// maxBackfillDepth.
 func (s *outputRoomEventsTopologyStatements) SelectEventIDsBeforeStreamPosition(
-	ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos types.StreamPosition, limit int,
+	ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition,
+	limit int, includeBackfilled bool,
 ) (eventIDs []string, start, end types.TopologyToken, err error) {
-	rows, err := sqlutil.TxStmt(txn, s.selectEventIDsBeforeStreamPositionStmt).QueryContext(ctx, roomID, minDepth, maxStreamPos, limit)
+	rows, err := sqlutil.TxStmt(txn, s.selectEventIDsBeforeStreamPositionStmt).QueryContext(
+		ctx, roomID, minDepth, maxStreamPos, includeBackfilled, maxBackfillDepth, limit,
+	)
 	if err != nil {
 		return
 	}
