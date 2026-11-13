@@ -67,6 +67,10 @@ const minBranchesForSelection = 2
 // far are stored, so retrying the same cursor makes progress.
 var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
 
+// errBackfillRecentlyFailed marks a backfill that was not attempted because the
+// same request definitively failed within terminalBackfillTTL.
+var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
+
 type messagesReq struct {
 	ctx               context.Context
 	db                storage.Database
@@ -1381,6 +1385,13 @@ func backfillEvents(
 	}
 	retryBackwardExtremityCleanup(ctx, db, roomID, pendingPrevIDs)
 
+	// A request that every server already answered "no such events" a moment
+	// ago would only repeat the whole federation round, so answer from memory.
+	cacheKey := terminalBackfillKey(roomID, backwardsExtremities)
+	if defaultTerminalBackfillCache.recentlyFailed(cacheKey) {
+		return nil, &api.BackfillUnavailableError{Err: errBackfillRecentlyFailed}
+	}
+
 	var res api.PerformBackfillResponse
 	err := rsAPI.PerformBackfill(ctx, &api.PerformBackfillRequest{
 		RoomID:               roomID,
@@ -1390,7 +1401,14 @@ func backfillEvents(
 		VirtualHost:          virtualHost,
 	}, &res)
 	if err != nil {
-		return nil, fmt.Errorf("PerformBackfill failed: %w", err)
+		wrapped := fmt.Errorf("PerformBackfill failed: %w", err)
+		if isTerminalBackfillFailure(wrapped) {
+			defaultTerminalBackfillCache.recordFailure(cacheKey)
+		}
+		return nil, wrapped
+	}
+	if len(res.Events) > 0 {
+		defaultTerminalBackfillCache.forget(cacheKey)
 	}
 	util.GetLogger(ctx).WithField("new_events", len(res.Events)).Info("Storing new events from backfill")
 
