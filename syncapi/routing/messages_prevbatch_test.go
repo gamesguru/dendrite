@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -46,11 +47,12 @@ func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) 
 		history := room.Events()
 		// The join is deeper than the remote room's history: hs1's server had
 		// not seen those events, so its depth counter is further along.
-		join := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "join"},
-			test.WithDepth(35), test.WithPrevEvents(history[len(history)-1].EventID()))
+		bob := test.NewUser(t)
+		join := room.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join},
+			test.WithStateKey(bob.ID), test.WithDepth(35), test.WithPrevEvents(history[len(history)-1].EventID()))
 
 		ctx := context.Background()
-		_, err = db.WriteEvent(ctx, join, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		_, err = db.WriteEvent(ctx, join, []*rstypes.HeaderedEvent{join}, []string{join.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 
 		snapshot, err := db.NewDatabaseTransaction(ctx)
