@@ -197,21 +197,31 @@ func relationsPage(
 		maxDepth = relationsRecursionDepth
 	}
 	// One extra entry tells whether there is another page.
-	entries, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, from, to, params.backwards, params.limit+1)
-	if err != nil {
-		return nil, err
-	}
+	//
 	// A stream token bounds pagination by stream order. Relations are selected
 	// by topology position, so children stored after the token can share a
-	// shallower position; drop them as /messages does.
-	if params.backwards && fromStream != nil {
-		kept := entries[:0]
-		for _, entry := range entries {
-			if entry.Position.PDUPosition <= fromStream.PDUPosition {
-				kept = append(kept, entry)
+	// shallower position; drop them as /messages does. Dropping entries from a
+	// fixed-size batch could hide older eligible relations beyond it, so keep
+	// reading further batches until the page is full or the range is exhausted.
+	bounded := params.backwards && fromStream != nil
+	var entries []types.TopologicalRelation
+	cursor := from
+	for {
+		batch, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, cursor, to, params.backwards, params.limit+1)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range batch {
+			if !bounded || entry.Position.PDUPosition <= fromStream.PDUPosition {
+				entries = append(entries, entry)
 			}
 		}
-		entries = kept
+		if !bounded || len(entries) > params.limit || len(batch) < params.limit+1 {
+			break
+		}
+		// Tokens name the cursor after an event, so step back over the last one.
+		cursor = batch[len(batch)-1].Position
+		cursor.Decrement()
 	}
 	res := &RelationsResponse{Chunk: []synctypes.ClientEvent{}}
 	if params.recurse != nil {

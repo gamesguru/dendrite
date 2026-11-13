@@ -155,7 +155,7 @@ func (r *messagesReq) topologyDepths(ctx context.Context, events []types.StreamE
 			r.topoDepths = make(map[string]int64, len(events))
 		}
 		for _, ev := range events {
-			depth := int64(ev.Depth())
+			depth := ev.Depth()
 			if pos, found := positions[ev.EventID()]; found {
 				depth = int64(pos.Depth)
 			}
@@ -603,25 +603,8 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	end types.TopologyToken, err error,
 ) {
 	emptyToken := types.TopologyToken{}
-	// Backward /messages cursors are placed immediately before the event at
-	// PDUPosition+1. Late-parent repair can move that anchor in topology while
-	// preserving its stream position; resolve the anchor again so the old token
-	// still describes the same boundary.
-	if r.backwardOrdering && r.fromTopologyToken && r.from.PDUPosition < types.StreamPosition(math.MaxInt64) {
-		if resolver, ok := r.snapshot.(interface {
-			EventPositionByStreamPosition(context.Context, string, types.StreamPosition) (types.TopologyToken, error)
-		}); ok {
-			anchor, lookupErr := resolver.EventPositionByStreamPosition(ctx, r.roomID, r.from.PDUPosition+1)
-			switch {
-			case lookupErr == nil:
-				r.from.Depth = anchor.Depth
-			case errors.Is(lookupErr, sql.ErrNoRows):
-				// Some callers use topology tokens that are not tied to a stored
-				// event. Keep their original position.
-			default:
-				return nil, *r.from, emptyToken, fmt.Errorf("resolve backward cursor anchor: %w", lookupErr)
-			}
-		}
+	if err = r.reanchorBackwardCursor(ctx); err != nil {
+		return nil, *r.from, emptyToken, err
 	}
 	// Retrieve the events from the local database.
 	// streamEvents has already been filtered by the client's sender/type filter (SelectEvents).
@@ -663,6 +646,10 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// stream order rather than topology order.
 	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
 		firstPos, fErr := r.snapshot.EventPositionInTopology(ctx, streamEvents[0].EventID())
+		if errors.Is(fErr, sql.ErrNoRows) {
+			// No stored position: the wire depth is the best there is.
+			firstPos, fErr = types.TopologyToken{Depth: types.StreamPosition(streamEvents[0].Depth())}, nil
+		}
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
 		}
@@ -914,10 +901,11 @@ func (r *messagesReq) filterByStreamToken(
 	filtered := events[:0]
 	droppedBackfilledSuffix := false
 	for _, ev := range events {
-		if r.backwardOrdering {
+		switch {
+		case r.backwardOrdering:
 			// Backfilled events are stored after the token was issued, so their
 			// stream positions are above it, but they belong to older history
-			// (no deeper than the token's own position in the topology).
+			// (strictly shallower than the token's own position in the topology).
 			keep := ev.StreamPosition <= r.fromStream.PDUPosition
 			if !keep && ev.ExcludeFromSync {
 				if r.from == nil || r.from.Depth == 0 {
@@ -927,17 +915,17 @@ func (r *messagesReq) filterByStreamToken(
 					if depthErr != nil {
 						return nil, end, depthErr
 					}
-					keep = evDepth <= int64(r.from.Depth)
+					keep = evDepth < int64(r.from.Depth)
 				}
 			}
 			if keep {
 				filtered = append(filtered, ev)
 				droppedBackfilledSuffix = false
 			}
-		} else if ev.StreamPosition > r.fromStream.PDUPosition {
+		case ev.StreamPosition > r.fromStream.PDUPosition:
 			filtered = append(filtered, ev)
 			droppedBackfilledSuffix = false
-		} else if ev.ExcludeFromSync {
+		case ev.ExcludeFromSync:
 			// This event was persisted as backfill and was not delivered by
 			// sync, so the topology cursor must not advance beyond it.
 			droppedBackfilledSuffix = true
@@ -1012,6 +1000,38 @@ func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
 		}
 		return events[i].Depth() < events[j].Depth()
 	})
+	return nil
+}
+
+// reanchorBackwardCursor resolves the anchor of a backward /messages topology
+// cursor again. Such a cursor is placed immediately before the event at
+// PDUPosition+1. A late-parent repair can lift that event in the topology
+// while keeping its stream position, so the depth in an old token may be stale.
+// A repair only ever raises a position, so the depth is only raised: a token
+// that does not follow that convention (a forward token used backwards, for
+// instance) resolves to some other event, and must not lower or sideline it.
+func (r *messagesReq) reanchorBackwardCursor(ctx context.Context) error {
+	if !r.backwardOrdering || !r.fromTopologyToken || r.from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
+		return nil
+	}
+	resolver, ok := r.snapshot.(interface {
+		EventPositionByStreamPosition(context.Context, string, types.StreamPosition) (types.TopologyToken, error)
+	})
+	if !ok {
+		return nil
+	}
+	anchor, err := resolver.EventPositionByStreamPosition(ctx, r.roomID, r.from.PDUPosition+1)
+	switch {
+	case err == nil:
+		if anchor.Depth > r.from.Depth {
+			r.from.Depth = anchor.Depth
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		// Some callers use topology tokens that are not tied to a stored
+		// event. Keep their original position.
+	default:
+		return fmt.Errorf("resolve backward cursor anchor: %w", err)
+	}
 	return nil
 }
 
@@ -1181,16 +1201,21 @@ func (r *messagesReq) truncateForwardPageAtGap(
 	if err != nil {
 		return events, end, err
 	}
+	// Look each gap up once, not once per event.
+	gaps := make([]types.TopologyToken, 0, len(open))
+	for extremityID := range open {
+		gap, gapErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
+		if gapErr != nil {
+			continue
+		}
+		gaps = append(gaps, gap)
+	}
 	for i := 1; i < len(events); i++ {
 		current, posErr := r.snapshot.EventPositionInTopology(ctx, events[i].EventID())
 		if posErr != nil {
 			return events, end, posErr
 		}
-		for extremityID := range open {
-			gap, gapErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
-			if gapErr != nil {
-				continue
-			}
+		for _, gap := range gaps {
 			// The gap may be absent from events because sender/type filters
 			// removed its event. Stop before the first visible event whose
 			// topology position crosses that gap.
@@ -1200,11 +1225,7 @@ func (r *messagesReq) truncateForwardPageAtGap(
 		}
 		previous = current
 	}
-	for extremityID := range open {
-		gap, gapErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
-		if gapErr != nil {
-			continue
-		}
+	for _, gap := range gaps {
 		if topologyTokenLess(previous, gap) && !topologyTokenLess(end, gap) {
 			// The marker itself was removed by the room filter, but the raw
 			// topology range crossed it. Keep the cursor at the last visible

@@ -335,7 +335,7 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 // GetEventsBeforeStreamPosition retrieves, newest first in topological order,
 // the events at or before a stream position and deeper than the to token.
 // With includeBackfilled, backfilled events (excluded from sync) persisted after
-// the position are also returned, up to the position's own topological depth;
+// the position are also returned, below the position's own topological depth;
 // without it, backfilled events are never returned.
 func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 	ctx context.Context,

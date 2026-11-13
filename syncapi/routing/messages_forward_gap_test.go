@@ -7,6 +7,7 @@ package routing
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -149,7 +150,7 @@ func (a *forwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackf
 	return nil
 }
 
-func newForwardGapReq(state *forwardGapState, fromDepth types.StreamPosition) *messagesReq {
+func newForwardGapReq(state *forwardGapState) *messagesReq {
 	return &messagesReq{
 		ctx:              context.Background(),
 		db:               forwardGapDB{state: state},
@@ -157,7 +158,7 @@ func newForwardGapReq(state *forwardGapState, fromDepth types.StreamPosition) *m
 		rsAPI:            &forwardGapAPI{state: state},
 		cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
 		roomID:           "!room:test",
-		from:             &types.TopologyToken{Depth: fromDepth},
+		from:             &types.TopologyToken{},
 		device:           &userapi.Device{UserID: "@alice:test"},
 		backwardOrdering: false,
 		filter:           &synctypes.RoomEventFilter{Limit: 10},
@@ -181,7 +182,7 @@ func TestFillForwardGapClosesHoleAheadOfCursor(t *testing.T) {
 	hole := len(state.unstored)
 	require.NotEmpty(t, state.extremities, "the first stored event has a missing prev event")
 
-	r := newForwardGapReq(state, 0)
+	r := newForwardGapReq(state)
 	position := types.TopologyToken{Depth: types.StreamPosition(all[split].Depth()), PDUPosition: types.StreamPosition(all[split].Depth())}
 	filled, err := r.fillForwardGap(r.ctx, position)
 	require.NoError(t, err)
@@ -207,7 +208,7 @@ func TestFillForwardGapReportsIncompleteGap(t *testing.T) {
 	state := newForwardGapState(all[split:], all[:split])
 	hole := len(state.unstored)
 
-	r := newForwardGapReq(state, 0)
+	r := newForwardGapReq(state)
 	position := types.TopologyToken{Depth: types.StreamPosition(all[split].Depth()), PDUPosition: types.StreamPosition(all[split].Depth())}
 	filled, err := r.fillForwardGap(r.ctx, position)
 	assert.ErrorIs(t, err, errForwardBackfillIncomplete)
@@ -275,7 +276,7 @@ func TestTruncateForwardPageAtGapCutsBeforeInPageExtremity(t *testing.T) {
 	for _, ev := range stored {
 		page = append(page, types.StreamEvent{HeaderedEvent: ev})
 	}
-	r := newForwardGapReq(state, 0)
+	r := newForwardGapReq(state)
 	got, end, err := r.truncateForwardPageAtGap(r.ctx, page, types.TopologyToken{Depth: 99})
 	require.NoError(t, err)
 	require.Len(t, got, 5, "events before the hole are served")
@@ -286,4 +287,82 @@ func TestTruncateForwardPageAtGapCutsBeforeInPageExtremity(t *testing.T) {
 	got, _, err = r.truncateForwardPageAtGap(r.ctx, page[5:], types.TopologyToken{Depth: 99})
 	require.NoError(t, err)
 	assert.Len(t, got, len(page[5:]))
+}
+
+// countingTopology counts the topology lookups a page costs.
+type countingTopology struct {
+	*forwardGapState
+	lookups int
+}
+
+func (c *countingTopology) EventPositionInTopology(ctx context.Context, eventID string) (types.TopologyToken, error) {
+	c.lookups++
+	return c.forwardGapState.EventPositionInTopology(ctx, eventID)
+}
+
+// Each open gap is looked up once for the page, not once per event.
+func TestTruncateForwardPageAtGapLooksUpEachGapOnce(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 14; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	all := room.Events()
+	stored := append(append([]*rstypes.HeaderedEvent{}, all[:11]...), all[12:]...)
+	state := newForwardGapState(stored, all[11:12])
+	require.Len(t, state.extremities, 1)
+
+	page := make([]types.StreamEvent, 0, len(stored))
+	for _, ev := range stored {
+		page = append(page, types.StreamEvent{HeaderedEvent: ev})
+	}
+	counting := &countingTopology{forwardGapState: state}
+	r := newForwardGapReq(state)
+	r.snapshot = counting
+	_, _, err := r.truncateForwardPageAtGap(r.ctx, page, types.TopologyToken{Depth: 99})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, counting.lookups, len(page)+len(state.extremities),
+		"one lookup per page event plus one per open gap")
+}
+
+type anchorSnapshot struct {
+	storage.DatabaseTransaction
+	anchor types.TopologyToken
+	err    error
+}
+
+func (s anchorSnapshot) EventPositionByStreamPosition(context.Context, string, types.StreamPosition) (types.TopologyToken, error) {
+	return s.anchor, s.err
+}
+
+// A repair only raises positions, so re-anchoring a backward cursor may raise
+// its depth but must never lower it.
+func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
+	newReq := func(depth types.StreamPosition, snapshot storage.DatabaseTransaction) *messagesReq {
+		return &messagesReq{
+			roomID: "!r:test", snapshot: snapshot, backwardOrdering: true, fromTopologyToken: true,
+			from: &types.TopologyToken{Depth: depth, PDUPosition: 10},
+		}
+	}
+	ctx := context.Background()
+
+	r := newReq(5, anchorSnapshot{anchor: types.TopologyToken{Depth: 9, PDUPosition: 11}})
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(9), r.from.Depth, "a lifted anchor raises the cursor")
+
+	r = newReq(9, anchorSnapshot{anchor: types.TopologyToken{Depth: 5, PDUPosition: 11}})
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(9), r.from.Depth, "a shallower event is not the anchor of a lifted cursor")
+
+	r = newReq(5, anchorSnapshot{err: sql.ErrNoRows})
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(5), r.from.Depth)
+
+	r = newReq(5, anchorSnapshot{anchor: types.TopologyToken{Depth: 9, PDUPosition: 11}})
+	r.fromTopologyToken = false
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(5), r.from.Depth, "only topology tokens are re-anchored")
+
+	r = newReq(5, anchorSnapshot{err: errors.New("db down")})
+	require.Error(t, r.reanchorBackwardCursor(ctx))
 }

@@ -6,11 +6,12 @@
 package routing
 
 import (
-	"github.com/gamesguru/gomatrixserverlib/spec"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // terminalBackfillTTL is how long a definitive "no server has these events"

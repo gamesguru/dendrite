@@ -62,7 +62,7 @@ const selectEventIDsInRangeDESCSQL = "" +
 const selectEventIDsBeforeStreamPositionSQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND topological_position > $2" +
-	" AND (stream_position <= $3 OR ($4 AND topological_position <= $5 AND event_id IN" +
+	" AND (stream_position <= $3 OR ($4 AND topological_position < $5 AND event_id IN" +
 	"  (SELECT event_id FROM syncapi_output_room_events WHERE room_id = $1 AND exclude_from_sync = TRUE)))" +
 	" AND ($4 OR event_id NOT IN" +
 	"  (SELECT event_id FROM syncapi_output_room_events WHERE room_id = $1 AND exclude_from_sync = TRUE))" +
@@ -276,7 +276,7 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 // SelectEventIDsBeforeStreamPosition selects, newest first in topological order,
 // the events of a room at or before a stream position and deeper than minDepth.
 // When includeBackfilled is set, events excluded from sync (backfilled history)
-// are also returned when they were persisted after the position, but only up to
+// are also returned when they were persisted after the position, but only below
 // maxBackfillDepth. When it is not set, excluded events are dropped even if
 // they were persisted before the position.
 func (s *outputRoomEventsTopologyStatements) SelectEventIDsBeforeStreamPosition(
