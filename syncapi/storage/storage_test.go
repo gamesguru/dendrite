@@ -73,35 +73,6 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
-// A server that loses its depth counter can send valid events claiming a depth
-// below their own parents. The topology must still place each event after its
-// stored parents, otherwise the room splits into two depth ranges and
-// pagination walks the wrong island first.
-func TestTopologyFollowsParentsAfterDepthReset(t *testing.T) {
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		alice := test.NewUser(t)
-		r := test.NewRoom(t, alice)
-		parent := r.CreateAndInsert(t, alice, "m.room.message",
-			map[string]any{"body": "before the reset"}, test.WithDepth(1000))
-		child := r.CreateAndInsert(t, alice, "m.room.message",
-			map[string]any{"body": "after the reset"}, test.WithDepth(0))
-
-		db, close := MustCreateDatabase(t, dbType)
-		defer close()
-		MustWriteEvents(t, db, r.Events())
-
-		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
-			parentPos, err := snapshot.EventPositionInTopology(ctx, parent.EventID())
-			require.NoError(t, err)
-			childPos, err := snapshot.EventPositionInTopology(ctx, child.EventID())
-			require.NoError(t, err)
-			assert.Equal(t, types.StreamPosition(1000), parentPos.Depth)
-			assert.Equal(t, types.StreamPosition(1001), childPos.Depth,
-				"a depth reset must not place the child at or below its parent")
-		})
-	})
-}
-
 func TestGetOrCreateConnectionConcurrent(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, closeDB := MustCreateDatabase(t, dbType)
@@ -1619,12 +1590,10 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 		defer closeDB()
 		alice := test.NewUser(t)
 		r := test.NewRoom(t, alice)
-		for i := 0; i < 5; i++ {
-			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "m"})
-		}
-		events := r.Events()
-		parent := events[len(events)-1]
-		_ = MustWriteEvents(t, db, events)
+		parent := r.CreateAndInsert(t, alice, "m.room.message",
+			map[string]any{"body": "before the reset"}, test.WithDepth(1000))
+		require.Equal(t, int64(1000), parent.Depth())
+		_ = MustWriteEvents(t, db, r.Events())
 
 		reset := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "after reset"}, test.WithDepth(0))
 		require.Equal(t, int64(0), reset.Depth(), "the event claims a restarted depth")
@@ -1634,7 +1603,7 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
 			pos, err := snapshot.EventPositionInTopology(ctx, reset.EventID())
 			require.NoError(t, err)
-			assert.Equal(t, types.StreamPosition(parent.Depth()+1), pos.Depth,
+			assert.Equal(t, types.StreamPosition(1001), pos.Depth,
 				"the event is lifted above its stored parent")
 		})
 	})
