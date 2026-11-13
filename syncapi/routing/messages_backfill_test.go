@@ -120,10 +120,15 @@ func TestBackwardBackfillContinuesUntilGapClosesOrRoundLimit(t *testing.T) {
 		for _, tc := range []struct {
 			name       string
 			batchCount int
+			noAnchor   bool
 			wantOpen   bool
+			wantCalls  int
 		}{
-			{name: "closes in second round", batchCount: 2},
-			{name: "remains open at round limit", batchCount: maxBackwardBackfillRounds + 1, wantOpen: true},
+			{name: "closes in second round", batchCount: 2, wantCalls: 2},
+			{name: "remains open at round limit", batchCount: maxBackwardBackfillRounds + 1, wantOpen: true, wantCalls: maxBackwardBackfillRounds},
+			// A chain that has not reached stored history strands nothing: the
+			// next page backfills onward, so the page is complete after one batch.
+			{name: "unfetched chain with nothing stored below", batchCount: maxBackwardBackfillRounds + 1, noAnchor: true, wantCalls: 1},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				alice := test.NewUser(t)
@@ -140,8 +145,10 @@ func TestBackwardBackfillContinuesUntilGapClosesOrRoundLimit(t *testing.T) {
 				child := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "stored child"}, test.WithPrevEvents(chain[len(chain)-1].EventID()))
 
 				ctx := context.Background()
-				_, err = db.WriteEvent(ctx, anchor, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
-				require.NoError(t, err)
+				if !tc.noAnchor {
+					_, err = db.WriteEvent(ctx, anchor, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+					require.NoError(t, err)
+				}
 				_, err = db.WriteEvent(ctx, child, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 				require.NoError(t, err)
 				snapshot, err := db.NewDatabaseTransaction(ctx)
@@ -170,15 +177,55 @@ func TestBackwardBackfillContinuesUntilGapClosesOrRoundLimit(t *testing.T) {
 				fetched, incomplete, err := req.backfillBackwardUntilComplete(extremities, nil, 10)
 				require.NoError(t, err)
 				assert.Equal(t, tc.wantOpen, incomplete)
-				if tc.wantOpen {
-					assert.Equal(t, maxBackwardBackfillRounds, federation.calls)
-					assert.Len(t, fetched, maxBackwardBackfillRounds)
-				} else {
-					assert.Equal(t, 2, federation.calls)
-					assert.Len(t, fetched, 2)
-				}
+				assert.Equal(t, tc.wantCalls, federation.calls)
+				assert.Len(t, fetched, tc.wantCalls)
 			})
 		}
+	})
+}
+
+func TestBackwardBackfillMissingParentWithoutOlderStoredHistoryIsComplete(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		missingParent := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "not fetched"})
+		backfilled := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"},
+			test.WithPrevEvents(missingParent.EventID()))
+		child := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "stored child"},
+			test.WithPrevEvents(backfilled.EventID()))
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		_, err = db.WriteEvent(ctx, child, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		snapshot, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+		extremities, err := snapshot.BackwardExtremitiesForRoom(ctx, room.ID)
+		require.NoError(t, err)
+
+		req := &messagesReq{
+			ctx:              ctx,
+			db:               db,
+			snapshot:         snapshot,
+			rsAPI:            &sequencedBackfillAPI{batches: [][]*rstypes.HeaderedEvent{{backfilled}}},
+			cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
+			roomID:           room.ID,
+			device:           &userapi.Device{UserID: "@alice:test"},
+			backwardOrdering: true,
+			from:             &types.TopologyToken{Depth: 0},
+		}
+		fetched, incomplete, err := req.backfillBackwardUntilComplete(extremities, nil, 10)
+		require.NoError(t, err)
+		require.Len(t, fetched, 1)
+		assert.False(t, incomplete, "an unfetched parent with no older stored history does not block pagination")
 	})
 }
 
@@ -357,6 +404,16 @@ func TestReachableBackwardExtremities(t *testing.T) {
 	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 0}
 	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
 		"a stream-position-0 cursor at depth 2 still reaches no deeper gap")
+
+	// A stream-token cursor (a /sync prev_batch) keeps the token's own stream
+	// position, which on a database whose first positions went to other data is
+	// not 0 but still precedes the join.
+	r.from = &types.TopologyToken{Depth: 2900, PDUPosition: 2}
+	r.fromStream = &types.StreamingToken{PDUPosition: 2}
+	assert.Equal(t, map[string][]string{"$at-cursor": {"$a"}, "$same-depth-newer": {"$same-depth-prev"}},
+		r.reachableBackwardExtremities(extremities),
+		"a stream-token cursor reaches same-depth extremities at later stream positions")
+	r.fromStream = nil
 
 	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
 	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),

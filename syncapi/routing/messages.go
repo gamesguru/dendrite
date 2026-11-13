@@ -1112,8 +1112,15 @@ func (r *messagesReq) reachableBackwardExtremities(
 // room joined over federation). That first event is itself the extremity, with
 // a stream position above 0, and its missing parents lie below the depth, so
 // the extremity counts when its depth does not exceed the cursor's.
+//
+// A cursor resolved from a stream token (a /sync prev_batch) is anchored the
+// same way when it precedes every stored event, but its stream position is the
+// token's, not 0: a database whose first positions went to other data, such as
+// account data, issues prev_batch s2 for a join stored at position 3. The
+// extremity is then at the cursor's depth with a later stream position, so the
+// same depth rule applies to any cursor that came from a stream token.
 func (r *messagesReq) extremityBeforeCursor(pos types.TopologyToken) bool {
-	if r.from.PDUPosition == 0 {
+	if r.from.PDUPosition == 0 || r.fromStream != nil {
 		return pos.Depth <= r.from.Depth
 	}
 	return topologyTokenLess(pos, *r.from)
@@ -1549,12 +1556,8 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	}
 	events = append(events, localEvents...)
 	events = append(events, backfilledAbovePageEnd...)
-	if r.didBackfill {
-		if err = r.sortByTopology(events); err != nil {
-			return nil, err
-		}
-	} else {
-		sort.Sort(eventsByDepth(events))
+	if err = r.sortByTopology(events); err != nil {
+		return nil, err
 	}
 
 	return
@@ -1571,6 +1574,9 @@ func (r *messagesReq) backfillBackwardUntilComplete(
 	for round := 0; round < maxBackwardBackfillRounds; round++ {
 		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
 		if backfillErr != nil {
+			if incomplete && isTerminalBackfillFailure(backfillErr) {
+				return events, false, nil
+			}
 			if errors.Is(backfillErr, errBackwardBackfillFetch) && incomplete {
 				// Events fetched in an earlier round are already stored, but the
 				// gap remains open. Keep the cursor in place for a retry.
@@ -1631,7 +1637,42 @@ func (r *messagesReq) backfillBatchHasMissingParents(
 	if err != nil {
 		return false, fmt.Errorf("check parents of backfilled page: %w", err)
 	}
-	return len(stored) < len(missing), nil
+	if len(stored) >= len(missing) {
+		return false, nil
+	}
+	// A parent that is not stored yet only strands stored events when some lie
+	// below the batch: the next page would continue there and skip the gap. With
+	// nothing stored below, the next page finds no local events and backfills
+	// onward from the new extremity, so the page is complete.
+	return r.hasStoredEventsBelow(backfilled)
+}
+
+// hasStoredEventsBelow reports whether the room has a stored event positioned
+// strictly below every one of the given events in the topology.
+func (r *messagesReq) hasStoredEventsBelow(events []*rstypes.HeaderedEvent) (bool, error) {
+	positions, err := r.topologyDepthsForEvents(r.ctx, events)
+	if err != nil {
+		return false, err
+	}
+	oldest := int64(math.MaxInt64)
+	for _, ev := range events {
+		if depth, ok := positions[ev.EventID()]; ok && depth < oldest {
+			oldest = depth
+		}
+	}
+	if oldest == int64(math.MaxInt64) {
+		// No position is known for the batch, so it cannot be shown to end
+		// above stored history.
+		return true, nil
+	}
+	below, _, _, err := r.snapshot.GetEventsInTopologicalRange(
+		r.ctx, &types.TopologyToken{Depth: types.StreamPosition(oldest)}, &types.TopologyToken{},
+		r.roomID, &synctypes.RoomEventFilter{Limit: 1}, true,
+	)
+	if err != nil {
+		return false, fmt.Errorf("check stored history below backfilled batch: %w", err)
+	}
+	return len(below) > 0, nil
 }
 
 type eventsByDepth []*rstypes.HeaderedEvent
