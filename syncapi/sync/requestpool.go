@@ -448,6 +448,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 
 		if syncReq.Since.IsEmpty() {
 			// Complete sync
+			syncReq.ArrivedAtPDUPosition = currentPos.PDUPosition
 			// Wait for a just-joined partial-state room to reach the sync API before
 			// any snapshot is open, as the wait takes snapshots of its own.
 			if waiter, ok := rp.streams.DeviceListStreamProvider.(interface {
