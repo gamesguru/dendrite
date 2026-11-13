@@ -24,14 +24,15 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-// A /sync prev_batch issued before hs1 backfilled a federated room is a stream
-// token at position 0. It is anchored at the depth of hs1's join, which is also
-// the join's own depth because the history sits below it. The join is therefore
-// a backward extremity at the cursor's depth, not strictly below it, and a
-// backward /messages from that token must still treat it as reachable and
-// backfill the history below it. Otherwise every client reload that restores
-// the cached sync token sees an empty page and never reaches the history
-// (Complement TestFederationBackfilledHistoryReachableFromPrevBatch).
+// A /sync prev_batch issued before hs1 backfilled a federated room can be a
+// stream token at position 2 (for example, when PostgreSQL assigned positions
+// 1 and 2 to events in other rooms). It is anchored at the depth of hs1's join,
+// which is also the join's own depth because the history sits below it. The
+// join is therefore a backward extremity at the cursor's depth, not strictly
+// below it, and a backward /messages from that token must still treat it as
+// reachable and backfill the history below it. Otherwise clients see an empty
+// page and never reach the history (Complement
+// TestFederationBackfilledHistoryReachableFromPrevBatch).
 func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
@@ -52,6 +53,16 @@ func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) 
 			test.WithStateKey(bob.ID), test.WithDepth(35), test.WithPrevEvents(history[len(history)-1].EventID()))
 
 		ctx := context.Background()
+		// PostgreSQL may assign early global PDU positions to events in other
+		// rooms. Put two events there so the join is at position 3, matching the
+		// s2 prev_batch emitted by the Complement failure.
+		paddingUser := test.NewUser(t)
+		paddingRoom := test.NewRoom(t, paddingUser)
+		for i := 0; i < 2; i++ {
+			padding := paddingRoom.CreateEvent(t, paddingUser, "m.room.message", map[string]any{"body": "padding"})
+			_, err = db.WriteEvent(ctx, padding, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
 		_, err = db.WriteEvent(ctx, join, []*rstypes.HeaderedEvent{join}, []string{join.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 
@@ -60,11 +71,11 @@ func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) 
 		defer func() { _ = snapshot.Rollback() }()
 
 		// The prev_batch token anchored by StreamToTopologicalPosition.
-		from, err := snapshot.StreamToTopologicalPosition(ctx, room.ID, 0, true)
+		from, err := snapshot.StreamToTopologicalPosition(ctx, room.ID, 2, true)
 		require.NoError(t, err)
 		assert.Equal(t, types.StreamPosition(35), from.Depth,
-			"a stream token before the first event is anchored at the join's depth")
-		assert.Equal(t, types.StreamPosition(0), from.PDUPosition)
+			"a stream token immediately before the join is anchored at the join's depth")
+		assert.Equal(t, types.StreamPosition(2), from.PDUPosition)
 
 		// The join is the backward extremity; its missing parent is the history.
 		extremities, err := snapshot.BackwardExtremitiesForRoom(ctx, room.ID)
@@ -80,7 +91,7 @@ func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) 
 			cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
 			roomID:           room.ID,
 			from:             &from,
-			fromStream:       &types.StreamingToken{PDUPosition: 0},
+			fromStream:       &types.StreamingToken{PDUPosition: 2},
 			to:               &types.TopologyToken{},
 			device:           &userapi.Device{UserID: "@alice:test"},
 			backwardOrdering: true,
