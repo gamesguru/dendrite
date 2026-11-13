@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -94,6 +95,14 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil, nil
 		}
 		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil, nil
+	}
+	if parts := strings.SplitN(token, "|", 2); len(parts) == 2 {
+		topology, topoErr := types.NewTopologyTokenFromString(parts[0])
+		stream, streamErr := types.NewStreamTokenFromString(parts[1])
+		if topoErr != nil || streamErr != nil {
+			return types.TopologyToken{}, nil, errInvalidRelationsToken
+		}
+		return topology, &stream, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
 		return topology, nil, nil
@@ -243,9 +252,9 @@ func relationsPage(
 			// Tokens name the cursor after an event, so step back over the last one.
 			next.Decrement()
 		}
-		res.NextBatch = next.String()
+		res.NextBatch = relationsContinuation(next, fromStream)
 	} else if capped {
-		res.NextBatch = cursor.String()
+		res.NextBatch = relationsContinuation(cursor, fromStream)
 	}
 
 	ids := make([]string, 0, len(entries))
@@ -304,4 +313,12 @@ func relationsPage(
 	}
 	bundler := internal.NewRelationBundlerAt(snapshot, rsAPI, userID, ignores, watermark)
 	return res, bundler.Bundle(ctx, shown, res.Chunk, synctypes.FormatAll)
+}
+
+func relationsContinuation(cursor types.TopologyToken, stream *types.StreamingToken) string {
+	topology := cursor.String()
+	if stream == nil {
+		return topology
+	}
+	return topology + "|" + stream.String()
 }
