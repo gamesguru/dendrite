@@ -52,6 +52,8 @@ type messagesReq struct {
 	didBackfill       bool
 	backfillHadEvents bool
 	backfillEnd       *types.TopologyToken
+	// reloaded is set once the page has been read again after a backfill.
+	reloaded bool
 }
 
 type messagesResp struct {
@@ -548,6 +550,15 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		// beginning of the room. Check for backfill opportunities.
 		if events, err = r.handleEmptyEventsSlice(); err != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
+		}
+		if extremityFilteredEmpty && r.backfillHadEvents && !r.reloaded {
+			// The page was set aside because an extremity sat above older stored
+			// events. The backfill has filled that gap and cleared the marker, so
+			// read the page again from the same cursor. Returning only the
+			// backfilled events would move the cursor below the stored events
+			// that were set aside and skip them.
+			r.reloaded = true
+			return r.retrieveEvents(ctx, rsAPI)
 		}
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
