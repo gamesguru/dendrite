@@ -346,6 +346,18 @@ func TestReachableBackwardExtremities(t *testing.T) {
 		r.reachableBackwardExtremities(extremities),
 		"only gaps strictly before the full topology cursor can hold older events, and the nearest one is filled first")
 
+	// A cursor at stream position 0 is the prev_batch of a room joined over
+	// federation: it carries the depth of the first stored event, which is the
+	// extremity itself and sits at a later stream position. Its parents are older.
+	r.from = &types.TopologyToken{Depth: 2900, PDUPosition: 0}
+	assert.Equal(t, map[string][]string{"$at-cursor": {"$a"}, "$same-depth-newer": {"$same-depth-prev"}},
+		r.reachableBackwardExtremities(extremities),
+		"extremities at the anchored depth are reachable from a stream-position-0 cursor; deeper ones are not")
+
+	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 0}
+	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
+		"a stream-position-0 cursor at depth 2 still reaches no deeper gap")
+
 	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
 	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
 		"a depth-2 request reaches no known gap; an extremity with no readable position is kept")

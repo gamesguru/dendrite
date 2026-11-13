@@ -1095,7 +1095,7 @@ func (r *messagesReq) reachableBackwardExtremities(
 		reachable = make(map[string][]string, len(backwardExtremities))
 		for extremityID, prevs := range backwardExtremities {
 			pos, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
-			if err != nil || topologyTokenLess(pos, *r.from) {
+			if err != nil || r.extremityBeforeCursor(pos) {
 				reachable[extremityID] = prevs
 			}
 		}
@@ -1104,6 +1104,19 @@ func (r *messagesReq) reachableBackwardExtremities(
 		return reachable
 	}
 	return deepestExtremities(r.ctx, r.snapshot, reachable)
+}
+
+// extremityBeforeCursor reports whether an extremity's gap can hold events older
+// than the backward cursor. A cursor at stream position 0 sits before every
+// stored event and carries only the depth of the first one (the prev_batch of a
+// room joined over federation). That first event is itself the extremity, with
+// a stream position above 0, and its missing parents lie below the depth, so
+// the extremity counts when its depth does not exceed the cursor's.
+func (r *messagesReq) extremityBeforeCursor(pos types.TopologyToken) bool {
+	if r.from.PDUPosition == 0 {
+		return pos.Depth <= r.from.Depth
+	}
+	return topologyTokenLess(pos, *r.from)
 }
 
 // deepestExtremities keeps only the extremities at the greatest known depth.
