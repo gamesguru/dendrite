@@ -365,4 +365,12 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 
 	r = newReq(5, anchorSnapshot{err: errors.New("db down")})
 	require.Error(t, r.reanchorBackwardCursor(ctx))
+
+	// A cursor before every stream position stays before every stored event,
+	// even though the first stored event sits deeper (a federated join's
+	// history is backfilled below its join).
+	r = newReq(1, anchorSnapshot{anchor: types.TopologyToken{Depth: 35, PDUPosition: 1}})
+	r.from.PDUPosition = 0
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(1), r.from.Depth, "a cursor at stream position 0 is not re-anchored")
 }

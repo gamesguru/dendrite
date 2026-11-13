@@ -1021,8 +1021,11 @@ func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
 // A repair only ever raises a position, so the depth is only raised: a token
 // that does not follow that convention (a forward token used backwards, for
 // instance) resolves to some other event, and must not lower or sideline it.
+// A cursor at stream position 0 has no preceding event whose depth could be
+// stale: it deliberately sits before everything stored (the prev_batch of a
+// room joined over federation, or an arbitrary old token), so it is kept.
 func (r *messagesReq) reanchorBackwardCursor(ctx context.Context) error {
-	if !r.backwardOrdering || !r.fromTopologyToken || r.from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
+	if !r.backwardOrdering || !r.fromTopologyToken || r.from.PDUPosition == 0 || r.from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
 		return nil
 	}
 	resolver, ok := r.snapshot.(interface {
@@ -1092,7 +1095,7 @@ func (r *messagesReq) reachableBackwardExtremities(
 		reachable = make(map[string][]string, len(backwardExtremities))
 		for extremityID, prevs := range backwardExtremities {
 			pos, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
-			if err != nil || pos.Depth <= r.from.Depth {
+			if err != nil || topologyTokenLess(pos, *r.from) {
 				reachable[extremityID] = prevs
 			}
 		}
