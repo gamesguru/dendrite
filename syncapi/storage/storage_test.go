@@ -1482,9 +1482,9 @@ func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
 }
 
 // A stream token before the room's first event has no topological position to
-// bound backfilled history with. Backfilled events stored after such a token
-// must not be returned: they are not older than the position it refers to.
-func TestGetEventsBeforeStreamPositionBeforeFirstEventSkipsBackfilled(t *testing.T) {
+// bound backfilled history with (a federated join's prev_batch). All backfilled
+// history is older than it, so it must stay reachable.
+func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := MustCreateDatabase(t, dbType)
 		defer close()
@@ -1500,7 +1500,8 @@ func TestGetEventsBeforeStreamPositionBeforeFirstEventSkipsBackfilled(t *testing
 			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, 0, &types.TopologyToken{}, r.ID,
 				&synctypes.RoomEventFilter{Limit: 10}, true)
 			require.NoError(t, err)
-			assert.Empty(t, events, "a token before the first event bounds backfilled history to nothing")
+			require.Len(t, events, 1, "a token before every stored event (a federated join's prev_batch) must reach backfilled history")
+			assert.Equal(t, backfilled.EventID(), events[0].EventID())
 		})
 	})
 }

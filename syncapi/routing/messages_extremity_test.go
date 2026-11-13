@@ -73,3 +73,24 @@ func TestExtremityBranchEventsWithoutOlderPageEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, excluded)
 }
+
+func TestHasMissingPrevEvent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	stored := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "stored"})
+	missing := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "missing"})
+	req := messagesReq{snapshot: &eventMapSnapshot{events: map[string]*rstypes.HeaderedEvent{stored.EventID(): stored}}}
+	ctx := context.Background()
+
+	open, err := req.hasMissingPrevEvent(ctx, []string{stored.EventID()})
+	require.NoError(t, err)
+	assert.False(t, open, "a marker whose prev event is stored has no gap left")
+
+	open, err = req.hasMissingPrevEvent(ctx, []string{stored.EventID(), missing.EventID()})
+	require.NoError(t, err)
+	assert.True(t, open, "one absent prev event keeps the gap open")
+
+	open, err = req.hasMissingPrevEvent(ctx, nil)
+	require.NoError(t, err)
+	assert.True(t, open, "a marker with no recorded prev events is kept")
+}

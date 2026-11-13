@@ -347,19 +347,19 @@ func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 ) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
 	var eIDs []string
 	// Backfilled history is stored after the token was issued, but must not be
-	// newer than the position the token refers to. Depth 0 means no event sits
-	// at or below the token, so there is nothing to bound by.
-	var maxBackfillDepth types.StreamPosition
-	if !includeBackfilled {
-		maxBackfillDepth = types.StreamPosition(math.MaxInt64) // unused by the query
-	} else {
+	// newer than the position the token refers to. Depth 0 means no stored event
+	// sits at or below the token (a prev_batch from before any local event, such
+	// as a room joined over federation): all backfilled history is older than it,
+	// so it is not bounded.
+	maxBackfillDepth := types.StreamPosition(math.MaxInt64)
+	if includeBackfilled {
 		pos, perr := d.StreamToTopologicalPosition(ctx, roomID, maxStreamPos, true)
 		if perr != nil {
 			return nil, types.TopologyToken{}, types.TopologyToken{}, perr
 		}
-		// Depth 0 means no event sits at or below the token, so no backfilled
-		// history is older than it: the bound stays at zero.
-		maxBackfillDepth = pos.Depth
+		if pos.Depth > 0 {
+			maxBackfillDepth = pos.Depth
+		}
 	}
 	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(
 		ctx, d.txn, roomID, to.Depth, maxStreamPos, maxBackfillDepth, filter.Limit, includeBackfilled,

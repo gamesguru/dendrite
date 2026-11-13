@@ -370,6 +370,29 @@ func (r *messagesReq) extremityBranchEvents(
 	return ancestors, nil
 }
 
+// hasMissingPrevEvent reports whether any of the prev events a backward
+// extremity was recorded with is still absent from the database. Markers are
+// only removed when a backfill covers them, so one can outlive its gap.
+func (r *messagesReq) hasMissingPrevEvent(ctx context.Context, prevIDs []string) (bool, error) {
+	if len(prevIDs) == 0 {
+		return true, nil
+	}
+	stored, err := r.snapshot.Events(ctx, prevIDs)
+	if err != nil {
+		return false, fmt.Errorf("load prev events of a backwards extremity: %w", err)
+	}
+	have := make(map[string]struct{}, len(stored))
+	for _, ev := range stored {
+		have[ev.EventID()] = struct{}{}
+	}
+	for _, id := range prevIDs {
+		if _, ok := have[id]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func getMembershipForUser(ctx context.Context, roomID, userID string, rsAPI api.SyncRoomserverAPI) (resp api.QueryMembershipForUserResponse, err error) {
 	fullUserID, err := spec.NewUserID(userID, true)
 	if err != nil {
@@ -427,7 +450,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 				// stream positions are above it, but they belong to older history
 				// (no deeper than the token's own position in the topology).
 				if ev.StreamPosition <= r.fromStream.PDUPosition ||
-					(ev.ExcludeFromSync && (r.from == nil || ev.Depth() <= int64(r.from.Depth))) {
+					(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
 					filtered = append(filtered, ev)
 				}
 			} else if ev.StreamPosition > r.fromStream.PDUPosition {
@@ -444,7 +467,17 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	if r.backwardOrdering && len(streamEvents) > 0 {
 		if backwardExtremities, bErr := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID); bErr == nil && len(backwardExtremities) > 0 {
 			excluded := make(map[string]struct{})
-			for extremityID := range backwardExtremities {
+			for extremityID, missingPrevs := range backwardExtremities {
+				open, openErr := r.hasMissingPrevEvent(ctx, missingPrevs)
+				if openErr != nil {
+					return nil, *r.from, emptyToken, openErr
+				}
+				if !open {
+					// Every prev event this marker was waiting for is stored now
+					// (for instance fetched with /event), so no gap is left here.
+					// Holding back the events below it would skip them.
+					continue
+				}
 				tok, err := r.snapshot.EventPositionInTopology(ctx, extremityID)
 				if err != nil {
 					continue
@@ -654,11 +687,15 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 // older than the request. Backfilling from an extremity deeper than the
 // requested position fills a different part of the history and returns events
 // newer than the client asked from, which the client then places on the wrong
-// side of its timeline. An extremity whose position cannot be read is kept.
+// side of its timeline. A cursor at depth 0 sits before every stored event, so
+// every gap is older and none is dropped. An extremity whose position cannot be
+// read is kept.
 func (r *messagesReq) reachableBackwardExtremities(
 	backwardExtremities map[string][]string,
 ) map[string][]string {
-	if !r.backwardOrdering || r.from == nil {
+	// Depth 0 is a cursor before every stored event (for instance a prev_batch
+	// of a room joined over federation): all history is older than it.
+	if !r.backwardOrdering || r.from == nil || r.from.Depth == 0 {
 		return backwardExtremities
 	}
 	reachable := make(map[string][]string, len(backwardExtremities))
