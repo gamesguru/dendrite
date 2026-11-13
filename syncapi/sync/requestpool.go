@@ -326,6 +326,11 @@ var waitingSyncRequests = prometheus.NewGauge(
 // called in a dedicated goroutine for this request. This function will block the goroutine
 // until a response is ready, or it times out.
 func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.Device) util.JSONResponse {
+	// Sampled before parsing a saved filter or any other work can block, so a
+	// leave that lands while this request is held up is still reported by a
+	// complete sync.
+	arrivedAt := rp.Notifier.CurrentPosition().PDUPosition
+
 	// Extract values from request
 	syncReq, err := newSyncRequest(req, *device, rp.db)
 	if err != nil {
@@ -345,10 +350,6 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 		// only other streams added, once the response is complete.
 		defer syncReq.Response.MoveStateToStateAfter(syncReq.StateAfter)
 	}
-
-	// Sampled before anything below can block, so a leave that lands while this
-	// request is held up is still reported by a complete sync.
-	arrivedAt := rp.Notifier.CurrentPosition().PDUPosition
 
 	activeSyncRequests.Inc()
 	defer activeSyncRequests.Dec()
