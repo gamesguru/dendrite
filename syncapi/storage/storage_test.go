@@ -1511,6 +1511,43 @@ func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *test
 	})
 }
 
+// Backfilled history persisted after a token is only reachable when it is no
+// deeper than the token's own position: a deeper backfilled event is newer than
+// the token and must not appear on a page requested with it.
+func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		var later []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			later = append(later, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+
+		_ = MustWriteEvents(t, db, base)
+		tokenPos := MustWriteEvents(t, db, later[:1])[0]
+		// The deeper events arrive afterwards as backfill (excluded from sync).
+		for _, ev := range later[1:] {
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			for _, ev := range events {
+				assert.NotContains(t, []string{later[1].EventID(), later[2].EventID()}, ev.EventID(),
+					"a backfilled event deeper than the token must not be returned")
+			}
+			require.NotEmpty(t, events)
+			assert.Equal(t, later[0].EventID(), events[0].EventID())
+		})
+	})
+}
+
 // A stream token before every stored event refers to the first event persisted
 // after it, not to the start of the depth axis: depth can restart in a room, so
 // an unbounded cursor would begin at the deepest events.
