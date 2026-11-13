@@ -321,16 +321,18 @@ func (emptyExtremityDB) Events(context.Context, []string) ([]*rstypes.HeaderedEv
 // Extremities elsewhere in the room belong to different gaps.
 func TestReachableBackwardExtremities(t *testing.T) {
 	extremities := map[string][]string{
-		"$at-cursor": {"$a"},
-		"$older":     {"$b"},
-		"$newer":     {"$c"},
-		"$unknown":   {"$d"},
+		"$at-cursor":        {"$a"},
+		"$same-depth-newer": {"$same-depth-prev"},
+		"$older":            {"$b"},
+		"$newer":            {"$c"},
+		"$unknown":          {"$d"},
 	}
 	snapshot := &extremitySnapshot{
 		positions: map[string]types.TopologyToken{
-			"$at-cursor": {Depth: 2900},
-			"$older":     {Depth: 2800},
-			"$newer":     {Depth: 2901},
+			"$at-cursor":        {Depth: 2900},
+			"$same-depth-newer": {Depth: 2900, PDUPosition: 101},
+			"$older":            {Depth: 2800},
+			"$newer":            {Depth: 2901},
 		},
 	}
 	r := &messagesReq{
@@ -342,7 +344,7 @@ func TestReachableBackwardExtremities(t *testing.T) {
 
 	assert.Equal(t, map[string][]string{"$at-cursor": {"$a"}},
 		r.reachableBackwardExtremities(extremities),
-		"only gaps at or below the cursor can hold older events, and the nearest one is filled first")
+		"only gaps strictly before the full topology cursor can hold older events, and the nearest one is filled first")
 
 	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
 	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
