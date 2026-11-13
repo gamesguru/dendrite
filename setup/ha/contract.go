@@ -50,9 +50,10 @@ type Contract struct {
 // membership history. Level 21 backfills that history from retained room
 // events, including transitions that the compact current-membership table
 // had overwritten before the history table existed. Level 21 can therefore
-// upgrade directly from older levels. It can roll back to level 19, whose
-// builds retain membership transitions; rolling back below level 19 would
-// lose transitions written after the upgrade.
+// upgrade directly from older levels. Level 22 is the first release level
+// whose writers lift stored positions when a late parent arrives; an older
+// writer can place an event below its stored parents and split the topology,
+// so rollback stops at level 22.
 var release = Contract{
 	Protocol:    1,
 	Level:       releaseLevel,
@@ -75,17 +76,20 @@ var release = Contract{
 // level 18 stores sliding-sync list windows by connection position, level 19
 // retains membership transitions for position-bounded lookups, and level 20
 // indexes roomserver events by (room_nid, event_nid), level 21 recovers
-// membership history from retained output events, and level 22 indexes
-// backward extremities by (room_id, prev_event_id), and level 23 indexes
+// membership history from retained output events, level 22 indexes backward
+// extremities by (room_id, prev_event_id) and is the first release level whose
+// writers lift stored positions when late parents arrive, and level 23 indexes
 // syncapi topology by room and topological or stream position.
 const (
 	releaseLevel           = 23
 	membershipHistoryLevel = 19
+	topologyLiftLevel      = 22
 )
 
 // rollbackToLevel is the oldest level that may take over from state this build
-// writes: the first level that maintains membership history.
-const rollbackToLevel = membershipHistoryLevel
+// writes: the first level whose writers lift stored positions for late
+// parents. Older writers can reorder the histories stored by this build.
+const rollbackToLevel = topologyLiftLevel
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades
