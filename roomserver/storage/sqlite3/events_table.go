@@ -33,6 +33,7 @@ const eventsSchema = `
     sent_to_output BOOLEAN NOT NULL DEFAULT FALSE,
     state_snapshot_nid INTEGER NOT NULL DEFAULT 0,
     depth INTEGER NOT NULL,
+    local_depth INTEGER NOT NULL DEFAULT -1,
     event_id TEXT NOT NULL UNIQUE,
 	auth_event_nids TEXT NOT NULL DEFAULT '[]',
 	is_rejected BOOLEAN NOT NULL DEFAULT FALSE
@@ -119,6 +120,12 @@ const bulkSelectUnsentEventNIDSQL = "" +
 const selectMaxEventDepthSQL = "" +
 	"SELECT COALESCE(MAX(depth) + 1, 0) FROM roomserver_events WHERE event_nid IN ($1)"
 
+const selectLocalDepthsSQL = "" +
+	"SELECT event_nid, local_depth FROM roomserver_events WHERE event_nid IN ($1)"
+
+const updateLocalDepthSQL = "" +
+	"UPDATE roomserver_events SET local_depth = $1 WHERE event_nid = $2"
+
 const selectRoomNIDsForEventNIDsSQL = "" +
 	"SELECT event_nid, room_nid FROM roomserver_events WHERE event_nid IN ($1)"
 
@@ -152,6 +159,17 @@ type eventStatements struct {
 func CreateEventsTable(db *sql.DB) error {
 	_, err := db.Exec(eventsSchema)
 	if err != nil {
+		return err
+	}
+
+	// The local_depth migration is independent of the reference_sha one below,
+	// which returns early on fresh databases, so it runs first.
+	localDepthMigrator := sqlutil.NewMigrator(db)
+	localDepthMigrator.AddMigrations(sqlutil.Migration{
+		Version: "roomserver: add local_depth to events",
+		Up:      deltas.UpAddLocalDepth,
+	})
+	if err = localDepthMigrator.Up(context.Background()); err != nil {
 		return err
 	}
 
@@ -729,4 +747,48 @@ func (s *eventStatements) SelectRoomsWithEventTypeNID(
 	}
 
 	return roomNIDs, rows.Err()
+}
+
+func (s *eventStatements) SelectLocalDepths(
+	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
+) (map[types.EventNID]int64, error) {
+	result := make(map[types.EventNID]int64, len(eventNIDs))
+	if len(eventNIDs) == 0 {
+		return result, nil
+	}
+	params := make([]any, len(eventNIDs))
+	for i, v := range eventNIDs {
+		params[i] = int64(v)
+	}
+	sqlStr := strings.Replace(selectLocalDepthsSQL, "($1)", sqlutil.QueryVariadic(len(params)), 1)
+	sqlPrep, err := s.db.Prepare(sqlStr)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, sqlPrep, "SelectLocalDepths: sqlPrep.close() failed")
+	rows, err := sqlutil.TxStmt(txn, sqlPrep).QueryContext(ctx, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectLocalDepths: rows.close() failed")
+	for rows.Next() {
+		var nid, d int64
+		if err = rows.Scan(&nid, &d); err != nil {
+			return nil, err
+		}
+		result[types.EventNID(nid)] = d
+	}
+	return result, rows.Err()
+}
+
+func (s *eventStatements) UpdateLocalDepth(
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, localDepth int64,
+) error {
+	stmt, err := s.db.Prepare(updateLocalDepthSQL)
+	if err != nil {
+		return err
+	}
+	defer internal.CloseAndLogIfError(ctx, stmt, "UpdateLocalDepth: stmt.close() failed")
+	_, err = sqlutil.TxStmt(txn, stmt).ExecContext(ctx, localDepth, int64(eventNID))
+	return err
 }

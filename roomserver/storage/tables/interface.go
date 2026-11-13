@@ -69,6 +69,10 @@ type Events interface {
 	BulkSelectEventNID(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.EventMetadata, error)
 	BulkSelectUnsentEventNID(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.EventMetadata, error)
 	SelectMaxEventDepth(ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID) (int64, error)
+	// SelectLocalDepths returns the locally computed topological depth of each
+	// event (-1 when it has not been computed). Unknown NIDs are omitted.
+	SelectLocalDepths(ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID) (map[types.EventNID]int64, error)
+	UpdateLocalDepth(ctx context.Context, txn *sql.Tx, eventNID types.EventNID, localDepth int64) error
 	SelectRoomNIDsForEventNIDs(ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID) (roomNIDs map[types.EventNID]types.RoomNID, err error)
 	SelectEventRejected(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, eventID string) (rejected bool, err error)
 
@@ -127,6 +131,9 @@ type PreviousEvents interface {
 	// Check if the event reference exists
 	// Returns sql.ErrNoRows if the event reference doesn't exist.
 	SelectPreviousEventExists(ctx context.Context, txn *sql.Tx, eventID string) error
+	// SelectReferencingEventNIDs returns the NIDs of the stored events that name
+	// previousEventID in their prev_events.
+	SelectReferencingEventNIDs(ctx context.Context, txn *sql.Tx, previousEventID string) ([]types.EventNID, error)
 }
 
 type Invites interface {

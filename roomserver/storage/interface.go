@@ -81,6 +81,9 @@ type Database interface {
 	SnapshotNIDFromEventID(ctx context.Context, eventID string) (types.StateSnapshotNID, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	// Stores a matrix room event in the database. Returns the room NID, the state snapshot or an error.
+	// LocalDepths returns the locally computed topological depth of stored
+	// events keyed by event ID; unknown or not yet computed events are omitted.
+	LocalDepths(ctx context.Context, eventIDs []string) (map[string]int64, error)
 	StoreEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
 	// StoreOutlierEvent is StoreEvent for an outlier: it does not record the event as
 	// referencing its prev_events.
@@ -335,6 +338,9 @@ type EventDatabase interface {
 	MaybeRedactEvent(
 		ctx context.Context, roomInfo *types.RoomInfo, eventNID types.EventNID, event gomatrixserverlib.PDU, plResolver state.PowerLevelResolver, querier api.QuerySenderIDAPI,
 	) (gomatrixserverlib.PDU, gomatrixserverlib.PDU, error)
+	// LocalDepths returns the locally computed topological depth of stored
+	// events keyed by event ID; unknown or not yet computed events are omitted.
+	LocalDepths(ctx context.Context, eventIDs []string) (map[string]int64, error)
 	StoreEvent(ctx context.Context, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID, authEventNIDs []types.EventNID, isRejected bool) (types.EventNID, types.StateAtEvent, error)
 	// StoreOutlierEvent is StoreEvent for an outlier: it does not record the event as
 	// referencing its prev_events.

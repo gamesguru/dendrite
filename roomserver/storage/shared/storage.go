@@ -883,6 +883,12 @@ func (d *EventDatabase) storeEvent(
 			}
 		}
 
+		// Compute the local topological depth, and correct the events that were
+		// stored before this one and name it in their prev_events.
+		if err = d.updateLocalDepths(ctx, txn, event.Version(), event, eventNID); err != nil {
+			return fmt.Errorf("d.updateLocalDepths: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -2851,4 +2857,137 @@ func (d *Database) ErasedUsers(ctx context.Context, userIDs []string) (map[strin
 		return map[string]struct{}{}, nil
 	}
 	return d.ErasedUsersTable.SelectErasedUsers(ctx, nil, userIDs)
+}
+
+// maxLocalDepthUpdates bounds how many descendants one stored event may force
+// the depth of to be corrected, so a pathological room cannot stall a write.
+const maxLocalDepthUpdates = 10000
+
+// localDepthFor computes 1 + max(local_depth of the stored prev events), 0 for
+// an event with no prev events. If prev events are named but none is stored
+// yet the depth is provisional (1) and is corrected when they arrive.
+func (d *EventDatabase) localDepthFor(
+	ctx context.Context, txn *sql.Tx, prevEventIDs []string,
+) (int64, error) {
+	if len(prevEventIDs) == 0 {
+		return 0, nil
+	}
+	metas, err := d.EventsTable.BulkSelectEventNID(ctx, txn, prevEventIDs)
+	if err != nil {
+		return 0, fmt.Errorf("d.EventsTable.BulkSelectEventNID: %w", err)
+	}
+	nids := make([]types.EventNID, 0, len(metas))
+	for _, meta := range metas {
+		nids = append(nids, meta.EventNID)
+	}
+	depths, err := d.EventsTable.SelectLocalDepths(ctx, txn, nids)
+	if err != nil {
+		return 0, fmt.Errorf("d.EventsTable.SelectLocalDepths: %w", err)
+	}
+	max := int64(0)
+	for _, depth := range depths {
+		if depth > max {
+			max = depth
+		}
+	}
+	return max + 1, nil
+}
+
+// updateLocalDepths sets the local depth of a newly stored event and then
+// propagates any change to the already stored events that descend from it.
+// Parents are always settled before their children, because a child is only
+// revisited once one of its parents changed.
+func (d *EventDatabase) updateLocalDepths(
+	ctx context.Context, txn *sql.Tx, roomVersion gomatrixserverlib.RoomVersion,
+	event gomatrixserverlib.PDU, eventNID types.EventNID,
+) error {
+	depth, err := d.localDepthFor(ctx, txn, event.PrevEventIDs())
+	if err != nil {
+		return err
+	}
+	current, err := d.EventsTable.SelectLocalDepths(ctx, txn, []types.EventNID{eventNID})
+	if err != nil {
+		return err
+	}
+	if cur, ok := current[eventNID]; ok && cur == depth {
+		return nil
+	}
+	if err = d.EventsTable.UpdateLocalDepth(ctx, txn, eventNID, depth); err != nil {
+		return err
+	}
+
+	queue := []struct {
+		nid     types.EventNID
+		eventID string
+	}{{eventNID, event.EventID()}}
+	updates := 0
+	for len(queue) > 0 && updates < maxLocalDepthUpdates {
+		head := queue[0]
+		queue = queue[1:]
+		childNIDs, err := d.PrevEventsTable.SelectReferencingEventNIDs(ctx, txn, head.eventID)
+		if err != nil {
+			return fmt.Errorf("d.PrevEventsTable.SelectReferencingEventNIDs: %w", err)
+		}
+		if len(childNIDs) == 0 {
+			continue
+		}
+		children, err := d.events(ctx, txn, roomVersion, childNIDs)
+		if err != nil {
+			// A referencing event we cannot load cannot be corrected; it keeps
+			// the provisional depth rather than failing the write.
+			continue
+		}
+		for _, child := range children {
+			if child.EventNID == eventNID {
+				continue
+			}
+			childDepth, err := d.localDepthFor(ctx, txn, child.PrevEventIDs())
+			if err != nil {
+				return err
+			}
+			stored, err := d.EventsTable.SelectLocalDepths(ctx, txn, []types.EventNID{child.EventNID})
+			if err != nil {
+				return err
+			}
+			if cur, ok := stored[child.EventNID]; ok && cur == childDepth {
+				continue
+			}
+			if err = d.EventsTable.UpdateLocalDepth(ctx, txn, child.EventNID, childDepth); err != nil {
+				return err
+			}
+			updates++
+			queue = append(queue, struct {
+				nid     types.EventNID
+				eventID string
+			}{child.EventNID, child.EventID()})
+		}
+	}
+	return nil
+}
+
+// LocalDepths returns the locally computed topological depth of each stored
+// event, keyed by event ID. Events that are unknown, or whose depth has not
+// been computed yet, are omitted.
+func (d *EventDatabase) LocalDepths(ctx context.Context, eventIDs []string) (map[string]int64, error) {
+	metas, err := d.EventsTable.BulkSelectEventNID(ctx, nil, eventIDs)
+	if err != nil {
+		return nil, fmt.Errorf("d.EventsTable.BulkSelectEventNID: %w", err)
+	}
+	nids := make([]types.EventNID, 0, len(metas))
+	byNID := make(map[types.EventNID]string, len(metas))
+	for eventID, meta := range metas {
+		nids = append(nids, meta.EventNID)
+		byNID[meta.EventNID] = eventID
+	}
+	depths, err := d.EventsTable.SelectLocalDepths(ctx, nil, nids)
+	if err != nil {
+		return nil, fmt.Errorf("d.EventsTable.SelectLocalDepths: %w", err)
+	}
+	result := make(map[string]int64, len(depths))
+	for nid, depth := range depths {
+		if depth >= 0 {
+			result[byNID[nid]] = depth
+		}
+	}
+	return result, nil
 }

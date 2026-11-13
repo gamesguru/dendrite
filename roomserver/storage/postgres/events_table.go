@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS roomserver_events (
     state_snapshot_nid BIGINT NOT NULL DEFAULT 0,
     -- Depth of the event in the event graph.
     depth BIGINT NOT NULL,
+    -- Depth computed locally as 1 + max(local_depth of the stored prev_events),
+    -- 0 for an event with no prev_events. Unlike depth, which is whatever the
+    -- sending server claimed, this is a true topological clock. -1 means it has
+    -- not been computed yet.
+    local_depth BIGINT NOT NULL DEFAULT -1,
     -- The textual event id.
     -- Used to lookup the numeric ID when processing requests.
     -- Needed for state resolution.
@@ -145,6 +150,12 @@ const bulkSelectUnsentEventNIDSQL = "" +
 const selectMaxEventDepthSQL = "" +
 	"SELECT COALESCE(MAX(depth) + 1, 0) FROM roomserver_events WHERE event_nid = ANY($1)"
 
+const selectLocalDepthsSQL = "" +
+	"SELECT event_nid, local_depth FROM roomserver_events WHERE event_nid = ANY($1)"
+
+const updateLocalDepthSQL = "" +
+	"UPDATE roomserver_events SET local_depth = $1 WHERE event_nid = $2"
+
 const selectRoomNIDsForEventNIDsSQL = "" +
 	"SELECT event_nid, room_nid FROM roomserver_events WHERE event_nid = ANY($1)"
 
@@ -171,6 +182,8 @@ type eventStatements struct {
 	bulkSelectEventNIDStmt                        *sql.Stmt
 	bulkSelectUnsentEventNIDStmt                  *sql.Stmt
 	selectMaxEventDepthStmt                       *sql.Stmt
+	selectLocalDepthsStmt                         *sql.Stmt
+	updateLocalDepthStmt                          *sql.Stmt
 	selectRoomNIDsForEventNIDsStmt                *sql.Stmt
 	selectEventRejectedStmt                       *sql.Stmt
 	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
@@ -186,6 +199,10 @@ func CreateEventsTable(ctx context.Context, db *sql.DB) error {
 		{
 			Version: "roomserver: drop column reference_sha from roomserver_events",
 			Up:      deltas.UpDropEventReferenceSHAEvents,
+		},
+		{
+			Version: "roomserver: add local_depth to events",
+			Up:      deltas.UpAddLocalDepth,
 		},
 	}...)
 	return m.Up(ctx)
@@ -297,6 +314,8 @@ func PrepareEventsTable(db *sql.DB) (tables.Events, error) {
 		{&s.bulkSelectEventNIDStmt, bulkSelectEventNIDSQL},
 		{&s.bulkSelectUnsentEventNIDStmt, bulkSelectUnsentEventNIDSQL},
 		{&s.selectMaxEventDepthStmt, selectMaxEventDepthSQL},
+		{&s.selectLocalDepthsStmt, selectLocalDepthsSQL},
+		{&s.updateLocalDepthStmt, updateLocalDepthSQL},
 		{&s.selectRoomNIDsForEventNIDsStmt, selectRoomNIDsForEventNIDsSQL},
 		{&s.selectEventRejectedStmt, selectEventRejectedSQL},
 		{&s.selectRoomsWithEventTypeNIDStmt, selectRoomsWithEventTypeNIDSQL},
@@ -706,4 +725,30 @@ func (s *eventStatements) SelectRoomsWithEventTypeNID(
 	}
 
 	return roomNIDs, rows.Err()
+}
+
+func (s *eventStatements) SelectLocalDepths(
+	ctx context.Context, txn *sql.Tx, eventNIDs []types.EventNID,
+) (map[types.EventNID]int64, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectLocalDepthsStmt).QueryContext(ctx, eventNIDsAsArray(eventNIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectLocalDepths: rows.close() failed")
+	result := make(map[types.EventNID]int64, len(eventNIDs))
+	for rows.Next() {
+		var nid, d int64
+		if err = rows.Scan(&nid, &d); err != nil {
+			return nil, err
+		}
+		result[types.EventNID(nid)] = d
+	}
+	return result, rows.Err()
+}
+
+func (s *eventStatements) UpdateLocalDepth(
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, localDepth int64,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.updateLocalDepthStmt).ExecContext(ctx, localDepth, int64(eventNID))
+	return err
 }

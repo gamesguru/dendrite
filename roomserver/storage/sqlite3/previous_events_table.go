@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -111,7 +112,7 @@ func (s *previousEventStatements) InsertPreviousEvent(
 ) error {
 	var eventNIDs string
 	eventNIDAsString := fmt.Sprintf("%d", eventNID)
-	selectStmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
+	selectStmt := sqlutil.TxStmt(txn, s.selectPreviousEventNIDsStmt)
 	err := selectStmt.QueryRowContext(ctx, previousEventID).Scan(&eventNIDs)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("selectStmt.QueryRowContext.Scan: %w", err)
@@ -143,4 +144,26 @@ func (s *previousEventStatements) SelectPreviousEventExists(
 	var ok int64
 	stmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
 	return stmt.QueryRowContext(ctx, eventID).Scan(&ok)
+}
+
+func (s *previousEventStatements) SelectReferencingEventNIDs(
+	ctx context.Context, txn *sql.Tx, previousEventID string,
+) ([]types.EventNID, error) {
+	var eventNIDs string
+	err := sqlutil.TxStmt(txn, s.selectPreviousEventNIDsStmt).QueryRowContext(ctx, previousEventID).Scan(&eventNIDs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result []types.EventNID
+	for _, part := range strings.Split(eventNIDs, ",") {
+		n, convErr := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if convErr != nil {
+			continue
+		}
+		result = append(result, types.EventNID(n))
+	}
+	return result, nil
 }

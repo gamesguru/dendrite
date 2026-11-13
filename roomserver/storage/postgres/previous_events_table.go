@@ -10,6 +10,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres/deltas"
@@ -50,9 +51,13 @@ const selectPreviousEventExistsSQL = "" +
 	"SELECT 1 FROM roomserver_previous_events" +
 	" WHERE previous_event_id = $1"
 
+const selectReferencingEventNIDsSQL = "" +
+	"SELECT event_nids FROM roomserver_previous_events WHERE previous_event_id = $1"
+
 type previousEventStatements struct {
-	insertPreviousEventStmt       *sql.Stmt
-	selectPreviousEventExistsStmt *sql.Stmt
+	selectReferencingEventNIDsStmt *sql.Stmt
+	insertPreviousEventStmt        *sql.Stmt
+	selectPreviousEventExistsStmt  *sql.Stmt
 }
 
 func CreatePrevEventsTable(ctx context.Context, db *sql.DB) error {
@@ -75,6 +80,7 @@ func PreparePrevEventsTable(db *sql.DB) (tables.PreviousEvents, error) {
 	s := &previousEventStatements{}
 
 	return s, sqlutil.StatementList{
+		{&s.selectReferencingEventNIDsStmt, selectReferencingEventNIDsSQL},
 		{&s.insertPreviousEventStmt, insertPreviousEventSQL},
 		{&s.selectPreviousEventExistsStmt, selectPreviousEventExistsSQL},
 	}.Prepare(db)
@@ -101,4 +107,22 @@ func (s *previousEventStatements) SelectPreviousEventExists(
 	var ok int64
 	stmt := sqlutil.TxStmt(txn, s.selectPreviousEventExistsStmt)
 	return stmt.QueryRowContext(ctx, eventID).Scan(&ok)
+}
+
+func (s *previousEventStatements) SelectReferencingEventNIDs(
+	ctx context.Context, txn *sql.Tx, previousEventID string,
+) ([]types.EventNID, error) {
+	var nids sqlutil.Int64Array
+	err := sqlutil.TxStmt(txn, s.selectReferencingEventNIDsStmt).QueryRowContext(ctx, previousEventID).Scan(&nids)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := make([]types.EventNID, len(nids))
+	for i, n := range nids {
+		result[i] = types.EventNID(n)
+	}
+	return result, nil
 }
