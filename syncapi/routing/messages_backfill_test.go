@@ -37,6 +37,21 @@ func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackf
 	return nil
 }
 
+type sequencedBackfillAPI struct {
+	api.SyncRoomserverAPI
+	batches [][]*rstypes.HeaderedEvent
+	calls   int
+}
+
+func (f *sequencedBackfillAPI) PerformBackfill(_ context.Context, _ *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
+	if f.calls < len(f.batches) {
+		res.Events = f.batches[f.calls]
+	}
+	f.calls++
+	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared
+	return nil
+}
+
 func TestIsTerminalBackfillFailure(t *testing.T) {
 	terminal := &api.BackfillUnavailableError{Retryable: false, Err: errors.New("not found")}
 	transient := &api.BackfillUnavailableError{Retryable: true, Err: errors.New("timeout")}
@@ -90,6 +105,80 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, extremities, newer.EventID(), "filled extremity must be cleared")
 		assert.Contains(t, extremities, older.EventID(), "the new boundary extremity must remain")
+	})
+}
+
+func TestBackwardBackfillContinuesUntilGapClosesOrRoundLimit(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			name       string
+			batchCount int
+			wantOpen   bool
+		}{
+			{name: "closes in second round", batchCount: 2},
+			{name: "remains open at round limit", batchCount: maxBackwardBackfillRounds + 1, wantOpen: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				alice := test.NewUser(t)
+				room := test.NewRoom(t, alice)
+				anchor := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "stored anchor"})
+				chain := make([]*rstypes.HeaderedEvent, tc.batchCount)
+				for i := range chain {
+					prevEvents := []string(nil)
+					if i > 0 {
+						prevEvents = []string{chain[i-1].EventID()}
+					}
+					chain[i] = room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("chain %d", i)}, test.WithPrevEvents(prevEvents...))
+				}
+				child := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "stored child"}, test.WithPrevEvents(chain[len(chain)-1].EventID()))
+
+				ctx := context.Background()
+				_, err = db.WriteEvent(ctx, anchor, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, err)
+				_, err = db.WriteEvent(ctx, child, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, err)
+				snapshot, err := db.NewDatabaseTransaction(ctx)
+				require.NoError(t, err)
+				defer func() { _ = snapshot.Rollback() }()
+				extremities, err := snapshot.BackwardExtremitiesForRoom(ctx, room.ID)
+				require.NoError(t, err)
+				require.Contains(t, extremities, child.EventID())
+
+				batches := make([][]*rstypes.HeaderedEvent, 0, len(chain))
+				for i := len(chain) - 1; i >= 0; i-- {
+					batches = append(batches, []*rstypes.HeaderedEvent{chain[i]})
+				}
+				federation := &sequencedBackfillAPI{batches: batches}
+				req := &messagesReq{
+					ctx:              ctx,
+					db:               db,
+					snapshot:         snapshot,
+					rsAPI:            federation,
+					cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
+					roomID:           room.ID,
+					device:           &userapi.Device{UserID: "@alice:test"},
+					backwardOrdering: true,
+					from:             &types.TopologyToken{Depth: 0},
+				}
+				fetched, incomplete, err := req.backfillBackwardUntilComplete(extremities, nil, 10)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantOpen, incomplete)
+				if tc.wantOpen {
+					assert.Equal(t, maxBackwardBackfillRounds, federation.calls)
+					assert.Len(t, fetched, maxBackwardBackfillRounds)
+				} else {
+					assert.Equal(t, 2, federation.calls)
+					assert.Len(t, fetched, 2)
+				}
+			})
+		}
 	})
 }
 

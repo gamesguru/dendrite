@@ -49,6 +49,12 @@ const maxBackfillReloads = 4
 // same cursor and the next request continues from the events already stored.
 const maxForwardBackfillRounds = 10
 
+// maxBackwardBackfillRounds bounds how many federation batches one backward
+// /messages request fetches while closing a gap. A bounded batch can expose a
+// new missing parent, so continue within the same request before returning a
+// page whose cursor could pass that gap.
+const maxBackwardBackfillRounds = 3
+
 // forwardBackfillBatch is the number of events requested per federation
 // backfill while closing a forward gap. It is independent of the page limit,
 // which can be as low as 10 and would need hundreds of round trips. It mirrors
@@ -68,10 +74,15 @@ const minBranchesForSelection = 2
 // far are stored, so retrying the same cursor makes progress.
 var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
 
-// errBackwardBackfillIncomplete is returned when a returned gap batch still
-// has missing parents. The caller retries the same cursor after the batch has
-// been stored, so the newly exposed extremity can be fetched next.
+// errBackwardBackfillIncomplete is returned when a backward gap remains open
+// after maxBackwardBackfillRounds. The caller retries the same cursor after
+// the fetched batches have been stored.
 var errBackwardBackfillIncomplete = errors.New("backward backfill batch left an open history gap")
+
+// errBackwardBackfillFetch marks federation fetch failures, which remain
+// best-effort for non-empty pages. Storage and gap-check failures must
+// propagate instead of being mistaken for a failed remote fetch.
+var errBackwardBackfillFetch = errors.New("backward federation backfill failed")
 
 // errBackfillRecentlyFailed marks a backfill that was not attempted because the
 // same request definitively failed within terminalBackfillTTL.
@@ -1309,7 +1320,8 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 	// Check if we have backward extremities for this room.
 	if len(backwardExtremities) > 0 {
 		// If so, retrieve as much events as needed through backfilling.
-		events, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit)
+		var incomplete bool
+		events, incomplete, err = r.backfillBackwardUntilComplete(backwardExtremities, nil, r.filter.Limit)
 		if err != nil {
 			if r.ctx.Err() != nil {
 				return
@@ -1325,6 +1337,9 @@ func (r *messagesReq) handleEmptyEventsSlice() (
 			// client would stop paginating and never retry the extremity.
 			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed; returning an error so the client can retry")
 			return nil, err
+		}
+		if incomplete {
+			return nil, errBackwardBackfillIncomplete
 		}
 		r.didBackfill = true
 		r.backfillHadEvents = len(events) > 0
@@ -1398,16 +1413,17 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 			if _, ok := backwardExtremities[streamEvents[i].EventID()]; !ok {
 				continue
 			}
-			pdus, bfErr := r.backfill(r.roomID, backwardExtremities, r.filter.Limit)
+			pdus, incomplete, bfErr := r.backfillBackwardUntilComplete(backwardExtremities, streamEvents, r.filter.Limit)
 			if bfErr != nil {
 				if r.ctx.Err() != nil {
 					return nil, bfErr
 				}
+				if !errors.Is(bfErr, errBackwardBackfillFetch) {
+					return nil, bfErr
+				}
 				util.GetLogger(r.ctx).WithError(bfErr).Warn("Backfill at backward extremity failed")
 			} else {
-				if incomplete, checkErr := r.backfillBatchHasMissingParents(streamEvents, pdus); checkErr != nil {
-					return nil, checkErr
-				} else if incomplete {
+				if incomplete {
 					return nil, errBackwardBackfillIncomplete
 				}
 				// Backfilled events come from federation and are not pre-filtered
@@ -1456,22 +1472,23 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	if len(backwardExtremities) > 0 && !isSetLargeEnough && r.backwardOrdering {
 		var pdus []*rstypes.HeaderedEvent
 		// Only ask the remote server for enough events to reach the limit.
-		pdus, err = r.backfill(r.roomID, backwardExtremities, r.filter.Limit-len(streamEvents))
+		var incomplete bool
+		pdus, incomplete, err = r.backfillBackwardUntilComplete(backwardExtremities, streamEvents, r.filter.Limit-len(streamEvents))
 		switch {
 		case err != nil && r.ctx.Err() != nil:
 			return
 		case err != nil:
+			if !errors.Is(err, errBackwardBackfillFetch) {
+				return nil, err
+			}
 			// Backfill is best effort: fall back to the events we have locally.
 			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
 			err = nil
+		case incomplete:
+			return nil, errBackwardBackfillIncomplete
 		default:
 			r.didBackfill = true
 			if len(pdus) > 0 {
-				if incomplete, checkErr := r.backfillBatchHasMissingParents(streamEvents, pdus); checkErr != nil {
-					return nil, checkErr
-				} else if incomplete {
-					return nil, errBackwardBackfillIncomplete
-				}
 				if err = r.sortByTopology(pdus); err != nil {
 					return nil, err
 				}
@@ -1527,10 +1544,52 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	return
 }
 
-// backfillBatchHasMissingParents detects whether the oldest returned history
-// still ends at an unresolved parent. Returning a lower local page would move
-// the cursor below that gap. The batch has already been stored, so retrying
-// unchanged lets the next request continue from its newly exposed extremity.
+// backfillBackwardUntilComplete follows newly exposed backward extremities
+// within one request, so a bounded federation batch does not leave the cursor
+// below an unresolved gap. It returns incomplete when the round limit is
+// reached, or a later batch cannot be fetched after an earlier one exposed a
+// missing parent.
+func (r *messagesReq) backfillBackwardUntilComplete(
+	backwardExtremities map[string][]string, page []types.StreamEvent, limit int,
+) (events []*rstypes.HeaderedEvent, incomplete bool, err error) {
+	for round := 0; round < maxBackwardBackfillRounds; round++ {
+		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
+		if backfillErr != nil {
+			if incomplete {
+				// Events fetched in an earlier round are already stored, but the
+				// gap remains open. Keep the cursor in place for a retry.
+				return events, true, nil
+			}
+			return events, false, fmt.Errorf("%w: %w", errBackwardBackfillFetch, backfillErr)
+		}
+		if len(batch) == 0 {
+			return events, incomplete, nil
+		}
+		events = append(events, batch...)
+		incomplete, err = r.backfillBatchHasMissingParents(page, events)
+		if err != nil || !incomplete {
+			return events, false, err
+		}
+		if round == maxBackwardBackfillRounds-1 {
+			return events, true, nil
+		}
+		backwardExtremities, err = r.snapshot.BackwardExtremitiesForRoom(r.ctx, r.roomID)
+		if err != nil {
+			return nil, false, err
+		}
+		backwardExtremities = r.reachableBackwardExtremities(backwardExtremities)
+		if len(backwardExtremities) == 0 {
+			// The missing parent is not represented by a reachable marker. We
+			// cannot safely move the page cursor past it.
+			return events, true, nil
+		}
+	}
+	return events, incomplete, nil
+}
+
+// backfillBatchHasMissingParents detects whether the fetched history still
+// ends at an unresolved parent. Returning a lower local page would move the
+// cursor below that gap.
 func (r *messagesReq) backfillBatchHasMissingParents(
 	page []types.StreamEvent, backfilled []*rstypes.HeaderedEvent,
 ) (bool, error) {
