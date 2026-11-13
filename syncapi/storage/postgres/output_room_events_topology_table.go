@@ -8,6 +8,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -94,6 +95,14 @@ const selectMaxTopologyPositionSQL = "" +
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
+const updateEventPositionSQL = "" +
+	"UPDATE syncapi_output_room_events_topology SET topological_position = $1 WHERE event_id = $2 AND topological_position < $1"
+
+const selectRoomEventTopologySQL = "" +
+	"SELECT e.headered_event_json, t.topological_position FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 ORDER BY t.stream_position, t.event_id"
+
 type outputRoomEventsTopologyStatements struct {
 	insertEventInTopologyStmt                     *sql.Stmt
 	selectEventIDsInRangeASCStmt                  *sql.Stmt
@@ -106,6 +115,8 @@ type outputRoomEventsTopologyStatements struct {
 	purgeEventsTopologyStmt                       *sql.Stmt
 	deleteEventFromTopologyStmt                   *sql.Stmt
 	selectMaxTopologyPositionStmt                 *sql.Stmt
+	updateEventPositionStmt                       *sql.Stmt
+	selectRoomEventTopologyStmt                   *sql.Stmt
 }
 
 func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
@@ -126,7 +137,41 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.purgeEventsTopologyStmt, purgeEventsTopologySQL},
 		{&s.deleteEventFromTopologyStmt, deleteEventFromTopologySQL},
 		{&s.selectMaxTopologyPositionStmt, selectMaxTopologyPositionSQL},
+		{&s.updateEventPositionStmt, updateEventPositionSQL},
+		{&s.selectRoomEventTopologyStmt, selectRoomEventTopologySQL},
 	}.Prepare(db)
+}
+
+func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(
+	ctx context.Context, txn *sql.Tx, eventID string, topoPos types.StreamPosition,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.updateEventPositionStmt).ExecContext(ctx, topoPos, eventID)
+	return err
+}
+
+func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
+	ctx context.Context, txn *sql.Tx, roomID string,
+) ([]tables.StoredEventTopology, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventTopologyStmt).QueryContext(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "selectRoomEventTopology: rows.close() failed")
+
+	var events []tables.StoredEventTopology
+	for rows.Next() {
+		var eventJSON string
+		var position types.StreamPosition
+		if err = rows.Scan(&eventJSON, &position); err != nil {
+			return nil, err
+		}
+		var event rstypes.HeaderedEvent
+		if err = json.Unmarshal([]byte(eventJSON), &event); err != nil {
+			return nil, err
+		}
+		events = append(events, tables.StoredEventTopology{Event: &event, Position: position})
+	}
+	return events, rows.Err()
 }
 
 // InsertEventInTopology inserts the given event in the room's topology, based

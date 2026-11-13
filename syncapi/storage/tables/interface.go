@@ -94,6 +94,12 @@ type Topology interface {
 	// InsertEventInTopology inserts the given event in the room's topology, based on the event's depth.
 	// `pos` is the stream position of this event in the events table, and is used to order events which have the same depth.
 	InsertEventInTopology(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition) (topoPos types.StreamPosition, err error)
+	// UpdateEventPosition raises an existing event's topology position when a
+	// previously missing parent arrives after it.
+	UpdateEventPosition(ctx context.Context, txn *sql.Tx, eventID string, topoPos types.StreamPosition) error
+	// SelectRoomEventTopology returns the stored DAG and current topology positions
+	// for the room. It is used only when a late parent requires descendant repair.
+	SelectRoomEventTopology(ctx context.Context, txn *sql.Tx, roomID string) ([]StoredEventTopology, error)
 	// SelectEventIDsInRange selects the IDs and the topological position of events whose depths are within a given range in a given room's topological order.
 	// Events with `minDepth` are *exclusive*, as is the event which has exactly `minDepth`,`maxStreamPos`. Returns the eventIDs and start/end topological tokens.
 	// `maxStreamPos` is only used when events have the same depth as `maxDepth`, which results in events less than `maxStreamPos` being returned.
@@ -181,7 +187,17 @@ type BackwardsExtremities interface {
 	SelectBackwardExtremitiesForRoom(ctx context.Context, txn *sql.Tx, roomID string) (bwExtrems map[string][]string, err error)
 	// DeleteBackwardExtremity removes a backwards extremity for a room, if one existed.
 	DeleteBackwardExtremity(ctx context.Context, txn *sql.Tx, roomID, knownEventID string) (err error)
+	// SelectEventsReferencingPrevEvent returns stored children that were waiting
+	// for the given missing parent.
+	SelectEventsReferencingPrevEvent(ctx context.Context, txn *sql.Tx, roomID, prevEventID string) ([]string, error)
 	PurgeBackwardExtremities(ctx context.Context, txn *sql.Tx, roomID string) error
+}
+
+// StoredEventTopology contains the event edges and current local ordering for
+// a room event.
+type StoredEventTopology struct {
+	Event    *rstypes.HeaderedEvent
+	Position types.StreamPosition
 }
 
 // SendToDevice tracks send-to-device messages which are sent to individual

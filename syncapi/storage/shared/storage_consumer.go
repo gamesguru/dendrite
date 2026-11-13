@@ -21,6 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -275,6 +276,122 @@ func (d *Database) handleBackwardExtremities(ctx context.Context, txn *sql.Tx, e
 	return nil
 }
 
+// repairLateParentTopology raises the stored descendants of ev when ev arrived
+// after them. InsertEventInTopology already lifted ev above its own stored
+// parents, which can put ev above children that were placed before that lift.
+// The backward-extremity table identifies those children cheaply; the full DAG
+// is only read when they exist.
+func (d *Database) repairLateParentTopology(
+	ctx context.Context, txn *sql.Tx, ev *rstypes.HeaderedEvent,
+) error {
+	roomID := ev.RoomID().String()
+	children, err := d.BackwardExtremities.SelectEventsReferencingPrevEvent(ctx, txn, roomID, ev.EventID())
+	if err != nil {
+		return err
+	}
+	if len(children) == 0 {
+		return nil
+	}
+
+	stored, err := d.Topology.SelectRoomEventTopology(ctx, txn, roomID)
+	if err != nil {
+		return err
+	}
+	positions := make(map[string]types.StreamPosition, len(stored))
+	events := make(map[string]*rstypes.HeaderedEvent, len(stored))
+	childEdges := make(map[string][]string, len(stored))
+	for _, entry := range stored {
+		eventID := entry.Event.EventID()
+		positions[eventID] = entry.Position
+		events[eventID] = entry.Event
+		for _, prevEventID := range entry.Event.PrevEventIDs() {
+			childEdges[prevEventID] = append(childEdges[prevEventID], eventID)
+		}
+	}
+
+	// Find the complete descendant set. The marker only identifies direct
+	// children; their descendants have no missing-edge marker of their own.
+	affected := make(map[string]struct{})
+	queue := append([]string(nil), children...)
+	for len(queue) > 0 {
+		eventID := queue[0]
+		queue = queue[1:]
+		if _, seen := affected[eventID]; seen {
+			continue
+		}
+		if _, exists := events[eventID]; !exists {
+			continue
+		}
+		if eventID == ev.EventID() {
+			return fmt.Errorf("late-parent topology contains a cycle through %s", eventID)
+		}
+		affected[eventID] = struct{}{}
+		queue = append(queue, childEdges[eventID]...)
+	}
+
+	// Process descendants in parent-first order. A child may already have a
+	// higher position than the late parent while one of its own descendants is
+	// lower, so every reachable node must be visited even when it doesn't move.
+	indegree := make(map[string]int, len(affected))
+	for eventID := range affected {
+		for _, prevEventID := range events[eventID].PrevEventIDs() {
+			if _, isAffected := affected[prevEventID]; isAffected {
+				indegree[eventID]++
+			}
+		}
+	}
+	ready := make([]string, 0, len(affected))
+	for eventID := range affected {
+		if indegree[eventID] == 0 {
+			ready = append(ready, eventID)
+		}
+	}
+	processed := 0
+	for len(ready) > 0 {
+		eventID := ready[0]
+		ready = ready[1:]
+		processed++
+		event := events[eventID]
+		currentPosition := positions[eventID]
+		nextPosition := currentPosition
+		if wireDepth := types.StreamPosition(depth.Clamp(event.Depth())); wireDepth > nextPosition {
+			nextPosition = wireDepth
+		}
+		for _, prevEventID := range event.PrevEventIDs() {
+			parentPosition, exists := positions[prevEventID]
+			if !exists {
+				continue
+			}
+			if parentPosition == types.StreamPosition(1<<63-1) {
+				return fmt.Errorf("topological position overflow after parent %s", prevEventID)
+			}
+			if afterParent := parentPosition + 1; afterParent > nextPosition {
+				nextPosition = afterParent
+			}
+		}
+		if nextPosition > currentPosition {
+			err = d.Topology.UpdateEventPosition(ctx, txn, eventID, nextPosition)
+			if err != nil {
+				return err
+			}
+			positions[eventID] = nextPosition
+		}
+		for _, childID := range childEdges[eventID] {
+			if _, isAffected := affected[childID]; !isAffected {
+				continue
+			}
+			indegree[childID]--
+			if indegree[childID] == 0 {
+				ready = append(ready, childID)
+			}
+		}
+	}
+	if processed != len(affected) {
+		return fmt.Errorf("late-parent topology contains a cycle in %d descendants", len(affected)-processed)
+	}
+	return nil
+}
+
 func (d *Database) PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.BackwardExtremities.DeleteBackwardExtremity(ctx, txn, roomID, prevEventID)
@@ -313,6 +430,13 @@ func (d *Database) WriteEvent(
 		var topoPosition types.StreamPosition
 		if topoPosition, err = d.Topology.InsertEventInTopology(ctx, txn, ev, pos); err != nil {
 			return fmt.Errorf("d.Topology.InsertEventInTopology: %w", err)
+		}
+		// A parent can arrive after its children. InsertEventInTopology lifts
+		// the parent above any stored ancestor, but the children were placed
+		// before that lift. Their backward-extremity rows still name them here,
+		// before handleBackwardExtremities deletes those rows below.
+		if err = d.repairLateParentTopology(ctx, txn, ev); err != nil {
+			return fmt.Errorf("d.repairLateParentTopology: %w", err)
 		}
 
 		if err = d.handleBackwardExtremities(ctx, txn, ev); err != nil {

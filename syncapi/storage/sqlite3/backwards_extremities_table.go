@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS syncapi_backward_extremities (
 	prev_event_id TEXT NOT NULL,
 	PRIMARY KEY(room_id, event_id, prev_event_id)
 );
+CREATE INDEX IF NOT EXISTS syncapi_backward_extremities_prev_idx ON syncapi_backward_extremities(room_id, prev_event_id);
 `
 
 const insertBackwardExtremitySQL = "" +
@@ -34,6 +35,9 @@ const insertBackwardExtremitySQL = "" +
 
 const selectBackwardExtremitiesForRoomSQL = "" +
 	"SELECT event_id, prev_event_id FROM syncapi_backward_extremities WHERE room_id = $1"
+
+const selectEventsReferencingPrevEventSQL = "" +
+	"SELECT event_id FROM syncapi_backward_extremities WHERE room_id = $1 AND prev_event_id = $2 ORDER BY event_id"
 
 const deleteBackwardExtremitySQL = "" +
 	"DELETE FROM syncapi_backward_extremities WHERE room_id = $1 AND prev_event_id = $2"
@@ -45,6 +49,7 @@ type backwardExtremitiesStatements struct {
 	db                                   *sql.DB
 	insertBackwardExtremityStmt          *sql.Stmt
 	selectBackwardExtremitiesForRoomStmt *sql.Stmt
+	selectEventsReferencingPrevEventStmt *sql.Stmt
 	deleteBackwardExtremityStmt          *sql.Stmt
 	purgeBackwardExtremitiesStmt         *sql.Stmt
 }
@@ -60,9 +65,30 @@ func NewSqliteBackwardsExtremitiesTable(db *sql.DB) (tables.BackwardsExtremities
 	return s, sqlutil.StatementList{
 		{&s.insertBackwardExtremityStmt, insertBackwardExtremitySQL},
 		{&s.selectBackwardExtremitiesForRoomStmt, selectBackwardExtremitiesForRoomSQL},
+		{&s.selectEventsReferencingPrevEventStmt, selectEventsReferencingPrevEventSQL},
 		{&s.deleteBackwardExtremityStmt, deleteBackwardExtremitySQL},
 		{&s.purgeBackwardExtremitiesStmt, purgeBackwardExtremitiesSQL},
 	}.Prepare(db)
+}
+
+func (s *backwardExtremitiesStatements) SelectEventsReferencingPrevEvent(
+	ctx context.Context, txn *sql.Tx, roomID, prevEventID string,
+) ([]string, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectEventsReferencingPrevEventStmt).QueryContext(ctx, roomID, prevEventID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "selectEventsReferencingPrevEvent: rows.close() failed")
+
+	var eventIDs []string
+	for rows.Next() {
+		var eventID string
+		if err = rows.Scan(&eventID); err != nil {
+			return nil, err
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	return eventIDs, rows.Err()
 }
 
 func (s *backwardExtremitiesStatements) InsertsBackwardExtremity(

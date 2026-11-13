@@ -1608,3 +1608,87 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 		})
 	})
 }
+
+// A parent may arrive after its child was stored. When the parent is placed
+// above its own parent, all stored descendants must be raised with it.
+func TestInsertLateParentLiftsStoredDescendants(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		root := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "root"}, test.WithDepth(1000))
+		_ = MustWriteEvents(t, db, r.Events())
+
+		lateParent := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "late parent"},
+			test.WithDepth(0), test.WithPrevEvents(root.EventID()))
+		child := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "child"},
+			test.WithDepth(0), test.WithPrevEvents(lateParent.EventID()))
+		grandchild := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "grandchild"},
+			test.WithDepth(1), test.WithPrevEvents(child.EventID()))
+
+		for _, event := range []*rstypes.HeaderedEvent{child, grandchild} {
+			_, err := db.WriteEvent(ctx, event, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		_, err := db.WriteEvent(ctx, lateParent, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			for event, want := range map[*rstypes.HeaderedEvent]types.StreamPosition{
+				root:       1000,
+				lateParent: 1001,
+				child:      1002,
+				grandchild: 1003,
+			} {
+				position, err := snapshot.EventPositionInTopology(ctx, event.EventID())
+				require.NoError(t, err)
+				assert.Equal(t, want, position.Depth, "event %s should follow all stored parents", event.EventID())
+			}
+		})
+	})
+}
+
+func TestInsertEventInTopologyLiftsStoredChildSubtree(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		ancestor := r.CreateAndInsert(t, alice, "m.room.message",
+			map[string]any{"body": "ancestor"}, test.WithDepth(1000))
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{ancestor})
+
+		// The parent is missing when its child and grandchild arrive, so both
+		// are placed using their own depths.
+		parent := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "late parent"},
+			test.WithDepth(101), test.WithPrevEvents(ancestor.EventID()))
+		child := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "child"},
+			test.WithDepth(102), test.WithPrevEvents(parent.EventID()))
+		grandchild := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "grandchild"},
+			test.WithDepth(103), test.WithPrevEvents(child.EventID()))
+
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{child, grandchild})
+		// The parent arrives late and is lifted above the stored ancestor. The
+		// stored child and grandchild have to move above it with it.
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{parent})
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			for event, wantDepth := range map[*rstypes.HeaderedEvent]types.StreamPosition{
+				ancestor:   1000,
+				parent:     1001,
+				child:      1002,
+				grandchild: 1003,
+			} {
+				pos, err := snapshot.EventPositionInTopology(ctx, event.EventID())
+				require.NoError(t, err)
+				assert.Equal(t, wantDepth, pos.Depth, event.EventID())
+			}
+		})
+	})
+}
