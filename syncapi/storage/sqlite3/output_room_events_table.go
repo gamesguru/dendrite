@@ -153,12 +153,12 @@ type outputRoomEventsStatements struct {
 	// selectSearchStmt             *sql.Stmt - prepared at runtime
 }
 
-func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Events, error) {
+func NewSqliteEventsTable(ctx context.Context, db *sql.DB, streamID *StreamIDStatements) (tables.Events, error) {
 	s := &outputRoomEventsStatements{
 		db:                 db,
 		streamIDStatements: streamID,
 	}
-	_, err := db.Exec(outputRoomEventsSchema)
+	_, err := db.ExecContext(ctx, outputRoomEventsSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func NewSqliteEventsTable(db *sql.DB, streamID *StreamIDStatements) (tables.Even
 			Up:      deltas.UpRestoreOutputRoomEventIDs,
 		},
 	)
-	err = m.Up(context.Background())
+	err = m.Up(ctx)
 	if err != nil {
 		return nil, err
 	}
