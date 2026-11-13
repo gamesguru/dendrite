@@ -346,6 +346,10 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 		defer syncReq.Response.MoveStateToStateAfter(syncReq.StateAfter)
 	}
 
+	// Sampled before anything below can block, so a leave that lands while this
+	// request is held up is still reported by a complete sync.
+	arrivedAt := rp.Notifier.CurrentPosition().PDUPosition
+
 	activeSyncRequests.Inc()
 	defer activeSyncRequests.Dec()
 
@@ -448,7 +452,7 @@ func (rp *RequestPool) OnIncomingSyncRequest(req *http.Request, device *userapi.
 
 		if syncReq.Since.IsEmpty() {
 			// Complete sync
-			syncReq.ArrivedAtPDUPosition = currentPos.PDUPosition
+			syncReq.ArrivedAtPDUPosition = arrivedAt
 			// Wait for a just-joined partial-state room to reach the sync API before
 			// any snapshot is open, as the wait takes snapshots of its own.
 			if waiter, ok := rp.streams.DeviceListStreamProvider.(interface {

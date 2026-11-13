@@ -182,7 +182,10 @@ func (p *PDUStreamProvider) CompleteSync(
 				logAbandoned(req, err, "", "complete")
 				return from
 			}
+			// Do not report to as covered: a leave the scan missed would
+			// never be reported by a later sync.
 			req.Log.WithError(err).Error("p.addLeftRoomsToCompleteSync failed")
+			return from
 		}
 	}
 

@@ -1647,15 +1647,17 @@ func (r *messagesReq) backfillBatchHasMissingParents(
 }
 
 // hasStoredEventsBelow reports whether the room has a stored event positioned
-// strictly below every one of the given events in the topology.
+// strictly below every one of the given events in the topology, ignoring the
+// events themselves. Events at the oldest depth that arrived earlier count as
+// below it.
 func (r *messagesReq) hasStoredEventsBelow(events []*rstypes.HeaderedEvent) (bool, error) {
-	positions, err := r.topologyDepthsForEvents(r.ctx, events)
+	depths, err := r.topologyDepthsForEvents(r.ctx, events)
 	if err != nil {
 		return false, err
 	}
 	oldest := int64(math.MaxInt64)
 	for _, ev := range events {
-		if depth, ok := positions[ev.EventID()]; ok && depth < oldest {
+		if depth, ok := depths[ev.EventID()]; ok && depth < oldest {
 			oldest = depth
 		}
 	}
@@ -1664,14 +1666,46 @@ func (r *messagesReq) hasStoredEventsBelow(events []*rstypes.HeaderedEvent) (boo
 		// above stored history.
 		return true, nil
 	}
+	// Start just below the oldest stored batch event at that depth, so that
+	// earlier arrivals at the same depth are included and the batch is not.
+	cursor := types.TopologyToken{Depth: types.StreamPosition(oldest)}
+	if batch, ok := r.snapshot.(interface {
+		EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error)
+	}); ok {
+		ids := make([]string, len(events))
+		for i, ev := range events {
+			ids[i] = ev.EventID()
+		}
+		positions, posErr := batch.EventPositionsInTopology(r.ctx, ids)
+		if posErr != nil {
+			return false, posErr
+		}
+		for _, pos := range positions {
+			if int64(pos.Depth) == oldest && pos.PDUPosition > cursor.PDUPosition {
+				cursor.PDUPosition = pos.PDUPosition
+			}
+		}
+		if cursor.PDUPosition > 0 {
+			cursor.PDUPosition--
+		}
+	}
+	inBatch := make(map[string]struct{}, len(events))
+	for _, ev := range events {
+		inBatch[ev.EventID()] = struct{}{}
+	}
 	below, _, _, err := r.snapshot.GetEventsInTopologicalRange(
-		r.ctx, &types.TopologyToken{Depth: types.StreamPosition(oldest)}, &types.TopologyToken{},
-		r.roomID, &synctypes.RoomEventFilter{Limit: 1}, true,
+		r.ctx, &cursor, &types.TopologyToken{},
+		r.roomID, &synctypes.RoomEventFilter{Limit: len(events) + 1}, true,
 	)
 	if err != nil {
 		return false, fmt.Errorf("check stored history below backfilled batch: %w", err)
 	}
-	return len(below) > 0, nil
+	for _, ev := range below {
+		if _, ok := inBatch[ev.EventID()]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type eventsByDepth []*rstypes.HeaderedEvent
