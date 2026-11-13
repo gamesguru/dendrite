@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ var (
 	randomMessageEvent  rstypes.HeaderedEvent
 	aliceInviteBobEvent rstypes.HeaderedEvent
 	bobLeaveEvent       rstypes.HeaderedEvent
+	bobBanEvent         rstypes.HeaderedEvent
 	syncPositionVeryOld = types.StreamingToken{PDUPosition: 5}
 	syncPositionBefore  = types.StreamingToken{PDUPosition: 11}
 	syncPositionAfter   = types.StreamingToken{PDUPosition: 12}
@@ -90,6 +92,22 @@ func init() {
 		"origin_server_ts": 12345,
 		"event_id": "$bobLeaveEvent:localhost"
 	}`), &bobLeaveEvent)
+	if err != nil {
+		panic(err)
+	}
+	err = json.Unmarshal([]byte(`{
+		"_room_version": "1",
+		"type": "m.room.member",
+		"state_key": "`+bob+`",
+		"content": {
+			"membership": "ban"
+		},
+		"sender": "`+alice+`",
+		"room_id": "`+roomID+`",
+		"origin": "localhost",
+		"origin_server_ts": 12345,
+		"event_id": "$bobBanEvent:localhost"
+	}`), &bobBanEvent)
 	if err != nil {
 		panic(err)
 	}
@@ -333,6 +351,37 @@ func TestNewEventAndWasPreviouslyJoinedToRoom(t *testing.T) {
 	// it's possible that at this point alice has been informed and bob is about to be informed, so wait
 	// for a fraction of a second to account for this race
 	time.Sleep(1 * time.Millisecond)
+}
+
+// A leave/ban must wake the state-key user even if the joined-user set is
+// stale and does not contain them.
+func TestBanWakesTargetWhenNotInJoinedUsers(t *testing.T) {
+	n := NewNotifier(&TestRoomServer{})
+	n.SetCurrentPosition(syncPositionBefore)
+
+	awoken := make(chan types.StreamingToken, 1)
+	go func() {
+		pos, err := waitForEvents(n, newTestSyncRequest(bob, bobDev, syncPositionBefore))
+		if err != nil {
+			t.Errorf("TestBanWakesTargetWhenNotInJoinedUsers error: %s", err)
+			return
+		}
+		awoken <- pos
+	}()
+
+	stream := lockedFetchUserStream(n, bob, bobDev)
+	waitForBlocking(stream, 1)
+	n.OnNewEvent(&bobBanEvent, roomID, nil, syncPositionAfter)
+
+	select {
+	case pos := <-awoken:
+		mustEqualPositions(t, pos, syncPositionAfter)
+	case <-time.After(time.Second):
+		t.Fatal("ban did not wake the target user")
+	}
+	if n.JoinedUsers(roomID) != nil && slices.Contains(n.JoinedUsers(roomID), bob) {
+		t.Fatal("banned user remains in the joined-user set")
+	}
 }
 
 func waitForEvents(n *Notifier, req types.SyncRequest) (types.StreamingToken, error) {
