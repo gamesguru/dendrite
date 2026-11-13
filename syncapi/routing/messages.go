@@ -39,6 +39,26 @@ import (
 // gaps makes progress; the bound only stops a marker that never clears.
 const maxBackfillReloads = 4
 
+// maxForwardBackfillRounds bounds how many federation batches one forward
+// /messages request asks for while closing a gap ahead of its cursor. Forward
+// pagination moves the token past everything it returns, so a gap left partly
+// filled below those events could never be walked again: the fill has to close
+// the gap before the page is served. A gap still open after the bound is
+// reported as an error rather than a short page, so the client retries with the
+// same cursor and the next request continues from the events already stored.
+const maxForwardBackfillRounds = 10
+
+// forwardBackfillBatch is the number of events requested per federation
+// backfill while closing a forward gap. It is independent of the page limit,
+// which can be as low as 10 and would need hundreds of round trips. It mirrors
+// the roomserver's maxBackfillEvents.
+const forwardBackfillBatch = 100
+
+// errForwardBackfillIncomplete is returned when a forward page cannot close the
+// gap ahead of its cursor within maxForwardBackfillRounds. The events fetched so
+// far are stored, so retrying the same cursor makes progress.
+var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
+
 type messagesReq struct {
 	ctx               context.Context
 	db                storage.Database
@@ -59,6 +79,9 @@ type messagesReq struct {
 	backfillEnd       *types.TopologyToken
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
+	// forwardBackfillRounds counts the federation batches fetched for this
+	// request while closing a gap ahead of a forward cursor.
+	forwardBackfillRounds int
 }
 
 type messagesResp struct {
@@ -268,6 +291,14 @@ func OnIncomingMessagesRequest(
 	}
 
 	clientEvents, start, end, err := mReq.retrieveEvents(req.Context(), rsAPI)
+	if errors.Is(err, errForwardBackfillIncomplete) {
+		// Progress is stored, so a retry continues where this request stopped.
+		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: history gap not yet closed")
+		return util.JSONResponse{
+			Code: http.StatusTooManyRequests,
+			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", 2000),
+		}
+	}
 	if err != nil {
 		util.GetLogger(req.Context()).WithError(err).Error("mreq.retrieveEvents failed")
 		return util.JSONResponse{
@@ -493,6 +524,30 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 			}
 		}
 		streamEvents = filtered
+	}
+	// A forward page can only backfill the gap that sits immediately ahead of
+	// its cursor. Forward pagination moves the token past every event it
+	// returns, so a gap left partly filled below them would be skipped for good;
+	// the fill therefore closes the gap before the page is served, and the page
+	// is read again to include the new events. Backfill is skipped when the
+	// client supplied a `to` bound, and for stream tokens, whose position is in
+	// stream order rather than topology order.
+	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
+		filled, fErr := r.fillForwardGap(ctx, streamEvents[0].Depth())
+		if fErr != nil {
+			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
+		}
+		if filled {
+			// The gap is closed; read the page again so the events just stored
+			// are returned in order instead of being skipped over.
+			return r.retrieveEvents(ctx, rsAPI)
+		}
+		// A gap can also sit inside the page. Serve only the events before it;
+		// the next request then starts at the extremity and fills it above.
+		streamEvents, end, err = r.truncateForwardPageAtGap(ctx, streamEvents, end)
+		if err != nil {
+			return []synctypes.ClientEvent{}, *r.from, emptyToken, err
+		}
 	}
 	decrementEnd := r.backwardOrdering
 	extremityFilteredEmpty := false
@@ -743,19 +798,187 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 func (r *messagesReq) reachableBackwardExtremities(
 	backwardExtremities map[string][]string,
 ) map[string][]string {
+	reachable := backwardExtremities
 	// Depth 0 is a cursor before every stored event (for instance a prev_batch
 	// of a room joined over federation): all history is older than it.
-	if !r.backwardOrdering || r.from == nil || r.from.Depth == 0 {
-		return backwardExtremities
-	}
-	reachable := make(map[string][]string, len(backwardExtremities))
-	for extremityID, prevs := range backwardExtremities {
-		pos, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
-		if err != nil || pos.Depth <= r.from.Depth {
-			reachable[extremityID] = prevs
+	if r.backwardOrdering && r.from != nil && r.from.Depth != 0 {
+		reachable = make(map[string][]string, len(backwardExtremities))
+		for extremityID, prevs := range backwardExtremities {
+			pos, err := r.snapshot.EventPositionInTopology(r.ctx, extremityID)
+			if err != nil || pos.Depth <= r.from.Depth {
+				reachable[extremityID] = prevs
+			}
 		}
 	}
-	return reachable
+	if !r.backwardOrdering {
+		return reachable
+	}
+	return deepestExtremities(r.ctx, r.snapshot, reachable)
+}
+
+// deepestExtremities keeps only the extremities at the greatest known depth.
+// A room can hold many open gaps; walking backwards must fill the one nearest
+// the cursor first. Backfilling from an older gap returns a block of old
+// history and leaves the newer hole between it and the cursor, which the walk
+// then never reaches. Extremities whose depth is unknown are kept only when no
+// depth is known at all.
+func deepestExtremities(
+	ctx context.Context, snapshot storage.DatabaseTransaction, extremities map[string][]string,
+) map[string][]string {
+	if len(extremities) < 2 {
+		return extremities
+	}
+	best := types.StreamPosition(0)
+	depths := make(map[string]types.StreamPosition, len(extremities))
+	for extremityID := range extremities {
+		pos, err := snapshot.EventPositionInTopology(ctx, extremityID)
+		if err != nil {
+			continue
+		}
+		depths[extremityID] = pos.Depth
+		if pos.Depth > best {
+			best = pos.Depth
+		}
+	}
+	if len(depths) == 0 {
+		return extremities
+	}
+	deepest := make(map[string][]string)
+	for extremityID, depth := range depths {
+		if depth == best {
+			deepest[extremityID] = extremities[extremityID]
+		}
+	}
+	return deepest
+}
+
+// forwardGapExtremity returns the open backward extremity that marks the gap
+// immediately ahead of a forward cursor, together with its recorded prev
+// events. A stored event whose prev event is missing always gets a backwards
+// extremity marker when it is written, so the first event after a hole is the
+// marker for that hole.
+//
+// Only extremities between the cursor and the page's first event are eligible:
+// the gap they mark is exactly the one the page would jump over. An extremity
+// deeper in the room belongs to a gap the walk has not reached yet, and filling
+// it here would store events newer than the page's own range. Extremities at or
+// behind the cursor are history the walk already passed.
+func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventDepth int64) (string, []string, error) {
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
+	if err != nil || len(backwardExtremities) == 0 {
+		return "", nil, err
+	}
+	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
+	if err != nil {
+		return "", nil, err
+	}
+	bestID := ""
+	bestDepth := int64(math.MaxInt64)
+	for extremityID := range open {
+		pos, posErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
+		if posErr != nil {
+			continue
+		}
+		depth := int64(pos.Depth)
+		if r.from != nil && depth <= int64(r.from.Depth) {
+			continue
+		}
+		if depth > firstEventDepth {
+			continue
+		}
+		if depth < bestDepth {
+			bestID, bestDepth = extremityID, depth
+		}
+	}
+	if bestID == "" {
+		return "", nil, nil
+	}
+	return bestID, backwardExtremities[bestID], nil
+}
+
+// truncateForwardPageAtGap cuts a forward page before the first event, after
+// the page's first, that is an open backward extremity (its prev events are
+// missing, so a hole lies below it). The returned end token sits at the last
+// event kept, so forward pagination resumes at the extremity. The first event
+// is never cut, so every page makes progress.
+func (r *messagesReq) truncateForwardPageAtGap(
+	ctx context.Context, events []types.StreamEvent, end types.TopologyToken,
+) ([]types.StreamEvent, types.TopologyToken, error) {
+	if len(events) < 2 {
+		return events, end, nil
+	}
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
+	if err != nil || len(backwardExtremities) == 0 {
+		return events, end, err
+	}
+	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
+	if err != nil || len(open) == 0 {
+		return events, end, err
+	}
+	for i := 1; i < len(events); i++ {
+		if _, isOpen := open[events[i].EventID()]; !isOpen {
+			continue
+		}
+		newEnd, posErr := r.snapshot.EventPositionInTopology(ctx, events[i-1].EventID())
+		if posErr != nil {
+			return events, end, posErr
+		}
+		return events[:i], newEnd, nil
+	}
+	return events, end, nil
+}
+
+// fillForwardGap closes the history gap between a forward cursor and the first
+// event the page would return, fetching from federation in batches. It reports
+// whether it stored any event, so the caller knows to read the page again.
+//
+// Each batch stores up to forwardBackfillBatch events and moves the extremity
+// marker down the chain towards the cursor. Filling stops once no open
+// extremity is left ahead of the cursor, or when the remote servers have no
+// more events (the page is then served from what is stored).
+func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventDepth int64) (bool, error) {
+	filled := false
+	for r.forwardBackfillRounds < maxForwardBackfillRounds {
+		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventDepth)
+		if err != nil {
+			return filled, err
+		}
+		if extremityID == "" {
+			return filled, nil
+		}
+		r.forwardBackfillRounds++
+		pdus, bfErr := r.backfill(r.roomID, map[string][]string{extremityID: prevs}, forwardBackfillBatch)
+		if bfErr != nil {
+			if ctx.Err() != nil {
+				return filled, bfErr
+			}
+			if isTerminalBackfillFailure(bfErr) {
+				// No server has these events: the gap is as filled as it can
+				// get and the rest of the history is genuinely unreachable.
+				util.GetLogger(ctx).WithError(bfErr).Debug("Forward backfill found no events on the attempted servers")
+				return filled, nil
+			}
+			// A transient failure must not look like the end of history, and it
+			// must not let the cursor move past the unfilled gap either.
+			util.GetLogger(ctx).WithError(bfErr).Warn("Forward backfill failed; returning an error so the client can retry")
+			return filled, bfErr
+		}
+		if len(pdus) == 0 {
+			return filled, nil
+		}
+		filled = true
+	}
+
+	// The last batch may have closed the gap exactly at the bound, so only
+	// report failure when an open gap is still ahead of the cursor.
+	extremityID, _, err := r.forwardGapExtremity(ctx, firstEventDepth)
+	if err != nil {
+		return filled, err
+	}
+	if extremityID == "" {
+		return filled, nil
+	}
+	return filled, errForwardBackfillIncomplete
 }
 
 // handleEmptyEventsSlice handles the case where the initial request to the

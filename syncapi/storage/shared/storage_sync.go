@@ -393,7 +393,16 @@ func (d *DatabaseTransaction) StreamToTopologicalPosition(
 	topoPos, err := d.Topology.SelectStreamToTopologicalPosition(ctx, d.txn, roomID, streamPos, backwardOrdering)
 	switch {
 	case errors.Is(err, sql.ErrNoRows) && backwardOrdering: // no events in range, going backward
-		return types.TopologyToken{PDUPosition: streamPos}, nil
+		// The token precedes every stored event, for instance a prev_batch issued
+		// at the first event of a room joined over federation. Anchor it at that
+		// first event's depth: depth is not a clock (a remote server can restart
+		// it), so an unbounded cursor would start at the deepest events and skip
+		// the history that sits below the first event.
+		depth, firstErr := d.Topology.SelectFirstSyncedDepthAfterStreamPosition(ctx, d.txn, roomID, streamPos)
+		if firstErr != nil && !errors.Is(firstErr, sql.ErrNoRows) {
+			return types.TopologyToken{}, fmt.Errorf("d.Topology.SelectFirstSyncedDepthAfterStreamPosition: %w", firstErr)
+		}
+		return types.TopologyToken{Depth: depth, PDUPosition: streamPos}, nil
 	case errors.Is(err, sql.ErrNoRows) && !backwardOrdering: // no events in range, going forward
 		return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil
 	case err != nil: // some other error happened

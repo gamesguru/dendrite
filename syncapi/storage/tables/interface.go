@@ -108,6 +108,8 @@ type Topology interface {
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
 	// SelectStreamToTopologicalPosition converts a stream position to a topological position by finding the nearest topological position in the room.
 	SelectStreamToTopologicalPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition, forward bool) (topoPos types.StreamPosition, err error)
+	// SelectFirstSyncedDepthAfterStreamPosition returns the depth of the first non-backfilled event persisted after streamPos.
+	SelectFirstSyncedDepthAfterStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition) (topoPos types.StreamPosition, err error)
 	PurgeEventsTopology(ctx context.Context, txn *sql.Tx, roomID string) error
 	// DeleteEventFromTopology removes a single event.
 	DeleteEventFromTopology(ctx context.Context, txn *sql.Tx, eventID string) error

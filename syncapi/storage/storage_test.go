@@ -1490,9 +1490,13 @@ func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *test
 		defer close()
 		alice := test.NewUser(t)
 		r := test.NewRoom(t, alice)
-		_ = MustWriteEvents(t, db, r.Events())
+		all := r.Events()
+		// The shape of a federated join: only the newest event (the join) is live,
+		// and the history below it arrives afterwards through backfill.
+		live := all[len(all)-1:]
+		_ = MustWriteEvents(t, db, live)
 
-		backfilled := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"})
+		backfilled := all[len(all)-2]
 		_, err := db.WriteEvent(ctx, backfilled, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 
@@ -1500,8 +1504,39 @@ func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *test
 			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, 0, &types.TopologyToken{}, r.ID,
 				&synctypes.RoomEventFilter{Limit: 10}, true)
 			require.NoError(t, err)
+			// The live join is after the token, so only the history below it is returned.
 			require.Len(t, events, 1, "a token before every stored event (a federated join's prev_batch) must reach backfilled history")
 			assert.Equal(t, backfilled.EventID(), events[0].EventID())
+		})
+	})
+}
+
+// A stream token before every stored event refers to the first event persisted
+// after it, not to the start of the depth axis: depth can restart in a room, so
+// an unbounded cursor would begin at the deepest events.
+func TestStreamToTopologicalPositionBeforeFirstEventAnchorsAtFirstLiveEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		live := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "live"})
+		_ = MustWriteEvents(t, db, r.Events())
+
+		backfilled := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"})
+		_, err := db.WriteEvent(ctx, backfilled, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			tok, err := snapshot.StreamToTopologicalPosition(ctx, r.ID, 0, true)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(r.Events()[0].Depth()), tok.Depth,
+				"anchored at the first live event, ignoring backfilled ones")
+			assert.NotEqual(t, types.StreamPosition(live.Depth()), tok.Depth)
+
+			tok, err = snapshot.StreamToTopologicalPosition(ctx, "!empty:test", 0, true)
+			require.NoError(t, err)
+			assert.Zero(t, tok.Depth, "a room with no stored events keeps the unbounded cursor")
 		})
 	})
 }

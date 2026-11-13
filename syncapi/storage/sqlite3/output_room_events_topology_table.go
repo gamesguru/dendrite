@@ -73,6 +73,12 @@ const selectStreamToTopologicalPositionAscSQL = "" +
 const selectStreamToTopologicalPositionDescSQL = "" +
 	"SELECT topological_position FROM syncapi_output_room_events_topology WHERE room_id = $1 AND stream_position <= $2 ORDER BY topological_position DESC LIMIT 1;"
 
+const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
+	"SELECT t.topological_position FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 AND t.stream_position > $2 AND e.exclude_from_sync = 0" +
+	" ORDER BY t.stream_position ASC LIMIT 1;"
+
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
@@ -80,16 +86,17 @@ const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
 type outputRoomEventsTopologyStatements struct {
-	db                                        *sql.DB
-	insertEventInTopologyStmt                 *sql.Stmt
-	selectEventIDsInRangeASCStmt              *sql.Stmt
-	selectEventIDsInRangeDESCStmt             *sql.Stmt
-	selectEventIDsBeforeStreamPositionStmt    *sql.Stmt
-	selectPositionInTopologyStmt              *sql.Stmt
-	selectStreamToTopologicalPositionAscStmt  *sql.Stmt
-	selectStreamToTopologicalPositionDescStmt *sql.Stmt
-	purgeEventsTopologyStmt                   *sql.Stmt
-	deleteEventFromTopologyStmt               *sql.Stmt
+	db                                            *sql.DB
+	insertEventInTopologyStmt                     *sql.Stmt
+	selectEventIDsInRangeASCStmt                  *sql.Stmt
+	selectEventIDsInRangeDESCStmt                 *sql.Stmt
+	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
+	selectPositionInTopologyStmt                  *sql.Stmt
+	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
+	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
+	selectFirstSyncedDepthAfterStreamPositionStmt *sql.Stmt
+	purgeEventsTopologyStmt                       *sql.Stmt
+	deleteEventFromTopologyStmt                   *sql.Stmt
 }
 
 func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
@@ -108,6 +115,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
+		{&s.selectFirstSyncedDepthAfterStreamPositionStmt, selectFirstSyncedDepthAfterStreamPositionSQL},
 		{&s.purgeEventsTopologyStmt, purgeEventsTopologySQL},
 		{&s.deleteEventFromTopologyStmt, deleteEventFromTopologySQL},
 	}.Prepare(db)
@@ -237,6 +245,17 @@ func (s *outputRoomEventsTopologyStatements) SelectStreamToTopologicalPosition(
 	} else {
 		err = sqlutil.TxStmt(txn, s.selectStreamToTopologicalPositionAscStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos)
 	}
+	return
+}
+
+// SelectFirstSyncedDepthAfterStreamPosition returns the depth of the first
+// event, in stream order, that was persisted after the given stream position and
+// was not backfilled. It is the event a prev_batch token issued before any
+// stored event refers to.
+func (s *outputRoomEventsTopologyStatements) SelectFirstSyncedDepthAfterStreamPosition(
+	ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition,
+) (topoPos types.StreamPosition, err error) {
+	err = sqlutil.TxStmt(txn, s.selectFirstSyncedDepthAfterStreamPositionStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&topoPos)
 	return
 }
 

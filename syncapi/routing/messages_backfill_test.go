@@ -209,19 +209,17 @@ func TestReachableBackwardExtremities(t *testing.T) {
 		from:             &types.TopologyToken{Depth: 2900, PDUPosition: 100},
 	}
 
-	assert.Equal(t, map[string][]string{
-		"$at-cursor": {"$a"},
-		"$older":     {"$b"},
-		"$unknown":   {"$d"},
-	}, r.reachableBackwardExtremities(extremities), "only gaps at or below the cursor can hold older events")
+	assert.Equal(t, map[string][]string{"$at-cursor": {"$a"}},
+		r.reachableBackwardExtremities(extremities),
+		"only gaps at or below the cursor can hold older events, and the nearest one is filled first")
 
 	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
 	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
 		"a depth-2 request reaches no known gap; an extremity with no readable position is kept")
 
 	r.from = &types.TopologyToken{Depth: 0, PDUPosition: 100}
-	assert.Equal(t, extremities, r.reachableBackwardExtremities(extremities),
-		"depth 0 is before every stored event (a prev_batch of a federated join): every gap is older")
+	assert.Equal(t, map[string][]string{"$newer": {"$c"}}, r.reachableBackwardExtremities(extremities),
+		"depth 0 is before every stored event (a prev_batch of a federated join): every gap is older, and the deepest is filled first")
 
 	r.backwardOrdering = false
 	assert.Equal(t, extremities, r.reachableBackwardExtremities(extremities), "forward requests are unaffected")
