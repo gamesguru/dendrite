@@ -186,7 +186,8 @@ func (s *outputRoomEventsTopologyStatements) SelectEventIDsInRange(
 // the events of a room at or before a stream position and deeper than minDepth.
 // When includeBackfilled is set, events excluded from sync (backfilled history)
 // are also returned when they were persisted after the position, but only up to
-// maxBackfillDepth.
+// maxBackfillDepth. When it is not set, excluded events are dropped even if
+// they were persisted before the position.
 func (s *outputRoomEventsTopologyStatements) SelectEventIDsBeforeStreamPosition(
 	ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition,
 	limit int, includeBackfilled bool,

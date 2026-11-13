@@ -189,3 +189,43 @@ func TestPrioritiseBackfillFromEventIDsKeepsOrderWhenNoBetterCandidate(t *testin
 		t.Fatalf("expected original ordering to be preserved, got %v", got)
 	}
 }
+
+// calculateNewStateIDs rolls the previous event's before-state forward into a
+// new slice. The slice it is given is the previous event's own before-state,
+// which is looked up again when another event is processed, so it must not be
+// modified in place.
+func TestCalculateNewStateIDsCopiesBeforeState(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+
+	oldMember := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	prevEvent := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"leave"},"origin_server_ts":2,"depth":2,"prev_events":["$old"],"auth_events":[]}`)
+	targetEvent := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["$prev"],"auth_events":[]}`)
+
+	prevEventStateIDs := []string{oldMember.EventID()}
+	requester := &backfillRequester{
+		eventIDToBeforeStateIDs: map[string][]string{prevEvent.EventID(): prevEventStateIDs},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{oldMember.EventID(): oldMember},
+	}
+
+	got := requester.calculateNewStateIDs(targetEvent, prevEvent, prevEventStateIDs)
+	require.Equal(t, []string{prevEvent.EventID()}, got)
+	require.Equal(t, []string{oldMember.EventID()}, prevEventStateIDs,
+		"the previous event's before-state must be left unchanged")
+	require.Equal(t, []string{oldMember.EventID()}, requester.eventIDToBeforeStateIDs[prevEvent.EventID()])
+
+	// An event without a state key inherits the previous state. An empty state
+	// must stay non-nil so callers do not mistake it for a failed calculation.
+	messageEvent := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":4,"depth":4,"prev_events":["$prev"],"auth_events":[]}`)
+	inherited := requester.calculateNewStateIDs(targetEvent, messageEvent, nil)
+	require.NotNil(t, inherited)
+	require.Empty(t, inherited)
+}

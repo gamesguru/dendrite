@@ -39,13 +39,13 @@ test-pkg pkg:
 # Build all binaries
 build:
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -v -o bin/ \
+        go build -tags goolm -trimpath -buildvcs=false -v -o bin/ \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/...
 
 # Build a specific binary
 build-bin name:
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -v -o bin/{{name}} \
+        go build -tags goolm -trimpath -buildvcs=false -v -o bin/{{name}} \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/{{name}}
 
 # Run both lint and tests

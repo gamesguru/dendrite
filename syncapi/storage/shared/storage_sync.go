@@ -334,6 +334,9 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 
 // GetEventsBeforeStreamPosition retrieves, newest first in topological order,
 // the events at or before a stream position and deeper than the to token.
+// With includeBackfilled, backfilled events (excluded from sync) persisted after
+// the position are also returned, up to the position's own topological depth;
+// without it, backfilled events are never returned.
 func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 	ctx context.Context,
 	maxStreamPos types.StreamPosition,
@@ -346,11 +349,17 @@ func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 	// Backfilled history is stored after the token was issued, but must not be
 	// newer than the position the token refers to. Depth 0 means no event sits
 	// at or below the token, so there is nothing to bound by.
-	maxBackfillDepth := types.StreamPosition(math.MaxInt64)
-	if includeBackfilled {
-		if pos, perr := d.StreamToTopologicalPosition(ctx, roomID, maxStreamPos, true); perr == nil && pos.Depth > 0 {
-			maxBackfillDepth = pos.Depth
+	var maxBackfillDepth types.StreamPosition
+	if !includeBackfilled {
+		maxBackfillDepth = types.StreamPosition(math.MaxInt64) // unused by the query
+	} else {
+		pos, perr := d.StreamToTopologicalPosition(ctx, roomID, maxStreamPos, true)
+		if perr != nil {
+			return nil, types.TopologyToken{}, types.TopologyToken{}, perr
 		}
+		// Depth 0 means no event sits at or below the token, so no backfilled
+		// history is older than it: the bound stays at zero.
+		maxBackfillDepth = pos.Depth
 	}
 	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(
 		ctx, d.txn, roomID, to.Depth, maxStreamPos, maxBackfillDepth, filter.Limit, includeBackfilled,

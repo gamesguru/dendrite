@@ -427,7 +427,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 				// stream positions are above it, but they belong to older history
 				// (no deeper than the token's own position in the topology).
 				if ev.StreamPosition <= r.fromStream.PDUPosition ||
-					(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
+					(ev.ExcludeFromSync && (r.from == nil || ev.Depth() <= int64(r.from.Depth))) {
 					filtered = append(filtered, ev)
 				}
 			} else if ev.StreamPosition > r.fromStream.PDUPosition {
@@ -658,7 +658,7 @@ func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.Topolog
 func (r *messagesReq) reachableBackwardExtremities(
 	backwardExtremities map[string][]string,
 ) map[string][]string {
-	if !r.backwardOrdering || r.from == nil || r.from.Depth <= 0 {
+	if !r.backwardOrdering || r.from == nil {
 		return backwardExtremities
 	}
 	reachable := make(map[string][]string, len(backwardExtremities))

@@ -215,9 +215,11 @@ func TestReachableBackwardExtremities(t *testing.T) {
 		"$unknown":   {"$d"},
 	}, r.reachableBackwardExtremities(extremities), "only gaps at or below the cursor can hold older events")
 
-	r.from = &types.TopologyToken{Depth: 2, PDUPosition: 100}
-	assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
-		"a request near the room start reaches no known gap; an extremity with no readable position is kept")
+	for _, depth := range []types.StreamPosition{0, 2} {
+		r.from = &types.TopologyToken{Depth: depth, PDUPosition: 100}
+		assert.Equal(t, map[string][]string{"$unknown": {"$d"}}, r.reachableBackwardExtremities(extremities),
+			"a depth-%d request reaches no known gap; an extremity with no readable position is kept", depth)
+	}
 
 	r.backwardOrdering = false
 	assert.Equal(t, extremities, r.reachableBackwardExtremities(extremities), "forward requests are unaffected")

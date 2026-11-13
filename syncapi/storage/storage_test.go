@@ -1481,6 +1481,30 @@ func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
 	})
 }
 
+// A stream token before the room's first event has no topological position to
+// bound backfilled history with. Backfilled events stored after such a token
+// must not be returned: they are not older than the position it refers to.
+func TestGetEventsBeforeStreamPositionBeforeFirstEventSkipsBackfilled(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		_ = MustWriteEvents(t, db, r.Events())
+
+		backfilled := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"})
+		_, err := db.WriteEvent(ctx, backfilled, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, 0, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 10}, true)
+			require.NoError(t, err)
+			assert.Empty(t, events, "a token before the first event bounds backfilled history to nothing")
+		})
+	})
+}
+
 func TestSelectMembershipsAtStreamAndTopologyTokens(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, close := MustCreateDatabase(t, dbType)

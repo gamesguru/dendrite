@@ -464,7 +464,10 @@ FederationHit:
 }
 
 func (b *backfillRequester) calculateNewStateIDs(targetEvent, prevEvent gomatrixserverlib.PDU, prevEventStateIDs []string) []string {
-	newStateIDs := prevEventStateIDs
+	// Copy: the slice is stored as the previous event's own before-state and must
+	// not be changed in place. make keeps an empty state non-nil.
+	newStateIDs := make([]string, 0, len(prevEventStateIDs)+1)
+	newStateIDs = append(newStateIDs, prevEventStateIDs...)
 	if prevEvent.StateKey() == nil {
 		// state is the same as the previous event
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = newStateIDs
