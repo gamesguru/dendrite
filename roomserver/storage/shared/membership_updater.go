@@ -198,20 +198,25 @@ func isPendingMembership(membership tables.MembershipState) bool {
 	return membership == tables.MembershipStateInvite || membership == tables.MembershipStateKnock
 }
 
+// SQLite busy retry tuning. The lock upgrade fails immediately rather than
+// waiting for the driver's busy timeout, so a few short backoffs let the
+// competing writer commit.
+const (
+	sqliteBusyRetryAttempts  = 10
+	sqliteBusyRetryBaseDelay = 25 * time.Millisecond
+	sqliteBusyRetryMaxDelay  = 250 * time.Millisecond
+)
+
 // retrySQLiteBusy runs fn, retrying a few times with a short backoff while it
 // fails with SQLite's lock-contention error.
 func retrySQLiteBusy(ctx context.Context, fn func() error) error {
-	const attempts = 10
 	var err error
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= sqliteBusyRetryAttempts; attempt++ {
 		err = fn()
-		if err == nil || attempt == attempts || !isSQLiteBusy(err) {
+		if err == nil || attempt == sqliteBusyRetryAttempts || !isSQLiteBusy(err) {
 			return err
 		}
-		delay := time.Duration(attempt) * 25 * time.Millisecond
-		if delay > 250*time.Millisecond {
-			delay = 250 * time.Millisecond
-		}
+		delay := min(time.Duration(attempt)*sqliteBusyRetryBaseDelay, sqliteBusyRetryMaxDelay)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
