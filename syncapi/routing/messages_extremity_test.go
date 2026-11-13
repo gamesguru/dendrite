@@ -21,6 +21,19 @@ import (
 type eventMapSnapshot struct {
 	storage.DatabaseTransaction
 	events map[string]*rstypes.HeaderedEvent
+	// positions overrides the topology depth of an event. Events without an
+	// entry sit at their wire depth.
+	positions map[string]types.StreamPosition
+}
+
+func (s *eventMapSnapshot) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
+	if depth, ok := s.positions[eventID]; ok {
+		return types.TopologyToken{Depth: depth}, nil
+	}
+	if event, ok := s.events[eventID]; ok {
+		return types.TopologyToken{Depth: types.StreamPosition(event.Depth())}, nil
+	}
+	return types.TopologyToken{}, context.Canceled
 }
 
 func (s *eventMapSnapshot) Events(_ context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
@@ -132,4 +145,35 @@ func TestOpenBackwardExtremities(t *testing.T) {
 	assert.Contains(t, open, "$partial", "one absent prev event keeps the gap open")
 	assert.Contains(t, open, "$absent")
 	assert.Contains(t, open, "$empty", "a marker with no recorded prev events is kept")
+}
+
+// The extremity's depth is a topology position. An event whose wire depth is
+// lower but which is stored above the extremity (its server restarted its depth
+// counter, or it arrived after its child) is newer than the gap and must not be
+// held back with the extremity's ancestors.
+func TestExtremityBranchEventsComparesTopologyDepth(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	branchPoint := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "shared"})
+	lifted := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "wire depth low, stored high"})
+	fork := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "fork"}, test.WithPrevEvents(lifted.EventID()))
+
+	snapshot := &eventMapSnapshot{
+		events: map[string]*rstypes.HeaderedEvent{},
+		positions: map[string]types.StreamPosition{
+			// The repaired topology stores this event far above the fork.
+			lifted.EventID(): types.StreamPosition(fork.Depth()) + 1000,
+		},
+	}
+	for _, event := range room.Events() {
+		snapshot.events[event.EventID()] = event
+	}
+	req := messagesReq{snapshot: snapshot}
+
+	page := []types.StreamEvent{{HeaderedEvent: lifted}, {HeaderedEvent: branchPoint}}
+	excluded, err := req.extremityBranchEvents(context.Background(), fork.EventID(), page, fork.Depth())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{branchPoint.EventID(): {}}, excluded)
+	assert.NotContains(t, excluded, lifted.EventID(),
+		"an event stored above the extremity is not on the gap's branch, whatever its wire depth")
 }

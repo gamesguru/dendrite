@@ -94,6 +94,30 @@ type messagesReq struct {
 	// forwardBackfillRounds counts the federation batches fetched for this
 	// request while closing a gap ahead of a forward cursor.
 	forwardBackfillRounds int
+	// topoDepths caches the topology position of events looked up during this
+	// request, see topologyDepth.
+	topoDepths map[string]int64
+}
+
+// topologyDepth returns the depth at which an event is stored in the room's
+// topology. Cursors (from, to, end) and extremity positions are expressed in
+// that space, which can differ from the depth written into the event: a
+// server that restarted its counter, or a late parent, is stored above its
+// parents, so comparing a cursor against the wire depth misjudges the event.
+// It falls back to the wire depth when the event has no stored position.
+func (r *messagesReq) topologyDepth(ctx context.Context, ev types.StreamEvent) int64 {
+	if depth, ok := r.topoDepths[ev.EventID()]; ok {
+		return depth
+	}
+	depth := ev.Depth()
+	if pos, err := r.snapshot.EventPositionInTopology(ctx, ev.EventID()); err == nil {
+		depth = int64(pos.Depth)
+	}
+	if r.topoDepths == nil {
+		r.topoDepths = make(map[string]int64)
+	}
+	r.topoDepths[ev.EventID()] = depth
+	return depth
 }
 
 type messagesResp struct {
@@ -386,10 +410,13 @@ func (r *messagesReq) extremityBranchEvents(
 		}
 	}
 
+	// Candidates are chosen in topology space, where extremityDepth lives. The
+	// ancestor walk below reads stored events, so its stopping depth is the
+	// candidates' lowest wire depth.
 	candidates := make(map[string]struct{})
-	minDepth := extremityDepth
+	minDepth := int64(math.MaxInt64)
 	for _, ev := range page {
-		if ev.Depth() < extremityDepth {
+		if r.topologyDepth(ctx, ev) < extremityDepth {
 			candidates[ev.EventID()] = struct{}{}
 			if ev.Depth() < minDepth {
 				minDepth = ev.Depth()
@@ -532,7 +559,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// client supplied a `to` bound, and for stream tokens, whose position is in
 	// stream order rather than topology order.
 	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
-		filled, fErr := r.fillForwardGap(ctx, streamEvents[0].Depth())
+		filled, fErr := r.fillForwardGap(ctx, r.topologyDepth(ctx, streamEvents[0]))
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
 		}
@@ -775,7 +802,7 @@ func (r *messagesReq) filterByStreamToken(
 			// stream positions are above it, but they belong to older history
 			// (no deeper than the token's own position in the topology).
 			if ev.StreamPosition <= r.fromStream.PDUPosition ||
-				(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || ev.Depth() <= int64(r.from.Depth))) {
+				(ev.ExcludeFromSync && (r.from == nil || r.from.Depth == 0 || r.topologyDepth(ctx, ev) <= int64(r.from.Depth))) {
 				filtered = append(filtered, ev)
 			}
 		} else if ev.StreamPosition > r.fromStream.PDUPosition {
