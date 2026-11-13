@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -177,6 +178,80 @@ func TestRelations(t *testing.T) {
 			res, ids := request(t, root.EventID(), "m.thread", "", "", http.StatusOK)
 			require.Equal(t, reply.EventID(), ids[1])
 			require.Equal(t, replyEdit.EventID(), gjson.GetBytes(res.Chunk[1].Unsigned, `m\.relations.m\.replace.event_id`).Str)
+		})
+		t.Run("stream watermark survives capped empty pages", func(t *testing.T) {
+			var beforeWatermark []string
+			for i := 0; i < relationsMaxLimit+5; i++ {
+				event := write(room.CreateEvent(t, alice, "m.room.message", map[string]any{
+					"body":         fmt.Sprintf("before watermark %d", i),
+					"m.relates_to": map[string]any{"rel_type": "m.reference", "event_id": root.EventID()},
+				}, test.WithDepth(2), test.WithPrevEvents(root.EventID())))
+				beforeWatermark = append(beforeWatermark, event.EventID())
+			}
+			// This high-depth event anchors a topology cursor above the relations
+			// inserted below, while its stream position excludes those relations.
+			high := write(room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "high"},
+				test.WithDepth(1000), test.WithPrevEvents(root.EventID())))
+			snapshot, err := db.NewDatabaseSnapshot(ctx)
+			require.NoError(t, err)
+			highPosition, err := snapshot.EventPositionInTopology(ctx, high.EventID())
+			require.NoError(t, err)
+			require.NoError(t, snapshot.Rollback())
+			watermark := types.StreamingToken{PDUPosition: highPosition.PDUPosition}
+			var firstAbove, lastAbove *rstypes.HeaderedEvent
+			for i := 0; i < relationsMaxLimit*maxRelationsBatches+50; i++ {
+				event := room.CreateEvent(t, alice, "m.room.message", map[string]any{
+					"body":         fmt.Sprintf("above watermark %d", i),
+					"m.relates_to": map[string]any{"rel_type": "m.reference", "event_id": root.EventID()},
+				}, test.WithDepth(100), test.WithPrevEvents(root.EventID()))
+				write(event)
+				if i == 0 {
+					firstAbove = event
+				}
+				if i == relationsMaxLimit*maxRelationsBatches+49 {
+					lastAbove = event
+				}
+			}
+			snapshot, err = db.NewDatabaseSnapshot(ctx)
+			require.NoError(t, err)
+			oldPosition, err := snapshot.EventPositionInTopology(ctx, beforeWatermark[0])
+			require.NoError(t, err)
+			firstAbovePosition, err := snapshot.EventPositionInTopology(ctx, firstAbove.EventID())
+			require.NoError(t, err)
+			lastAbovePosition, err := snapshot.EventPositionInTopology(ctx, lastAbove.EventID())
+			require.NoError(t, err)
+			require.NoError(t, snapshot.Rollback())
+			require.Greater(t, firstAbovePosition.Depth, oldPosition.Depth)
+			require.Less(t, firstAbovePosition.Depth, highPosition.Depth)
+			require.Greater(t, lastAbovePosition.PDUPosition, watermark.PDUPosition)
+			query := "limit=10&from=" + url.QueryEscape(watermark.String())
+			res, ids := request(t, root.EventID(), "m.reference", "", query, http.StatusOK)
+			require.Empty(t, ids)
+			require.NotEmpty(t, res.NextBatch, "a capped empty page must be resumable")
+			seen := make([]string, 0, len(beforeWatermark))
+			sawNormalContinuation := false
+			for pages := 0; res.NextBatch != ""; pages++ {
+				require.Less(t, pages, 20, "pagination must make progress")
+				continuationSnapshot, snapshotErr := db.NewDatabaseSnapshot(ctx)
+				require.NoError(t, snapshotErr)
+				continued, stream, parseErr := parseRelationsToken(ctx, continuationSnapshot, room.ID, res.NextBatch, true)
+				require.NoError(t, parseErr)
+				require.NoError(t, continuationSnapshot.Rollback())
+				require.NotZero(t, continued.Depth)
+				require.NotNil(t, stream)
+				require.Equal(t, watermark.PDUPosition, stream.PDUPosition)
+				res, ids = request(t, root.EventID(), "m.reference", "", "limit=10&from="+url.QueryEscape(res.NextBatch), http.StatusOK)
+				for _, id := range ids {
+					require.Contains(t, beforeWatermark, id, "above-watermark relations must not leak into any page")
+					seen = append(seen, id)
+				}
+				if len(ids) > 0 && res.NextBatch != "" {
+					sawNormalContinuation = true
+				}
+			}
+			require.Greater(t, len(seen), 10)
+			require.True(t, sawNormalContinuation, "a full page must also retain the stream watermark")
+			require.Empty(t, res.NextBatch)
 		})
 	})
 }

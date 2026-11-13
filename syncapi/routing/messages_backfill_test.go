@@ -229,6 +229,46 @@ func TestBackwardBackfillMissingParentWithoutOlderStoredHistoryIsComplete(t *tes
 	})
 }
 
+// A backfilled batch event that has no stored topology position must still
+// bound the search with its wire depth. Choosing only stored batch positions
+// would treat stored history between that depth and a stored batch event's
+// depth as stranded, although it lies above the unstored event.
+func TestHasStoredEventsBelowFallsBackToWireDepth(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		parent := room.Events()[0]
+		between := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "stored between"},
+			test.WithDepth(7), test.WithPrevEvents(parent.EventID()))
+		storedBatch := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "stored batch"},
+			test.WithDepth(10), test.WithPrevEvents(parent.EventID()))
+		unstoredBatch := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "unstored batch"},
+			test.WithDepth(5), test.WithPrevEvents(parent.EventID()))
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		for _, event := range []*rstypes.HeaderedEvent{between, storedBatch} {
+			_, err = db.WriteEvent(ctx, event, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		snapshot, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+
+		req := &messagesReq{ctx: ctx, snapshot: snapshot, roomID: room.ID}
+		below, err := req.hasStoredEventsBelow([]*rstypes.HeaderedEvent{storedBatch, unstoredBatch})
+		require.NoError(t, err)
+		assert.False(t, below, "stored history above the unstored batch event is not stranded")
+	})
+}
+
 // Events backfilled after a client's sync token get stream positions above that
 // token. Paginating back from the token must still return them, otherwise every
 // refresh finds nothing locally and backfills over federation again.

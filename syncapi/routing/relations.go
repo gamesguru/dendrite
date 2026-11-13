@@ -96,9 +96,9 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		}
 		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil, nil
 	}
-	if parts := strings.SplitN(token, "|", 2); len(parts) == 2 {
-		topology, topoErr := types.NewTopologyTokenFromString(parts[0])
-		stream, streamErr := types.NewStreamTokenFromString(parts[1])
+	if topologyToken, streamToken, ok := strings.Cut(token, "|"); ok {
+		topology, topoErr := types.NewTopologyTokenFromString(topologyToken)
+		stream, streamErr := types.NewStreamTokenFromString(streamToken)
 		if topoErr != nil || streamErr != nil {
 			return types.TopologyToken{}, nil, errInvalidRelationsToken
 		}
