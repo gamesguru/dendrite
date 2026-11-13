@@ -1506,7 +1506,6 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 			}
 			// Backfill is best effort: fall back to the events we have locally.
 			util.GetLogger(r.ctx).WithError(err).Warn("Backfill failed, returning only local events")
-			err = nil
 		case incomplete:
 			return nil, errBackwardBackfillIncomplete
 		default:

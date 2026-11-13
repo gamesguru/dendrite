@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -280,8 +279,9 @@ func (d *Database) handleBackwardExtremities(ctx context.Context, txn *sql.Tx, e
 // repairLateParentTopology raises the stored descendants of ev when ev arrived
 // after them. InsertEventInTopology already lifted ev above its own stored
 // parents, which can put ev above children that were placed before that lift.
-// The backward-extremity table identifies those children cheaply; the relevant
-// topology suffix is only read when they exist.
+// The backward-extremity table identifies those children cheaply; the room's
+// topology is read only when they exist so descendants below their parents are
+// included in the repair traversal.
 func (d *Database) repairLateParentTopology(
 	ctx context.Context, txn *sql.Tx, ev *rstypes.HeaderedEvent,
 ) error {
@@ -294,27 +294,7 @@ func (d *Database) repairLateParentTopology(
 		return nil
 	}
 
-	childPositions, err := d.Topology.SelectPositionsInTopology(ctx, txn, children)
-	if err != nil {
-		return err
-	}
-	minTopologicalPos := types.StreamPosition(math.MaxInt64)
-	for _, childID := range children {
-		pos, ok := childPositions[childID]
-		if !ok {
-			// A missing topology position is inconsistent with the backward
-			// extremity marker. Fall back to a complete scan to preserve repair.
-			minTopologicalPos = 0
-			break
-		}
-		if pos.Depth < minTopologicalPos {
-			minTopologicalPos = pos.Depth
-		}
-	}
-	if minTopologicalPos == types.StreamPosition(math.MaxInt64) {
-		minTopologicalPos = 0
-	}
-	stored, err := d.Topology.SelectRoomEventTopology(ctx, txn, roomID, minTopologicalPos)
+	stored, err := d.Topology.SelectRoomEventTopology(ctx, txn, roomID, 0)
 	if err != nil {
 		return err
 	}
