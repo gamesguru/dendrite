@@ -163,13 +163,30 @@ func TestForwardStreamTokenEndStaysAtLastIncludedEvent(t *testing.T) {
 	}
 
 	filtered, end, err := req.filterByStreamToken(context.Background(), []types.StreamEvent{
-		{HeaderedEvent: backfilled, StreamPosition: 127092, ExcludeFromSync: true},
 		{HeaderedEvent: live, StreamPosition: 127272},
+		{HeaderedEvent: backfilled, StreamPosition: 127092, ExcludeFromSync: true},
 	}, types.TopologyToken{Depth: 1386, PDUPosition: 127092})
 	require.NoError(t, err)
 	require.Len(t, filtered, 1)
 	assert.Equal(t, live.EventID(), filtered[0].EventID())
 	assert.Equal(t, livePosition, end, "the end cursor must not advance over filtered backfill")
+}
+
+func TestForwardStreamTokenKeepsCursorPastAlreadySyncedEvents(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "already synced"})
+	req := messagesReq{
+		snapshot:   &extremitySnapshot{},
+		fromStream: &types.StreamingToken{PDUPosition: 100},
+	}
+	originalEnd := types.TopologyToken{Depth: 20, PDUPosition: 120}
+	filtered, end, err := req.filterByStreamToken(context.Background(), []types.StreamEvent{
+		{HeaderedEvent: live, StreamPosition: 90},
+	}, originalEnd)
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+	assert.Equal(t, originalEnd, end, "already-synced events must not pull the cursor backward and be replayed")
 }
 
 // extremitySnapshot stubs the topology lookups used to decide which backward
@@ -283,10 +300,19 @@ func TestHandleEmptyEventsSliceDoesNotBackfillNewerGaps(t *testing.T) {
 type fullPageSnapshot struct {
 	storage.DatabaseTransaction
 	extremities map[string][]string
+	positions   map[string]types.TopologyToken
 }
 
 func (s *fullPageSnapshot) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
 	return s.extremities, nil
+}
+
+func (s *fullPageSnapshot) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
+	pos, ok := s.positions[eventID]
+	if !ok {
+		return types.TopologyToken{}, errors.New("event not in topology")
+	}
+	return pos, nil
 }
 
 func (s *fullPageSnapshot) StreamEventsToEvents(_ context.Context, _ *userapi.Device, in []types.StreamEvent, _ api.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
@@ -330,12 +356,22 @@ func TestFullPageBackfillKeepsGapEventsAboveThePageEnd(t *testing.T) {
 		{HeaderedEvent: pageMiddle},
 		{HeaderedEvent: pageOldest},
 	}
+	positions := make(map[string]types.TopologyToken, len(page)+2)
+	for i, ev := range page {
+		positions[ev.EventID()] = types.TopologyToken{
+			Depth:       types.StreamPosition(ev.Depth()),
+			PDUPosition: types.StreamPosition(100 - i),
+		}
+	}
+	positions[aboveGap.EventID()] = types.TopologyToken{Depth: types.StreamPosition(aboveGap.Depth()), PDUPosition: 60}
+	positions[belowGap.EventID()] = types.TopologyToken{Depth: types.StreamPosition(belowGap.Depth()), PDUPosition: 50}
 	newReq := func(pdus ...*rstypes.HeaderedEvent) *messagesReq {
 		return &messagesReq{
 			ctx: context.Background(),
 			db:  stubWriteDB{},
 			snapshot: &fullPageSnapshot{
 				extremities: map[string][]string{extremity.EventID(): {"$missing"}},
+				positions:   positions,
 			},
 			rsAPI:            &backfillOnlyAPI{events: pdus},
 			cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},

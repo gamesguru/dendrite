@@ -68,6 +68,11 @@ const minBranchesForSelection = 2
 // far are stored, so retrying the same cursor makes progress.
 var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
 
+// errBackwardBackfillIncomplete is returned when a returned gap batch still
+// has missing parents. The caller retries the same cursor after the batch has
+// been stored, so the newly exposed extremity can be fetched next.
+var errBackwardBackfillIncomplete = errors.New("backward backfill batch left an open history gap")
+
 // errBackfillRecentlyFailed marks a backfill that was not attempted because the
 // same request definitively failed within terminalBackfillTTL.
 var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
@@ -81,6 +86,7 @@ type messagesReq struct {
 	roomID            string
 	from              *types.TopologyToken
 	fromStream        *types.StreamingToken
+	fromTopologyToken bool
 	to                *types.TopologyToken
 	device            *userapi.Device
 	deviceUserID      spec.UserID
@@ -127,6 +133,53 @@ func (r *messagesReq) topologyDepth(ctx context.Context, ev types.StreamEvent) (
 	}
 	r.topoDepths[ev.EventID()] = depth
 	return depth, nil
+}
+
+// topologyDepths resolves a page of events in one topology query where the
+// storage backend supports it. The fallback keeps small test snapshots and
+// alternate implementations compatible.
+func (r *messagesReq) topologyDepths(ctx context.Context, events []types.StreamEvent) (map[string]int64, error) {
+	depths := make(map[string]int64, len(events))
+	ids := make([]string, len(events))
+	for i := range events {
+		ids[i] = events[i].EventID()
+	}
+	if batch, ok := r.snapshot.(interface {
+		EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error)
+	}); ok {
+		positions, err := batch.EventPositionsInTopology(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		if r.topoDepths == nil {
+			r.topoDepths = make(map[string]int64, len(events))
+		}
+		for _, ev := range events {
+			depth := int64(ev.Depth())
+			if pos, found := positions[ev.EventID()]; found {
+				depth = int64(pos.Depth)
+			}
+			r.topoDepths[ev.EventID()] = depth
+			depths[ev.EventID()] = depth
+		}
+		return depths, nil
+	}
+	for _, ev := range events {
+		depth, err := r.topologyDepth(ctx, ev)
+		if err != nil {
+			return nil, err
+		}
+		depths[ev.EventID()] = depth
+	}
+	return depths, nil
+}
+
+func (r *messagesReq) topologyDepthsForEvents(ctx context.Context, events []*rstypes.HeaderedEvent) (map[string]int64, error) {
+	streamEvents := make([]types.StreamEvent, len(events))
+	for i, ev := range events {
+		streamEvents[i] = types.StreamEvent{HeaderedEvent: ev}
+	}
+	return r.topologyDepths(ctx, streamEvents)
 }
 
 type messagesResp struct {
@@ -214,6 +267,7 @@ func OnIncomingMessagesRequest(
 	// Extract parameters from the request's URL.
 	// Pagination tokens.
 	var fromStream *types.StreamingToken
+	fromTopologyToken := false
 	fromQuery := req.URL.Query().Get("from")
 	toQuery := req.URL.Query().Get("to")
 
@@ -247,7 +301,9 @@ func OnIncomingMessagesRequest(
 	}
 
 	from, err := types.NewTopologyTokenFromString(fromQuery)
-	if err != nil {
+	if err == nil {
+		fromTopologyToken = !emptyFromSupplied
+	} else {
 		var streamToken types.StreamingToken
 		if streamToken, err = types.NewStreamTokenFromString(fromQuery); err != nil {
 			return util.JSONResponse{
@@ -315,27 +371,36 @@ func OnIncomingMessagesRequest(
 		}
 		if backwardOrdering {
 			from = token
+			fromTopologyToken = false
 		}
 	}
 
 	mReq := messagesReq{
-		ctx:              req.Context(),
-		db:               db,
-		snapshot:         snapshot,
-		rsAPI:            rsAPI,
-		cfg:              cfg,
-		roomID:           roomID,
-		from:             &from,
-		fromStream:       fromStream,
-		to:               &to,
-		wasToProvided:    wasToProvided,
-		filter:           filter,
-		backwardOrdering: backwardOrdering,
-		device:           device,
-		deviceUserID:     *deviceUserID,
+		ctx:               req.Context(),
+		db:                db,
+		snapshot:          snapshot,
+		rsAPI:             rsAPI,
+		cfg:               cfg,
+		roomID:            roomID,
+		from:              &from,
+		fromStream:        fromStream,
+		fromTopologyToken: fromTopologyToken,
+		to:                &to,
+		wasToProvided:     wasToProvided,
+		filter:            filter,
+		backwardOrdering:  backwardOrdering,
+		device:            device,
+		deviceUserID:      *deviceUserID,
 	}
 
 	clientEvents, start, end, err := mReq.retrieveEvents(req.Context(), rsAPI)
+	if errors.Is(err, errBackwardBackfillIncomplete) {
+		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: backward history gap remains open")
+		return util.JSONResponse{
+			Code: http.StatusTooManyRequests,
+			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", forwardBackfillRetryAfterMS),
+		}
+	}
 	if errors.Is(err, errForwardBackfillIncomplete) {
 		// Progress is stored, so a retry continues where this request stopped.
 		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: history gap not yet closed")
@@ -424,11 +489,12 @@ func (r *messagesReq) extremityBranchEvents(
 	// candidates' lowest wire depth.
 	candidates := make(map[string]struct{})
 	minDepth := int64(math.MaxInt64)
+	pageDepths, err := r.topologyDepths(ctx, page)
+	if err != nil {
+		return nil, err
+	}
 	for _, ev := range page {
-		evDepth, depthErr := r.topologyDepth(ctx, ev)
-		if depthErr != nil {
-			return nil, depthErr
-		}
+		evDepth := pageDepths[ev.EventID()]
 		if evDepth < extremityDepth {
 			candidates[ev.EventID()] = struct{}{}
 			if ev.Depth() < minDepth {
@@ -537,6 +603,26 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	end types.TopologyToken, err error,
 ) {
 	emptyToken := types.TopologyToken{}
+	// Backward /messages cursors are placed immediately before the event at
+	// PDUPosition+1. Late-parent repair can move that anchor in topology while
+	// preserving its stream position; resolve the anchor again so the old token
+	// still describes the same boundary.
+	if r.backwardOrdering && r.fromTopologyToken && r.from.PDUPosition < types.StreamPosition(math.MaxInt64) {
+		if resolver, ok := r.snapshot.(interface {
+			EventPositionByStreamPosition(context.Context, string, types.StreamPosition) (types.TopologyToken, error)
+		}); ok {
+			anchor, lookupErr := resolver.EventPositionByStreamPosition(ctx, r.roomID, r.from.PDUPosition+1)
+			switch {
+			case lookupErr == nil:
+				r.from.Depth = anchor.Depth
+			case errors.Is(lookupErr, sql.ErrNoRows):
+				// Some callers use topology tokens that are not tied to a stored
+				// event. Keep their original position.
+			default:
+				return nil, *r.from, emptyToken, fmt.Errorf("resolve backward cursor anchor: %w", lookupErr)
+			}
+		}
+	}
 	// Retrieve the events from the local database.
 	// streamEvents has already been filtered by the client's sender/type filter (SelectEvents).
 	// topologyStart/end come from the unfiltered topology range, so end remains valid for
@@ -576,11 +662,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// client supplied a `to` bound, and for stream tokens, whose position is in
 	// stream order rather than topology order.
 	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
-		firstDepth, fErr := r.topologyDepth(ctx, streamEvents[0])
+		firstPos, fErr := r.snapshot.EventPositionInTopology(ctx, streamEvents[0].EventID())
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
 		}
-		filled, fErr := r.fillForwardGap(ctx, firstDepth)
+		filled, fErr := r.fillForwardGap(ctx, firstPos)
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
 		}
@@ -709,13 +795,12 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
 			// are all there is: return them rather than ending pagination here.
-			sort.Slice(withheld, func(i, j int) bool {
-				if withheld[i].Depth() == withheld[j].Depth() {
-					return withheld[i].StreamPosition < withheld[j].StreamPosition
-				}
-				return withheld[i].Depth() < withheld[j].Depth()
-			})
 			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, withheld, r.rsAPI) //nolint:contextcheck
+			// Order by stored topology position: a lifted event's wire depth
+			// is lower than where it sits.
+			if err = r.sortByTopology(events); err != nil {
+				return []synctypes.ClientEvent{}, *r.from, emptyToken, err
+			}
 			topologyHadEvents = true
 		}
 	} else if len(streamEvents) > 0 {
@@ -771,6 +856,11 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// If we backfilled in the process of getting events, we need
 	// to re-fetch the start/end positions
 	if r.didBackfill {
+		// Backfilled events can arrive after a late parent has lifted stored
+		// topology positions, so wire depth no longer orders the page.
+		if err = r.sortByTopology(filteredEvents); err != nil {
+			return []synctypes.ClientEvent{}, *r.from, *r.to, err
+		}
 		end, err = r.getEnd(filteredEvents)
 		if err != nil {
 			return []synctypes.ClientEvent{}, *r.from, *r.to, err
@@ -861,6 +951,68 @@ func (r *messagesReq) filterByStreamToken(
 		}
 	}
 	return filtered, end, nil
+}
+
+// sortByTopology orders events by their stored topology position, using the
+// stream position to break ties. The wire depth of an event can be lower than
+// its stored position after a late parent lifts it, so it is only a fallback
+// for events without a stored position.
+func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
+	type eventPosition struct {
+		depth, stream int64
+		known         bool
+	}
+	positions := make(map[string]eventPosition, len(events))
+	ids := make([]string, len(events))
+	for i, ev := range events {
+		ids[i] = ev.EventID()
+	}
+	var batchPositions map[string]types.TopologyToken
+	if batch, ok := r.snapshot.(interface {
+		EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error)
+	}); ok {
+		var err error
+		batchPositions, err = batch.EventPositionsInTopology(r.ctx, ids)
+		if err != nil {
+			return err
+		}
+	}
+	for _, ev := range events {
+		var pos eventPosition
+		topology, found := batchPositions[ev.EventID()]
+		var posErr error
+		if batchPositions != nil {
+			if !found {
+				posErr = sql.ErrNoRows
+			}
+		} else {
+			topology, posErr = r.snapshot.EventPositionInTopology(r.ctx, ev.EventID())
+		}
+		switch {
+		case posErr == nil:
+			pos = eventPosition{depth: int64(topology.Depth), stream: int64(topology.PDUPosition), known: true}
+			if r.topoDepths == nil {
+				r.topoDepths = make(map[string]int64)
+			}
+			r.topoDepths[ev.EventID()] = pos.depth
+		case errors.Is(posErr, sql.ErrNoRows):
+			pos.depth = ev.Depth()
+		default:
+			return fmt.Errorf("EventPositionInTopology(%s): %w", ev.EventID(), posErr)
+		}
+		positions[ev.EventID()] = pos
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		left, right := positions[events[i].EventID()], positions[events[j].EventID()]
+		if left.known && right.known {
+			if left.depth == right.depth {
+				return left.stream < right.stream
+			}
+			return left.depth < right.depth
+		}
+		return events[i].Depth() < events[j].Depth()
+	})
+	return nil
 }
 
 func (r *messagesReq) getEnd(events []*rstypes.HeaderedEvent) (end types.TopologyToken, err error) {
@@ -967,7 +1119,7 @@ func deepestExtremities(
 // deeper in the room belongs to a gap the walk has not reached yet, and filling
 // it here would store events newer than the page's own range. Extremities at or
 // behind the cursor are history the walk already passed.
-func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventDepth int64) (string, []string, error) {
+func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPosition types.TopologyToken) (string, []string, error) {
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
 	if err != nil || len(backwardExtremities) == 0 {
 		return "", nil, err
@@ -977,27 +1129,33 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventDepth i
 		return "", nil, err
 	}
 	bestID := ""
-	bestDepth := int64(math.MaxInt64)
+	bestPosition := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
 	for extremityID := range open {
 		pos, posErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
 		if posErr != nil {
 			continue
 		}
-		depth := int64(pos.Depth)
-		if r.from != nil && depth <= int64(r.from.Depth) {
+		if r.from != nil && !topologyTokenLess(*r.from, pos) {
 			continue
 		}
-		if depth > firstEventDepth {
+		if topologyTokenLess(firstEventPosition, pos) {
 			continue
 		}
-		if depth < bestDepth {
-			bestID, bestDepth = extremityID, depth
+		if topologyTokenLess(pos, bestPosition) {
+			bestID, bestPosition = extremityID, pos
 		}
 	}
 	if bestID == "" {
 		return "", nil, nil
 	}
 	return bestID, backwardExtremities[bestID], nil
+}
+
+func topologyTokenLess(left, right types.TopologyToken) bool {
+	if left.Depth == right.Depth {
+		return left.PDUPosition < right.PDUPosition
+	}
+	return left.Depth < right.Depth
 }
 
 // truncateForwardPageAtGap cuts a forward page before the first event, after
@@ -1008,7 +1166,7 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventDepth i
 func (r *messagesReq) truncateForwardPageAtGap(
 	ctx context.Context, events []types.StreamEvent, end types.TopologyToken,
 ) ([]types.StreamEvent, types.TopologyToken, error) {
-	if len(events) < minBranchesForSelection {
+	if len(events) == 0 {
 		return events, end, nil
 	}
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
@@ -1036,11 +1194,23 @@ func (r *messagesReq) truncateForwardPageAtGap(
 			// The gap may be absent from events because sender/type filters
 			// removed its event. Stop before the first visible event whose
 			// topology position crosses that gap.
-			if gap.Depth > previous.Depth && gap.Depth <= current.Depth {
+			if topologyTokenLess(previous, gap) && !topologyTokenLess(current, gap) {
 				return events[:i], previous, nil
 			}
 		}
 		previous = current
+	}
+	for extremityID := range open {
+		gap, gapErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
+		if gapErr != nil {
+			continue
+		}
+		if topologyTokenLess(previous, gap) && !topologyTokenLess(end, gap) {
+			// The marker itself was removed by the room filter, but the raw
+			// topology range crossed it. Keep the cursor at the last visible
+			// event so the next request can fill the gap before continuing.
+			return events, previous, nil
+		}
 	}
 	return events, end, nil
 }
@@ -1053,10 +1223,10 @@ func (r *messagesReq) truncateForwardPageAtGap(
 // marker down the chain towards the cursor. Filling stops once no open
 // extremity is left ahead of the cursor, or when the remote servers have no
 // more events (the page is then served from what is stored).
-func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventDepth int64) (bool, error) {
+func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition types.TopologyToken) (bool, error) {
 	filled := false
 	for r.forwardBackfillRounds < maxForwardBackfillRounds {
-		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventDepth)
+		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
 		if err != nil {
 			return filled, err
 		}
@@ -1088,7 +1258,7 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventDepth int64)
 
 	// The last batch may have closed the gap exactly at the bound, so only
 	// report failure when an open gap is still ahead of the cursor.
-	extremityID, _, err := r.forwardGapExtremity(ctx, firstEventDepth)
+	extremityID, _, err := r.forwardGapExtremity(ctx, firstEventPosition)
 	if err != nil {
 		return filled, err
 	}
@@ -1214,13 +1384,22 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 				}
 				util.GetLogger(r.ctx).WithError(bfErr).Warn("Backfill at backward extremity failed")
 			} else {
+				if incomplete, checkErr := r.backfillBatchHasMissingParents(streamEvents, pdus); checkErr != nil {
+					return nil, checkErr
+				} else if incomplete {
+					return nil, errBackwardBackfillIncomplete
+				}
 				// Backfilled events come from federation and are not pre-filtered
 				// by the database query, so apply the client's filter here too.
 				pdus = filterHeaderedEvents(pdus, r.filter)
-				pageEndDepth := streamEvents[0].Depth()
-				for _, ev := range streamEvents[1:] {
-					if ev.Depth() < pageEndDepth {
-						pageEndDepth = ev.Depth()
+				pagePositions, posErr := r.topologyDepths(r.ctx, streamEvents)
+				if posErr != nil {
+					return nil, posErr
+				}
+				pageEndDepth := int64(math.MaxInt64)
+				for _, ev := range streamEvents {
+					if depth := pagePositions[ev.EventID()]; depth < pageEndDepth {
+						pageEndDepth = depth
 					}
 				}
 				onPage := make(map[string]struct{}, len(streamEvents))
@@ -1229,8 +1408,12 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 				}
 				// The page can exceed the limit by the gap events kept here. A
 				// client tolerates a long page, and dropping them would skip them.
+				backfilledPositions, posErr := r.topologyDepthsForEvents(r.ctx, pdus)
+				if posErr != nil {
+					return nil, posErr
+				}
 				for _, ev := range pdus {
-					if ev.Depth() < pageEndDepth {
+					if backfilledPositions[ev.EventID()] < pageEndDepth {
 						continue
 					}
 					if _, duplicate := onPage[ev.EventID()]; duplicate {
@@ -1263,7 +1446,14 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		default:
 			r.didBackfill = true
 			if len(pdus) > 0 {
-				sort.Sort(eventsByDepth(pdus))
+				if incomplete, checkErr := r.backfillBatchHasMissingParents(streamEvents, pdus); checkErr != nil {
+					return nil, checkErr
+				} else if incomplete {
+					return nil, errBackwardBackfillIncomplete
+				}
+				if err = r.sortByTopology(pdus); err != nil {
+					return nil, err
+				}
 				r.backfillHadEvents = true
 				backfillEnd, positionErr := r.getEnd(pdus)
 				if positionErr != nil {
@@ -1286,10 +1476,18 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 		// those sit below the gap (e.g. from an earlier stay in the room); returning
 		// them would put the end token past the gap and skip the stored events in
 		// between, so leave them for a later page.
-		oldest := events[0].Depth()
+		backfilledPositions, posErr := r.topologyDepthsForEvents(r.ctx, events)
+		if posErr != nil {
+			return nil, posErr
+		}
+		oldest := backfilledPositions[events[0].EventID()]
+		localPositions, posErr := r.topologyDepthsForEvents(r.ctx, localEvents)
+		if posErr != nil {
+			return nil, posErr
+		}
 		kept := localEvents[:0]
 		for _, ev := range localEvents {
-			if ev.Depth() >= oldest {
+			if localPositions[ev.EventID()] >= oldest {
 				kept = append(kept, ev)
 			}
 		}
@@ -1297,9 +1495,47 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	}
 	events = append(events, localEvents...)
 	events = append(events, backfilledAbovePageEnd...)
-	sort.Sort(eventsByDepth(events))
+	if r.didBackfill {
+		if err = r.sortByTopology(events); err != nil {
+			return nil, err
+		}
+	} else {
+		sort.Sort(eventsByDepth(events))
+	}
 
 	return
+}
+
+// backfillBatchHasMissingParents detects whether the oldest returned history
+// still ends at an unresolved parent. Returning a lower local page would move
+// the cursor below that gap. The batch has already been stored, so retrying
+// unchanged lets the next request continue from its newly exposed extremity.
+func (r *messagesReq) backfillBatchHasMissingParents(
+	page []types.StreamEvent, backfilled []*rstypes.HeaderedEvent,
+) (bool, error) {
+	known := make(map[string]struct{}, len(page)+len(backfilled))
+	var parentIDs []string
+	for _, event := range page {
+		known[event.EventID()] = struct{}{}
+	}
+	for _, event := range backfilled {
+		known[event.EventID()] = struct{}{}
+		parentIDs = append(parentIDs, event.PrevEventIDs()...)
+	}
+	var missing []string
+	for _, parentID := range util.UniqueStrings(parentIDs) {
+		if _, ok := known[parentID]; !ok {
+			missing = append(missing, parentID)
+		}
+	}
+	if len(missing) == 0 {
+		return false, nil
+	}
+	stored, err := r.snapshot.Events(r.ctx, missing)
+	if err != nil {
+		return false, fmt.Errorf("check parents of backfilled page: %w", err)
+	}
+	return len(stored) < len(missing), nil
 }
 
 type eventsByDepth []*rstypes.HeaderedEvent

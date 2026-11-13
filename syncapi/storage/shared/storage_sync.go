@@ -387,6 +387,27 @@ func (d *DatabaseTransaction) EventPositionInTopology(
 	return types.TopologyToken{Depth: depth, PDUPosition: stream}, nil
 }
 
+// EventPositionByStreamPosition resolves an event's current topology position
+// from its stable room stream position. It lets /messages re-anchor a
+// previously issued topology cursor after a late-parent repair moved events.
+func (d *DatabaseTransaction) EventPositionByStreamPosition(
+	ctx context.Context, roomID string, streamPos types.StreamPosition,
+) (types.TopologyToken, error) {
+	depth, stream, err := d.Topology.SelectPositionByStreamPosition(ctx, d.txn, roomID, streamPos)
+	if err != nil {
+		return types.TopologyToken{}, err
+	}
+	return types.TopologyToken{Depth: depth, PDUPosition: stream}, nil
+}
+
+// EventPositionsInTopology returns current positions for multiple events in a
+// single query, omitting IDs that are not stored in topology.
+func (d *DatabaseTransaction) EventPositionsInTopology(
+	ctx context.Context, eventIDs []string,
+) (map[string]types.TopologyToken, error) {
+	return d.Topology.SelectPositionsInTopology(ctx, d.txn, eventIDs)
+}
+
 func (d *DatabaseTransaction) StreamToTopologicalPosition(
 	ctx context.Context, roomID string, streamPos types.StreamPosition, backwardOrdering bool,
 ) (types.TopologyToken, error) {

@@ -182,7 +182,8 @@ func TestFillForwardGapClosesHoleAheadOfCursor(t *testing.T) {
 	require.NotEmpty(t, state.extremities, "the first stored event has a missing prev event")
 
 	r := newForwardGapReq(state, 0)
-	filled, err := r.fillForwardGap(r.ctx, all[split].Depth())
+	position := types.TopologyToken{Depth: types.StreamPosition(all[split].Depth()), PDUPosition: types.StreamPosition(all[split].Depth())}
+	filled, err := r.fillForwardGap(r.ctx, position)
 	require.NoError(t, err)
 	assert.True(t, filled)
 	assert.Empty(t, state.unstored, "the whole hole is filled")
@@ -207,7 +208,8 @@ func TestFillForwardGapReportsIncompleteGap(t *testing.T) {
 	hole := len(state.unstored)
 
 	r := newForwardGapReq(state, 0)
-	filled, err := r.fillForwardGap(r.ctx, all[split].Depth())
+	position := types.TopologyToken{Depth: types.StreamPosition(all[split].Depth()), PDUPosition: types.StreamPosition(all[split].Depth())}
+	filled, err := r.fillForwardGap(r.ctx, position)
 	assert.ErrorIs(t, err, errForwardBackfillIncomplete)
 	assert.True(t, filled, "the batches fetched before the bound are kept")
 	assert.Equal(t, maxForwardBackfillRounds, state.batches)
@@ -240,16 +242,16 @@ func TestForwardGapExtremityOnlyTakesGapsAheadOfTheCursor(t *testing.T) {
 		from:     &types.TopologyToken{Depth: 10},
 	}
 
-	extremityID, prevs, err := r.forwardGapExtremity(r.ctx, 100)
+	extremityID, prevs, err := r.forwardGapExtremity(r.ctx, types.TopologyToken{Depth: 100})
 	require.NoError(t, err)
 	assert.Equal(t, "$ahead", extremityID, "the shallowest gap ahead wins")
 	assert.Equal(t, []string{"$a"}, prevs)
 
-	extremityID, _, err = r.forwardGapExtremity(r.ctx, 40)
+	extremityID, _, err = r.forwardGapExtremity(r.ctx, types.TopologyToken{Depth: 40})
 	require.NoError(t, err)
 	assert.Empty(t, extremityID, "a marker beyond the page's first event is a later gap")
 
-	extremityID, _, err = r.forwardGapExtremity(r.ctx, 50)
+	extremityID, _, err = r.forwardGapExtremity(r.ctx, types.TopologyToken{Depth: 50})
 	require.NoError(t, err)
 	assert.Equal(t, "$ahead", extremityID, "a gap at the first event's depth is the one being jumped over")
 }

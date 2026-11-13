@@ -69,6 +69,18 @@ func TestTopologyTable(t *testing.T) {
 				}
 				highestPos = topoPos + 1
 			}
+			ids := make([]string, len(events))
+			for i, event := range events {
+				ids[i] = event.EventID()
+			}
+			positions, err := tab.SelectPositionsInTopology(ctx, txn, ids)
+			if err != nil {
+				return fmt.Errorf("failed to SelectPositionsInTopology: %w", err)
+			}
+			assert.Len(t, positions, len(events))
+			for i, event := range events {
+				assert.Equal(t, types.TopologyToken{Depth: types.StreamPosition(i + 1), PDUPosition: types.StreamPosition(i)}, positions[event.EventID()])
+			}
 			// check ordering works without limit
 			eventIDs, start, end, err := tab.SelectEventIDsInRange(ctx, txn, room.ID, 0, highestPos, highestPos, 100, true)
 			assert.NoError(t, err, "failed to SelectEventIDsInRange")

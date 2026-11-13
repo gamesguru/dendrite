@@ -71,6 +71,14 @@ const selectPositionInTopologySQL = "" +
 	"SELECT topological_position, stream_position FROM syncapi_output_room_events_topology" +
 	" WHERE event_id = $1"
 
+const selectPositionByStreamPositionSQL = "" +
+	"SELECT topological_position, stream_position FROM syncapi_output_room_events_topology" +
+	" WHERE room_id = $1 AND stream_position = $2"
+
+const selectPositionsInTopologySQL = "" +
+	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
+	" WHERE event_id = ANY($1)"
+
 const selectStreamToTopologicalPositionAscSQL = "" +
 	"SELECT topological_position FROM syncapi_output_room_events_topology WHERE room_id = $1 AND stream_position >= $2 ORDER BY topological_position ASC LIMIT 1;"
 
@@ -109,6 +117,8 @@ type outputRoomEventsTopologyStatements struct {
 	selectEventIDsInRangeDESCStmt                 *sql.Stmt
 	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
 	selectPositionInTopologyStmt                  *sql.Stmt
+	selectPositionByStreamPositionStmt            *sql.Stmt
+	selectPositionsInTopologyStmt                 *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
 	selectFirstSyncedDepthAfterStreamPositionStmt *sql.Stmt
@@ -131,6 +141,8 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
 		{&s.selectEventIDsBeforeStreamPositionStmt, selectEventIDsBeforeStreamPositionSQL},
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
+		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
+		{&s.selectPositionsInTopologyStmt, selectPositionsInTopologySQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
 		{&s.selectFirstSyncedDepthAfterStreamPositionStmt, selectFirstSyncedDepthAfterStreamPositionSQL},
@@ -297,6 +309,36 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionInTopology(
 ) (pos, spos types.StreamPosition, err error) {
 	err = sqlutil.TxStmt(txn, s.selectPositionInTopologyStmt).QueryRowContext(ctx, eventID).Scan(&pos, &spos)
 	return
+}
+
+func (s *outputRoomEventsTopologyStatements) SelectPositionByStreamPosition(
+	ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition,
+) (depth, spos types.StreamPosition, err error) {
+	err = sqlutil.TxStmt(txn, s.selectPositionByStreamPositionStmt).QueryRowContext(ctx, roomID, streamPos).Scan(&depth, &spos)
+	return
+}
+
+func (s *outputRoomEventsTopologyStatements) SelectPositionsInTopology(
+	ctx context.Context, txn *sql.Tx, eventIDs []string,
+) (map[string]types.TopologyToken, error) {
+	positions := make(map[string]types.TopologyToken, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return positions, nil
+	}
+	rows, err := sqlutil.TxStmt(txn, s.selectPositionsInTopologyStmt).QueryContext(ctx, eventIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "selectPositionsInTopology: rows.close() failed")
+	for rows.Next() {
+		var eventID string
+		var position types.TopologyToken
+		if err = rows.Scan(&eventID, &position.Depth, &position.PDUPosition); err != nil {
+			return nil, err
+		}
+		positions[eventID] = position
+	}
+	return positions, rows.Err()
 }
 
 // SelectStreamToTopologicalPosition returns the closest position of a given event

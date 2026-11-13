@@ -126,6 +126,9 @@ type DatabaseTransaction interface {
 	GetEventsBeforeStreamPosition(ctx context.Context, maxStreamPos types.StreamPosition, to *types.TopologyToken, roomID string, filter *synctypes.RoomEventFilter, includeBackfilled bool) (events []types.StreamEvent, start, end types.TopologyToken, err error)
 	// EventPositionInTopology returns the depth and stream position of the given event.
 	EventPositionInTopology(ctx context.Context, eventID string) (types.TopologyToken, error)
+	// EventPositionByStreamPosition resolves an event's current topology
+	// position from its stable stream position.
+	EventPositionByStreamPosition(ctx context.Context, roomID string, streamPos types.StreamPosition) (types.TopologyToken, error)
 	// BackwardExtremitiesForRoom returns a map of backwards extremity event ID to a list of its prev_events.
 	BackwardExtremitiesForRoom(ctx context.Context, roomID string) (backwardExtremities map[string][]string, err error)
 	// StreamEventsToEvents converts streamEvent to Event. If device is non-nil and

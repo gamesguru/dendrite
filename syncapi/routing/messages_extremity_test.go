@@ -7,6 +7,8 @@ package routing
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -176,4 +178,48 @@ func TestExtremityBranchEventsComparesTopologyDepth(t *testing.T) {
 	assert.Equal(t, map[string]struct{}{branchPoint.EventID(): {}}, excluded)
 	assert.NotContains(t, excluded, lifted.EventID(),
 		"an event stored above the extremity is not on the gap's branch, whatever its wire depth")
+}
+
+// A late parent lifts a child above its wire depth; ordering follows the
+// stored position, not the wire depth.
+func TestSortByTopologyUsesStoredPosition(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	lifted := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "lifted"}, test.WithDepth(5))
+	other := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "other"}, test.WithDepth(10))
+	snapshot := &eventMapSnapshot{
+		events:    map[string]*rstypes.HeaderedEvent{lifted.EventID(): lifted, other.EventID(): other},
+		positions: map[string]types.StreamPosition{lifted.EventID(): 20},
+	}
+	req := &messagesReq{snapshot: snapshot}
+	events := []*rstypes.HeaderedEvent{lifted, other}
+	require.NoError(t, req.sortByTopology(events))
+	assert.Equal(t, []string{other.EventID(), lifted.EventID()}, []string{events[0].EventID(), events[1].EventID()})
+}
+
+type noRowsSnapshot struct {
+	storage.DatabaseTransaction
+	err error
+}
+
+func (s noRowsSnapshot) EventPositionInTopology(context.Context, string) (types.TopologyToken, error) {
+	return types.TopologyToken{}, s.err
+}
+
+// Only a missing topology row falls back to the wire depth; any other error
+// is returned and nothing is cached.
+func TestTopologyDepthOnlyFallsBackOnMissingRow(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ev := types.StreamEvent{HeaderedEvent: room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "x"}, test.WithDepth(7))}
+
+	req := &messagesReq{snapshot: noRowsSnapshot{err: sql.ErrNoRows}}
+	depth, err := req.topologyDepth(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), depth)
+
+	req = &messagesReq{snapshot: noRowsSnapshot{err: errors.New("connection reset")}}
+	_, err = req.topologyDepth(context.Background(), ev)
+	require.Error(t, err)
+	assert.Empty(t, req.topoDepths, "a failed lookup must not be cached")
 }

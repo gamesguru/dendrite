@@ -1548,6 +1548,42 @@ func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
 	})
 }
 
+// A sender or type filter that removes every event of a non-empty range must
+// still leave the range's cursor, so /messages can tell a filtered-empty page
+// from the end of history.
+func TestTopologyPageKeepsCursorWhenFilterRemovesEveryEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		var msgs []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			msgs = append(msgs, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+		_ = MustWriteEvents(t, db, r.Events())
+		pos := MustWriteEvents(t, db, msgs)
+		last := pos[len(pos)-1]
+
+		noSuchType := []string{"org.example.no_such_type"}
+		filter := &synctypes.RoomEventFilter{Limit: 10, Types: &noSuchType}
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			from := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
+			events, start, end, err := snapshot.GetEventsInTopologicalRange(ctx, &from, &types.TopologyToken{}, r.ID, filter, true)
+			require.NoError(t, err)
+			assert.Empty(t, events)
+			assert.NotEqual(t, types.TopologyToken{}, start, "the range had events, so its bounds must survive the filter")
+			assert.NotEqual(t, types.TopologyToken{}, end)
+
+			events, start, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, last, &types.TopologyToken{}, r.ID, filter, true)
+			require.NoError(t, err)
+			assert.Empty(t, events)
+			assert.NotEqual(t, types.TopologyToken{}, start)
+			assert.NotEqual(t, types.TopologyToken{}, end)
+		})
+	})
+}
+
 // A stream token before every stored event refers to the first event persisted
 // after it, not to the start of the depth axis: depth can restart in a room, so
 // an unbounded cursor would begin at the deepest events.
@@ -1669,6 +1705,13 @@ func TestInsertLateParentLiftsStoredDescendants(t *testing.T) {
 			_, err := db.WriteEvent(ctx, event, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 			require.NoError(t, err)
 		}
+		var oldChildCursor types.TopologyToken
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			position, err := snapshot.EventPositionInTopology(ctx, child.EventID())
+			require.NoError(t, err)
+			oldChildCursor = position
+			oldChildCursor.Decrement()
+		})
 		_, err := db.WriteEvent(ctx, lateParent, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 
@@ -1683,6 +1726,10 @@ func TestInsertLateParentLiftsStoredDescendants(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, want, position.Depth, "event %s should follow all stored parents", event.EventID())
 			}
+			anchor, err := snapshot.EventPositionByStreamPosition(ctx, r.ID, oldChildCursor.PDUPosition+1)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1002), anchor.Depth,
+				"a previously issued cursor can resolve its event anchor after topology repair")
 		})
 	})
 }

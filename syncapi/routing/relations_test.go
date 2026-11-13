@@ -134,6 +134,11 @@ func TestRelations(t *testing.T) {
 			sync := types.StreamingToken{PDUPosition: position.PDUPosition}
 			_, ids = request(t, root.EventID(), "", "", "from="+url.QueryEscape(sync.String()), http.StatusOK)
 			require.Equal(t, []string{edit.EventID(), reply.EventID()}, ids)
+			// A token before every stored event is older than all of them: the
+			// relations persisted after it must not be returned as older history.
+			beforeAll := types.StreamingToken{PDUPosition: 0}
+			_, ids = request(t, root.EventID(), "", "", "from="+url.QueryEscape(beforeAll.String()), http.StatusOK)
+			require.Empty(t, ids)
 		})
 		t.Run("filters", func(t *testing.T) {
 			_, ids := request(t, root.EventID(), "m.thread", "", "", http.StatusOK)
