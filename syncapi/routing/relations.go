@@ -102,9 +102,21 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		if topoErr != nil || streamErr != nil {
 			return types.TopologyToken{}, nil, errInvalidRelationsToken
 		}
+		// A late-parent repair may have lifted the event this cursor sits
+		// before, so resolve its current depth as backward /messages does.
+		if backwards {
+			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
+				return types.TopologyToken{}, nil, err
+			}
+		}
 		return topology, &stream, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
+		if backwards {
+			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
+				return types.TopologyToken{}, nil, err
+			}
+		}
 		return topology, nil, nil
 	}
 	stream, err := types.NewStreamTokenFromString(token)
