@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build rezzy && linux && cgo
 
 package eventhash
 
