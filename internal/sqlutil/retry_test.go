@@ -3,6 +3,7 @@ package sqlutil
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +37,21 @@ func TestRetrySQLiteBusyStopsOnOtherErrors(t *testing.T) {
 	})
 	require.ErrorIs(t, err, other)
 	assert.Equal(t, 1, calls, "a non-busy error is not retried")
+}
+
+func TestRetrySQLiteBusyRunsAtLeastOnceForInvalidAttemptCount(t *testing.T) {
+	for _, maxAttempts := range []int{0, -1} {
+		t.Run(fmt.Sprintf("max_attempts_%d", maxAttempts), func(t *testing.T) {
+			calls := 0
+			wantErr := errors.New("write failed")
+			err := RetrySQLiteBusy(context.Background(), SQLiteRetryPolicy{MaxAttempts: maxAttempts}, func() error {
+				calls++
+				return wantErr
+			})
+			require.ErrorIs(t, err, wantErr)
+			assert.Equal(t, 1, calls)
+		})
+	}
 }
 
 func TestRetrySQLiteBusyReturnsLastBusyError(t *testing.T) {
