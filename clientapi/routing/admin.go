@@ -685,3 +685,69 @@ func parseUint64OrDefault(input string, defaultValue uint64) uint64 {
 	}
 	return v
 }
+
+// AdminFetchEvent pulls a single event from a remote server and ingests it.
+func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, eventID, serverName := vars["roomID"], vars["eventID"], vars["serverName"]
+	if roomID == "" || eventID == "" || serverName == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting server name, room ID and event ID."),
+		}
+	}
+	outcome, err := rsAPI.PerformAdminFetchEvent(req.Context(), roomID, eventID, spec.ServerName(serverName))
+	if err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
+		}).Error("failed to fetch event")
+		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.Unknown(err.Error())}
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Outcome string `json:"outcome"`
+	}{Outcome: outcome}}
+}
+
+// AdminFetchEvents is the batch form of AdminFetchEvent. Body: {"event_ids": [...]}.
+// Events are ingested sequentially in the order given (list oldest first to
+// avoid needless missing-prev-event lookups); one failure doesn't stop the rest.
+func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, serverName := vars["roomID"], vars["serverName"]
+	if roomID == "" || serverName == "" {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting server name and room ID.")}
+	}
+	var body struct {
+		EventIDs []string `json:"event_ids"`
+	}
+	if err = json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error())}
+	}
+	if len(body.EventIDs) == 0 || len(body.EventIDs) > 100 { //nolint:mnd
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"event_ids\" array of 1-100 event IDs.")}
+	}
+	results := make(map[string]string, len(body.EventIDs))
+	for _, eventID := range body.EventIDs {
+		outcome, err := rsAPI.PerformAdminFetchEvent(req.Context(), roomID, eventID, spec.ServerName(serverName))
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
+			}).Error("failed to fetch event")
+			results[eventID] = err.Error()
+			continue
+		}
+		results[eventID] = outcome
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Results map[string]string `json:"results"`
+	}{Results: results}}
+}

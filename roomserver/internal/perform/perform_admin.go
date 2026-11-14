@@ -826,3 +826,74 @@ func (r *Admin) PerformUserErasure(ctx context.Context, userID spec.UserID, eras
 	}
 	return r.DB.SetUserErased(ctx, userID.String(), erased)
 }
+
+// PerformAdminFetchEvent fetches eventID from serverName via federation /event,
+// verifies its signatures, and submits it as an ordinary new event (so missing
+// prev_events are fetched and auth/state resolution run as for a /send PDU).
+// It is not re-federated onwards (SendAsServer is empty). Use it to recover an
+// event another server has but which never reached us.
+func (r *Admin) PerformAdminFetchEvent(
+	ctx context.Context,
+	roomID, eventID string,
+	serverName spec.ServerName,
+) (string, error) {
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return "", err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return "", eventutil.ErrRoomNoExists{}
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return "", err
+	}
+	txn, err := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, serverName, eventID)
+	if err != nil {
+		return "", fmt.Errorf("fetching %s from %s: %w", eventID, serverName, err)
+	}
+	if len(txn.PDUs) == 0 {
+		return "", fmt.Errorf("%s returned no PDU for %s", serverName, eventID)
+	}
+	ev, err := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
+	if err != nil {
+		return "", fmt.Errorf("parsing event: %w", err)
+	}
+	if ev.EventID() != eventID {
+		return "", fmt.Errorf("%s returned event %s, wanted %s", serverName, ev.EventID(), eventID)
+	}
+	if ev.RoomID().String() != roomID {
+		return "", fmt.Errorf("event %s belongs to room %s, not %s", eventID, ev.RoomID().String(), roomID)
+	}
+	if err = gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+	}); err != nil {
+		return "", fmt.Errorf("signature check failed: %w", err)
+	}
+	inputRes := &api.InputRoomEventsResponse{}
+	r.Inputer.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+		InputRoomEvents: []api.InputRoomEvent{{
+			Kind:   api.KindNew,
+			Event:  &types.HeaderedEvent{PDU: ev},
+			Origin: serverName,
+		}},
+		Asynchronous: false,
+	}, inputRes)
+	if inputRes.ErrMsg != "" {
+		return "", inputRes.Err()
+	}
+	// InputRoomEvents succeeds even if the event ended up rejected, so read
+	// back what was actually persisted. (Soft-failed events are stored as
+	// accepted but excluded from current state; that is not distinguished here.)
+	states, err := r.DB.StateAtEventIDs(ctx, []string{eventID})
+	if err != nil {
+		return "", fmt.Errorf("reading back stored event: %w", err)
+	}
+	if len(states) == 0 {
+		return "not_stored", nil
+	}
+	if states[0].IsRejected {
+		return "rejected", nil
+	}
+	return "accepted", nil
+}

@@ -305,6 +305,10 @@ type ClientRoomserverAPI interface {
 	PerformAdminPurgeRoom(ctx context.Context, roomID string) error
 	PerformAdminDownloadState(ctx context.Context, roomID, userID string, serverName spec.ServerName) error
 	PerformAdminBridgeState(ctx context.Context, roomID, userID string, extraEventIDs []string) error
+	// PerformAdminFetchEvent fetches eventID from serverName over federation and
+	// feeds it through the normal input path as if it had arrived via /send.
+	// The outcome is read back from storage: "accepted", "rejected" or "not_stored".
+	PerformAdminFetchEvent(ctx context.Context, roomID, eventID string, serverName spec.ServerName) (outcome string, err error)
 	AdminQueryEmptyRooms(ctx context.Context) ([]string, error)
 	PerformPeek(ctx context.Context, req *PerformPeekRequest) (roomID string, err error)
 	PerformUnpeek(ctx context.Context, roomID, userID, deviceID string) error
