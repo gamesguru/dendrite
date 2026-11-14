@@ -86,6 +86,19 @@ type QueryStateAfterEventsResponse struct {
 	StateEvents []*types.HeaderedEvent `json:"state_events"`
 }
 
+// QueryRoomReconciliationStateRequest asks for the event set and frame used
+// by MSC4521 reconciliation.
+type QueryRoomReconciliationStateRequest struct {
+	RoomID string `json:"room_id"`
+}
+
+// QueryRoomReconciliationStateResponse is the room's MSC4521 event set.
+type QueryRoomReconciliationStateResponse struct {
+	RoomVersion        gomatrixserverlib.RoomVersion `json:"room_version"`
+	EventIDs           []string                      `json:"event_ids"`
+	ForwardExtremities []string                      `json:"forward_extremities"`
+}
+
 // QueryEventsByIDRequest is a request to QueryEventsByID.
 type QueryEventsByIDRequest struct {
 	// The roomID to query events for. If this is empty, we first try to fetch the roomID from the database

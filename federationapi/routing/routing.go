@@ -26,6 +26,7 @@ import (
 	"codefloe.com/pat-s/zendrite/federationapi/producers"
 	"codefloe.com/pat-s/zendrite/internal"
 	"codefloe.com/pat-s/zendrite/internal/httputil"
+	"codefloe.com/pat-s/zendrite/internal/reconciliation"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
@@ -75,6 +76,30 @@ func Setup(
 
 	wakeup := &FederationWakeups{
 		FsAPI: fsAPI,
+	}
+
+	// MSC4521 algebraic set reconciliation is unstable and only served when
+	// this build links rezzy and the deployment opts in.
+	if cfg.MSC4521Enabled && reconciliation.Enabled {
+		msc4521mux := fedMux.PathPrefix("/unstable/tk.nutra.msc0501").Subrouter()
+		msc4521mux.Handle("/room_digest/{roomID}", MakeFedAPI(
+			"federation_room_digest", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
+			func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+				return RoomDigest(httpReq, request, rsAPI, vars["roomID"], false)
+			},
+		)).Methods(http.MethodGet)
+		msc4521mux.Handle("/room_digest/{roomID}/strata", MakeFedAPI(
+			"federation_room_digest_strata", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
+			func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+				return RoomDigest(httpReq, request, rsAPI, vars["roomID"], true)
+			},
+		)).Methods(http.MethodGet)
+		msc4521mux.Handle("/room_diff/{roomID}", MakeFedAPI(
+			"federation_room_diff", cfg.Matrix.ServerName, cfg.Matrix.IsLocalServerName, keys, wakeup,
+			func(httpReq *http.Request, request *fclient.FederationRequest, vars map[string]string) util.JSONResponse {
+				return RoomDiff(httpReq, request, rsAPI, vars["roomID"])
+			},
+		)).Methods(http.MethodPost)
 	}
 
 	localKeys := httputil.MakeExternalAPI("localkeys", func(req *http.Request) util.JSONResponse {
@@ -610,7 +635,7 @@ func Setup(
 	v1fedmux.Handle("/version", httputil.MakeExternalAPI(
 		"federation_version",
 		func(httpReq *http.Request) util.JSONResponse {
-			return Version()
+			return Version(cfg.MSC4521Enabled && reconciliation.Enabled)
 		},
 	)).Methods(http.MethodGet)
 

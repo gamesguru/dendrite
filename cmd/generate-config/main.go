@@ -106,6 +106,9 @@ func main() {
 			// Complement joins rooms whose servers all fail to give state, and expects the
 			// join to be abandoned within seconds.
 			cfg.FederationAPI.PartialStateResyncGiveUpAfter = 5 * time.Second //nolint:mnd
+			// Exercise MSC4521 reconciliation. The rezzy build enables the
+			// endpoints; a non-rezzy build answers them as unsupported.
+			cfg.FederationAPI.MSC4521Enabled = true
 			// Allow allow networks when running in CI, as otherwise connections
 			// to other servers might be blocked when running Complement/Sytest.
 			cfg.FederationAPI.DenyNetworkCIDRs = []string{}

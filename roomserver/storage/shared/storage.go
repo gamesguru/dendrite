@@ -406,6 +406,10 @@ func (d *EventDatabase) EventIDs(
 	return d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 }
 
+func (d *EventDatabase) EventIDsInRoom(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
+	return d.EventsTable.SelectEventIDsInRoom(ctx, nil, roomNID)
+}
+
 func (d *EventDatabase) EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) ([]types.Event, error) {
 	return d.eventsFromIDs(ctx, nil, roomInfo, eventIDs, NoFilter)
 }

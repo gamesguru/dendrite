@@ -69,6 +69,11 @@ type FederationAPI struct {
 	// Should we prefer direct key fetches over perspective ones?
 	PreferDirectFetch bool `yaml:"prefer_direct_fetch"`
 
+	// MSC4521Enabled serves the unstable algebraic digest set reconciliation
+	// endpoints. It only takes effect in builds that link the native rezzy
+	// library (the "rezzy" build tag on Linux with cgo).
+	MSC4521Enabled bool `yaml:"msc4521_enabled"`
+
 	preferDirectFetchSet bool
 
 	// Deny/Allow lists used for restricting request scopes.

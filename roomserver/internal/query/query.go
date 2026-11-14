@@ -183,6 +183,34 @@ func (r *Queryer) QueryStateAfterEvents(
 	return nil
 }
 
+// QueryRoomReconciliationState returns the room's non-rejected timeline event
+// IDs and forward extremities for MSC4521 reconciliation.
+func (r *Queryer) QueryRoomReconciliationState(
+	ctx context.Context,
+	req *api.QueryRoomReconciliationStateRequest,
+	res *api.QueryRoomReconciliationStateResponse,
+) error {
+	info, err := r.DB.RoomInfo(ctx, req.RoomID)
+	if err != nil {
+		return err
+	}
+	if info == nil || info.IsStub() {
+		return fmt.Errorf("room %s not found", req.RoomID)
+	}
+	eventIDs, err := r.DB.EventIDsInRoom(ctx, info.RoomNID)
+	if err != nil {
+		return err
+	}
+	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
+	if err != nil {
+		return err
+	}
+	res.RoomVersion = info.RoomVersion
+	res.EventIDs = eventIDs
+	res.ForwardExtremities = latest
+	return nil
+}
+
 // QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
 // which room to use by querying the first event's room ID. Returned events include
 // local event orderings, also indexed by event ID in response.EventNIDs. Rejected

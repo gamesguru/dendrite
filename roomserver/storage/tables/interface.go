@@ -73,6 +73,9 @@ type Events interface {
 	SelectEventRejected(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, eventID string) (rejected bool, err error)
 
 	SelectRoomsWithEventTypeNID(ctx context.Context, txn *sql.Tx, eventTypeNID types.EventTypeNID) ([]types.RoomNID, error)
+	// SelectEventIDsInRoom returns the room's non-rejected timeline events
+	// (outliers have no state snapshot and are excluded) in event NID order.
+	SelectEventIDsInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) ([]string, error)
 }
 
 type Rooms interface {

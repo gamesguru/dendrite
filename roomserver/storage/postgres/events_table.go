@@ -153,6 +153,15 @@ const selectEventRejectedSQL = "" +
 
 const selectRoomsWithEventTypeNIDSQL = `SELECT DISTINCT room_nid FROM roomserver_events WHERE event_type_nid = $1`
 
+// selectEventIDsInRoomSQL returns the room's event set with resolved state.
+// Outliers have no state snapshot and rejected events are not part of the
+// reconciled set, so both are excluded. A state-less backfill entry is also
+// excluded until it gains state.
+const selectEventIDsInRoomSQL = "" +
+	"SELECT event_id FROM roomserver_events" +
+	" WHERE room_nid = $1 AND is_rejected = FALSE AND state_snapshot_nid != 0" +
+	" ORDER BY event_nid"
+
 type eventStatements struct {
 	insertEventStmt                               *sql.Stmt
 	selectEventStmt                               *sql.Stmt
@@ -174,6 +183,7 @@ type eventStatements struct {
 	selectRoomNIDsForEventNIDsStmt                *sql.Stmt
 	selectEventRejectedStmt                       *sql.Stmt
 	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
+	selectEventIDsInRoomStmt                      *sql.Stmt
 }
 
 func CreateEventsTable(ctx context.Context, db *sql.DB) error {
@@ -300,6 +310,7 @@ func PrepareEventsTable(db *sql.DB) (tables.Events, error) {
 		{&s.selectRoomNIDsForEventNIDsStmt, selectRoomNIDsForEventNIDsSQL},
 		{&s.selectEventRejectedStmt, selectEventRejectedSQL},
 		{&s.selectRoomsWithEventTypeNIDStmt, selectRoomsWithEventTypeNIDSQL},
+		{&s.selectEventIDsInRoomStmt, selectEventIDsInRoomSQL},
 	}.Prepare(db)
 }
 
@@ -706,4 +717,25 @@ func (s *eventStatements) SelectRoomsWithEventTypeNID(
 	}
 
 	return roomNIDs, rows.Err()
+}
+
+func (s *eventStatements) SelectEventIDsInRoom(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) ([]string, error) {
+	stmt := sqlutil.TxStmt(txn, s.selectEventIDsInRoomStmt)
+	rows, err := stmt.QueryContext(ctx, roomNID)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectEventIDsInRoom: rows.close() failed")
+
+	var eventIDs []string
+	var eventID string
+	for rows.Next() {
+		if err := rows.Scan(&eventID); err != nil {
+			return nil, err
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	return eventIDs, rows.Err()
 }

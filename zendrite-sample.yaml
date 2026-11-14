@@ -391,6 +391,12 @@ federation_api:
   # last resort.
   prefer_direct_fetch: false
 
+  # Serve the unstable MSC4521 algebraic digest set reconciliation endpoints.
+  # Only takes effect in builds that link the native rezzy library (the
+  # "rezzy" build tag on Linux with cgo); other builds answer them as
+  # unsupported. Default false.
+  msc4521_enabled: false
+
   # deny_networks and allow_networks are the CIDR ranges used to prevent requests
   # from accessing private IPs. If your system has specific IPs it should never
   # contact, add them here with CIDR notation.

@@ -305,6 +305,8 @@ type ClientRoomserverAPI interface {
 	PerformAdminPurgeRoom(ctx context.Context, roomID string) error
 	PerformAdminDownloadState(ctx context.Context, roomID, userID string, serverName spec.ServerName) error
 	PerformAdminBridgeState(ctx context.Context, roomID, userID string, extraEventIDs []string) error
+	// QueryRoomReconciliationState returns the room's MSC4521 event set and frame.
+	QueryRoomReconciliationState(ctx context.Context, req *QueryRoomReconciliationStateRequest, res *QueryRoomReconciliationStateResponse) error
 	// PerformAdminFetchEvent fetches eventID from serverName over federation and
 	// feeds it through the normal input path as if it had arrived via /send.
 	// The outcome is read back from storage: "accepted", "rejected" or "not_stored".
@@ -385,6 +387,9 @@ type FederationRoomserverAPI interface {
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
 	// which room to use by querying the first events roomID.
 	QueryEventsByID(ctx context.Context, req *QueryEventsByIDRequest, res *QueryEventsByIDResponse) error
+	// QueryRoomReconciliationState returns the room's non-rejected timeline
+	// event IDs and forward extremities for MSC4521 reconciliation.
+	QueryRoomReconciliationState(ctx context.Context, req *QueryRoomReconciliationStateRequest, res *QueryRoomReconciliationStateResponse) error
 	// Query to get state and auth chain for a (potentially hypothetical) event.
 	// Takes lists of PrevEventIDs and AuthEventsIDs and uses them to calculate
 	// the state and auth chain to return.

@@ -328,6 +328,12 @@ func Setup(
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
+	zendriteAdminRouter.Handle("/admin/reconcile/{serverName}/{roomID}",
+		httputil.MakeAdminAPI("admin_reconcile_room", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return AdminReconcileRoom(req, device, rsAPI, federation, zendriteCfg)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	zendriteAdminRouter.Handle("/admin/fetchEvents/{serverName}/{roomID}",
 		httputil.MakeAdminAPI("admin_fetch_events", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminFetchEvents(req, device, rsAPI)
