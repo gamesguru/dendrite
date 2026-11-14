@@ -294,6 +294,30 @@ func (d *Database) repairLateParentTopology(
 		return nil
 	}
 
+	// The late parent only affects descendants through its direct children. If
+	// every child already sits above it, no position changes and the room's
+	// history need not be read; this is the usual case at a backfill batch
+	// boundary.
+	ids := append([]string{ev.EventID()}, children...)
+	current, err := d.Topology.SelectPositionsInTopology(ctx, txn, ids)
+	if err != nil {
+		return err
+	}
+	parentToken, parentStored := current[ev.EventID()]
+	if !parentStored {
+		return nil
+	}
+	childMoves := false
+	for _, childID := range children {
+		if child, ok := current[childID]; ok && child.Depth <= parentToken.Depth {
+			childMoves = true
+			break
+		}
+	}
+	if !childMoves {
+		return nil
+	}
+
 	stored, err := d.Topology.SelectRoomEventTopology(ctx, txn, roomID, 0)
 	if err != nil {
 		return err
