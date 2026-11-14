@@ -655,11 +655,18 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	// is read again to include the new events. Backfill is skipped when the
 	// client supplied a `to` bound, and for stream tokens, whose position is in
 	// stream order rather than topology order.
-	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && len(streamEvents) > 0 {
-		firstPos, fErr := r.snapshot.EventPositionInTopology(ctx, streamEvents[0].EventID())
-		if errors.Is(fErr, sql.ErrNoRows) {
-			// No stored position: the wire depth is the best there is.
-			firstPos, fErr = types.TopologyToken{Depth: types.StreamPosition(streamEvents[0].Depth())}, nil
+	if !r.backwardOrdering && r.fromStream == nil && !r.wasToProvided && (len(streamEvents) > 0 || topologyHadEvents) {
+		// A sender/type filter can remove every stored event of a non-empty
+		// range, including the event that marks a gap. The raw range end then
+		// bounds the fill, so the cursor cannot move past the marker.
+		firstPos := end
+		var fErr error
+		if len(streamEvents) > 0 {
+			firstPos, fErr = r.snapshot.EventPositionInTopology(ctx, streamEvents[0].EventID())
+			if errors.Is(fErr, sql.ErrNoRows) {
+				// No stored position: the wire depth is the best there is.
+				firstPos, fErr = types.TopologyToken{Depth: types.StreamPosition(streamEvents[0].Depth())}, nil
+			}
 		}
 		if fErr != nil {
 			return []synctypes.ClientEvent{}, *r.from, emptyToken, fErr
@@ -1025,20 +1032,29 @@ func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
 // stale: it deliberately sits before everything stored (the prev_batch of a
 // room joined over federation, or an arbitrary old token), so it is kept.
 func (r *messagesReq) reanchorBackwardCursor(ctx context.Context) error {
-	if !r.backwardOrdering || !r.fromTopologyToken || r.from.PDUPosition == 0 || r.from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
+	if !r.backwardOrdering || !r.fromTopologyToken {
 		return nil
 	}
-	resolver, ok := r.snapshot.(interface {
+	return reanchorBackwardTopologyToken(ctx, r.snapshot, r.roomID, r.from)
+}
+
+// reanchorBackwardTopologyToken applies the re-anchoring described on
+// reanchorBackwardCursor to a backward topology token, in place.
+func reanchorBackwardTopologyToken(ctx context.Context, snapshot any, roomID string, from *types.TopologyToken) error {
+	if from.PDUPosition == 0 || from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
+		return nil
+	}
+	resolver, ok := snapshot.(interface {
 		EventPositionByStreamPosition(context.Context, string, types.StreamPosition) (types.TopologyToken, error)
 	})
 	if !ok {
 		return nil
 	}
-	anchor, err := resolver.EventPositionByStreamPosition(ctx, r.roomID, r.from.PDUPosition+1)
+	anchor, err := resolver.EventPositionByStreamPosition(ctx, roomID, from.PDUPosition+1)
 	switch {
 	case err == nil:
-		if anchor.Depth > r.from.Depth {
-			r.from.Depth = anchor.Depth
+		if anchor.Depth > from.Depth {
+			from.Depth = anchor.Depth
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		// Some callers use topology tokens that are not tied to a stored
