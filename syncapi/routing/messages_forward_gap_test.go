@@ -325,6 +325,73 @@ func TestTruncateForwardPageAtGapLooksUpEachGapOnce(t *testing.T) {
 		"one lookup per page event plus one per open gap")
 }
 
+// filteredForwardRange stands in for SelectEvents when the sender/type filter
+// removed every stored event of a non-empty topology range: no stream events,
+// but the raw range's start and end are still reported.
+type filteredForwardRange struct {
+	*forwardGapState
+	start, end types.TopologyToken
+}
+
+func (f filteredForwardRange) GetEventsInTopologicalRange(
+	context.Context, *types.TopologyToken, *types.TopologyToken, string,
+	*synctypes.RoomEventFilter, bool,
+) ([]types.StreamEvent, types.TopologyToken, types.TopologyToken, error) {
+	return nil, f.start, f.end, nil
+}
+
+// A filter can remove the membership event that marks an open gap. The empty
+// page must still fill that gap instead of moving its end token above it,
+// because forward pagination never comes back to it.
+func TestForwardFilteredEmptyPageChecksGapInRawRange(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 10; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	all := room.Events()
+	// Drop events 5..7 so all[8] carries a backwards-extremity marker.
+	stored := append(append([]*rstypes.HeaderedEvent{}, all[:5]...), all[8:]...)
+	state := newForwardGapState(stored, all[5:8])
+	require.Contains(t, state.extremities, all[8].EventID())
+
+	withHole := &messagesReq{
+		ctx:                   context.Background(),
+		snapshot:              filteredForwardRange{forwardGapState: state, start: state.positions[all[0].EventID()], end: state.positions[all[len(all)-1].EventID()]},
+		rsAPI:                 &forwardGapAPI{state: state},
+		cfg:                   &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
+		roomID:                "!room:test",
+		from:                  &types.TopologyToken{Depth: 1, PDUPosition: 1},
+		device:                &userapi.Device{UserID: "@alice:test"},
+		backwardOrdering:      false,
+		filter:                &synctypes.RoomEventFilter{Limit: 10},
+		forwardBackfillRounds: maxForwardBackfillRounds,
+	}
+	clientEvents, start, _, err := withHole.retrieveEvents(withHole.ctx, withHole.rsAPI)
+	require.ErrorIs(t, err, errForwardBackfillIncomplete,
+		"the filtered-out gap blocks the page instead of being skipped")
+	assert.Empty(t, clientEvents)
+	assert.Equal(t, *withHole.from, start)
+
+	// With no open gap the empty page is served normally.
+	closed := newForwardGapState(all, nil)
+	noHole := &messagesReq{
+		ctx:              context.Background(),
+		snapshot:         filteredForwardRange{forwardGapState: closed, start: closed.positions[all[0].EventID()], end: closed.positions[all[len(all)-1].EventID()]},
+		rsAPI:            &forwardGapAPI{state: closed},
+		cfg:              &config.SyncAPI{Matrix: &config.Global{ServerName: "test"}},
+		roomID:           "!room:test",
+		from:             &types.TopologyToken{Depth: 1, PDUPosition: 1},
+		device:           &userapi.Device{UserID: "@alice:test"},
+		backwardOrdering: false,
+		filter:           &synctypes.RoomEventFilter{Limit: 10},
+	}
+	_, _, end, err := noHole.retrieveEvents(noHole.ctx, noHole.rsAPI)
+	require.NoError(t, err)
+	assert.Equal(t, closed.positions[all[len(all)-1].EventID()], end,
+		"without a gap the raw range end is the next cursor")
+}
+
 type anchorSnapshot struct {
 	storage.DatabaseTransaction
 	anchor types.TopologyToken
