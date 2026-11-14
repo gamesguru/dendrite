@@ -18,7 +18,9 @@ FROM --platform=${TARGETPLATFORM} docker.io/rust:1.89-alpine AS rezzy-build
 RUN apk --update --no-cache add musl-dev
 WORKDIR /rezzy
 COPY --from=rezzy Cargo.toml Cargo.lock /rezzy/
+COPY --from=rezzy README.md /rezzy/README.md
 COPY --from=rezzy src /rezzy/src
+COPY --from=rezzy tests /rezzy/tests
 COPY --from=rezzy rezzy-cli /rezzy/rezzy-cli
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
 COPY --from=rezzy rezzy-json /rezzy/rezzy-json

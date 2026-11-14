@@ -8,10 +8,15 @@ Docker images for Dendrite are available from:
 ## Dockerfile
 
 The `Dockerfile` is a multistage file which can build Dendrite.
-From the root of the Dendrite repository, run:
+From the root of the Dendrite repository, initialize the Rezzy submodule and
+ensure the hooked gomatrixserverlib checkout is at `../gmsl`, then run:
 
 ```bash
-docker build -t pats22/dendrite:latest .
+git submodule update --init rezzy
+docker buildx build --load \
+  --build-context rezzy=./rezzy \
+  --build-context gmsl=../gmsl \
+  -t pats22/dendrite:latest .
 ```
 
 ## Compose file
