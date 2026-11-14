@@ -89,7 +89,7 @@ func parseRelationsParams(req *http.Request) (relationsParams, error) {
 // direction. For a stream token it also returns the parsed token: a decoded
 // stream position bounds the page by stream order, which the converted
 // topology token alone cannot express.
-func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards bool) (types.TopologyToken, *types.StreamingToken, error) {
+func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards, reanchor bool) (types.TopologyToken, *types.StreamingToken, error) {
 	if token == "" {
 		if backwards {
 			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil, nil
@@ -104,7 +104,9 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		}
 		// A late-parent repair may have lifted the event this cursor sits
 		// before, so resolve its current depth as backward /messages does.
-		if backwards {
+		// Only a backward `from` cursor is anchored this way; a `to` bound is
+		// not, or it would admit events beyond the requested end.
+		if reanchor {
 			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
 				return types.TopologyToken{}, nil, err
 			}
@@ -112,7 +114,7 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		return topology, &stream, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
-		if backwards {
+		if reanchor {
 			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
 				return types.TopologyToken{}, nil, err
 			}
@@ -189,11 +191,11 @@ func Relations(
 	}
 
 	q := req.URL.Query()
-	from, fromStream, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards)
+	from, fromStream, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards, params.backwards)
 	var to types.TopologyToken
 	if err == nil {
 		// A to token bounds the opposite end of the page.
-		to, _, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards)
+		to, _, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards, false)
 	}
 	if errors.Is(err, errInvalidRelationsToken) {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam(err.Error())}

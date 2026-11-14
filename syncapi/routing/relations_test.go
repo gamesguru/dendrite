@@ -234,7 +234,7 @@ func TestRelations(t *testing.T) {
 				require.Less(t, pages, 20, "pagination must make progress")
 				continuationSnapshot, snapshotErr := db.NewDatabaseSnapshot(ctx)
 				require.NoError(t, snapshotErr)
-				continued, stream, parseErr := parseRelationsToken(ctx, continuationSnapshot, room.ID, res.NextBatch, true)
+				continued, stream, parseErr := parseRelationsToken(ctx, continuationSnapshot, room.ID, res.NextBatch, true, true)
 				require.NoError(t, parseErr)
 				require.NoError(t, continuationSnapshot.Rollback())
 				require.NotZero(t, continued.Depth)
