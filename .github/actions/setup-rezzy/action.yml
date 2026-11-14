@@ -1,0 +1,31 @@
+---
+name: Set up local gomatrixserverlib and Rezzy
+description: Provide the sibling module checkouts and optionally build Rezzy's native library.
+inputs:
+  native:
+    description: Build the Linux native library and configure pkg-config.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Check out the hooked gomatrixserverlib fork
+      shell: bash
+      run: |
+        git init ../gmsl
+        git -C ../gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
+        git -C ../gmsl fetch --depth=1 origin 238ff2c
+        git -C ../gmsl checkout FETCH_HEAD
+    - name: Link the Rezzy submodule at the expected sibling path
+      shell: bash
+      run: ln -s "$GITHUB_WORKSPACE/rezzy" ../rezzy
+    - uses: dtolnay/rust-toolchain@stable
+      if: inputs.native == 'true'
+    - name: Build Rezzy native library
+      if: inputs.native == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config
+        make -C ../rezzy/rezzy-ffi native
+        echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/../rezzy/target/pkgconfig" >> "$GITHUB_ENV"

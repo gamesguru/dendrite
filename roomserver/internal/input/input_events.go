@@ -165,12 +165,6 @@ func (r *Inputer) processRoomEvent(
 		"origin":   input.Origin,
 		"type":     event.Type(),
 	})
-	if err := eventhash.Check(event); err != nil {
-		logger.WithError(err).Warn("rezzy disagrees with gomatrixserverlib about this event")
-	}
-	if err := eventhash.CheckContentHash(event); err != nil {
-		logger.WithError(err).Warn("rezzy could not verify the event content hash")
-	}
 	if input.HasState {
 		logger = logger.WithFields(logrus.Fields{
 			"has_state": input.HasState,

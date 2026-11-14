@@ -183,3 +183,5 @@ require (
 go 1.27.0
 
 replace github.com/gamesguru/rezzy/rezzy-ffi => ../rezzy/rezzy-ffi
+
+replace github.com/gamesguru/gomatrixserverlib => ../gmsl
