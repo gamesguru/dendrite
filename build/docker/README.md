@@ -23,6 +23,58 @@ docker buildx build --load \
 
 The `docker-compose.yaml` file runs a Dendrite deployment with Postgres.
 
+## Complement with MSC4521
+
+`build/scripts/ComplementRezzy.Dockerfile` links the native Rezzy library, so
+the MSC4521 reconciliation endpoints are real instead of returning the
+unsupported stub. Build it with the same named contexts as the production
+image:
+
+```bash
+git submodule update --init rezzy
+docker buildx build --load \
+  --build-context rezzy=./rezzy \
+  --build-context gmsl=../gmsl \
+  -f build/scripts/ComplementRezzy.Dockerfile \
+  -t complement-dendrite:rezzy .
+```
+
+Then run the MSC4521 suite from the Complement branch that carries it
+(requires Go 1.26 or later):
+
+```bash
+COMPLEMENT_REF=guru/feat/msc4521-libminisketch-set-recon
+mkdir -p /tmp/complement-msc4521
+wget -O - "https://github.com/gamesguru/complement/archive/refs/heads/${COMPLEMENT_REF}.tar.gz" \
+  | tar -xz --strip-components=1 -C /tmp/complement-msc4521
+cd /tmp/complement-msc4521
+```
+
+Zendrite implements the responder side and an explicit admin trigger, but not
+periodic outbound reconciliation yet. Run the responder-side tests with:
+
+```bash
+COMPLEMENT_BASE_IMAGE=complement-dendrite:rezzy \
+  go test -tags zendrite_blacklist -v -timeout 45m \
+  -run 'TestMSC4521/(Primitives|Compatibility)' ./tests/msc4521/...
+COMPLEMENT_BASE_IMAGE=complement-dendrite:rezzy \
+  go test -tags zendrite_blacklist -v -timeout 15m \
+  -run 'TestMSC4521/(Convergence|Adversarial)/(ActiveRoom|NonMembersAndACLBlocked)' \
+  ./tests/msc4521/...
+```
+
+The remaining convergence and adversarial tests expect the homeserver to
+initiate exchanges and will fail until outbound scheduling exists. Run them
+with:
+
+```bash
+COMPLEMENT_BASE_IMAGE=complement-dendrite:rezzy \
+  go test -tags zendrite_blacklist -v -timeout 60m ./tests/msc4521/...
+```
+
+The `msc4521_enabled` configuration option is set by `generate-config --ci`,
+which the Complement image's entrypoint already runs.
+
 ## Configuration
 
 The compose file refers to the `./config` volume as where the runtime config should come from.

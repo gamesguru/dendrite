@@ -34,7 +34,7 @@ WORKDIR /build
 ENV PKG_CONFIG_PATH=/rezzy/target/pkgconfig
 # go.rezzy.mod replaces rezzy-ffi and gomatrixserverlib with these checkouts.
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
-COPY --from=rezzy include /rezzy/include
+COPY --from=rezzy rezzy-ffi/include /rezzy/include
 COPY --from=rezzy-build /rezzy/target/release/librezzy_ffi.a /rezzy/target/release/librezzy_ffi.a
 COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
 COPY --from=gmsl . /gmsl
@@ -49,8 +49,8 @@ ARG CGO=1
 RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=${CGO} go build -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -o /zendrite ./cmd/generate-config ./cmd/generate-keys ./cmd/zendrite && \
-    CGO_ENABLED=${CGO} go build -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite && \
+    CGO_ENABLED=${CGO} go build -buildvcs=false -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -o /zendrite ./cmd/generate-config ./cmd/generate-keys ./cmd/zendrite && \
+    CGO_ENABLED=${CGO} go build -buildvcs=false -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite && \
     cp build/scripts/complement-cmd.sh /complement-cmd.sh
 
 WORKDIR /zendrite

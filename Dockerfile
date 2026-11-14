@@ -47,7 +47,7 @@ ENV GONOSUMCHECK=codefloe.com/* \
 # go.rezzy.mod replaces both modules with sibling checkouts supplied by the
 # named build contexts above.
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
-COPY --from=rezzy include /rezzy/include
+COPY --from=rezzy rezzy-ffi/include /rezzy/include
 COPY --from=rezzy-build /rezzy/target/release/librezzy_ffi.a /rezzy/target/release/librezzy_ffi.a
 COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
 COPY --from=gmsl . /gmsl
@@ -56,7 +56,7 @@ RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED=1 \
-    go build -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -v -trimpath \
+    go build -buildvcs=false -modfile=go.rezzy.mod -tags rezzy,goolm,nodynamic -v -trimpath \
     -ldflags "-X codefloe.com/pat-s/zendrite/internal.version='"$VERSION"'" \
     -o /out/ ./cmd/...
 
