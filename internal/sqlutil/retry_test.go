@@ -69,3 +69,13 @@ func TestIsSQLiteBusy(t *testing.T) {
 	assert.True(t, IsSQLiteBusy(errDatabaseLocked))
 	assert.True(t, IsSQLiteBusy(errors.New("SQLITE_BUSY (5)")))
 }
+
+func TestRetrySQLiteBusyRunsOnceWithZeroPolicy(t *testing.T) {
+	calls := 0
+	err := RetrySQLiteBusy(context.Background(), SQLiteRetryPolicy{}, func() error {
+		calls++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "a zero-value policy must not skip the call")
+}

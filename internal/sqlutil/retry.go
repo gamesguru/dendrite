@@ -34,10 +34,12 @@ var SQLiteLockRetryPolicy = SQLiteRetryPolicy{
 // immediately even though the SQLite busy timeout is set, so the whole
 // transaction and its lookup must be retried.
 func RetrySQLiteBusy(ctx context.Context, policy SQLiteRetryPolicy, fn func() error) error {
+	// A zero-value policy must still run fn once.
+	maxAttempts := max(policy.MaxAttempts, 1)
 	var err error
-	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		err = fn()
-		if err == nil || !IsSQLiteBusy(err) || attempt == policy.MaxAttempts-1 {
+		if err == nil || !IsSQLiteBusy(err) || attempt == maxAttempts-1 {
 			return err
 		}
 		delay := time.Duration(attempt+1) * policy.DelayStep

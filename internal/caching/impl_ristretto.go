@@ -104,14 +104,16 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 			},
 		},
 		RoomServerStateKeys: &RistrettoCachePartition[types.EventStateKeyNID, string]{ // event NID -> event state key
-			cache:  cache,
-			Prefix: eventStateKeyCache,
-			MaxAge: maxAge,
+			cache:   cache,
+			Prefix:  eventStateKeyCache,
+			MaxAge:  maxAge,
+			Mutable: true, // unset when a state-key NID is assigned in a transaction that does not commit
 		},
 		RoomServerStateKeyNIDs: &RistrettoCachePartition[string, types.EventStateKeyNID]{ // eventStateKey -> eventStateKey NID
-			cache:  cache,
-			Prefix: eventStateKeyNIDCache,
-			MaxAge: maxAge,
+			cache:   cache,
+			Prefix:  eventStateKeyNIDCache,
+			MaxAge:  maxAge,
+			Mutable: true, // unset when a state-key NID is assigned in a transaction that does not commit
 		},
 		RoomServerEventTypeNIDs: &RistrettoCachePartition[string, types.EventTypeNID]{ // eventType -> eventType NID
 			cache:  cache,
