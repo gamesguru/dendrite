@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
@@ -34,6 +35,13 @@ import (
 const (
 	relationsMaxLimit       = 50
 	relationsRecursionDepth = 3
+	// This bounds how many batches one stream-token request reads.
+	maxRelationsBatches = 8
+	// RelationsBackwardTokenPrefix marks a continuation issued by backward
+	// pagination. Its topology part names the event after the cursor, so it may
+	// be re-anchored after a late-parent repair. Unmarked tokens (forward
+	// pagination, /messages, /sync) name the event itself and are left alone.
+	relationsBackwardTokenPrefix = "b"
 )
 
 type RelationsResponse struct {
@@ -83,22 +91,55 @@ func parseRelationsParams(req *http.Request) (relationsParams, error) {
 
 // parseRelationsToken accepts this endpoint's tokens as well as /messages and
 // /sync tokens. An empty token is the start of the pagination in the given
-// direction.
-func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards bool) (types.TopologyToken, error) {
+// direction. For a stream token it also returns the parsed token: a decoded
+// stream position bounds the page by stream order, which the converted
+// topology token alone cannot express.
+func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransaction, roomID, token string, backwards, reanchor bool) (types.TopologyToken, *types.StreamingToken, error) {
 	if token == "" {
 		if backwards {
-			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil
+			return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil, nil
 		}
-		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil
+		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil, nil
+	}
+	// Only tokens this endpoint issued for backward pagination use the
+	// "cursor before the event" convention. A token from forward pagination (or
+	// /messages) names the event itself, so resolving PDU+1 would find an
+	// unrelated event and could raise the boundary without any repair.
+	backwardCursor := strings.HasPrefix(token, relationsBackwardTokenPrefix)
+	if backwardCursor {
+		token = strings.TrimPrefix(token, relationsBackwardTokenPrefix)
+	}
+	if topologyToken, streamToken, ok := strings.Cut(token, "|"); ok {
+		topology, topoErr := types.NewTopologyTokenFromString(topologyToken)
+		stream, streamErr := types.NewStreamTokenFromString(streamToken)
+		if topoErr != nil || streamErr != nil {
+			return types.TopologyToken{}, nil, errInvalidRelationsToken
+		}
+		// A late-parent repair may have lifted the event this cursor sits
+		// before, so resolve its current depth as backward /messages does.
+		// Only a backward `from` cursor is anchored this way; a `to` bound is
+		// not, or it would admit events beyond the requested end.
+		if reanchor && backwardCursor {
+			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
+				return types.TopologyToken{}, nil, err
+			}
+		}
+		return topology, &stream, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
-		return topology, nil
+		if reanchor && backwardCursor {
+			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
+				return types.TopologyToken{}, nil, err
+			}
+		}
+		return topology, nil, nil
 	}
 	stream, err := types.NewStreamTokenFromString(token)
 	if err != nil {
-		return types.TopologyToken{}, errInvalidRelationsToken
+		return types.TopologyToken{}, nil, errInvalidRelationsToken
 	}
-	return snapshot.StreamToTopologicalPosition(ctx, roomID, stream.PDUPosition, backwards)
+	topology, err := snapshot.StreamToTopologicalPosition(ctx, roomID, stream.PDUPosition, backwards)
+	return topology, &stream, err
 }
 
 var errInvalidRelationsToken = errors.New("invalid pagination token")
@@ -163,11 +204,11 @@ func Relations(
 	}
 
 	q := req.URL.Query()
-	from, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards)
+	from, fromStream, err := parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("from"), params.backwards, params.backwards)
 	var to types.TopologyToken
 	if err == nil {
 		// A to token bounds the opposite end of the page.
-		to, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards)
+		to, _, err = parseRelationsToken(ctx, snapshot, roomID.String(), q.Get("to"), !params.backwards, false)
 	}
 	if errors.Is(err, errInvalidRelationsToken) {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.InvalidParam(err.Error())}
@@ -175,7 +216,7 @@ func Relations(
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
-	res, err := relationsPage(ctx, snapshot, rsAPI, *userID, *roomID, eventID, relType, eventType, params, from, to)
+	res, err := relationsPage(ctx, snapshot, rsAPI, *userID, *roomID, eventID, relType, eventType, params, from, to, fromStream)
 	if err != nil {
 		return util.ErrorResponse(err)
 	}
@@ -187,16 +228,45 @@ func Relations(
 func relationsPage(
 	ctx context.Context, snapshot storage.DatabaseTransaction, rsAPI api.SyncRoomserverAPI,
 	userID spec.UserID, roomID spec.RoomID, eventID, relType, eventType string,
-	params relationsParams, from, to types.TopologyToken,
+	params relationsParams, from, to types.TopologyToken, fromStream *types.StreamingToken,
 ) (*RelationsResponse, error) {
 	maxDepth := 1
 	if params.recurse != nil && *params.recurse {
 		maxDepth = relationsRecursionDepth
 	}
 	// One extra entry tells whether there is another page.
-	entries, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, from, to, params.backwards, params.limit+1)
-	if err != nil {
-		return nil, err
+	//
+	// A stream token bounds pagination by stream order. Relations are selected
+	// by topology position, so children stored after the token can share a
+	// shallower position; drop them as /messages does. Dropping entries from a
+	// fixed-size batch could hide older eligible relations beyond it, so keep
+	// reading further batches until the page is full or the range is exhausted.
+	bounded := params.backwards && fromStream != nil
+	var entries []types.TopologicalRelation
+	cursor := from
+	capped := false
+	for batches := 0; ; batches++ {
+		batch, err := snapshot.RelationsInTopologicalRange(ctx, roomID.String(), eventID, relType, eventType, maxDepth, cursor, to, params.backwards, params.limit+1)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range batch {
+			if !bounded || entry.Position.PDUPosition <= fromStream.PDUPosition {
+				entries = append(entries, entry)
+			}
+		}
+		if !bounded || len(entries) > params.limit || len(batch) < params.limit+1 {
+			break
+		}
+		// Tokens name the cursor after an event, so step back over the last one.
+		cursor = batch[len(batch)-1].Position
+		cursor.Decrement()
+		if batches+1 >= maxRelationsBatches {
+			// Each batch re-runs the recursive query. Return the short page
+			// with a token that resumes after the last row scanned.
+			capped = true
+			break
+		}
 	}
 	res := &RelationsResponse{Chunk: []synctypes.ClientEvent{}}
 	if params.recurse != nil {
@@ -209,7 +279,9 @@ func relationsPage(
 			// Tokens name the cursor after an event, so step back over the last one.
 			next.Decrement()
 		}
-		res.NextBatch = next.String()
+		res.NextBatch = relationsContinuation(next, fromStream, params.backwards)
+	} else if capped {
+		res.NextBatch = relationsContinuation(cursor, fromStream, params.backwards)
 	}
 
 	ids := make([]string, 0, len(entries))
@@ -268,4 +340,18 @@ func relationsPage(
 	}
 	bundler := internal.NewRelationBundlerAt(snapshot, rsAPI, userID, ignores, watermark)
 	return res, bundler.Bundle(ctx, shown, res.Chunk, synctypes.FormatAll)
+}
+
+func relationsContinuation(cursor types.TopologyToken, stream *types.StreamingToken, backwards bool) string {
+	topology := cursor.String()
+	if topology == "" {
+		return ""
+	}
+	if backwards {
+		topology = relationsBackwardTokenPrefix + topology
+	}
+	if stream == nil {
+		return topology
+	}
+	return topology + "|" + stream.String()
 }

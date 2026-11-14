@@ -57,6 +57,14 @@ COMPLEMENT_TAGS ?= zendrite_blacklist
 COMPLEMENT_TIMEOUT ?= 1h
 DENDRITE_INSTALL_PATH ?= /usr/local/bin/dendrite
 DENDRITE_SYSTEMD_SERVICE ?= dendrite
+# Version embedded in the binary. Defaults to git describe, e.g.
+# v3.5.0-289-g6db4e241 or v3.5.0-289-g6db4e241-dirty. Build with
+# -buildvcs=false so internal/version.go does not append a second hash.
+VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null),unknown)
+# VERSION reaches the recipe shell through the environment, so a git tag name
+# is never parsed as shell syntax.
+export DENDRITE_VERSION := $(VERSION)
+GO_LDFLAGS = -buildvcs=false -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$$DENDRITE_VERSION"
 SUDO ?= sudo
 
 export GOCACHE
@@ -96,15 +104,15 @@ lint: ## Run vet, staticcheck, and golangci-lint
 
 .PHONY: build
 build: ## Build all packages
-	$(GO) build $(PKGS)
+	$(GO) build $(GO_LDFLAGS) $(PKGS)
 
 .PHONY: build-cmd
 build-cmd: ## Build binaries under cmd/
-	$(GO) build ./cmd/...
+	$(GO) build $(GO_LDFLAGS) ./cmd/...
 
 .PHONY: install
 install: ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
-	$(GO) build -o dendrite ./cmd/zendrite
+	$(GO) build $(GO_LDFLAGS) -o dendrite ./cmd/zendrite
 	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
 
 .PHONY: restart

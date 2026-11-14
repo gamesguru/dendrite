@@ -418,7 +418,11 @@ func (a *UserInternalAPI) remoteKeysFromDatabase(
 				if err == nil {
 					continue
 				}
-				util.GetLogger(ctx).WithError(err).Error("populateResponseWithDeviceKeysFromDatabase")
+				if errors.Is(err, errDeviceKeysNotLocal) {
+					util.GetLogger(ctx).WithError(err).Debug("No device keys stored locally, falling back to /keys/query")
+				} else {
+					util.GetLogger(ctx).WithError(err).Error("populateResponseWithDeviceKeysFromDatabase")
+				}
 			}
 			// fetch device lists from remote
 			if _, ok := fetchRemote[domain]; !ok {
@@ -616,7 +620,7 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 				logrus.ErrorKey: err,
 				"user_id":       userID,
 				"server":        serverName,
-			}).Error("Failed to manually update device lists for user")
+			}).Error("Failed to manually update device lists for user, falling back to /keys/query")
 			// try to do it via /keys/query
 			devKeys[userID] = []string{}
 			continue
@@ -628,11 +632,16 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			logrus.WithFields(logrus.Fields{
+			entry := logrus.WithFields(logrus.Fields{
 				logrus.ErrorKey: err,
 				"user_id":       userID,
 				"server":        serverName,
-			}).Error("Failed to manually update device lists for user")
+			})
+			if errors.Is(err, errDeviceKeysNotLocal) {
+				entry.Debug("No device keys stored locally, falling back to /keys/query")
+			} else {
+				entry.Error("Failed to read device keys from the database after a manual update, falling back to /keys/query")
+			}
 			// try to do it via /keys/query
 			devKeys[userID] = []string{}
 			continue
@@ -675,6 +684,11 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	respMu.Unlock()
 }
 
+// errDeviceKeysNotLocal reports that the database has no, or fewer than the
+// requested, device keys, so the caller has to fall back to the remote server.
+// It is an expected result rather than a database failure.
+var errDeviceKeysNotLocal = errors.New("device keys not available locally")
+
 func (a *UserInternalAPI) populateResponseWithDeviceKeysFromDatabase(
 	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex, userID string, deviceIDs []string,
 ) error {
@@ -684,10 +698,10 @@ func (a *UserInternalAPI) populateResponseWithDeviceKeysFromDatabase(
 		return fmt.Errorf("DeviceKeysForUser %s %v failed: %w", userID, deviceIDs, err)
 	}
 	if len(keys) < len(deviceIDs) {
-		return fmt.Errorf("DeviceKeysForUser %s returned fewer devices than requested, falling back to remote", userID)
+		return fmt.Errorf("DeviceKeysForUser %s returned fewer devices than requested, falling back to remote: %w", userID, errDeviceKeysNotLocal)
 	}
 	if len(deviceIDs) == 0 && len(keys) == 0 {
-		return fmt.Errorf("DeviceKeysForUser %s returned no keys but wanted all keys, falling back to remote", userID)
+		return fmt.Errorf("DeviceKeysForUser %s returned no keys but wanted all keys, falling back to remote: %w", userID, errDeviceKeysNotLocal)
 	}
 	respMu.Lock()
 	if res.DeviceKeys[userID] == nil {

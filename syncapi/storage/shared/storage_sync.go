@@ -334,15 +334,36 @@ func (d *DatabaseTransaction) GetEventsInTopologicalRange(
 
 // GetEventsBeforeStreamPosition retrieves, newest first in topological order,
 // the events at or before a stream position and deeper than the to token.
+// With includeBackfilled, backfilled events (excluded from sync) persisted after
+// the position are also returned, below the position's own topological depth;
+// without it, backfilled events are never returned.
 func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 	ctx context.Context,
 	maxStreamPos types.StreamPosition,
 	to *types.TopologyToken,
 	roomID string,
 	filter *synctypes.RoomEventFilter,
+	includeBackfilled bool,
 ) (events []types.StreamEvent, start, end types.TopologyToken, err error) {
 	var eIDs []string
-	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(ctx, d.txn, roomID, to.Depth, maxStreamPos, filter.Limit)
+	// Backfilled history is stored after the token was issued, but must not be
+	// newer than the position the token refers to. Depth 0 means no stored event
+	// sits at or below the token (a prev_batch from before any local event, such
+	// as a room joined over federation): all backfilled history is older than it,
+	// so it is not bounded.
+	maxBackfillDepth := types.StreamPosition(math.MaxInt64)
+	if includeBackfilled {
+		pos, perr := d.StreamToTopologicalPosition(ctx, roomID, maxStreamPos, true)
+		if perr != nil {
+			return nil, types.TopologyToken{}, types.TopologyToken{}, perr
+		}
+		if pos.Depth > 0 {
+			maxBackfillDepth = pos.Depth
+		}
+	}
+	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(
+		ctx, d.txn, roomID, to.Depth, maxStreamPos, maxBackfillDepth, filter.Limit, includeBackfilled,
+	)
 	if err != nil {
 		return
 	}
@@ -366,13 +387,43 @@ func (d *DatabaseTransaction) EventPositionInTopology(
 	return types.TopologyToken{Depth: depth, PDUPosition: stream}, nil
 }
 
+// EventPositionByStreamPosition resolves an event's current topology position
+// from its stable room stream position. It lets /messages re-anchor a
+// previously issued topology cursor after a late-parent repair moved events.
+func (d *DatabaseTransaction) EventPositionByStreamPosition(
+	ctx context.Context, roomID string, streamPos types.StreamPosition,
+) (types.TopologyToken, error) {
+	depth, stream, err := d.Topology.SelectPositionByStreamPosition(ctx, d.txn, roomID, streamPos)
+	if err != nil {
+		return types.TopologyToken{}, err
+	}
+	return types.TopologyToken{Depth: depth, PDUPosition: stream}, nil
+}
+
+// EventPositionsInTopology returns current positions for multiple events in a
+// single query, omitting IDs that are not stored in topology.
+func (d *DatabaseTransaction) EventPositionsInTopology(
+	ctx context.Context, eventIDs []string,
+) (map[string]types.TopologyToken, error) {
+	return d.Topology.SelectPositionsInTopology(ctx, d.txn, eventIDs)
+}
+
 func (d *DatabaseTransaction) StreamToTopologicalPosition(
 	ctx context.Context, roomID string, streamPos types.StreamPosition, backwardOrdering bool,
 ) (types.TopologyToken, error) {
 	topoPos, err := d.Topology.SelectStreamToTopologicalPosition(ctx, d.txn, roomID, streamPos, backwardOrdering)
 	switch {
 	case errors.Is(err, sql.ErrNoRows) && backwardOrdering: // no events in range, going backward
-		return types.TopologyToken{PDUPosition: streamPos}, nil
+		// The token precedes every stored event, for instance a prev_batch issued
+		// at the first event of a room joined over federation. Anchor it at that
+		// first event's depth: depth is not a clock (a remote server can restart
+		// it), so an unbounded cursor would start at the deepest events and skip
+		// the history that sits below the first event.
+		depth, firstErr := d.Topology.SelectFirstSyncedDepthAfterStreamPosition(ctx, d.txn, roomID, streamPos)
+		if firstErr != nil && !errors.Is(firstErr, sql.ErrNoRows) {
+			return types.TopologyToken{}, fmt.Errorf("d.Topology.SelectFirstSyncedDepthAfterStreamPosition: %w", firstErr)
+		}
+		return types.TopologyToken{Depth: depth, PDUPosition: streamPos}, nil
 	case errors.Is(err, sql.ErrNoRows) && !backwardOrdering: // no events in range, going forward
 		return types.TopologyToken{Depth: math.MaxInt64, PDUPosition: math.MaxInt64}, nil
 	case err != nil: // some other error happened

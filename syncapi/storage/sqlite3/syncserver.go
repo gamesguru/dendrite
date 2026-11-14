@@ -67,7 +67,7 @@ func (d *SyncServerDatasource) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	events, err := NewSqliteEventsTable(d.db, &d.streamID) //nolint:contextcheck
+	events, err := NewSqliteEventsTable(ctx, d.db, &d.streamID)
 	if err != nil {
 		return err
 	}

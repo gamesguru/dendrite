@@ -24,6 +24,12 @@ type SyncRequest struct {
 	// timeline, StateAfterKey or UnstableStateAfterKey, when the client opted
 	// in to MSC4222. It is empty for the state at the start of the timeline.
 	StateAfter string
+	// ArrivedAtPDUPosition is the PDU position the sync API had reached when
+	// the request arrived. A complete sync reads a snapshot taken later, after
+	// any waits, so it can contain leaves and bans that raced the request; the
+	// client never saw those rooms, and next_batch moves past the leave, so
+	// they must be reported by this response.
+	ArrivedAtPDUPosition StreamPosition
 
 	// Updated by the PDU stream.
 	Rooms map[string]string

@@ -49,6 +49,8 @@ func (h *stdDemuxerHook) Fire(entry *logrus.Entry) error {
 func SetupHookLogging(hooks []config.LogrusHook) {
 	levelLogAddedMu.Lock()
 	defer levelLogAddedMu.Unlock()
+	var stdHookLevel logrus.Level
+	stdHookConfigured := false
 	for _, hook := range hooks {
 		// Check we received a proper logging level
 		level, err := logrus.ParseLevel(hook.Level)
@@ -70,12 +72,23 @@ func SetupHookLogging(hooks []config.LogrusHook) {
 			checkSyslogHookParams(hook.Params)
 			setupSyslogHook(hook, level)
 		case "std":
-			setupStdLogHook(level)
+			// Remember the most verbose configured level and add a single
+			// stdout hook after the loop. Multiple std hooks at different
+			// levels (or a configured debug hook plus the old unconditional
+			// info fallback) would otherwise write every matching entry twice.
+			if !stdHookConfigured || level > stdHookLevel {
+				stdHookLevel = level
+			}
+			stdHookConfigured = true
 		default:
 			logrus.Fatalf("Unrecognized logging hook type: %s", hook.Type)
 		}
 	}
-	setupStdLogHook(logrus.InfoLevel)
+	if stdHookConfigured {
+		setupStdLogHook(stdHookLevel)
+	} else {
+		setupStdLogHook(logrus.InfoLevel)
+	}
 	// Hooks are now configured for stdout/err, so throw away the default logger output
 	logrus.SetOutput(io.Discard)
 }

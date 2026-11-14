@@ -1472,11 +1472,176 @@ func TestGetEventsBeforeStreamPositionAfterPartition(t *testing.T) {
 
 		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
 			filter := &synctypes.RoomEventFilter{Limit: 4}
-			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter)
+			paginated, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, onePrimePos-1, &types.TopologyToken{}, r.ID, filter, true)
 			require.NoError(t, err)
 			gots := snapshot.StreamEventsToEvents(context.Background(), nil, paginated, nil)
 			test.AssertEventsEqual(t, gots, test.Reversed(local))
 			assert.Equal(t, local[0].Depth(), int64(end.Depth))
+		})
+	})
+}
+
+// A stream token before the room's first event has no topological position to
+// bound backfilled history with (a federated join's prev_batch). All backfilled
+// history is older than it, so it must stay reachable.
+func TestGetEventsBeforeStreamPositionBeforeFirstEventIncludesBackfilled(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		all := r.Events()
+		// The newest event is live, and the history below it arrives afterwards
+		// through backfill.
+		live := all[len(all)-1:]
+		_ = MustWriteEvents(t, db, live)
+
+		backfilled := all[len(all)-2]
+		_, err := db.WriteEvent(ctx, backfilled, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, 0, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 10}, true)
+			require.NoError(t, err)
+			// The live join is after the token, so only the history below it is returned.
+			require.Len(t, events, 1, "a token before every stored event (a federated join's prev_batch) must reach backfilled history")
+			assert.Equal(t, backfilled.EventID(), events[0].EventID())
+		})
+	})
+}
+
+// Backfilled history persisted after a token is only reachable when it is no
+// deeper than the token's own position: a deeper backfilled event is newer than
+// the token and must not appear on a page requested with it.
+func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		var later []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			later = append(later, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+
+		_ = MustWriteEvents(t, db, base)
+		tokenPos := MustWriteEvents(t, db, later[:1])[0]
+		// The deeper events arrive afterwards as backfill (excluded from sync).
+		for _, ev := range later[1:] {
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			for _, ev := range events {
+				assert.NotContains(t, []string{later[1].EventID(), later[2].EventID()}, ev.EventID(),
+					"a backfilled event deeper than the token must not be returned")
+			}
+			require.NotEmpty(t, events)
+			assert.Equal(t, later[0].EventID(), events[0].EventID())
+		})
+	})
+}
+
+// A sender or type filter that removes every event of a non-empty range must
+// still leave the range's cursor, so /messages can tell a filtered-empty page
+// from the end of history.
+func TestTopologyPageKeepsCursorWhenFilterRemovesEveryEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		var msgs []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			msgs = append(msgs, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+		}
+		_ = MustWriteEvents(t, db, r.Events())
+		pos := MustWriteEvents(t, db, msgs)
+		last := pos[len(pos)-1]
+
+		noSuchType := []string{"org.example.no_such_type"}
+		filter := &synctypes.RoomEventFilter{Limit: 10, Types: &noSuchType}
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			from := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
+			events, start, end, err := snapshot.GetEventsInTopologicalRange(ctx, &from, &types.TopologyToken{}, r.ID, filter, true)
+			require.NoError(t, err)
+			assert.Empty(t, events)
+			assert.NotEqual(t, types.TopologyToken{}, start, "the range had events, so its bounds must survive the filter")
+			assert.NotEqual(t, types.TopologyToken{}, end)
+
+			events, start, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, last, &types.TopologyToken{}, r.ID, filter, true)
+			require.NoError(t, err)
+			assert.Empty(t, events)
+			assert.NotEqual(t, types.TopologyToken{}, start)
+			assert.NotEqual(t, types.TopologyToken{}, end)
+		})
+	})
+}
+
+// A backfilled event at the token's own depth was persisted after the token,
+// so it is newer than the token's position and must not appear in an older page.
+func TestGetEventsBeforeStreamPositionExcludesBackfilledAtTokenDepth(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		// Siblings: both follow the same prev event, so they share a depth and
+		// neither is placed above the other in the topology.
+		sameDepth := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "same depth"})
+		anchor := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "anchor"})
+		require.Equal(t, anchor.Depth(), sameDepth.Depth())
+
+		_ = MustWriteEvents(t, db, base)
+		tokenPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{anchor})[0]
+		_, err := db.WriteEvent(ctx, sameDepth, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, tokenPos, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			require.NotEmpty(t, events)
+			for _, ev := range events {
+				assert.NotEqual(t, sameDepth.EventID(), ev.EventID(), "a backfilled event at the token's depth is newer than the token")
+			}
+		})
+	})
+}
+
+// A stream token before every stored event refers to the first event persisted
+// after it, not to the start of the depth axis: depth can restart in a room, so
+// an unbounded cursor would begin at the deepest events.
+func TestStreamToTopologicalPositionBeforeFirstEventAnchorsAtFirstLiveEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		live := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "live"})
+		_ = MustWriteEvents(t, db, r.Events())
+
+		backfilled := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "backfilled"})
+		_, err := db.WriteEvent(ctx, backfilled, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			tok, err := snapshot.StreamToTopologicalPosition(ctx, r.ID, 0, true)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(r.Events()[0].Depth()), tok.Depth,
+				"anchored at the first live event, ignoring backfilled ones")
+			assert.NotEqual(t, types.StreamPosition(live.Depth()), tok.Depth)
+
+			tok, err = snapshot.StreamToTopologicalPosition(ctx, "!empty:test", 0, true)
+			require.NoError(t, err)
+			assert.Zero(t, tok.Depth, "a room with no stored events keeps the unbounded cursor")
 		})
 	})
 }
@@ -1518,5 +1683,128 @@ func TestSelectMembershipsAtStreamAndTopologyTokens(t *testing.T) {
 		assert.ElementsMatch(t, []string{r.Events()[1].EventID(), bobJoin.EventID()}, members(types.TopologyToken{Depth: depth, PDUPosition: bobPos}))
 		assert.Len(t, members(types.TopologyToken{Depth: depth, PDUPosition: math.MaxInt64}), 3)
 		assert.Len(t, members(types.TopologyToken{Depth: depth - 1, PDUPosition: math.MaxInt64}), 1)
+	})
+}
+
+// A server that restarts its depth counter claims a depth below its parents.
+// The topology must still place the event after them, or the room splits into
+// two depth ranges that a backward walk cannot cross.
+func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		parent := r.CreateAndInsert(t, alice, "m.room.message",
+			map[string]any{"body": "before the reset"}, test.WithDepth(1000))
+		require.Equal(t, int64(1000), parent.Depth())
+		_ = MustWriteEvents(t, db, r.Events())
+
+		reset := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "after reset"}, test.WithDepth(0))
+		require.Equal(t, int64(0), reset.Depth(), "the event claims a restarted depth")
+		_, err := db.WriteEvent(ctx, reset, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			pos, err := snapshot.EventPositionInTopology(ctx, reset.EventID())
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1001), pos.Depth,
+				"the event is lifted above its stored parent")
+		})
+	})
+}
+
+// A parent may arrive after its child was stored. When the parent is placed
+// above its own parent, all stored descendants must be raised with it.
+func TestInsertLateParentLiftsStoredDescendants(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		root := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "root"}, test.WithDepth(1000))
+		_ = MustWriteEvents(t, db, r.Events())
+
+		lateParent := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "late parent"},
+			test.WithDepth(0), test.WithPrevEvents(root.EventID()))
+		child := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "child"},
+			test.WithDepth(0), test.WithPrevEvents(lateParent.EventID()))
+		grandchild := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "grandchild"},
+			test.WithDepth(1), test.WithPrevEvents(child.EventID()))
+
+		for _, event := range []*rstypes.HeaderedEvent{child, grandchild} {
+			_, err := db.WriteEvent(ctx, event, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		var oldChildCursor types.TopologyToken
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			position, err := snapshot.EventPositionInTopology(ctx, child.EventID())
+			require.NoError(t, err)
+			oldChildCursor = position
+			oldChildCursor.Decrement()
+		})
+		_, err := db.WriteEvent(ctx, lateParent, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			for event, want := range map[*rstypes.HeaderedEvent]types.StreamPosition{
+				root:       1000,
+				lateParent: 1001,
+				child:      1002,
+				grandchild: 1003,
+			} {
+				position, err := snapshot.EventPositionInTopology(ctx, event.EventID())
+				require.NoError(t, err)
+				assert.Equal(t, want, position.Depth, "event %s should follow all stored parents", event.EventID())
+			}
+			anchor, err := snapshot.EventPositionByStreamPosition(ctx, r.ID, oldChildCursor.PDUPosition+1)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1002), anchor.Depth,
+				"a previously issued cursor can resolve its event anchor after topology repair")
+		})
+	})
+}
+
+func TestInsertEventInTopologyLiftsStoredChildSubtree(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		ancestor := r.CreateAndInsert(t, alice, "m.room.message",
+			map[string]any{"body": "ancestor"}, test.WithDepth(1000))
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{ancestor})
+
+		// The parent is missing when its child and grandchild arrive, so both
+		// are placed using their own depths.
+		parent := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "late parent"},
+			test.WithDepth(101), test.WithPrevEvents(ancestor.EventID()))
+		child := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "child"},
+			test.WithDepth(102), test.WithPrevEvents(parent.EventID()))
+		grandchild := r.CreateEvent(t, alice, "m.room.message",
+			map[string]any{"body": "grandchild"},
+			test.WithDepth(103), test.WithPrevEvents(child.EventID()))
+
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{child, grandchild})
+		// The parent arrives late and is lifted above the stored ancestor. The
+		// stored child and grandchild have to move above it with it.
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{parent})
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			for event, wantDepth := range map[*rstypes.HeaderedEvent]types.StreamPosition{
+				ancestor:   1000,
+				parent:     1001,
+				child:      1002,
+				grandchild: 1003,
+			} {
+				pos, err := snapshot.EventPositionInTopology(ctx, event.EventID())
+				require.NoError(t, err)
+				assert.Equal(t, wantDepth, pos.Depth, event.EventID())
+			}
+		})
 	})
 }

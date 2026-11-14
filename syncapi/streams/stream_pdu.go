@@ -169,13 +169,23 @@ func (p *PDUStreamProvider) CompleteSync(
 		req.Rooms[roomID] = spec.Join
 	}
 
+	// Rooms left or banned from after the request arrived are always reported:
+	// the snapshot postdates the request, and next_batch moves past the leave,
+	// so no later sync would report it.
+	leftAfter := req.ArrivedAtPDUPosition
 	if req.Filter.Room.IncludeLeave {
-		if err = p.addLeftRoomsToCompleteSync(ctx, snapshot, req, to, &eventFilter, &stateFilter, bundler); err != nil {
+		leftAfter = 0
+	}
+	if req.Filter.Room.IncludeLeave || to > leftAfter {
+		if err = p.addLeftRoomsToCompleteSync(ctx, snapshot, req, to, leftAfter, &eventFilter, &stateFilter, bundler); err != nil {
 			if req.Context.Err() != nil || abandonsSync(err) {
 				logAbandoned(req, err, "", "complete")
 				return from
 			}
+			// Do not report to as covered: a leave the scan missed would
+			// never be reported by a later sync.
 			req.Log.WithError(err).Error("p.addLeftRoomsToCompleteSync failed")
+			return from
 		}
 	}
 
@@ -233,6 +243,7 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 	to types.StreamPosition,
+	leftAfter types.StreamPosition,
 	eventFilter *synctypes.RoomEventFilter,
 	stateFilter *synctypes.StateFilter,
 	bundler *syncBundler,
@@ -240,14 +251,20 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 	memberTypes := []string{spec.MRoomMember}
 	leaveFilter := &synctypes.StateFilter{Types: &memberTypes}
 	deltas, joinedRoomIDs, err := snapshot.GetStateDeltas(
-		ctx, req.Device, types.Range{From: 0, To: to}, req.Device.UserID, leaveFilter, p.rsAPI,
+		ctx, req.Device, types.Range{From: leftAfter, To: to}, req.Device.UserID, leaveFilter, p.rsAPI,
 	)
 	if err != nil {
 		return fmt.Errorf("snapshot.GetStateDeltas: %w", err)
 	}
-	joined := make(map[string]struct{}, len(joinedRoomIDs))
+	joined := make(map[string]struct{}, len(joinedRoomIDs)+len(req.Rooms))
 	for _, roomID := range joinedRoomIDs {
 		joined[roomID] = struct{}{}
+	}
+	// A range that starts after the request arrived does not see every join.
+	for roomID, membership := range req.Rooms {
+		if membership == spec.Join {
+			joined[roomID] = struct{}{}
+		}
 	}
 	userID, err := spec.NewUserID(req.Device.UserID, true)
 	if err != nil {
@@ -259,6 +276,9 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 			continue
 		}
 		if _, ok := joined[delta.RoomID]; ok {
+			continue
+		}
+		if delta.MembershipPos <= leftAfter {
 			continue
 		}
 		if err = ctx.Err(); err != nil {
@@ -1072,7 +1092,9 @@ func topologicalRecentEvents(
 			var end types.TopologyToken
 			var err error
 			if batch == 0 {
-				matched, _, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, to, &types.TopologyToken{}, roomID, &batchFilter)
+				// Backfilled events are excluded from sync, so leave them out
+				// before the batch limit rather than after it.
+				matched, _, end, err = snapshot.GetEventsBeforeStreamPosition(ctx, to, &types.TopologyToken{}, roomID, &batchFilter, false)
 			} else {
 				from := cursor
 				matched, _, end, err = snapshot.GetEventsInTopologicalRange(ctx, &from, &types.TopologyToken{}, roomID, &batchFilter, true)

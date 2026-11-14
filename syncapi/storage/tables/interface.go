@@ -94,6 +94,14 @@ type Topology interface {
 	// InsertEventInTopology inserts the given event in the room's topology, based on the event's depth.
 	// `pos` is the stream position of this event in the events table, and is used to order events which have the same depth.
 	InsertEventInTopology(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition) (topoPos types.StreamPosition, err error)
+	// UpdateEventPosition raises an existing event's topology position when a
+	// previously missing parent arrives after it.
+	UpdateEventPosition(ctx context.Context, txn *sql.Tx, eventID string, topoPos types.StreamPosition) error
+	// SelectRoomEventTopology returns the stored DAG and current topology positions
+	// at or above minTopologicalPos. It is used only when a late parent requires
+	// descendant repair; lower positions cannot be descendants because stored
+	// children are lifted when their parent arrives.
+	SelectRoomEventTopology(ctx context.Context, txn *sql.Tx, roomID string, minTopologicalPos types.StreamPosition) ([]StoredEventTopology, error)
 	// SelectEventIDsInRange selects the IDs and the topological position of events whose depths are within a given range in a given room's topological order.
 	// Events with `minDepth` are *exclusive*, as is the event which has exactly `minDepth`,`maxStreamPos`. Returns the eventIDs and start/end topological tokens.
 	// `maxStreamPos` is only used when events have the same depth as `maxDepth`, which results in events less than `maxStreamPos` being returned.
@@ -101,11 +109,24 @@ type Topology interface {
 	SelectEventIDsInRange(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxDepth, maxStreamPos types.StreamPosition, limit int, chronologicalOrder bool) (eventIDs []string, start, end types.TopologyToken, err error)
 	// SelectEventIDsBeforeStreamPosition selects, newest first in topological order, the IDs and
 	// topological positions of a room's events at or before a stream position and deeper than minDepth.
-	SelectEventIDsBeforeStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos types.StreamPosition, limit int) (eventIDs []string, start, end types.TopologyToken, err error)
+	// With `includeBackfilled`, events excluded from sync (backfilled history) persisted after the position
+	// are also returned, but only strictly shallower than `maxBackfillDepth`: a backfilled event at the token's own depth was stored after it, so it is newer. Without it, such events are never returned.
+	SelectEventIDsBeforeStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition, limit int, includeBackfilled bool) (eventIDs []string, start, end types.TopologyToken, err error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
+	// SelectPositionsInTopology returns the stored positions for the requested
+	// events in one query. Events absent from topology are omitted.
+	SelectPositionsInTopology(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.TopologyToken, error)
+	// SelectPositionByStreamPosition returns the current topology position for
+	// an event in the room with this stable stream position. It returns
+	// sql.ErrNoRows when no event in the room has that stream position.
+	SelectPositionByStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition) (depth, spos types.StreamPosition, err error)
 	// SelectStreamToTopologicalPosition converts a stream position to a topological position by finding the nearest topological position in the room.
 	SelectStreamToTopologicalPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition, forward bool) (topoPos types.StreamPosition, err error)
+	// SelectFirstSyncedDepthAfterStreamPosition returns the topological position
+	// of the first non-backfilled event persisted after streamPos. It returns
+	// sql.ErrNoRows when no such event exists.
+	SelectFirstSyncedDepthAfterStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, streamPos types.StreamPosition) (topoPos types.StreamPosition, err error)
 	PurgeEventsTopology(ctx context.Context, txn *sql.Tx, roomID string) error
 	// DeleteEventFromTopology removes a single event.
 	DeleteEventFromTopology(ctx context.Context, txn *sql.Tx, eventID string) error
@@ -177,7 +198,17 @@ type BackwardsExtremities interface {
 	SelectBackwardExtremitiesForRoom(ctx context.Context, txn *sql.Tx, roomID string) (bwExtrems map[string][]string, err error)
 	// DeleteBackwardExtremity removes a backwards extremity for a room, if one existed.
 	DeleteBackwardExtremity(ctx context.Context, txn *sql.Tx, roomID, knownEventID string) (err error)
+	// SelectEventsReferencingPrevEvent returns stored children that were waiting
+	// for the given missing parent.
+	SelectEventsReferencingPrevEvent(ctx context.Context, txn *sql.Tx, roomID, prevEventID string) ([]string, error)
 	PurgeBackwardExtremities(ctx context.Context, txn *sql.Tx, roomID string) error
+}
+
+// StoredEventTopology contains the event edges and current local ordering for
+// a room event.
+type StoredEventTopology struct {
+	Event    *rstypes.HeaderedEvent
+	Position types.StreamPosition
 }
 
 // SendToDevice tracks send-to-device messages which are sent to individual
@@ -243,6 +274,10 @@ type Memberships interface {
 	// user at or before the given stream position.
 	SelectMembershipForUserAtStreamPosition(ctx context.Context, txn *sql.Tx, roomID, userID string, streamPos int64) (membership, eventID string, err error)
 	PurgeMemberships(ctx context.Context, txn *sql.Tx, roomID string) error
+	// UpdateMembershipTopologicalPos raises the stored topological position of
+	// the membership rows last changed by the event, when the event is moved
+	// in the room's topology. It never lowers a position.
+	UpdateMembershipTopologicalPos(ctx context.Context, txn *sql.Tx, roomID, eventID string, topologicalPos types.StreamPosition) error
 	SelectMemberships(
 		ctx context.Context, txn *sql.Tx,
 		roomID string, pos types.TopologyToken,

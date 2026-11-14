@@ -17,7 +17,7 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
-func newRelationsTable(t *testing.T, dbType test.DBType) (tables.Relations, *sql.DB, func()) {
+func newRelationsTable(ctx context.Context, t *testing.T, dbType test.DBType) (tables.Relations, *sql.DB, func()) {
 	t.Helper()
 	connStr, close := test.PrepareDBConnectionString(t, dbType)
 	db, err := sqlutil.Open(&config.DatabaseOptions{
@@ -30,17 +30,25 @@ func newRelationsTable(t *testing.T, dbType test.DBType) (tables.Relations, *sql
 	var tab tables.Relations
 	switch dbType {
 	case test.DBTypePostgres:
+		// The topology queries reference the output events table.
+		if _, err = postgres.NewPostgresEventsTable(ctx, db); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = postgres.NewPostgresTopologyTable(db); err != nil {
 			t.Fatal(err)
 		}
 		tab, err = postgres.NewPostgresRelationsTable(db)
 	case test.DBTypeSQLite:
-		if _, err = sqlite3.NewSqliteTopologyTable(db); err != nil {
-			t.Fatal(err)
-		}
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {
 			t.Fatalf("failed to prepare stream stmts: %s", err)
+		}
+		// The topology queries reference the output events table.
+		if _, err = sqlite3.NewSqliteEventsTable(ctx, db, &stream); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = sqlite3.NewSqliteTopologyTable(db); err != nil {
+			t.Fatal(err)
 		}
 		tab, err = sqlite3.NewSqliteRelationsTable(db, &stream)
 	}
@@ -77,7 +85,7 @@ const (
 func TestRelationsTable(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		tab, _, close := newRelationsTable(t, dbType)
+		tab, _, close := newRelationsTable(ctx, t, dbType)
 		defer close()
 
 		// Insert some relations
@@ -199,7 +207,7 @@ func TestRelationsTable(t *testing.T) {
 func TestThreadRelationsTable(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		ctx := t.Context()
-		tab, db, closeDB := newRelationsTable(t, dbType)
+		tab, db, closeDB := newRelationsTable(ctx, t, dbType)
 		defer closeDB()
 		insert := func(room, root, child string, depth, stream int64) {
 			require.NoError(t, tab.InsertRelation(ctx, nil, room, root, child, "m.room.message", "m.thread"))
@@ -233,7 +241,7 @@ func TestThreadRelationsTable(t *testing.T) {
 func TestSelectRelationTypesForEvents(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		ctx := t.Context()
-		tab, _, closeDB := newRelationsTable(t, dbType)
+		tab, _, closeDB := newRelationsTable(ctx, t, dbType)
 		defer closeDB()
 		for _, rel := range []struct{ room, parent, child, relType string }{
 			{roomID, "a", "a1", "m.thread"},
@@ -267,7 +275,7 @@ func TestSelectRelationTypesForEvents(t *testing.T) {
 func TestSelectRelationsInTopologicalRange(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		ctx := t.Context()
-		tab, db, closeDB := newRelationsTable(t, dbType)
+		tab, db, closeDB := newRelationsTable(ctx, t, dbType)
 		defer closeDB()
 		var stream int64
 		insert := func(room, parent, child, childType, relType string, depth int64) types.TopologyToken {

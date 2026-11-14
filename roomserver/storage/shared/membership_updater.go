@@ -9,6 +9,7 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -34,18 +35,38 @@ func NewMembershipUpdater(
 ) (*MembershipUpdater, error) {
 	var roomNID types.RoomNID
 	var targetUserNID types.EventStateKeyNID
+	assign := func() error {
+		return d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
+			var err error
+			roomNID, err = d.assignRoomNID(ctx, txn, roomID, roomVersion)
+			if err != nil {
+				return err
+			}
+			targetUserNID, err = d.assignStateKeyNID(ctx, txn, targetUserID)
+			return err
+		})
+	}
+	// The NID lookups read before they insert. On SQLite that read-then-write
+	// lock upgrade can fail at once with SQLITE_BUSY, ignoring the busy timeout,
+	// when another connection commits in between. When this call owns the
+	// transaction (txn == nil) it is safe to retry the whole thing.
 	var err error
-	err = d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
-		roomNID, err = d.assignRoomNID(ctx, txn, roomID, roomVersion)
-		if err != nil {
-			return err
+	if txn == nil {
+		assignAndReset := func() error {
+			assignErr := assign()
+			if assignErr != nil {
+				// A failed commit rolls the NID rows back, but assign* cached
+				// their IDs before committing. Drop them so a retry resolves or
+				// inserts them again, and a later call cannot reuse them either.
+				d.Cache.InvalidateRoom(roomID)
+				d.Cache.InvalidateEventStateKey(targetUserID)
+			}
+			return assignErr
 		}
-		targetUserNID, err = d.assignStateKeyNID(ctx, txn, targetUserID)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+		err = sqlutil.RetrySQLiteBusy(ctx, sqlutil.SQLiteLockRetryPolicy, assignAndReset)
+	} else {
+		err = assign()
+	}
 	if err != nil {
 		return nil, err
 	}

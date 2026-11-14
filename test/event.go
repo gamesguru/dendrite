@@ -29,6 +29,7 @@ type eventMods struct {
 	redacts        string
 	sticky         *gomatrixserverlib.StickyEventData
 	prevEvents     []string
+	depth          *int64
 }
 
 type eventModifier func(e *eventMods)
@@ -88,6 +89,15 @@ func WithStickyDuration(d time.Duration) eventModifier {
 func WithPrevEvents(eventIDs ...string) eventModifier {
 	return func(e *eventMods) {
 		e.prevEvents = eventIDs
+	}
+}
+
+// WithDepth overrides the wire depth the event claims. Test rooms normally
+// number events by insertion order; use this to model a server that restarted
+// its depth counter, which forks the room into two depth islands.
+func WithDepth(depth int64) eventModifier {
+	return func(e *eventMods) {
+		e.depth = &depth
 	}
 }
 

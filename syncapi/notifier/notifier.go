@@ -127,6 +127,10 @@ func (n *Notifier) OnNewEvent(
 					case spec.Leave:
 						fallthrough
 					case spec.Ban:
+						// The target may already be absent from the joined-user
+						// set (for example during a partial-state join). Wake it
+						// directly so it can observe the leave/ban transition.
+						usersToNotify = append(usersToNotify, targetUserID.String())
 						n._removeJoinedUser(ev.RoomID().String(), targetUserID.String())
 					}
 				}

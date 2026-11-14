@@ -19,7 +19,7 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
-func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, *sql.DB, func()) {
+func newOutputRoomEventsTable(ctx context.Context, t *testing.T, dbType test.DBType) (tables.Events, *sql.DB, func()) {
 	t.Helper()
 	connStr, close := test.PrepareDBConnectionString(t, dbType)
 	db, err := sqlutil.Open(&config.DatabaseOptions{
@@ -32,13 +32,13 @@ func newOutputRoomEventsTable(t *testing.T, dbType test.DBType) (tables.Events, 
 	var tab tables.Events
 	switch dbType {
 	case test.DBTypePostgres:
-		tab, err = postgres.NewPostgresEventsTable(context.Background(), db)
+		tab, err = postgres.NewPostgresEventsTable(ctx, db)
 	case test.DBTypeSQLite:
 		var stream sqlite3.StreamIDStatements
 		if err = stream.Prepare(db); err != nil {
 			t.Fatalf("failed to prepare stream stmts: %s", err)
 		}
-		tab, err = sqlite3.NewSqliteEventsTable(db, &stream)
+		tab, err = sqlite3.NewSqliteEventsTable(ctx, db, &stream)
 	}
 	if err != nil {
 		t.Fatalf("failed to make new table: %s", err)
@@ -54,7 +54,7 @@ func TestOutputRoomEventsTable(t *testing.T) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
 
-		tab, db, close := newOutputRoomEventsTable(t, dbType) //nolint:contextcheck
+		tab, db, close := newOutputRoomEventsTable(ctx, t, dbType)
 		defer close()
 		events := room.Events()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
@@ -131,7 +131,7 @@ func TestReindex(t *testing.T) {
 			"msgbody": "my room message",
 			"type":    "m.text",
 		})
-		tab, db, close := newOutputRoomEventsTable(t, dbType) //nolint:contextcheck
+		tab, db, close := newOutputRoomEventsTable(ctx, t, dbType)
 		defer close()
 		err := sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
 			for _, ev := range room.Events() {

@@ -110,6 +110,9 @@ SELECT event_id FROM
     AND ($5 IS NULL OR t.membership <> $5)
 `
 
+const updateMembershipTopologicalPosSQL = "" +
+	"UPDATE syncapi_memberships SET topological_pos = $1 WHERE room_id = $2 AND event_id = $3 AND topological_pos < $1"
+
 const purgeMembershipsSQL = "" +
 	"DELETE FROM syncapi_memberships WHERE room_id = $1"
 
@@ -121,6 +124,7 @@ type membershipsStatements struct {
 	selectMembershipForUserStmt         *sql.Stmt
 	selectMembershipAtStreamStmt        *sql.Stmt
 	selectMembersStmt                   *sql.Stmt
+	updateMembershipTopologicalPosStmt  *sql.Stmt
 	purgeMembershipsStmt                *sql.Stmt
 	insertMembershipHistoryStmt         *sql.Stmt
 	selectMembershipHistoryAtStreamStmt *sql.Stmt
@@ -143,6 +147,7 @@ func NewSqliteMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 		{&s.selectMembershipForUserStmt, selectMembershipBeforeSQL},
 		{&s.selectMembershipAtStreamStmt, selectMembershipAtStreamSQL},
 		{&s.selectMembersStmt, selectMembersSQL},
+		{&s.updateMembershipTopologicalPosStmt, updateMembershipTopologicalPosSQL},
 		{&s.purgeMembershipsStmt, purgeMembershipsSQL},
 		{&s.insertMembershipHistoryStmt, insertMembershipHistorySQL},
 		{&s.selectMembershipHistoryAtStreamStmt, selectMembershipHistoryAtStreamSQL},
@@ -243,6 +248,13 @@ func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 		return currentMembership, currentEventID, nil
 	}
 	return "leave", "", nil
+}
+
+func (s *membershipsStatements) UpdateMembershipTopologicalPos(
+	ctx context.Context, txn *sql.Tx, roomID, eventID string, topologicalPos types.StreamPosition,
+) error {
+	_, err := sqlutil.TxStmt(txn, s.updateMembershipTopologicalPosStmt).ExecContext(ctx, topologicalPos, roomID, eventID)
+	return err
 }
 
 func (s *membershipsStatements) PurgeMemberships(

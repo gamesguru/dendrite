@@ -55,26 +55,27 @@ func TestContractNextKeepsTheFloor(t *testing.T) {
 func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	current := Release()
 	require.Equal(t, 1, current.UpgradeFrom)
-	require.Equal(t, membershipHistoryLevel, current.RollbackTo)
+	require.Equal(t, topologyLiftLevel, current.RollbackTo)
 
 	// A direct upgrade from a build without membership history is admitted:
 	// level 21 reconstructs all retained transitions from output events.
 	preHistory := Recorded{Fingerprint: "deployment", Protocol: 1, Level: 18, Floor: 16}
 	require.NoError(t, current.Admit("deployment", preHistory))
 
-	// Once level 21 has run, a build without membership history may not take
+	// Once this build has run, a build without membership history may not take
 	// over, since it would overwrite transitions nothing can recover.
-	level21 := current.Next("deployment", "v21", preHistory)
-	require.Equal(t, membershipHistoryLevel, level21.Floor)
+	afterCurrent := current.Next("deployment", "v23", preHistory)
+	require.Equal(t, topologyLiftLevel, afterCurrent.Floor)
 	level18 := Contract{Protocol: 1, Level: 18, UpgradeFrom: 1, RollbackTo: 16}
-	require.ErrorIs(t, level18.Admit("deployment", level21), ErrIncompatibleBuild)
+	require.ErrorIs(t, level18.Admit("deployment", afterCurrent), ErrIncompatibleBuild)
 
-	// Rolling back to level 19, which keeps the history, and upgrading again
-	// stays supported. A rollback below level 19 remains refused by the floor.
+	// Level 19 retains membership history but predates topology lifting, so it
+	// cannot take over. The current release can take over and upgrade again.
 	level19 := Contract{Protocol: 1, Level: membershipHistoryLevel, UpgradeFrom: 1, RollbackTo: 16}
-	require.NoError(t, level19.Admit("deployment", level21))
-	afterRollback := level19.Next("deployment", "v19", level21)
-	require.Equal(t, membershipHistoryLevel, afterRollback.Floor)
+	require.ErrorIs(t, level19.Admit("deployment", afterCurrent), ErrIncompatibleBuild)
+	require.NoError(t, current.Admit("deployment", afterCurrent))
+	afterRollback := current.Next("deployment", "v23", afterCurrent)
+	require.Equal(t, topologyLiftLevel, afterRollback.Floor)
 	require.NoError(t, current.Admit("deployment", afterRollback))
 }
 
