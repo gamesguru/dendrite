@@ -37,6 +37,11 @@ const (
 	relationsRecursionDepth = 3
 	// This bounds how many batches one stream-token request reads.
 	maxRelationsBatches = 8
+	// RelationsBackwardTokenPrefix marks a continuation issued by backward
+	// pagination. Its topology part names the event after the cursor, so it may
+	// be re-anchored after a late-parent repair. Unmarked tokens (forward
+	// pagination, /messages, /sync) name the event itself and are left alone.
+	relationsBackwardTokenPrefix = "b"
 )
 
 type RelationsResponse struct {
@@ -96,6 +101,14 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		}
 		return types.TopologyToken{Depth: -1, PDUPosition: -1}, nil, nil
 	}
+	// Only tokens this endpoint issued for backward pagination use the
+	// "cursor before the event" convention. A token from forward pagination (or
+	// /messages) names the event itself, so resolving PDU+1 would find an
+	// unrelated event and could raise the boundary without any repair.
+	backwardCursor := strings.HasPrefix(token, relationsBackwardTokenPrefix)
+	if backwardCursor {
+		token = strings.TrimPrefix(token, relationsBackwardTokenPrefix)
+	}
 	if topologyToken, streamToken, ok := strings.Cut(token, "|"); ok {
 		topology, topoErr := types.NewTopologyTokenFromString(topologyToken)
 		stream, streamErr := types.NewStreamTokenFromString(streamToken)
@@ -106,7 +119,7 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		// before, so resolve its current depth as backward /messages does.
 		// Only a backward `from` cursor is anchored this way; a `to` bound is
 		// not, or it would admit events beyond the requested end.
-		if reanchor {
+		if reanchor && backwardCursor {
 			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
 				return types.TopologyToken{}, nil, err
 			}
@@ -114,7 +127,7 @@ func parseRelationsToken(ctx context.Context, snapshot storage.DatabaseTransacti
 		return topology, &stream, nil
 	}
 	if topology, err := types.NewTopologyTokenFromString(token); err == nil {
-		if reanchor {
+		if reanchor && backwardCursor {
 			if err := reanchorBackwardTopologyToken(ctx, snapshot, roomID, &topology); err != nil {
 				return types.TopologyToken{}, nil, err
 			}
@@ -266,9 +279,9 @@ func relationsPage(
 			// Tokens name the cursor after an event, so step back over the last one.
 			next.Decrement()
 		}
-		res.NextBatch = relationsContinuation(next, fromStream)
+		res.NextBatch = relationsContinuation(next, fromStream, params.backwards)
 	} else if capped {
-		res.NextBatch = relationsContinuation(cursor, fromStream)
+		res.NextBatch = relationsContinuation(cursor, fromStream, params.backwards)
 	}
 
 	ids := make([]string, 0, len(entries))
@@ -329,8 +342,14 @@ func relationsPage(
 	return res, bundler.Bundle(ctx, shown, res.Chunk, synctypes.FormatAll)
 }
 
-func relationsContinuation(cursor types.TopologyToken, stream *types.StreamingToken) string {
+func relationsContinuation(cursor types.TopologyToken, stream *types.StreamingToken, backwards bool) string {
 	topology := cursor.String()
+	if topology == "" {
+		return ""
+	}
+	if backwards {
+		topology = relationsBackwardTokenPrefix + topology
+	}
 	if stream == nil {
 		return topology
 	}
