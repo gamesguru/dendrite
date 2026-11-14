@@ -22,10 +22,9 @@ COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
 COPY --from=rezzy rezzy-json /rezzy/rezzy-json
 COPY --from=rezzy rezzy-log /rezzy/rezzy-log
 COPY --from=rezzy rezzy-recon /rezzy/rezzy-recon
-RUN cargo build --release -p rezzy-ffi \
-    && mkdir -p target/pkgconfig \
-    && printf 'prefix=/rezzy\nlibdir=/rezzy/target/release\nincludedir=/rezzy/include\n\nName: rezzy-ffi\nDescription: Rezzy static C ABI\nVersion: 0.0.0\nLibs: /rezzy/target/release/librezzy_ffi.a -lpthread -ldl -lm\nCflags: -I/rezzy/include\n' \
-        > target/pkgconfig/rezzy-ffi.pc
+# Builds librezzy.a and writes target/pkgconfig/rezzy-ffi.pc with the real version.
+RUN apt-get update && apt-get install -y make python3 \
+    && make -C rezzy-ffi native
 
 FROM golang:1.27-trixie AS build
 RUN apt-get update && apt-get install -y sqlite3 pkg-config
@@ -35,7 +34,7 @@ ENV PKG_CONFIG_PATH=/rezzy/target/pkgconfig
 # go.rezzy.mod replaces rezzy-ffi and gomatrixserverlib with these checkouts.
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
 COPY --from=rezzy rezzy-ffi/include /rezzy/include
-COPY --from=rezzy-build /rezzy/target/release/librezzy_ffi.a /rezzy/target/release/librezzy_ffi.a
+COPY --from=rezzy-build /rezzy/target/release/librezzy.a /rezzy/target/release/librezzy.a
 COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
 COPY --from=gmsl . /gmsl
 
