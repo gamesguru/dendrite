@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -582,60 +581,13 @@ func (d *Database) PutFilter(
 	// InsertFilter looks the filter up before inserting it, so SQLite can
 	// report SQLITE_BUSY when another writer holds the lock. Retry the whole
 	// transaction.
-	err := retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+	err := sqlutil.RetrySQLiteBusy(ctx, sqlutil.SQLiteLockRetryPolicy, func() error {
 		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) (insertErr error) {
 			filterID, insertErr = d.Filter.InsertFilter(ctx, txn, filter, localpart)
 			return insertErr
 		})
 	})
 	return filterID, err
-}
-
-type sqliteRetryPolicy struct {
-	maxAttempts int
-	delayStep   time.Duration
-	maxDelay    time.Duration
-}
-
-const (
-	sqliteMaxRetryAttempts = 10
-	sqliteRetryDelayStep   = 25 * time.Millisecond
-	sqliteMaxRetryDelay    = 250 * time.Millisecond
-)
-
-// sqliteLockRetryPolicy waits out the normal room-creation write burst while
-// staying bounded for callers that cannot be blocked indefinitely.
-var sqliteLockRetryPolicy = sqliteRetryPolicy{
-	maxAttempts: sqliteMaxRetryAttempts,
-	delayStep:   sqliteRetryDelayStep,
-	maxDelay:    sqliteMaxRetryDelay,
-}
-
-// retrySQLiteBusy runs fn, retrying with a bounded backoff while it fails with
-// SQLITE_BUSY. Read-then-write transactions can fail to upgrade their lock
-// immediately even though the SQLite busy timeout is set, so the whole
-// transaction and its lookup must be retried.
-func retrySQLiteBusy(ctx context.Context, policy sqliteRetryPolicy, fn func() error) error {
-	var err error
-	for attempt := 0; attempt < policy.maxAttempts; attempt++ {
-		err = fn()
-		if err == nil || !isSQLiteBusy(err) || attempt == policy.maxAttempts-1 {
-			return err
-		}
-		delay := time.Duration(attempt+1) * policy.delayStep
-		if policy.maxDelay > 0 && delay > policy.maxDelay {
-			delay = policy.maxDelay
-		}
-		logrus.WithError(err).WithField("attempt", attempt+1).Debug("SQLite database busy, retrying")
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return err
 }
 
 func (d *Database) RedactEvent(ctx context.Context, redactedEventID string, redactedBecause *rstypes.HeaderedEvent, querier api.QuerySenderIDAPI) error {
@@ -874,7 +826,7 @@ func (d *Database) StoreReceipt(ctx context.Context, roomId, receiptType, userId
 	// The lookup reads before the upsert writes. SQLite can report SQLITE_BUSY
 	// when another writer holds the lock and the read transaction cannot be
 	// upgraded, so retry the whole transaction, including the lookup.
-	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+	err = sqlutil.RetrySQLiteBusy(ctx, sqlutil.SQLiteLockRetryPolicy, func() error {
 		pos = 0
 		changed = false
 		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -1050,17 +1002,6 @@ func (d *Database) SelectMemberships(
 
 // ===== Phase 10: New Sliding Sync Methods with Delta Tracking =====.
 
-// isSQLiteBusy reports whether err is SQLite's lock-contention error. It is
-// matched by text because the pure-Go and cgo drivers expose different error
-// types and the build only links one of them.
-func isSQLiteBusy(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
-}
-
 func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, connID string) (connectionKey int64, err error) {
 	// Look up the connection outside a transaction so inserting a missing row
 	// doesn't need to upgrade a SQLite read transaction to a write transaction.
@@ -1075,7 +1016,7 @@ func (d *Database) GetOrCreateConnection(ctx context.Context, userID, deviceID, 
 	// If another request creates the same connection after the lookup, the
 	// unique constraint resolves the race. A write-first transaction can wait
 	// for SQLite's busy timeout without hitting the read-to-write upgrade case.
-	err = retrySQLiteBusy(ctx, sqliteLockRetryPolicy, func() error {
+	err = sqlutil.RetrySQLiteBusy(ctx, sqlutil.SQLiteLockRetryPolicy, func() error {
 		return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 			var insertErr error
 			connectionKey, insertErr = d.SlidingSync.InsertConnection(ctx, txn, userID, deviceID, connID, time.Now().UnixMilli())

@@ -8,6 +8,9 @@ type EventStateKeyCache interface {
 	GetEventStateKey(eventStateKeyNID types.EventStateKeyNID) (string, bool)
 	StoreEventStateKey(eventStateKeyNID types.EventStateKeyNID, eventStateKey string)
 	GetEventStateKeyNID(eventStateKey string) (types.EventStateKeyNID, bool)
+	// InvalidateEventStateKey drops both directions for a state key whose NID
+	// was assigned in a transaction that failed to commit.
+	InvalidateEventStateKey(eventStateKey string)
 }
 
 func (c Caches) GetEventStateKey(eventStateKeyNID types.EventStateKeyNID) (string, bool) {
@@ -21,6 +24,15 @@ func (c Caches) StoreEventStateKey(eventStateKeyNID types.EventStateKeyNID, even
 
 func (c Caches) GetEventStateKeyNID(eventStateKey string) (types.EventStateKeyNID, bool) {
 	return c.RoomServerStateKeyNIDs.Get(eventStateKey)
+}
+
+// InvalidateEventStateKey drops both directions of a state-key mapping whose
+// NID was assigned in a transaction that did not commit.
+func (c Caches) InvalidateEventStateKey(eventStateKey string) {
+	if nid, ok := c.RoomServerStateKeyNIDs.Get(eventStateKey); ok {
+		c.RoomServerStateKeys.Unset(nid)
+	}
+	c.RoomServerStateKeyNIDs.Unset(eventStateKey)
 }
 
 type EventTypeCache interface {

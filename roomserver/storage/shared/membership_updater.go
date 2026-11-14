@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
-	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -53,7 +52,18 @@ func NewMembershipUpdater(
 	// transaction (txn == nil) it is safe to retry the whole thing.
 	var err error
 	if txn == nil {
-		err = retrySQLiteBusy(ctx, assign)
+		assignAndReset := func() error {
+			assignErr := assign()
+			if assignErr != nil {
+				// A failed commit rolls the NID rows back, but assign* cached
+				// their IDs before committing. Drop them so a retry resolves or
+				// inserts them again, and a later call cannot reuse them either.
+				d.Cache.InvalidateRoom(roomID)
+				d.Cache.InvalidateEventStateKey(targetUserID)
+			}
+			return assignErr
+		}
+		err = sqlutil.RetrySQLiteBusy(ctx, sqlutil.SQLiteLockRetryPolicy, assignAndReset)
 	} else {
 		err = assign()
 	}
@@ -196,41 +206,4 @@ func (u *MembershipUpdater) Update(newMembership tables.MembershipState, event *
 // table: an invite or a knock waiting for the room to respond.
 func isPendingMembership(membership tables.MembershipState) bool {
 	return membership == tables.MembershipStateInvite || membership == tables.MembershipStateKnock
-}
-
-// SQLite busy retry tuning. The lock upgrade fails immediately rather than
-// waiting for the driver's busy timeout, so a few short backoffs let the
-// competing writer commit.
-const (
-	sqliteBusyRetryAttempts  = 10
-	sqliteBusyRetryBaseDelay = 25 * time.Millisecond
-	sqliteBusyRetryMaxDelay  = 250 * time.Millisecond
-)
-
-// retrySQLiteBusy runs fn, retrying a few times with a short backoff while it
-// fails with SQLite's lock-contention error.
-func retrySQLiteBusy(ctx context.Context, fn func() error) error {
-	var err error
-	for attempt := 1; attempt <= sqliteBusyRetryAttempts; attempt++ {
-		err = fn()
-		if err == nil || attempt == sqliteBusyRetryAttempts || !isSQLiteBusy(err) {
-			return err
-		}
-		delay := min(time.Duration(attempt)*sqliteBusyRetryBaseDelay, sqliteBusyRetryMaxDelay)
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return err
-}
-
-// isSQLiteBusy matches by text because the cgo and pure-Go drivers expose
-// different error types and only one is linked into a build.
-func isSQLiteBusy(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
