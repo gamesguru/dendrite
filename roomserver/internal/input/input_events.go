@@ -27,6 +27,7 @@ import (
 
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventhash"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/acls"
@@ -164,6 +165,12 @@ func (r *Inputer) processRoomEvent(
 		"origin":   input.Origin,
 		"type":     event.Type(),
 	})
+	if err := eventhash.Check(event); err != nil {
+		logger.WithError(err).Warn("rezzy disagrees with gomatrixserverlib about this event")
+	}
+	if err := eventhash.CheckContentHash(event); err != nil {
+		logger.WithError(err).Warn("rezzy could not verify the event content hash")
+	}
 	if input.HasState {
 		logger = logger.WithFields(logrus.Fields{
 			"has_state": input.HasState,
@@ -736,6 +743,15 @@ func (r *Inputer) processRoomEvent(
 			return types.RejectedError(rejectionErr.Error())
 		}
 		return nil
+	}
+
+	// A state event is the only kind that can change the state snapshot, so
+	// cross-checking every message would repeat the same HAMT work. This is a
+	// shadow check: a disagreement is logged and never fails ingestion.
+	if eventhash.Enabled && event.StateKey() != nil && stateAtEvent.BeforeStateSnapshotNID != 0 {
+		if hamtErr := r.checkStateHAMT(ctx, roomInfo, event.RoomID().String(), stateAtEvent.BeforeStateSnapshotNID); hamtErr != nil {
+			logger.WithError(hamtErr).Warn("rezzy state HAMT disagrees with the roomserver state")
+		}
 	}
 
 	// Index an accepted annotation, so that its sender can be stopped from
@@ -1355,6 +1371,38 @@ nextAuthEvent:
 	}
 
 	return nil
+}
+
+// checkStateHAMT loads a room state snapshot and asks rezzy to rebuild it as a
+// state HAMT. It is only called from the rezzy build.
+func (r *Inputer) checkStateHAMT(
+	ctx context.Context,
+	roomInfo *types.RoomInfo,
+	roomID string,
+	snapshotNID types.StateSnapshotNID,
+) error {
+	roomState := state.NewStateResolution(r.DB, roomInfo, r.Queryer)
+	stateEntries, err := roomState.LoadStateAtSnapshot(ctx, snapshotNID)
+	if err != nil {
+		return fmt.Errorf("LoadStateAtSnapshot: %w", err)
+	}
+	stateEvents, err := helpers.LoadStateEvents(ctx, r.DB, roomInfo, stateEntries)
+	if err != nil {
+		return fmt.Errorf("LoadStateEvents: %w", err)
+	}
+	entries := make([]eventhash.StateEntry, 0, len(stateEvents))
+	for _, stateEvent := range stateEvents {
+		stateKey := stateEvent.StateKey()
+		if stateKey == nil {
+			continue
+		}
+		entries = append(entries, eventhash.StateEntry{
+			Type:     stateEvent.Type(),
+			StateKey: *stateKey,
+			EventID:  stateEvent.EventID(),
+		})
+	}
+	return eventhash.CheckStateHAMT(roomID, entries)
 }
 
 func (r *Inputer) calculateAndSetState(

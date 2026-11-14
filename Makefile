@@ -75,6 +75,21 @@ help: ## Show available targets
 	@grep -hE '^[a-zA-Z0-9_\/-]+:[[:space:]]*## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":[[:space:]]*## "}; {printf "$(STYLE_CYAN)%-18s$(STYLE_RESET) %s\n", $$1, $$2}'
 
+# rezzy is linked through its own modfile so go.mod, go.sum and the Dockerfile
+# stay free of the local ../rezzy replace. Build the native library first.
+REZZY_ENV = PKG_CONFIG_PATH=$(abspath ../rezzy/target/pkgconfig):$$PKG_CONFIG_PATH
+REZZY_FLAGS = -modfile=go.rezzy.mod -tags rezzy
+
+.PHONY: build-rezzy
+build-rezzy: ## Build with rezzy linked, so it checks each event ID (needs ../rezzy)
+	$(MAKE) -C ../rezzy/rezzy-ffi native
+	$(REZZY_ENV) $(GO) build $(REZZY_FLAGS) ./...
+
+.PHONY: test-rezzy
+test-rezzy: ## Test the rezzy event ID check
+	$(MAKE) -C ../rezzy/rezzy-ffi native
+	$(REZZY_ENV) $(GO) test $(REZZY_FLAGS) ./internal/eventhash/... ./roomserver/internal/input/...
+
 .PHONY: format
 format: ## Format Go source files
 	$(GO) fmt $(PKGS)
