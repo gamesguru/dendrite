@@ -28,7 +28,7 @@ func (f *lateParentExtremities) SelectEventsReferencingPrevEvent(
 type lateParentTopology struct {
 	tables.Topology
 	positions map[string]types.TopologyToken
-	fullReads int
+	stored    []tables.StoredEventTopology
 }
 
 func (f *lateParentTopology) SelectPositionsInTopology(
@@ -46,31 +46,48 @@ func (f *lateParentTopology) SelectPositionsInTopology(
 func (f *lateParentTopology) SelectRoomEventTopology(
 	context.Context, *sql.Tx, string, types.StreamPosition,
 ) ([]tables.StoredEventTopology, error) {
-	f.fullReads++
-	return nil, nil
+	return f.stored, nil
 }
 
-// The room's history is only read when the late parent moves a child.
-func TestRepairLateParentTopologyReadsHistoryOnlyWhenAChildMoves(t *testing.T) {
+func (f *lateParentTopology) UpdateEventPosition(
+	_ context.Context, _ *sql.Tx, eventID string, position types.StreamPosition,
+) error {
+	token := f.positions[eventID]
+	token.Depth = position
+	f.positions[eventID] = token
+	return nil
+}
+
+// A legacy descendant can be below its direct parent even when the direct
+// child is already above the newly arrived parent. The full branch still needs
+// traversing so that descendant is repaired.
+func TestRepairLateParentTopologyRepairsMisorderedGrandchild(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
-	parent := room.Events()[0]
-	child := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "child"})
-
-	run := func(parentDepth, childDepth types.StreamPosition) *lateParentTopology {
-		topology := &lateParentTopology{positions: map[string]types.TopologyToken{
-			parent.EventID(): {Depth: parentDepth, PDUPosition: 1},
-			child.EventID():  {Depth: childDepth, PDUPosition: 2},
-		}}
-		db := &shared.Database{
-			Topology:            topology,
-			BackwardExtremities: &lateParentExtremities{children: []string{child.EventID()}},
-		}
-		require.NoError(t, shared.RepairLateParentTopology(db, context.Background(), nil, parent))
-		return topology
+	parent := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "late parent"}, test.WithDepth(10))
+	child := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "child"},
+		test.WithDepth(20), test.WithPrevEvents(parent.EventID()))
+	grandchild := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "grandchild"},
+		test.WithDepth(1), test.WithPrevEvents(child.EventID()))
+	topology := &lateParentTopology{
+		positions: map[string]types.TopologyToken{
+			parent.EventID():     {Depth: 10, PDUPosition: 1},
+			child.EventID():      {Depth: 20, PDUPosition: 2},
+			grandchild.EventID(): {Depth: 1, PDUPosition: 3},
+		},
+		stored: []tables.StoredEventTopology{
+			{Event: parent, Position: 10},
+			{Event: child, Position: 20},
+			{Event: grandchild, Position: 1},
+		},
 	}
-
-	assert.Zero(t, run(3, 4).fullReads, "child already above the parent: nothing to repair")
-	assert.Equal(t, 1, run(4, 4).fullReads, "child at the parent's position moves")
-	assert.Equal(t, 1, run(5, 4).fullReads, "child below the parent moves")
+	db := &shared.Database{
+		Topology:            topology,
+		BackwardExtremities: &lateParentExtremities{children: []string{child.EventID()}},
+	}
+	require.NoError(t, shared.RepairLateParentTopology(db, context.Background(), nil, parent))
+	assert.Equal(t, types.StreamPosition(20), topology.positions[child.EventID()].Depth,
+		"the direct child already followed the late parent")
+	assert.Equal(t, types.StreamPosition(21), topology.positions[grandchild.EventID()].Depth,
+		"the legacy grandchild must still be lifted above its parent")
 }
