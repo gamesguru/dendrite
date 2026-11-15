@@ -51,11 +51,6 @@ func CheckContentHash(event gomatrixserverlib.PDU) error {
 	return nil
 }
 
-// maxStateHAMTLookups bounds the number of point lookups per check. Each
-// lookup rebuilds the HAMT from the entries, so checking every key would make
-// an event O(n^2) in the size of the room state.
-const maxStateHAMTLookups = 3
-
 // CheckStateHAMT builds a state HAMT from the entries and verifies that its
 // root does not depend on entry order and that sample lookups return the event
 // IDs that the roomserver has in the snapshot.
