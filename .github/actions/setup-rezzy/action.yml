@@ -16,9 +16,6 @@ runs:
         git -C ../gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
         git -C ../gmsl fetch --depth=1 origin 238ff2c
         git -C ../gmsl checkout FETCH_HEAD
-    - name: Link the Rezzy submodule at the expected sibling path
-      shell: bash
-      run: ln -s "$GITHUB_WORKSPACE/rezzy" ../rezzy
     - uses: dtolnay/rust-toolchain@stable
       if: inputs.native == 'true'
     - name: Build Rezzy native library
@@ -27,5 +24,5 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y pkg-config
-        make -C ../rezzy/rezzy-ffi native
-        echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/../rezzy/target/pkgconfig" >> "$GITHUB_ENV"
+        make -C rezzy/rezzy-ffi native
+        echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/rezzy/target/pkgconfig" >> "$GITHUB_ENV"

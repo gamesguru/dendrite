@@ -78,17 +78,17 @@ help: ## Show available targets
 # Rezzy's authoritative event ID and content hash hooks are opt-in so the
 # default Go build stays independent of the native library. Build the native
 # library first, then use the rezzy modfile and tag.
-REZZY_ENV = PKG_CONFIG_PATH=$(abspath ../rezzy/target/pkgconfig):$$PKG_CONFIG_PATH
+REZZY_ENV = PKG_CONFIG_PATH=$(abspath ./rezzy/target/pkgconfig):$$PKG_CONFIG_PATH
 REZZY_FLAGS = -modfile=go.rezzy.mod -tags rezzy
 
 .PHONY: build-rezzy
-build-rezzy: ## Build with rezzy authoritative (needs ../rezzy and ../gmsl)
-	$(MAKE) -C ../rezzy/rezzy-ffi native
+build-rezzy: ## Build with rezzy authoritative (needs the rezzy submodule and ../gmsl)
+	$(MAKE) -C ./rezzy/rezzy-ffi native
 	$(REZZY_ENV) $(GO) build $(REZZY_FLAGS) ./...
 
 .PHONY: test-rezzy
 test-rezzy: ## Test the rezzy hooks and state HAMT cross-check
-	$(MAKE) -C ../rezzy/rezzy-ffi native
+	$(MAKE) -C ./rezzy/rezzy-ffi native
 	$(REZZY_ENV) $(GO) test $(REZZY_FLAGS) ./internal/eventhash/... ./roomserver/internal/input/...
 
 .PHONY: format
