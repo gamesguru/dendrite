@@ -946,7 +946,9 @@ func (r *Admin) PerformAdminImportEvents(
 	}
 	results := make([]api.AdminImportResult, 0, len(pdus))
 	events := make([]parsed, 0, len(pdus))
-	seen := make(map[string]struct{}, len(pdus))
+	// IDs already ingested without error. A copy that failed (for example a
+	// bad signature) must not suppress a valid copy of the same event.
+	done := make(map[string]struct{}, len(pdus))
 	for i, raw := range pdus {
 		line := i + 1
 		ev, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
@@ -958,19 +960,20 @@ func (r *Admin) PerformAdminImportEvents(
 				Line: line, EventID: ev.EventID(), Outcome: "invalid: event belongs to room " + ev.RoomID().String(),
 			})
 		default:
-			if _, dup := seen[ev.EventID()]; dup {
-				results = append(results, api.AdminImportResult{Line: line, EventID: ev.EventID(), Outcome: "duplicate"})
-				continue
-			}
-			seen[ev.EventID()] = struct{}{}
 			events = append(events, parsed{line: line, ev: ev})
 		}
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].ev.Depth() < events[j].ev.Depth() })
 	for _, p := range events {
+		if _, dup := done[p.ev.EventID()]; dup {
+			results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: "duplicate"})
+			continue
+		}
 		outcome, ingestErr := r.ingestAdminEvent(ctx, p.ev, origin)
 		if ingestErr != nil {
 			outcome = "error: " + ingestErr.Error()
+		} else {
+			done[p.ev.EventID()] = struct{}{}
 		}
 		results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
 	}

@@ -776,6 +776,10 @@ func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserve
 // maxImportLineBytes bounds one PDU line; the Matrix event limit is 65 KiB.
 const maxImportLineBytes = 1 << 20
 
+// maxImportBodyBytes bounds the nonblank bytes of one import. A request may
+// not buffer more than this, whatever the per-line and per-import event limits.
+const maxImportBodyBytes = 64 << 20
+
 // AdminImportEvents ingests PDUs from a JSONL request body (one PDU per
 // line, blank lines ignored) into a room that already exists locally. Events are
 // signature-checked and ingested oldest depth first. The optional "origin"
@@ -799,12 +803,25 @@ func AdminImportEvents(
 	scanner := bufio.NewScanner(req.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxImportLineBytes)
 	var pdus []json.RawMessage
+	// physicalLines[i] is the line of the body that pdus[i] came from, so
+	// results can name real input lines even when blank lines were skipped.
+	var physicalLines []int
+	total, physical := 0, 0
 	for scanner.Scan() {
+		physical++
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
 		}
+		total += len(line)
+		if total > maxImportBodyBytes {
+			return util.JSONResponse{
+				Code: http.StatusRequestEntityTooLarge,
+				JSON: spec.Unknown(fmt.Sprintf("The import is larger than %d bytes.", maxImportBodyBytes)),
+			}
+		}
 		pdus = append(pdus, json.RawMessage(append([]byte(nil), line...)))
+		physicalLines = append(physicalLines, physical)
 	}
 	if err = scanner.Err(); err != nil {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not read the JSONL body: " + err.Error())}
@@ -819,6 +836,11 @@ func AdminImportEvents(
 		}
 		logrus.WithError(err).WithFields(logrus.Fields{"userID": device.UserID, "roomID": roomID}).Error("failed to import events")
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.Unknown(err.Error())}
+	}
+	for i := range results {
+		if n := results[i].Line; n >= 1 && n <= len(physicalLines) {
+			results[i].Line = physicalLines[n-1]
+		}
 	}
 	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
 		Results []roomserverAPI.AdminImportResult `json:"results"`

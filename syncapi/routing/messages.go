@@ -1404,20 +1404,31 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 }
 
 // forwardGapAdvanced reports whether a backfill round changed the gap it was
-// asked to fill. If the same extremity is still open with the same missing
+// asked to fill. If the selected extremity is still open with the same missing
 // parents, none of them were stored and another round cannot make progress.
+// The extremity is looked up by ID: the lowest open gap may be a different,
+// already-tried one, which says nothing about the gap that was just fetched.
 func (r *messagesReq) forwardGapAdvanced(
 	ctx context.Context, firstEventPosition types.TopologyToken, extremityID string, prevs []string,
 ) bool {
-	nextID, nextPrevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
 	if err != nil {
 		// Treat an unreadable extremity set as progress so the round loop's
 		// own bound and error handling decide what happens next.
 		return true
 	}
-	before := extremitiesKey(map[string][]string{extremityID: prevs})
-	after := extremitiesKey(map[string][]string{nextID: nextPrevs})
-	return before != after
+	nextPrevs, ok := backwardExtremities[extremityID]
+	if !ok {
+		return true
+	}
+	open, err := r.openBackwardExtremities(ctx, map[string][]string{extremityID: nextPrevs})
+	if err != nil {
+		return true
+	}
+	if _, stillOpen := open[extremityID]; !stillOpen {
+		return true
+	}
+	return extremitiesKey(map[string][]string{extremityID: prevs}) != extremitiesKey(map[string][]string{extremityID: nextPrevs})
 }
 
 // handleEmptyEventsSlice handles the case where the initial request to the
