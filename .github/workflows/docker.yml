@@ -62,7 +62,7 @@ jobs:
           context: .
           build-contexts: |
             rezzy=./rezzy
-            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b
+            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b2
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: |
@@ -77,7 +77,7 @@ jobs:
           context: .
           build-contexts: |
             rezzy=./rezzy
-            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b
+            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b2
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: |
@@ -92,7 +92,7 @@ jobs:
           context: .
           build-contexts: |
             rezzy=./rezzy
-            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b
+            gmsl=https://github.com/gamesguru/gomatrixserverlib.git#d7cecfcc334530d4a1f76ed4534b7ea286ab22b2
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: |
