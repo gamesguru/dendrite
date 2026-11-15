@@ -34,6 +34,7 @@ type forwardGapState struct {
 	unstored         []*rstypes.HeaderedEvent // the hole, oldest first
 	stored           map[string]*rstypes.HeaderedEvent
 	positions        map[string]types.TopologyToken
+	positionFailures map[string]int
 	extremities      map[string][]string
 	batches          int
 	positionLookups  int
@@ -93,6 +94,10 @@ func (s *forwardGapState) Events(_ context.Context, eventIDs []string) ([]*rstyp
 
 func (s *forwardGapState) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
 	s.positionLookups++
+	if s.positionFailures[eventID] > 0 {
+		s.positionFailures[eventID]--
+		return types.TopologyToken{}, errors.New("temporary topology lookup failure")
+	}
 	pos, ok := s.positions[eventID]
 	if !ok {
 		return types.TopologyToken{}, errors.New("event not in topology")
@@ -547,4 +552,33 @@ func TestFillForwardGapCachesExtremityPositionsAcrossTerminalCacheHits(t *testin
 	// attempted gap: O(E), not a re-read of every prev event each round.
 	assert.LessOrEqual(t, state.prevEventLookups, 2*len(state.extremities),
 		"the extremities' prev events should not be re-read for every round")
+	assert.Equal(t, len(state.extremities), r.forwardGapScan.next,
+		"selection should advance through the cached candidates instead of rescanning the prefix")
+}
+
+func TestForwardGapRetriesTransientPositionLookupFailure(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	event := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+
+	state := &forwardGapState{
+		stored:           make(map[string]*rstypes.HeaderedEvent),
+		positions:        make(map[string]types.TopologyToken),
+		positionFailures: map[string]int{event.EventID(): 1},
+		extremities:      map[string][]string{event.EventID(): {"$missing"}},
+	}
+	state.store(event)
+	r := newForwardGapReq(state)
+	firstEventPosition := types.TopologyToken{Depth: 10, PDUPosition: 10}
+
+	id, _, err := r.forwardGapExtremity(r.ctx, firstEventPosition)
+	require.NoError(t, err)
+	assert.Empty(t, id, "the first topology lookup fails transiently")
+	assert.Nil(t, r.forwardGapScan, "an incomplete candidate scan must not be cached")
+
+	id, prevs, err := r.forwardGapExtremity(r.ctx, firstEventPosition)
+	require.NoError(t, err)
+	assert.Equal(t, event.EventID(), id, "the next scan retries the failed position lookup")
+	assert.Equal(t, []string{"$missing"}, prevs)
+	assert.Equal(t, 2, state.positionLookups)
 }

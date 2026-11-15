@@ -1234,13 +1234,16 @@ func (r *messagesReq) forwardGapCandidates(ctx context.Context) (*forwardGapScan
 		return nil, err
 	}
 	scan := &forwardGapScan{candidates: make([]forwardGapCandidate, 0, len(open))}
+	positionLookupFailed := false
 	for extremityID := range open {
 		pos, cached := r.forwardGapPositions[extremityID]
 		if !cached {
 			var posErr error
 			pos, posErr = r.snapshot.EventPositionInTopology(ctx, extremityID)
 			if posErr != nil {
-				// As before, ignore markers that do not have a topology position.
+				// Do not cache an incomplete scan. A later selection round can
+				// retry this lookup while successful positions remain memoized.
+				positionLookupFailed = true
 				continue
 			}
 			if r.forwardGapPositions == nil {
@@ -1258,7 +1261,9 @@ func (r *messagesReq) forwardGapCandidates(ctx context.Context) (*forwardGapScan
 		}
 		return topologyTokenLess(scan.candidates[i].pos, scan.candidates[j].pos)
 	})
-	r.forwardGapScan = scan
+	if !positionLookupFailed {
+		r.forwardGapScan = scan
+	}
 	return scan, nil
 }
 
