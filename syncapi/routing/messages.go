@@ -597,6 +597,7 @@ func (r *messagesReq) openBackwardExtremities(
 		for _, ev := range stored {
 			have[ev.EventID()] = struct{}{}
 		}
+		r.addRoomserverHeldEvents(ctx, util.UniqueStrings(all), have)
 	}
 	open := make(map[string]struct{}, len(backwardExtremities))
 	for extremityID, prevIDs := range backwardExtremities {
@@ -612,6 +613,38 @@ func (r *messagesReq) openBackwardExtremities(
 		}
 	}
 	return open, nil
+}
+
+// addRoomserverHeldEvents marks as present every ID the roomserver stores
+// that the syncapi does not. A soft-failed event is stored by the roomserver but
+// never sent to the syncapi, so a child recorded with it as a prev event would
+// otherwise look like an open gap forever, and no backfill can ever close it:
+// the roomserver already has the event. Rejected events are not counted, since
+// fetching them again can still change the outcome. A failed lookup leaves the
+// gap open, as before.
+func (r *messagesReq) addRoomserverHeldEvents(ctx context.Context, ids []string, have map[string]struct{}) {
+	if r.rsAPI == nil {
+		return
+	}
+	var missing []string
+	for _, id := range ids {
+		if _, ok := have[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	var res api.QueryEventsByIDResponse
+	if err := r.rsAPI.QueryEventsByID(ctx, &api.QueryEventsByIDRequest{
+		RoomID: r.roomID, EventIDs: missing, ExcludeRejected: true,
+	}, &res); err != nil {
+		util.GetLogger(ctx).WithError(err).Warn("could not ask the roomserver for prev events of the backwards extremities")
+		return
+	}
+	for _, ev := range res.Events {
+		have[ev.EventID()] = struct{}{}
+	}
 }
 
 func getMembershipForUser(ctx context.Context, roomID, userID string, rsAPI api.SyncRoomserverAPI) (resp api.QueryMembershipForUserResponse, err error) {

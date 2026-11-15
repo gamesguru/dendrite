@@ -162,6 +162,33 @@ type forwardGapAPI struct {
 	state *forwardGapState
 }
 
+// QueryEventsByID reports no events: the roomserver holds nothing the syncapi
+// lacks, so gap tests see only the syncapi's own view.
+func (a *forwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	return nil
+}
+
+// heldEventsAPI is a roomserver that stores the given events.
+type heldEventsAPI struct {
+	api.SyncRoomserverAPI
+	held map[string]*rstypes.HeaderedEvent
+	err  error
+	asks int
+}
+
+func (a *heldEventsAPI) QueryEventsByID(_ context.Context, req *api.QueryEventsByIDRequest, res *api.QueryEventsByIDResponse) error {
+	a.asks++
+	if a.err != nil {
+		return a.err
+	}
+	for _, id := range req.EventIDs {
+		if ev, ok := a.held[id]; ok {
+			res.Events = append(res.Events, ev)
+		}
+	}
+	return nil
+}
+
 func (a *forwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
 	res.Events = a.state.takeBatch(req.Limit)
 	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared
@@ -467,6 +494,10 @@ type replayForwardGapAPI struct {
 	api.SyncRoomserverAPI
 	events []*rstypes.HeaderedEvent
 	calls  int
+}
+
+func (a *replayForwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	return nil
 }
 
 func (a *replayForwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
