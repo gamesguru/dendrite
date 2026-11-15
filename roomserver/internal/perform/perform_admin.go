@@ -917,6 +917,18 @@ func (r *Admin) verifyAdminEventSignatures(ctx context.Context, ev gomatrixserve
 	})
 }
 
+// adminDuplicateOutcome reports the import result for an event ID that was
+// already ingested. The duplicate's signature is re-checked, because a bad
+// copy must be reported as an error rather than silently accepted as a
+// duplicate of the good one.
+func adminDuplicateOutcome(ev gomatrixserverlib.PDU, verify func(gomatrixserverlib.PDU) error) string {
+	outcome := "duplicate"
+	if err := verify(ev); err != nil {
+		outcome = "error: signature check failed: " + err.Error()
+	}
+	return outcome
+}
+
 // maxAdminImportEvents bounds one import so it finishes inside the server's
 // write timeout.
 const maxAdminImportEvents = 5000
@@ -970,10 +982,9 @@ func (r *Admin) PerformAdminImportEvents(
 	sort.SliceStable(events, func(i, j int) bool { return events[i].ev.Depth() < events[j].ev.Depth() })
 	for _, p := range events {
 		if _, dup := done[p.ev.EventID()]; dup {
-			outcome := "duplicate"
-			if err := r.verifyAdminEventSignatures(ctx, p.ev); err != nil {
-				outcome = "error: signature check failed: " + err.Error()
-			}
+			outcome := adminDuplicateOutcome(p.ev, func(ev gomatrixserverlib.PDU) error {
+				return r.verifyAdminEventSignatures(ctx, ev)
+			})
 			results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
 			continue
 		}

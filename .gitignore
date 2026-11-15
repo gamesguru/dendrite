@@ -98,3 +98,4 @@ AGENTS.md
 *.merged.yaml
 __pycache__/
 *.pyc
+.venv-scripts/

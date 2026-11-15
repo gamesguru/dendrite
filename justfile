@@ -22,7 +22,9 @@ lint: rezzy-native
 
 # Run the Python script tests
 test-scripts:
-    python3 -m unittest discover -s scripts
+    python3 -m venv .venv-scripts
+    .venv-scripts/bin/python -m pip install --quiet pyyaml
+    .venv-scripts/bin/python -m unittest discover -s scripts
 
 # Build the native Rezzy library the Go packages link against
 rezzy-native:
