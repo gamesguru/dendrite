@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -1586,6 +1587,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 func (r *messagesReq) backfillBackwardUntilComplete(
 	backwardExtremities map[string][]string, page []types.StreamEvent, limit int,
 ) (events []*rstypes.HeaderedEvent, incomplete bool, err error) {
+	prevKey := extremitiesKey(backwardExtremities)
 	for round := 0; round < maxBackwardBackfillRounds; round++ {
 		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
 		if backfillErr != nil {
@@ -1620,8 +1622,29 @@ func (r *messagesReq) backfillBackwardUntilComplete(
 			// cannot safely move the page cursor past it.
 			return events, true, nil
 		}
+		if key := extremitiesKey(backwardExtremities); key == prevKey {
+			// The round stored events but the frontier did not move; repeating
+			// it would refetch the same batch.
+			util.GetLogger(r.ctx).WithField("room_id", r.roomID).
+				Warn("backfillBackwardUntilComplete: no progress, stopping")
+			return events, true, nil
+		} else {
+			prevKey = key
+		}
 	}
 	return events, incomplete, nil
+}
+
+// extremitiesKey returns a stable identity for a backward extremity map.
+func extremitiesKey(m map[string][]string) string {
+	var parts []string
+	for id, prevs := range m {
+		p := append([]string(nil), prevs...)
+		sort.Strings(p)
+		parts = append(parts, id+":"+strings.Join(p, ","))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }
 
 // backfillBatchHasMissingParents detects whether the fetched history still

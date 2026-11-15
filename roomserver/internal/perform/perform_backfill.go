@@ -132,6 +132,16 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 	)
+	returned := make(map[string]struct{}, len(events))
+	for _, ev := range events {
+		returned[ev.EventID()] = struct{}{}
+	}
+	for _, id := range fromEventIDs {
+		if _, ok := returned[id]; !ok {
+			logrus.WithField("room_id", req.RoomID).WithField("frontier", id).
+				Warn("backfillViaFederation: response did not contain the requested frontier event")
+		}
+	}
 	// Only return an error if we really couldn't get any events.
 	if err != nil && len(events) == 0 {
 		logrus.WithError(err).Errorf("gomatrixserverlib.RequestBackfill failed")
@@ -153,6 +163,10 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// visibility change, and the sync API's history filter applies each event's
 	// own value when the event is later read from /messages.
 	historyVisibilities := make(map[string]gomatrixserverlib.HistoryVisibility, len(storedEvents))
+	// State events fetched while resolving the state above. They are stored but
+	// have no before-state here, so they are returned with the most restrictive
+	// visibility rather than left invisible to the sync API.
+	var sideEffectEvents []gomatrixserverlib.PDU
 	for _, ev := range storedEvents {
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
@@ -165,7 +179,8 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		var entries []types.StateEntry
 		if entries, err = r.DB.StateEntriesForEventIDs(ctx, stateIDs, true); err != nil {
 			// attempt to fetch the missing events
-			r.fetchAndStoreMissingEvents(ctx, info.RoomVersion, requester, stateIDs, req.VirtualHost)
+			sideEffectEvents = append(sideEffectEvents,
+				r.fetchAndStoreMissingEvents(ctx, info.RoomVersion, requester, stateIDs, req.VirtualHost)...)
 			// try again
 			entries, err = r.DB.StateEntriesForEventIDs(ctx, stateIDs, true)
 			if err != nil {
@@ -183,6 +198,16 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		}
 		if err = r.DB.SetState(ctx, ev.EventNID, beforeStateSnapshotNID); err != nil {
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to persist snapshot nid")
+			continue
+		}
+		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
+			// persistEvents validated this redaction before the event had a
+			// before-state, which fails (and rolls the redaction back). Now that
+			// the snapshot exists, validate it again.
+			resolver := state.NewStateResolution(r.DB, info, r.Querier)
+			if _, _, rErr := r.DB.MaybeRedactEvent(ctx, info, ev.EventNID, ev.PDU, &resolver, r.Querier); rErr != nil {
+				logrus.WithError(rErr).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to apply redaction after state assignment")
+			}
 		}
 	}
 
@@ -197,6 +222,17 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			vis = gomatrixserverlib.HistoryVisibilityJoined
 		}
 		res.Events[i] = &types.HeaderedEvent{PDU: events[i], Visibility: vis}
+	}
+	inResponse := make(map[string]struct{}, len(events))
+	for _, ev := range events {
+		inResponse[ev.EventID()] = struct{}{}
+	}
+	for _, ev := range sideEffectEvents {
+		if _, ok := inResponse[ev.EventID()]; ok {
+			continue
+		}
+		inResponse[ev.EventID()] = struct{}{}
+		res.Events = append(res.Events, &types.HeaderedEvent{PDU: ev, Visibility: gomatrixserverlib.HistoryVisibilityJoined})
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
@@ -288,17 +324,19 @@ func prioritiseBackfillFromEventIDs(
 }
 
 // fetchAndStoreMissingEvents does a best-effort fetch and store of missing events specified in stateIDs. Returns no error as it is just
-// best effort.
+// best effort. It returns the events it stored, so the caller can hand them to the
+// sync API: stored only in the roomserver, they would stay invisible to /messages
+// while still being cited as missing parents by backward extremities.
 func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gomatrixserverlib.RoomVersion,
 	backfillRequester *backfillRequester, stateIDs []string, virtualHost spec.ServerName,
-) {
+) []gomatrixserverlib.PDU {
 	servers := backfillRequester.servers
 
 	// work out which are missing
 	nidMap, err := r.DB.EventNIDs(ctx, stateIDs)
 	if err != nil {
 		util.GetLogger(ctx).WithError(err).Warn("cannot query missing events")
-		return
+		return nil
 	}
 	missingMap := make(map[string]*types.HeaderedEvent) // id -> event
 	for _, id := range stateIDs {
@@ -361,7 +399,12 @@ func (r *Backfiller) fetchAndStoreMissingEvents(ctx context.Context, roomVer gom
 		}
 	}
 	util.GetLogger(ctx).Infof("Persisting %d new events", len(newEvents))
-	persistEvents(ctx, r.DB, r.Querier, newEvents)
+	_, stored := persistEvents(ctx, r.DB, r.Querier, newEvents)
+	out := make([]gomatrixserverlib.PDU, 0, len(stored))
+	for _, ev := range stored {
+		out = append(out, ev.PDU)
+	}
+	return out
 }
 
 // backfillRequester implements gomatrixserverlib.BackfillRequester.
@@ -771,8 +814,11 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 
 		_, redactedEvent, err := db.MaybeRedactEvent(ctx, roomInfo, eventNID, ev, &resolver, querier)
 		if err != nil {
+			// The event is already stored. Skipping it here would leave it
+			// without a before-state snapshot (set by the caller for stored
+			// events only), so every later backfill would refetch it. Keep it.
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("Failed to redact event")
-			continue
+			redactedEvent = nil
 		}
 		// If storing this event results in it being redacted, then do so.
 		// It's also possible for this event to be a redaction which results in another event being
