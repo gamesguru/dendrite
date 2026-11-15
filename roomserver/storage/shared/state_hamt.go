@@ -887,8 +887,9 @@ func (d *Database) stateHAMTEntriesForTuplesLocked(
 
 // withStateHAMTReadLock keeps the purge sweep from deleting nodes between a
 // root lookup and the corresponding node reads. The advisory lock is
-// transaction-scoped, so an owned transaction is required for standalone
-// reads; callers with an existing transaction keep using it.
+// transaction-scoped, so a standalone read opens an owned transaction when the
+// backend has real node locks. SQLite has none, so it reads without one;
+// callers with an existing transaction keep using it.
 func (d *Database) withStateHAMTReadLock(
 	ctx context.Context, txn *sql.Tx, read func(*sql.Tx) error,
 ) error {

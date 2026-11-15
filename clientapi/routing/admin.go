@@ -758,7 +758,12 @@ func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserve
 			logrus.WithError(err).WithFields(logrus.Fields{
 				"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
 			}).Error("failed to fetch event")
-			results[eventID] = err.Error()
+			if roomserverAPI.IsInputRejected(err) {
+				// Report the auth reason without the internal marker.
+				results[eventID] = "rejected: " + roomserverAPI.InputRejectionReason(err)
+			} else {
+				results[eventID] = err.Error()
+			}
 			continue
 		}
 		results[eventID] = outcome
