@@ -20,9 +20,13 @@ fmt: install-dev-deps
 lint:
     prek run golangci-lint --all-files
 
+# Build the native Rezzy library the Go packages link against
+rezzy-native:
+    make -C ./rezzy/rezzy-ffi native
+
 # Run unit tests
-test:
-    go test -tags goolm -v ./...
+test: rezzy-native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -v ./...
 
 # Run unit tests with race detector
 test-race:

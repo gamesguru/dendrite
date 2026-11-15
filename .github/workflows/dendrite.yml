@@ -8,11 +8,15 @@ on:
       - "**.go" # only execute on changes to go files
       - "go.sum" # or dependency updates
       - ".github/workflows/**" # or workflow changes
+      - ".github/actions/**" # or a changed composite action
+      - "rezzy" # or a bumped native library
   pull_request:
     paths:
       - "**.go"
       - "go.sum" # or dependency updates
       - ".github/workflows/**"
+      - ".github/actions/**"
+      - "rezzy"
   release:
     types: [published]
   workflow_dispatch:

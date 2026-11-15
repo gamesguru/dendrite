@@ -96,3 +96,5 @@ AGENTS.md
 /docs/
 /.hachaos
 *.merged.yaml
+__pycache__/
+*.pyc

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 
 import yaml
 
@@ -210,14 +211,25 @@ def main():
         print(
             "Not in sample: " + ", ".join(".".join(p) for p in missing), file=sys.stderr
         )
-    # The merged config holds secrets, so restrict it to the owner.
-    fd = os.open(a.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.writelines(out)
+    # The merged config holds secrets: write it to a private temporary file in
+    # the output directory, then replace the output atomically, so a failure
+    # leaves any existing output untouched and no partial file behind.
+    out_dir = os.path.dirname(os.path.abspath(a.output))
+    fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix=".merge_yaml.")
     try:
-        os.chmod(a.output, 0o600)
-    except OSError:
-        pass  # best effort on platforms without POSIX permissions
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.writelines(out)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass  # best effort on platforms without POSIX permissions
+        os.replace(tmp_path, a.output)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     print(
         f"Wrote {a.output}: {len(used)} of your values applied, "
         f"{len(missing)} not in sample"
