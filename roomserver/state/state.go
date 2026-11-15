@@ -20,8 +20,10 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/matrix-org/util"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -796,6 +798,11 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 			stateNID, err = v.db.AddState(
 				ctx, v.roomInfo.RoomNID, applyStateEntry(previous, prevState.StateEntry),
 			)
+		}
+		var missing *statehamt.MissingNodesError
+		if errors.As(err, &missing) {
+			logrus.WithError(err).WithField("snapshot_nid", prevState.BeforeStateSnapshotNID).
+				Warn("State HAMT is missing nodes for a stored snapshot; run backfill-state-hamt -verify")
 		}
 		if err != nil {
 			err = fmt.Errorf("v.db.AddStateDelta: %w", err)
