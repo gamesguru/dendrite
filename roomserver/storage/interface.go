@@ -69,6 +69,9 @@ type Database interface {
 	// HAMT. The boolean is false for snapshots written before HAMT persistence.
 	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
 	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
+	// BackfillStateHAMTs persists HAMTs for up to limit snapshots that predate
+	// HAMT persistence, returning the number completed.
+	BackfillStateHAMTs(ctx context.Context, limit int) (int, error)
 	// Look up the state data for the state key tuples for each numeric state block ID
 	// This is used to fetch a subset of the room state at a snapshot.
 	// If a block doesn't contain any of the requested tuples then it can be discarded from the result.

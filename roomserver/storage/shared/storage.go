@@ -2095,6 +2095,9 @@ func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 		if _, err = d.PartialStateTable.DeletePartialStateRoom(ctx, txn, roomNID); err != nil {
 			return fmt.Errorf("failed to purge partial state: %w", err)
 		}
+		if err = d.purgeStateHAMTs(ctx, txn, roomNID); err != nil {
+			return fmt.Errorf("failed to purge state HAMTs: %w", err)
+		}
 		return d.Purge.PurgeRoom(ctx, txn, roomNID, roomID)
 	})
 	if err != nil {

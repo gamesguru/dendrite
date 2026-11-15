@@ -134,6 +134,12 @@ type StateHAMTRoot struct {
 	EntryCount   int
 }
 
+// StateHAMTRootRef is the identity needed to walk a root during node GC.
+type StateHAMTRootRef struct {
+	RoomID   string
+	RootHash []byte
+}
+
 // StateHAMT stores persisted state HAMTs keyed by snapshot.
 type StateHAMT interface {
 	InsertStateHAMT(
@@ -144,6 +150,10 @@ type StateHAMT interface {
 	// SelectStateHAMT returns nil when the snapshot has no persisted HAMT.
 	SelectStateHAMT(ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID) (*StateHAMTRoot, error)
 	SelectStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) ([]StateHAMTNode, error)
+	DeleteStateHAMTRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error
+	SelectStateHAMTRootRefs(ctx context.Context, txn *sql.Tx) ([]StateHAMTRootRef, error)
+	SelectStateHAMTNodeHashes(ctx context.Context, txn *sql.Tx) ([][]byte, error)
+	DeleteStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) error
 }
 
 type RoomAliases interface {

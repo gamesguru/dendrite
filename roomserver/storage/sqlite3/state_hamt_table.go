@@ -52,6 +52,15 @@ const selectStateHAMTNodesSQL = `
   SELECT node_hash, node_bytes FROM roomserver_state_hamt_nodes WHERE node_hash IN ($1)
 `
 
+const deleteStateHAMTRoomSQL = `DELETE FROM roomserver_state_hamt_snapshots WHERE room_nid = $1`
+const selectStateHAMTRootRefsSQL = `
+  SELECT r.room_id, h.root_hash
+  FROM roomserver_state_hamt_snapshots AS h
+  JOIN roomserver_rooms AS r ON r.room_nid = h.room_nid
+`
+const selectStateHAMTNodeHashesSQL = `SELECT node_hash FROM roomserver_state_hamt_nodes`
+const deleteStateHAMTNodesSQL = `DELETE FROM roomserver_state_hamt_nodes WHERE node_hash IN ($1)`
+
 type stateHAMTStatements struct{ db *sql.DB }
 
 func PrepareStateHAMTTable(db *sql.DB) (tables.StateHAMT, error) {
@@ -150,4 +159,66 @@ func (s *stateHAMTStatements) SelectStateHAMTNodes(
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
+}
+
+func (s *stateHAMTStatements) DeleteStateHAMTRoom(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+) error {
+	_, err := s.exec(ctx, txn, deleteStateHAMTRoomSQL, roomNID)
+	return err
+}
+
+func (s *stateHAMTStatements) SelectStateHAMTRootRefs(
+	ctx context.Context, txn *sql.Tx,
+) ([]tables.StateHAMTRootRef, error) {
+	rows, err := s.query(ctx, txn, selectStateHAMTRootRefsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectStateHAMTRootRefs rows close failed")
+	var roots []tables.StateHAMTRootRef
+	for rows.Next() {
+		var root tables.StateHAMTRootRef
+		if err := rows.Scan(&root.RoomID, &root.RootHash); err != nil {
+			return nil, err
+		}
+		roots = append(roots, root)
+	}
+	return roots, rows.Err()
+}
+
+func (s *stateHAMTStatements) SelectStateHAMTNodeHashes(
+	ctx context.Context, txn *sql.Tx,
+) ([][]byte, error) {
+	rows, err := s.query(ctx, txn, selectStateHAMTNodeHashesSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectStateHAMTNodeHashes rows close failed")
+	var hashes [][]byte
+	for rows.Next() {
+		var hash []byte
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes, rows.Err()
+}
+
+func (s *stateHAMTStatements) DeleteStateHAMTNodes(
+	ctx context.Context, txn *sql.Tx, hashes [][]byte,
+) error {
+	for start := 0; start < len(hashes); start += 500 {
+		end := min(start+500, len(hashes))
+		args := make([]any, end-start)
+		for i, hash := range hashes[start:end] {
+			args[i] = hash
+		}
+		query := strings.Replace(deleteStateHAMTNodesSQL, "($1)", sqlutil.QueryVariadic(len(args)), 1)
+		if _, err := s.exec(ctx, txn, query, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }

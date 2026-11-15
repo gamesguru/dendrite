@@ -15,6 +15,160 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
+// BackfillStateHAMTs builds persisted HAMTs for snapshots which predate
+// snapshot-time HAMT writes. A non-positive limit selects a conservative batch
+// size so callers can repeat this operation until it returns zero.
+func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, error) {
+	if !statehamt.Enabled {
+		return 0, statehamt.ErrDisabled
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := d.DB.QueryContext(ctx, `
+		SELECT s.state_snapshot_nid, s.room_nid
+		FROM roomserver_state_snapshots AS s
+		LEFT JOIN roomserver_state_hamt_snapshots AS h
+		  ON h.state_snapshot_nid = s.state_snapshot_nid
+		WHERE h.state_snapshot_nid IS NULL
+		ORDER BY s.state_snapshot_nid
+		LIMIT $1`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("select snapshots without state HAMTs: %w", err)
+	}
+	closeRows := func(cause error) error {
+		if closeErr := rows.Close(); closeErr != nil {
+			return fmt.Errorf("%w (also failed to close snapshot rows: %v)", cause, closeErr)
+		}
+		return cause
+	}
+	type snapshot struct {
+		nid     types.StateSnapshotNID
+		roomNID types.RoomNID
+	}
+	var snapshots []snapshot
+	for rows.Next() {
+		var item snapshot
+		if err = rows.Scan(&item.nid, &item.roomNID); err != nil {
+			return 0, closeRows(fmt.Errorf("scan snapshot without state HAMT: %w", err))
+		}
+		snapshots = append(snapshots, item)
+	}
+	if err = rows.Err(); err != nil {
+		return 0, closeRows(fmt.Errorf("iterate snapshots without state HAMTs: %w", err))
+	}
+	if err = rows.Close(); err != nil {
+		return 0, fmt.Errorf("close snapshots without state HAMTs: %w", err)
+	}
+
+	completed := 0
+	for _, item := range snapshots {
+		built := false
+		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+			// Another backfill process or a live writer may have filled this
+			// snapshot after the batch query.
+			existing, err := d.StateHAMTTable.SelectStateHAMT(ctx, txn, item.nid)
+			if err != nil {
+				return fmt.Errorf("check state HAMT for snapshot %d: %w", item.nid, err)
+			}
+			if existing != nil {
+				return nil
+			}
+			blockLists, err := d.StateSnapshotTable.BulkSelectStateBlockNIDs(ctx, txn, []types.StateSnapshotNID{item.nid})
+			if err != nil {
+				return fmt.Errorf("load state blocks for snapshot %d: %w", item.nid, err)
+			}
+			if len(blockLists) != 1 || blockLists[0].StateSnapshotNID != item.nid {
+				return fmt.Errorf("state blocks missing for snapshot %d", item.nid)
+			}
+			if err := d.persistStateHAMT(ctx, txn, item.roomNID, item.nid, blockLists[0].StateBlockNIDs); err != nil {
+				return fmt.Errorf("persist HAMT for snapshot %d: %w", item.nid, err)
+			}
+			built = true
+			return nil
+		})
+		if err != nil {
+			return completed, err
+		}
+		if built {
+			completed++
+		}
+	}
+	return completed, nil
+}
+
+// purgeStateHAMTs removes a room's roots and, when the Rezzy reader is
+// available, sweeps node records not reachable from any remaining root. Node
+// records are content-addressed and shared, so the sweep must trace all roots.
+func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
+	if err := d.StateHAMTTable.DeleteStateHAMTRoom(ctx, txn, roomNID); err != nil {
+		return fmt.Errorf("delete state HAMT roots for room %d: %w", roomNID, err)
+	}
+	if !statehamt.Enabled {
+		// Root rows are gone, so the room is purged correctly. A non-Rezzy
+		// binary cannot safely trace shared node references; leave node cleanup
+		// for a Rezzy-enabled run rather than risk deleting live data.
+		return nil
+	}
+
+	roots, err := d.StateHAMTTable.SelectStateHAMTRootRefs(ctx, txn)
+	if err != nil {
+		return fmt.Errorf("select remaining state HAMT roots: %w", err)
+	}
+	live := make(map[string]struct{})
+	for _, root := range roots {
+		nodes := make([]statehamt.Node, 0, 16)
+		seen := make(map[string]struct{})
+		complete := false
+		for round := 0; round < 64; round++ {
+			needed, err := statehamt.Needed(root.RoomID, root.RootHash, nodes)
+			if err != nil {
+				return fmt.Errorf("trace state HAMT rooted at %x for room %s: %w", root.RootHash, root.RoomID, err)
+			}
+			if len(needed) == 0 {
+				complete = true
+				break
+			}
+			fetched, err := d.StateHAMTTable.SelectStateHAMTNodes(ctx, txn, needed)
+			if err != nil {
+				return fmt.Errorf("load state HAMT nodes during purge: %w", err)
+			}
+			if len(fetched) == 0 {
+				return fmt.Errorf("state HAMT for room %s has missing nodes during purge", root.RoomID)
+			}
+			for _, node := range fetched {
+				key := string(node.Hash)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				nodes = append(nodes, statehamt.Node{Hash: node.Hash, Bytes: node.Bytes})
+			}
+		}
+		if !complete {
+			return fmt.Errorf("state HAMT for room %s exceeded the traversal limit during purge", root.RoomID)
+		}
+		for _, node := range nodes {
+			live[string(node.Hash)] = struct{}{}
+		}
+	}
+
+	allHashes, err := d.StateHAMTTable.SelectStateHAMTNodeHashes(ctx, txn)
+	if err != nil {
+		return fmt.Errorf("select state HAMT node hashes during purge: %w", err)
+	}
+	var garbage [][]byte
+	for _, hash := range allHashes {
+		if _, ok := live[string(hash)]; !ok {
+			garbage = append(garbage, hash)
+		}
+	}
+	if err := d.StateHAMTTable.DeleteStateHAMTNodes(ctx, txn, garbage); err != nil {
+		return fmt.Errorf("delete unreachable state HAMT nodes: %w", err)
+	}
+	return nil
+}
+
 // persistStateHAMT builds the HAMT for a just-created snapshot and stores its
 // nodes and root record. It is a no-op when the build does not link rezzy.
 func (d *Database) persistStateHAMT(
