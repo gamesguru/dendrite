@@ -269,15 +269,100 @@ func (v *StateResolution) LoadMembershipAtEvent(
 		EventTypeNID:     types.MRoomMemberNID,
 		EventStateKeyNID: stateKeyNID,
 	}}
-	result := make(map[string][]types.StateEntry)
-	for snapshotNID, evIDs := range snapshotNIDMap {
-		entries, err := v.loadStateAtSnapshotForNumericTuples(ctx, snapshotNID, tuples)
+	// Snapshots with a persisted HAMT are read by key; the rest share one
+	// batched legacy read so state blocks used by several snapshots are
+	// fetched once.
+	byNID := make(map[types.StateSnapshotNID][]types.StateEntry, len(snapshotNIDMap))
+	var legacy []types.StateSnapshotNID
+	for snapshotNID := range snapshotNIDMap {
+		entries, ok, err := v.db.StateHAMTEntriesForTuples(ctx, snapshotNID, tuples)
 		if err != nil {
 			return nil, err
 		}
-		for _, evID := range evIDs {
-			result[evID] = append(result[evID], entries...)
+		if ok {
+			byNID[snapshotNID] = entries
+			continue
 		}
+		legacy = append(legacy, snapshotNID)
+	}
+	legacyStates, err := v.loadLegacyStatesBatched(ctx, legacy, tuples)
+	if err != nil {
+		return nil, err
+	}
+	for nid, entries := range legacyStates {
+		byNID[nid] = entries
+	}
+	result := make(map[string][]types.StateEntry)
+	for snapshotNID, evIDs := range snapshotNIDMap {
+		for _, evID := range evIDs {
+			result[evID] = append(result[evID], byNID[snapshotNID]...)
+		}
+	}
+	return result, nil
+}
+
+// loadLegacyStatesBatched loads the state of several snapshots from their
+// legacy state blocks with one query for the block lists and one for the
+// entries, however many snapshots share a block. A nil tuples slice loads every
+// entry; otherwise only entries for those tuples are loaded. Each result is
+// merged last-wins and sorted, as LoadStateAtSnapshot does.
+func (v *StateResolution) loadLegacyStatesBatched(
+	ctx context.Context, nids []types.StateSnapshotNID, tuples []types.StateKeyTuple,
+) (map[types.StateSnapshotNID][]types.StateEntry, error) {
+	result := make(map[types.StateSnapshotNID][]types.StateEntry, len(nids))
+	if len(nids) == 0 {
+		return result, nil
+	}
+	blockLists, err := v.db.StateBlockNIDs(ctx, UniqueStateSnapshotNIDs(nids))
+	if err != nil {
+		return nil, fmt.Errorf("v.db.StateBlockNIDs: %w", err)
+	}
+	blocksByNID := make(map[types.StateSnapshotNID][]types.StateBlockNID, len(blockLists))
+	seenBlock := make(map[types.StateBlockNID]struct{})
+	var wantBlocks []types.StateBlockNID
+	for _, list := range blockLists {
+		blocksByNID[list.StateSnapshotNID] = list.StateBlockNIDs
+		for _, blockNID := range list.StateBlockNIDs {
+			if _, ok := seenBlock[blockNID]; !ok {
+				seenBlock[blockNID] = struct{}{}
+				wantBlocks = append(wantBlocks, blockNID)
+			}
+		}
+	}
+	sort.Slice(wantBlocks, func(i, j int) bool { return wantBlocks[i] < wantBlocks[j] })
+
+	var entryLists []types.StateEntryList
+	if tuples == nil {
+		entryLists, err = v.db.StateEntries(ctx, wantBlocks)
+	} else {
+		entryLists, err = v.db.StateEntriesForTuples(ctx, wantBlocks, tuples)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load state entries: %w", err)
+	}
+	entriesMap := stateEntryListMap(entryLists)
+
+	for _, nid := range nids {
+		blockNIDs, ok := blocksByNID[nid]
+		if !ok {
+			// It should be impossible for an event to reference a NID that doesn't exist.
+			return nil, fmt.Errorf("corrupt DB: Missing state snapshot numeric ID %d", nid)
+		}
+		var fullState []types.StateEntry
+		for _, blockNID := range blockNIDs {
+			entries, ok := entriesMap.lookup(blockNID)
+			if !ok {
+				if tuples != nil {
+					// No entry in this block matched a requested tuple.
+					continue
+				}
+				return nil, fmt.Errorf("corrupt DB: Missing state block numeric ID %d", blockNID)
+			}
+			fullState = append(fullState, entries...)
+		}
+		sort.Stable(stateEntryByStateKeySorter(fullState))
+		fullState = fullState[:util.Unique(stateEntryByStateKeySorter(fullState))]
+		result[nid] = fullState
 	}
 	return result, nil
 }
@@ -313,19 +398,38 @@ func (v *StateResolution) LoadCombinedStateAfterEvents(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.LoadCombinedStateAfterEvents")
 	defer trace.EndRegion()
 
-	var combined []types.StateEntry
-	snapshotCache := make(map[types.StateSnapshotNID][]types.StateEntry)
+	// Load each distinct snapshot once. Snapshots with a persisted HAMT are
+	// read individually; the rest share one batched legacy read, so blocks
+	// reused by several snapshots are fetched once.
+	snapshotCache := make(map[types.StateSnapshotNID][]types.StateEntry, len(prevStates))
+	var legacy []types.StateSnapshotNID
 	for _, prevState := range prevStates {
 		snapshotNID := prevState.BeforeStateSnapshotNID
-		cached, ok := snapshotCache[snapshotNID]
-		if !ok {
-			var err error
-			cached, err = v.LoadStateAtSnapshot(ctx, snapshotNID)
-			if err != nil {
-				return nil, fmt.Errorf("v.LoadStateAtSnapshot: %w", err)
-			}
-			snapshotCache[snapshotNID] = cached
+		if _, ok := snapshotCache[snapshotNID]; ok {
+			continue
 		}
+		entries, ok, err := v.db.StateHAMTEntries(ctx, snapshotNID)
+		if err != nil {
+			return nil, fmt.Errorf("v.db.StateHAMTEntries: %w", err)
+		}
+		if ok {
+			snapshotCache[snapshotNID] = entries
+			continue
+		}
+		snapshotCache[snapshotNID] = nil
+		legacy = append(legacy, snapshotNID)
+	}
+	legacyStates, err := v.loadLegacyStatesBatched(ctx, legacy, nil)
+	if err != nil {
+		return nil, err
+	}
+	for nid, entries := range legacyStates {
+		snapshotCache[nid] = entries
+	}
+
+	var combined []types.StateEntry
+	for _, prevState := range prevStates {
+		cached := snapshotCache[prevState.BeforeStateSnapshotNID]
 		// Work on a copy: the append and in-place sort below must not write
 		// through the cached snapshot's backing array for later predecessors.
 		fullState := append([]types.StateEntry(nil), cached...)
