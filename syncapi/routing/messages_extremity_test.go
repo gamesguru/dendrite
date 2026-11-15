@@ -149,48 +149,6 @@ func TestOpenBackwardExtremities(t *testing.T) {
 	assert.Contains(t, open, "$empty", "a marker with no recorded prev events is kept")
 }
 
-// A soft-failed parent is stored by the roomserver but never reaches the
-// syncapi. A child recorded with it must not look like an open gap forever.
-func TestOpenBackwardExtremitiesCountsRoomserverHeldParent(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-	softFailed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "soft-failed"})
-	lost := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "lost"})
-	rs := &heldEventsAPI{held: map[string]*rstypes.HeaderedEvent{softFailed.EventID(): softFailed}}
-	req := messagesReq{snapshot: &eventMapSnapshot{events: map[string]*rstypes.HeaderedEvent{}}, rsAPI: rs, roomID: room.ID}
-
-	open, err := req.openBackwardExtremities(context.Background(), map[string][]string{
-		"$soft":    {softFailed.EventID()},
-		"$mixed":   {softFailed.EventID(), lost.EventID()},
-		"$missing": {lost.EventID()},
-	})
-	require.NoError(t, err)
-	assert.NotContains(t, open, "$soft", "a parent the roomserver holds leaves no gap to backfill")
-	assert.Contains(t, open, "$mixed", "a parent nobody holds keeps the gap open")
-	assert.Contains(t, open, "$missing")
-	require.NotNil(t, rs.lastReq)
-	assert.True(t, rs.lastReq.ExcludeOutliers, "an outlier has no stored ancestry, so it must not close a gap")
-	assert.True(t, rs.lastReq.ExcludeSentToOutput, "an event already sent to output is only waiting for the consumer")
-
-	rs.err = errors.New("roomserver down")
-	open, err = req.openBackwardExtremities(context.Background(), map[string][]string{"$soft": {softFailed.EventID()}})
-	require.NoError(t, err)
-	assert.Contains(t, open, "$soft", "a failed lookup must keep the gap open, not close it")
-}
-
-// An event the roomserver returns for another room must not close this room's gap.
-func TestOpenBackwardExtremitiesIgnoresOtherRoomsEvent(t *testing.T) {
-	alice := test.NewUser(t)
-	room := test.NewRoom(t, alice)
-	parent := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "parent"})
-	rs := &heldEventsAPI{held: map[string]*rstypes.HeaderedEvent{parent.EventID(): parent}}
-	req := messagesReq{snapshot: &eventMapSnapshot{events: map[string]*rstypes.HeaderedEvent{}}, rsAPI: rs, roomID: "!other:test"}
-
-	open, err := req.openBackwardExtremities(context.Background(), map[string][]string{"$child": {parent.EventID()}})
-	require.NoError(t, err)
-	assert.Contains(t, open, "$child")
-}
-
 // The extremity's depth is a topology position. An event whose wire depth is
 // lower but which is stored above the extremity (its server restarted its depth
 // counter, or it arrived after its child) is newer than the gap and must not be

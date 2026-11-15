@@ -168,29 +168,6 @@ func (a *forwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDReq
 	return nil
 }
 
-// heldEventsAPI is a roomserver that stores the given events.
-type heldEventsAPI struct {
-	api.SyncRoomserverAPI
-	held    map[string]*rstypes.HeaderedEvent
-	err     error
-	asks    int
-	lastReq *api.QueryEventsByIDRequest
-}
-
-func (a *heldEventsAPI) QueryEventsByID(_ context.Context, req *api.QueryEventsByIDRequest, res *api.QueryEventsByIDResponse) error {
-	a.asks++
-	a.lastReq = req
-	if a.err != nil {
-		return a.err
-	}
-	for _, id := range req.EventIDs {
-		if ev, ok := a.held[id]; ok {
-			res.Events = append(res.Events, ev)
-		}
-	}
-	return nil
-}
-
 func (a *forwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
 	res.Events = a.state.takeBatch(req.Limit)
 	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared

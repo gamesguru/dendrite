@@ -113,15 +113,6 @@ type QueryEventsByIDRequest struct {
 	// re-verify their signatures and clear the rejection once a valid signing
 	// key can be fetched (e.g. after a notary stops rate-limiting us).
 	ExcludeRejected bool `json:"exclude_rejected"`
-	// ExcludeOutliers, when true, omits events that are stored as outliers, or
-	// that have no before-state snapshot. An outlier is not part of the room
-	// DAG and has no stored ancestry, so callers deciding whether missing
-	// history is covered must not treat one as present.
-	ExcludeOutliers bool `json:"exclude_outliers"`
-	// ExcludeSentToOutput, when true, omits events already written to the
-	// roomserver output log. Their absence from a downstream consumer is a
-	// delivery lag, not proof that the history around them is covered.
-	ExcludeSentToOutput bool `json:"exclude_sent_to_output"`
 }
 
 // QueryEventsByIDResponse is a response to QueryEventsByID.

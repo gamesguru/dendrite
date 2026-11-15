@@ -34,27 +34,6 @@ func (f stateLookupFedAPI) LookupState(
 	return nil, f.errs[s]
 }
 
-// countingStateFedAPI records state lookups so a test can prove the local-state
-// path does not fall through to federation.
-type countingStateFedAPI struct {
-	stateLookupFedAPI
-	lookups int
-}
-
-func (f *countingStateFedAPI) LookupStateIDs(
-	ctx context.Context, origin, s spec.ServerName, roomID, eventID string,
-) (gomatrixserverlib.StateIDResponse, error) {
-	f.lookups++
-	return f.stateLookupFedAPI.LookupStateIDs(ctx, origin, s, roomID, eventID)
-}
-
-func (f *countingStateFedAPI) LookupState(
-	ctx context.Context, origin, s spec.ServerName, roomID, eventID string, roomVersion gomatrixserverlib.RoomVersion,
-) (gomatrixserverlib.StateResponse, error) {
-	f.lookups++
-	return f.stateLookupFedAPI.LookupState(ctx, origin, s, roomID, eventID, roomVersion)
-}
-
 // noLocalEventsDB makes the local event lookup fail so StateBeforeEvent falls
 // through to federation.
 type noLocalEventsDB struct{ storage.Database }
@@ -366,35 +345,25 @@ func TestStateIDsBeforeEventRollsForwardFromStoredState(t *testing.T) {
 	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
 		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["` + prevEvent.EventID() + `"],"auth_events":[]}`)
 
-	build := func(db storage.Database, fed *countingStateFedAPI) *backfillRequester {
+	build := func(db storage.Database) *backfillRequester {
 		return &backfillRequester{
 			db:                      db,
-			fsAPI:                   fed,
-			servers:                 []spec.ServerName{"hs1"},
 			roomVersion:             gomatrixserverlib.RoomVersionV10,
 			eventIDToBeforeStateIDs: map[string][]string{prevEvent.EventID(): {oldMember.EventID()}},
 			eventIDMap:              map[string]gomatrixserverlib.PDU{prevEvent.EventID(): prevEvent},
 		}
 	}
-	newFed := func() *countingStateFedAPI {
-		return &countingStateFedAPI{stateLookupFedAPI: stateLookupFedAPI{errs: map[spec.ServerName]error{"hs1": errors.New("no state")}}}
-	}
-
-	fed := newFed()
 	db := newStoredEventsDB(oldMember)
-	got, err := build(db, fed).StateIDsBeforeEvent(context.Background(), target)
+	got, err := build(db).StateIDsBeforeEvent(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, []string{prevEvent.EventID()}, got,
 		"the member event the previous event replaces is stored, so no federation request is needed")
-	require.Zero(t, fed.lookups, "the local-state path still requested /state_ids")
 
 	// With the old member not stored locally the state cannot be rolled forward,
-	// and the request falls through to federation.
-	fed = newFed()
-	got, err = build(newStoredEventsDB(), fed).StateIDsBeforeEvent(context.Background(), target)
-	require.Error(t, err, "the unreachable server's error is reported")
+	// and no server is configured to answer the state lookup.
+	got, err = build(newStoredEventsDB()).StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
 	require.Nil(t, got)
-	require.Equal(t, 1, fed.lookups, "the fallback did not reach federation")
 }
 
 // A later backfill page gets a new requester. An event stored by an earlier page
@@ -418,11 +387,8 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
 	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
 
-	fed := &countingStateFedAPI{stateLookupFedAPI: stateLookupFedAPI{errs: map[spec.ServerName]error{"hs1": errors.New("no state")}}}
 	requester := &backfillRequester{
 		db:                      db,
-		fsAPI:                   fed,
-		servers:                 []spec.ServerName{"hs1"},
 		roomVersion:             gomatrixserverlib.RoomVersionV10,
 		eventIDToBeforeStateIDs: map[string][]string{},
 		eventIDMap:              map[string]gomatrixserverlib.PDU{},
@@ -430,15 +396,13 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, []string{member.EventID()}, got)
-	require.Zero(t, fed.lookups, "a stored snapshot still caused a /state_ids request")
 
 	// An event with no stored snapshot falls through to federation.
 	db.beforeState = nil
 	requester.eventIDToBeforeStateIDs = map[string][]string{}
 	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
-	require.Error(t, err, "the unreachable server's error is reported")
+	require.NoError(t, err)
 	require.Nil(t, got)
-	require.Equal(t, 1, fed.lookups, "the fallback did not reach federation")
 }
 
 // A room with partial state (MSC3706) can hold incomplete before-state

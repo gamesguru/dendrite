@@ -302,35 +302,6 @@ func (r *Queryer) QueryEventsByID(
 		}
 	}
 
-	if request.ExcludeOutliers {
-		// An outlier is stored without a before-state, so its own ancestry is
-		// unknown. Treat "no snapshot" as "not in the DAG": a caller looking
-		// for missing history must keep looking instead of closing the gap.
-		inDAG := events[:0]
-		for _, event := range events {
-			stateNID, stateErr := r.DB.SnapshotNIDFromEventID(ctx, event.EventID())
-			if stateErr != nil || stateNID == 0 {
-				continue
-			}
-			inDAG = append(inDAG, event)
-		}
-		events = inDAG
-	}
-
-	if request.ExcludeSentToOutput {
-		// A stored event whose output has already been produced is expected to
-		// reach the consumer; its absence here is a lag, not missing history.
-		unsent := events[:0]
-		for _, event := range events {
-			sent, sentErr := r.DB.EventSentToOutput(ctx, event.EventNID)
-			if sentErr != nil || sent {
-				continue
-			}
-			unsent = append(unsent, event)
-		}
-		events = unsent
-	}
-
 	for _, event := range events {
 		response.Events = append(response.Events, &types.HeaderedEvent{PDU: event.PDU, EventNID: event.EventNID})
 	}
