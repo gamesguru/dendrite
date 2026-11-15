@@ -33,8 +33,6 @@ jobs:
     if: ${{ false }} # disable for now
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -73,8 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -127,8 +123,6 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -182,8 +176,6 @@ jobs:
         goarch: ["amd64"]
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -245,8 +237,6 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -368,7 +358,7 @@ jobs:
       # Run Complement
       - run: |
           set -o pipefail &&
-          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
+          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)(msc(3389|4429|4500|4521)|linkproxy)$'); test_status=$?; \
            go test -v -json -timeout 1h -tags zendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
            if [ $test_status -ne 0 ]; then exit $test_status; fi; exit $target_status) 2>&1 | gotestfmt -hide all
         shell: bash
@@ -377,6 +367,23 @@ jobs:
           COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         working-directory: complement
+
+      # Only the MSC4521 cases that test this server's inbound endpoints. The
+      # rest expect the homeserver to initiate reconciliation itself, which is
+      # not implemented yet, and tests/linkproxy checks that behaviour too.
+      - name: Run MSC4521 inbound tests
+        shell: bash
+        env:
+          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
+          COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
+        working-directory: complement
+        run: |
+          set -o pipefail
+          go test -v -json -timeout 45m -tags zendrite_blacklist \
+            -run 'TestMSC4521/(Primitives|Compatibility)' ./tests/msc4521/... 2>&1 | gotestfmt -hide all
+          go test -v -json -timeout 15m -tags zendrite_blacklist \
+            -run 'TestMSC4521/(Convergence|Adversarial)/(ActiveRoom|NonMembersAndACLBlocked)' \
+            ./tests/msc4521/... 2>&1 | gotestfmt -hide all
 
   integration-tests-done:
     name: Integration tests passed
