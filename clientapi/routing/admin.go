@@ -704,6 +704,12 @@ func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserver
 		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
 			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
 		}
+		if roomserverAPI.IsInputRejected(err) {
+			return util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden(roomserverAPI.InputRejectionReason(err)),
+			}
+		}
 		logrus.WithError(err).WithFields(logrus.Fields{
 			"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
 		}).Error("failed to fetch event")
