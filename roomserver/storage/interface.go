@@ -65,6 +65,10 @@ type Database interface {
 	// Look up the state data for each numeric state data ID
 	// The returned slice is sorted by numeric state data ID.
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
+	// StateHAMTEntries returns the full state at a snapshot from its persisted
+	// HAMT. The boolean is false for snapshots written before HAMT persistence.
+	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
+	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
 	// Look up the state data for the state key tuples for each numeric state block ID
 	// This is used to fetch a subset of the room state at a snapshot.
 	// If a block doesn't contain any of the requested tuples then it can be discarded from the result.
@@ -292,6 +296,8 @@ type RoomDatabase interface {
 	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	StateBlockNIDs(ctx context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
+	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
+	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
 	AddState(ctx context.Context, roomNID types.RoomNID, stateBlockNIDs []types.StateBlockNID, state []types.StateEntry) (types.StateSnapshotNID, error)

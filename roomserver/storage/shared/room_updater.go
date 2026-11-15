@@ -146,6 +146,18 @@ func (u *RoomUpdater) StateEntries(
 	return u.d.stateEntries(ctx, u.txn, stateBlockNIDs)
 }
 
+func (u *RoomUpdater) StateHAMTEntries(
+	ctx context.Context, snapshotNID types.StateSnapshotNID,
+) ([]types.StateEntry, bool, error) {
+	return u.d.stateHAMTEntries(ctx, u.txn, snapshotNID)
+}
+
+func (u *RoomUpdater) StateHAMTEntriesForTuples(
+	ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple,
+) ([]types.StateEntry, bool, error) {
+	return u.d.stateHAMTEntriesForTuples(ctx, u.txn, snapshotNID, tuples)
+}
+
 func (u *RoomUpdater) StateEntriesForTuples(
 	ctx context.Context,
 	stateBlockNIDs []types.StateBlockNID,

@@ -64,6 +64,11 @@ const bulkSelectEventTypeNIDSQL = `
 	  WHERE event_type IN ($1)
 `
 
+const bulkSelectEventTypeSQL = `
+	SELECT event_type, event_type_nid FROM roomserver_event_types
+	  WHERE event_type_nid IN ($1)
+`
+
 type eventTypeStatements struct {
 	db                         *sql.DB
 	insertEventTypeNIDStmt     *sql.Stmt
@@ -138,6 +143,39 @@ func (s *eventTypeStatements) BulkSelectEventTypeNID(
 			return nil, err
 		}
 		result[eventType] = types.EventTypeNID(eventTypeNID)
+	}
+	return result, rows.Err()
+}
+
+func (s *eventTypeStatements) BulkSelectEventType(
+	ctx context.Context, txn *sql.Tx, eventTypeNIDs []types.EventTypeNID,
+) (map[types.EventTypeNID]string, error) {
+	if len(eventTypeNIDs) == 0 {
+		return map[types.EventTypeNID]string{}, nil
+	}
+	iNIDs := make([]any, len(eventTypeNIDs))
+	for k, v := range eventTypeNIDs {
+		iNIDs[k] = v
+	}
+	selectOrig := strings.Replace(bulkSelectEventTypeSQL, "($1)", sqlutil.QueryVariadic(len(iNIDs)), 1)
+	selectPrep, err := s.db.Prepare(selectOrig)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, selectPrep, "selectPrep.close() failed")
+	rows, err := sqlutil.TxStmt(txn, selectPrep).QueryContext(ctx, iNIDs...)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "BulkSelectEventType: rows.close() failed")
+	result := make(map[types.EventTypeNID]string, len(eventTypeNIDs))
+	var eventType string
+	var eventTypeNID int64
+	for rows.Next() {
+		if err := rows.Scan(&eventType, &eventTypeNID); err != nil {
+			return nil, err
+		}
+		result[types.EventTypeNID(eventTypeNID)] = eventType
 	}
 	return result, rows.Err()
 }

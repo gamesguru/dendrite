@@ -31,6 +31,7 @@ type EventTypes interface {
 	InsertEventTypeNID(ctx context.Context, tx *sql.Tx, eventType string) (types.EventTypeNID, error)
 	SelectEventTypeNID(ctx context.Context, tx *sql.Tx, eventType string) (types.EventTypeNID, error)
 	BulkSelectEventTypeNID(ctx context.Context, txn *sql.Tx, eventTypes []string) (map[string]types.EventTypeNID, error)
+	BulkSelectEventType(ctx context.Context, txn *sql.Tx, eventTypeNIDs []types.EventTypeNID) (map[types.EventTypeNID]string, error)
 }
 
 type EventStateKeys interface {
@@ -115,6 +116,34 @@ type StateBlock interface {
 	BulkInsertStateData(ctx context.Context, txn *sql.Tx, entries types.StateEntries) (types.StateBlockNID, error)
 	BulkSelectStateBlockEntries(ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs) ([][]types.EventNID, error)
 	// BulkSelectFilteredStateBlockEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
+}
+
+// StateHAMTNode is one persisted MTHN record.
+type StateHAMTNode struct {
+	Hash  []byte
+	Bytes []byte
+}
+
+// StateHAMTRoot is the persisted MTHR identity for one state snapshot.
+type StateHAMTRoot struct {
+	SnapshotNID  types.StateSnapshotNID
+	RoomNID      types.RoomNID
+	RootHash     []byte
+	StateGroupID []byte
+	RootRecord   []byte
+	EntryCount   int
+}
+
+// StateHAMT stores persisted state HAMTs keyed by snapshot.
+type StateHAMT interface {
+	InsertStateHAMT(
+		ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID,
+		roomNID types.RoomNID, rootHash, stateGroupID, rootRecord []byte, entryCount int,
+	) error
+	InsertStateHAMTNodes(ctx context.Context, txn *sql.Tx, nodes []StateHAMTNode) error
+	// SelectStateHAMT returns nil when the snapshot has no persisted HAMT.
+	SelectStateHAMT(ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID) (*StateHAMTRoot, error)
+	SelectStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) ([]StateHAMTNode, error)
 }
 
 type RoomAliases interface {

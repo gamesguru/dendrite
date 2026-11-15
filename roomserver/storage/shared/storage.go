@@ -51,6 +51,7 @@ type Database struct {
 	RoomsTable         tables.Rooms
 	StateSnapshotTable tables.StateSnapshot
 	StateBlockTable    tables.StateBlock
+	StateHAMTTable     tables.StateHAMT
 	RoomAliasesTable   tables.RoomAliases
 	InvitesTable       tables.Invites
 	MembershipTable    tables.Membership
@@ -332,6 +333,9 @@ func (d *Database) addState(
 		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, stateBlockNIDs)
 		if err != nil {
 			return fmt.Errorf("d.StateSnapshotTable.InsertState: %w", err)
+		}
+		if err := d.persistStateHAMT(ctx, txn, roomNID, stateNID, stateBlockNIDs); err != nil {
+			return fmt.Errorf("d.persistStateHAMT: %w", err)
 		}
 		return nil
 	})
@@ -2700,6 +2704,11 @@ func findRoomNameAndCanonicalAlias(events []tables.StrippedEvent, roomID string)
 func (d *Database) loadStateAtSnapshot(
 	ctx context.Context, stateNID types.StateSnapshotNID,
 ) ([]types.StateEntry, error) {
+	if entries, ok, err := d.StateHAMTEntries(ctx, stateNID); err != nil {
+		return nil, err
+	} else if ok {
+		return entries, nil
+	}
 	stateBlockNIDLists, err := d.StateBlockNIDs(ctx, []types.StateSnapshotNID{stateNID})
 	if err != nil {
 		return nil, err
