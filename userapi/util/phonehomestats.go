@@ -142,7 +142,7 @@ func (p *phoneHomeStats) collect(parent context.Context) {
 		logrus.WithError(err).Error("Unable to create phone-home statistics request")
 		return
 	}
-	request.Header.Set("User-Agent", "Zendrite/"+internal.VersionString())
+	request.Header.Set("User-Agent", "DZENDRITE/"+internal.VersionString())
 
 	resp, err := p.client.Do(request)
 	if resp != nil {

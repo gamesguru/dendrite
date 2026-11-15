@@ -40,9 +40,12 @@ type Database interface {
 	AddState(
 		ctx context.Context,
 		roomNID types.RoomNID,
-		stateBlockNIDs []types.StateBlockNID,
 		state []types.StateEntry,
 	) (types.StateSnapshotNID, error)
+	// AddStateDelta stores the state of parent with the tuples in changed
+	// replaced, touching only the affected HAMT paths. It returns
+	// types.ErrNoStateHAMT when parent has no persisted HAMT.
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
 
 	MissingAuthPrevEvents(
 		ctx context.Context, e gomatrixserverlib.PDU,
@@ -65,6 +68,27 @@ type Database interface {
 	// Look up the state data for each numeric state data ID
 	// The returned slice is sorted by numeric state data ID.
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
+	// StateHAMTEntries returns the full state at a snapshot from its persisted
+	// HAMT. The boolean is false for snapshots written before HAMT persistence.
+	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
+	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
+	// BackfillStateHAMTs persists HAMTs for up to limit snapshots that predate
+	// HAMT persistence, returning the number completed.
+	BackfillStateHAMTs(ctx context.Context, limit int) (int, error)
+	// StateHAMTCoverage reports how many state snapshots exist and how many of
+	// them have a persisted HAMT. Equal counts are a point-in-time
+	// precondition for HAMT-only reads, not a standing guarantee: every writer
+	// must persist HAMTs, or the counts diverge again.
+	StateHAMTCoverage(ctx context.Context) (total int64, withHAMT int64, err error)
+	// StateSnapshotNIDs returns up to limit snapshot NIDs greater than after,
+	// in ascending order, so maintenance commands can page through every
+	// snapshot. A non-positive limit selects a default page size of 1000.
+	StateSnapshotNIDs(ctx context.Context, after types.StateSnapshotNID, limit int) ([]types.StateSnapshotNID, error)
+	// VerifyStateHAMT compares a snapshot's persisted HAMT with the entries its
+	// legacy state blocks describe, returning types.ErrNoStateHAMT when there
+	// is no HAMT to check. Snapshots without legacy blocks receive only an
+	// internal HAMT identity check.
+	VerifyStateHAMT(ctx context.Context, snapshotNID types.StateSnapshotNID) error
 	// Look up the state data for the state key tuples for each numeric state block ID
 	// This is used to fetch a subset of the room state at a snapshot.
 	// If a block doesn't contain any of the requested tuples then it can be discarded from the result.
@@ -100,6 +124,11 @@ type Database interface {
 	// Lookup the event IDs for a batch of event numeric IDs.
 	// Returns an error if the retrieval went wrong.
 	EventIDs(ctx context.Context, eventNIDs []types.EventNID) (map[types.EventNID]string, error)
+	// EventIDsInRoom returns the room's non-rejected timeline event IDs with
+	// a state snapshot, excluding outliers. Events still waiting for state
+	// (for example a backfill entry with no snapshot yet) are omitted until
+	// they gain one. This is the event set MSC4521 reconciles.
+	EventIDsInRoom(ctx context.Context, roomNID types.RoomNID) ([]string, error)
 	// Opens and returns a room updater, which locks the room and opens a transaction.
 	// The GetRoomUpdater must have Commit or Rollback called on it if this doesn't return an error.
 	// If this returns an error then no further action is required.
@@ -289,9 +318,17 @@ type RoomDatabase interface {
 	AnyLocalMemberNotForgotten(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	StateBlockNIDs(ctx context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
+	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
+	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
+	VerifyStateHAMT(ctx context.Context, snapshotNID types.StateSnapshotNID) error
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
-	AddState(ctx context.Context, roomNID types.RoomNID, stateBlockNIDs []types.StateBlockNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	// AddStateDelta stores the state of parent with the tuples in changed
+	// replaced, touching only the affected HAMT paths. It returns
+	// types.ErrNoStateHAMT when parent has no persisted HAMT.
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
+	// AddState stores the complete room state at the new snapshot, not a delta.
+	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
 	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)
 	GetOrCreateRoomInfo(ctx context.Context, event gomatrixserverlib.PDU) (*types.RoomInfo, error)
 	GetOrCreateEventTypeNID(ctx context.Context, eventType string) (eventTypeNID types.EventTypeNID, err error)

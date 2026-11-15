@@ -95,3 +95,7 @@ AGENTS.md
 # Local documentation
 /docs/
 /.hachaos
+*.merged.yaml
+__pycache__/
+*.pyc
+.venv-scripts/

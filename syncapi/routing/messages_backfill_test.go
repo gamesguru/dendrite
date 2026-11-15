@@ -95,7 +95,7 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		// Backfilling the prev event makes the newer event's marker stale.
 		_, err = backfillEvents(ctx, &backfillOnlyAPI{events: []*rstypes.HeaderedEvent{older}},
 			db, "hs2", "hs2", room.ID,
-			map[string][]string{newer.EventID(): {older.EventID()}}, 10)
+			map[string][]string{newer.EventID(): {older.EventID()}}, 10, nil)
 		require.NoError(t, err)
 
 		snapshot, err = db.NewDatabaseSnapshot(ctx)
@@ -313,7 +313,7 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 		// Backfill happens after the client obtained its sync token.
 		_, err = backfillEvents(ctx, &backfillOnlyAPI{events: []*rstypes.HeaderedEvent{older}},
 			db, "hs2", "hs2", room.ID,
-			map[string][]string{newer.EventID(): {older.EventID()}}, 10)
+			map[string][]string{newer.EventID(): {older.EventID()}}, 10, nil)
 		require.NoError(t, err)
 
 		// The same event can be written again by the normal sync API path, for

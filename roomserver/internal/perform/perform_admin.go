@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -349,7 +350,7 @@ func (r *Admin) installRepairedState(
 	var succeeded bool
 	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
 
-	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, nil, newStateEntries)
+	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, newStateEntries)
 	if err != nil {
 		return fmt.Errorf("updater.AddState: %w", err)
 	}
@@ -825,4 +826,176 @@ func (r *Admin) PerformUserErasure(ctx context.Context, userID spec.UserID, eras
 		return fmt.Errorf("user %q is not local", userID.String())
 	}
 	return r.DB.SetUserErased(ctx, userID.String(), erased)
+}
+
+// PerformAdminFetchEvent fetches eventID from serverName via federation /event,
+// verifies its signatures, and submits it as an ordinary new event (so missing
+// prev_events are fetched and auth/state resolution run as for a /send PDU).
+// It is not re-federated onwards (SendAsServer is empty). Use it to recover an
+// event another server has but which never reached us.
+func (r *Admin) PerformAdminFetchEvent(
+	ctx context.Context,
+	roomID, eventID string,
+	serverName spec.ServerName,
+) (string, error) {
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return "", err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return "", eventutil.ErrRoomNoExists{}
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return "", err
+	}
+	txn, err := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, serverName, eventID)
+	if err != nil {
+		return "", fmt.Errorf("fetching %s from %s: %w", eventID, serverName, err)
+	}
+	if len(txn.PDUs) == 0 {
+		return "", fmt.Errorf("%s returned no PDU for %s", serverName, eventID)
+	}
+	ev, err := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
+	if err != nil {
+		return "", fmt.Errorf("parsing event: %w", err)
+	}
+	if ev.EventID() != eventID {
+		return "", fmt.Errorf("%s returned event %s, wanted %s", serverName, ev.EventID(), eventID)
+	}
+	if ev.RoomID().String() != roomID {
+		return "", fmt.Errorf("event %s belongs to room %s, not %s", eventID, ev.RoomID().String(), roomID)
+	}
+	return r.ingestAdminEvent(ctx, ev, serverName)
+}
+
+// ingestAdminEvent verifies ev's signatures, submits it as a new event and
+// reads back whether it was stored: "accepted", "rejected" or "not_stored".
+func (r *Admin) ingestAdminEvent(
+	ctx context.Context, ev gomatrixserverlib.PDU, serverName spec.ServerName,
+) (string, error) {
+	eventID := ev.EventID()
+	if err := r.verifyAdminEventSignatures(ctx, ev); err != nil {
+		return "", fmt.Errorf("signature check failed: %w", err)
+	}
+	inputRes := &api.InputRoomEventsResponse{}
+	r.Inputer.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+		InputRoomEvents: []api.InputRoomEvent{{
+			Kind:   api.KindNew,
+			Event:  &types.HeaderedEvent{PDU: ev},
+			Origin: serverName,
+		}},
+		Asynchronous: false,
+		VirtualHost:  r.Cfg.Matrix.ServerName,
+	}, inputRes)
+	if inputRes.ErrMsg != "" {
+		return "", inputRes.Err()
+	}
+	// InputRoomEvents succeeds even if the event ended up rejected, so read
+	// back what was actually persisted. (Soft-failed events are stored as
+	// accepted but excluded from current state; that is not distinguished here.)
+	states, err := r.DB.StateAtEventIDs(ctx, []string{eventID})
+	if err != nil {
+		var missingErr types.MissingEventError
+		if errors.As(err, &missingErr) {
+			return "not_stored", nil
+		}
+		return "", fmt.Errorf("reading back stored event: %w", err)
+	}
+	if len(states) == 0 {
+		return "not_stored", nil
+	}
+	if states[0].IsRejected {
+		return "rejected", nil
+	}
+	return "accepted", nil
+}
+
+func (r *Admin) verifyAdminEventSignatures(ctx context.Context, ev gomatrixserverlib.PDU) error {
+	return gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+	})
+}
+
+// adminDuplicateOutcome reports the import result for an event ID that was
+// already ingested. The duplicate's signature is re-checked, because a bad
+// copy must be reported as an error rather than silently accepted as a
+// duplicate of the good one.
+func adminDuplicateOutcome(ev gomatrixserverlib.PDU, verify func(gomatrixserverlib.PDU) error) string {
+	outcome := "duplicate"
+	if err := verify(ev); err != nil {
+		outcome = "error: signature check failed: " + err.Error()
+	}
+	return outcome
+}
+
+// maxAdminImportEvents bounds one import so it finishes inside the server's
+// write timeout.
+const maxAdminImportEvents = 5000
+
+// PerformAdminImportEvents ingests PDUs supplied by the operator (for example
+// from a JSONL export) into roomID. Each event must belong to the room, parse
+// for its room version and carry valid signatures; events are submitted as new
+// events in ascending depth order so their prev_events arrive first. The origin
+// is the server asked for any prev or auth events the batch does not contain.
+// One failing event does not stop the rest.
+func (r *Admin) PerformAdminImportEvents(
+	ctx context.Context, roomID string, pdus []json.RawMessage, origin spec.ServerName,
+) ([]api.AdminImportResult, error) {
+	if len(pdus) > maxAdminImportEvents {
+		return nil, fmt.Errorf("at most %d events per import, got %d", maxAdminImportEvents, len(pdus))
+	}
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return nil, eventutil.ErrRoomNoExists{}
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return nil, err
+	}
+	type parsed struct {
+		line int
+		ev   gomatrixserverlib.PDU
+	}
+	results := make([]api.AdminImportResult, 0, len(pdus))
+	events := make([]parsed, 0, len(pdus))
+	// IDs already ingested without error. A copy that failed (for example a
+	// bad signature) must not suppress a valid copy of the same event.
+	done := make(map[string]struct{}, len(pdus))
+	for i, raw := range pdus {
+		line := i + 1
+		ev, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
+		switch {
+		case parseErr != nil:
+			results = append(results, api.AdminImportResult{Line: line, Outcome: "invalid: " + parseErr.Error()})
+		case ev.RoomID().String() != roomID:
+			results = append(results, api.AdminImportResult{
+				Line: line, EventID: ev.EventID(), Outcome: "invalid: event belongs to room " + ev.RoomID().String(),
+			})
+		default:
+			events = append(events, parsed{line: line, ev: ev})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].ev.Depth() < events[j].ev.Depth() })
+	for _, p := range events {
+		if _, dup := done[p.ev.EventID()]; dup {
+			outcome := adminDuplicateOutcome(p.ev, func(ev gomatrixserverlib.PDU) error {
+				return r.verifyAdminEventSignatures(ctx, ev)
+			})
+			results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
+			continue
+		}
+		outcome, ingestErr := r.ingestAdminEvent(ctx, p.ev, origin)
+		if ingestErr != nil {
+			outcome = "error: " + ingestErr.Error()
+		} else {
+			done[p.ev.EventID()] = struct{}{}
+		}
+		results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Line < results[j].Line })
+	return results, nil
 }

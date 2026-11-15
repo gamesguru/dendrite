@@ -39,6 +39,9 @@ linters:
     - whitespace
     - zerologlint
   settings:
+    gomoddirectives:
+      # The native Rezzy library is a git submodule.
+      replace-local: true
     errorlint:
       errorf-multi: true
     forbidigo:

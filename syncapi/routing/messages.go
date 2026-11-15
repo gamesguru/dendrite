@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -89,26 +90,37 @@ var errBackwardBackfillFetch = errors.New("backward federation backfill failed")
 var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
 
 type messagesReq struct {
-	ctx               context.Context
-	db                storage.Database
-	snapshot          storage.DatabaseTransaction
-	rsAPI             api.SyncRoomserverAPI
-	cfg               *config.SyncAPI
-	roomID            string
-	from              *types.TopologyToken
-	fromStream        *types.StreamingToken
-	fromTopologyToken bool
-	to                *types.TopologyToken
-	device            *userapi.Device
-	deviceUserID      spec.UserID
-	wasToProvided     bool
-	backwardOrdering  bool
-	filter            *synctypes.RoomEventFilter
-	didBackfill       bool
-	backfillHadEvents bool
-	backfillEnd       *types.TopologyToken
+	ctx                      context.Context
+	db                       storage.Database
+	snapshot                 storage.DatabaseTransaction
+	rsAPI                    api.SyncRoomserverAPI
+	cfg                      *config.SyncAPI
+	roomID                   string
+	from                     *types.TopologyToken
+	fromStream               *types.StreamingToken
+	fromTopologyToken        bool
+	to                       *types.TopologyToken
+	device                   *userapi.Device
+	deviceUserID             spec.UserID
+	wasToProvided            bool
+	backwardOrdering         bool
+	filter                   *synctypes.RoomEventFilter
+	didBackfill              bool
+	backfillHadEvents        bool
+	backfillEnd              *types.TopologyToken
+	backfilledRedactedEvents map[string]*rstypes.HeaderedEvent
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
+	// forwardGapPositions caches the topology position of each gap extremity
+	// for this request. Positions are stable while the request stores nothing,
+	// but a late parent raises the stored position of its descendants, so
+	// fillForwardGap drops this cache after a round that stored events.
+	forwardGapPositions map[string]types.TopologyToken
+	// forwardGapScan caches the open extremities ahead of a forward cursor.
+	// The set only changes when events are stored, so fillForwardGap reuses it
+	// while its rounds store nothing instead of re-reading every extremity and
+	// every prev event each round.
+	forwardGapScan *forwardGapScan
 	// forwardBackfillRounds counts the federation batches fetched for this
 	// request while closing a gap ahead of a forward cursor.
 	forwardBackfillRounds int
@@ -421,6 +433,20 @@ func OnIncomingMessagesRequest(
 		}
 	}
 	if err != nil {
+		// sql.ErrTxDone also results from a transaction being used after it was
+		// closed, which is a server bug. Only treat it as a disconnect when the
+		// request context really is done.
+		if sqlutil.ErrIsCanceled(err) && req.Context().Err() != nil {
+			// The client went away while backfill was running, which rolls the
+			// request's read transaction back. The fetched events are stored in
+			// their own transactions, so the retry continues from the same
+			// cursor; this is not a server failure.
+			util.GetLogger(req.Context()).WithError(err).Debug("mreq.retrieveEvents canceled")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
 		util.GetLogger(req.Context()).WithError(err).Error("mreq.retrieveEvents failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -800,6 +826,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
 			// are all there is: return them rather than ending pagination here.
+			r.applyBackfilledRedactions(withheld)
 			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, withheld, r.rsAPI) //nolint:contextcheck
 			// Order by stored topology position: a lifted event's wire depth
 			// is lower than where it sits.
@@ -1178,6 +1205,74 @@ func deepestExtremities(
 	return deepest
 }
 
+// forwardGapScan is the set of open backward extremities ahead of a forward
+// cursor, as of the last read from storage.
+type forwardGapScan struct {
+	candidates []forwardGapCandidate
+	next       int
+	// incomplete is set when a position lookup failed, so an extremity may be
+	// missing from candidates. Such a scan is never cached.
+	incomplete bool
+}
+
+type forwardGapCandidate struct {
+	id    string
+	prevs []string
+	pos   types.TopologyToken
+}
+
+// forwardGapCandidates returns the open backward extremities for this request.
+// Storing events is the only thing that changes the set, so it is read once and
+// reused until the caller clears r.forwardGapScan after a round that stored
+// events; a request whose rounds store nothing reads it exactly once.
+func (r *messagesReq) forwardGapCandidates(ctx context.Context) (*forwardGapScan, error) {
+	if r.forwardGapScan != nil {
+		return r.forwardGapScan, nil
+	}
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
+	if err != nil || len(backwardExtremities) == 0 {
+		return nil, err
+	}
+	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
+	if err != nil {
+		return nil, err
+	}
+	scan := &forwardGapScan{candidates: make([]forwardGapCandidate, 0, len(open))}
+	positionLookupFailed := false
+	for extremityID := range open {
+		pos, cached := r.forwardGapPositions[extremityID]
+		if !cached {
+			var posErr error
+			pos, posErr = r.snapshot.EventPositionInTopology(ctx, extremityID)
+			if posErr != nil {
+				// Do not cache an incomplete scan. A later selection round can
+				// retry this lookup while successful positions remain memoized.
+				positionLookupFailed = true
+				continue
+			}
+			if r.forwardGapPositions == nil {
+				r.forwardGapPositions = make(map[string]types.TopologyToken)
+			}
+			r.forwardGapPositions[extremityID] = pos
+		}
+		scan.candidates = append(scan.candidates, forwardGapCandidate{
+			id: extremityID, prevs: backwardExtremities[extremityID], pos: pos,
+		})
+	}
+	sort.Slice(scan.candidates, func(i, j int) bool {
+		if scan.candidates[i].pos == scan.candidates[j].pos {
+			return scan.candidates[i].id < scan.candidates[j].id
+		}
+		return topologyTokenLess(scan.candidates[i].pos, scan.candidates[j].pos)
+	})
+	if positionLookupFailed {
+		scan.incomplete = true
+	} else {
+		r.forwardGapScan = scan
+	}
+	return scan, nil
+}
+
 // forwardGapExtremity returns the open backward extremity that marks the gap
 // immediately ahead of a forward cursor, together with its recorded prev
 // events. A stored event whose prev event is missing always gets a backwards
@@ -1190,35 +1285,47 @@ func deepestExtremities(
 // it here would store events newer than the page's own range. Extremities at or
 // behind the cursor are history the walk already passed.
 func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPosition types.TopologyToken) (string, []string, error) {
-	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
-	if err != nil || len(backwardExtremities) == 0 {
+	return r.forwardGapExtremitySkipping(ctx, firstEventPosition, nil)
+}
+
+// forwardGapExtremitySkipping is forwardGapExtremity that ignores extremities
+// whose key (see extremitiesKey) is in skip. It is used by fillForwardGap so a
+// gap already tried in this request, and not closed, does not hide a newer gap
+// behind it. The selector stays free of device and config state.
+func (r *messagesReq) forwardGapExtremitySkipping(
+	ctx context.Context, firstEventPosition types.TopologyToken, skip map[string]struct{},
+) (string, []string, error) {
+	scan, err := r.forwardGapCandidates(ctx)
+	if err != nil || scan == nil {
 		return "", nil, err
 	}
-	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
-	if err != nil {
-		return "", nil, err
+	start := 0
+	if skip != nil {
+		start = scan.next
 	}
-	bestID := ""
-	bestPosition := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
-	for extremityID := range open {
-		pos, posErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
-		if posErr != nil {
+	for i := start; i < len(scan.candidates); i++ {
+		candidate := scan.candidates[i]
+		if _, tried := skip[extremitiesKey(map[string][]string{candidate.id: candidate.prevs})]; tried {
 			continue
 		}
-		if r.from != nil && !topologyTokenLess(*r.from, pos) {
+		if r.from != nil && !topologyTokenLess(*r.from, candidate.pos) {
 			continue
 		}
-		if topologyTokenLess(firstEventPosition, pos) {
+		if topologyTokenLess(firstEventPosition, candidate.pos) {
 			continue
 		}
-		if topologyTokenLess(pos, bestPosition) {
-			bestID, bestPosition = extremityID, pos
+		if skip != nil {
+			scan.next = i + 1
 		}
+		return candidate.id, candidate.prevs, nil
 	}
-	if bestID == "" {
-		return "", nil, nil
+	if scan.incomplete {
+		// An extremity whose position could not be read may be the gap ahead
+		// of the cursor. Reporting "no gap" would let the page move past it, so
+		// surface a retryable error instead.
+		return "", nil, errForwardBackfillIncomplete
 	}
-	return bestID, backwardExtremities[bestID], nil
+	return "", nil, nil
 }
 
 func topologyTokenLess(left, right types.TopologyToken) bool {
@@ -1296,14 +1403,20 @@ func (r *messagesReq) truncateForwardPageAtGap(
 // more events (the page is then served from what is stored).
 func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition types.TopologyToken) (bool, error) {
 	filled := false
+	stored := 0
+	// Gaps already attempted in this request. The lowest gap is picked first,
+	// so one the remote cannot close (a dangling parent, a terminal failure)
+	// would otherwise be picked again and starve every newer gap behind it.
+	tried := map[string]struct{}{}
 	for r.forwardBackfillRounds < maxForwardBackfillRounds {
-		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
+		extremityID, prevs, err := r.forwardGapExtremitySkipping(ctx, firstEventPosition, tried)
 		if err != nil {
 			return filled, err
 		}
 		if extremityID == "" {
 			return filled, nil
 		}
+		tried[extremitiesKey(map[string][]string{extremityID: prevs})] = struct{}{}
 		r.forwardBackfillRounds++
 		pdus, bfErr := r.backfill(r.roomID, map[string][]string{extremityID: prevs}, forwardBackfillBatch)
 		if bfErr != nil {
@@ -1313,8 +1426,15 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			if isTerminalBackfillFailure(bfErr) {
 				// No server has these events: the gap is as filled as it can
 				// get and the rest of the history is genuinely unreachable.
+				// A terminal answer comes from the fetch itself, before any
+				// event is stored, so the cached scan is still accurate.
 				util.GetLogger(ctx).WithError(bfErr).Debug("Forward backfill found no events on the attempted servers")
-				return filled, nil
+				if errors.Is(bfErr, errBackfillRecentlyFailed) {
+					// Answered from memory, no federation round happened, so
+					// it must not use up the budget for later extremities.
+					r.forwardBackfillRounds--
+				}
+				continue
 			}
 			// A transient failure must not look like the end of history, and it
 			// must not let the cursor move past the unfilled gap either.
@@ -1322,21 +1442,85 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			return filled, bfErr
 		}
 		if len(pdus) == 0 {
-			return filled, nil
+			continue
 		}
+		// Storing events moves or closes extremities, so the cached scan is
+		// stale. A late parent also raises the stored topology position of its
+		// descendants (see repairLateParentTopology), so cached positions can
+		// no longer be trusted either.
+		r.forwardGapScan = nil
+		r.forwardGapPositions = nil
 		filled = true
+		stored += len(pdus)
+		// The batch may contain events older than the missing parent without
+		// containing the parent itself (a dangling prev_event that no server
+		// has). The marker then does not move: the next round asks for the
+		// same frontier and gets the same batch again. Detect that and stop,
+		// otherwise every /messages request repeats the whole federation
+		// round until the remote starts returning 429.
+		if !r.forwardGapAdvanced(ctx, extremityID, prevs) {
+			util.GetLogger(ctx).WithField("room_id", r.roomID).
+				WithField("extremity", extremityID).
+				WithField("missing_parents", prevs).
+				Warn("Forward backfill made no progress; the gap's frontier is not reachable")
+			// Remember it so later requests serve the stored history instead
+			// of hitting the same servers again.
+			defaultTerminalBackfillCache.recordFailure(terminalBackfillKey(
+				r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
+				map[string][]string{extremityID: prevs},
+			))
+			// The batch was stored, so it stays reported as filled. Move on
+			// to the next gap rather than ending the request on this one.
+			continue
+		}
 	}
 
 	// The last batch may have closed the gap exactly at the bound, so only
 	// report failure when an open gap is still ahead of the cursor.
-	extremityID, _, err := r.forwardGapExtremity(ctx, firstEventPosition)
+	extremityID, _, err := r.forwardGapExtremitySkipping(ctx, firstEventPosition, tried)
 	if err != nil {
 		return filled, err
 	}
 	if extremityID == "" {
 		return filled, nil
 	}
+	// The gap is larger than maxForwardBackfillRounds batches. The events
+	// fetched so far are stored, so the retry continues from the new marker
+	// instead of starting over. Log the size so this is not mistaken for a
+	// frontier that made no progress.
+	util.GetLogger(ctx).WithField("room_id", r.roomID).
+		WithField("rounds", r.forwardBackfillRounds).
+		WithField("events_stored", stored).
+		Warn("Forward backfill did not close the gap within one request")
 	return filled, errForwardBackfillIncomplete
+}
+
+// forwardGapAdvanced reports whether a backfill round changed the gap it was
+// asked to fill. If the selected extremity is still open with the same missing
+// parents, none of them were stored and another round cannot make progress.
+// The extremity is looked up by ID: the lowest open gap may be a different,
+// already-tried one, which says nothing about the gap that was just fetched.
+func (r *messagesReq) forwardGapAdvanced(
+	ctx context.Context, extremityID string, prevs []string,
+) bool {
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
+	if err != nil {
+		// Treat an unreadable extremity set as progress so the round loop's
+		// own bound and error handling decide what happens next.
+		return true
+	}
+	nextPrevs, ok := backwardExtremities[extremityID]
+	if !ok {
+		return true
+	}
+	open, err := r.openBackwardExtremities(ctx, map[string][]string{extremityID: nextPrevs})
+	if err != nil {
+		return true
+	}
+	if _, stillOpen := open[extremityID]; !stillOpen {
+		return true
+	}
+	return extremitiesKey(map[string][]string{extremityID: prevs}) != extremitiesKey(map[string][]string{extremityID: nextPrevs})
 }
 
 // handleEmptyEventsSlice handles the case where the initial request to the
@@ -1546,6 +1730,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	}
 
 	// Append the events ve previously retrieved locally.
+	r.applyBackfilledRedactions(streamEvents)
 	localEvents := r.snapshot.StreamEventsToEvents(r.ctx, nil, streamEvents, r.rsAPI)
 	if r.backwardOrdering && len(events) > 0 {
 		// Backfill returns only the newest events of the gap. Local events older than
@@ -1586,6 +1771,10 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 func (r *messagesReq) backfillBackwardUntilComplete(
 	backwardExtremities map[string][]string, page []types.StreamEvent, limit int,
 ) (events []*rstypes.HeaderedEvent, incomplete bool, err error) {
+	prevKey := extremitiesKey(backwardExtremities)
+	// A later round can redact an event an earlier round returned, so apply
+	// the collected redactions to everything accumulated before returning.
+	defer func() { r.applyBackfilledRedactionsToHeadered(events) }()
 	for round := 0; round < maxBackwardBackfillRounds; round++ {
 		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
 		if backfillErr != nil {
@@ -1620,8 +1809,29 @@ func (r *messagesReq) backfillBackwardUntilComplete(
 			// cannot safely move the page cursor past it.
 			return events, true, nil
 		}
+		if key := extremitiesKey(backwardExtremities); key == prevKey {
+			// The round stored events but the frontier did not move; repeating
+			// it would refetch the same batch.
+			util.GetLogger(r.ctx).WithField("room_id", r.roomID).
+				Warn("backfillBackwardUntilComplete: no progress, stopping")
+			return events, true, nil
+		} else {
+			prevKey = key
+		}
 	}
 	return events, incomplete, nil
+}
+
+// extremitiesKey returns a stable identity for a backward extremity map.
+func extremitiesKey(m map[string][]string) string {
+	var parts []string
+	for id, prevs := range m {
+		p := append([]string(nil), prevs...)
+		sort.Strings(p)
+		parts = append(parts, id+":"+strings.Join(p, ","))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }
 
 // backfillBatchHasMissingParents detects whether the fetched history still
@@ -1877,7 +2087,38 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 // Returns an error if there was an issue with retrieving the list of servers in
 // the room or sending the request.
 func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]string, limit int) ([]*rstypes.HeaderedEvent, error) {
-	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit)
+	if r.backfilledRedactedEvents == nil {
+		r.backfilledRedactedEvents = make(map[string]*rstypes.HeaderedEvent)
+	}
+	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit, r.backfilledRedactedEvents)
+}
+
+func (r *messagesReq) applyBackfilledRedactions(events []types.StreamEvent) {
+	for i := range events {
+		if redacted, ok := r.backfilledRedactedEvents[events[i].EventID()]; ok {
+			// Keep metadata from the stored event: the backfilled copy only
+			// carries a PDU and must not discard visibility or local fields.
+			cp := *events[i].HeaderedEvent
+			cp.PDU = redacted.PDU
+			events[i].HeaderedEvent = &cp
+		}
+	}
+}
+
+// applyBackfilledRedactionsToHeadered swaps in the redacted PDU for backfilled
+// events that a backfill redacted, keeping each event's other fields. Events
+// are replaced by copies because they may be shared.
+func (r *messagesReq) applyBackfilledRedactionsToHeadered(events []*rstypes.HeaderedEvent) {
+	for i, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if redacted, ok := r.backfilledRedactedEvents[ev.EventID()]; ok {
+			cp := *ev
+			cp.PDU = redacted.PDU
+			events[i] = &cp
+		}
+	}
 }
 
 // backfillEvents asks the roomserver to backfill events over federation and
@@ -1891,6 +2132,7 @@ func backfillEvents(
 	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
 	serverName, virtualHost spec.ServerName,
 	roomID string, backwardsExtremities map[string][]string, limit int,
+	redactedTargets map[string]*rstypes.HeaderedEvent,
 ) ([]*rstypes.HeaderedEvent, error) {
 	// Finish the backfill even if the client goes away, so the events are stored.
 	ctx = context.WithoutCancel(ctx)
@@ -1947,6 +2189,11 @@ func backfillEvents(
 	}
 	events := res.Events
 	for i := range events {
+		if events[i].Redacted() {
+			if err = db.UpdateEventJSON(ctx, events[i].EventID(), events[i]); err != nil {
+				return nil, err
+			}
+		}
 		// The roomserver reports the visibility in force before each event.
 		// Fall back to the batch value when it could not be determined.
 		if events[i].Visibility == "" {
@@ -1963,6 +2210,23 @@ func backfillEvents(
 		)
 		if err != nil {
 			return nil, err
+		}
+	}
+	// A backfilled redaction can target an event already present in the sync
+	// timeline but absent from this response batch. Persist that redacted copy
+	// and remove relation rows just as the live redaction output path does.
+	for eventID, redacted := range res.RedactedEvents {
+		if redacted == nil {
+			continue
+		}
+		if err = db.UpdateEventJSON(ctx, eventID, redacted); err != nil {
+			return nil, err
+		}
+		if err = db.RedactRelations(ctx, roomID, eventID); err != nil {
+			return nil, err
+		}
+		if redactedTargets != nil {
+			redactedTargets[eventID] = redacted
 		}
 	}
 

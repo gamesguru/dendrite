@@ -1,6 +1,8 @@
 package routing
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -684,4 +686,175 @@ func parseUint64OrDefault(input string, defaultValue uint64) uint64 {
 		return defaultValue
 	}
 	return v
+}
+
+// AdminFetchEvent pulls a single event from a remote server and ingests it.
+func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, eventID, serverName := vars["roomID"], vars["eventID"], vars["serverName"]
+	if roomID == "" || eventID == "" || serverName == "" {
+		return util.JSONResponse{
+			Code: http.StatusBadRequest,
+			JSON: spec.MissingParam("Expecting server name, room ID and event ID."),
+		}
+	}
+	outcome, err := rsAPI.PerformAdminFetchEvent(req.Context(), roomID, eventID, spec.ServerName(serverName))
+	if err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		}
+		if roomserverAPI.IsInputRejected(err) {
+			return util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden(roomserverAPI.InputRejectionReason(err)),
+			}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
+		}).Error("failed to fetch event")
+		return util.JSONResponse{Code: http.StatusBadGateway, JSON: spec.Unknown(err.Error())}
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Outcome string `json:"outcome"`
+	}{Outcome: outcome}}
+}
+
+const maxAdminFetchEvents = 100
+
+// AdminFetchEvents is the batch form of AdminFetchEvent. Body: {"event_ids": [...]}.
+// Events are ingested sequentially in the order given (list oldest first to
+// avoid needless missing-prev-event lookups); one failure doesn't stop the rest.
+func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID, serverName := vars["roomID"], vars["serverName"]
+	if roomID == "" || serverName == "" {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting server name and room ID.")}
+	}
+	var body struct {
+		EventIDs []string `json:"event_ids"`
+	}
+	if err = json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error())}
+	}
+	if len(body.EventIDs) == 0 || len(body.EventIDs) > maxAdminFetchEvents {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"event_ids\" array of 1-100 event IDs.")}
+	}
+	results := make(map[string]string, len(body.EventIDs))
+	seen := make(map[string]struct{}, len(body.EventIDs))
+	for _, eventID := range body.EventIDs {
+		if eventID == "" {
+			continue
+		}
+		if _, ok := seen[eventID]; ok {
+			continue
+		}
+		seen[eventID] = struct{}{}
+		outcome, err := rsAPI.PerformAdminFetchEvent(req.Context(), roomID, eventID, spec.ServerName(serverName))
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
+			}).Error("failed to fetch event")
+			if roomserverAPI.IsInputRejected(err) {
+				// Report the auth reason without the internal marker.
+				results[eventID] = "rejected: " + roomserverAPI.InputRejectionReason(err)
+			} else {
+				results[eventID] = err.Error()
+			}
+			continue
+		}
+		results[eventID] = outcome
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Results map[string]string `json:"results"`
+	}{Results: results}}
+}
+
+// maxImportLineBytes bounds one PDU line; the Matrix event limit is 65 KiB.
+const maxImportLineBytes = 1 << 20
+
+// maxImportBodyBytes bounds the nonblank bytes of one import. A request may
+// not buffer more than this, whatever the per-line and per-import event limits.
+const maxImportBodyBytes = 64 << 20
+
+// maxImportEvents bounds the records buffered before the roomserver applies its
+// own per-import limit, so tiny records cannot force huge slices.
+const maxImportEvents = 5000
+
+// AdminImportEvents ingests PDUs from a JSONL request body (one PDU per
+// line, blank lines ignored) into a room that already exists locally. Events are
+// signature-checked and ingested oldest depth first. The optional "origin"
+// query parameter names the server asked for prev/auth events the file lacks;
+// it defaults to this server, so a self-contained file needs no federation.
+func AdminImportEvents(
+	req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI, localServer spec.ServerName,
+) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID := vars["roomID"]
+	if roomID == "" {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting a room ID.")}
+	}
+	origin := localServer
+	if o := req.URL.Query().Get("origin"); o != "" {
+		origin = spec.ServerName(o)
+	}
+	scanner := bufio.NewScanner(req.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxImportLineBytes)
+	var pdus []json.RawMessage
+	// physicalLines[i] is the line of the body that pdus[i] came from, so
+	// results can name real input lines even when blank lines were skipped.
+	var physicalLines []int
+	total, physical := 0, 0
+	for scanner.Scan() {
+		physical++
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		total += len(scanner.Bytes())
+		if total > maxImportBodyBytes {
+			return util.JSONResponse{
+				Code: http.StatusRequestEntityTooLarge,
+				JSON: spec.BadJSON("Request body too large."),
+			}
+		}
+		if len(pdus) >= maxImportEvents {
+			return util.JSONResponse{
+				Code: http.StatusRequestEntityTooLarge,
+				JSON: spec.BadJSON("Too many events in one import."),
+			}
+		}
+		pdus = append(pdus, json.RawMessage(append([]byte(nil), line...)))
+		physicalLines = append(physicalLines, physical)
+	}
+	if err = scanner.Err(); err != nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not read the JSONL body: " + err.Error())}
+	}
+	if len(pdus) == 0 {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting one PDU per line.")}
+	}
+	results, err := rsAPI.PerformAdminImportEvents(req.Context(), roomID, pdus, origin)
+	if err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{"userID": device.UserID, "roomID": roomID}).Error("failed to import events")
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.Unknown(err.Error())}
+	}
+	for i := range results {
+		if n := results[i].Line; n >= 1 && n <= len(physicalLines) {
+			results[i].Line = physicalLines[n-1]
+		}
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Results []roomserverAPI.AdminImportResult `json:"results"`
+	}{Results: results}}
 }

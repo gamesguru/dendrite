@@ -6,4 +6,9 @@ TAG=${1:-latest}
 
 echo "Building tag '${TAG}'"
 
-docker build -t pats22/dendrite:${TAG} .
+git submodule update --init rezzy
+
+docker buildx build --load \
+  --build-context rezzy=./rezzy \
+  --build-context gmsl=../gmsl \
+  -t pats22/dendrite:${TAG} .

@@ -31,6 +31,7 @@ type EventTypes interface {
 	InsertEventTypeNID(ctx context.Context, tx *sql.Tx, eventType string) (types.EventTypeNID, error)
 	SelectEventTypeNID(ctx context.Context, tx *sql.Tx, eventType string) (types.EventTypeNID, error)
 	BulkSelectEventTypeNID(ctx context.Context, txn *sql.Tx, eventTypes []string) (map[string]types.EventTypeNID, error)
+	BulkSelectEventType(ctx context.Context, txn *sql.Tx, eventTypeNIDs []types.EventTypeNID) (map[types.EventTypeNID]string, error)
 }
 
 type EventStateKeys interface {
@@ -73,6 +74,10 @@ type Events interface {
 	SelectEventRejected(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, eventID string) (rejected bool, err error)
 
 	SelectRoomsWithEventTypeNID(ctx context.Context, txn *sql.Tx, eventTypeNID types.EventTypeNID) ([]types.RoomNID, error)
+	// SelectEventIDsInRoom returns the room's non-rejected timeline events
+	// that have a state snapshot, in event NID order. Outliers and events
+	// whose state has not been computed yet are excluded.
+	SelectEventIDsInRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) ([]string, error)
 }
 
 type Rooms interface {
@@ -96,7 +101,10 @@ type Rooms interface {
 }
 
 type StateSnapshot interface {
-	InsertState(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, stateBlockNIDs types.StateBlockNIDs) (stateNID types.StateSnapshotNID, err error)
+	// InsertState stores a snapshot identified by snapshotHash. A snapshot
+	// written by a Rezzy build is keyed by its state HAMT root and has no state
+	// blocks; the hash makes identical state reuse the same snapshot row.
+	InsertState(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, snapshotHash []byte, stateBlockNIDs types.StateBlockNIDs) (stateNID types.StateSnapshotNID, err error)
 	BulkSelectStateBlockNIDs(ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	// BulkSelectStateForHistoryVisibility is a PostgreSQL-only optimisation for finding
 	// which users are in a room faster than having to load the entire room state. In the
@@ -112,6 +120,55 @@ type StateBlock interface {
 	BulkInsertStateData(ctx context.Context, txn *sql.Tx, entries types.StateEntries) (types.StateBlockNID, error)
 	BulkSelectStateBlockEntries(ctx context.Context, txn *sql.Tx, stateBlockNIDs types.StateBlockNIDs) ([][]types.EventNID, error)
 	// BulkSelectFilteredStateBlockEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
+}
+
+// StateHAMTNode is one persisted MTHN record.
+type StateHAMTNode struct {
+	Hash  []byte
+	Bytes []byte
+}
+
+// StateHAMTRoot is the persisted MTHR identity for one state snapshot.
+type StateHAMTRoot struct {
+	SnapshotNID  types.StateSnapshotNID
+	RoomNID      types.RoomNID
+	RootHash     []byte
+	StateGroupID []byte
+	RootRecord   []byte
+	EntryCount   int
+}
+
+// StateHAMTRootRef is the identity needed to walk a root during node GC.
+type StateHAMTRootRef struct {
+	RoomID   string
+	RootHash []byte
+}
+
+// StateHAMT stores persisted state HAMTs keyed by snapshot.
+type StateHAMT interface {
+	InsertStateHAMT(
+		ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID,
+		roomNID types.RoomNID, rootHash, stateGroupID, rootRecord []byte, entryCount int,
+	) error
+	InsertStateHAMTNodes(ctx context.Context, txn *sql.Tx, nodes []StateHAMTNode) error
+	// SelectStateHAMT returns nil when the snapshot has no persisted HAMT.
+	SelectStateHAMT(ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID) (*StateHAMTRoot, error)
+	SelectStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) ([]StateHAMTNode, error)
+	DeleteStateHAMTRoom(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error
+	SelectStateHAMTRootRefs(ctx context.Context, txn *sql.Tx) ([]StateHAMTRootRef, error)
+	SelectStateHAMTNodeHashes(ctx context.Context, txn *sql.Tx) ([][]byte, error)
+	DeleteStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) error
+	// LockStateHAMTNodes holds a lock until txn ends on Postgres. The SQLite
+	// implementation is a no-op: it relies on the process-wide writer mutex, so
+	// do not assume transaction-scoped exclusion there. Writers that add nodes
+	// take it shared and the unreachable-node sweep takes it exclusive, so
+	// the sweep cannot delete nodes a concurrent writer has just added or
+	// relied on. It must be called inside a transaction.
+	LockStateHAMTNodes(ctx context.Context, txn *sql.Tx, exclusive bool) error
+	// HasNodeLocks reports whether LockStateHAMTNodes does anything. When it
+	// is false, standalone readers should not open a transaction just to
+	// take the lock.
+	HasNodeLocks() bool
 }
 
 type RoomAliases interface {

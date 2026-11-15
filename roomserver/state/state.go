@@ -10,6 +10,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -30,11 +31,14 @@ type StateResolutionStorage interface {
 	EventStateKeyNIDs(ctx context.Context, eventStateKeys []string) (map[string]types.EventStateKeyNID, error)
 	StateBlockNIDs(ctx context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
+	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
+	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
 	SnapshotNIDFromEventID(ctx context.Context, eventID string) (types.StateSnapshotNID, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
 	StateAtEventIDs(ctx context.Context, eventIDs []string) ([]types.StateAtEvent, error)
-	AddState(ctx context.Context, roomNID types.RoomNID, stateBlockNIDs []types.StateBlockNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
 	Events(ctx context.Context, roomVersion gomatrixserverlib.RoomVersion, eventNIDs []types.EventNID) ([]types.Event, error)
 	EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) ([]types.Event, error)
 	IsEventRejected(ctx context.Context, roomNID types.RoomNID, eventID string) (bool, error)
@@ -187,6 +191,12 @@ func (v *StateResolution) LoadStateAtSnapshot(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.LoadStateAtSnapshot")
 	defer trace.EndRegion()
 
+	if entries, ok, err := v.db.StateHAMTEntries(ctx, stateNID); err != nil {
+		return nil, err
+	} else if ok {
+		return entries, nil
+	}
+
 	stateBlockNIDLists, err := v.db.StateBlockNIDs(ctx, []types.StateSnapshotNID{stateNID})
 	if err != nil {
 		return nil, err
@@ -250,69 +260,130 @@ func (v *StateResolution) LoadMembershipAtEvent(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.LoadMembershipAtEvent")
 	defer trace.EndRegion()
 
-	// Get a mapping from snapshotNID -> eventIDs
 	snapshotNIDMap, err := v.db.BulkSelectSnapshotsFromEventIDs(ctx, eventIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	snapshotNIDs := make([]types.StateSnapshotNID, 0, len(snapshotNIDMap))
-	for nid := range snapshotNIDMap {
-		snapshotNIDs = append(snapshotNIDs, nid)
+	tuples := []types.StateKeyTuple{{
+		EventTypeNID:     types.MRoomMemberNID,
+		EventStateKeyNID: stateKeyNID,
+	}}
+	// Snapshots with a persisted HAMT are read by key; the rest share one
+	// batched legacy read so state blocks used by several snapshots are
+	// fetched once.
+	byNID := make(map[types.StateSnapshotNID][]types.StateEntry, len(snapshotNIDMap))
+	var legacy []types.StateSnapshotNID
+	for snapshotNID := range snapshotNIDMap {
+		entries, ok, err := v.db.StateHAMTEntriesForTuples(ctx, snapshotNID, tuples)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			byNID[snapshotNID] = entries
+			continue
+		}
+		legacy = append(legacy, snapshotNID)
 	}
-
-	stateBlockNIDLists, err := v.db.StateBlockNIDs(ctx, snapshotNIDs)
+	legacyStates, err := v.loadLegacyStatesBatched(ctx, legacy, tuples)
 	if err != nil {
 		return nil, err
 	}
-
-	var wantStateBlocks []types.StateBlockNID
-	for _, x := range stateBlockNIDLists {
-		wantStateBlocks = append(wantStateBlocks, x.StateBlockNIDs...)
+	for nid, entries := range legacyStates {
+		byNID[nid] = entries
 	}
-
-	stateEntryLists, err := v.db.StateEntriesForTuples(ctx, uniqueStateBlockNIDs(wantStateBlocks), []types.StateKeyTuple{
-		{
-			EventTypeNID:     types.MRoomMemberNID,
-			EventStateKeyNID: stateKeyNID,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	stateBlockNIDsMap := stateBlockNIDListMap(stateBlockNIDLists)
-	stateEntriesMap := stateEntryListMap(stateEntryLists)
-
 	result := make(map[string][]types.StateEntry)
-	for _, stateBlockNIDList := range stateBlockNIDLists {
-		stateBlockNIDs, ok := stateBlockNIDsMap.lookup(stateBlockNIDList.StateSnapshotNID)
-		if !ok {
-			// This should only get hit if the database is corrupt.
-			// It should be impossible for an event to reference a NID that doesn't exist
-			return nil, fmt.Errorf("corrupt DB: Missing state snapshot numeric ID %d", stateBlockNIDList.StateSnapshotNID)
-		}
-
-		for _, stateBlockNID := range stateBlockNIDs {
-			entries, ok := stateEntriesMap.lookup(stateBlockNID)
-			if !ok {
-				// This should only get hit if the database is corrupt.
-				// It should be impossible for an event to reference a NID that doesn't exist
-				return nil, fmt.Errorf("corrupt DB: Missing state block numeric ID %d", stateBlockNID)
-			}
-
-			evIDs := snapshotNIDMap[stateBlockNIDList.StateSnapshotNID]
-
-			for _, evID := range evIDs {
-				result[evID] = append(result[evID], entries...)
-			}
+	for snapshotNID, evIDs := range snapshotNIDMap {
+		for _, evID := range evIDs {
+			result[evID] = append(result[evID], byNID[snapshotNID]...)
 		}
 	}
-
 	return result, nil
 }
 
-// LoadStateAtEvent loads the full state of a room before a particular event.
+// legacyStateQueryChunk caps how many NIDs one legacy state query binds. Each
+// NID is a bind variable in an `IN (...)` list, and SQLite rejects a statement
+// with more variables than its limit (999 on older builds).
+const legacyStateQueryChunk = 500
+
+// loadLegacyStatesBatched loads the state of several snapshots from their
+// legacy state blocks with one query for the block lists and one for the
+// entries, however many snapshots share a block. A nil tuples slice loads every
+// entry; otherwise only entries for those tuples are loaded. Each result is
+// merged last-wins and sorted, as LoadStateAtSnapshot does.
+func (v *StateResolution) loadLegacyStatesBatched(
+	ctx context.Context, nids []types.StateSnapshotNID, tuples []types.StateKeyTuple,
+) (map[types.StateSnapshotNID][]types.StateEntry, error) {
+	result := make(map[types.StateSnapshotNID][]types.StateEntry, len(nids))
+	if len(nids) == 0 {
+		return result, nil
+	}
+	var blockLists []types.StateBlockNIDList
+	uniqueNIDs := UniqueStateSnapshotNIDs(nids)
+	for start := 0; start < len(uniqueNIDs); start += legacyStateQueryChunk {
+		end := min(start+legacyStateQueryChunk, len(uniqueNIDs))
+		lists, err := v.db.StateBlockNIDs(ctx, uniqueNIDs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("v.db.StateBlockNIDs: %w", err)
+		}
+		blockLists = append(blockLists, lists...)
+	}
+	blocksByNID := make(map[types.StateSnapshotNID][]types.StateBlockNID, len(blockLists))
+	seenBlock := make(map[types.StateBlockNID]struct{})
+	var wantBlocks []types.StateBlockNID
+	for _, list := range blockLists {
+		blocksByNID[list.StateSnapshotNID] = list.StateBlockNIDs
+		for _, blockNID := range list.StateBlockNIDs {
+			if _, ok := seenBlock[blockNID]; !ok {
+				seenBlock[blockNID] = struct{}{}
+				wantBlocks = append(wantBlocks, blockNID)
+			}
+		}
+	}
+	sort.Slice(wantBlocks, func(i, j int) bool { return wantBlocks[i] < wantBlocks[j] })
+
+	var entryLists []types.StateEntryList
+	for start := 0; start < len(wantBlocks); start += legacyStateQueryChunk {
+		end := min(start+legacyStateQueryChunk, len(wantBlocks))
+		var lists []types.StateEntryList
+		var err error
+		if tuples == nil {
+			lists, err = v.db.StateEntries(ctx, wantBlocks[start:end])
+		} else {
+			lists, err = v.db.StateEntriesForTuples(ctx, wantBlocks[start:end], tuples)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load state entries: %w", err)
+		}
+		entryLists = append(entryLists, lists...)
+	}
+	entriesMap := stateEntryListMap(entryLists)
+
+	for _, nid := range nids {
+		blockNIDs, ok := blocksByNID[nid]
+		if !ok {
+			// It should be impossible for an event to reference a NID that doesn't exist.
+			return nil, fmt.Errorf("corrupt DB: Missing state snapshot numeric ID %d", nid)
+		}
+		var fullState []types.StateEntry
+		for _, blockNID := range blockNIDs {
+			entries, ok := entriesMap.lookup(blockNID)
+			if !ok {
+				if tuples != nil {
+					// No entry in this block matched a requested tuple.
+					continue
+				}
+				return nil, fmt.Errorf("corrupt DB: Missing state block numeric ID %d", blockNID)
+			}
+			fullState = append(fullState, entries...)
+		}
+		sort.Stable(stateEntryByStateKeySorter(fullState))
+		fullState = fullState[:util.Unique(stateEntryByStateKeySorter(fullState))]
+		result[nid] = fullState
+	}
+	return result, nil
+}
+
 func (v *StateResolution) LoadStateAtEventForHistoryVisibility(
 	ctx context.Context, eventID string,
 ) ([]types.StateEntry, error) {
@@ -344,57 +415,41 @@ func (v *StateResolution) LoadCombinedStateAfterEvents(
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.LoadCombinedStateAfterEvents")
 	defer trace.EndRegion()
 
-	stateNIDs := make([]types.StateSnapshotNID, len(prevStates))
-	for i, state := range prevStates {
-		stateNIDs[i] = state.BeforeStateSnapshotNID
+	// Load each distinct snapshot once. Snapshots with a persisted HAMT are
+	// read individually; the rest share one batched legacy read, so blocks
+	// reused by several snapshots are fetched once.
+	snapshotCache := make(map[types.StateSnapshotNID][]types.StateEntry, len(prevStates))
+	var legacy []types.StateSnapshotNID
+	for _, prevState := range prevStates {
+		snapshotNID := prevState.BeforeStateSnapshotNID
+		if _, ok := snapshotCache[snapshotNID]; ok {
+			continue
+		}
+		entries, ok, err := v.db.StateHAMTEntries(ctx, snapshotNID)
+		if err != nil {
+			return nil, fmt.Errorf("v.db.StateHAMTEntries: %w", err)
+		}
+		if ok {
+			snapshotCache[snapshotNID] = entries
+			continue
+		}
+		snapshotCache[snapshotNID] = nil
+		legacy = append(legacy, snapshotNID)
 	}
-	// Fetch the state snapshots for the state before the each prev event from the database.
-	// Deduplicate the IDs before passing them to the database.
-	// There could be duplicates because the events could be state events where
-	// the snapshot of the room state before them was the same.
-	stateBlockNIDLists, err := v.db.StateBlockNIDs(ctx, UniqueStateSnapshotNIDs(stateNIDs))
+	legacyStates, err := v.loadLegacyStatesBatched(ctx, legacy, nil)
 	if err != nil {
-		return nil, fmt.Errorf("v.db.StateBlockNIDs: %w", err)
+		return nil, err
+	}
+	for nid, entries := range legacyStates {
+		snapshotCache[nid] = entries
 	}
 
-	var stateBlockNIDs []types.StateBlockNID
-	for _, list := range stateBlockNIDLists {
-		stateBlockNIDs = append(stateBlockNIDs, list.StateBlockNIDs...)
-	}
-	// Fetch the state entries that will be combined to create the snapshots.
-	// Deduplicate the IDs before passing them to the database.
-	// There could be duplicates because a block of state entries could be reused by
-	// multiple snapshots.
-	stateEntryLists, err := v.db.StateEntries(ctx, uniqueStateBlockNIDs(stateBlockNIDs))
-	if err != nil {
-		return nil, fmt.Errorf("v.db.StateEntries: %w", err)
-	}
-	stateBlockNIDsMap := stateBlockNIDListMap(stateBlockNIDLists)
-	stateEntriesMap := stateEntryListMap(stateEntryLists)
-
-	// Combine the entries from all the snapshots of state after each prev event into a single list.
 	var combined []types.StateEntry
 	for _, prevState := range prevStates {
-		// Grab the list of state data NIDs for this snapshot.
-		stateBlockNIDs, ok := stateBlockNIDsMap.lookup(prevState.BeforeStateSnapshotNID)
-		if !ok {
-			// This should only get hit if the database is corrupt.
-			// It should be impossible for an event to reference a NID that doesn't exist
-			panic(fmt.Errorf("corrupt DB: Missing state snapshot numeric ID %d", prevState.BeforeStateSnapshotNID))
-		}
-
-		// Combine all the state entries for this snapshot.
-		// The order of state block NIDs in the list tells us the order to combine them in.
-		var fullState []types.StateEntry
-		for _, stateBlockNID := range stateBlockNIDs {
-			entries, ok := stateEntriesMap.lookup(stateBlockNID)
-			if !ok {
-				// This should only get hit if the database is corrupt.
-				// It should be impossible for an event to reference a NID that doesn't exist
-				panic(fmt.Errorf("corrupt DB: Missing state block numeric ID %d", stateBlockNID))
-			}
-			fullState = append(fullState, entries...)
-		}
+		cached := snapshotCache[prevState.BeforeStateSnapshotNID]
+		// Work on a copy: the append and in-place sort below must not write
+		// through the cached snapshot's backing array for later predecessors.
+		fullState := append([]types.StateEntry(nil), cached...)
 		if prevState.IsStateEvent() && !prevState.IsRejected {
 			// If the prev event was a state event then add an entry for the event itself
 			// so that we get the state after the event rather than the state before.
@@ -412,7 +467,6 @@ func (v *StateResolution) LoadCombinedStateAfterEvents(
 	return combined, nil
 }
 
-// DifferenceBetweeenStateSnapshots works out which state entries have been added and removed between two snapshots.
 func (v *StateResolution) DifferenceBetweeenStateSnapshots(
 	ctx context.Context, oldStateNID, newStateNID types.StateSnapshotNID,
 ) (removed, added []types.StateEntry, err error) {
@@ -544,6 +598,12 @@ func (v *StateResolution) loadStateAtSnapshotForNumericTuples(
 ) ([]types.StateEntry, error) {
 	trace, ctx := internal.StartRegion(ctx, "StateResolution.loadStateAtSnapshotForNumericTuples")
 	defer trace.EndRegion()
+
+	if entries, ok, err := v.db.StateHAMTEntriesForTuples(ctx, stateNID, stateKeyTuples); err != nil {
+		return nil, err
+	} else if ok {
+		return entries, nil
+	}
 
 	stateBlockNIDLists, err := v.db.StateBlockNIDs(ctx, []types.StateSnapshotNID{stateNID})
 	if err != nil {
@@ -698,11 +758,11 @@ var calculateStateDurations = prometheus.NewHistogramVec(
 	// The possible values for algorithm are:
 	//    empty_state -> The list of events was empty so the state is empty.
 	//    no_change -> The state hasn't changed.
-	//    single_delta -> There was a single event added to the state in a way that can be encoded as a single delta
+	//    single_state_event -> State was formed by applying one state event to its previous snapshot.
 	//    full_state_no_conflicts -> We created a new copy of the full room state, but didn't enounter any conflicts
 	//                               while doing so.
 	//    full_state_with_conflicts -> We created a new copy of the full room state and had to resolve conflicts to do so.
-	//    _load_state_block_nids -> Failed loading the state block nids for a single previous state.
+	//    _load_state -> Failed loading a previous state snapshot.
 	//    _load_combined_state -> Failed to load the combined state.
 	//    _resolve_conflicts -> Failed to resolve conflicts.
 	[]string{"algorithm", "outcome"},
@@ -738,6 +798,19 @@ var calculateStateConflictLength = prometheus.NewSummaryVec(
 	[]string{"algorithm", "outcome"},
 )
 
+var stateHAMTSnapshotsMissing = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "zendrite",
+	Subsystem: "roomserver",
+	Name:      "state_hamt_snapshots_missing",
+	Help:      "Number of room state snapshots without a persisted state HAMT.",
+})
+
+// SetStateHAMTSnapshotsMissing updates the number of snapshots that still use
+// legacy state blocks for reads.
+func SetStateHAMTSnapshotsMissing(missing int64) {
+	stateHAMTSnapshotsMissing.Set(float64(missing))
+}
+
 type calculateStateMetrics struct {
 	algorithm       string
 	startTime       time.Time
@@ -772,6 +845,7 @@ func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		calculateStateDurations, calculateStatePrevEventLength,
 		calculateStateFullStateLength, calculateStateConflictLength,
+		stateHAMTSnapshotsMissing,
 	)
 }
 
@@ -811,7 +885,7 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 		// 2) There weren't any prev_events for this event so the state is
 		// empty.
 		metrics.algorithm = "empty_state"
-		stateNID, err := v.db.AddState(ctx, v.roomInfo.RoomNID, nil, nil)
+		stateNID, err := v.db.AddState(ctx, v.roomInfo.RoomNID, nil)
 		if err != nil {
 			err = fmt.Errorf("v.db.AddState: %w", err)
 		}
@@ -828,30 +902,29 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 			metrics.algorithm = "no_change"
 			return metrics.stop(prevState.BeforeStateSnapshotNID, nil)
 		}
-		// The previous event was a state event so we need to store a copy
-		// of the previous state updated with that event.
-		stateBlockNIDLists, err := v.db.StateBlockNIDs(
-			ctx, []types.StateSnapshotNID{prevState.BeforeStateSnapshotNID},
+		// 4) The state after this event is the previous snapshot with that one
+		// entry replaced, so apply it as a delta to the previous HAMT.
+		metrics.algorithm = "single_state_event"
+		stateNID, err := v.db.AddStateDelta(
+			ctx, v.roomInfo.RoomNID, prevState.BeforeStateSnapshotNID,
+			[]types.StateEntry{prevState.StateEntry},
 		)
-		if err != nil {
-			metrics.algorithm = "_load_state_blocks"
-			return metrics.stop(0, fmt.Errorf("v.db.StateBlockNIDs: %w", err))
-		}
-		stateBlockNIDs := stateBlockNIDLists[0].StateBlockNIDs
-		if len(stateBlockNIDs) < maxStateBlockNIDs {
-			// 4) The number of state data blocks is small enough that we can just
-			// add the state event as a block of size one to the end of the blocks.
-			metrics.algorithm = "single_delta"
-			stateNID, err := v.db.AddState(
-				ctx, v.roomInfo.RoomNID, stateBlockNIDs, []types.StateEntry{prevState.StateEntry},
-			)
-			if err != nil {
-				err = fmt.Errorf("v.db.AddState: %w", err)
+		if errors.Is(err, types.ErrNoStateHAMT) {
+			// The previous snapshot predates HAMT storage; rebuild from its
+			// full state.
+			previous, loadErr := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
+			if loadErr != nil {
+				metrics.algorithm = "_load_state"
+				return metrics.stop(0, fmt.Errorf("v.LoadStateAtSnapshot: %w", loadErr))
 			}
-			return metrics.stop(stateNID, err)
+			stateNID, err = v.db.AddState(
+				ctx, v.roomInfo.RoomNID, applyStateEntry(previous, prevState.StateEntry),
+			)
 		}
-		// If there are too many deltas then we need to calculate the full state
-		// So fall through to calculateAndStoreStateAfterManyEvents
+		if err != nil {
+			err = fmt.Errorf("v.db.AddStateDelta: %w", err)
+		}
+		return metrics.stop(stateNID, err)
 	}
 
 	stateNID, err := v.calculateAndStoreStateAfterManyEvents(ctx, v.roomInfo.RoomNID, prevStates, metrics)
@@ -861,12 +934,32 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 	return stateNID, nil
 }
 
-// maxStateBlockNIDs is the maximum number of state data blocks to use to encode a snapshot of room state.
-// Increasing this number means that we can encode more of the state changes as simple deltas which means that
-// we need fewer entries in the state data table. However making this number bigger will increase the size of
-// the rows in the state table itself and will require more index lookups when retrieving a snapshot.
-// TODO: Tune this to get the right balance between size and lookup performance.
-const maxStateBlockNIDs = 64
+// applyStateEntry returns state with the entry for the same (event type, state
+// key) tuple replaced by entry. The result stays sorted so the state hash is
+// independent of insertion order.
+func applyStateEntry(state []types.StateEntry, entry types.StateEntry) []types.StateEntry {
+	result := make([]types.StateEntry, 0, len(state)+1)
+	replaced := false
+	for _, existing := range state {
+		if existing.StateKeyTuple == entry.StateKeyTuple {
+			result = append(result, entry)
+			replaced = true
+			continue
+		}
+		result = append(result, existing)
+	}
+	if !replaced {
+		result = append(result, entry)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.EventTypeNID != b.EventTypeNID {
+			return a.EventTypeNID < b.EventTypeNID
+		}
+		return a.EventStateKeyNID < b.EventStateKeyNID
+	})
+	return result
+}
 
 // calculateAndStoreStateAfterManyEvents finds the room state after the given events.
 // This handles the slow path of calculateAndStoreStateAfterEvents for when there is more than one event.
@@ -890,7 +983,7 @@ func (v *StateResolution) calculateAndStoreStateAfterManyEvents(
 	// previous state.
 	metrics.conflictLength = conflictLength
 	metrics.fullStateLength = len(state)
-	return metrics.stop(v.db.AddState(ctx, roomNID, nil, state))
+	return metrics.stop(v.db.AddState(ctx, roomNID, state))
 }
 
 func (v *StateResolution) calculateStateAfterManyEvents(
@@ -1434,20 +1527,6 @@ func (s stateEntrySorter) Len() int           { return len(s) }
 func (s stateEntrySorter) Less(i, j int) bool { return s[i].LessThan(s[j]) }
 func (s stateEntrySorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
-type stateBlockNIDListMap []types.StateBlockNIDList
-
-func (m stateBlockNIDListMap) lookup(stateNID types.StateSnapshotNID) (stateBlockNIDs []types.StateBlockNID, ok bool) {
-	list := []types.StateBlockNIDList(m)
-	i := sort.Search(len(list), func(i int) bool {
-		return list[i].StateSnapshotNID >= stateNID
-	})
-	if i < len(list) && list[i].StateSnapshotNID == stateNID {
-		ok = true
-		stateBlockNIDs = list[i].StateBlockNIDs
-	}
-	return
-}
-
 type stateEntryListMap []types.StateEntryList
 
 func (m stateEntryListMap) lookup(stateBlockNID types.StateBlockNID) (stateEntries []types.StateEntry, ok bool) {
@@ -1478,16 +1557,6 @@ func (s stateNIDSorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 func UniqueStateSnapshotNIDs(nids []types.StateSnapshotNID) []types.StateSnapshotNID {
 	return nids[:util.SortAndUnique(stateNIDSorter(nids))]
-}
-
-type stateBlockNIDSorter []types.StateBlockNID
-
-func (s stateBlockNIDSorter) Len() int           { return len(s) }
-func (s stateBlockNIDSorter) Less(i, j int) bool { return s[i] < s[j] }
-func (s stateBlockNIDSorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-func uniqueStateBlockNIDs(nids []types.StateBlockNID) []types.StateBlockNID {
-	return nids[:util.SortAndUnique(stateBlockNIDSorter(nids))]
 }
 
 // Map from event type, state key tuple to numeric event ID.

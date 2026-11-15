@@ -493,6 +493,12 @@ func (d *Database) WriteEvent(
 	return pduPosition, returnErr
 }
 
+func (d *Database) UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		return d.OutputEvents.UpdateEventJSON(ctx, txn, eventID, event)
+	})
+}
+
 // This function should always be called within a sqlutil.Writer for safety in SQLite.
 func (d *Database) updateRoomState(
 	ctx context.Context, txn *sql.Tx,

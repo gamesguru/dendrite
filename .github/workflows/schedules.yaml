@@ -159,6 +159,9 @@ jobs:
         with:
           path: dendrite
 
+      - name: Checkout Rezzy submodule
+        run: git -C dendrite submodule update --init --depth 1 rezzy
+
       # Attempt to check out the same branch of Complement as the PR. If it
       # doesn't exist, fallback to main.
       - name: Checkout complement
@@ -182,7 +185,8 @@ jobs:
             (wget -O - "https://github.com/gamesguru/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
           done
       # Build initial Dendrite image
-      - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
+      - uses: docker/setup-buildx-action@v3
+      - run: docker buildx build --load --build-context rezzy=./rezzy --build-arg=BUILD_COVER=1 --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
         working-directory: dendrite
         env:
           DOCKER_BUILDKIT: 1

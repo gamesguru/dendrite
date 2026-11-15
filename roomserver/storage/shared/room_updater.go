@@ -146,6 +146,18 @@ func (u *RoomUpdater) StateEntries(
 	return u.d.stateEntries(ctx, u.txn, stateBlockNIDs)
 }
 
+func (u *RoomUpdater) StateHAMTEntries(
+	ctx context.Context, snapshotNID types.StateSnapshotNID,
+) ([]types.StateEntry, bool, error) {
+	return u.d.stateHAMTEntries(ctx, u.txn, snapshotNID)
+}
+
+func (u *RoomUpdater) StateHAMTEntriesForTuples(
+	ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple,
+) ([]types.StateEntry, bool, error) {
+	return u.d.stateHAMTEntriesForTuples(ctx, u.txn, snapshotNID, tuples)
+}
+
 func (u *RoomUpdater) StateEntriesForTuples(
 	ctx context.Context,
 	stateBlockNIDs []types.StateBlockNID,
@@ -157,10 +169,16 @@ func (u *RoomUpdater) StateEntriesForTuples(
 func (u *RoomUpdater) AddState(
 	ctx context.Context,
 	roomNID types.RoomNID,
-	stateBlockNIDs []types.StateBlockNID,
 	state []types.StateEntry,
 ) (stateNID types.StateSnapshotNID, err error) {
-	return u.d.addState(ctx, u.txn, roomNID, stateBlockNIDs, state)
+	return u.d.addState(ctx, u.txn, roomNID, state)
+}
+
+func (u *RoomUpdater) AddStateDelta(
+	ctx context.Context, roomNID types.RoomNID,
+	parent types.StateSnapshotNID, changed []types.StateEntry,
+) (types.StateSnapshotNID, error) {
+	return u.d.addStateDelta(ctx, u.txn, roomNID, parent, changed)
 }
 
 func (u *RoomUpdater) SetState(

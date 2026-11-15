@@ -9,6 +9,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -343,6 +344,16 @@ func (r *RoomInfo) CopyFrom(r2 *RoomInfo) {
 }
 
 var ErrorInvalidRoomInfo = fmt.Errorf("room info is invalid")
+
+// ErrRoomNotFound is returned when a roomserver query names a room that this
+// roomserver does not know about. It is deliberately distinct from database
+// errors so HTTP layers can map only this condition to 404 and map everything
+// else to 500. Test for it with errors.Is.
+var ErrRoomNotFound = errors.New("room not found")
+
+// ErrNoStateHAMT is returned when a snapshot has no persisted state HAMT, so
+// callers must fall back to the legacy state blocks.
+var ErrNoStateHAMT = fmt.Errorf("state snapshot has no persisted HAMT")
 
 // Struct to represent a device or a server name.
 //

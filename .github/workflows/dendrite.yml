@@ -6,13 +6,23 @@ on:
       - main
     paths:
       - "**.go" # only execute on changes to go files
+      - "scripts/**" # script changes and their regression tests
       - "go.sum" # or dependency updates
       - ".github/workflows/**" # or workflow changes
+      - ".github/actions/**" # or a changed composite action
+      - "rezzy" # submodule pointer updates change this path itself
+      - "rezzy/**" # native library and pkg-config changes
+      - ".github/actions/setup-rezzy/**" # Rezzy CI setup
   pull_request:
     paths:
       - "**.go"
+      - "scripts/**"
       - "go.sum" # or dependency updates
       - ".github/workflows/**"
+      - ".github/actions/**"
+      - "rezzy"
+      - "rezzy/**"
+      - ".github/actions/setup-rezzy/**"
   release:
     types: [published]
   workflow_dispatch:
@@ -28,7 +38,7 @@ env:
 jobs:
   wasm:
     name: WASM build test
-    timeout-minutes: 5
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     if: ${{ false }} # disable for now
     steps:
@@ -66,11 +76,21 @@ jobs:
 
   # Run golangci-lint
   lint:
-    timeout-minutes: 5
+    timeout-minutes: 15
     name: Linting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Keep Python first: actions/setup-python overwrites PKG_CONFIG_PATH, which
+      # the libolm and Rezzy steps below append to for golangci-lint's cgo.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test scripts
+        run: |
+          python -m pip install --quiet pyyaml
+          python -m unittest discover -s scripts
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -89,14 +109,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Build required Rezzy library
+        uses: ./.github/actions/setup-rezzy
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         env:
           CGO_ENABLED: 1
+          PKG_CONFIG_PATH: ${{ github.workspace }}/rezzy/target/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig
 
   # run go test with different go versions
   test:
-    timeout-minutes: 10
+    timeout-minutes: 30
     name: Unit tests
     runs-on: ubuntu-latest
     # Service containers to run with `container-job`
@@ -139,15 +162,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
-      - uses: actions/cache@v4
-        # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-stable-unit-
+      - name: Set up Rezzy
+        uses: ./.github/actions/setup-rezzy
+#      - uses: actions/cache@v4
+#        # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
+#        with:
+#          path: |
+#            ~/.cache/go-build
+#            ~/go/pkg/mod
+#          key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
+#          restore-keys: |
+#            ${{ runner.os }}-go-stable-unit-
       - name: Set up gotestfmt
         uses: gotesttools/gotestfmt-action@v2
         with:
@@ -160,7 +185,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
 
-  # build Dendrite for linux with different architectures and go versions
+  # Build Dendrite for its supported Linux target.
   build:
     name: Build for Linux
     timeout-minutes: 10
@@ -169,13 +194,15 @@ jobs:
       fail-fast: false
       matrix:
         goos: ["linux"]
-        goarch: ["amd64", "386"]
+        goarch: ["amd64"]
     steps:
       - uses: actions/checkout@v5
       - name: Setup go
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Build required Rezzy library
+        uses: ./.github/actions/setup-rezzy
       - uses: actions/cache@v4
         with:
           path: |
@@ -184,9 +211,6 @@ jobs:
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
-      - name: Install dependencies x86
-        if: ${{ matrix.goarch == '386' }}
-        run: sudo apt update && sudo apt-get install -y gcc-multilib
       - env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -194,54 +218,9 @@ jobs:
           CGO_CFLAGS: -fno-stack-protector
         run: go build -trimpath -v -o "bin/" ./cmd/...
 
-  # build for Windows 64-bit
-  build_windows:
-    name: Build for Windows
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: ["windows"]
-        goarch: ["amd64"]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: "go.mod"
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
-      - name: Install dependencies
-        run: sudo apt update && sudo apt install -y gcc-mingw-w64-x86-64 # install required gcc
-      - env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: "/usr/bin/x86_64-w64-mingw32-gcc"
-        run: go build -trimpath -v -o "bin/" ./cmd/...
-
-  # Dummy step to gate other tests on without repeating the whole list
-  initial-tests-done:
-    name: Initial tests passed
-    needs: [lint, test, build, build_windows]
-    runs-on: ubuntu-latest
-    if: ${{ !cancelled() }} # Run this even if prior jobs were skipped
-    steps:
-      - name: Check initial tests passed
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-
   # run go test with different go versions
   integration:
     timeout-minutes: 20
-    needs: initial-tests-done
     name: Integration tests
     runs-on: ubuntu-latest
     # Service containers to run with `container-job`
@@ -280,6 +259,8 @@ jobs:
           sudo cmake --install olm-build
           sudo ldconfig
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+      - name: Set up Rezzy
+        uses: ./.github/actions/setup-rezzy
       - name: Setup go
         uses: actions/setup-go@v5
         with:
@@ -313,21 +294,18 @@ jobs:
   # run Complement
   complement:
     name: "Complement (${{ matrix.label }})"
-    timeout-minutes: 35
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: SQLite native
-            cgo: 0
-
-          - label: SQLite Cgo
-            cgo: 1
+          - label: SQLite
+            image: sqlite
 
           - label: PostgreSQL
             postgres: Postgres
-            cgo: 0
+            image: postgres
     steps:
       # Env vars are set file a file given by $GITHUB_PATH. We need both Go 1.17 and GOPATH on env to run Complement.
       # See https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
@@ -335,70 +313,100 @@ jobs:
         run: |
           echo "$GOROOT_1_17_X64/bin" >> $GITHUB_PATH
           echo "~/go/bin" >> $GITHUB_PATH
+      # libolm is built from source; cache the source and build trees so only the
+      # (fast) install runs on a hit. The install rules copy headers from the
+      # source tree, so the build tree alone is not enough.
+      - name: Cache libolm build
+        id: olm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            olm-build
+            olm-${{ env.OLM_VERSION }}
+          key: olm-src-build-${{ runner.os }}-${{ env.OLM_VERSION }}-${{ env.OLM_SHA256 }}
       - name: "Install Complement Dependencies"
         # We don't need to install Go because it is included on the Ubuntu 20.04 image:
         # See https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-Readme.md specifically GOROOT_1_17_X64
         run: |
           set -euo pipefail
-          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
-          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
-          tar xzf olm.tar.gz
-          cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build olm-build -j"$(nproc)"
+          if [ "${{ steps.olm-cache.outputs.cache-hit }}" != "true" ]; then
+            curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+            echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+            tar xzf olm.tar.gz
+            cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            cmake --build olm-build -j"$(nproc)"
+          fi
           sudo cmake --install olm-build
           sudo ldconfig
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
-          go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+      - name: Set up gotestfmt
+        uses: gotesttools/gotestfmt-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run actions/checkout@v5 for dendrite
         uses: actions/checkout@v5
         with:
           path: dendrite
 
-      # Run the Complement suite maintained on the fork's dev branch. A PR may
-      # carry its own matching Complement branch; otherwise (including a push to
-      # main) fall back to dev, which is where Zendrite's test fixes land. The
-      # fork's main branch lags behind dev and lacks those fixes, so selecting it
-      # from the Dendrite branch name makes an identical build fail after a merge.
+      - name: Checkout Rezzy submodule
+        run: git -C dendrite submodule update --init --depth 1 rezzy
+
+      # Run the Complement suite from the fork's MSC4521 branch at a pinned
+      # commit: it merges dev, which carries Zendrite's Complement fixes, and
+      # adds the MSC4521 tests, so one checkout runs both.
       - name: Checkout complement
         shell: bash
         run: |
-          mkdir -p complement
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "dev"; do
-            # Skip empty branch names and merge commits.
-            if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
-              continue
-            fi
-            (wget -O - "https://github.com/gamesguru/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
-          done
-          test -f complement/go.mod || { echo "failed to check out a Complement suite"; exit 1; }
+          set -euo pipefail
+          COMPLEMENT_COMMIT=aab262f
+          git init complement
+          # The pinned MSC4521 merge is on GitLab; the GitHub mirror's branch
+          # does not contain this commit.
+          git -C complement remote add origin https://gitlab.com/gamesguru/complement.git
+          git -C complement fetch --depth=100 origin guru/feat/msc4521-libminisketch-set-recon
+          commit=$(git -C complement rev-parse "${COMPLEMENT_COMMIT}^{commit}")
+          git -C complement checkout --detach "$commit"
+          test -f complement/go.mod
       # Build initial Dendrite image
-      - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      # Export the BuildKit layer cache to the GitHub Actions cache so the Rust
+      # (Rezzy) and Go stages are reused across runs; only changed layers rebuild.
+      - name: Expose GitHub Actions cache to BuildKit
+        uses: crazy-max/ghaction-github-runtime@v3
+      - name: Build Complement image
         working-directory: dendrite
-        env:
-          DOCKER_BUILDKIT: 1
+        run: |
+          docker buildx build --load \
+            --build-context rezzy=./rezzy \
+            --cache-from type=gha,scope=complement-${{ matrix.image }} \
+            --cache-to type=gha,mode=max,scope=complement-${{ matrix.image }} \
+            -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile \
+            -t complement-dendrite:${{ matrix.image }} .
 
-      # Run Complement
+      # Run Complement. Only the MSC4521 cases that test this server's inbound
+      # endpoints run; the rest expect the homeserver to initiate reconciliation
+      # itself, which is not implemented yet, and tests/linkproxy checks that too.
       - run: |
           set -o pipefail &&
-          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)msc(3389|4429|4500)$'); test_status=$?; \
+          (go test -v -json -timeout 1h -tags zendrite_blacklist $(go list ./tests/... | grep -vE '(^|/)(msc(3389|4429|4500|4521)|linkproxy)$'); test_status=$?; \
            go test -v -json -timeout 1h -tags zendrite_blacklist -run '^TestMSC3389RedactionStripsRelationInOlderVersions$' ./tests/msc3389; target_status=$?; \
-           if [ $test_status -ne 0 ]; then exit $test_status; fi; exit $target_status) 2>&1 | gotestfmt -hide all
+           go test -v -json -timeout 45m -tags zendrite_blacklist -run 'TestMSC4521/(Primitives|Compatibility)' ./tests/msc4521/...; msc_status=$?; \
+           go test -v -json -timeout 15m -tags zendrite_blacklist -run 'TestMSC4521/(Convergence|Adversarial)/(ActiveRoom|NonMembersAndACLBlocked)' ./tests/msc4521/...; msc_status2=$?; \
+           if [ $test_status -ne 0 ]; then exit $test_status; fi; \
+           if [ $target_status -ne 0 ]; then exit $target_status; fi; \
+           if [ $msc_status -ne 0 ]; then exit $msc_status; fi; exit $msc_status2) 2>&1 | gotestfmt -hide all
         shell: bash
         name: Run Complement Tests
         env:
-          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }}
+          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         working-directory: complement
 
   integration-tests-done:
     name: Integration tests passed
-    needs:
-      [
-        initial-tests-done,
-        complement,
-        integration,
-      ]
+    needs: [lint, test, build, integration, complement]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }} # Run this even if prior jobs were skipped
     steps:

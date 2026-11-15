@@ -59,12 +59,12 @@ func TestStateSnapshotTable(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			stateBlockNIDs = append(stateBlockNIDs, types.StateBlockNID(i))
 		}
-		stateNID, err := tab.InsertState(ctx, nil, 1, stateBlockNIDs)
+		stateNID, err := tab.InsertState(ctx, nil, 1, stateBlockNIDs.Hash(), stateBlockNIDs)
 		assert.NoError(t, err)
 		assert.Equal(t, types.StateSnapshotNID(1), stateNID)
 
 		// verify ON CONFLICT; Note: this updates the sequence!
-		stateNID, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs)
+		stateNID, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs.Hash(), stateBlockNIDs)
 		assert.NoError(t, err)
 		assert.Equal(t, types.StateSnapshotNID(1), stateNID)
 
@@ -74,7 +74,7 @@ func TestStateSnapshotTable(t *testing.T) {
 			stateBlockNIDs2 = append(stateBlockNIDs2, types.StateBlockNID(i))
 		}
 
-		stateNID, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs2)
+		stateNID, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs2.Hash(), stateBlockNIDs2)
 		assert.NoError(t, err)
 		// StateSnapshotNID is now 3, since the DO UPDATE SET statement incremented the sequence
 		assert.Equal(t, types.StateSnapshotNID(3), stateNID)
@@ -92,7 +92,7 @@ func TestStateSnapshotTable(t *testing.T) {
 		for i := 0; i < 65555; i++ {
 			stateBlockNIDs2 = append(stateBlockNIDs2, types.StateBlockNID(i))
 		}
-		_, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs2)
+		_, err = tab.InsertState(ctx, nil, 1, stateBlockNIDs2.Hash(), stateBlockNIDs2)
 		assert.NoError(t, err)
 	})
 }

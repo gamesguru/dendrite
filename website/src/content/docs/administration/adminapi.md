@@ -89,6 +89,72 @@ Response format:
 }
 ```
 
+## POST `/_zendrite/admin/fetchEvent/{serverName}/{roomID}/{eventID}`
+
+Fetches a single event from `serverName` and ingests it into `roomID`.
+This is mainly useful for repairing a room whose event graph has gaps.
+The response contains the ingestion outcome:
+
+```json
+{
+  "outcome": "accepted"
+}
+```
+
+## POST `/_zendrite/admin/fetchEvents/{serverName}/{roomID}`
+
+Fetches and ingests several events from `serverName` into `roomID`.
+The request body holds between 1 and 100 event IDs:
+
+```json
+{
+  "event_ids": [
+    "$event1",
+    "$event2"
+  ]
+}
+```
+
+Events are fetched sequentially in the order given, so list them oldest first
+to avoid needless missing-previous-event lookups.
+Empty IDs are ignored, duplicates are fetched once, and one failure does not
+stop the remaining events.
+The response maps each event ID to its outcome (or an error message):
+
+```json
+{
+  "results": {
+    "$event1": "accepted",
+    "$event2": "rejected"
+  }
+}
+```
+
+## POST `/_zendrite/admin/reconcile/{serverName}/{roomID}`
+
+Runs an explicit MSC4521 reconciliation exchange against `serverName` and
+fetches any events the remote holds that this server is missing.
+It requires a native Rezzy build (see the `rezzy-native` target in the
+`Makefile`) **and** `federation_api.msc4521_enabled: true` in the configuration;
+otherwise the endpoint returns 404.
+
+The exchange runs at most 8 bucket rounds. The response reports the final
+status (`synchronized`, `diverged`, `no_progress`, `capacity_exceeded`, or
+another remote sketch status), the number of rounds used, and the event IDs
+that were fetched or failed:
+
+```json
+{
+  "status": "synchronized",
+  "rounds": 1,
+  "remote_digest": "<digest>",
+  "remote_count": 123,
+  "fetched": ["$event1"],
+  "failed": {},
+  "requester_only": []
+}
+```
+
 ## POST `/_synapse/admin/v1/send_server_notice`
 
 Request body format:

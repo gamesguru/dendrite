@@ -25,6 +25,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/internal/perform"
 	"codefloe.com/pat-s/zendrite/roomserver/internal/query"
 	"codefloe.com/pat-s/zendrite/roomserver/producers"
+	roomstate "codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
@@ -238,6 +239,29 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 
 	if err := r.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start roomserver input API")
+	}
+	if r.enableMetrics && r.Cfg.Global.Metrics.Enabled {
+		r.ProcessContext.Go(func() {
+			refreshStateHAMTCoverage := func() {
+				total, withHAMT, err := r.DB.StateHAMTCoverage(r.ProcessContext.Context())
+				if err != nil {
+					logrus.WithError(err).Warn("failed to refresh state HAMT coverage metric")
+					return
+				}
+				roomstate.SetStateHAMTSnapshotsMissing(total - withHAMT)
+			}
+			refreshStateHAMTCoverage()
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-r.ProcessContext.WaitForShutdown():
+					return
+				case <-ticker.C:
+					refreshStateHAMTCoverage()
+				}
+			}
+		})
 	}
 
 	// When auto-purge is enabled, sweep any rooms that are already eligible

@@ -55,7 +55,9 @@ func TestContractNextKeepsTheFloor(t *testing.T) {
 func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	current := Release()
 	require.Equal(t, 1, current.UpgradeFrom)
-	require.Equal(t, topologyLiftLevel, current.RollbackTo)
+	// The rollback floor is the oldest level that can read the state
+	// snapshots this build writes, which is the HAMT cutover.
+	require.Equal(t, rollbackToLevel, current.RollbackTo)
 
 	// A direct upgrade from a build without membership history is admitted:
 	// level 21 reconstructs all retained transitions from output events.
@@ -65,7 +67,7 @@ func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	// Once this build has run, a build without membership history may not take
 	// over, since it would overwrite transitions nothing can recover.
 	afterCurrent := current.Next("deployment", "v23", preHistory)
-	require.Equal(t, topologyLiftLevel, afterCurrent.Floor)
+	require.Equal(t, rollbackToLevel, afterCurrent.Floor)
 	level18 := Contract{Protocol: 1, Level: 18, UpgradeFrom: 1, RollbackTo: 16}
 	require.ErrorIs(t, level18.Admit("deployment", afterCurrent), ErrIncompatibleBuild)
 
@@ -75,7 +77,7 @@ func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	require.ErrorIs(t, level19.Admit("deployment", afterCurrent), ErrIncompatibleBuild)
 	require.NoError(t, current.Admit("deployment", afterCurrent))
 	afterRollback := current.Next("deployment", "v23", afterCurrent)
-	require.Equal(t, topologyLiftLevel, afterRollback.Floor)
+	require.Equal(t, rollbackToLevel, afterRollback.Floor)
 	require.NoError(t, current.Admit("deployment", afterRollback))
 }
 

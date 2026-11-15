@@ -1,0 +1,212 @@
+package statehamt
+
+import (
+	"encoding/hex"
+	"errors"
+	"fmt"
+
+	"github.com/gamesguru/rezzy/rezzy-ffi/go/rezzy"
+)
+
+func toEntries(entries []Entry) []rezzy.HAMTEntry {
+	out := make([]rezzy.HAMTEntry, len(entries))
+	for i, entry := range entries {
+		out[i] = rezzy.HAMTEntry{entry.Type, entry.StateKey, entry.EventID}
+	}
+	return out
+}
+
+func fromEntries(entries []rezzy.HAMTEntry) []Entry {
+	out := make([]Entry, len(entries))
+	for i, entry := range entries {
+		out[i] = Entry{Type: entry[0], StateKey: entry[1], EventID: entry[2]}
+	}
+	return out
+}
+
+func toNodes(nodes []Node) []rezzy.HAMTNode {
+	out := make([]rezzy.HAMTNode, len(nodes))
+	for i, node := range nodes {
+		out[i] = rezzy.HAMTNode{Hash: hex.EncodeToString(node.Hash), Bytes: node.Bytes}
+	}
+	return out
+}
+
+func fromNodes(nodes []rezzy.HAMTNode) ([]Node, error) {
+	out := make([]Node, len(nodes))
+	for i, node := range nodes {
+		hash, err := hex.DecodeString(node.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("statehamt: decode node hash: %w", err)
+		}
+		out[i] = Node{Hash: hash, Bytes: node.Bytes}
+	}
+	return out, nil
+}
+
+// Build persists a state HAMT and returns every record needed to store it.
+func Build(roomID string, entries []Entry) (*Persisted, error) {
+	persisted, err := rezzy.StateHAMTPersist(roomID, toEntries(entries))
+	if err != nil {
+		return nil, err
+	}
+	return persistedFromRezzy(persisted)
+}
+
+func persistedFromRezzy(persisted *rezzy.HAMTPersisted) (*Persisted, error) {
+	rootHash, err := hex.DecodeString(persisted.RootHash)
+	if err != nil {
+		return nil, fmt.Errorf("statehamt: decode root hash: %w", err)
+	}
+	stateGroupID, err := hex.DecodeString(persisted.StateGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("statehamt: decode state group id: %w", err)
+	}
+	nodes, err := fromNodes(persisted.Nodes)
+	if err != nil {
+		return nil, err
+	}
+	return &Persisted{
+		RootHash:     rootHash,
+		StateGroupID: stateGroupID,
+		RootRecord:   persisted.RootRecord,
+		Nodes:        nodes,
+		EntryCount:   persisted.EntryCount,
+		NodeBytes:    persisted.NodeBytes,
+	}, nil
+}
+
+// Needed returns the node hashes required to walk the tree but absent from
+// nodes.
+func Needed(roomID string, rootHash []byte, nodes []Node) ([][]byte, error) {
+	hashes, err := rezzy.StateHAMTNeeded(roomID, hex.EncodeToString(rootHash), toNodes(nodes))
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, len(hashes))
+	for i, hash := range hashes {
+		decoded, err := hex.DecodeString(hash)
+		if err != nil {
+			return nil, fmt.Errorf("statehamt: decode needed hash: %w", err)
+		}
+		out[i] = decoded
+	}
+	return out, nil
+}
+
+// Entries reads every leaf under rootHash from the supplied nodes.
+func Entries(roomID string, rootHash []byte, nodes []Node) ([]Entry, error) {
+	entries, err := rezzy.StateHAMTReadEntries(roomID, hex.EncodeToString(rootHash), toNodes(nodes))
+	if err != nil {
+		return nil, convertMissingNodes(err)
+	}
+	return fromEntries(entries), nil
+}
+
+// Lookup resolves keys under rootHash from the supplied nodes.
+func Lookup(roomID string, rootHash []byte, nodes []Node, keys []Key) ([]string, []bool, error) {
+	converted := make([]rezzy.HAMTNodeKey, len(keys))
+	for i, key := range keys {
+		converted[i] = rezzy.HAMTNodeKey{EventType: key.Type, StateKey: key.StateKey}
+	}
+	values, found, err := rezzy.StateHAMTLookupRoot(roomID, hex.EncodeToString(rootHash), toNodes(nodes), converted)
+	if err != nil {
+		return nil, nil, convertMissingNodes(err)
+	}
+	return values, found, nil
+}
+
+// convertMissingNodes maps the FFI's missing-node error onto the package's
+// MissingNodesError so every read has the same error contract.
+func convertMissingNodes(err error) error {
+	var missing *rezzy.MissingNodesError
+	if !errors.As(err, &missing) {
+		return err
+	}
+	hashes := make([][]byte, len(missing.Hashes))
+	for i, hash := range missing.Hashes {
+		decoded, decodeErr := hex.DecodeString(hash)
+		if decodeErr != nil {
+			return fmt.Errorf("statehamt: decode missing hash: %w", decodeErr)
+		}
+		hashes[i] = decoded
+	}
+	return &MissingNodesError{Hashes: hashes}
+}
+
+// Verify checks a root record and its node set.
+func Verify(roomID string, rootRecord []byte, nodes []Node) (*Verification, error) {
+	verified, err := rezzy.StateHAMTVerify(roomID, rootRecord, toNodes(nodes))
+	if err != nil {
+		return nil, err
+	}
+	rootHash, err := hex.DecodeString(verified.RootHash)
+	if err != nil {
+		return nil, fmt.Errorf("statehamt: decode verified root hash: %w", err)
+	}
+	stateGroupID, err := hex.DecodeString(verified.StateGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("statehamt: decode verified state group id: %w", err)
+	}
+	return &Verification{
+		RootHash:     rootHash,
+		StateGroupID: stateGroupID,
+		RoomID:       verified.RoomID,
+		Prefix:       verified.Prefix,
+		EntryCount:   verified.EntryCount,
+	}, nil
+}
+
+// maxApplyRounds bounds the fetch-and-retry loop in Apply. Every round loads
+// at least one more node of the mutated paths, so the bound is the maximum
+// HAMT depth times the number of mutations, with generous slack.
+const maxApplyRounds = 256
+
+// Apply applies mutations to the HAMT described by parentRootRecord (nil
+// starts from the empty state) in O(len(mutations) * log n). It returns the
+// new root record and only the nodes created relative to the parent.
+//
+// The fetch callback loads persisted nodes by hash for the path nodes the
+// mutations need; every node it returns is verified against its hash.
+func Apply(
+	roomID string, parentRootRecord []byte, parentEntryCount int,
+	fetch func(hashes [][]byte) ([]Node, error), mutations []Mutation,
+) (*Persisted, error) {
+	converted := make([]rezzy.HAMTMutation, len(mutations))
+	for i, mutation := range mutations {
+		converted[i] = rezzy.HAMTMutation{
+			EventType: mutation.Type, StateKey: mutation.StateKey, EventID: mutation.EventID,
+		}
+	}
+	var supplied []Node
+	for round := 0; round < maxApplyRounds; round++ {
+		applied, err := rezzy.StateHAMTApply(
+			roomID, parentRootRecord, parentEntryCount, toNodes(supplied), converted,
+		)
+		var missing *rezzy.MissingNodesError
+		if errors.As(err, &missing) {
+			hashes := make([][]byte, len(missing.Hashes))
+			for i, hash := range missing.Hashes {
+				decoded, decodeErr := hex.DecodeString(hash)
+				if decodeErr != nil {
+					return nil, fmt.Errorf("statehamt: decode missing hash: %w", decodeErr)
+				}
+				hashes[i] = decoded
+			}
+			fetched, fetchErr := fetch(hashes)
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			if len(fetched) == 0 {
+				return nil, &MissingNodesError{Hashes: hashes}
+			}
+			supplied = append(supplied, fetched...)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return persistedFromRezzy(applied)
+	}
+	return nil, fmt.Errorf("statehamt: apply still missing nodes after %d rounds", maxApplyRounds)
+}

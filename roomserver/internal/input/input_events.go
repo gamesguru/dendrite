@@ -27,6 +27,7 @@ import (
 
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventhash"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/acls"
@@ -738,6 +739,19 @@ func (r *Inputer) processRoomEvent(
 		return nil
 	}
 
+	// A state event is the only kind that can change the state snapshot, so
+	// cross-checking every message would repeat the same HAMT work. This is a
+	// shadow check: a disagreement is logged and never fails ingestion.
+	// Full-state verification is sampled because it compares the entire
+	// persisted HAMT with legacy state blocks and would otherwise add unbounded
+	// work to the input path for every state event.
+	if eventhash.Enabled && event.StateKey() != nil && stateAtEvent.BeforeStateSnapshotNID != 0 &&
+		r.stateHAMTVerifyCounter.Add(1)%256 == 0 {
+		if hamtErr := r.checkStateHAMT(ctx, stateAtEvent.BeforeStateSnapshotNID); hamtErr != nil && !errors.Is(hamtErr, types.ErrNoStateHAMT) {
+			logger.WithError(hamtErr).Warn("rezzy state HAMT check failed")
+		}
+	}
+
 	// Index an accepted annotation, so that its sender can be stopped from
 	// sending it again (MSC2677). This runs after MaybeRedactEvent, which
 	// strips the content of an annotation whose redaction arrived first, so
@@ -1357,6 +1371,15 @@ nextAuthEvent:
 	return nil
 }
 
+// checkStateHAMT compares a snapshot's persisted HAMT with the legacy state
+// blocks it was built from. It is only called from the rezzy build.
+func (r *Inputer) checkStateHAMT(
+	ctx context.Context,
+	snapshotNID types.StateSnapshotNID,
+) error {
+	return r.DB.VerifyStateHAMT(ctx, snapshotNID)
+}
+
 func (r *Inputer) calculateAndSetState(
 	ctx context.Context,
 	input *api.InputRoomEvent,
@@ -1385,7 +1408,7 @@ func (r *Inputer) calculateAndSetState(
 		}
 		entries = types.DeduplicateStateEntries(entries)
 
-		if stateAtEvent.BeforeStateSnapshotNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, entries); err != nil {
+		if stateAtEvent.BeforeStateSnapshotNID, err = updater.AddState(ctx, roomInfo.RoomNID, entries); err != nil {
 			return fmt.Errorf("updater.AddState: %w", err)
 		}
 	} else {

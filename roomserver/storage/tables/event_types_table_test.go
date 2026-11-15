@@ -76,5 +76,23 @@ func Test_EventTypesTable(t *testing.T) {
 				t.Fatalf("unable to find %d in result set", nid)
 			}
 		}
+
+		// BulkSelectEventType maps numeric IDs back to their event types. It
+		// returns only the NIDs that exist, ignoring unknown ones.
+		gotEventTypes, err := tab.BulkSelectEventType(ctx, nil, []types.EventTypeNID{
+			eventTypeMap["dummyEventType1"],
+			eventTypeMap["dummyEventType7"],
+			types.EventTypeNID(9999),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, map[types.EventTypeNID]string{
+			eventTypeMap["dummyEventType1"]: "dummyEventType1",
+			eventTypeMap["dummyEventType7"]: "dummyEventType7",
+		}, gotEventTypes)
+
+		// An empty slice must not query the database and returns an empty map.
+		gotEventTypes, err = tab.BulkSelectEventType(ctx, nil, []types.EventTypeNID{})
+		assert.NoError(t, err)
+		assert.Empty(t, gotEventTypes)
 	})
 }

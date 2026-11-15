@@ -80,7 +80,7 @@ func (r *Inputer) recomputeWindowState(
 		return false, nil, nil, nil, nil
 	}
 
-	anchorNID, err := updater.AddState(ctx, roomNID, nil, anchorEntries)
+	anchorNID, err := updater.AddState(ctx, roomNID, anchorEntries)
 	if err != nil {
 		return false, nil, nil, nil, fmt.Errorf("updater.AddState (anchor): %w", err)
 	}
@@ -381,11 +381,8 @@ func (r *Inputer) recomputeStateSinceJoin(
 	return done, skipped, rejected, accepted, nil
 }
 
-// flatStateAfterEvents is CalculateAndStoreStateAfterEvents, except that the state
-// after a single state event is stored as one block. A snapshot's blocks are kept in
-// the order of their NIDs, and a block of one event is shared with every snapshot
-// that holds it, so a delta block made earlier can sort before the block it should
-// override, and the old entry for the state key would win.
+// flatStateAfterEvents is CalculateAndStoreStateAfterEvents, except it writes
+// through the updater's transaction.
 func (r *Inputer) flatStateAfterEvents(
 	ctx context.Context,
 	updater *shared.RoomUpdater,
@@ -411,5 +408,5 @@ func (r *Inputer) flatStateAfterEvents(
 	if !replaced {
 		entries = append(entries, prev.StateEntry)
 	}
-	return updater.AddState(ctx, roomInfo.RoomNID, nil, entries)
+	return updater.AddState(ctx, roomInfo.RoomNID, entries)
 }

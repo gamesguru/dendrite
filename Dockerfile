@@ -3,30 +3,68 @@
 #
 # base installs required dependencies and runs go mod download to cache dependencies
 #
-FROM --platform=${BUILDPLATFORM} docker.io/golang:1.27-alpine AS base
-RUN apk --update --no-cache add bash build-base curl git
+FROM docker.io/golang:1.27-alpine AS base
+RUN apk --update --no-cache add bash build-base curl git pkgconf
+
+#
+# rezzy-build compiles the native library that the Go binaries link against.
+# Build it for the target platform so the cgo toolchain in the build stage can
+# use it without a cross compiler. The rezzy source comes from the "rezzy"
+# named build context, for example:
+#
+#   docker build --build-context rezzy=./rezzy .
+#
+# The Go build resolves the ./rezzy/rezzy-ffi module from the checked-out
+# submodule in the main build context, so the context must include it:
+# `git submodule update --init rezzy` before building.
+#
+# The rezzy and Go build stages below run on the target platform, so the
+# multi-arch release build compiles them under emulation for arm64 and arm/v7.
+# That is much slower than native cross-compilation.
+#
+FROM --platform=${TARGETPLATFORM} docker.io/rust:1.89-alpine AS rezzy-build
+RUN apk --update --no-cache add musl-dev
+WORKDIR /rezzy
+COPY --from=rezzy Cargo.toml Cargo.lock /rezzy/
+COPY --from=rezzy README.md /rezzy/README.md
+COPY --from=rezzy src /rezzy/src
+COPY --from=rezzy tests /rezzy/tests
+COPY --from=rezzy rezzy-cli /rezzy/rezzy-cli
+COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
+COPY --from=rezzy rezzy-json /rezzy/rezzy-json
+COPY --from=rezzy rezzy-log /rezzy/rezzy-log
+COPY --from=rezzy rezzy-keyfile /rezzy/rezzy-keyfile
+COPY --from=rezzy rezzy-recon /rezzy/rezzy-recon
+RUN cargo build --locked --release -p rezzy-ffi \
+    && mkdir -p target/pkgconfig \
+    && printf 'prefix=/rezzy\nlibdir=/rezzy/target/release\nincludedir=/rezzy/include\n\nName: rezzy-ffi\nDescription: Rezzy static C ABI\nVersion: 0.0.0\nLibs: /rezzy/target/release/librezzy_ffi.a -lpthread -ldl -lm\nCflags: -I/rezzy/include\n' \
+        > target/pkgconfig/rezzy-ffi.pc
 
 #
 # build creates all needed binaries
 #
-FROM --platform=${BUILDPLATFORM} base AS build
+FROM --platform=${TARGETPLATFORM} base AS build
 WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 ENV GONOSUMCHECK=codefloe.com/* \
     GONOSUMDB=codefloe.com/* \
-    GONOPROXY=codefloe.com/*
+    GONOPROXY=codefloe.com/* \
+    CGO_ENABLED=1 \
+    PKG_CONFIG_PATH=/rezzy/target/pkgconfig
+# HAMT support is required by every supported build.
+COPY --from=rezzy rezzy-ffi/include /rezzy/include
+COPY --from=rezzy-build /rezzy/target/release/librezzy_ffi.a /rezzy/target/release/librezzy_ffi.a
+COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
 # Disable WebP's dynamic backend, which requires glibc even with CGO_ENABLED=0.
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    sh -c 'USERARCH=$(go env GOARCH); \
-    if [ "$TARGETARCH" = "$USERARCH" ]; then CGO=1; else CGO=0; fi; \
-    GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED="$CGO" \
-    go build -tags goolm,nodynamic -v -trimpath \
+    GOARCH="$TARGETARCH" GOOS="linux" CGO_ENABLED=1 \
+    go build -buildvcs=false -tags goolm,nodynamic -v -trimpath \
     -ldflags "-X codefloe.com/pat-s/zendrite/internal.version='"$VERSION"'" \
-    -o /out/ ./cmd/...'
+    -o /out/ ./cmd/...
 
 #
 # Builds the Zendrite image containing all required binaries
@@ -34,7 +72,7 @@ RUN --mount=target=. \
 FROM alpine:3.24
 
 # Install runtime dependencies
-RUN apk --update --no-cache add ca-certificates curl tzdata \
+RUN apk --update --no-cache add ca-certificates curl tzdata libgcc \
     && addgroup -g 1000 zendrite \
     && adduser -u 1000 -G zendrite -h /etc/zendrite -D zendrite
 

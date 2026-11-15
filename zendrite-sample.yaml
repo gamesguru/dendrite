@@ -1,3 +1,4 @@
+---
 # This is the Zendrite configuration file.
 #
 # The configuration is split up into sections - each Zendrite component has a
@@ -180,6 +181,10 @@ global:
     # The prefix to use for stream names for this homeserver - really only useful
     # if you are running more than one Zendrite server on the same NATS deployment.
     topic_prefix: Zendrite
+
+    # Keep all NATS storage in memory instead of on disk. This is meant for unit
+    # tests; leave it false in production, or streams are lost on every restart.
+    in_memory: false
 
   # Configuration for Prometheus metric collection.
   # Exposed at /metrics
@@ -390,6 +395,17 @@ federation_api:
   # or whether it should try perspective servers first, using direct fetches as a
   # last resort.
   prefer_direct_fetch: false
+
+  # Serve the unstable MSC4521 algebraic digest set reconciliation endpoints.
+  # Only takes effect in builds that link the native rezzy library (the
+  # "rezzy" build tag on Linux with cgo); other builds answer them as
+  # unsupported. Default false.
+  msc4521_enabled: false
+
+  # Ask the remote server for the full room state on every join instead of using
+  # partial state joins (MSC3706). Joins to large rooms then block until all
+  # members are known, so they get slower. Mainly useful for debugging. Default false.
+  disable_partial_state_joins: false
 
   # deny_networks and allow_networks are the CIDR ranges used to prevent requests
   # from accessing private IPs. If your system has specific IPs it should never

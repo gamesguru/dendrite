@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -305,6 +306,17 @@ type ClientRoomserverAPI interface {
 	PerformAdminPurgeRoom(ctx context.Context, roomID string) error
 	PerformAdminDownloadState(ctx context.Context, roomID, userID string, serverName spec.ServerName) error
 	PerformAdminBridgeState(ctx context.Context, roomID, userID string, extraEventIDs []string) error
+	// QueryRoomReconciliationState returns the room's MSC4521 event set and frame.
+	QueryRoomReconciliationState(ctx context.Context, req *QueryRoomReconciliationStateRequest, res *QueryRoomReconciliationStateResponse) error
+	// PerformAdminFetchEvent fetches eventID from serverName over federation and
+	// feeds it through the normal input path as if it had arrived via /send.
+	// The outcome is read back from storage: "accepted", "rejected" or "not_stored".
+	PerformAdminFetchEvent(ctx context.Context, roomID, eventID string, serverName spec.ServerName) (outcome string, err error)
+	// PerformAdminImportEvents ingests operator-supplied PDUs into roomID as new
+	// events, oldest depth first, after verifying their signatures. origin is
+	// asked for any prev or auth events the batch lacks. Results are per input
+	// line; one failure does not stop the rest.
+	PerformAdminImportEvents(ctx context.Context, roomID string, pdus []json.RawMessage, origin spec.ServerName) ([]AdminImportResult, error)
 	AdminQueryEmptyRooms(ctx context.Context) ([]string, error)
 	PerformPeek(ctx context.Context, req *PerformPeekRequest) (roomID string, err error)
 	PerformUnpeek(ctx context.Context, roomID, userID, deviceID string) error
@@ -381,6 +393,9 @@ type FederationRoomserverAPI interface {
 	// QueryEventsByID queries a list of events by event ID for one room. If no room is specified, it will try to determine
 	// which room to use by querying the first events roomID.
 	QueryEventsByID(ctx context.Context, req *QueryEventsByIDRequest, res *QueryEventsByIDResponse) error
+	// QueryRoomReconciliationState returns the room's non-rejected timeline
+	// event IDs and forward extremities for MSC4521 reconciliation.
+	QueryRoomReconciliationState(ctx context.Context, req *QueryRoomReconciliationStateRequest, res *QueryRoomReconciliationStateResponse) error
 	// Query to get state and auth chain for a (potentially hypothetical) event.
 	// Takes lists of PrevEventIDs and AuthEventsIDs and uses them to calculate
 	// the state and auth chain to return.
@@ -473,4 +488,12 @@ type KeyserverRoomserverAPI interface {
 	// QueryMembersJoinedAfterPartialJoin returns the users who joined a partial state
 	// room after we did, while it still has partial state.
 	QueryMembersJoinedAfterPartialJoin(ctx context.Context, roomID string) ([]string, error)
+}
+
+// AdminImportResult is the outcome of one imported PDU. Outcome is "accepted",
+// "rejected", "not_stored", "duplicate", "invalid: ..." or "error: ...".
+type AdminImportResult struct {
+	Line    int    `json:"line"`
+	EventID string `json:"event_id,omitempty"`
+	Outcome string `json:"outcome"`
 }

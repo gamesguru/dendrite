@@ -1,0 +1,88 @@
+package eventhash
+
+import (
+	"fmt"
+	"sync"
+
+	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/rezzy/rezzy-ffi/go/rezzy"
+)
+
+// selfTestEvent is an arbitrary room v10 event. Its ID is computed with the
+// built-in gomatrixserverlib code before the hooks are installed, so a rezzy
+// that is linked but broken is caught at startup instead of failing events.
+const selfTestEvent = `{"type":"m.room.message","room_id":"!selftest:example.org","sender":"@a:example.org","content":{"body":"x","msgtype":"m.text"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`
+
+var (
+	installOnce sync.Once
+	installErr  error
+)
+
+func init() { //nolint:gochecknoinits // hooks must be installed before any event is parsed
+	if err := Install(); err != nil {
+		panic("eventhash: rezzy is linked but not usable: " + err.Error())
+	}
+}
+
+// Install makes rezzy the source of event IDs and content hash verdicts by
+// installing the gomatrixserverlib hooks. The package's init function calls it,
+// so importing eventhash installs the hooks before any event is parsed; a
+// rezzy that is linked but unusable makes that init panic. Calling Install
+// again is safe and returns the result of the first attempt.
+func Install() error {
+	installOnce.Do(func() { installErr = install() })
+	return installErr
+}
+
+func install() error {
+	ver := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	ev, err := ver.NewEventFromTrustedJSON([]byte(selfTestEvent), false)
+	if err != nil {
+		return fmt.Errorf("self-test event: %w", err)
+	}
+	want := ev.EventID()
+	got, err := rezzy.EventID(string(gomatrixserverlib.RoomVersionV10), []byte(selfTestEvent))
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("self-test event ID is %s, gomatrixserverlib has %s", got, want)
+	}
+
+	gomatrixserverlib.SetEventIDHook(func(v gomatrixserverlib.RoomVersion, eventJSON []byte) (string, error) {
+		if !rezzyDerivesIDs(v) {
+			return "", gomatrixserverlib.ErrUseBuiltin
+		}
+		return rezzy.EventID(string(v), eventJSON)
+	})
+	gomatrixserverlib.SetContentHashHook(func(v gomatrixserverlib.RoomVersion, eventJSON []byte) error {
+		if !rezzyVerifiesContentHash(v) {
+			return gomatrixserverlib.ErrUseBuiltin
+		}
+		return rezzy.VerifyContentHash(string(v), eventJSON)
+	})
+	return nil
+}
+
+// rezzyDerivesIDs reports the stable room versions whose event IDs can be
+// derived from the event. Experimental room versions use GMSL's implementation.
+func rezzyDerivesIDs(v gomatrixserverlib.RoomVersion) bool {
+	switch v {
+	case gomatrixserverlib.RoomVersionV3, gomatrixserverlib.RoomVersionV4,
+		gomatrixserverlib.RoomVersionV5, gomatrixserverlib.RoomVersionV6,
+		gomatrixserverlib.RoomVersionV7, gomatrixserverlib.RoomVersionV8,
+		gomatrixserverlib.RoomVersionV9, gomatrixserverlib.RoomVersionV10,
+		gomatrixserverlib.RoomVersionV11, gomatrixserverlib.RoomVersionV12:
+		return true
+	default:
+		return false
+	}
+}
+
+// rezzyVerifiesContentHash reports the room versions whose content hashes
+// rezzy verifies: the stable versions other than 1 and 2, which predate content
+// hashes. It is the gate shared by the installed hook and CheckContentHash.
+func rezzyVerifiesContentHash(v gomatrixserverlib.RoomVersion) bool {
+	return v != gomatrixserverlib.RoomVersionV1 && v != gomatrixserverlib.RoomVersionV2 &&
+		gomatrixserverlib.StableRoomVersion(v)
+}

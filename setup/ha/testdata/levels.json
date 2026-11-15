@@ -159,5 +159,19 @@
     "upgrade_from": 1,
     "rollback_to": 22,
     "surface": "454c3c7c7689e518601e37c1997bdc43d6cb6f1ae318d9a25af32dccb454f8ed"
+  },
+  {
+    "protocol": 1,
+    "level": 24,
+    "upgrade_from": 1,
+    "rollback_to": 22,
+    "surface": "7bdbf0c31d71b08cadf301bbe3be51e1f07a10d4808034b51553285f216b8ee3"
+  },
+  {
+    "protocol": 1,
+    "level": 25,
+    "upgrade_from": 1,
+    "rollback_to": 25,
+    "surface": "c3232135d51df58af4f9ef48d55301a8214da672ee0aea3760f6ee153ac8da73"
   }
 ]

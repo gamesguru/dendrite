@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -30,11 +31,18 @@ import (
 // extremities implied by the events whose prev events are absent.
 type forwardGapState struct {
 	storage.DatabaseTransaction
-	unstored    []*rstypes.HeaderedEvent // the hole, oldest first
-	stored      map[string]*rstypes.HeaderedEvent
-	positions   map[string]types.TopologyToken
-	extremities map[string][]string
-	batches     int
+	unstored         []*rstypes.HeaderedEvent // the hole, oldest first
+	stored           map[string]*rstypes.HeaderedEvent
+	positions        map[string]types.TopologyToken
+	positionFailures map[string]int
+	extremities      map[string][]string
+	batches          int
+	positionLookups  int
+	extremityLookups int
+	prevEventLookups int
+	// afterStore runs after WriteEvent stores an event, so a test can model a
+	// late parent lifting the stored topology position of a descendant.
+	afterStore func()
 }
 
 func newForwardGapState(stored, unstored []*rstypes.HeaderedEvent) *forwardGapState {
@@ -77,6 +85,7 @@ func (s *forwardGapState) recomputeExtremities() {
 }
 
 func (s *forwardGapState) Events(_ context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
+	s.prevEventLookups++
 	events := make([]*rstypes.HeaderedEvent, 0, len(eventIDs))
 	for _, eventID := range eventIDs {
 		if ev, ok := s.stored[eventID]; ok {
@@ -87,6 +96,11 @@ func (s *forwardGapState) Events(_ context.Context, eventIDs []string) ([]*rstyp
 }
 
 func (s *forwardGapState) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
+	s.positionLookups++
+	if s.positionFailures[eventID] > 0 {
+		s.positionFailures[eventID]--
+		return types.TopologyToken{}, errors.New("temporary topology lookup failure")
+	}
 	pos, ok := s.positions[eventID]
 	if !ok {
 		return types.TopologyToken{}, errors.New("event not in topology")
@@ -95,6 +109,7 @@ func (s *forwardGapState) EventPositionInTopology(_ context.Context, eventID str
 }
 
 func (s *forwardGapState) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
+	s.extremityLookups++
 	return s.extremities, nil
 }
 
@@ -132,6 +147,9 @@ func (d forwardGapDB) WriteEvent(_ context.Context, ev *rstypes.HeaderedEvent, _
 		}
 	}
 	d.state.recomputeExtremities()
+	if d.state.afterStore != nil {
+		d.state.afterStore()
+	}
 	return 0, nil
 }
 
@@ -440,4 +458,203 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 	r.from.PDUPosition = 0
 	require.NoError(t, r.reanchorBackwardCursor(ctx))
 	assert.Equal(t, types.StreamPosition(1), r.from.Depth, "a cursor at stream position 0 is not re-anchored")
+}
+
+// replayForwardGapAPI answers every backfill with the same events, whether or
+// not they contain the missing parent. It stands in for a remote server that
+// has the events around a hole but not the dangling prev_event itself.
+type replayForwardGapAPI struct {
+	api.SyncRoomserverAPI
+	events []*rstypes.HeaderedEvent
+	calls  int
+}
+
+func (a *replayForwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
+	a.calls++
+	res.Events = a.events
+	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared
+	return nil
+}
+
+// A batch that does not contain the missing parent leaves the marker where it
+// was. Repeating the round would refetch the same events until the client is
+// rate limited, so the gap is treated as unfillable and remembered.
+func TestFillForwardGapStopsWhenFrontierCannotBeFilled(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 10; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	all := room.Events()
+	// The newest event is stored and its prev event is missing everywhere.
+	state := newForwardGapState(all[len(all)-1:], nil)
+	require.Len(t, state.extremities, 1)
+
+	replay := &replayForwardGapAPI{events: all[len(all)-1:]}
+	r := newForwardGapReq(state)
+	r.rsAPI = replay
+	key := terminalBackfillKey(r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID, state.extremities)
+	defaultTerminalBackfillCache.forget(key)
+	defer defaultTerminalBackfillCache.forget(key)
+
+	position := types.TopologyToken{
+		Depth:       types.StreamPosition(all[len(all)-1].Depth()),
+		PDUPosition: types.StreamPosition(all[len(all)-1].Depth()),
+	}
+	filled, err := r.fillForwardGap(r.ctx, position)
+	require.NoError(t, err)
+	assert.True(t, filled, "the stored batch must send the caller back to reread the page")
+	assert.Equal(t, 1, replay.calls, "the round stops after the frontier failed to move")
+
+	// The failure is remembered, so the next request does not ask again.
+	again := newForwardGapReq(state)
+	again.rsAPI = replay
+	filled, err = again.fillForwardGap(again.ctx, position)
+	require.NoError(t, err)
+	assert.False(t, filled)
+	assert.Zero(t, again.forwardBackfillRounds, "a cached terminal answer is not a federation round")
+	assert.Equal(t, 1, replay.calls, "a remembered gap is not requested again")
+}
+
+func TestFillForwardGapCachesExtremityPositionsAcrossTerminalCacheHits(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 32; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: make(map[string][]string),
+	}
+	for i, ev := range room.Events() {
+		state.store(ev)
+		state.extremities[ev.EventID()] = []string{fmt.Sprintf("$missing-%d", i)}
+	}
+	r := newForwardGapReq(state)
+
+	for extremityID, prevs := range state.extremities {
+		key := terminalBackfillKey(
+			r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
+			map[string][]string{extremityID: prevs},
+		)
+		defaultTerminalBackfillCache.forget(key)
+		defaultTerminalBackfillCache.recordFailure(key)
+		t.Cleanup(func() { defaultTerminalBackfillCache.forget(key) })
+	}
+
+	filled, err := r.fillForwardGap(r.ctx, types.TopologyToken{
+		Depth: types.StreamPosition(1 << 30), PDUPosition: types.StreamPosition(1 << 30),
+	})
+	require.NoError(t, err)
+	assert.False(t, filled)
+	assert.Zero(t, r.forwardBackfillRounds, "cached answers do not use the federation round budget")
+	assert.Equal(t, len(state.extremities), state.positionLookups,
+		"each extremity position should be loaded once for the request")
+	assert.Equal(t, 1, state.extremityLookups,
+		"the open extremity set should be read once, however many rounds it takes")
+	// One batched read for the scan, plus at most one cleanup lookup per
+	// attempted gap: O(E), not a re-read of every prev event each round.
+	assert.LessOrEqual(t, state.prevEventLookups, 2*len(state.extremities),
+		"the extremities' prev events should not be re-read for every round")
+	assert.Equal(t, len(state.extremities), r.forwardGapScan.next,
+		"selection should advance through the cached candidates instead of rescanning the prefix")
+}
+
+// A cached answer moves the scan past itself, so the next round resumes after
+// it instead of re-walking the prefix. Without that, a request with E
+// remembered failures would examine E + (E-1) + ... + 1 candidates.
+func TestForwardGapExtremitySkippingResumesAfterTheLastAnswer(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 4; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: make(map[string][]string),
+	}
+	for i, ev := range room.Events() {
+		state.store(ev)
+		state.extremities[ev.EventID()] = []string{fmt.Sprintf("$missing-%d", i)}
+	}
+	r := newForwardGapReq(state)
+	firstEventPosition := types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30}
+	// The caller deliberately does not re-mark the first answer, so only the
+	// cursor can keep it from being selected again.
+	skip := map[string]struct{}{}
+
+	firstID, _, err := r.forwardGapExtremitySkipping(r.ctx, firstEventPosition, skip)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstID)
+	secondID, _, err := r.forwardGapExtremitySkipping(r.ctx, firstEventPosition, skip)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstID, secondID,
+		"the scan should resume after the last answer, not return it again")
+	assert.Equal(t, 2, r.forwardGapScan.next, "the cursor should move past both answers")
+}
+
+// A late parent raises the stored topology position of its descendants, which
+// repairLateParentTopology rewrites on write. A position cached while selecting
+// the gap must therefore be dropped once a round stores events.
+func TestFillForwardGapReloadsPositionsLiftedByLateParent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	low := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "low"})
+	parent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "late parent"})
+
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: map[string][]string{low.EventID(): {"$missing"}},
+		unstored:    []*rstypes.HeaderedEvent{parent},
+	}
+	state.store(low)
+	state.positions[low.EventID()] = types.TopologyToken{Depth: 5, PDUPosition: 5}
+	// Storing the parent lifts the still-open marker, as the topology repair
+	// does for a stored descendant.
+	state.afterStore = func() {
+		state.positions[low.EventID()] = types.TopologyToken{Depth: 50, PDUPosition: 50}
+	}
+
+	r := newForwardGapReq(state)
+	// Allow one round: it stores the parent, then the post-loop selection
+	// rebuilds the scan and has to read the lifted position.
+	r.forwardBackfillRounds = maxForwardBackfillRounds - 1
+	_, err := r.fillForwardGap(r.ctx, types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30})
+	require.ErrorIs(t, err, errForwardBackfillIncomplete)
+
+	require.Contains(t, r.forwardGapPositions, low.EventID())
+	assert.Equal(t, types.StreamPosition(50), r.forwardGapPositions[low.EventID()].Depth,
+		"a position lifted by a stored late parent must be read again")
+}
+
+func TestForwardGapRetriesTransientPositionLookupFailure(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	event := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+
+	state := &forwardGapState{
+		stored:           make(map[string]*rstypes.HeaderedEvent),
+		positions:        make(map[string]types.TopologyToken),
+		positionFailures: map[string]int{event.EventID(): 1},
+		extremities:      map[string][]string{event.EventID(): {"$missing"}},
+	}
+	state.store(event)
+	r := newForwardGapReq(state)
+	firstEventPosition := types.TopologyToken{Depth: 10, PDUPosition: 10}
+
+	filled, err := r.fillForwardGap(r.ctx, firstEventPosition)
+	require.ErrorIs(t, err, errForwardBackfillIncomplete,
+		"a failed lookup must not look like the absence of a gap")
+	assert.False(t, filled)
+	assert.Nil(t, r.forwardGapScan, "an incomplete candidate scan must not be cached")
+
+	id, prevs, err := r.forwardGapExtremity(r.ctx, firstEventPosition)
+	require.NoError(t, err)
+	assert.Equal(t, event.EventID(), id, "the next scan retries the failed position lookup")
+	assert.Equal(t, []string{"$missing"}, prevs)
+	assert.Equal(t, 2, state.positionLookups)
 }

@@ -75,43 +75,50 @@ help: ## Show available targets
 	@grep -hE '^[a-zA-Z0-9_\/-]+:[[:space:]]*## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":[[:space:]]*## "}; {printf "$(STYLE_CYAN)%-18s$(STYLE_RESET) %s\n", $$1, $$2}'
 
+REZZY_ENV = PKG_CONFIG_PATH=$(abspath ./rezzy/target/pkgconfig):$$PKG_CONFIG_PATH
+export PKG_CONFIG_PATH := $(abspath ./rezzy/target/pkgconfig):$(PKG_CONFIG_PATH)
+
+.PHONY: rezzy-native
+rezzy-native: ## Build the required Linux native library
+	$(MAKE) -C ./rezzy/rezzy-ffi native
+
 .PHONY: format
 format: ## Format Go source files
 	$(GO) fmt $(PKGS)
 
 .PHONY: test
-test: ## Run SQLite-only unit tests with race detection
+test: rezzy-native ## Run SQLite-only unit tests with race detection
 	DENDRITE_TEST_SKIP_NODB=$(DENDRITE_TEST_SKIP_NODB) $(GO) test --race $(PKGS)
 
 .PHONY: test-all
-test-all: ## Run all unit tests, including Postgres-backed ones if available
+test-all: rezzy-native ## Run all unit tests, including Postgres-backed ones if available
 	$(GO) test --race $(PKGS)
 
 .PHONY: test-lib
-test-lib: ## Run library package tests only, excluding cmd/
+test-lib: rezzy-native ## Run library package tests only, excluding cmd/
 	DENDRITE_TEST_SKIP_NODB=$(DENDRITE_TEST_SKIP_NODB) $(GO) test --race $(LIBPKGS)
 
 .PHONY: cov
-cov: ## Run library package tests with coverage and print a summary
+cov: rezzy-native ## Run library package tests with coverage and print a summary
 	DENDRITE_TEST_SKIP_NODB=$(DENDRITE_TEST_SKIP_NODB) $(GO) test -covermode=atomic -coverpkg=./... -coverprofile=$(COVERPROFILE) $(LIBPKGS)
 	$(GO) tool cover -func=$(COVERPROFILE)
 
 .PHONY: lint
-lint: ## Run vet, staticcheck, and golangci-lint
+lint: rezzy-native ## Run vet, staticcheck, and golangci-lint
 	$(GO) vet $(VETFLAGS) ./...
 	$(GOLANGCI_LINT) run $(GOLANGCI_LINTFLAGS) --no-config --new-from-rev=$(DIFF_BASE) ./...
 	$(STATICCHECK) -checks='$(STATICCHECKCHECKS)' $(STATICCHECKFLAGS) ./...
 
 .PHONY: build
-build: ## Build all packages
+build: rezzy-native ## Build all packages
 	$(GO) build $(GO_LDFLAGS) $(PKGS)
 
 .PHONY: build-cmd
-build-cmd: ## Build binaries under cmd/
+build-cmd: rezzy-native ## Build binaries under cmd/
 	$(GO) build $(GO_LDFLAGS) ./cmd/...
 
 .PHONY: install
-install: ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
+install: rezzy-native ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
 	$(GO) build $(GO_LDFLAGS) -o dendrite ./cmd/zendrite
 	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
 

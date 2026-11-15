@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -80,9 +81,10 @@ type Inputer struct {
 	OutputProducer      *producers.RoomEventProducer
 	workers             sync.Map // room ID -> *worker
 
-	Queryer       *query.Queryer
-	UserAPI       userapi.RoomserverUserAPI
-	EnableMetrics bool
+	Queryer                *query.Queryer
+	UserAPI                userapi.RoomserverUserAPI
+	EnableMetrics          bool
+	stateHAMTVerifyCounter atomic.Uint64
 
 	// missingStateCooldown tracks rooms where state resolution recently failed.
 	// When state resolution via federation fails for a room, we record the failure

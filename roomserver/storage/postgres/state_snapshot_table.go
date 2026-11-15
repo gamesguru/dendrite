@@ -129,10 +129,13 @@ func PrepareStateSnapshotTable(db *sql.DB) (*stateSnapshotStatements, error) {
 }
 
 func (s *stateSnapshotStatements) InsertState(
-	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, nids types.StateBlockNIDs,
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, snapshotHash []byte, nids types.StateBlockNIDs,
 ) (stateNID types.StateSnapshotNID, err error) {
+	if nids == nil {
+		nids = []types.StateBlockNID{} // zero slice to not store 'null' in the DB
+	}
 	nids = nids[:util.SortAndUnique(nids)]
-	err = sqlutil.TxStmt(txn, s.insertStateStmt).QueryRowContext(ctx, nids.Hash(), int64(roomNID), stateBlockNIDsAsArray(nids)).Scan(&stateNID)
+	err = sqlutil.TxStmt(txn, s.insertStateStmt).QueryRowContext(ctx, snapshotHash, int64(roomNID), stateBlockNIDsAsArray(nids)).Scan(&stateNID)
 	if err != nil {
 		return 0, err
 	}

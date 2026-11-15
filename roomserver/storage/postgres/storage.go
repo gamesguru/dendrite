@@ -178,6 +178,10 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 	if err != nil {
 		return err
 	}
+	stateHAMT, err := PrepareStateHAMTTable(db)
+	if err != nil {
+		return err
+	}
 	prevEvents, err := PreparePrevEventsTable(db)
 	if err != nil {
 		return err
@@ -255,6 +259,7 @@ func (d *Database) prepare(db *sql.DB, writer sqlutil.Writer, cache caching.Room
 		RoomsTable:              rooms,
 		StateBlockTable:         stateBlock,
 		StateSnapshotTable:      stateSnapshot,
+		StateHAMTTable:          stateHAMT,
 		RoomAliasesTable:        roomAliases,
 		InvitesTable:            invites,
 		MembershipTable:         membership,

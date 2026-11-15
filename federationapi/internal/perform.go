@@ -212,7 +212,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 		// membership needed to authorize an invited join.
 		logrus.WithError(inviteErr).WithField("room_id", roomID).Warn("Failed to check pending invite; using full state for join")
 	}
-	if invitePending || inviteErr != nil || r.rejoinsResyncedRoom(ctx, room) {
+	if r.cfg.DisablePartialStateJoins || invitePending || inviteErr != nil || r.rejoinsResyncedRoom(ctx, room) {
 		// A rejoin into a room whose resync has finished also uses full state:
 		// sync and backfill do not handle a partial-state rejoin there.
 		// A partial state response omits our own invite membership, which

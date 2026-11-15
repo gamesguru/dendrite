@@ -17,35 +17,50 @@ fmt: install-dev-deps
 		gci write --skip-vendor --skip-generated -s standard -s default -s "prefix(codefloe.com/pat-s/zendrite)" --custom-order .
 
 # Run golangci-lint
-lint:
-    prek run golangci-lint --all-files
+lint: rezzy-native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" prek run golangci-lint --all-files
+
+# Run the Python script tests
+test-scripts:
+    python3 -m venv .venv-scripts
+    .venv-scripts/bin/python -m pip install --quiet pyyaml
+    .venv-scripts/bin/python -m unittest discover -s scripts
+
+# Build the native Rezzy library the Go packages link against
+rezzy-native:
+    make -C ./rezzy/rezzy-ffi native
 
 # Run unit tests
-test:
-    go test -tags goolm -v ./...
+test: rezzy-native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -v ./...
 
 # Run unit tests with race detector
 test-race:
-    go test -tags goolm -race -v ./...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -race -v ./...
 
 # Run unit tests with coverage
 test-coverage:
-    go test -tags goolm -race -v -coverpkg=./... -coverprofile=cover.out ./...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -race -v -coverpkg=./... -coverprofile=cover.out ./...
 
 # Run unit tests for a specific package
 test-pkg pkg:
-    go test -tags goolm -v ./{{pkg}}/...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -v ./{{pkg}}/...
 
 # Build all binaries
 build:
+    @make -C ./rezzy/rezzy-ffi native
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -buildvcs=false -v -o bin/ \
+        PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go build -tags goolm -trimpath -buildvcs=false -v -o bin/ \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/...
 
 # Build a specific binary
 build-bin name:
+    @make -C ./rezzy/rezzy-ffi native
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -buildvcs=false -v -o bin/{{name}} \
+        PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go build -tags goolm -trimpath -buildvcs=false -v -o bin/{{name}} \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/{{name}}
 
 # Run both lint and tests
@@ -78,15 +93,21 @@ vendor:
 
 # Build multi-arch container image (default: load to local docker)
 container tag="zendrite:dev":
-    docker buildx build --platform linux/amd64,linux/arm64 -t {{tag}} .
+    docker buildx build --platform linux/amd64,linux/arm64 \
+        --build-context rezzy=./rezzy \
+        -t {{tag}} .
 
 # Build container image and load to local docker (current arch only)
 container-local tag="zendrite:dev":
-    docker buildx build --load -t {{tag}} .
+    docker buildx build --load \
+        --build-context rezzy=./rezzy \
+        -t {{tag}} .
 
 # Build and push container image to registry
 container-push tag:
-    docker buildx build --platform linux/amd64,linux/arm64 --push -t {{tag}} .
+    docker buildx build --platform linux/amd64,linux/arm64 --push \
+        --build-context rezzy=./rezzy \
+        -t {{tag}} .
 
 # Run local Zendrite container to verify image works
 container-run tag="codefloe.com/pat-s/zendrite:dev":

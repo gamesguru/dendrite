@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -180,6 +181,76 @@ func (r *Queryer) QueryStateAfterEvents(
 		response.StateEvents = append(response.StateEvents, &types.HeaderedEvent{PDU: event})
 	}
 
+	return nil
+}
+
+// QueryRoomReconciliationState returns the room's non-rejected timeline event
+// IDs and forward extremities for MSC4521 reconciliation.
+func (r *Queryer) QueryRoomReconciliationState(
+	ctx context.Context,
+	req *api.QueryRoomReconciliationStateRequest,
+	res *api.QueryRoomReconciliationStateResponse,
+) error {
+	info, err := r.DB.RoomInfo(ctx, req.RoomID)
+	if err != nil {
+		return err
+	}
+	if info == nil || info.IsStub() {
+		return fmt.Errorf("room %s: %w", req.RoomID, types.ErrRoomNotFound)
+	}
+	// Read the extremities first: events are only ever added, so a later read
+	// of the event list is guaranteed to include every extremity read here.
+	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
+	if err != nil {
+		return err
+	}
+	eventIDs, err := r.DB.EventIDsInRoom(ctx, info.RoomNID)
+	if err != nil {
+		return err
+	}
+	var isServerInRoom bool
+	if req.ServerName != "" {
+		isServerInRoom, err = r.DB.GetServerInRoom(ctx, info.RoomNID, req.ServerName)
+		if err != nil {
+			return fmt.Errorf("check server membership for reconciliation: %w", err)
+		}
+		visibleEventIDs := eventIDs[:0]
+		for _, eventID := range eventIDs {
+			allowed, _, err := helpers.CheckServerEventAccess(
+				ctx, r.DB, info, req.RoomID, eventID, req.ServerName, isServerInRoom, r,
+			)
+			if err != nil {
+				return fmt.Errorf("check reconciliation event visibility for %s: %w", eventID, err)
+			}
+			if allowed {
+				visibleEventIDs = append(visibleEventIDs, eventID)
+			}
+		}
+		eventIDs = visibleEventIDs
+	}
+	if req.ServerName != "" {
+		// Extremities name events, so the frame must not reveal one the
+		// requesting server cannot see. frame_id is derived from this set.
+		visibleLatest := latest[:0]
+		for _, eventID := range latest {
+			allowed, _, err := helpers.CheckServerEventAccess(
+				ctx, r.DB, info, req.RoomID, eventID, req.ServerName, isServerInRoom, r,
+			)
+			if err != nil {
+				return fmt.Errorf("check reconciliation extremity visibility for %s: %w", eventID, err)
+			}
+			if allowed {
+				visibleLatest = append(visibleLatest, eventID)
+			}
+		}
+		latest = visibleLatest
+	}
+	// LatestEventIDs builds its slice from a map of event NIDs, so its order
+	// changes between calls. Sort it to keep the MSC4521 frame deterministic.
+	sort.Strings(latest)
+	res.RoomVersion = info.RoomVersion
+	res.EventIDs = eventIDs
+	res.ForwardExtremities = latest
 	return nil
 }
 
@@ -904,7 +975,7 @@ func (r *Queryer) QueryRoomVersionForRoom(ctx context.Context, roomID string) (g
 		return "", err
 	}
 	if info == nil {
-		return "", fmt.Errorf("QueryRoomVersionForRoom: missing room info for room %s", roomID)
+		return "", fmt.Errorf("QueryRoomVersionForRoom: %w: %s", types.ErrRoomNotFound, roomID)
 	}
 	r.Cache.StoreRoomVersion(roomID, info.RoomVersion)
 	return info.RoomVersion, nil
