@@ -200,6 +200,14 @@ column roomserver_rooms | state_snapshot_nid | bigint | NO | 0
 column roomserver_state_block | event_nids | ARRAY | NO |
 column roomserver_state_block | state_block_hash | bytea | YES |
 column roomserver_state_block | state_block_nid | bigint | NO | nextval('roomserver_state_block_nid_seq'::regclass)
+column roomserver_state_hamt_nodes | node_bytes | bytea | NO |
+column roomserver_state_hamt_nodes | node_hash | bytea | NO |
+column roomserver_state_hamt_snapshots | entry_count | bigint | NO |
+column roomserver_state_hamt_snapshots | room_nid | bigint | NO |
+column roomserver_state_hamt_snapshots | root_hash | bytea | NO |
+column roomserver_state_hamt_snapshots | root_record | bytea | NO |
+column roomserver_state_hamt_snapshots | state_group_id | bytea | NO |
+column roomserver_state_hamt_snapshots | state_snapshot_nid | bigint | NO |
 column roomserver_state_snapshots | room_nid | bigint | NO |
 column roomserver_state_snapshots | state_block_nids | ARRAY | NO |
 column roomserver_state_snapshots | state_snapshot_hash | bytea | YES |
@@ -601,6 +609,8 @@ index roomserver_rooms | roomserver_room_id_unique | CREATE UNIQUE INDEX roomser
 index roomserver_rooms | roomserver_rooms_pkey | CREATE UNIQUE INDEX roomserver_rooms_pkey ON public.roomserver_rooms USING btree (room_nid)
 index roomserver_state_block | roomserver_state_block_pkey | CREATE UNIQUE INDEX roomserver_state_block_pkey ON public.roomserver_state_block USING btree (state_block_nid)
 index roomserver_state_block | roomserver_state_block_state_block_hash_key | CREATE UNIQUE INDEX roomserver_state_block_state_block_hash_key ON public.roomserver_state_block USING btree (state_block_hash)
+index roomserver_state_hamt_nodes | roomserver_state_hamt_nodes_pkey | CREATE UNIQUE INDEX roomserver_state_hamt_nodes_pkey ON public.roomserver_state_hamt_nodes USING btree (node_hash)
+index roomserver_state_hamt_snapshots | roomserver_state_hamt_snapshots_pkey | CREATE UNIQUE INDEX roomserver_state_hamt_snapshots_pkey ON public.roomserver_state_hamt_snapshots USING btree (state_snapshot_nid)
 index roomserver_state_snapshots | roomserver_state_snapshots_pkey | CREATE UNIQUE INDEX roomserver_state_snapshots_pkey ON public.roomserver_state_snapshots USING btree (state_snapshot_nid)
 index roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | CREATE UNIQUE INDEX roomserver_state_snapshots_state_snapshot_hash_key ON public.roomserver_state_snapshots USING btree (state_snapshot_hash)
 index roomserver_user_room_keys | roomserver_user_room_keys_pk | CREATE UNIQUE INDEX roomserver_user_room_keys_pk ON public.roomserver_user_room_keys USING btree (user_nid, room_nid)
@@ -775,6 +785,8 @@ constraint roomserver_rooms | roomserver_room_id_unique | UNIQUE (room_id)
 constraint roomserver_rooms | roomserver_rooms_pkey | PRIMARY KEY (room_nid)
 constraint roomserver_state_block | roomserver_state_block_pkey | PRIMARY KEY (state_block_nid)
 constraint roomserver_state_block | roomserver_state_block_state_block_hash_key | UNIQUE (state_block_hash)
+constraint roomserver_state_hamt_nodes | roomserver_state_hamt_nodes_pkey | PRIMARY KEY (node_hash)
+constraint roomserver_state_hamt_snapshots | roomserver_state_hamt_snapshots_pkey | PRIMARY KEY (state_snapshot_nid)
 constraint roomserver_state_snapshots | roomserver_state_snapshots_pkey | PRIMARY KEY (state_snapshot_nid)
 constraint roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | UNIQUE (state_snapshot_hash)
 constraint roomserver_user_room_keys | roomserver_user_room_keys_pk | PRIMARY KEY (user_nid, room_nid)

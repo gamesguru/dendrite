@@ -78,10 +78,12 @@ var release = Contract{
 // indexes roomserver events by (room_nid, event_nid), level 21 recovers
 // membership history from retained output events, level 22 indexes backward
 // extremities by (room_id, prev_event_id) and is the first release level whose
-// writers lift stored positions when late parents arrive, and level 23 indexes
-// syncapi topology by room and topological or stream position.
+// writers lift stored positions when late parents arrive, level 23 indexes
+// syncapi topology by room and topological or stream position, and level 24
+// adds the roomserver state HAMT node and snapshot tables. Level 24 only adds
+// tables, so it upgrades from and rolls back to the same levels as level 23.
 const (
-	releaseLevel           = 23
+	releaseLevel           = 24
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22
 )
