@@ -97,6 +97,22 @@ func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, erro
 	return completed, nil
 }
 
+// StateHAMTCoverage reports how many state snapshots exist and how many of
+// them have a persisted HAMT. The migration to HAMT-backed snapshots is
+// complete when the two counts are equal: only then can reads stop falling
+// back to state blocks.
+func (d *Database) StateHAMTCoverage(ctx context.Context) (total, withHAMT int64, err error) {
+	err = d.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(h.state_snapshot_nid)
+		FROM roomserver_state_snapshots AS s
+		LEFT JOIN roomserver_state_hamt_snapshots AS h
+		  ON h.state_snapshot_nid = s.state_snapshot_nid`).Scan(&total, &withHAMT)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count state HAMT coverage: %w", err)
+	}
+	return total, withHAMT, nil
+}
+
 // purgeStateHAMTs removes a room's roots and, when the Rezzy reader is
 // available, sweeps node records not reachable from any remaining root. Node
 // records are content-addressed and shared, so the sweep must trace all roots.

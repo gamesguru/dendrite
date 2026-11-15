@@ -72,6 +72,10 @@ type Database interface {
 	// BackfillStateHAMTs persists HAMTs for up to limit snapshots that predate
 	// HAMT persistence, returning the number completed.
 	BackfillStateHAMTs(ctx context.Context, limit int) (int, error)
+	// StateHAMTCoverage reports how many state snapshots exist and how many of
+	// them have a persisted HAMT. The two are equal once the backfill is
+	// complete, which is what makes HAMT-only reads safe.
+	StateHAMTCoverage(ctx context.Context) (total int64, withHAMT int64, err error)
 	// Look up the state data for the state key tuples for each numeric state block ID
 	// This is used to fetch a subset of the room state at a snapshot.
 	// If a block doesn't contain any of the requested tuples then it can be discarded from the result.

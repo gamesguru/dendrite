@@ -22,6 +22,8 @@ import (
 )
 
 var batchSize = flag.Int("batch-size", 100, "maximum snapshots to backfill per transaction batch")
+var requireComplete = flag.Bool("require-complete", false,
+	"exit non-zero unless every state snapshot has a persisted HAMT")
 
 func main() {
 	if !statehamt.Enabled {
@@ -58,5 +60,14 @@ func main() {
 		if count == 0 {
 			break
 		}
+	}
+
+	snapshots, withHAMT, err := db.StateHAMTCoverage(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("state HAMT coverage: %d/%d snapshots\n", withHAMT, snapshots)
+	if *requireComplete && withHAMT != snapshots {
+		panic(fmt.Sprintf("%d state snapshots still have no HAMT", snapshots-withHAMT))
 	}
 }
