@@ -9,14 +9,16 @@ on:
       - "go.sum" # or dependency updates
       - ".github/workflows/**" # or workflow changes
       - ".github/actions/**" # or a changed composite action
-      - "rezzy" # or a bumped native library
+      - "rezzy/**" # native library and pkg-config changes
+      - ".github/actions/setup-rezzy/**" # Rezzy CI setup
   pull_request:
     paths:
       - "**.go"
       - "go.sum" # or dependency updates
       - ".github/workflows/**"
       - ".github/actions/**"
-      - "rezzy"
+      - "rezzy/**"
+      - ".github/actions/setup-rezzy/**"
   release:
     types: [published]
   workflow_dispatch:
@@ -147,15 +149,15 @@ jobs:
           go-version-file: "go.mod"
       - name: Set up Rezzy
         uses: ./.github/actions/setup-rezzy
-      - uses: actions/cache@v4
-        # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-stable-unit-
+#      - uses: actions/cache@v4
+#        # manually set up caches, as they otherwise clash with different steps using setup-go with cache=true
+#        with:
+#          path: |
+#            ~/.cache/go-build
+#            ~/go/pkg/mod
+#          key: ${{ runner.os }}-go-stable-unit-${{ hashFiles('**/go.sum') }}
+#          restore-keys: |
+#            ${{ runner.os }}-go-stable-unit-
       - name: Set up gotestfmt
         uses: gotesttools/gotestfmt-action@v2
         with:

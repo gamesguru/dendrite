@@ -59,7 +59,7 @@ func TestBackfillEventsSkipsRecentTerminalFailure(t *testing.T) {
 	t.Cleanup(func() { defaultTerminalBackfillCache.forget(terminalBackfillKey("s", "v", roomID, extremities)) })
 
 	for i := 0; i < 3; i++ {
-		_, err := backfillEvents(context.Background(), rs, stubWriteDB{}, "hs", "hs", roomID, extremities, 10)
+		_, err := backfillEvents(context.Background(), rs, stubWriteDB{}, "hs", "hs", roomID, extremities, 10, nil)
 		require.Error(t, err)
 		assert.True(t, isTerminalBackfillFailure(err), "the cached answer stays terminal so callers stop paginating")
 	}

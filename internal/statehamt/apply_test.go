@@ -104,7 +104,7 @@ func TestApplyMatchesFullRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build expected state: %v", err)
 	}
-	assertSamePersisted(t, got, full)
+	assertSamePersisted(t, roomID, got, full, parent)
 }
 
 // TestApplyFromEmptyMatchesBuild checks the no-parent case against the empty
@@ -129,11 +129,27 @@ func TestApplyFromEmptyMatchesBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	assertSamePersisted(t, empty, full)
+	assertSamePersisted(t, roomID, empty, full)
 }
 
-func assertSamePersisted(t *testing.T, got, want *Persisted) {
+func assertSamePersisted(t *testing.T, roomID string, got, want *Persisted, parents ...*Persisted) {
 	t.Helper()
+	var nodes []Node
+	for _, parent := range parents {
+		nodes = append(nodes, parent.Nodes...)
+	}
+	nodes = append(nodes, got.Nodes...)
+	gotEntries, err := Entries(roomID, got.RootHash, nodes)
+	if err != nil {
+		t.Fatalf("reconstruct persisted entries: %v", err)
+	}
+	wantEntries, err := Entries(roomID, want.RootHash, want.Nodes)
+	if err != nil {
+		t.Fatalf("reconstruct expected entries: %v", err)
+	}
+	if !sameEntries(gotEntries, wantEntries) {
+		t.Errorf("reconstructed entries = %v, want %v", gotEntries, wantEntries)
+	}
 	if !bytes.Equal(got.RootHash, want.RootHash) {
 		t.Errorf("root hash = %x, want %x", got.RootHash, want.RootHash)
 	}
@@ -146,4 +162,21 @@ func assertSamePersisted(t *testing.T, got, want *Persisted) {
 	if got.EntryCount != want.EntryCount {
 		t.Errorf("entry count = %d, want %d", got.EntryCount, want.EntryCount)
 	}
+}
+
+func sameEntries(a, b []Entry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[Entry]int, len(a))
+	for _, entry := range a {
+		counts[entry]++
+	}
+	for _, entry := range b {
+		if counts[entry] == 0 {
+			return false
+		}
+		counts[entry]--
+	}
+	return true
 }

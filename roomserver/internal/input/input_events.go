@@ -742,7 +742,11 @@ func (r *Inputer) processRoomEvent(
 	// A state event is the only kind that can change the state snapshot, so
 	// cross-checking every message would repeat the same HAMT work. This is a
 	// shadow check: a disagreement is logged and never fails ingestion.
-	if eventhash.Enabled && event.StateKey() != nil && stateAtEvent.BeforeStateSnapshotNID != 0 {
+	// Full-state verification is sampled because it compares the entire
+	// persisted HAMT with legacy state blocks and would otherwise add unbounded
+	// work to the input path for every state event.
+	if eventhash.Enabled && event.StateKey() != nil && stateAtEvent.BeforeStateSnapshotNID != 0 &&
+		r.stateHAMTVerifyCounter.Add(1)%256 == 0 {
 		if hamtErr := r.checkStateHAMT(ctx, stateAtEvent.BeforeStateSnapshotNID); hamtErr != nil && !errors.Is(hamtErr, types.ErrNoStateHAMT) {
 			logger.WithError(hamtErr).Warn("rezzy state HAMT check failed")
 		}

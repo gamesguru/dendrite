@@ -296,19 +296,33 @@ func sampleEntries(entries []types.StateEntry, limit int) string {
 	return fmt.Sprintf(" (first: %v)", entries)
 }
 
-// purgeStateHAMTs removes a room's roots and, when the Rezzy reader is
-// available, sweeps node records not reachable from any remaining root. Node
-// records are content-addressed and shared, so the sweep must trace all roots.
+// purgeStateHAMTs removes a room's roots. Node records are content-addressed
+// and shared; reclaiming unreachable nodes is deferred to maintenance so a
+// foreground room purge does not trace every retained snapshot under an
+// exclusive node lock.
 func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
-	// Exclude concurrent node writers for the whole trace-and-delete, so no
-	// node committed after the trace can be swept as unreachable.
 	if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, true); err != nil {
 		return fmt.Errorf("lock state HAMT nodes for purge: %w", err)
 	}
 	if err := d.StateHAMTTable.DeleteStateHAMTRoom(ctx, txn, roomNID); err != nil {
 		return fmt.Errorf("delete state HAMT roots for room %d: %w", roomNID, err)
 	}
+	return nil
+}
 
+// CollectStateHAMTGarbage traces every retained root and deletes unreachable
+// content-addressed nodes. This is intentionally an explicit maintenance
+// operation: its exclusive lock is held for the full history scan.
+func (d *Database) CollectStateHAMTGarbage(ctx context.Context) error {
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, true); err != nil {
+			return fmt.Errorf("lock state HAMT nodes for collection: %w", err)
+		}
+		return d.collectStateHAMTGarbageLocked(ctx, txn)
+	})
+}
+
+func (d *Database) collectStateHAMTGarbageLocked(ctx context.Context, txn *sql.Tx) error {
 	roots, err := d.StateHAMTTable.SelectStateHAMTRootRefs(ctx, txn)
 	if err != nil {
 		return fmt.Errorf("select remaining state HAMT roots: %w", err)
@@ -329,10 +343,10 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 			}
 			fetched, err := d.StateHAMTTable.SelectStateHAMTNodes(ctx, txn, needed)
 			if err != nil {
-				return fmt.Errorf("load state HAMT nodes during purge: %w", err)
+				return fmt.Errorf("load state HAMT nodes during collection: %w", err)
 			}
 			if len(fetched) == 0 {
-				return fmt.Errorf("state HAMT for room %s has missing nodes during purge", root.RoomID)
+				return fmt.Errorf("state HAMT for room %s has missing nodes during collection", root.RoomID)
 			}
 			for _, node := range fetched {
 				key := string(node.Hash)
@@ -344,7 +358,7 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 			}
 		}
 		if !complete {
-			return fmt.Errorf("state HAMT for room %s exceeded the traversal limit during purge", root.RoomID)
+			return fmt.Errorf("state HAMT for room %s exceeded the traversal limit during collection", root.RoomID)
 		}
 		for _, node := range nodes {
 			live[string(node.Hash)] = struct{}{}
@@ -353,7 +367,7 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 
 	allHashes, err := d.StateHAMTTable.SelectStateHAMTNodeHashes(ctx, txn)
 	if err != nil {
-		return fmt.Errorf("select state HAMT node hashes during purge: %w", err)
+		return fmt.Errorf("select state HAMT node hashes during collection: %w", err)
 	}
 	var garbage [][]byte
 	for _, hash := range allHashes {

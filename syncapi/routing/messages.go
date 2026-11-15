@@ -90,24 +90,25 @@ var errBackwardBackfillFetch = errors.New("backward federation backfill failed")
 var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
 
 type messagesReq struct {
-	ctx               context.Context
-	db                storage.Database
-	snapshot          storage.DatabaseTransaction
-	rsAPI             api.SyncRoomserverAPI
-	cfg               *config.SyncAPI
-	roomID            string
-	from              *types.TopologyToken
-	fromStream        *types.StreamingToken
-	fromTopologyToken bool
-	to                *types.TopologyToken
-	device            *userapi.Device
-	deviceUserID      spec.UserID
-	wasToProvided     bool
-	backwardOrdering  bool
-	filter            *synctypes.RoomEventFilter
-	didBackfill       bool
-	backfillHadEvents bool
-	backfillEnd       *types.TopologyToken
+	ctx                      context.Context
+	db                       storage.Database
+	snapshot                 storage.DatabaseTransaction
+	rsAPI                    api.SyncRoomserverAPI
+	cfg                      *config.SyncAPI
+	roomID                   string
+	from                     *types.TopologyToken
+	fromStream               *types.StreamingToken
+	fromTopologyToken        bool
+	to                       *types.TopologyToken
+	device                   *userapi.Device
+	deviceUserID             spec.UserID
+	wasToProvided            bool
+	backwardOrdering         bool
+	filter                   *synctypes.RoomEventFilter
+	didBackfill              bool
+	backfillHadEvents        bool
+	backfillEnd              *types.TopologyToken
+	backfilledRedactedEvents map[string]*rstypes.HeaderedEvent
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
 	// forwardBackfillRounds counts the federation batches fetched for this
@@ -815,6 +816,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 		if extremityFilteredEmpty && len(events) == 0 && !r.backfillHadEvents && len(withheld) > 0 {
 			// Backfill found nothing to fill the extremity, so the withheld events
 			// are all there is: return them rather than ending pagination here.
+			r.applyBackfilledRedactions(withheld)
 			events = r.snapshot.StreamEventsToEvents(r.ctx, nil, withheld, r.rsAPI) //nolint:contextcheck
 			// Order by stored topology position: a lifted event's wire depth
 			// is lower than where it sits.
@@ -1638,6 +1640,7 @@ func (r *messagesReq) handleNonEmptyEventsSlice(streamEvents []types.StreamEvent
 	}
 
 	// Append the events ve previously retrieved locally.
+	r.applyBackfilledRedactions(streamEvents)
 	localEvents := r.snapshot.StreamEventsToEvents(r.ctx, nil, streamEvents, r.rsAPI)
 	if r.backwardOrdering && len(events) > 0 {
 		// Backfill returns only the newest events of the gap. Local events older than
@@ -1991,7 +1994,18 @@ func filterHeaderedEvents(events []*rstypes.HeaderedEvent, filter *synctypes.Roo
 // Returns an error if there was an issue with retrieving the list of servers in
 // the room or sending the request.
 func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]string, limit int) ([]*rstypes.HeaderedEvent, error) {
-	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit)
+	if r.backfilledRedactedEvents == nil {
+		r.backfilledRedactedEvents = make(map[string]*rstypes.HeaderedEvent)
+	}
+	return backfillEvents(r.ctx, r.rsAPI, r.db, r.cfg.Matrix.ServerName, r.device.UserDomain(), roomID, backwardsExtremities, limit, r.backfilledRedactedEvents)
+}
+
+func (r *messagesReq) applyBackfilledRedactions(events []types.StreamEvent) {
+	for i := range events {
+		if redacted, ok := r.backfilledRedactedEvents[events[i].EventID()]; ok {
+			events[i].HeaderedEvent = redacted
+		}
+	}
 }
 
 // backfillEvents asks the roomserver to backfill events over federation and
@@ -2005,6 +2019,7 @@ func backfillEvents(
 	ctx context.Context, rsAPI api.SyncRoomserverAPI, db storage.Database,
 	serverName, virtualHost spec.ServerName,
 	roomID string, backwardsExtremities map[string][]string, limit int,
+	redactedTargets map[string]*rstypes.HeaderedEvent,
 ) ([]*rstypes.HeaderedEvent, error) {
 	// Finish the backfill even if the client goes away, so the events are stored.
 	ctx = context.WithoutCancel(ctx)
@@ -2096,6 +2111,9 @@ func backfillEvents(
 		}
 		if err = db.RedactRelations(ctx, roomID, eventID); err != nil {
 			return nil, err
+		}
+		if redactedTargets != nil {
+			redactedTargets[eventID] = redacted
 		}
 	}
 

@@ -813,11 +813,11 @@ func AdminImportEvents(
 		if len(line) == 0 {
 			continue
 		}
-		total += len(line)
+		total += len(scanner.Bytes())
 		if total > maxImportBodyBytes {
 			return util.JSONResponse{
 				Code: http.StatusRequestEntityTooLarge,
-				JSON: spec.Unknown(fmt.Sprintf("The import is larger than %d bytes.", maxImportBodyBytes)),
+				JSON: spec.BadJSON("Request body too large."),
 			}
 		}
 		pdus = append(pdus, json.RawMessage(append([]byte(nil), line...)))

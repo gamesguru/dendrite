@@ -30,26 +30,31 @@ test: rezzy-native
 
 # Run unit tests with race detector
 test-race:
-    go test -tags goolm -race -v ./...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -race -v ./...
 
 # Run unit tests with coverage
 test-coverage:
-    go test -tags goolm -race -v -coverpkg=./... -coverprofile=cover.out ./...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -race -v -coverpkg=./... -coverprofile=cover.out ./...
 
 # Run unit tests for a specific package
 test-pkg pkg:
-    go test -tags goolm -v ./{{pkg}}/...
+    @make -C ./rezzy/rezzy-ffi native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go test -tags goolm -v ./{{pkg}}/...
 
 # Build all binaries
 build:
+    @make -C ./rezzy/rezzy-ffi native
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -buildvcs=false -v -o bin/ \
+        PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go build -tags goolm -trimpath -buildvcs=false -v -o bin/ \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/...
 
 # Build a specific binary
 build-bin name:
+    @make -C ./rezzy/rezzy-ffi native
     v="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"; \
-        go build -tags goolm -trimpath -buildvcs=false -v -o bin/{{name}} \
+        PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" go build -tags goolm -trimpath -buildvcs=false -v -o bin/{{name}} \
         -ldflags "-X codefloe.com/pat-s/zendrite/internal.version=$v" ./cmd/{{name}}
 
 # Run both lint and tests

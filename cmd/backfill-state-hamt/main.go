@@ -37,6 +37,9 @@ var (
 var verify = flag.Bool("verify", false,
 	"compare every persisted HAMT with the state blocks it was built from and exit non-zero on any mismatch")
 
+var collectGarbage = flag.Bool("collect-garbage", false,
+	"trace all retained HAMT roots and delete unreachable nodes (holds an exclusive lock for the full scan)")
+
 func main() {
 	ctx := context.Background()
 	cfg := setup.ParseFlags(true)
@@ -90,6 +93,16 @@ func main() {
 		if mismatched > 0 {
 			panic(fmt.Sprintf("%d state HAMTs disagree with their state blocks", mismatched))
 		}
+	}
+	if *collectGarbage {
+		collector, ok := db.(interface{ CollectStateHAMTGarbage(context.Context) error })
+		if !ok {
+			panic("database does not support state HAMT garbage collection")
+		}
+		if err = collector.CollectStateHAMTGarbage(ctx); err != nil {
+			panic(err)
+		}
+		fmt.Println("collected unreachable state HAMT nodes")
 	}
 }
 
