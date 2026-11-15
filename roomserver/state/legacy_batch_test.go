@@ -15,6 +15,8 @@ type chunkRecordingDB struct {
 	StateResolutionStorage
 	blockNIDQueries []int
 	entryQueries    []int
+	tupleQueries    []int
+	tuplesSeen      [][]types.StateKeyTuple
 }
 
 func (d *chunkRecordingDB) StateBlockNIDs(_ context.Context, nids []types.StateSnapshotNID) ([]types.StateBlockNIDList, error) {
@@ -44,6 +46,12 @@ func (d *chunkRecordingDB) StateEntries(_ context.Context, blocks []types.StateB
 	return out, nil
 }
 
+func (d *chunkRecordingDB) StateEntriesForTuples(ctx context.Context, blocks []types.StateBlockNID, tuples []types.StateKeyTuple) ([]types.StateEntryList, error) {
+	d.tupleQueries = append(d.tupleQueries, len(blocks))
+	d.tuplesSeen = append(d.tuplesSeen, tuples)
+	return d.StateEntries(ctx, blocks)
+}
+
 func TestLoadLegacyStatesBatchedChunksQueries(t *testing.T) {
 	const snapshots = 3*legacyStateQueryChunk + 7
 	nids := make([]types.StateSnapshotNID, snapshots)
@@ -65,4 +73,26 @@ func TestLoadLegacyStatesBatchedChunksQueries(t *testing.T) {
 	}
 	require.Len(t, db.blockNIDQueries, 4, "one StateBlockNIDs query per chunk")
 	require.Len(t, db.entryQueries, 4, "one StateEntries query per chunk")
+}
+
+func TestLoadLegacyStatesBatchedChunksTupleQueries(t *testing.T) {
+	const snapshots = 3*legacyStateQueryChunk + 7
+	nids := make([]types.StateSnapshotNID, snapshots)
+	for i := range nids {
+		nids[i] = types.StateSnapshotNID(i + 1)
+	}
+	tuples := []types.StateKeyTuple{{EventTypeNID: 1, EventStateKeyNID: 1}}
+	db := &chunkRecordingDB{}
+	v := &StateResolution{db: db}
+
+	got, err := v.loadLegacyStatesBatched(context.Background(), nids, tuples)
+	require.NoError(t, err)
+	require.Len(t, got, snapshots)
+	for _, n := range db.tupleQueries {
+		require.LessOrEqual(t, n, legacyStateQueryChunk, "a tuple query bound too many NIDs")
+	}
+	require.Len(t, db.tupleQueries, 4, "one StateEntriesForTuples query per chunk")
+	for _, seen := range db.tuplesSeen {
+		require.Equal(t, tuples, seen, "every chunk must keep the tuple filter")
+	}
 }
