@@ -12,7 +12,11 @@ RUN apk --update --no-cache add bash build-base curl git pkgconf
 # use it without a cross compiler. The rezzy source comes from the "rezzy"
 # named build context, for example:
 #
-#   docker build --build-context rezzy=../rezzy --build-context gmsl=../gmsl .
+#   docker build --build-context rezzy=./rezzy --build-context gmsl=../gmsl .
+#
+# The Go build resolves the ./rezzy/rezzy-ffi module from the checked-out
+# submodule in the main build context, so the context must include it:
+# `git submodule update --init rezzy` before building.
 #
 FROM --platform=${TARGETPLATFORM} docker.io/rust:1.89-alpine AS rezzy-build
 RUN apk --update --no-cache add musl-dev
@@ -44,9 +48,8 @@ ENV GONOSUMCHECK=codefloe.com/* \
     GONOPROXY=codefloe.com/* \
     CGO_ENABLED=1 \
     PKG_CONFIG_PATH=/rezzy/target/pkgconfig
-# go.rezzy.mod replaces both modules with sibling checkouts supplied by the
-# named build contexts above.
-COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
+# go.rezzy.mod replaces rezzy with the ./rezzy submodule (present in the
+# mounted build context) and gomatrixserverlib with the gmsl build context.
 COPY --from=rezzy rezzy-ffi/include /rezzy/include
 COPY --from=rezzy-build /rezzy/target/release/librezzy_ffi.a /rezzy/target/release/librezzy_ffi.a
 COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
