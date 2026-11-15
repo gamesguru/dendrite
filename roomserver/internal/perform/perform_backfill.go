@@ -120,6 +120,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		return fmt.Errorf("backfillViaFederation: missing room info for room %s", req.RoomID)
 	}
 	requester := newBackfillRequester(r.DB, r.FSAPI, r.Querier, req.VirtualHost, r.IsLocalServerName, req.BackwardsExtremities, r.PreferServers, info.RoomVersion)
+	requester.roomNID = info.RoomNID
 	// Request 100 items regardless of what the query asks for.
 	// We don't want to go much higher than this.
 	// We can't honor exactly the limit as some sytests rely on requesting more for tests to pass
@@ -489,6 +490,13 @@ type backfillRequester struct {
 	eventIDMap              map[string]gomatrixserverlib.PDU
 	historyVisiblity        gomatrixserverlib.HistoryVisibility
 	roomVersion             gomatrixserverlib.RoomVersion
+
+	// roomNID scopes the partial-state check behind local state reuse. Zero
+	// disables the check, which is only the case for requesters a test builds
+	// directly.
+	roomNID             types.RoomNID
+	partialStateChecked bool
+	partialState        bool
 }
 
 func newBackfillRequester(
@@ -595,8 +603,7 @@ FederationHit:
 // needed. State snapshots are persisted as HAMTs, with state blocks retained
 // as a fallback for databases that predate HAMT persistence.
 func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID string) ([]string, bool) {
-	known, err := b.db.EventNIDs(ctx, []string{eventID})
-	if err != nil || len(known) == 0 {
+	if !b.localStateUsable(ctx) {
 		return nil, false
 	}
 	states, err := b.db.StateAtEventIDs(ctx, []string{eventID})
@@ -641,6 +648,31 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 		ids = append(ids, id)
 	}
 	return ids, true
+}
+
+// localStateUsable reports whether a stored before-state snapshot may be
+// reused for this room. A snapshot taken while the room had partial state
+// (MSC3706) can be incomplete, so reusing it would feed an incomplete state set
+// into backfill verification; those rooms keep asking federation instead.
+// The check is per requester because a requester is always scoped to one room.
+func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
+	if b.partialStateChecked {
+		return !b.partialState
+	}
+	b.partialStateChecked = true
+	if b.roomNID == 0 {
+		// Only requesters built directly by tests leave this unset.
+		return true
+	}
+	partial, err := b.db.IsRoomPartialState(ctx, b.roomNID)
+	if err != nil {
+		// Being unable to prove the snapshot complete is enough to distrust
+		// it; federation is the safe answer.
+		b.partialState = true
+		return false
+	}
+	b.partialState = partial
+	return !partial
 }
 
 // hydrateStateEvents loads the events for ids that are not already known to

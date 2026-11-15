@@ -42,6 +42,12 @@ func (noLocalEventsDB) EventNIDs(context.Context, []string) (map[string]types.Ev
 	return nil, errors.New("no local events")
 }
 
+// StateAtEventIDs is the lookup StateIDsBeforeEvent consults first; the event
+// is not stored locally, so federation has to answer.
+func (noLocalEventsDB) StateAtEventIDs(context.Context, []string) ([]types.StateAtEvent, error) {
+	return nil, errors.New("no local events")
+}
+
 func TestBackfillStateLookupFailuresAreRecorded(t *testing.T) {
 	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	// Two prev events force a /state_ids request instead of rolling state forward.
@@ -241,6 +247,13 @@ type storedEventsDB struct {
 	beforeState map[string]types.StateSnapshotNID
 	// snapshots maps a snapshot to the NIDs of the events it contains.
 	snapshots map[types.StateSnapshotNID][]types.EventNID
+	// partial marks the room as having partial state, so snapshots must not
+	// be reused.
+	partial bool
+}
+
+func (d *storedEventsDB) IsRoomPartialState(context.Context, types.RoomNID) (bool, error) {
+	return d.partial, nil
 }
 
 func newStoredEventsDB(events ...gomatrixserverlib.PDU) *storedEventsDB {
@@ -384,4 +397,42 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+// A room with partial state (MSC3706) can hold incomplete before-state
+// snapshots, so they must not be reused: backfill asks federation instead.
+func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	member := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["$unknown1","$unknown2"],"auth_events":[]}`)
+
+	db := newStoredEventsDB(member, target)
+	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+	db.partial = true
+
+	requester := &backfillRequester{
+		db:                      db,
+		roomNID:                 1,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Nil(t, got, "a partially-stated room must not reuse its stored snapshot")
+
+	// The same snapshot is reused once the room is no longer partial.
+	db.partial = false
+	requester.partialStateChecked = false
+	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{member.EventID()}, got)
 }
