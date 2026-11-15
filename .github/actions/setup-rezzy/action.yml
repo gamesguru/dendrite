@@ -12,10 +12,15 @@ runs:
     - name: Check out the hooked gomatrixserverlib fork
       shell: bash
       run: |
+        # GitHub does not serve abbreviated SHAs, and the pin may sit behind the
+        # branch tip, so fetch the branch with some history and check out the
+        # full SHA, which fails loudly if the pin is unreachable.
+        set -euo pipefail
+        GMSL_COMMIT=238ff2c0584fbfc2c9712e57955ae259b0f40727
         git init ../gmsl
         git -C ../gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
-        git -C ../gmsl fetch --depth=1 origin 238ff2c
-        git -C ../gmsl checkout FETCH_HEAD
+        git -C ../gmsl fetch --depth=100 origin feat/rezzy
+        git -C ../gmsl checkout "$GMSL_COMMIT"
     - uses: dtolnay/rust-toolchain@stable
       if: inputs.native == 'true'
     - name: Build Rezzy native library

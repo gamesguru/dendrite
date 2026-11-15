@@ -57,8 +57,10 @@ jobs:
         # this must be a sibling of dendrite, not of the workspace.
         #
         # Fetch the branch rather than the bare commit: GitHub does not serve
-        # arbitrary commit SHAs as refs. The checkout then verifies the pin, so
-        # a moved branch fails here instead of silently building something else.
+        # arbitrary commit SHAs as refs. The pin may sit behind the branch tip,
+        # so fetch enough history to reach it; a depth of 1 only has the tip.
+        # The checkout then verifies the pin, so a moved branch fails here
+        # instead of silently building something else.
         env:
           GMSL_REPO: https://github.com/gamesguru/gomatrixserverlib.git
           GMSL_BRANCH: feat/rezzy
@@ -67,7 +69,7 @@ jobs:
           set -euo pipefail
           git init gmsl
           git -C gmsl remote add origin "$GMSL_REPO"
-          git -C gmsl fetch --depth=1 origin "$GMSL_BRANCH"
+          git -C gmsl fetch --depth=100 origin "$GMSL_BRANCH"
           git -C gmsl checkout "$GMSL_COMMIT"
           test "$(git -C gmsl rev-parse HEAD)" = "$GMSL_COMMIT"
 
