@@ -14,6 +14,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
@@ -158,14 +159,22 @@ func (d *Database) StateSnapshotNIDs(
 func (d *Database) VerifyStateHAMT(
 	ctx context.Context, snapshotNID types.StateSnapshotNID,
 ) error {
-	root, err := d.StateHAMTTable.SelectStateHAMT(ctx, nil, snapshotNID)
+	return d.withStateHAMTReadLock(ctx, nil, func(txn *sql.Tx) error {
+		return d.verifyStateHAMT(ctx, txn, snapshotNID)
+	})
+}
+
+func (d *Database) verifyStateHAMT(
+	ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID,
+) error {
+	root, err := d.StateHAMTTable.SelectStateHAMT(ctx, txn, snapshotNID)
 	if err != nil {
 		return fmt.Errorf("load state HAMT for snapshot %d: %w", snapshotNID, err)
 	}
 	if root == nil {
 		return types.ErrNoStateHAMT
 	}
-	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, nil, []types.RoomNID{root.RoomNID})
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{root.RoomNID})
 	if err != nil {
 		return fmt.Errorf("load room for snapshot %d: %w", snapshotNID, err)
 	}
@@ -173,7 +182,7 @@ func (d *Database) VerifyStateHAMT(
 		return fmt.Errorf("snapshot %d belongs to unknown room NID %d", snapshotNID, root.RoomNID)
 	}
 	roomID := roomIDs[0]
-	nodes, err := d.loadStateHAMTNodes(ctx, nil, roomID, root, snapshotNID)
+	nodes, err := d.loadStateHAMTNodes(ctx, txn, roomID, root, snapshotNID)
 	if err != nil {
 		return err
 	}
@@ -193,7 +202,7 @@ func (d *Database) VerifyStateHAMT(
 		return fmt.Errorf("state HAMT for snapshot %d has %d entries, recorded %d", snapshotNID, verified.EntryCount, root.EntryCount)
 	}
 
-	blockLists, err := d.stateBlockNIDs(ctx, nil, []types.StateSnapshotNID{snapshotNID})
+	blockLists, err := d.stateBlockNIDs(ctx, txn, []types.StateSnapshotNID{snapshotNID})
 	if err != nil {
 		return fmt.Errorf("load state blocks for snapshot %d: %w", snapshotNID, err)
 	}
@@ -206,7 +215,7 @@ func (d *Database) VerifyStateHAMT(
 		// verification.
 		return nil
 	}
-	hamtEntries, ok, err := d.stateHAMTEntries(ctx, nil, snapshotNID)
+	hamtEntries, ok, err := d.stateHAMTEntriesLocked(ctx, txn, snapshotNID)
 	if err != nil {
 		return fmt.Errorf("load state HAMT entries for snapshot %d: %w", snapshotNID, err)
 	}
@@ -215,7 +224,7 @@ func (d *Database) VerifyStateHAMT(
 	}
 	// Merge the blocks with last-wins semantics, as LoadStateAtSnapshot does,
 	// so superseded entries for the same state key do not count as a mismatch.
-	blockEntries, err := d.stateEntriesFromBlocks(ctx, nil, blockLists[0].StateBlockNIDs)
+	blockEntries, err := d.stateEntriesFromBlocks(ctx, txn, blockLists[0].StateBlockNIDs)
 	if err != nil {
 		return fmt.Errorf("load state entries for snapshot %d: %w", snapshotNID, err)
 	}
@@ -499,6 +508,13 @@ func (d *Database) addStateDelta(
 		}
 		persisted, err := statehamt.Apply(roomIDs[0], parent.RootRecord, parent.EntryCount, fetch, mutations)
 		if err != nil {
+			var missing *statehamt.MissingNodesError
+			if errors.As(err, &missing) {
+				logrus.WithFields(logrus.Fields{
+					"room_nid":     roomNID,
+					"snapshot_nid": parentNID,
+				}).WithError(err).Warn("State HAMT parent is missing nodes; inspect with backfill-state-hamt -verify")
+			}
 			return fmt.Errorf("statehamt.Apply: %w", err)
 		}
 		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, persisted.RootHash, nil)
@@ -704,6 +720,19 @@ func (d *Database) StateHAMTEntries(
 func (d *Database) stateHAMTEntries(
 	ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID,
 ) ([]types.StateEntry, bool, error) {
+	var entries []types.StateEntry
+	var ok bool
+	err := d.withStateHAMTReadLock(ctx, txn, func(readTxn *sql.Tx) error {
+		var err error
+		entries, ok, err = d.stateHAMTEntriesLocked(ctx, readTxn, snapshotNID)
+		return err
+	})
+	return entries, ok, err
+}
+
+func (d *Database) stateHAMTEntriesLocked(
+	ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID,
+) ([]types.StateEntry, bool, error) {
 	root, err := d.StateHAMTTable.SelectStateHAMT(ctx, txn, snapshotNID)
 	if err != nil {
 		return nil, false, fmt.Errorf("SelectStateHAMT: %w", err)
@@ -778,6 +807,19 @@ func (d *Database) StateHAMTEntriesForTuples(
 func (d *Database) stateHAMTEntriesForTuples(
 	ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple,
 ) ([]types.StateEntry, bool, error) {
+	var entries []types.StateEntry
+	var ok bool
+	err := d.withStateHAMTReadLock(ctx, txn, func(readTxn *sql.Tx) error {
+		var err error
+		entries, ok, err = d.stateHAMTEntriesForTuplesLocked(ctx, readTxn, snapshotNID, tuples)
+		return err
+	})
+	return entries, ok, err
+}
+
+func (d *Database) stateHAMTEntriesForTuplesLocked(
+	ctx context.Context, txn *sql.Tx, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple,
+) ([]types.StateEntry, bool, error) {
 	root, err := d.StateHAMTTable.SelectStateHAMT(ctx, txn, snapshotNID)
 	if err != nil {
 		return nil, false, fmt.Errorf("SelectStateHAMT: %w", err)
@@ -841,4 +883,22 @@ func (d *Database) stateHAMTEntriesForTuples(
 		return nil, false, err
 	}
 	return resolved, true, nil
+}
+
+// withStateHAMTReadLock keeps the purge sweep from deleting nodes between a
+// root lookup and the corresponding node reads. The advisory lock is
+// transaction-scoped, so an owned transaction is required for standalone
+// reads; callers with an existing transaction keep using it.
+func (d *Database) withStateHAMTReadLock(
+	ctx context.Context, txn *sql.Tx, read func(*sql.Tx) error,
+) error {
+	if txn == nil {
+		return sqlutil.WithTransaction(d.DB, func(txn *sql.Tx) error {
+			return d.withStateHAMTReadLock(ctx, txn, read)
+		})
+	}
+	if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, false); err != nil {
+		return fmt.Errorf("lock state HAMT nodes for read: %w", err)
+	}
+	return read(txn)
 }
