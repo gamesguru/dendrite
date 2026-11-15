@@ -1205,6 +1205,16 @@ func deepestExtremities(
 // it here would store events newer than the page's own range. Extremities at or
 // behind the cursor are history the walk already passed.
 func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPosition types.TopologyToken) (string, []string, error) {
+	return r.forwardGapExtremitySkipping(ctx, firstEventPosition, nil)
+}
+
+// forwardGapExtremitySkipping is forwardGapExtremity that ignores extremities
+// whose key (see extremitiesKey) is in skip. fillForwardGap uses it so a gap it
+// already tried this request, and could not close, does not hide a newer gap
+// behind it. The selector stays free of device and config state.
+func (r *messagesReq) forwardGapExtremitySkipping(
+	ctx context.Context, firstEventPosition types.TopologyToken, skip map[string]struct{},
+) (string, []string, error) {
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
 	if err != nil || len(backwardExtremities) == 0 {
 		return "", nil, err
@@ -1216,6 +1226,9 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPositio
 	bestID := ""
 	bestPosition := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
 	for extremityID := range open {
+		if _, tried := skip[extremitiesKey(map[string][]string{extremityID: backwardExtremities[extremityID]})]; tried {
+			continue
+		}
 		pos, posErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
 		if posErr != nil {
 			continue
@@ -1312,14 +1325,19 @@ func (r *messagesReq) truncateForwardPageAtGap(
 func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition types.TopologyToken) (bool, error) {
 	filled := false
 	stored := 0
+	// Gaps already attempted in this request. The lowest gap is picked first,
+	// so one the remote cannot close (a dangling parent, a terminal failure)
+	// would otherwise be picked again and starve every newer gap behind it.
+	tried := map[string]struct{}{}
 	for r.forwardBackfillRounds < maxForwardBackfillRounds {
-		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
+		extremityID, prevs, err := r.forwardGapExtremitySkipping(ctx, firstEventPosition, tried)
 		if err != nil {
 			return filled, err
 		}
 		if extremityID == "" {
 			return filled, nil
 		}
+		tried[extremitiesKey(map[string][]string{extremityID: prevs})] = struct{}{}
 		r.forwardBackfillRounds++
 		pdus, bfErr := r.backfill(r.roomID, map[string][]string{extremityID: prevs}, forwardBackfillBatch)
 		if bfErr != nil {
@@ -1330,7 +1348,7 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 				// No server has these events: the gap is as filled as it can
 				// get and the rest of the history is genuinely unreachable.
 				util.GetLogger(ctx).WithError(bfErr).Debug("Forward backfill found no events on the attempted servers")
-				return filled, nil
+				continue
 			}
 			// A transient failure must not look like the end of history, and it
 			// must not let the cursor move past the unfilled gap either.
@@ -1338,7 +1356,7 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			return filled, bfErr
 		}
 		if len(pdus) == 0 {
-			return filled, nil
+			continue
 		}
 		filled = true
 		stored += len(pdus)
@@ -1359,15 +1377,15 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 				r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
 				map[string][]string{extremityID: prevs},
 			))
-			// The batch was stored, so report it as filled: the caller must
-			// reread the page to serve those events rather than skip them.
-			return filled, nil
+			// The batch was stored, so it stays reported as filled. Move on
+			// to the next gap rather than ending the request on this one.
+			continue
 		}
 	}
 
 	// The last batch may have closed the gap exactly at the bound, so only
 	// report failure when an open gap is still ahead of the cursor.
-	extremityID, _, err := r.forwardGapExtremity(ctx, firstEventPosition)
+	extremityID, _, err := r.forwardGapExtremitySkipping(ctx, firstEventPosition, tried)
 	if err != nil {
 		return filled, err
 	}
