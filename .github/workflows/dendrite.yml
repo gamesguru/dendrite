@@ -332,23 +332,20 @@ jobs:
       - name: Checkout Rezzy submodule
         run: git -C dendrite submodule update --init --depth 1 rezzy
 
-      # Run the Complement suite maintained on the fork's dev branch. A PR may
-      # carry its own matching Complement branch; otherwise (including a push to
-      # main) fall back to dev, which is where Zendrite's test fixes land. The
-      # fork's main branch lags behind dev and lacks those fixes, so selecting it
-      # from the Dendrite branch name makes an identical build fail after a merge.
+      # Run the Complement suite from the fork's MSC4521 branch at a pinned
+      # commit: it merges dev, which carries Zendrite's Complement fixes, and
+      # adds the MSC4521 tests, so one checkout runs both.
       - name: Checkout complement
         shell: bash
         run: |
-          mkdir -p complement
-          for BRANCH_NAME in "$GITHUB_HEAD_REF" "dev"; do
-            # Skip empty branch names and merge commits.
-            if [[ -z "$BRANCH_NAME" || $BRANCH_NAME =~ ^refs/pull/.* ]]; then
-              continue
-            fi
-            (wget -O - "https://github.com/gamesguru/complement/archive/$BRANCH_NAME.tar.gz" | tar -xz --strip-components=1 -C complement) && break
-          done
-          test -f complement/go.mod || { echo "failed to check out a Complement suite"; exit 1; }
+          set -euo pipefail
+          COMPLEMENT_COMMIT=aab262f
+          git init complement
+          git -C complement remote add origin https://github.com/gamesguru/complement.git
+          git -C complement fetch --depth=100 origin guru/feat/msc4521-libminisketch-set-recon
+          commit=$(git -C complement rev-parse "${COMPLEMENT_COMMIT}^{commit}")
+          git -C complement checkout --detach "$commit"
+          test -f complement/go.mod
       # Build initial Dendrite image
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -372,30 +369,6 @@ jobs:
           COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         working-directory: complement
-
-      # MSC4521 is not in the dev Complement branch above, so it needs its own
-      # suite checkout. It runs on every matrix row against that row's image.
-      - name: Checkout Complement MSC4521 suite
-        if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
-        run: |
-          set -euo pipefail
-          mkdir -p complement-msc4521
-          wget -O - "https://github.com/gamesguru/complement/archive/refs/heads/guru/feat/msc4521-libminisketch-set-recon.tar.gz" \
-            | tar -xz --strip-components=1 -C complement-msc4521
-          test -d complement-msc4521/tests/msc4521
-      - name: Run MSC4521 tests
-        if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
-        working-directory: complement-msc4521
-        env:
-          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
-          COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
-        run: |
-          set -o pipefail
-          go test -tags zendrite_blacklist -v -timeout 45m \
-            -run 'TestMSC4521/(Primitives|Compatibility)' ./tests/msc4521/...
-          go test -tags zendrite_blacklist -v -timeout 15m \
-            -run 'TestMSC4521/(Convergence|Adversarial)/(ActiveRoom|NonMembersAndACLBlocked)' \
-            ./tests/msc4521/...
 
   integration-tests-done:
     name: Integration tests passed
