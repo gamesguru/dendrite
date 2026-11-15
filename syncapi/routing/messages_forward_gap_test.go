@@ -40,6 +40,9 @@ type forwardGapState struct {
 	positionLookups  int
 	extremityLookups int
 	prevEventLookups int
+	// afterStore runs after WriteEvent stores an event, so a test can model a
+	// late parent lifting the stored topology position of a descendant.
+	afterStore func()
 }
 
 func newForwardGapState(stored, unstored []*rstypes.HeaderedEvent) *forwardGapState {
@@ -144,6 +147,9 @@ func (d forwardGapDB) WriteEvent(_ context.Context, ev *rstypes.HeaderedEvent, _
 		}
 	}
 	d.state.recomputeExtremities()
+	if d.state.afterStore != nil {
+		d.state.afterStore()
+	}
 	return 0, nil
 }
 
@@ -588,6 +594,40 @@ func TestForwardGapExtremitySkippingResumesAfterTheLastAnswer(t *testing.T) {
 	assert.NotEqual(t, firstID, secondID,
 		"the scan should resume after the last answer, not return it again")
 	assert.Equal(t, 2, r.forwardGapScan.next, "the cursor should move past both answers")
+}
+
+// A late parent raises the stored topology position of its descendants, which
+// repairLateParentTopology rewrites on write. A position cached while selecting
+// the gap must therefore be dropped once a round stores events.
+func TestFillForwardGapReloadsPositionsLiftedByLateParent(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	low := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "low"})
+	parent := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "late parent"})
+
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: map[string][]string{low.EventID(): {"$missing"}},
+		unstored:    []*rstypes.HeaderedEvent{parent},
+	}
+	state.store(low)
+	state.positions[low.EventID()] = types.TopologyToken{Depth: 5, PDUPosition: 5}
+	// Storing the parent lifts the still-open marker, as the topology repair
+	// does for a stored descendant.
+	state.afterStore = func() {
+		state.positions[low.EventID()] = types.TopologyToken{Depth: 50, PDUPosition: 50}
+	}
+
+	r := newForwardGapReq(state)
+	// Allow one round: it stores the parent, then the post-loop selection
+	// rebuilds the scan and has to read the lifted position.
+	r.forwardBackfillRounds = maxForwardBackfillRounds - 1
+	_, _ = r.fillForwardGap(r.ctx, types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30})
+
+	require.Contains(t, r.forwardGapPositions, low.EventID())
+	assert.Equal(t, types.StreamPosition(50), r.forwardGapPositions[low.EventID()].Depth,
+		"a position lifted by a stored late parent must be read again")
 }
 
 func TestForwardGapRetriesTransientPositionLookupFailure(t *testing.T) {

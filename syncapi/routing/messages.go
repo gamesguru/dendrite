@@ -112,8 +112,9 @@ type messagesReq struct {
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
 	// forwardGapPositions caches the topology position of each gap extremity
-	// for this request. Event positions never change, so a retried lookup
-	// always answers the same.
+	// for this request. Positions are stable while the request stores nothing,
+	// but a late parent raises the stored position of its descendants, so
+	// fillForwardGap drops this cache after a round that stored events.
 	forwardGapPositions map[string]types.TopologyToken
 	// forwardGapScan caches the open extremities ahead of a forward cursor.
 	// The set only changes when events are stored, so fillForwardGap reuses it
@@ -1433,8 +1434,11 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			continue
 		}
 		// Storing events moves or closes extremities, so the cached scan is
-		// stale. The positions stay valid: an event's position never changes.
+		// stale. A late parent also raises the stored topology position of its
+		// descendants (see repairLateParentTopology), so cached positions can
+		// no longer be trusted either.
 		r.forwardGapScan = nil
+		r.forwardGapPositions = nil
 		filled = true
 		stored += len(pdus)
 		// The batch may contain events older than the missing parent without
