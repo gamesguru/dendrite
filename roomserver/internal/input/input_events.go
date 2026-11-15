@@ -618,7 +618,7 @@ func (r *Inputer) processRoomEvent(
 		isPartialState, _ = r.DB.IsRoomPartialState(ctx, roomInfo.RoomNID)
 	}
 
-	if input.Kind == api.KindNew && !isCreateEvent && !isPartialState && !input.SkipEventAuth {
+	if input.Kind == api.KindNew && !isCreateEvent && !isPartialState && !input.SkipEventAuth && !input.SkipSoftFail {
 		// Check that the event passes authentication checks based on the
 		// current room state. Skip this for partial state rooms per MSC3706.
 		softfail, err = helpers.CheckForSoftFail(ctx, r.DB, roomInfo, headered, input.StateEventIDs, r.Queryer)

@@ -119,6 +119,12 @@ type InputRoomEvent struct {
 	// event. This is used by admin endpoints (e.g. downloadState) that need to
 	// inject events into rooms where the sender may lack the necessary power level.
 	SkipEventAuth bool `json:"skip_event_auth,omitempty"`
+	// SkipSoftFail, if true, skips only the soft-fail check, which judges the
+	// event against the room's current state. Admin imports of old history set
+	// it: an event from months ago is checked against today's state and can
+	// conflict with it, which would store it but never show it to clients. The
+	// event is still authorized against the state before it.
+	SkipSoftFail bool `json:"skip_soft_fail,omitempty"`
 }
 
 // TransactionID contains the transaction ID sent by a client when sending an

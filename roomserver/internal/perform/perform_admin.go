@@ -884,6 +884,9 @@ func (r *Admin) ingestAdminEvent(
 			Kind:   api.KindNew,
 			Event:  &types.HeaderedEvent{PDU: ev},
 			Origin: serverName,
+			// The operator is importing history, not receiving a live event,
+			// so it must not be judged against today's state.
+			SkipSoftFail: true,
 		}},
 		Asynchronous: false,
 		VirtualHost:  r.Cfg.Matrix.ServerName,
@@ -892,8 +895,7 @@ func (r *Admin) ingestAdminEvent(
 		return "", inputRes.Err()
 	}
 	// InputRoomEvents succeeds even if the event ended up rejected, so read
-	// back what was actually persisted. (Soft-failed events are stored as
-	// accepted but excluded from current state; that is not distinguished here.)
+	// back what was actually persisted.
 	states, err := r.DB.StateAtEventIDs(ctx, []string{eventID})
 	if err != nil {
 		var missingErr types.MissingEventError
