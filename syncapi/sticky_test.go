@@ -205,7 +205,7 @@ func TestStickyEventsSyncFilteredAndExpired(t *testing.T) {
 		room := test.NewRoom(t, alice)
 		env.send(room.Events()...)
 
-		short := sendSticky(room, alice, "short", 1500*time.Millisecond)(t)
+		short := sendSticky(room, alice, "short", 4*time.Second)(t)
 		long := sendSticky(room, alice, "long", time.Hour)(t)
 		env.send(short, long)
 		env.waitFor(alice, room.ID, long)
@@ -213,7 +213,7 @@ func TestStickyEventsSyncFilteredAndExpired(t *testing.T) {
 		res := env.sync(alice, "", excludeMessages)
 		require.Equal(t, []string{short.EventID(), long.EventID()}, stickyIDs(res, room.ID))
 
-		time.Sleep(time.Until(short.OriginServerTS().Time().Add(1600 * time.Millisecond)))
+		time.Sleep(time.Until(short.OriginServerTS().Time().Add(4100 * time.Millisecond)))
 		res = env.sync(alice, "", excludeMessages)
 		require.Equal(t, []string{long.EventID()}, stickyIDs(res, room.ID))
 
