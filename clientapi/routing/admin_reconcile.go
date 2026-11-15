@@ -7,6 +7,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/internal/reconciliation"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
@@ -197,6 +199,23 @@ func AdminReconcileRoom(
 		}
 	}
 
+	// The round budget can run out just after a round that fetched events. Do
+	// one final digest read so that convergence is not misreported as
+	// divergence simply because the loop ended.
+	if status == "diverged" && rounds >= reconcileMaxRounds {
+		state, resErr := roomReconciliationStateFromAPI(req.Context(), rsAPI, roomID)
+		if resErr != nil {
+			return *resErr
+		}
+		localSnapshot, err := reconciliation.Snapshot(state.EventIDs, format)
+		if err != nil {
+			return util.ErrorResponse(err)
+		}
+		if localSnapshot.Digest == remoteDigest.Digest && localSnapshot.Count == remoteDigest.KnownEventCount {
+			status = "synchronized"
+		}
+	}
+
 	response := map[string]any{
 		"status":         status,
 		"rounds":         rounds,
@@ -216,7 +235,14 @@ func roomReconciliationStateFromAPI(
 	if err := rsAPI.QueryRoomReconciliationState(ctx, &roomserverAPI.QueryRoomReconciliationStateRequest{
 		RoomID: roomID,
 	}, &state); err != nil {
-		return nil, &util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room not found")}
+		if errors.Is(err, types.ErrRoomNotFound) {
+			return nil, &util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room not found")}
+		}
+		util.GetLogger(ctx).WithError(err).Error("failed to query room reconciliation state")
+		return nil, &util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("Failed to query room reconciliation state"),
+		}
 	}
 	return &state, nil
 }

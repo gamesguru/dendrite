@@ -79,19 +79,19 @@ vendor:
 # Build multi-arch container image (default: load to local docker)
 container tag="zendrite:dev":
     docker buildx build --platform linux/amd64,linux/arm64 \
-        --build-context rezzy=../rezzy --build-context gmsl=../gmsl \
+        --build-context rezzy=./rezzy \
         -t {{tag}} .
 
 # Build container image and load to local docker (current arch only)
 container-local tag="zendrite:dev":
     docker buildx build --load \
-        --build-context rezzy=../rezzy --build-context gmsl=../gmsl \
+        --build-context rezzy=./rezzy \
         -t {{tag}} .
 
 # Build and push container image to registry
 container-push tag:
     docker buildx build --platform linux/amd64,linux/arm64 --push \
-        --build-context rezzy=../rezzy --build-context gmsl=../gmsl \
+        --build-context rezzy=./rezzy \
         -t {{tag}} .
 
 # Run local Zendrite container to verify image works

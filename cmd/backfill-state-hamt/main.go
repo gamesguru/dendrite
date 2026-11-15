@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	batchSize       = flag.Int("batch-size", defaultBatchSize, "maximum snapshots to backfill per transaction batch")
+	batchSize       = flag.Int("batch-size", defaultBatchSize, "maximum snapshots to fetch per query (each snapshot is backfilled in its own transaction)")
 	requireComplete = flag.Bool("require-complete", false,
 		"exit non-zero unless every state snapshot has a persisted HAMT")
 )
@@ -47,15 +47,15 @@ func main() {
 	if dbOpts.ConnectionString == "" {
 		dbOpts = cfg.Global.DatabaseOptions
 	}
+	if *batchSize <= 0 {
+		panic("-batch-size must be positive")
+	}
 	db, err := storage.Open(
 		processCtx.Context(), connections, &dbOpts,
 		caching.NewRistrettoCache(cacheMaxBytes, cacheTTL, caching.DisableMetrics),
 	)
 	if err != nil {
 		panic(err)
-	}
-	if *batchSize <= 0 {
-		panic("-batch-size must be positive")
 	}
 
 	total := 0

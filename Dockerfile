@@ -18,6 +18,10 @@ RUN apk --update --no-cache add bash build-base curl git pkgconf
 # submodule in the main build context, so the context must include it:
 # `git submodule update --init rezzy` before building.
 #
+# The rezzy and Go build stages below run on the target platform, so the
+# multi-arch release build compiles them under emulation for arm64 and arm/v7.
+# That is much slower than native cross-compilation.
+#
 FROM --platform=${TARGETPLATFORM} docker.io/rust:1.89-alpine AS rezzy-build
 RUN apk --update --no-cache add musl-dev
 WORKDIR /rezzy
@@ -29,8 +33,9 @@ COPY --from=rezzy rezzy-cli /rezzy/rezzy-cli
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
 COPY --from=rezzy rezzy-json /rezzy/rezzy-json
 COPY --from=rezzy rezzy-log /rezzy/rezzy-log
+COPY --from=rezzy rezzy-keyfile /rezzy/rezzy-keyfile
 COPY --from=rezzy rezzy-recon /rezzy/rezzy-recon
-RUN cargo build --release -p rezzy-ffi \
+RUN cargo build --locked --release -p rezzy-ffi \
     && mkdir -p target/pkgconfig \
     && printf 'prefix=/rezzy\nlibdir=/rezzy/target/release\nincludedir=/rezzy/include\n\nName: rezzy-ffi\nDescription: Rezzy static C ABI\nVersion: 0.0.0\nLibs: /rezzy/target/release/librezzy_ffi.a -lpthread -ldl -lm\nCflags: -I/rezzy/include\n' \
         > target/pkgconfig/rezzy-ffi.pc

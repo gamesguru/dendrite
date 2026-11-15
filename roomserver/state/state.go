@@ -312,10 +312,17 @@ func (v *StateResolution) LoadCombinedStateAfterEvents(
 	defer trace.EndRegion()
 
 	var combined []types.StateEntry
+	snapshotCache := make(map[types.StateSnapshotNID][]types.StateEntry)
 	for _, prevState := range prevStates {
-		fullState, err := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
-		if err != nil {
-			return nil, fmt.Errorf("v.LoadStateAtSnapshot: %w", err)
+		snapshotNID := prevState.BeforeStateSnapshotNID
+		fullState, ok := snapshotCache[snapshotNID]
+		if !ok {
+			var err error
+			fullState, err = v.LoadStateAtSnapshot(ctx, snapshotNID)
+			if err != nil {
+				return nil, fmt.Errorf("v.LoadStateAtSnapshot: %w", err)
+			}
+			snapshotCache[snapshotNID] = fullState
 		}
 		if prevState.IsStateEvent() && !prevState.IsRejected {
 			// If the prev event was a state event then add an entry for the event itself
@@ -625,11 +632,11 @@ var calculateStateDurations = prometheus.NewHistogramVec(
 	// The possible values for algorithm are:
 	//    empty_state -> The list of events was empty so the state is empty.
 	//    no_change -> The state hasn't changed.
-	//    single_delta -> There was a single event added to the state in a way that can be encoded as a single delta
+	//    single_state_event -> State was formed by applying one state event to its previous snapshot.
 	//    full_state_no_conflicts -> We created a new copy of the full room state, but didn't enounter any conflicts
 	//                               while doing so.
 	//    full_state_with_conflicts -> We created a new copy of the full room state and had to resolve conflicts to do so.
-	//    _load_state_block_nids -> Failed loading the state block nids for a single previous state.
+	//    _load_state -> Failed loading a previous state snapshot.
 	//    _load_combined_state -> Failed to load the combined state.
 	//    _resolve_conflicts -> Failed to resolve conflicts.
 	[]string{"algorithm", "outcome"},

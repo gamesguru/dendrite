@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -195,7 +196,7 @@ func (r *Queryer) QueryRoomReconciliationState(
 		return err
 	}
 	if info == nil || info.IsStub() {
-		return fmt.Errorf("room %s not found", req.RoomID)
+		return fmt.Errorf("room %s: %w", req.RoomID, types.ErrRoomNotFound)
 	}
 	eventIDs, err := r.DB.EventIDsInRoom(ctx, info.RoomNID)
 	if err != nil {
@@ -205,6 +206,9 @@ func (r *Queryer) QueryRoomReconciliationState(
 	if err != nil {
 		return err
 	}
+	// LatestEventIDs builds its slice from a map of event NIDs, so its order
+	// changes between calls. Sort it to keep the MSC4521 frame deterministic.
+	sort.Strings(latest)
 	res.RoomVersion = info.RoomVersion
 	res.EventIDs = eventIDs
 	res.ForwardExtremities = latest

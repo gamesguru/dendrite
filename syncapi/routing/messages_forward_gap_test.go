@@ -485,7 +485,7 @@ func TestFillForwardGapStopsWhenFrontierCannotBeFilled(t *testing.T) {
 	}
 	filled, err := r.fillForwardGap(r.ctx, position)
 	require.NoError(t, err)
-	assert.False(t, filled, "an unfillable gap must not send the caller back to reread the page")
+	assert.True(t, filled, "the stored batch must send the caller back to reread the page")
 	assert.Equal(t, 1, replay.calls, "the round stops after the frontier failed to move")
 
 	// The failure is remembered, so the next request does not ask again.

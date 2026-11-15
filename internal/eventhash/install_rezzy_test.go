@@ -40,10 +40,10 @@ func TestInstalledHooksRedactTamperedEvent(t *testing.T) {
 	}
 }
 
-// rezzy and the built-in gmsl code agree on MSC4014 event IDs.
-func TestPseudoIDsEventIDMatchesBuiltin(t *testing.T) {
+// rezzy and the built-in gmsl code agree on room v10 event IDs.
+func TestV10EventIDMatchesBuiltin(t *testing.T) {
 	const ev = `{"type":"m.room.message","room_id":"!r:example.org","sender":"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG","content":{"body":"x"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`
-	impl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs)
+	impl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	gomatrixserverlib.SetEventIDHook(nil)
 	defer func() { _ = install() }()
 	builtin, err := impl.NewEventFromTrustedJSON([]byte(ev), false)

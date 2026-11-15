@@ -6,10 +6,12 @@
 package routing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -21,6 +23,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/reconciliation"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
 const (
@@ -42,9 +45,16 @@ func roomReconciliationState(
 	if err := rsAPI.QueryRoomReconciliationState(ctx, &roomserverAPI.QueryRoomReconciliationStateRequest{
 		RoomID: roomID,
 	}, &res); err != nil {
+		if errors.Is(err, types.ErrRoomNotFound) {
+			return nil, &util.JSONResponse{
+				Code: http.StatusNotFound,
+				JSON: spec.NotFound("Room not found"),
+			}
+		}
+		util.GetLogger(ctx).WithError(err).Error("failed to query room reconciliation state")
 		return nil, &util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("Room not found"),
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("Failed to query room reconciliation state"),
 		}
 	}
 	if _, ok := reconciliation.EventIDFormat(res.RoomVersion); !ok {
@@ -116,14 +126,12 @@ func digestResponse(
 	withStrata bool,
 ) map[string]any {
 	response := map[string]any{
-		"digest":                 snapshot.Digest,
-		"digest_type":            reconciliation.DigestType,
-		"known_event_count":      snapshot.Count,
-		"frame_id":               frameID(state.ForwardExtremities),
-		"frame_event_ids":        state.ForwardExtremities,
-		"extremity_event_ids":    state.ForwardExtremities,
-		"depth_range":            []int64{0, 0},
-		"origin_server_ts_range": []int64{0, 0},
+		"digest":              snapshot.Digest,
+		"digest_type":         reconciliation.DigestType,
+		"known_event_count":   snapshot.Count,
+		"frame_id":            frameID(state.ForwardExtremities),
+		"frame_event_ids":     state.ForwardExtremities,
+		"extremity_event_ids": state.ForwardExtremities,
 	}
 	if withStrata {
 		response["strata"] = snapshot.Strata
@@ -173,7 +181,7 @@ type roomDiffRequest struct {
 }
 
 func parseBucketPrefix(raw json.RawMessage) (uint64, bool) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return 0, false
 	}
 	var number uint64
@@ -238,6 +246,32 @@ func RoomDiff(
 	if len(body.Requests) == 0 || len(body.Requests) > maxReconciliationBuckets {
 		return badParam("Invalid number of bucket requests")
 	}
+	requests := make([]reconciliation.BucketRequest, len(body.Requests))
+	// Buckets must form an ordered antichain: each covers a range of the
+	// 32-bit hash space, and ranges may neither overlap nor be out of order.
+	var coveredUpTo uint64
+	for i, bucket := range body.Requests {
+		prefix, ok := parseBucketPrefix(bucket.Prefix)
+		if !ok {
+			return badParam(fmt.Sprintf("Invalid `requests[%d].prefix`", i))
+		}
+		if bucket.Depth > maxBucketDepth || bucket.Capacity == 0 || bucket.Capacity > maxBucketSketchCapacity {
+			return badParam(fmt.Sprintf("Invalid `requests[%d]`", i))
+		}
+		if prefix >= uint64(1)<<bucket.Depth {
+			return badParam(fmt.Sprintf("`requests[%d].prefix` is out of range for its depth", i))
+		}
+		start := prefix << (maxBucketDepth - bucket.Depth)
+		if start < coveredUpTo {
+			return badParam(fmt.Sprintf("`requests[%d]` overlaps or precedes an earlier bucket", i))
+		}
+		coveredUpTo = (prefix + 1) << (maxBucketDepth - bucket.Depth)
+		requests[i] = reconciliation.BucketRequest{
+			Depth:    uint8(bucket.Depth),
+			Prefix:   prefix,
+			Capacity: int(bucket.Capacity),
+		}
+	}
 
 	state, resErr := roomReconciliationState(httpReq.Context(), rsAPI, roomID)
 	if resErr != nil {
@@ -279,41 +313,20 @@ func RoomDiff(
 		}}
 	}
 
-	requests := make([]reconciliation.BucketRequest, len(body.Requests))
-	// Buckets must form an ordered antichain: each covers a range of the
-	// 32-bit hash space, and ranges may neither overlap nor be out of order.
-	var coveredUpTo uint64
-	for i, bucket := range body.Requests {
-		prefix, ok := parseBucketPrefix(bucket.Prefix)
-		if !ok {
-			return badParam(fmt.Sprintf("Invalid `requests[%d].prefix`", i))
-		}
-		if bucket.Depth > maxBucketDepth || bucket.Capacity == 0 || bucket.Capacity > maxBucketSketchCapacity {
-			return badParam(fmt.Sprintf("Invalid `requests[%d]`", i))
-		}
-		if prefix >= uint64(1)<<bucket.Depth {
-			return badParam(fmt.Sprintf("`requests[%d].prefix` is out of range for its depth", i))
-		}
-		start := prefix << (maxBucketDepth - bucket.Depth)
-		if start < coveredUpTo {
-			return badParam(fmt.Sprintf("`requests[%d]` overlaps or precedes an earlier bucket", i))
-		}
-		coveredUpTo = (prefix + 1) << (maxBucketDepth - bucket.Depth)
-		requests[i] = reconciliation.BucketRequest{
-			Depth:    uint8(bucket.Depth),
-			Prefix:   prefix,
-			Capacity: int(bucket.Capacity),
-		}
-	}
-
 	format, _ := reconciliation.EventIDFormat(state.RoomVersion)
 	result, err := reconciliation.BucketDiff(
 		state.EventIDs, format, requests, body.LocalSketches,
 		body.LocalDigest, body.LocalKnownEventCount,
 	)
 	if err != nil {
-		util.GetLogger(httpReq.Context()).WithError(err).Warn("MSC4521 bucket diff failed")
-		return badParam("Invalid reconciliation request: " + err.Error())
+		if errors.Is(err, reconciliation.ErrInvalidRequest) {
+			return badParam("Invalid reconciliation request: " + err.Error())
+		}
+		util.GetLogger(httpReq.Context()).WithError(err).Error("MSC4521 bucket diff failed")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("Failed to compute the reconciliation difference"),
+		}
 	}
 
 	missing := result.MissingEventIDs

@@ -157,6 +157,11 @@ type StateHAMT interface {
 	SelectStateHAMTRootRefs(ctx context.Context, txn *sql.Tx) ([]StateHAMTRootRef, error)
 	SelectStateHAMTNodeHashes(ctx context.Context, txn *sql.Tx) ([][]byte, error)
 	DeleteStateHAMTNodes(ctx context.Context, txn *sql.Tx, hashes [][]byte) error
+	// LockStateHAMTNodes holds a lock until txn ends. Writers that add nodes
+	// take it shared and the unreachable-node sweep takes it exclusive, so
+	// the sweep cannot delete nodes a concurrent writer has just added or
+	// relied on. It must be called inside a transaction.
+	LockStateHAMTNodes(ctx context.Context, txn *sql.Tx, exclusive bool) error
 }
 
 type RoomAliases interface {

@@ -240,12 +240,12 @@ func (r *RoomserverInternalAPI) SetFederationAPI(fsAPI fsAPI.RoomserverFederatio
 	if err := r.Start(); err != nil {
 		logrus.WithError(err).Panic("failed to start roomserver input API")
 	}
-	if r.enableMetrics {
+	if r.enableMetrics && r.Cfg.Global.Metrics.Enabled {
 		r.ProcessContext.Go(func() {
 			refreshStateHAMTCoverage := func() {
 				total, withHAMT, err := r.DB.StateHAMTCoverage(r.ProcessContext.Context())
 				if err != nil {
-					logrus.WithError(err).Debug("failed to refresh state HAMT coverage metric")
+					logrus.WithError(err).Warn("failed to refresh state HAMT coverage metric")
 					return
 				}
 				roomstate.SetStateHAMTSnapshotsMissing(total - withHAMT)

@@ -1,9 +1,9 @@
-// Package eventhash optionally makes rezzy authoritative for event IDs and
-// content hash verdicts by installing gomatrixserverlib hooks, and cross-checks
-// roomserver state snapshots against rezzy's HAMT.
+// Package eventhash makes rezzy authoritative for event IDs and content hash
+// verdicts by installing gomatrixserverlib hooks at import time, and
+// cross-checks roomserver state snapshots against rezzy's HAMT.
 //
-// The default build links rezzy through cgo and installs the hooks that make
-// it authoritative. The "rezzy" tag also enables the state HAMT cross-check.
-// Both need the native library; see the build-rezzy and test-rezzy targets in
-// the Makefile.
+// Every build links rezzy through cgo, installs the authoritative hooks, and
+// compiles in the state HAMT cross-check; no build tag opts in or out. The
+// package needs the native library, so build it with the rezzy-native target
+// in the Makefile.
 package eventhash

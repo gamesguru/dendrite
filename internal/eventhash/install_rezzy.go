@@ -24,9 +24,11 @@ func init() { //nolint:gochecknoinits // hooks must be installed before any even
 	}
 }
 
-// Install makes rezzy the source of event IDs and content hash verdicts.
-// Call it during server startup before parsing events. It self-tests the
-// native library before installing hooks, so unsupported builds fail early.
+// Install makes rezzy the source of event IDs and content hash verdicts by
+// installing the gomatrixserverlib hooks. The package's init function calls it,
+// so importing eventhash installs the hooks before any event is parsed; a
+// rezzy that is linked but unusable makes that init panic. Calling Install
+// again is safe and returns the result of the first attempt.
 func Install() error {
 	installOnce.Do(func() { installErr = install() })
 	return installErr

@@ -196,6 +196,9 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 	) (types.StreamPosition, error)
+	// UpdateEventJSON replaces the serialized event for an event already in the
+	// sync timeline, for example when backfill discovers its redaction later.
+	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
 	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
 	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
 	// PurgeBackwardExtremitiesForEvents is PurgeBackwardExtremitiesForEvent for many events in one transaction.

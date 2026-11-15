@@ -77,11 +77,12 @@ type Database interface {
 	StateHAMTCoverage(ctx context.Context) (total int64, withHAMT int64, err error)
 	// StateSnapshotNIDs returns up to limit snapshot NIDs greater than after,
 	// in ascending order, so maintenance commands can page through every
-	// snapshot.
+	// snapshot. A non-positive limit selects a default page size of 1000.
 	StateSnapshotNIDs(ctx context.Context, after types.StateSnapshotNID, limit int) ([]types.StateSnapshotNID, error)
 	// VerifyStateHAMT compares a snapshot's persisted HAMT with the entries its
 	// legacy state blocks describe, returning types.ErrNoStateHAMT when there
-	// is no HAMT to check.
+	// is no HAMT to check. Snapshots without legacy blocks receive only an
+	// internal HAMT identity check.
 	VerifyStateHAMT(ctx context.Context, snapshotNID types.StateSnapshotNID) error
 	// Look up the state data for the state key tuples for each numeric state block ID
 	// This is used to fetch a subset of the room state at a snapshot.
@@ -312,8 +313,10 @@ type RoomDatabase interface {
 	StateEntries(ctx context.Context, stateBlockNIDs []types.StateBlockNID) ([]types.StateEntryList, error)
 	StateHAMTEntries(ctx context.Context, snapshotNID types.StateSnapshotNID) ([]types.StateEntry, bool, error)
 	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
+	VerifyStateHAMT(ctx context.Context, snapshotNID types.StateSnapshotNID) error
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
+	// AddState stores the complete room state at the new snapshot, not a delta.
 	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
 	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)
 	GetOrCreateRoomInfo(ctx context.Context, event gomatrixserverlib.PDU) (*types.RoomInfo, error)

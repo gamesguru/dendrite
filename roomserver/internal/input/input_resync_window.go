@@ -381,11 +381,8 @@ func (r *Inputer) recomputeStateSinceJoin(
 	return done, skipped, rejected, accepted, nil
 }
 
-// flatStateAfterEvents is CalculateAndStoreStateAfterEvents, except that the state
-// after a single state event is stored as one block. A snapshot's blocks are kept in
-// the order of their NIDs, and a block of one event is shared with every snapshot
-// that holds it, so a delta block made earlier can sort before the block it should
-// override, and the old entry for the state key would win.
+// flatStateAfterEvents is CalculateAndStoreStateAfterEvents, except it writes
+// through the updater's transaction.
 func (r *Inputer) flatStateAfterEvents(
 	ctx context.Context,
 	updater *shared.RoomUpdater,

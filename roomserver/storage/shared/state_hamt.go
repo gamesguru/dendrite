@@ -8,8 +8,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
@@ -60,6 +63,7 @@ func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, erro
 	}
 
 	completed := 0
+	var failures []error
 	for _, item := range snapshots {
 		built := false
 		err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -86,13 +90,17 @@ func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, erro
 			return nil
 		})
 		if err != nil {
-			return completed, err
+			// One unbuildable snapshot must not block the rest of the batch.
+			logrus.WithError(err).WithField("state_snapshot_nid", item.nid).
+				Warn("failed to backfill state HAMT; continuing")
+			failures = append(failures, err)
+			continue
 		}
 		if built {
 			completed++
 		}
 	}
-	return completed, nil
+	return completed, errors.Join(failures...)
 }
 
 // StateHAMTCoverage reports how many state snapshots exist and how many of
@@ -205,13 +213,11 @@ func (d *Database) VerifyStateHAMT(
 	if !ok {
 		return types.ErrNoStateHAMT
 	}
-	entryLists, err := d.stateEntries(ctx, nil, blockLists[0].StateBlockNIDs)
+	// Merge the blocks with last-wins semantics, as LoadStateAtSnapshot does,
+	// so superseded entries for the same state key do not count as a mismatch.
+	blockEntries, err := d.stateEntriesFromBlocks(ctx, nil, blockLists[0].StateBlockNIDs)
 	if err != nil {
 		return fmt.Errorf("load state entries for snapshot %d: %w", snapshotNID, err)
-	}
-	var blockEntries []types.StateEntry
-	for _, list := range entryLists {
-		blockEntries = append(blockEntries, list.StateEntries...)
 	}
 	return diffStateEntries(snapshotNID, hamtEntries, blockEntries)
 }
@@ -285,6 +291,11 @@ func sampleEntries(entries []types.StateEntry, limit int) string {
 // available, sweeps node records not reachable from any remaining root. Node
 // records are content-addressed and shared, so the sweep must trace all roots.
 func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
+	// Exclude concurrent node writers for the whole trace-and-delete, so no
+	// node committed after the trace can be swept as unreachable.
+	if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, true); err != nil {
+		return fmt.Errorf("lock state HAMT nodes for purge: %w", err)
+	}
 	if err := d.StateHAMTTable.DeleteStateHAMTRoom(ctx, txn, roomNID); err != nil {
 		return fmt.Errorf("delete state HAMT roots for room %d: %w", roomNID, err)
 	}
@@ -457,6 +468,9 @@ func (d *Database) insertStateHAMT(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID, snapshotNID types.StateSnapshotNID, persisted *statehamt.Persisted,
 ) error {
+	if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, false); err != nil {
+		return fmt.Errorf("lock state HAMT nodes: %w", err)
+	}
 	nodes := make([]tables.StateHAMTNode, len(persisted.Nodes))
 	for i, node := range persisted.Nodes {
 		nodes[i] = tables.StateHAMTNode{Hash: node.Hash, Bytes: node.Bytes}

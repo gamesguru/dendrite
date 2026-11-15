@@ -1359,7 +1359,9 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 				r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
 				map[string][]string{extremityID: prevs},
 			))
-			return false, nil
+			// The batch was stored, so report it as filled: the caller must
+			// reread the page to serve those events rather than skip them.
+			return filled, nil
 		}
 	}
 
@@ -2030,6 +2032,11 @@ func backfillEvents(
 	}
 	events := res.Events
 	for i := range events {
+		if events[i].Redacted() {
+			if err = db.UpdateEventJSON(ctx, events[i].EventID(), events[i]); err != nil {
+				return nil, err
+			}
+		}
 		// The roomserver reports the visibility in force before each event.
 		// Fall back to the batch value when it could not be determined.
 		if events[i].Visibility == "" {

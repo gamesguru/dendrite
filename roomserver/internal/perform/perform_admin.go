@@ -878,6 +878,7 @@ func (r *Admin) PerformAdminFetchEvent(
 			Origin: serverName,
 		}},
 		Asynchronous: false,
+		VirtualHost:  r.Cfg.Matrix.ServerName,
 	}, inputRes)
 	if inputRes.ErrMsg != "" {
 		return "", inputRes.Err()
@@ -887,6 +888,10 @@ func (r *Admin) PerformAdminFetchEvent(
 	// accepted but excluded from current state; that is not distinguished here.)
 	states, err := r.DB.StateAtEventIDs(ctx, []string{eventID})
 	if err != nil {
+		var missingErr types.MissingEventError
+		if errors.As(err, &missingErr) {
+			return "not_stored", nil
+		}
 		return "", fmt.Errorf("reading back stored event: %w", err)
 	}
 	if len(states) == 0 {

@@ -188,6 +188,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// visibility change, and the sync API's history filter applies each event's
 	// own value when the event is later read from /messages.
 	historyVisibilities := make(map[string]gomatrixserverlib.HistoryVisibility, len(storedEvents))
+	redactedInBatch := make(map[string]gomatrixserverlib.PDU)
 	// State events fetched while resolving the state above. They are stored but
 	// have no before-state here, so they are returned with the most restrictive
 	// visibility rather than left invisible to the sync API.
@@ -210,7 +211,11 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			entries, err = r.DB.StateEntriesForEventIDs(ctx, stateIDs, true)
 			if err != nil {
 				logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to get state entries for event")
-				return err
+				// Keep processing the batch. State events fetched above are
+				// already persisted in the roomserver and must still be returned
+				// to sync; a later retry would consider them present and omit
+				// them from sideEffectEvents.
+				continue
 			}
 		}
 
@@ -230,8 +235,13 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			// before-state, which fails (and rolls the redaction back). Now that
 			// the snapshot exists, validate it again.
 			resolver := state.NewStateResolution(r.DB, info, r.Querier)
-			if _, _, rErr := r.DB.MaybeRedactEvent(ctx, info, ev.EventNID, ev.PDU, &resolver, r.Querier); rErr != nil {
+			_, redacted, rErr := r.DB.MaybeRedactEvent(ctx, info, ev.EventNID, ev.PDU, &resolver, r.Querier)
+			if rErr != nil {
 				logrus.WithError(rErr).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to apply redaction after state assignment")
+			} else if redacted != nil {
+				// The response still holds the unredacted target. Replace it, so
+				// the sync copy written from the response is redacted too.
+				redactedInBatch[redacted.EventID()] = redacted
 			}
 		}
 	}
@@ -240,6 +250,9 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 
 	res.Events = make([]*types.HeaderedEvent, len(events))
 	for i := range events {
+		if redacted, ok := redactedInBatch[events[i].EventID()]; ok {
+			events[i] = redacted
+		}
 		vis := historyVisibilities[events[i].EventID()]
 		if vis == "" {
 			// The state before this event was not available. Do not fall back to
@@ -848,9 +861,24 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 		// If storing this event results in it being redacted, then do so.
 		// It's also possible for this event to be a redaction which results in another event being
 		// redacted, which we don't care about since we aren't returning it in this backfill.
-		if redactedEvent != nil && redactedEvent.EventID() == ev.EventID() {
-			ev = redactedEvent
-			events[j] = ev
+		if redactedEvent != nil {
+			// A redaction can target an event earlier in this batch as well as
+			// the event currently being stored. Keep both response collections
+			// in sync with the persisted redacted copy.
+			for i := range events {
+				if events[i].EventID() == redactedEvent.EventID() {
+					events[i] = redactedEvent
+				}
+			}
+			for i := range storedEvents {
+				if storedEvents[i].EventID() == redactedEvent.EventID() {
+					storedEvents[i].PDU = redactedEvent
+				}
+			}
+			if redactedEvent.EventID() == ev.EventID() {
+				ev = redactedEvent
+				events[j] = ev
+			}
 		}
 		storedEvents = append(storedEvents, types.Event{
 			EventNID: eventNID,

@@ -11,6 +11,9 @@ runs:
   steps:
     - uses: dtolnay/rust-toolchain@stable
       if: inputs.native == 'true'
+    - name: Check out the Rezzy submodule
+      shell: bash
+      run: git submodule update --init --depth 1 rezzy
     - name: Build Rezzy native library
       if: inputs.native == 'true'
       shell: bash

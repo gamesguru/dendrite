@@ -11,6 +11,7 @@ import (
 	"github.com/matrix-org/util"
 
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/reconciliation"
 )
 
 type version struct {
@@ -34,8 +35,8 @@ func Version(msc4521 bool) util.JSONResponse {
 	}
 	if msc4521 {
 		v.UnstableFeatures = map[string]bool{
-			"tk.nutra.msc4521.digest.algebraic_v1": true,
-			"tk.nutra.msc0501.reconciliation":      true,
+			"tk.nutra.msc4521.digest." + reconciliation.DigestType: true,
+			"tk.nutra.msc0501.reconciliation":                      true,
 		}
 	}
 	return util.JSONResponse{

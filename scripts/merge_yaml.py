@@ -15,6 +15,7 @@ commented block at the end and listed on stderr.
 
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -25,12 +26,37 @@ KEY_RE = re.compile(r"^(\s*)([A-Za-z0-9_.\-]+):(?:\s+(.*?))?\s*$")
 
 def scalar(v):
     """Format a scalar as a JSON literal, which is valid YAML."""
-    return "null" if v is None else json.dumps(v, ensure_ascii=False)
+    if v is None:
+        return "null"
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except TypeError:
+        return json.dumps(str(v), ensure_ascii=False)
 
 
 def is_scalar(v):
     """Return whether v is neither a dict nor a list."""
     return not isinstance(v, (dict, list))
+
+
+def trailing_comment(text):
+    """Return a YAML comment suffix outside any quoted scalar, if present."""
+    quote = None
+    escaped = False
+    for i, char in enumerate(text):
+        if quote == '"' and escaped:
+            escaped = False
+            continue
+        if quote == '"' and char == "\\":
+            escaped = True
+            continue
+        if quote and char == quote:
+            quote = None
+        elif not quote and char in "'\"":
+            quote = char
+        elif not quote and char == "#" and (i == 0 or text[i - 1].isspace()):
+            return text[i:]
+    return ""
 
 
 def dump_block(v, indent):
@@ -72,7 +98,10 @@ def merge(sample_lines, user):  # pylint: disable=too-many-locals
         while j < n:
             ln = sample_lines[j]
             if ln.strip() and not ln.lstrip().startswith("#"):
-                if len(ln) - len(ln.lstrip()) <= key_indent:
+                line_indent = len(ln) - len(ln.lstrip())
+                if line_indent < key_indent or (
+                    line_indent == key_indent and not ln.lstrip().startswith("-")
+                ):
                     break
             j += 1
         # do not swallow trailing blank/comment lines that belong to the next key
@@ -91,8 +120,9 @@ def merge(sample_lines, user):  # pylint: disable=too-many-locals
             i += 1
             continue
         indent, key, inline = len(m.group(1)), m.group(2), m.group(3) or ""
-        if inline.startswith("#"):
-            inline = ""
+        comment = trailing_comment(inline)
+        if comment and not comment.startswith(" "):
+            comment = " " + comment
         while stack and stack[-1][0] >= indent:
             stack.pop()
         path = tuple(k for _, k in stack) + (key,)
@@ -123,15 +153,15 @@ def merge(sample_lines, user):  # pylint: disable=too-many-locals
                 i += 1
             continue
         if is_scalar(val):
-            out.append(f"{' ' * indent}{key}: {scalar(val)}\n")
+            out.append(f"{' ' * indent}{key}: {scalar(val)}{comment}\n")
             used.add(path)
             i = child_end if has_children else i + 1
-        elif sample_is_list or (not has_children) or isinstance(val, list):
+        elif sample_is_list or (not has_children) or isinstance(val, list) or (isinstance(val, dict) and not val):
             # lists, and dicts where the sample has a scalar/empty value: replace whole
             out.append(
-                f"{' ' * indent}{key}:\n"
+                f"{' ' * indent}{key}:{comment}\n"
                 if val
-                else f"{' ' * indent}{key}: {'[]' if isinstance(val, list) else '{}'}\n"
+                else f"{' ' * indent}{key}: {'[]' if isinstance(val, list) else '{}'}{comment}\n"
             )
             if val:
                 out.append(dump_block(val, indent + 2))
@@ -180,8 +210,14 @@ def main():
         print(
             "Not in sample: " + ", ".join(".".join(p) for p in missing), file=sys.stderr
         )
-    with open(a.output, "w", encoding="utf-8") as f:
+    # The merged config holds secrets, so restrict it to the owner.
+    fd = os.open(a.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.writelines(out)
+    try:
+        os.chmod(a.output, 0o600)
+    except OSError:
+        pass  # best effort on platforms without POSIX permissions
     print(
         f"Wrote {a.output}: {len(used)} of your values applied, "
         f"{len(missing)} not in sample"

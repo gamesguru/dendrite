@@ -707,7 +707,7 @@ func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserver
 		logrus.WithError(err).WithFields(logrus.Fields{
 			"userID": device.UserID, "serverName": serverName, "roomID": roomID, "eventID": eventID,
 		}).Error("failed to fetch event")
-		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.Unknown(err.Error())}
+		return util.JSONResponse{Code: http.StatusBadGateway, JSON: spec.Unknown(err.Error())}
 	}
 	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
 		Outcome string `json:"outcome"`
@@ -736,7 +736,15 @@ func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserve
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"event_ids\" array of 1-100 event IDs.")}
 	}
 	results := make(map[string]string, len(body.EventIDs))
+	seen := make(map[string]struct{}, len(body.EventIDs))
 	for _, eventID := range body.EventIDs {
+		if eventID == "" {
+			continue
+		}
+		if _, ok := seen[eventID]; ok {
+			continue
+		}
+		seen[eventID] = struct{}{}
 		outcome, err := rsAPI.PerformAdminFetchEvent(req.Context(), roomID, eventID, spec.ServerName(serverName))
 		if err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{

@@ -7,6 +7,7 @@ package sqlite3
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -24,6 +25,8 @@ const stateHAMTSchema = `
     root_record BLOB NOT NULL,
     entry_count INTEGER NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS roomserver_state_hamt_snapshots_room_idx
+    ON roomserver_state_hamt_snapshots (room_nid);
   CREATE TABLE IF NOT EXISTS roomserver_state_hamt_nodes (
     node_hash BLOB PRIMARY KEY,
     node_bytes BLOB NOT NULL
@@ -35,12 +38,6 @@ const insertStateHAMTSQL = `
     (state_snapshot_nid, room_nid, root_hash, state_group_id, root_record, entry_count)
   VALUES ($1, $2, $3, $4, $5, $6)
   ON CONFLICT (state_snapshot_nid) DO NOTHING
-`
-
-const insertStateHAMTNodeSQL = `
-  INSERT INTO roomserver_state_hamt_nodes (node_hash, node_bytes)
-  VALUES ($1, $2)
-  ON CONFLICT (node_hash) DO NOTHING
 `
 
 const selectStateHAMTSQL = `
@@ -58,7 +55,7 @@ const stateHAMTLookupBatch = 500
 const (
 	deleteStateHAMTRoomSQL     = `DELETE FROM roomserver_state_hamt_snapshots WHERE room_nid = $1`
 	selectStateHAMTRootRefsSQL = `
-  SELECT r.room_id, h.root_hash
+  SELECT DISTINCT r.room_id, h.root_hash
   FROM roomserver_state_hamt_snapshots AS h
   JOIN roomserver_rooms AS r ON r.room_nid = h.room_nid
 `
@@ -116,11 +113,25 @@ func (s *stateHAMTStatements) InsertStateHAMT(
 	return err
 }
 
+// insertStateHAMTNodesBatch bounds the rows in one multi-row insert. Each row
+// binds two parameters, comfortably below SQLite's host-parameter limit.
+const insertStateHAMTNodesBatch = 500
+
 func (s *stateHAMTStatements) InsertStateHAMTNodes(
 	ctx context.Context, txn *sql.Tx, nodes []tables.StateHAMTNode,
 ) error {
-	for _, node := range nodes {
-		if _, err := s.exec(ctx, txn, insertStateHAMTNodeSQL, node.Hash, node.Bytes); err != nil {
+	for start := 0; start < len(nodes); start += insertStateHAMTNodesBatch {
+		end := min(start+insertStateHAMTNodesBatch, len(nodes))
+		batch := nodes[start:end]
+		placeholders := make([]string, len(batch))
+		args := make([]any, 0, len(batch)*2)
+		for i, node := range batch {
+			placeholders[i] = fmt.Sprintf("($%d, $%d)", len(args)+1, len(args)+2)
+			args = append(args, node.Hash, node.Bytes)
+		}
+		query := `INSERT INTO roomserver_state_hamt_nodes (node_hash, node_bytes) VALUES ` +
+			strings.Join(placeholders, ", ") + ` ON CONFLICT (node_hash) DO NOTHING`
+		if _, err := s.exec(ctx, txn, query, args...); err != nil {
 			return err
 		}
 	}
@@ -145,6 +156,21 @@ func (s *stateHAMTStatements) SelectStateHAMT(
 func (s *stateHAMTStatements) SelectStateHAMTNodes(
 	ctx context.Context, txn *sql.Tx, hashes [][]byte,
 ) ([]tables.StateHAMTNode, error) {
+	var nodes []tables.StateHAMTNode
+	for start := 0; start < len(hashes); start += stateHAMTLookupBatch {
+		end := min(start+stateHAMTLookupBatch, len(hashes))
+		batch, err := s.selectStateHAMTNodesBatch(ctx, txn, hashes[start:end])
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, batch...)
+	}
+	return nodes, nil
+}
+
+func (s *stateHAMTStatements) selectStateHAMTNodesBatch(
+	ctx context.Context, txn *sql.Tx, hashes [][]byte,
+) ([]tables.StateHAMTNode, error) {
 	if len(hashes) == 0 {
 		return nil, nil
 	}
@@ -167,6 +193,12 @@ func (s *stateHAMTStatements) SelectStateHAMTNodes(
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
+}
+
+// LockStateHAMTNodes is a no-op: SQLite serializes writers through a single
+// writer, so the sweep cannot interleave with a node insert.
+func (s *stateHAMTStatements) LockStateHAMTNodes(context.Context, *sql.Tx, bool) error {
+	return nil
 }
 
 func (s *stateHAMTStatements) DeleteStateHAMTRoom(
