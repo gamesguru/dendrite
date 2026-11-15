@@ -142,6 +142,31 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 				Warn("backfillViaFederation: response did not contain the requested frontier event")
 		}
 	}
+	// Also report whether the predecessors of every returned event that is
+	// part of the frontier made it into the response. This distinguishes
+	// "server returned the frontier but not its parent" from a failure that
+	// happens after the response is received.
+	for _, ev := range events {
+		isFrontier := false
+		for _, id := range fromEventIDs {
+			if id == ev.EventID() {
+				isFrontier = true
+				break
+			}
+		}
+		if !isFrontier {
+			continue
+		}
+		for _, prev := range ev.PrevEventIDs() {
+			_, have := returned[prev]
+			logrus.WithField("room_id", req.RoomID).
+				WithField("frontier", ev.EventID()).
+				WithField("prev_event", prev).
+				WithField("prev_in_response", have).
+				WithField("response_events", len(events)).
+				Info("backfillViaFederation: frontier predecessor check")
+		}
+	}
 	// Only return an error if we really couldn't get any events.
 	if err != nil && len(events) == 0 {
 		logrus.WithError(err).Errorf("gomatrixserverlib.RequestBackfill failed")
