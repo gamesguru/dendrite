@@ -163,6 +163,10 @@ type StateHAMT interface {
 	// the sweep cannot delete nodes a concurrent writer has just added or
 	// relied on. It must be called inside a transaction.
 	LockStateHAMTNodes(ctx context.Context, txn *sql.Tx, exclusive bool) error
+	// HasNodeLocks reports whether LockStateHAMTNodes does anything. When it
+	// is false, standalone readers should not open a transaction just to
+	// take the lock.
+	HasNodeLocks() bool
 }
 
 type RoomAliases interface {

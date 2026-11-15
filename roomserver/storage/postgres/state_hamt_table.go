@@ -200,6 +200,8 @@ func (s *stateHAMTStatements) selectStateHAMTNodesBatch(
 // against the unreachable-node sweep.
 const stateHAMTNodesLockKey = 0x484d4e44 // "HMND"
 
+func (s *stateHAMTStatements) HasNodeLocks() bool { return true }
+
 func (s *stateHAMTStatements) LockStateHAMTNodes(
 	ctx context.Context, txn *sql.Tx, exclusive bool,
 ) error {

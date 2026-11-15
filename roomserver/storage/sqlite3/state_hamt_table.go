@@ -196,6 +196,8 @@ func (s *stateHAMTStatements) selectStateHAMTNodesBatch(
 	return nodes, rows.Err()
 }
 
+func (s *stateHAMTStatements) HasNodeLocks() bool { return false }
+
 // LockStateHAMTNodes is a no-op: SQLite serializes writers through a single
 // writer, so the sweep cannot interleave with a node insert.
 func (s *stateHAMTStatements) LockStateHAMTNodes(context.Context, *sql.Tx, bool) error {

@@ -611,6 +611,7 @@ index roomserver_state_block | roomserver_state_block_pkey | CREATE UNIQUE INDEX
 index roomserver_state_block | roomserver_state_block_state_block_hash_key | CREATE UNIQUE INDEX roomserver_state_block_state_block_hash_key ON public.roomserver_state_block USING btree (state_block_hash)
 index roomserver_state_hamt_nodes | roomserver_state_hamt_nodes_pkey | CREATE UNIQUE INDEX roomserver_state_hamt_nodes_pkey ON public.roomserver_state_hamt_nodes USING btree (node_hash)
 index roomserver_state_hamt_snapshots | roomserver_state_hamt_snapshots_pkey | CREATE UNIQUE INDEX roomserver_state_hamt_snapshots_pkey ON public.roomserver_state_hamt_snapshots USING btree (state_snapshot_nid)
+index roomserver_state_hamt_snapshots | roomserver_state_hamt_snapshots_room_idx | CREATE INDEX roomserver_state_hamt_snapshots_room_idx ON public.roomserver_state_hamt_snapshots USING btree (room_nid)
 index roomserver_state_snapshots | roomserver_state_snapshots_pkey | CREATE UNIQUE INDEX roomserver_state_snapshots_pkey ON public.roomserver_state_snapshots USING btree (state_snapshot_nid)
 index roomserver_state_snapshots | roomserver_state_snapshots_state_snapshot_hash_key | CREATE UNIQUE INDEX roomserver_state_snapshots_state_snapshot_hash_key ON public.roomserver_state_snapshots USING btree (state_snapshot_hash)
 index roomserver_user_room_keys | roomserver_user_room_keys_pk | CREATE UNIQUE INDEX roomserver_user_room_keys_pk ON public.roomserver_user_room_keys USING btree (user_nid, room_nid)

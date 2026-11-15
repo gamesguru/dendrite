@@ -893,6 +893,11 @@ func (d *Database) withStateHAMTReadLock(
 	ctx context.Context, txn *sql.Tx, read func(*sql.Tx) error,
 ) error {
 	if txn == nil {
+		if !d.StateHAMTTable.HasNodeLocks() {
+			// SQLite: the lock is a no-op, and an owned read transaction would
+			// only hold a database lock against the single writer.
+			return read(nil)
+		}
 		return sqlutil.WithTransaction(d.DB, func(txn *sql.Tx) error {
 			return d.withStateHAMTReadLock(ctx, txn, read)
 		})
