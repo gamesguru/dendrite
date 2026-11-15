@@ -1366,7 +1366,7 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 		// same frontier and gets the same batch again. Detect that and stop,
 		// otherwise every /messages request repeats the whole federation
 		// round until the remote starts returning 429.
-		if !r.forwardGapAdvanced(ctx, firstEventPosition, extremityID, prevs) {
+		if !r.forwardGapAdvanced(ctx, extremityID, prevs) {
 			util.GetLogger(ctx).WithField("room_id", r.roomID).
 				WithField("extremity", extremityID).
 				WithField("missing_parents", prevs).
@@ -1409,7 +1409,7 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 // The extremity is looked up by ID: the lowest open gap may be a different,
 // already-tried one, which says nothing about the gap that was just fetched.
 func (r *messagesReq) forwardGapAdvanced(
-	ctx context.Context, firstEventPosition types.TopologyToken, extremityID string, prevs []string,
+	ctx context.Context, extremityID string, prevs []string,
 ) bool {
 	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
 	if err != nil {

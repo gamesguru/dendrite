@@ -202,8 +202,9 @@ func (r *Queryer) QueryRoomReconciliationState(
 	if err != nil {
 		return err
 	}
+	var isServerInRoom bool
 	if req.ServerName != "" {
-		isServerInRoom, err := r.DB.GetServerInRoom(ctx, info.RoomNID, req.ServerName)
+		isServerInRoom, err = r.DB.GetServerInRoom(ctx, info.RoomNID, req.ServerName)
 		if err != nil {
 			return fmt.Errorf("check server membership for reconciliation: %w", err)
 		}
@@ -224,6 +225,23 @@ func (r *Queryer) QueryRoomReconciliationState(
 	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
 	if err != nil {
 		return err
+	}
+	if req.ServerName != "" {
+		// Extremities name events, so the frame must not reveal one the
+		// requesting server cannot see. frame_id is derived from this set.
+		visibleLatest := latest[:0]
+		for _, eventID := range latest {
+			allowed, _, err := helpers.CheckServerEventAccess(
+				ctx, r.DB, info, req.RoomID, eventID, req.ServerName, isServerInRoom, r,
+			)
+			if err != nil {
+				return fmt.Errorf("check reconciliation extremity visibility for %s: %w", eventID, err)
+			}
+			if allowed {
+				visibleLatest = append(visibleLatest, eventID)
+			}
+		}
+		latest = visibleLatest
 	}
 	// LatestEventIDs builds its slice from a map of event NIDs, so its order
 	// changes between calls. Sort it to keep the MSC4521 frame deterministic.
