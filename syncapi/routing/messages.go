@@ -1414,6 +1414,8 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			if isTerminalBackfillFailure(bfErr) {
 				// No server has these events: the gap is as filled as it can
 				// get and the rest of the history is genuinely unreachable.
+				// A terminal answer comes from the fetch itself, before any
+				// event is stored, so the cached scan is still accurate.
 				util.GetLogger(ctx).WithError(bfErr).Debug("Forward backfill found no events on the attempted servers")
 				if errors.Is(bfErr, errBackfillRecentlyFailed) {
 					// Answered from memory, no federation round happened, so

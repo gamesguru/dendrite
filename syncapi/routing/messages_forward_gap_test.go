@@ -556,6 +556,40 @@ func TestFillForwardGapCachesExtremityPositionsAcrossTerminalCacheHits(t *testin
 		"selection should advance through the cached candidates instead of rescanning the prefix")
 }
 
+// A cached answer moves the scan past itself, so the next round resumes after
+// it instead of re-walking the prefix. Without that, a request with E
+// remembered failures would examine E + (E-1) + ... + 1 candidates.
+func TestForwardGapExtremitySkippingResumesAfterTheLastAnswer(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 4; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: make(map[string][]string),
+	}
+	for i, ev := range room.Events() {
+		state.store(ev)
+		state.extremities[ev.EventID()] = []string{fmt.Sprintf("$missing-%d", i)}
+	}
+	r := newForwardGapReq(state)
+	firstEventPosition := types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30}
+	// The caller deliberately does not re-mark the first answer, so only the
+	// cursor can keep it from being selected again.
+	skip := map[string]struct{}{}
+
+	firstID, _, err := r.forwardGapExtremitySkipping(r.ctx, firstEventPosition, skip)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstID)
+	secondID, _, err := r.forwardGapExtremitySkipping(r.ctx, firstEventPosition, skip)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstID, secondID,
+		"the scan should resume after the last answer, not return it again")
+	assert.Equal(t, 2, r.forwardGapScan.next, "the cursor should move past both answers")
+}
+
 func TestForwardGapRetriesTransientPositionLookupFailure(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
