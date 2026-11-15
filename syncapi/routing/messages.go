@@ -1208,6 +1208,7 @@ func deepestExtremities(
 // cursor, as of the last read from storage.
 type forwardGapScan struct {
 	candidates []forwardGapCandidate
+	next       int
 }
 
 type forwardGapCandidate struct {
@@ -1287,7 +1288,12 @@ func (r *messagesReq) forwardGapExtremitySkipping(
 	if err != nil || scan == nil {
 		return "", nil, err
 	}
-	for _, candidate := range scan.candidates {
+	start := 0
+	if skip != nil {
+		start = scan.next
+	}
+	for i := start; i < len(scan.candidates); i++ {
+		candidate := scan.candidates[i]
 		if _, tried := skip[extremitiesKey(map[string][]string{candidate.id: candidate.prevs})]; tried {
 			continue
 		}
@@ -1296,6 +1302,9 @@ func (r *messagesReq) forwardGapExtremitySkipping(
 		}
 		if topologyTokenLess(firstEventPosition, candidate.pos) {
 			continue
+		}
+		if skip != nil {
+			scan.next = i + 1
 		}
 		return candidate.id, candidate.prevs, nil
 	}
@@ -1396,11 +1405,6 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 		if bfErr != nil {
 			if ctx.Err() != nil {
 				return filled, bfErr
-			}
-			// A failed fetch may still have stored part of a batch, which can
-			// change the extremity set. A remembered failure stored nothing.
-			if !errors.Is(bfErr, errBackfillRecentlyFailed) {
-				r.forwardGapScan = nil
 			}
 			if isTerminalBackfillFailure(bfErr) {
 				// No server has these events: the gap is as filled as it can
