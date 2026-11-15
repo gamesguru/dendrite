@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "**.go" # only execute on changes to go files
+      - "scripts/**" # script changes and their regression tests
       - "go.sum" # or dependency updates
       - ".github/workflows/**" # or workflow changes
       - ".github/actions/**" # or a changed composite action
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - "**.go"
+      - "scripts/**"
       - "go.sum" # or dependency updates
       - ".github/workflows/**"
       - ".github/actions/**"
@@ -79,6 +81,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Keep Python first: actions/setup-python overwrites PKG_CONFIG_PATH, which
+      # the libolm and Rezzy steps below append to for golangci-lint's cgo.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test scripts
+        run: |
+          python -m pip install --quiet pyyaml
+          python -m unittest discover -s scripts
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -99,18 +111,11 @@ jobs:
           go-version-file: "go.mod"
       - name: Build required Rezzy library
         uses: ./.github/actions/setup-rezzy
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Test scripts
-        run: |
-          python -m pip install --quiet pyyaml
-          python -m unittest discover -s scripts
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         env:
           CGO_ENABLED: 1
+          PKG_CONFIG_PATH: ${{ github.workspace }}/rezzy/target/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig
 
   # run go test with different go versions
   test:

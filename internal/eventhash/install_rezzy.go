@@ -56,7 +56,7 @@ func install() error {
 		return rezzy.EventID(string(v), eventJSON)
 	})
 	gomatrixserverlib.SetContentHashHook(func(v gomatrixserverlib.RoomVersion, eventJSON []byte) error {
-		if v == gomatrixserverlib.RoomVersionV1 || v == gomatrixserverlib.RoomVersionV2 || !gomatrixserverlib.StableRoomVersion(v) {
+		if !rezzyVerifiesContentHash(v) {
 			return gomatrixserverlib.ErrUseBuiltin
 		}
 		return rezzy.VerifyContentHash(string(v), eventJSON)
@@ -77,4 +77,12 @@ func rezzyDerivesIDs(v gomatrixserverlib.RoomVersion) bool {
 	default:
 		return false
 	}
+}
+
+// rezzyVerifiesContentHash reports the room versions whose content hashes
+// rezzy verifies: the stable versions other than 1 and 2, which predate content
+// hashes. It is the gate shared by the installed hook and CheckContentHash.
+func rezzyVerifiesContentHash(v gomatrixserverlib.RoomVersion) bool {
+	return v != gomatrixserverlib.RoomVersionV1 && v != gomatrixserverlib.RoomVersionV2 &&
+		gomatrixserverlib.StableRoomVersion(v)
 }

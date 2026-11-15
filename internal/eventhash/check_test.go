@@ -62,6 +62,24 @@ func TestCheckContentHashRejectsTamperedEvent(t *testing.T) {
 	}
 }
 
+// CheckContentHash must use the installed hook's gate, so every stable version
+// except 1 and 2 is checked by rezzy. That includes stable MSC versions such
+// as org.matrix.msc4242.12, whose event IDs GMSL still derives.
+func TestContentHashGateMatchesHook(t *testing.T) {
+	for version := range gomatrixserverlib.StableRoomVersions() {
+		want := version != gomatrixserverlib.RoomVersionV1 && version != gomatrixserverlib.RoomVersionV2
+		if got := rezzyVerifiesContentHash(version); got != want {
+			t.Errorf("rezzyVerifiesContentHash(%s) = %v, want %v", version, got, want)
+		}
+	}
+	if !rezzyVerifiesContentHash(gomatrixserverlib.RoomVersionStateDAGs) {
+		t.Error("stable MSC room versions must have their content hashes verified by rezzy")
+	}
+	if rezzyVerifiesContentHash("com.example.unknown") {
+		t.Error("unknown room versions must be checked by GMSL, not rezzy")
+	}
+}
+
 func TestCheckStateHAMTAgreesWithEntries(t *testing.T) {
 	if !Enabled {
 		t.Skip("CheckStateHAMT is a no-op without rezzy")

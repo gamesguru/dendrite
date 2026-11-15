@@ -198,6 +198,12 @@ func (r *Queryer) QueryRoomReconciliationState(
 	if info == nil || info.IsStub() {
 		return fmt.Errorf("room %s: %w", req.RoomID, types.ErrRoomNotFound)
 	}
+	// Read the extremities first: events are only ever added, so a later read
+	// of the event list is guaranteed to include every extremity read here.
+	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
+	if err != nil {
+		return err
+	}
 	eventIDs, err := r.DB.EventIDsInRoom(ctx, info.RoomNID)
 	if err != nil {
 		return err
@@ -221,10 +227,6 @@ func (r *Queryer) QueryRoomReconciliationState(
 			}
 		}
 		eventIDs = visibleEventIDs
-	}
-	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
-	if err != nil {
-		return err
 	}
 	if req.ServerName != "" {
 		// Extremities name events, so the frame must not reveal one the

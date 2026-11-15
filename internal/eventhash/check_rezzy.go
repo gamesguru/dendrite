@@ -42,11 +42,11 @@ func Check(event gomatrixserverlib.PDU) error {
 }
 
 // CheckContentHash returns an error when rezzy cannot verify the event's
-// content hash. Only the stable room versions 3 through 12 are checked;
-// versions 1 and 2 have no content hashes and experimental or unknown
-// versions are hashed by GMSL, so they are skipped.
+// content hash. It uses the same gate as the installed content-hash hook:
+// every stable room version except 1 and 2, which have no content hashes.
+// Experimental and unknown versions are verified by GMSL, so they are skipped.
 func CheckContentHash(event gomatrixserverlib.PDU) error {
-	if !rezzyDerivesIDs(event.Version()) {
+	if !rezzyVerifiesContentHash(event.Version()) {
 		return nil
 	}
 	if err := rezzy.VerifyContentHash(string(event.Version()), event.JSON()); err != nil {

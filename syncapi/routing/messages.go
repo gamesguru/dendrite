@@ -1350,6 +1350,11 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 				// No server has these events: the gap is as filled as it can
 				// get and the rest of the history is genuinely unreachable.
 				util.GetLogger(ctx).WithError(bfErr).Debug("Forward backfill found no events on the attempted servers")
+				if errors.Is(bfErr, errBackfillRecentlyFailed) {
+					// Answered from memory, no federation round happened, so
+					// it must not use up the budget for later extremities.
+					r.forwardBackfillRounds--
+				}
 				continue
 			}
 			// A transient failure must not look like the end of history, and it
@@ -1682,6 +1687,9 @@ func (r *messagesReq) backfillBackwardUntilComplete(
 	backwardExtremities map[string][]string, page []types.StreamEvent, limit int,
 ) (events []*rstypes.HeaderedEvent, incomplete bool, err error) {
 	prevKey := extremitiesKey(backwardExtremities)
+	// A later round can redact an event an earlier round returned, so apply
+	// the collected redactions to everything accumulated before returning.
+	defer func() { r.applyBackfilledRedactionsToHeadered(events) }()
 	for round := 0; round < maxBackwardBackfillRounds; round++ {
 		batch, backfillErr := r.backfill(r.roomID, backwardExtremities, limit)
 		if backfillErr != nil {
@@ -2008,6 +2016,22 @@ func (r *messagesReq) applyBackfilledRedactions(events []types.StreamEvent) {
 			cp := *events[i].HeaderedEvent
 			cp.PDU = redacted.PDU
 			events[i].HeaderedEvent = &cp
+		}
+	}
+}
+
+// applyBackfilledRedactionsToHeadered swaps in the redacted PDU for backfilled
+// events that a backfill redacted, keeping each event's other fields. Events
+// are replaced by copies because they may be shared.
+func (r *messagesReq) applyBackfilledRedactionsToHeadered(events []*rstypes.HeaderedEvent) {
+	for i, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if redacted, ok := r.backfilledRedactedEvents[ev.EventID()]; ok {
+			cp := *ev
+			cp.PDU = redacted.PDU
+			events[i] = &cp
 		}
 	}
 }

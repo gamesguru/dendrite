@@ -494,5 +494,6 @@ func TestFillForwardGapStopsWhenFrontierCannotBeFilled(t *testing.T) {
 	filled, err = again.fillForwardGap(again.ctx, position)
 	require.NoError(t, err)
 	assert.False(t, filled)
+	assert.Zero(t, again.forwardBackfillRounds, "a cached terminal answer is not a federation round")
 	assert.Equal(t, 1, replay.calls, "a remembered gap is not requested again")
 }

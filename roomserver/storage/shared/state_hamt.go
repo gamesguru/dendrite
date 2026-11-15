@@ -884,13 +884,9 @@ func (d *Database) stateHAMTEntriesForTuplesLocked(
 	if len(keys) == 0 {
 		return nil, true, nil
 	}
-	nodes, err := d.loadStateHAMTNodes(ctx, txn, roomID, root, snapshotNID)
+	values, found, err := d.lookupStateHAMTKeys(ctx, txn, roomID, root, snapshotNID, keys)
 	if err != nil {
 		return nil, false, err
-	}
-	values, found, err := statehamt.Lookup(roomID, root.RootHash, nodes, keys)
-	if err != nil {
-		return nil, false, fmt.Errorf("statehamt.Lookup: %w", err)
 	}
 	entries := make([]statehamt.Entry, 0, len(keys))
 	for i, key := range keys {
@@ -903,6 +899,60 @@ func (d *Database) stateHAMTEntriesForTuplesLocked(
 		return nil, false, err
 	}
 	return resolved, true, nil
+}
+
+// lookupStateHAMTKeys loads only the nodes visited by the requested keys.
+// Lookup reports the next missing node on those paths; fetching that node and
+// retrying discovers the next level without loading unrelated subtrees.
+//
+// Each call reveals at most one missing node, so a lookup over many keys would
+// need one query per node on their combined paths. After a few rounds this
+// falls back to the batched whole-tree load, which is fewer round trips once
+// the key set is large.
+func (d *Database) lookupStateHAMTKeys(
+	ctx context.Context, txn *sql.Tx, roomID string, root *tables.StateHAMTRoot,
+	snapshotNID types.StateSnapshotNID, keys []statehamt.Key,
+) ([]string, []bool, error) {
+	const keyedRounds = 8
+	nodes := make([]statehamt.Node, 0, keyedRounds)
+	seen := make(map[string]struct{}, keyedRounds)
+	for round := 0; round < keyedRounds; round++ {
+		values, found, err := statehamt.Lookup(roomID, root.RootHash, nodes, keys)
+		if err == nil {
+			return values, found, nil
+		}
+		var missing *statehamt.MissingNodesError
+		if !errors.As(err, &missing) {
+			return nil, nil, fmt.Errorf("statehamt.Lookup: %w", err)
+		}
+		fetched, fetchErr := d.StateHAMTTable.SelectStateHAMTNodes(ctx, txn, missing.Hashes)
+		if fetchErr != nil {
+			return nil, nil, fmt.Errorf("SelectStateHAMTNodes: %w", fetchErr)
+		}
+		added := 0
+		for _, node := range fetched {
+			key := string(node.Hash)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			nodes = append(nodes, statehamt.Node{Hash: node.Hash, Bytes: node.Bytes})
+			added++
+		}
+		if added == 0 {
+			return nil, nil, fmt.Errorf("state HAMT for snapshot %d is missing lookup nodes: %w", snapshotNID, err)
+		}
+	}
+	// Too many paths for per-node discovery; load the tree in batches instead.
+	nodes, err := d.loadStateHAMTNodes(ctx, txn, roomID, root, snapshotNID)
+	if err != nil {
+		return nil, nil, err
+	}
+	values, found, err := statehamt.Lookup(roomID, root.RootHash, nodes, keys)
+	if err != nil {
+		return nil, nil, fmt.Errorf("statehamt.Lookup: %w", err)
+	}
+	return values, found, nil
 }
 
 // withStateHAMTReadLock keeps the purge sweep from deleting nodes between a
