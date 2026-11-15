@@ -18,4 +18,4 @@ runs:
         sudo apt-get update
         sudo apt-get install -y pkg-config
         make -C rezzy/rezzy-ffi native
-        echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/rezzy/target/pkgconfig" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/rezzy/target/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"

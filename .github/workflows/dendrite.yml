@@ -73,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -243,6 +245,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Install libolm
         # Build from source so the job does not depend on the Ubuntu package
         # mirrors, which hosted runners intermittently cannot resolve.
@@ -257,6 +261,8 @@ jobs:
           sudo cmake --install olm-build
           sudo ldconfig
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+      - name: Set up Rezzy
+        uses: ./.github/actions/setup-rezzy
       - name: Setup go
         uses: actions/setup-go@v5
         with:
