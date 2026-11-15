@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -30,11 +31,12 @@ import (
 // extremities implied by the events whose prev events are absent.
 type forwardGapState struct {
 	storage.DatabaseTransaction
-	unstored    []*rstypes.HeaderedEvent // the hole, oldest first
-	stored      map[string]*rstypes.HeaderedEvent
-	positions   map[string]types.TopologyToken
-	extremities map[string][]string
-	batches     int
+	unstored        []*rstypes.HeaderedEvent // the hole, oldest first
+	stored          map[string]*rstypes.HeaderedEvent
+	positions       map[string]types.TopologyToken
+	extremities     map[string][]string
+	batches         int
+	positionLookups int
 }
 
 func newForwardGapState(stored, unstored []*rstypes.HeaderedEvent) *forwardGapState {
@@ -87,6 +89,7 @@ func (s *forwardGapState) Events(_ context.Context, eventIDs []string) ([]*rstyp
 }
 
 func (s *forwardGapState) EventPositionInTopology(_ context.Context, eventID string) (types.TopologyToken, error) {
+	s.positionLookups++
 	pos, ok := s.positions[eventID]
 	if !ok {
 		return types.TopologyToken{}, errors.New("event not in topology")
@@ -496,4 +499,42 @@ func TestFillForwardGapStopsWhenFrontierCannotBeFilled(t *testing.T) {
 	assert.False(t, filled)
 	assert.Zero(t, again.forwardBackfillRounds, "a cached terminal answer is not a federation round")
 	assert.Equal(t, 1, replay.calls, "a remembered gap is not requested again")
+}
+
+func TestFillForwardGapCachesExtremityPositionsAcrossTerminalCacheHits(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 32; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+
+	state := &forwardGapState{
+		stored:      make(map[string]*rstypes.HeaderedEvent),
+		positions:   make(map[string]types.TopologyToken),
+		extremities: make(map[string][]string),
+	}
+	for i, ev := range room.Events() {
+		state.store(ev)
+		state.extremities[ev.EventID()] = []string{fmt.Sprintf("$missing-%d", i)}
+	}
+	r := newForwardGapReq(state)
+
+	for extremityID, prevs := range state.extremities {
+		key := terminalBackfillKey(
+			r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
+			map[string][]string{extremityID: prevs},
+		)
+		defaultTerminalBackfillCache.forget(key)
+		defaultTerminalBackfillCache.recordFailure(key)
+		t.Cleanup(func() { defaultTerminalBackfillCache.forget(key) })
+	}
+
+	filled, err := r.fillForwardGap(r.ctx, types.TopologyToken{
+		Depth: types.StreamPosition(1 << 30), PDUPosition: types.StreamPosition(1 << 30),
+	})
+	require.NoError(t, err)
+	assert.False(t, filled)
+	assert.Zero(t, r.forwardBackfillRounds, "cached answers do not use the federation round budget")
+	assert.Equal(t, len(state.extremities), state.positionLookups,
+		"each extremity position should be loaded once for the request")
 }

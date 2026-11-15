@@ -111,6 +111,11 @@ type messagesReq struct {
 	backfilledRedactedEvents map[string]*rstypes.HeaderedEvent
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
+	// forwardGapPositions caches the topology position of each gap extremity
+	// for this request. Event positions do not change, and fillForwardGap
+	// rescans the extremities every round, so caching avoids repeating each
+	// position lookup for every remaining gap.
+	forwardGapPositions map[string]types.TopologyToken
 	// forwardBackfillRounds counts the federation batches fetched for this
 	// request while closing a gap ahead of a forward cursor.
 	forwardBackfillRounds int
@@ -1231,9 +1236,18 @@ func (r *messagesReq) forwardGapExtremitySkipping(
 		if _, tried := skip[extremitiesKey(map[string][]string{extremityID: backwardExtremities[extremityID]})]; tried {
 			continue
 		}
-		pos, posErr := r.snapshot.EventPositionInTopology(ctx, extremityID)
-		if posErr != nil {
-			continue
+		pos, cached := r.forwardGapPositions[extremityID]
+		if !cached {
+			var posErr error
+			pos, posErr = r.snapshot.EventPositionInTopology(ctx, extremityID)
+			if posErr != nil {
+				// Not cached, so a later round retries it.
+				continue
+			}
+			if r.forwardGapPositions == nil {
+				r.forwardGapPositions = make(map[string]types.TopologyToken)
+			}
+			r.forwardGapPositions[extremityID] = pos
 		}
 		if r.from != nil && !topologyTokenLess(*r.from, pos) {
 			continue
