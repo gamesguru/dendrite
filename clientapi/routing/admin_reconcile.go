@@ -85,7 +85,14 @@ func AdminReconcileRoom(
 	}
 	roomVersion, err := rsAPI.QueryRoomVersionForRoom(req.Context(), roomID)
 	if err != nil {
-		return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room not found")}
+		if errors.Is(err, types.ErrRoomNotFound) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room not found")}
+		}
+		logrus.WithError(err).WithField("roomID", roomID).Error("failed to query room version for reconciliation")
+		return util.JSONResponse{
+			Code: http.StatusInternalServerError,
+			JSON: spec.Unknown("Failed to query room version"),
+		}
 	}
 	format, ok := reconciliation.EventIDFormat(roomVersion)
 	if !ok {

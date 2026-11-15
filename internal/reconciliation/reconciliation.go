@@ -1,9 +1,8 @@
 // Package reconciliation exposes the MSC4521 algebraic digest and bucket
 // sketch primitives used by the federation reconciliation endpoints.
 //
-// The default build does not link the native rezzy library, so the endpoints
-// report themselves unsupported. Building with the "rezzy" tag on Linux with
-// cgo enables them; see the build-rezzy target in the Makefile.
+// Every build links the native rezzy library and enables reconciliation; see
+// the rezzy-native target in the Makefile.
 package reconciliation
 
 import (

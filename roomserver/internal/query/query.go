@@ -202,6 +202,25 @@ func (r *Queryer) QueryRoomReconciliationState(
 	if err != nil {
 		return err
 	}
+	if req.ServerName != "" {
+		isServerInRoom, err := r.DB.GetServerInRoom(ctx, info.RoomNID, req.ServerName)
+		if err != nil {
+			return fmt.Errorf("check server membership for reconciliation: %w", err)
+		}
+		visibleEventIDs := eventIDs[:0]
+		for _, eventID := range eventIDs {
+			allowed, _, err := helpers.CheckServerEventAccess(
+				ctx, r.DB, info, req.RoomID, eventID, req.ServerName, isServerInRoom, r,
+			)
+			if err != nil {
+				return fmt.Errorf("check reconciliation event visibility for %s: %w", eventID, err)
+			}
+			if allowed {
+				visibleEventIDs = append(visibleEventIDs, eventID)
+			}
+		}
+		eventIDs = visibleEventIDs
+	}
 	latest, _, _, err := r.DB.LatestEventIDs(ctx, info.RoomNID)
 	if err != nil {
 		return err
@@ -936,7 +955,7 @@ func (r *Queryer) QueryRoomVersionForRoom(ctx context.Context, roomID string) (g
 		return "", err
 	}
 	if info == nil {
-		return "", fmt.Errorf("QueryRoomVersionForRoom: missing room info for room %s", roomID)
+		return "", fmt.Errorf("QueryRoomVersionForRoom: %w: %s", types.ErrRoomNotFound, roomID)
 	}
 	r.Cache.StoreRoomVersion(roomID, info.RoomVersion)
 	return info.RoomVersion, nil

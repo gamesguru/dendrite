@@ -39,11 +39,11 @@ const (
 // roomReconciliationState loads the room's event set and frame, returning an
 // error response if the room is unknown or unsupported.
 func roomReconciliationState(
-	ctx context.Context, rsAPI roomserverAPI.FederationRoomserverAPI, roomID string,
+	ctx context.Context, rsAPI roomserverAPI.FederationRoomserverAPI, roomID string, serverName spec.ServerName,
 ) (*roomserverAPI.QueryRoomReconciliationStateResponse, *util.JSONResponse) {
 	var res roomserverAPI.QueryRoomReconciliationStateResponse
 	if err := rsAPI.QueryRoomReconciliationState(ctx, &roomserverAPI.QueryRoomReconciliationStateRequest{
-		RoomID: roomID,
+		RoomID: roomID, ServerName: serverName,
 	}, &res); err != nil {
 		if errors.Is(err, types.ErrRoomNotFound) {
 			return nil, &util.JSONResponse{
@@ -147,7 +147,7 @@ func RoomDigest(
 	if res := checkReconciliationAccess(httpReq.Context(), rsAPI, request, roomID); res != nil {
 		return *res
 	}
-	state, resErr := roomReconciliationState(httpReq.Context(), rsAPI, roomID)
+	state, resErr := roomReconciliationState(httpReq.Context(), rsAPI, roomID, request.Origin())
 	if resErr != nil {
 		return *resErr
 	}
@@ -273,7 +273,7 @@ func RoomDiff(
 		}
 	}
 
-	state, resErr := roomReconciliationState(httpReq.Context(), rsAPI, roomID)
+	state, resErr := roomReconciliationState(httpReq.Context(), rsAPI, roomID, request.Origin())
 	if resErr != nil {
 		return *resErr
 	}

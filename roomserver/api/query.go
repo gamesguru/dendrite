@@ -89,7 +89,8 @@ type QueryStateAfterEventsResponse struct {
 // QueryRoomReconciliationStateRequest asks for the event set and frame used
 // by MSC4521 reconciliation.
 type QueryRoomReconciliationStateRequest struct {
-	RoomID string `json:"room_id"`
+	RoomID     string          `json:"room_id"`
+	ServerName spec.ServerName `json:"server_name,omitempty"`
 }
 
 // QueryRoomReconciliationStateResponse is the room's MSC4521 event set.
