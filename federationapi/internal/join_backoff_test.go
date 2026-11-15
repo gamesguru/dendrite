@@ -194,23 +194,25 @@ func (c *joinRecordingClient) SendJoinPartialState(context.Context, spec.ServerN
 func TestJoinSendJoinRequestMatchesInviteState(t *testing.T) {
 	lookupErr := errors.New("db down")
 	for name, tc := range map[string]struct {
-		rs   invitedRoomserverAPI
-		want []string
+		rs      invitedRoomserverAPI
+		disable bool
+		want    []string
 	}{
-		"invited asks for full state once":               {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
-		"unknown invite state asks for full state once":  {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
-		"unknown room uses partial state":                {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
-		"stub room uses partial state":                   {rs: invitedRoomserverAPI{roomInfo: stubRoomInfo()}, want: []string{"partial"}},
-		"partial room uses partial state":                {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}, partial: true}, want: []string{"partial"}},
-		"resynced room asks for full state once":         {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}}, want: []string{"full"}},
-		"room lookup failure uses partial state":         {rs: invitedRoomserverAPI{roomErr: errors.New("db down")}, want: []string{"partial"}},
-		"sender lookup failure asks for full state once": {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
+		"disabled partial state asks for full state once": {rs: invitedRoomserverAPI{}, disable: true, want: []string{"full"}},
+		"invited asks for full state once":                {rs: invitedRoomserverAPI{pending: true}, want: []string{"full"}},
+		"unknown invite state asks for full state once":   {rs: invitedRoomserverAPI{inviteErr: lookupErr}, want: []string{"full"}},
+		"unknown room uses partial state":                 {rs: invitedRoomserverAPI{}, want: []string{"partial"}},
+		"stub room uses partial state":                    {rs: invitedRoomserverAPI{roomInfo: stubRoomInfo()}, want: []string{"partial"}},
+		"partial room uses partial state":                 {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}, partial: true}, want: []string{"partial"}},
+		"resynced room asks for full state once":          {rs: invitedRoomserverAPI{roomInfo: &types.RoomInfo{RoomNID: 1}}, want: []string{"full"}},
+		"room lookup failure uses partial state":          {rs: invitedRoomserverAPI{roomErr: errors.New("db down")}, want: []string{"partial"}},
+		"sender lookup failure asks for full state once":  {rs: invitedRoomserverAPI{senderErr: lookupErr}, want: []string{"full"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			testDB := test.NewInMemoryFederationDatabase()
 			_, key, err := ed25519.GenerateKey(nil)
 			require.NoError(t, err)
-			cfg := config.FederationAPI{Matrix: &config.Global{
+			cfg := config.FederationAPI{DisablePartialStateJoins: tc.disable, Matrix: &config.Global{
 				SigningIdentity: fclient.SigningIdentity{ServerName: "local", KeyID: "ed25519:1", PrivateKey: key},
 			}}
 			processCtx := process.NewProcessContext()

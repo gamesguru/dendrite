@@ -40,6 +40,12 @@ type FederationAPI struct {
 	// so a restart starts it again. 0, the default, retries until it works.
 	PartialStateResyncGiveUpAfter time.Duration `yaml:"partial_state_resync_give_up_after"`
 
+	// DisablePartialStateJoins makes every join ask the remote server for the full
+	// room state (no MSC3706 omit_members), so the join blocks until all members
+	// are known. Joins to large rooms get slower. Useful to rule partial state in
+	// or out when debugging. Defaults to false.
+	DisablePartialStateJoins bool `yaml:"disable_partial_state_joins"`
+
 	// P2P Feature: Whether relaying to specific nodes should be enabled.
 	// Defaults to false.
 	// Note: Enabling relays introduces a huge startup delay, if you are not using

@@ -397,6 +397,11 @@ federation_api:
   # unsupported. Default false.
   msc4521_enabled: false
 
+  # Ask the remote server for the full room state on every join instead of using
+  # partial state joins (MSC3706). Joins to large rooms then block until all
+  # members are known, so they get slower. Mainly useful for debugging. Default false.
+  disable_partial_state_joins: false
+
   # deny_networks and allow_networks are the CIDR ranges used to prevent requests
   # from accessing private IPs. If your system has specific IPs it should never
   # contact, add them here with CIDR notation.
