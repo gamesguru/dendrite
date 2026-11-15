@@ -16,7 +16,7 @@ runs:
         # branch tip, so fetch the branch with some history and check out the
         # full SHA, which fails loudly if the pin is unreachable.
         set -euo pipefail
-        GMSL_COMMIT=238ff2c0584fbfc2c9712e57955ae259b0f40727
+        GMSL_COMMIT=d7cecfcc334530d4a1f76ed4534b7ea286ab22b
         git init ../gmsl
         git -C ../gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
         git -C ../gmsl fetch --depth=100 origin feat/rezzy
