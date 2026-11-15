@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -865,7 +866,16 @@ func (r *Admin) PerformAdminFetchEvent(
 	if ev.RoomID().String() != roomID {
 		return "", fmt.Errorf("event %s belongs to room %s, not %s", eventID, ev.RoomID().String(), roomID)
 	}
-	if err = gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	return r.ingestAdminEvent(ctx, ev, serverName)
+}
+
+// ingestAdminEvent verifies ev's signatures, submits it as a new event and
+// reads back whether it was stored: "accepted", "rejected" or "not_stored".
+func (r *Admin) ingestAdminEvent(
+	ctx context.Context, ev gomatrixserverlib.PDU, serverName spec.ServerName,
+) (string, error) {
+	eventID := ev.EventID()
+	if err := gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
 		return "", fmt.Errorf("signature check failed: %w", err)
@@ -901,4 +911,69 @@ func (r *Admin) PerformAdminFetchEvent(
 		return "rejected", nil
 	}
 	return "accepted", nil
+}
+
+// maxAdminImportEvents bounds one import so it finishes inside the server's
+// write timeout.
+const maxAdminImportEvents = 5000
+
+// PerformAdminImportEvents ingests PDUs supplied by the operator (for example
+// from a JSONL export) into roomID. Each event must belong to the room, parse
+// for its room version and carry valid signatures; events are submitted as new
+// events in ascending depth order so their prev_events arrive first. origin is
+// the server asked for any prev or auth events the batch does not contain.
+// One failing event does not stop the rest.
+func (r *Admin) PerformAdminImportEvents(
+	ctx context.Context, roomID string, pdus []json.RawMessage, origin spec.ServerName,
+) ([]api.AdminImportResult, error) {
+	if len(pdus) > maxAdminImportEvents {
+		return nil, fmt.Errorf("at most %d events per import, got %d", maxAdminImportEvents, len(pdus))
+	}
+	roomInfo, err := r.DB.RoomInfo(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return nil, eventutil.ErrRoomNoExists{}
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return nil, err
+	}
+	type parsed struct {
+		line int
+		ev   gomatrixserverlib.PDU
+	}
+	results := make([]api.AdminImportResult, 0, len(pdus))
+	events := make([]parsed, 0, len(pdus))
+	seen := make(map[string]struct{}, len(pdus))
+	for i, raw := range pdus {
+		line := i + 1
+		ev, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
+		switch {
+		case parseErr != nil:
+			results = append(results, api.AdminImportResult{Line: line, Outcome: "invalid: " + parseErr.Error()})
+		case ev.RoomID().String() != roomID:
+			results = append(results, api.AdminImportResult{
+				Line: line, EventID: ev.EventID(), Outcome: "invalid: event belongs to room " + ev.RoomID().String(),
+			})
+		default:
+			if _, dup := seen[ev.EventID()]; dup {
+				results = append(results, api.AdminImportResult{Line: line, EventID: ev.EventID(), Outcome: "duplicate"})
+				continue
+			}
+			seen[ev.EventID()] = struct{}{}
+			events = append(events, parsed{line: line, ev: ev})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].ev.Depth() < events[j].ev.Depth() })
+	for _, p := range events {
+		outcome, ingestErr := r.ingestAdminEvent(ctx, p.ev, origin)
+		if ingestErr != nil {
+			outcome = "error: " + ingestErr.Error()
+		}
+		results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Line < results[j].Line })
+	return results, nil
 }

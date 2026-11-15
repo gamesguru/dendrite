@@ -1,6 +1,8 @@
 package routing
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -763,5 +765,57 @@ func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserve
 	}
 	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
 		Results map[string]string `json:"results"`
+	}{Results: results}}
+}
+
+// maxImportLineBytes bounds one PDU line; the Matrix event limit is 65 KiB.
+const maxImportLineBytes = 1 << 20
+
+// AdminImportEvents ingests PDUs from a JSONL request body (one PDU per
+// line, blank lines ignored) into a room that already exists locally. Events are
+// signature-checked and ingested oldest depth first. The optional "origin"
+// query parameter names the server asked for prev/auth events the file lacks;
+// it defaults to this server, so a self-contained file needs no federation.
+func AdminImportEvents(
+	req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI, localServer spec.ServerName,
+) util.JSONResponse {
+	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
+	if err != nil {
+		return util.ErrorResponse(err)
+	}
+	roomID := vars["roomID"]
+	if roomID == "" {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting a room ID.")}
+	}
+	origin := localServer
+	if o := req.URL.Query().Get("origin"); o != "" {
+		origin = spec.ServerName(o)
+	}
+	scanner := bufio.NewScanner(req.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxImportLineBytes)
+	var pdus []json.RawMessage
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		pdus = append(pdus, json.RawMessage(append([]byte(nil), line...)))
+	}
+	if err = scanner.Err(); err != nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("Could not read the JSONL body: " + err.Error())}
+	}
+	if len(pdus) == 0 {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting one PDU per line.")}
+	}
+	results, err := rsAPI.PerformAdminImportEvents(req.Context(), roomID, pdus, origin)
+	if err != nil {
+		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound(err.Error())}
+		}
+		logrus.WithError(err).WithFields(logrus.Fields{"userID": device.UserID, "roomID": roomID}).Error("failed to import events")
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.Unknown(err.Error())}
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		Results []roomserverAPI.AdminImportResult `json:"results"`
 	}{Results: results}}
 }

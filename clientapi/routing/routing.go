@@ -340,6 +340,12 @@ func Setup(
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
+	zendriteAdminRouter.Handle("/admin/importEvents/{roomID}",
+		httputil.MakeAdminAPI("admin_import_events", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return AdminImportEvents(req, device, rsAPI, zendriteCfg.Global.ServerName)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	zendriteAdminRouter.Handle("/admin/fulltext/reindex",
 		httputil.MakeAdminAPI("admin_fultext_reindex", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminReindex(req, cfg, device, natsClient)

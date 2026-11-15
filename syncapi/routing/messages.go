@@ -2055,6 +2055,20 @@ func backfillEvents(
 			return nil, err
 		}
 	}
+	// A backfilled redaction can target an event already present in the sync
+	// timeline but absent from this response batch. Persist that redacted copy
+	// and remove relation rows just as the live redaction output path does.
+	for eventID, redacted := range res.RedactedEvents {
+		if redacted == nil {
+			continue
+		}
+		if err = db.UpdateEventJSON(ctx, eventID, redacted); err != nil {
+			return nil, err
+		}
+		if err = db.RedactRelations(ctx, roomID, eventID); err != nil {
+			return nil, err
+		}
+	}
 
 	// WriteEvent adds a backward extremity for every prev event it could not
 	// find, but it cannot remove extremities belonging to other events which
