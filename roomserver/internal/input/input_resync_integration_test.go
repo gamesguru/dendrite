@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	fsAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver"
@@ -33,6 +34,21 @@ func stateEventIDs(events []*types.HeaderedEvent) []string {
 	return ids
 }
 
+// noPeersFederation is a federation API with no other servers in any room. An
+// event with a missing prev or auth event makes the input path ask for the
+// servers to fetch it from, which panics on a nil federation API.
+type noPeersFederation struct {
+	fsAPI.RoomserverFederationAPI
+}
+
+func (noPeersFederation) QueryJoinedHostServerNamesInRoom(
+	context.Context, *fsAPI.QueryJoinedHostServerNamesInRoomRequest, *fsAPI.QueryJoinedHostServerNamesInRoomResponse,
+) error {
+	return nil
+}
+
+func (noPeersFederation) KeyRing() *gomatrixserverlib.KeyRing { return nil }
+
 // withResyncRoomserver runs fn against a roomserver backed by each test database.
 func withResyncRoomserver(t *testing.T, fn func(context.Context, api.RoomserverInternalAPI)) {
 	t.Helper()
@@ -44,7 +60,7 @@ func withResyncRoomserver(t *testing.T, fn func(context.Context, api.RoomserverI
 		_, _ = natsInstance.Prepare(processCtx, &cfg.Global.JetStream)
 		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
 		rsAPI := roomserver.NewInternalAPI(processCtx, cfg, cm, natsInstance, caches, caching.DisableMetrics)
-		rsAPI.SetFederationAPI(nil, nil)
+		rsAPI.SetFederationAPI(noPeersFederation{}, nil)
 		fn(processCtx.Context(), rsAPI)
 	})
 }
