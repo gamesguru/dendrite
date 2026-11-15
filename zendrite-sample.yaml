@@ -1,3 +1,4 @@
+---
 # This is the Zendrite configuration file.
 #
 # The configuration is split up into sections - each Zendrite component has a
@@ -180,6 +181,10 @@ global:
     # The prefix to use for stream names for this homeserver - really only useful
     # if you are running more than one Zendrite server on the same NATS deployment.
     topic_prefix: Zendrite
+
+    # Keep all NATS storage in memory instead of on disk. This is meant for unit
+    # tests; leave it false in production, or streams are lost on every restart.
+    in_memory: false
 
   # Configuration for Prometheus metric collection.
   # Exposed at /metrics
