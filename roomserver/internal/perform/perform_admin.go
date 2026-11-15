@@ -349,7 +349,7 @@ func (r *Admin) installRepairedState(
 	var succeeded bool
 	defer sqlutil.EndTransactionWithCheck(updater, &succeeded, &err)
 
-	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, nil, newStateEntries)
+	stateSnapshotNID, err := updater.AddState(ctx, roomInfo.RoomNID, newStateEntries)
 	if err != nil {
 		return fmt.Errorf("updater.AddState: %w", err)
 	}

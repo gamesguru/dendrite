@@ -40,7 +40,6 @@ type Database interface {
 	AddState(
 		ctx context.Context,
 		roomNID types.RoomNID,
-		stateBlockNIDs []types.StateBlockNID,
 		state []types.StateEntry,
 	) (types.StateSnapshotNID, error)
 
@@ -315,7 +314,7 @@ type RoomDatabase interface {
 	StateHAMTEntriesForTuples(ctx context.Context, snapshotNID types.StateSnapshotNID, tuples []types.StateKeyTuple) ([]types.StateEntry, bool, error)
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
-	AddState(ctx context.Context, roomNID types.RoomNID, stateBlockNIDs []types.StateBlockNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
 	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)
 	GetOrCreateRoomInfo(ctx context.Context, event gomatrixserverlib.PDU) (*types.RoomInfo, error)
 	GetOrCreateEventTypeNID(ctx context.Context, eventType string) (eventTypeNID types.EventTypeNID, err error)

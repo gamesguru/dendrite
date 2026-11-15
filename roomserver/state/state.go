@@ -36,7 +36,7 @@ type StateResolutionStorage interface {
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
 	StateAtEventIDs(ctx context.Context, eventIDs []string) ([]types.StateAtEvent, error)
-	AddState(ctx context.Context, roomNID types.RoomNID, stateBlockNIDs []types.StateBlockNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
 	Events(ctx context.Context, roomVersion gomatrixserverlib.RoomVersion, eventNIDs []types.EventNID) ([]types.Event, error)
 	EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) ([]types.Event, error)
 	IsEventRejected(ctx context.Context, roomNID types.RoomNID, eventID string) (bool, error)
@@ -752,7 +752,7 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 		// 2) There weren't any prev_events for this event so the state is
 		// empty.
 		metrics.algorithm = "empty_state"
-		stateNID, err := v.db.AddState(ctx, v.roomInfo.RoomNID, nil, nil)
+		stateNID, err := v.db.AddState(ctx, v.roomInfo.RoomNID, nil)
 		if err != nil {
 			err = fmt.Errorf("v.db.AddState: %w", err)
 		}
@@ -769,10 +769,9 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 			metrics.algorithm = "no_change"
 			return metrics.stop(prevState.BeforeStateSnapshotNID, nil)
 		}
-		// 4) The previous event was a state event, so the state after it is
-		// the previous snapshot with that one entry replaced. Snapshots are
-		// stored as their full state (keyed by the state HAMT root), so the
-		// state-block delta encoding no longer applies.
+		// 4) Snapshots are stored as their full state, keyed by the HAMT root,
+		// so the state after this event is the previous snapshot with that one
+		// entry replaced.
 		previous, err := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
 		if err != nil {
 			metrics.algorithm = "_load_state"
@@ -780,7 +779,7 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 		}
 		metrics.algorithm = "single_state_event"
 		stateNID, err := v.db.AddState(
-			ctx, v.roomInfo.RoomNID, nil, applyStateEntry(previous, prevState.StateEntry),
+			ctx, v.roomInfo.RoomNID, applyStateEntry(previous, prevState.StateEntry),
 		)
 		if err != nil {
 			err = fmt.Errorf("v.db.AddState: %w", err)
@@ -844,7 +843,7 @@ func (v *StateResolution) calculateAndStoreStateAfterManyEvents(
 	// previous state.
 	metrics.conflictLength = conflictLength
 	metrics.fullStateLength = len(state)
-	return metrics.stop(v.db.AddState(ctx, roomNID, nil, state))
+	return metrics.stop(v.db.AddState(ctx, roomNID, state))
 }
 
 func (v *StateResolution) calculateStateAfterManyEvents(

@@ -1427,7 +1427,7 @@ func (r *Inputer) calculateAndSetState(
 		}
 		entries = types.DeduplicateStateEntries(entries)
 
-		if stateAtEvent.BeforeStateSnapshotNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, entries); err != nil {
+		if stateAtEvent.BeforeStateSnapshotNID, err = updater.AddState(ctx, roomInfo.RoomNID, entries); err != nil {
 			return fmt.Errorf("updater.AddState: %w", err)
 		}
 	} else {

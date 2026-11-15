@@ -80,7 +80,7 @@ func (r *Inputer) recomputeWindowState(
 		return false, nil, nil, nil, nil
 	}
 
-	anchorNID, err := updater.AddState(ctx, roomNID, nil, anchorEntries)
+	anchorNID, err := updater.AddState(ctx, roomNID, anchorEntries)
 	if err != nil {
 		return false, nil, nil, nil, fmt.Errorf("updater.AddState (anchor): %w", err)
 	}
@@ -411,5 +411,5 @@ func (r *Inputer) flatStateAfterEvents(
 	if !replaced {
 		entries = append(entries, prev.StateEntry)
 	}
-	return updater.AddState(ctx, roomInfo.RoomNID, nil, entries)
+	return updater.AddState(ctx, roomInfo.RoomNID, entries)
 }

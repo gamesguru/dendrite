@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 // Please see LICENSE files in the repository root for full details.
 
-// Command backfill-state-hamt persists HAMT records for snapshots created
-// before HAMT writes were enabled. Run with -tags rezzy.
+// Command backfill-state-hamt persists HAMT records for snapshots created by
+// builds that predate HAMT-backed writes.
 package main
 
 import (
@@ -15,7 +15,6 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup"
@@ -30,9 +29,6 @@ var verify = flag.Bool("verify", false,
 	"compare every persisted HAMT with the state blocks it was built from and exit non-zero on any mismatch")
 
 func main() {
-	if !statehamt.Enabled {
-		panic("state HAMT support is disabled; rebuild with -tags rezzy")
-	}
 	ctx := context.Background()
 	cfg := setup.ParseFlags(true)
 	cfg.Logging = append(cfg.Logging[:0], config.LogrusHook{Type: "std", Level: "error"})

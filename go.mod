@@ -101,6 +101,7 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
+	github.com/gamesguru/rezzy/rezzy-ffi v0.0.0
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
@@ -180,3 +181,5 @@ require (
 )
 
 go 1.27.0
+
+replace github.com/gamesguru/rezzy/rezzy-ffi => ./rezzy/rezzy-ffi

@@ -1,14 +1,7 @@
 // Package statehamt adapts rezzy's persisted state-HAMT records to the
-// roomserver. It is a thin, build-tagged wrapper: the rezzy build calls the
-// native library, every other build reports Enabled=false and the roomserver
-// keeps using state blocks.
+// roomserver. It is a thin wrapper over the native library, which every build
+// links.
 package statehamt
-
-import "errors"
-
-// ErrDisabled is returned when the build does not link the native rezzy
-// library, so no HAMT persistence is available.
-var ErrDisabled = errors.New("statehamt: native rezzy library is not linked")
 
 // Entry is one state leaf: event type, state key, and event ID.
 type Entry struct {

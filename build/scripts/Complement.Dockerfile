@@ -1,8 +1,42 @@
 #syntax=docker/dockerfile:1.28
 
+# Complement image (SQLite). Zendrite requires the native Rezzy library, so
+# every image links it and the MSC4521 endpoints are always compiled in.
+#
+# Build from the repo root with the sibling checkouts as named contexts:
+#
+#   docker build -f build/scripts/Complement.Dockerfile \
+#     --build-context rezzy=../rezzy \
+#     -t complement-dendrite:local .
+#
+# The Rust stage uses a glibc base (not Alpine/musl) because the Go build stage
+# below is Debian; a musl static library would not link into it.
+FROM docker.io/rust:1.89-trixie AS rezzy-build
+WORKDIR /rezzy
+COPY --from=rezzy Cargo.toml Cargo.lock /rezzy/
+COPY --from=rezzy README.md /rezzy/README.md
+COPY --from=rezzy src /rezzy/src
+COPY --from=rezzy tests /rezzy/tests
+COPY --from=rezzy rezzy-cli /rezzy/rezzy-cli
+COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
+COPY --from=rezzy rezzy-json /rezzy/rezzy-json
+COPY --from=rezzy rezzy-keyfile /rezzy/rezzy-keyfile
+COPY --from=rezzy rezzy-log /rezzy/rezzy-log
+COPY --from=rezzy rezzy-recon /rezzy/rezzy-recon
+# Builds librezzy.a and writes target/pkgconfig/rezzy-ffi.pc with the real version.
+RUN apt-get update && apt-get install -y make python3 \
+    && make -C rezzy-ffi native
+
 FROM golang:1.27-trixie AS build
-RUN apt-get update && apt-get install -y sqlite3
+RUN apt-get update && apt-get install -y sqlite3 pkg-config
 WORKDIR /build
+
+ENV PKG_CONFIG_PATH=/rezzy/target/pkgconfig
+# go.mod uses the Rezzy FFI from the checked-out submodule.
+COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
+COPY --from=rezzy rezzy-ffi/include /rezzy/include
+COPY --from=rezzy-build /rezzy/target/release/librezzy.a /rezzy/target/release/librezzy.a
+COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgconfig/rezzy-ffi.pc
 
 # we will dump the binaries and config file to this location to ensure any local untracked files
 # that come from the COPY . . file don't contaminate the build
@@ -10,12 +44,11 @@ RUN mkdir /zendrite
 
 # Utilise Docker caching when downloading dependencies, this stops us needlessly
 # downloading dependencies every time.
-ARG CGO=1
 RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=${CGO} go build -tags goolm,nodynamic -o /zendrite ./cmd/generate-config ./cmd/generate-keys ./cmd/zendrite && \
-    CGO_ENABLED=${CGO} go build -tags goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite && \
+    CGO_ENABLED=1 go build -buildvcs=false -tags goolm,nodynamic -o /zendrite ./cmd/generate-config ./cmd/generate-keys ./cmd/zendrite && \
+    CGO_ENABLED=1 go build -buildvcs=false -tags goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite && \
     cp build/scripts/complement-cmd.sh /complement-cmd.sh
 
 WORKDIR /zendrite

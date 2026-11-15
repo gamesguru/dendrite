@@ -84,18 +84,15 @@ var release = Contract{
 // new state snapshots as their full state keyed by the HAMT root instead of
 // state-block deltas. A build of level 24 or older cannot read a level-25
 // snapshot, so level 25 only rolls back to itself.
+//
+// Every build links the native state HAMT reader, so every build writes level
+// 25 and only rolls back to itself.
 const (
 	releaseLevel           = 25
+	rollbackToLevel        = releaseLevel
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22
-	stateHAMTLevel         = 25
 )
-
-// rollbackToLevel is the oldest level that may take over from state this build
-// writes: the first level whose writers lift stored positions for late
-// parents. Older writers can reorder the histories stored by this build. Level
-// 25 also writes state snapshots that only a HAMT-capable build can read.
-const rollbackToLevel = stateHAMTLevel
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

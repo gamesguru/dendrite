@@ -28,7 +28,7 @@ env:
 jobs:
   wasm:
     name: WASM build test
-    timeout-minutes: 5
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     if: ${{ false }} # disable for now
     steps:
@@ -91,6 +91,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Build required Rezzy library
+        uses: ./.github/actions/setup-rezzy
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         env:
@@ -165,15 +167,8 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dendrite
-      - name: Test Rezzy authoritative hooks and state HAMT checks
-        run: go test -modfile=go.rezzy.mod -tags rezzy ./...
-        env:
-          POSTGRES_HOST: localhost
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: dendrite
 
-  # build Dendrite for linux with different architectures and go versions
+  # Build Dendrite for its supported Linux target.
   build:
     name: Build for Linux
     timeout-minutes: 10
@@ -182,13 +177,17 @@ jobs:
       fail-fast: false
       matrix:
         goos: ["linux"]
-        goarch: ["amd64", "386"]
+        goarch: ["amd64"]
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Setup go
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Build required Rezzy library
+        uses: ./.github/actions/setup-rezzy
       - uses: actions/cache@v4
         with:
           path: |
@@ -197,9 +196,6 @@ jobs:
           key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
-      - name: Install dependencies x86
-        if: ${{ matrix.goarch == '386' }}
-        run: sudo apt update && sudo apt-get install -y gcc-multilib
       - env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -207,42 +203,10 @@ jobs:
           CGO_CFLAGS: -fno-stack-protector
         run: go build -trimpath -v -o "bin/" ./cmd/...
 
-  # build for Windows 64-bit
-  build_windows:
-    name: Build for Windows
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: ["windows"]
-        goarch: ["amd64"]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: "go.mod"
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            key: ${{ runner.os }}-go-stable-${{ matrix.goos }}-${{ matrix.goarch }}-
-      - name: Install dependencies
-        run: sudo apt update && sudo apt install -y gcc-mingw-w64-x86-64 # install required gcc
-      - env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: "/usr/bin/x86_64-w64-mingw32-gcc"
-        run: go build -trimpath -v -o "bin/" ./cmd/...
-
   # Dummy step to gate other tests on without repeating the whole list
   initial-tests-done:
     name: Initial tests passed
-    needs: [lint, test, build, build_windows]
+    needs: [lint, test, build]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }} # Run this even if prior jobs were skipped
     steps:
@@ -332,15 +296,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: SQLite native
-            cgo: 0
-
-          - label: SQLite Cgo
-            cgo: 1
+          - label: SQLite
+            image: sqlite
 
           - label: PostgreSQL
             postgres: Postgres
-            cgo: 0
+            image: postgres
     steps:
       # Env vars are set file a file given by $GITHUB_PATH. We need both Go 1.17 and GOPATH on env to run Complement.
       # See https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
@@ -368,6 +329,9 @@ jobs:
         with:
           path: dendrite
 
+      - name: Checkout Rezzy submodule
+        run: git -C dendrite submodule update --init --depth 1 rezzy
+
       # Run the Complement suite maintained on the fork's dev branch. A PR may
       # carry its own matching Complement branch; otherwise (including a push to
       # main) fall back to dev, which is where Zendrite's test fixes land. The
@@ -386,10 +350,15 @@ jobs:
           done
           test -f complement/go.mod || { echo "failed to check out a Complement suite"; exit 1; }
       # Build initial Dendrite image
-      - run: docker build --build-arg=CGO=${{ matrix.cgo }} -t complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }} -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Complement image
         working-directory: dendrite
-        env:
-          DOCKER_BUILDKIT: 1
+        run: |
+          docker buildx build --load \
+            --build-context rezzy=./rezzy \
+            -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile \
+            -t complement-dendrite:${{ matrix.image }} .
 
       # Run Complement
       - run: |
@@ -400,79 +369,25 @@ jobs:
         shell: bash
         name: Run Complement Tests
         env:
-          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.postgres }}${{ matrix.cgo }}
+          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         working-directory: complement
 
-  # MSC4521 cannot ride the complement matrix above: its tests are not in the
-  # Complement branch that job checks out (the fork's dev branch has no
-  # tests/msc4521), and its endpoints are only real in an image that links the
-  # native Rezzy library. It therefore needs both a different image and a
-  # different suite. It lives here rather than in its own workflow so it is
-  # part of the same run; it is not in the release gate yet.
-  complement-msc4521:
-    name: "Complement (MSC4521, rezzy)"
-    timeout-minutes: 75
-    runs-on: ubuntu-latest
-    if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
-    steps:
-      - name: Checkout dendrite
-        uses: actions/checkout@v5
-        with:
-          path: dendrite
-
-      - name: Checkout Rezzy submodule
-        run: git -C dendrite submodule update --init --depth 1 rezzy
-
-      - name: Checkout hooked gomatrixserverlib fork
-        # The build context is resolved from the dendrite working directory, so
-        # this must be a sibling of dendrite, not of the workspace.
-        #
-        # Take the commit from go.mod so the image cannot be built against a
-        # different library than the module graph. Fetch the branch rather than
-        # a bare SHA: the pin may sit behind the tip, and a depth-1 fetch has
-        # only the tip.
-        run: |
-          set -euo pipefail
-          short=$(grep -o 'gamesguru/gomatrixserverlib v[^ ]*' dendrite/go.mod | sed 's/.*-//' | cut -c1-12)
-          test "${#short}" = 12
-          git init gmsl
-          git -C gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
-          git -C gmsl fetch --depth=100 origin feat/rezzy
-          commit=$(git -C gmsl rev-parse "${short}^{commit}")
-          git -C gmsl checkout "$commit"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Rezzy-enabled Complement image
-        working-directory: dendrite
-        run: |
-          set -euo pipefail
-          docker buildx build --load \
-            --build-context rezzy=./rezzy \
-            --build-context gmsl=../gmsl \
-            -f build/scripts/ComplementRezzy.Dockerfile \
-            -t complement-dendrite:rezzy .
-
+      # MSC4521 is not in the dev Complement branch above, so it needs its own
+      # suite checkout. It runs on every matrix row against that row's image.
       - name: Checkout Complement MSC4521 suite
+        if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          mkdir -p complement
+          mkdir -p complement-msc4521
           wget -O - "https://github.com/gamesguru/complement/archive/refs/heads/guru/feat/msc4521-libminisketch-set-recon.tar.gz" \
-            | tar -xz --strip-components=1 -C complement
-          test -d complement/tests/msc4521
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: complement/go.mod
-          cache-dependency-path: complement/go.sum
-
-      - name: Run inbound MSC4521 tests
-        working-directory: complement
+            | tar -xz --strip-components=1 -C complement-msc4521
+          test -d complement-msc4521/tests/msc4521
+      - name: Run MSC4521 tests
+        if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
+        working-directory: complement-msc4521
         env:
-          COMPLEMENT_BASE_IMAGE: complement-dendrite:rezzy
+          COMPLEMENT_BASE_IMAGE: complement-dendrite:${{ matrix.image }}
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         run: |
           set -o pipefail

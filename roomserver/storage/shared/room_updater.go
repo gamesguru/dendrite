@@ -169,10 +169,9 @@ func (u *RoomUpdater) StateEntriesForTuples(
 func (u *RoomUpdater) AddState(
 	ctx context.Context,
 	roomNID types.RoomNID,
-	stateBlockNIDs []types.StateBlockNID,
 	state []types.StateEntry,
 ) (stateNID types.StateSnapshotNID, err error) {
-	return u.d.addState(ctx, u.txn, roomNID, stateBlockNIDs, state)
+	return u.d.addState(ctx, u.txn, roomNID, state)
 }
 
 func (u *RoomUpdater) SetState(

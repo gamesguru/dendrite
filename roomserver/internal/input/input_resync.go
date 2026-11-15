@@ -251,7 +251,7 @@ func (r *Inputer) UpdateStateAfterResync(ctx context.Context, roomID string, sta
 		}
 	}
 	if !computedFromLatest {
-		newStateNID, err = updater.AddState(ctx, roomInfo.RoomNID, nil, stateEntries)
+		newStateNID, err = updater.AddState(ctx, roomInfo.RoomNID, stateEntries)
 		if err != nil {
 			return false, nil, fmt.Errorf("updater.AddState: %w", err)
 		}

@@ -20,9 +20,6 @@ import (
 // snapshot-time HAMT writes. A non-positive limit selects a conservative batch
 // size so callers can repeat this operation until it returns zero.
 func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, error) {
-	if !statehamt.Enabled {
-		return 0, statehamt.ErrDisabled
-	}
 	if limit <= 0 {
 		limit = 100
 	}
@@ -291,12 +288,6 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 	if err := d.StateHAMTTable.DeleteStateHAMTRoom(ctx, txn, roomNID); err != nil {
 		return fmt.Errorf("delete state HAMT roots for room %d: %w", roomNID, err)
 	}
-	if !statehamt.Enabled {
-		// Root rows are gone, so the room is purged correctly. A non-Rezzy
-		// binary cannot safely trace shared node references; leave node cleanup
-		// for a Rezzy-enabled run rather than risk deleting live data.
-		return nil
-	}
 
 	roots, err := d.StateHAMTTable.SelectStateHAMTRootRefs(ctx, txn)
 	if err != nil {
@@ -357,8 +348,7 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 }
 
 // persistStateHAMT builds the HAMT for a snapshot that predates HAMT storage
-// from the entries of its state blocks and stores it. It is a no-op when the
-// build does not link rezzy.
+// from the entries of its state blocks and stores it.
 func (d *Database) persistStateHAMT(
 	ctx context.Context,
 	txn *sql.Tx,
@@ -366,9 +356,6 @@ func (d *Database) persistStateHAMT(
 	snapshotNID types.StateSnapshotNID,
 	stateBlockNIDs []types.StateBlockNID,
 ) error {
-	if !statehamt.Enabled {
-		return nil
-	}
 	stateEntries, err := d.stateEntriesFromBlocks(ctx, txn, stateBlockNIDs)
 	if err != nil {
 		return err

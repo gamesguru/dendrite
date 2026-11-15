@@ -1,5 +1,3 @@
-//go:build rezzy && linux && cgo
-
 package routing
 
 import (

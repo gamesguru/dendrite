@@ -1,5 +1,3 @@
-//go:build rezzy && linux && cgo
-
 package statehamt
 
 import (
@@ -8,9 +6,6 @@ import (
 
 	"github.com/gamesguru/rezzy/rezzy-ffi/go/rezzy"
 )
-
-// Enabled reports whether this build persists state HAMTs.
-const Enabled = true
 
 func toEntries(entries []Entry) []rezzy.HAMTEntry {
 	out := make([]rezzy.HAMTEntry, len(entries))

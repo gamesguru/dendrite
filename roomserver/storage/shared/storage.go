@@ -23,7 +23,6 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
-	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
@@ -357,57 +356,29 @@ func (d *Database) roomInfo(ctx context.Context, txn *sql.Tx, roomID string) (*t
 func (d *Database) AddState(
 	ctx context.Context,
 	roomNID types.RoomNID,
-	stateBlockNIDs []types.StateBlockNID,
 	state []types.StateEntry,
 ) (stateNID types.StateSnapshotNID, err error) {
-	return d.addState(ctx, nil, roomNID, stateBlockNIDs, state)
+	return d.addState(ctx, nil, roomNID, state)
 }
 
 func (d *Database) addState(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID,
-	stateBlockNIDs []types.StateBlockNID,
 	state []types.StateEntry,
 ) (stateNID types.StateSnapshotNID, err error) {
-	if len(stateBlockNIDs) > 0 {
-		// Snapshots are stored as their full state now, so callers must pass
-		// the complete state rather than a state-block delta.
-		return 0, fmt.Errorf("addState: state blocks are no longer accepted")
-	}
 	err = d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
-		var snapshotHash []byte
-		var persisted *statehamt.Persisted
-		if statehamt.Enabled {
-			// The HAMT root is the snapshot's identity as well as its content:
-			// identical state produces identical roots and therefore one row.
-			persisted, err = d.buildStateHAMT(ctx, txn, roomNID, state)
-			if err != nil {
-				return err
-			}
-			snapshotHash = persisted.RootHash
-		} else {
-			// Without the native library the snapshot keeps the legacy
-			// representation and is still keyed by its state blocks.
-			if len(state) > 0 {
-				var stateBlockNID types.StateBlockNID
-				stateBlockNID, err = d.StateBlockTable.BulkInsertStateData(ctx, txn, state)
-				if err != nil {
-					return fmt.Errorf("d.StateBlockTable.BulkInsertStateData: %w", err)
-				}
-				stateBlockNIDs = append(stateBlockNIDs, stateBlockNID)
-			}
-			snapshotHash = types.StateBlockNIDs(stateBlockNIDs).Hash()
+		// The HAMT root is the snapshot's identity as well as its content:
+		// identical state produces identical roots and therefore one row.
+		persisted, err := d.buildStateHAMT(ctx, txn, roomNID, state)
+		if err != nil {
+			return err
 		}
-		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, snapshotHash, stateBlockNIDs)
+		snapshotHash := persisted.RootHash
+		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, snapshotHash, nil)
 		if err != nil {
 			return fmt.Errorf("d.StateSnapshotTable.InsertState: %w", err)
 		}
-		if persisted != nil {
-			if err := d.insertStateHAMT(ctx, txn, roomNID, stateNID, persisted); err != nil {
-				return err
-			}
-		}
-		return nil
+		return d.insertStateHAMT(ctx, txn, roomNID, stateNID, persisted)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("d.Writer.Do: %w", err)
