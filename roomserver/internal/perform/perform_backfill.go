@@ -270,7 +270,18 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			continue
 		}
 		inResponse[ev.EventID()] = struct{}{}
+		// A side-effect event can be the target of a redaction in this batch
+		// too; return the redacted copy so the sync write stores it that way.
+		if redacted, ok := redactedInBatch[ev.EventID()]; ok {
+			ev = redacted
+		}
 		res.Events = append(res.Events, &types.HeaderedEvent{PDU: ev, Visibility: gomatrixserverlib.HistoryVisibilityJoined})
+	}
+	if len(redactedInBatch) > 0 {
+		res.RedactedEvents = make(map[string]*types.HeaderedEvent, len(redactedInBatch))
+		for eventID, redacted := range redactedInBatch {
+			res.RedactedEvents[eventID] = &types.HeaderedEvent{PDU: redacted}
+		}
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil

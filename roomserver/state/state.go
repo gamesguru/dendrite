@@ -319,15 +319,18 @@ func (v *StateResolution) LoadCombinedStateAfterEvents(
 	snapshotCache := make(map[types.StateSnapshotNID][]types.StateEntry)
 	for _, prevState := range prevStates {
 		snapshotNID := prevState.BeforeStateSnapshotNID
-		fullState, ok := snapshotCache[snapshotNID]
+		cached, ok := snapshotCache[snapshotNID]
 		if !ok {
 			var err error
-			fullState, err = v.LoadStateAtSnapshot(ctx, snapshotNID)
+			cached, err = v.LoadStateAtSnapshot(ctx, snapshotNID)
 			if err != nil {
 				return nil, fmt.Errorf("v.LoadStateAtSnapshot: %w", err)
 			}
-			snapshotCache[snapshotNID] = fullState
+			snapshotCache[snapshotNID] = cached
 		}
+		// Work on a copy: the append and in-place sort below must not write
+		// through the cached snapshot's backing array for later predecessors.
+		fullState := append([]types.StateEntry(nil), cached...)
 		if prevState.IsStateEvent() && !prevState.IsRejected {
 			// If the prev event was a state event then add an entry for the event itself
 			// so that we get the state after the event rather than the state before.

@@ -91,9 +91,9 @@ func (d *Database) SupportsConcurrentRoomInputs() bool {
 func (d *Database) GetMembershipForHistoryVisibility(
 	ctx context.Context, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
-	// Read each event's state from its HAMT. Any snapshot that predates HAMT
-	// persistence makes the whole query fall back to the SQL optimisation, so
-	// a partially backfilled database still returns complete results.
+	// Read each event's state from its HAMT. Snapshots that predate HAMT
+	// persistence are read from their state blocks instead; a HAMT-only
+	// snapshot has no blocks, so the two sets cannot be swapped wholesale.
 	if result, ok, err := d.membershipFromHAMT(ctx, userNID, roomInfo, eventIDs); err != nil {
 		var missingEventErr types.MissingEventError
 		if !errors.As(err, &missingEventErr) {
@@ -118,6 +118,11 @@ func (d *Database) membershipFromHAMT(
 		EventStateKeyNID: userNID,
 	}
 	membershipNIDs := make(map[string]types.EventNID, len(eventIDs))
+	// Snapshots written before the HAMT cutover have no HAMT to read. Ask the
+	// block-based query for those events only: a HAMT-only snapshot has no
+	// state blocks, so falling back for the whole query would report its
+	// memberships as leave.
+	var blockEventIDs []string
 	for _, eventID := range eventIDs {
 		// BulkSelectStateAtEventByID does not return the event ID, so ask for
 		// one event at a time rather than assuming the rows keep input order.
@@ -137,7 +142,8 @@ func (d *Database) membershipFromHAMT(
 			return nil, false, err
 		}
 		if !ok {
-			return nil, false, nil
+			blockEventIDs = append(blockEventIDs, eventID)
+			continue
 		}
 		if len(entries) > 0 {
 			membershipNIDs[eventID] = entries[len(entries)-1].EventNID
@@ -163,6 +169,17 @@ func (d *Database) membershipFromHAMT(
 			// Membership event exists but its JSON does not, matching the
 			// SQL path's empty event.
 			result[eventID] = &types.HeaderedEvent{}
+		}
+	}
+	if len(blockEventIDs) > 0 {
+		fromBlocks, err := d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(
+			ctx, nil, userNID, roomInfo, blockEventIDs...,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		for eventID, event := range fromBlocks {
+			result[eventID] = event
 		}
 	}
 	return result, true, nil
