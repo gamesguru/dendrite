@@ -128,7 +128,7 @@ func (d *Database) StateSnapshotNIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select state snapshot IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var nids []types.StateSnapshotNID
 	for rows.Next() {
 		var nid types.StateSnapshotNID
