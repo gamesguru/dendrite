@@ -422,6 +422,20 @@ func OnIncomingMessagesRequest(
 		}
 	}
 	if err != nil {
+		// sql.ErrTxDone also results from a transaction being used after it was
+		// closed, which is a server bug. Only treat it as a disconnect when the
+		// request context really is done.
+		if sqlutil.ErrIsCanceled(err) && req.Context().Err() != nil {
+			// The client went away while backfill was running, which rolls the
+			// request's read transaction back. The fetched events are stored in
+			// their own transactions, so the retry continues from the same
+			// cursor; this is not a server failure.
+			util.GetLogger(req.Context()).WithError(err).Debug("mreq.retrieveEvents canceled")
+			return util.JSONResponse{
+				Code: http.StatusInternalServerError,
+				JSON: spec.InternalServerError{},
+			}
+		}
 		util.GetLogger(req.Context()).WithError(err).Error("mreq.retrieveEvents failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
@@ -1297,6 +1311,7 @@ func (r *messagesReq) truncateForwardPageAtGap(
 // more events (the page is then served from what is stored).
 func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition types.TopologyToken) (bool, error) {
 	filled := false
+	stored := 0
 	for r.forwardBackfillRounds < maxForwardBackfillRounds {
 		extremityID, prevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
 		if err != nil {
@@ -1326,6 +1341,26 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			return filled, nil
 		}
 		filled = true
+		stored += len(pdus)
+		// The batch may contain events older than the missing parent without
+		// containing the parent itself (a dangling prev_event that no server
+		// has). The marker then does not move: the next round asks for the
+		// same frontier and gets the same batch again. Detect that and stop,
+		// otherwise every /messages request repeats the whole federation
+		// round until the remote starts returning 429.
+		if !r.forwardGapAdvanced(ctx, firstEventPosition, extremityID, prevs) {
+			util.GetLogger(ctx).WithField("room_id", r.roomID).
+				WithField("extremity", extremityID).
+				WithField("missing_parents", prevs).
+				Warn("Forward backfill made no progress; the gap's frontier is not reachable")
+			// Remember it so later requests serve the stored history instead
+			// of hitting the same servers again.
+			defaultTerminalBackfillCache.recordFailure(terminalBackfillKey(
+				r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID,
+				map[string][]string{extremityID: prevs},
+			))
+			return false, nil
+		}
 	}
 
 	// The last batch may have closed the gap exactly at the bound, so only
@@ -1337,7 +1372,32 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 	if extremityID == "" {
 		return filled, nil
 	}
+	// The gap is larger than maxForwardBackfillRounds batches. The events
+	// fetched so far are stored, so the retry continues from the new marker
+	// instead of starting over. Log the size so this is not mistaken for a
+	// frontier that made no progress.
+	util.GetLogger(ctx).WithField("room_id", r.roomID).
+		WithField("rounds", r.forwardBackfillRounds).
+		WithField("events_stored", stored).
+		Warn("Forward backfill did not close the gap within one request")
 	return filled, errForwardBackfillIncomplete
+}
+
+// forwardGapAdvanced reports whether a backfill round changed the gap it was
+// asked to fill. If the same extremity is still open with the same missing
+// parents, none of them were stored and another round cannot make progress.
+func (r *messagesReq) forwardGapAdvanced(
+	ctx context.Context, firstEventPosition types.TopologyToken, extremityID string, prevs []string,
+) bool {
+	nextID, nextPrevs, err := r.forwardGapExtremity(ctx, firstEventPosition)
+	if err != nil {
+		// Treat an unreadable extremity set as progress so the round loop's
+		// own bound and error handling decide what happens next.
+		return true
+	}
+	before := extremitiesKey(map[string][]string{extremityID: prevs})
+	after := extremitiesKey(map[string][]string{nextID: nextPrevs})
+	return before != after
 }
 
 // handleEmptyEventsSlice handles the case where the initial request to the

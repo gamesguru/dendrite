@@ -441,3 +441,58 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 	require.NoError(t, r.reanchorBackwardCursor(ctx))
 	assert.Equal(t, types.StreamPosition(1), r.from.Depth, "a cursor at stream position 0 is not re-anchored")
 }
+
+// replayForwardGapAPI answers every backfill with the same events, whether or
+// not they contain the missing parent. It stands in for a remote server that
+// has the events around a hole but not the dangling prev_event itself.
+type replayForwardGapAPI struct {
+	api.SyncRoomserverAPI
+	events []*rstypes.HeaderedEvent
+	calls  int
+}
+
+func (a *replayForwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
+	a.calls++
+	res.Events = a.events
+	res.HistoryVisibility = gomatrixserverlib.HistoryVisibilityShared
+	return nil
+}
+
+// A batch that does not contain the missing parent leaves the marker where it
+// was. Repeating the round would refetch the same events until the client is
+// rate limited, so the gap is treated as unfillable and remembered.
+func TestFillForwardGapStopsWhenFrontierCannotBeFilled(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	for i := 0; i < 10; i++ {
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "message"})
+	}
+	all := room.Events()
+	// The newest event is stored and its prev event is missing everywhere.
+	state := newForwardGapState(all[len(all)-1:], nil)
+	require.Len(t, state.extremities, 1)
+
+	replay := &replayForwardGapAPI{events: all[len(all)-1:]}
+	r := newForwardGapReq(state)
+	r.rsAPI = replay
+	key := terminalBackfillKey(r.cfg.Matrix.ServerName, r.device.UserDomain(), r.roomID, state.extremities)
+	defaultTerminalBackfillCache.forget(key)
+	defer defaultTerminalBackfillCache.forget(key)
+
+	position := types.TopologyToken{
+		Depth:       types.StreamPosition(all[len(all)-1].Depth()),
+		PDUPosition: types.StreamPosition(all[len(all)-1].Depth()),
+	}
+	filled, err := r.fillForwardGap(r.ctx, position)
+	require.NoError(t, err)
+	assert.False(t, filled, "an unfillable gap must not send the caller back to reread the page")
+	assert.Equal(t, 1, replay.calls, "the round stops after the frontier failed to move")
+
+	// The failure is remembered, so the next request does not ask again.
+	again := newForwardGapReq(state)
+	again.rsAPI = replay
+	filled, err = again.fillForwardGap(again.ctx, position)
+	require.NoError(t, err)
+	assert.False(t, filled)
+	assert.Equal(t, 1, replay.calls, "a remembered gap is not requested again")
+}
