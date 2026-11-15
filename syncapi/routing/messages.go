@@ -1210,6 +1210,9 @@ func deepestExtremities(
 type forwardGapScan struct {
 	candidates []forwardGapCandidate
 	next       int
+	// incomplete is set when a position lookup failed, so an extremity may be
+	// missing from candidates. Such a scan is never cached.
+	incomplete bool
 }
 
 type forwardGapCandidate struct {
@@ -1262,7 +1265,9 @@ func (r *messagesReq) forwardGapCandidates(ctx context.Context) (*forwardGapScan
 		}
 		return topologyTokenLess(scan.candidates[i].pos, scan.candidates[j].pos)
 	})
-	if !positionLookupFailed {
+	if positionLookupFailed {
+		scan.incomplete = true
+	} else {
 		r.forwardGapScan = scan
 	}
 	return scan, nil
@@ -1313,6 +1318,12 @@ func (r *messagesReq) forwardGapExtremitySkipping(
 			scan.next = i + 1
 		}
 		return candidate.id, candidate.prevs, nil
+	}
+	if scan.incomplete {
+		// An extremity whose position could not be read may be the gap ahead
+		// of the cursor. Reporting "no gap" would let the page move past it, so
+		// surface a retryable error instead.
+		return "", nil, errForwardBackfillIncomplete
 	}
 	return "", nil, nil
 }

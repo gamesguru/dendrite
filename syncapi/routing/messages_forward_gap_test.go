@@ -623,7 +623,8 @@ func TestFillForwardGapReloadsPositionsLiftedByLateParent(t *testing.T) {
 	// Allow one round: it stores the parent, then the post-loop selection
 	// rebuilds the scan and has to read the lifted position.
 	r.forwardBackfillRounds = maxForwardBackfillRounds - 1
-	_, _ = r.fillForwardGap(r.ctx, types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30})
+	_, err := r.fillForwardGap(r.ctx, types.TopologyToken{Depth: 1 << 30, PDUPosition: 1 << 30})
+	require.ErrorIs(t, err, errForwardBackfillIncomplete)
 
 	require.Contains(t, r.forwardGapPositions, low.EventID())
 	assert.Equal(t, types.StreamPosition(50), r.forwardGapPositions[low.EventID()].Depth,
@@ -645,9 +646,10 @@ func TestForwardGapRetriesTransientPositionLookupFailure(t *testing.T) {
 	r := newForwardGapReq(state)
 	firstEventPosition := types.TopologyToken{Depth: 10, PDUPosition: 10}
 
-	id, _, err := r.forwardGapExtremity(r.ctx, firstEventPosition)
-	require.NoError(t, err)
-	assert.Empty(t, id, "the first topology lookup fails transiently")
+	filled, err := r.fillForwardGap(r.ctx, firstEventPosition)
+	require.ErrorIs(t, err, errForwardBackfillIncomplete,
+		"a failed lookup must not look like the absence of a gap")
+	assert.False(t, filled)
 	assert.Nil(t, r.forwardGapScan, "an incomplete candidate scan must not be cached")
 
 	id, prevs, err := r.forwardGapExtremity(r.ctx, firstEventPosition)
