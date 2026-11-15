@@ -20,6 +20,10 @@ fmt: install-dev-deps
 lint: rezzy-native
     PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" prek run golangci-lint --all-files
 
+# Run the Python script tests
+test-scripts:
+    python3 -m unittest discover -s scripts
+
 # Build the native Rezzy library the Go packages link against
 rezzy-native:
     make -C ./rezzy/rezzy-ffi native

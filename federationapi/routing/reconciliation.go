@@ -27,10 +27,6 @@ import (
 )
 
 const (
-	// MSC4521Prefix is the unstable federation prefix used by the
-	// reconciliation profile.
-	MSC4521Prefix = "/_matrix/federation/unstable/tk.nutra.msc0501"
-
 	maxReconciliationBuckets = 128
 	maxBucketSketchCapacity  = 32
 	maxBucketDepth           = 32

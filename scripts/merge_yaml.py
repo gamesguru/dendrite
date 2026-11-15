@@ -53,7 +53,9 @@ def trailing_comment(text):
             continue
         if quote and char == quote:
             quote = None
-        elif not quote and char in "'\"":
+        elif not quote and char in "'\"" and (i == 0 or text[i - 1] in " \t[{,:"):
+            # A quote only opens a scalar at a token start; an apostrophe inside
+            # a plain scalar (don't) must not hide a later comment.
             quote = char
         elif not quote and char == "#" and (i == 0 or text[i - 1].isspace()):
             return text[i:]
@@ -191,12 +193,12 @@ def main():
     missing = [
         p
         for p, _ in leaves(user)
-        if p not in used and not any(p[:k] in used for k in range(1, len(p)))
+        if p and p not in used and not any(p[:k] in used for k in range(1, len(p)))
     ]
     if missing:
         rest = {}
         for p, v in leaves(user):
-            if p in missing:
+            if p in missing:  # p is never empty: empty overrides are skipped above
                 cur = rest
                 for k in p[:-1]:
                     cur = cur.setdefault(k, {})

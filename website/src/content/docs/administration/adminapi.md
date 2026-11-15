@@ -134,7 +134,7 @@ The response maps each event ID to its outcome (or an error message):
 
 Runs an explicit MSC4521 reconciliation exchange against `serverName` and
 fetches any events the remote holds that this server is missing.
-It requires a native Rezzy build (see the `build-rezzy` target in the
+It requires a native Rezzy build (see the `rezzy-native` target in the
 `Makefile`) **and** `federation_api.msc4521_enabled: true` in the configuration;
 otherwise the endpoint returns 404.
 

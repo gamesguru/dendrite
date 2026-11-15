@@ -107,7 +107,7 @@ func main() {
 			// join to be abandoned within seconds.
 			cfg.FederationAPI.PartialStateResyncGiveUpAfter = 5 * time.Second //nolint:mnd
 			// Exercise MSC4521 reconciliation. The rezzy build enables the
-			// endpoints; a non-rezzy build answers them as unsupported.
+			// endpoints; a non-rezzy build does not register them.
 			cfg.FederationAPI.MSC4521Enabled = true
 			// Allow allow networks when running in CI, as otherwise connections
 			// to other servers might be blocked when running Complement/Sytest.

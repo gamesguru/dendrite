@@ -21,8 +21,9 @@ type StateEntry struct {
 // hash the event. Room versions 1 and 2 have server-assigned IDs that cannot
 // be derived from the event, so they are skipped.
 func Check(event gomatrixserverlib.PDU) error {
-	switch event.Version() {
-	case gomatrixserverlib.RoomVersionV1, gomatrixserverlib.RoomVersionV2:
+	// Use the same gate as the installed hooks: experimental room versions
+	// are hashed by GMSL, not rezzy.
+	if !rezzyDerivesIDs(event.Version()) {
 		return nil
 	}
 	id, err := rezzy.EventID(string(event.Version()), event.JSON())
@@ -41,8 +42,7 @@ func Check(event gomatrixserverlib.PDU) error {
 // CheckContentHash returns an error when rezzy cannot verify the event's
 // content hash. Room versions 1 and 2 do not have content hashes.
 func CheckContentHash(event gomatrixserverlib.PDU) error {
-	switch event.Version() {
-	case gomatrixserverlib.RoomVersionV1, gomatrixserverlib.RoomVersionV2:
+	if !rezzyDerivesIDs(event.Version()) {
 		return nil
 	}
 	if err := rezzy.VerifyContentHash(string(event.Version()), event.JSON()); err != nil {

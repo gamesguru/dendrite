@@ -76,8 +76,9 @@ type Database interface {
 	// HAMT persistence, returning the number completed.
 	BackfillStateHAMTs(ctx context.Context, limit int) (int, error)
 	// StateHAMTCoverage reports how many state snapshots exist and how many of
-	// them have a persisted HAMT. The two are equal once the backfill is
-	// complete, which is what makes HAMT-only reads safe.
+	// them have a persisted HAMT. Equal counts are a point-in-time
+	// precondition for HAMT-only reads, not a standing guarantee: every writer
+	// must persist HAMTs, or the counts diverge again.
 	StateHAMTCoverage(ctx context.Context) (total int64, withHAMT int64, err error)
 	// StateSnapshotNIDs returns up to limit snapshot NIDs greater than after,
 	// in ascending order, so maintenance commands can page through every

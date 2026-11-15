@@ -50,6 +50,9 @@ func TestV10EventIDMatchesBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Record the reference ID before the hook is installed: EventID may be
+	// computed lazily and would then go through the hook.
+	want := builtin.EventID()
 	if err := install(); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +60,7 @@ func TestV10EventIDMatchesBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if builtin.EventID() != hooked.EventID() {
+	if want != hooked.EventID() {
 		t.Fatalf("builtin %s, rezzy %s", builtin.EventID(), hooked.EventID())
 	}
 }

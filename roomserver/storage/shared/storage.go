@@ -122,6 +122,13 @@ func (d *Database) membershipFromHAMT(
 	// block-based query for those events only: a HAMT-only snapshot has no
 	// state blocks, so falling back for the whole query would report its
 	// memberships as leave.
+	type snapshotMembership struct {
+		entries []types.StateEntry
+		ok      bool
+	}
+	// Events that share a before-state snapshot also share the tuple lookup, so
+	// resolve each snapshot once.
+	bySnapshot := make(map[types.StateSnapshotNID]snapshotMembership)
 	var blockEventIDs []string
 	for _, eventID := range eventIDs {
 		// BulkSelectStateAtEventByID does not return the event ID, so ask for
@@ -137,16 +144,21 @@ func (d *Database) membershipFromHAMT(
 		if snapshotNID == 0 {
 			continue
 		}
-		entries, ok, err := d.stateHAMTEntriesForTuples(ctx, nil, snapshotNID, []types.StateKeyTuple{tuple})
-		if err != nil {
-			return nil, false, err
+		cached, seen := bySnapshot[snapshotNID]
+		if !seen {
+			entries, ok, err := d.stateHAMTEntriesForTuples(ctx, nil, snapshotNID, []types.StateKeyTuple{tuple})
+			if err != nil {
+				return nil, false, err
+			}
+			cached = snapshotMembership{entries: entries, ok: ok}
+			bySnapshot[snapshotNID] = cached
 		}
-		if !ok {
+		if !cached.ok {
 			blockEventIDs = append(blockEventIDs, eventID)
 			continue
 		}
-		if len(entries) > 0 {
-			membershipNIDs[eventID] = entries[len(entries)-1].EventNID
+		if len(cached.entries) > 0 {
+			membershipNIDs[eventID] = cached.entries[len(cached.entries)-1].EventNID
 		}
 	}
 	eventNIDList := make([]types.EventNID, 0, len(membershipNIDs))

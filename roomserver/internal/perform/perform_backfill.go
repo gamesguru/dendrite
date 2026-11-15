@@ -164,7 +164,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 				WithField("prev_event", prev).
 				WithField("prev_in_response", have).
 				WithField("response_events", len(events)).
-				Info("backfillViaFederation: frontier predecessor check")
+				Debug("backfillViaFederation: frontier predecessor check")
 		}
 	}
 	// Only return an error if we really couldn't get any events.
@@ -193,6 +193,15 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// have no before-state here, so they are returned with the most restrictive
 	// visibility rather than left invisible to the sync API.
 	var sideEffectEvents []gomatrixserverlib.PDU
+	// Redactions whose state assignment or validation did not complete. They
+	// are left out of the response, so sync does not store a redaction that
+	// never redacted its target; a retry fetches and validates them again.
+	unvalidatedRedactions := make(map[string]struct{})
+	markUnvalidated := func(ev gomatrixserverlib.PDU) {
+		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
+			unvalidatedRedactions[ev.EventID()] = struct{}{}
+		}
+	}
 	for _, ev := range storedEvents {
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
@@ -200,6 +209,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			// this should be impossible as all events returned must have pass Step 5 of the PDU checks
 			// which requires a list of state IDs.
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for event which passed auth checks")
+			markUnvalidated(ev.PDU)
 			continue
 		}
 		var entries []types.StateEntry
@@ -215,6 +225,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 				// already persisted in the roomserver and must still be returned
 				// to sync; a later retry would consider them present and omit
 				// them from sideEffectEvents.
+				markUnvalidated(ev.PDU)
 				continue
 			}
 		}
@@ -228,6 +239,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		}
 		if err = r.DB.SetState(ctx, ev.EventNID, beforeStateSnapshotNID); err != nil {
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to persist snapshot nid")
+			markUnvalidated(ev.PDU)
 			continue
 		}
 		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
@@ -238,6 +250,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			_, redacted, rErr := r.DB.MaybeRedactEvent(ctx, info, ev.EventNID, ev.PDU, &resolver, r.Querier)
 			if rErr != nil {
 				logrus.WithError(rErr).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to apply redaction after state assignment")
+				markUnvalidated(ev.PDU)
 			} else if redacted != nil {
 				// The response still holds the unredacted target. Replace it, so
 				// the sync copy written from the response is redacted too.
@@ -248,8 +261,11 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 
 	// TODO: update backwards extremities, as that should be moved from syncapi to roomserver at some point.
 
-	res.Events = make([]*types.HeaderedEvent, len(events))
+	res.Events = make([]*types.HeaderedEvent, 0, len(events))
 	for i := range events {
+		if _, skip := unvalidatedRedactions[events[i].EventID()]; skip {
+			continue
+		}
 		if redacted, ok := redactedInBatch[events[i].EventID()]; ok {
 			events[i] = redacted
 		}
@@ -259,7 +275,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			// the anchor's visibility, which may be less restrictive.
 			vis = gomatrixserverlib.HistoryVisibilityJoined
 		}
-		res.Events[i] = &types.HeaderedEvent{PDU: events[i], Visibility: vis}
+		res.Events = append(res.Events, &types.HeaderedEvent{PDU: events[i], Visibility: vis})
 	}
 	inResponse := make(map[string]struct{}, len(events))
 	for _, ev := range events {

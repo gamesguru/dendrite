@@ -63,6 +63,9 @@ func TestCheckContentHashRejectsTamperedEvent(t *testing.T) {
 }
 
 func TestCheckStateHAMTAgreesWithEntries(t *testing.T) {
+	if !Enabled {
+		t.Skip("CheckStateHAMT is a no-op without rezzy")
+	}
 	entries := []StateEntry{
 		{Type: "m.room.create", StateKey: "", EventID: "$create"},
 		{Type: "m.room.member", StateKey: "@alice:example.org", EventID: "$alice"},

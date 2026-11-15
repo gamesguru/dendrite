@@ -55,8 +55,8 @@ func TestContractNextKeepsTheFloor(t *testing.T) {
 func TestMembershipHistoryContractUpgradeAndRollbackPaths(t *testing.T) {
 	current := Release()
 	require.Equal(t, 1, current.UpgradeFrom)
-	// The rollback floor is the first level whose state snapshots a build of
-	// this level can read, which is now the HAMT cutover.
+	// The rollback floor is the oldest level that can read the state
+	// snapshots this build writes, which is the HAMT cutover.
 	require.Equal(t, rollbackToLevel, current.RollbackTo)
 
 	// A direct upgrade from a build without membership history is admitted:

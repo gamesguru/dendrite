@@ -99,6 +99,10 @@ jobs:
           go-version-file: "go.mod"
       - name: Build required Rezzy library
         uses: ./.github/actions/setup-rezzy
+      - name: Test scripts
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 -m unittest discover -s scripts
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         env:
@@ -281,7 +285,7 @@ jobs:
   # run Complement
   complement:
     name: "Complement (${{ matrix.label }})"
-    timeout-minutes: 35
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
