@@ -170,7 +170,10 @@ func (e *BackfillUnavailableError) Unwrap() error { return e.Err }
 // PerformBackfillResponse is a response to PerformBackfill.
 type PerformBackfillResponse struct {
 	// Missing events, arbritrary order.
-	Events            []*types.HeaderedEvent              `json:"events"`
+	Events []*types.HeaderedEvent `json:"events"`
+	// RedactedEvents carries redacted copies of targets that may already exist
+	// in the sync timeline but were not included in this backfill batch.
+	RedactedEvents    map[string]*types.HeaderedEvent     `json:"redacted_events,omitempty"`
 	HistoryVisibility gomatrixserverlib.HistoryVisibility `json:"history_visibility"`
 }
 
