@@ -42,13 +42,19 @@ COPY --from=rezzy-build /rezzy/target/pkgconfig/rezzy-ffi.pc /rezzy/target/pkgco
 # that come from the COPY . . file don't contaminate the build
 RUN mkdir /zendrite
 
+# The coverage-instrumented binary doubles the Go compile time; build it only
+# when asked (--build-arg BUILD_COVER=1), which COVER=1 at runtime requires.
+ARG BUILD_COVER=0
+
 # Utilise Docker caching when downloading dependencies, this stops us needlessly
 # downloading dependencies every time.
 RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -buildvcs=false -tags goolm,nodynamic -o /zendrite ./cmd/generate-config ./cmd/generate-keys ./cmd/zendrite && \
-    CGO_ENABLED=1 go build -buildvcs=false -tags goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite && \
+    if [ "$BUILD_COVER" = "1" ]; then \
+      CGO_ENABLED=1 go build -buildvcs=false -tags goolm,nodynamic -cover -covermode=atomic -o /zendrite/zendrite-cover -coverpkg "codefloe.com/pat-s/zendrite/..." ./cmd/zendrite; \
+    fi && \
     cp build/scripts/complement-cmd.sh /complement-cmd.sh
 
 WORKDIR /zendrite

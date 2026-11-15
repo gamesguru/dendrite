@@ -308,21 +308,34 @@ jobs:
         run: |
           echo "$GOROOT_1_17_X64/bin" >> $GITHUB_PATH
           echo "~/go/bin" >> $GITHUB_PATH
+      # libolm is built from source; cache the build tree so only the (fast)
+      # install runs on a hit.
+      - name: Cache libolm build
+        id: olm-cache
+        uses: actions/cache@v4
+        with:
+          path: olm-build
+          key: olm-build-${{ runner.os }}-${{ env.OLM_VERSION }}-${{ env.OLM_SHA256 }}
       - name: "Install Complement Dependencies"
         # We don't need to install Go because it is included on the Ubuntu 20.04 image:
         # See https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-Readme.md specifically GOROOT_1_17_X64
         run: |
           set -euo pipefail
-          curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
-          echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
-          tar xzf olm.tar.gz
-          cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build olm-build -j"$(nproc)"
+          if [ "${{ steps.olm-cache.outputs.cache-hit }}" != "true" ]; then
+            curl -fsSL "https://gitlab.matrix.org/matrix-org/olm/-/archive/${{ env.OLM_VERSION }}/olm-${{ env.OLM_VERSION }}.tar.gz" -o olm.tar.gz
+            echo "${{ env.OLM_SHA256 }}  olm.tar.gz" | sha256sum -c -
+            tar xzf olm.tar.gz
+            cmake -S olm-${{ env.OLM_VERSION }} -B olm-build -DCMAKE_INSTALL_PREFIX=/usr/local -DOLM_TESTS=OFF \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            cmake --build olm-build -j"$(nproc)"
+          fi
           sudo cmake --install olm-build
           sudo ldconfig
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
-          go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+      - name: Set up gotestfmt
+        uses: gotesttools/gotestfmt-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run actions/checkout@v5 for dendrite
         uses: actions/checkout@v5
         with:
@@ -350,11 +363,17 @@ jobs:
       # Build initial Dendrite image
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      # Export the BuildKit layer cache to the GitHub Actions cache so the Rust
+      # (Rezzy) and Go stages are reused across runs; only changed layers rebuild.
+      - name: Expose GitHub Actions cache to BuildKit
+        uses: crazy-max/ghaction-github-runtime@v3
       - name: Build Complement image
         working-directory: dendrite
         run: |
           docker buildx build --load \
             --build-context rezzy=./rezzy \
+            --cache-from type=gha,scope=complement-${{ matrix.image }} \
+            --cache-to type=gha,mode=max,scope=complement-${{ matrix.image }} \
             -f build/scripts/Complement${{ matrix.postgres }}.Dockerfile \
             -t complement-dendrite:${{ matrix.image }} .
 
