@@ -875,9 +875,7 @@ func (r *Admin) ingestAdminEvent(
 	ctx context.Context, ev gomatrixserverlib.PDU, serverName spec.ServerName,
 ) (string, error) {
 	eventID := ev.EventID()
-	if err := gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
-	}); err != nil {
+	if err := r.verifyAdminEventSignatures(ctx, ev); err != nil {
 		return "", fmt.Errorf("signature check failed: %w", err)
 	}
 	inputRes := &api.InputRoomEventsResponse{}
@@ -911,6 +909,12 @@ func (r *Admin) ingestAdminEvent(
 		return "rejected", nil
 	}
 	return "accepted", nil
+}
+
+func (r *Admin) verifyAdminEventSignatures(ctx context.Context, ev gomatrixserverlib.PDU) error {
+	return gomatrixserverlib.VerifyEventSignatures(ctx, ev, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
+	})
 }
 
 // maxAdminImportEvents bounds one import so it finishes inside the server's
@@ -966,7 +970,11 @@ func (r *Admin) PerformAdminImportEvents(
 	sort.SliceStable(events, func(i, j int) bool { return events[i].ev.Depth() < events[j].ev.Depth() })
 	for _, p := range events {
 		if _, dup := done[p.ev.EventID()]; dup {
-			results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: "duplicate"})
+			outcome := "duplicate"
+			if err := r.verifyAdminEventSignatures(ctx, p.ev); err != nil {
+				outcome = "error: signature check failed: " + err.Error()
+			}
+			results = append(results, api.AdminImportResult{Line: p.line, EventID: p.ev.EventID(), Outcome: outcome})
 			continue
 		}
 		outcome, ingestErr := r.ingestAdminEvent(ctx, p.ev, origin)

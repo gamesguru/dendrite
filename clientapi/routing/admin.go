@@ -780,6 +780,10 @@ const maxImportLineBytes = 1 << 20
 // not buffer more than this, whatever the per-line and per-import event limits.
 const maxImportBodyBytes = 64 << 20
 
+// maxImportEvents bounds the records buffered before the roomserver applies its
+// own per-import limit, so tiny records cannot force huge slices.
+const maxImportEvents = 5000
+
 // AdminImportEvents ingests PDUs from a JSONL request body (one PDU per
 // line, blank lines ignored) into a room that already exists locally. Events are
 // signature-checked and ingested oldest depth first. The optional "origin"
@@ -818,6 +822,12 @@ func AdminImportEvents(
 			return util.JSONResponse{
 				Code: http.StatusRequestEntityTooLarge,
 				JSON: spec.BadJSON("Request body too large."),
+			}
+		}
+		if len(pdus) >= maxImportEvents {
+			return util.JSONResponse{
+				Code: http.StatusRequestEntityTooLarge,
+				JSON: spec.BadJSON("Too many events in one import."),
 			}
 		}
 		pdus = append(pdus, json.RawMessage(append([]byte(nil), line...)))

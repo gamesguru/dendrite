@@ -17,8 +17,8 @@ fmt: install-dev-deps
 		gci write --skip-vendor --skip-generated -s standard -s default -s "prefix(codefloe.com/pat-s/zendrite)" --custom-order .
 
 # Run golangci-lint
-lint:
-    prek run golangci-lint --all-files
+lint: rezzy-native
+    PKG_CONFIG_PATH="{{justfile_directory()}}/rezzy/target/pkgconfig:${PKG_CONFIG_PATH:-}" prek run golangci-lint --all-files
 
 # Build the native Rezzy library the Go packages link against
 rezzy-native:

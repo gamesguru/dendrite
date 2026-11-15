@@ -2003,7 +2003,11 @@ func (r *messagesReq) backfill(roomID string, backwardsExtremities map[string][]
 func (r *messagesReq) applyBackfilledRedactions(events []types.StreamEvent) {
 	for i := range events {
 		if redacted, ok := r.backfilledRedactedEvents[events[i].EventID()]; ok {
-			events[i].HeaderedEvent = redacted
+			// Keep metadata from the stored event: the backfilled copy only
+			// carries a PDU and must not discard visibility or local fields.
+			cp := *events[i].HeaderedEvent
+			cp.PDU = redacted.PDU
+			events[i].HeaderedEvent = &cp
 		}
 	}
 }

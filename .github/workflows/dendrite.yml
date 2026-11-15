@@ -9,6 +9,7 @@ on:
       - "go.sum" # or dependency updates
       - ".github/workflows/**" # or workflow changes
       - ".github/actions/**" # or a changed composite action
+      - "rezzy" # submodule pointer updates change this path itself
       - "rezzy/**" # native library and pkg-config changes
       - ".github/actions/setup-rezzy/**" # Rezzy CI setup
   pull_request:
@@ -17,6 +18,7 @@ on:
       - "go.sum" # or dependency updates
       - ".github/workflows/**"
       - ".github/actions/**"
+      - "rezzy"
       - "rezzy/**"
       - ".github/actions/setup-rezzy/**"
   release:
@@ -203,22 +205,9 @@ jobs:
           CGO_CFLAGS: -fno-stack-protector
         run: go build -trimpath -v -o "bin/" ./cmd/...
 
-  # Dummy step to gate other tests on without repeating the whole list
-  initial-tests-done:
-    name: Initial tests passed
-    needs: [lint, test, build]
-    runs-on: ubuntu-latest
-    if: ${{ !cancelled() }} # Run this even if prior jobs were skipped
-    steps:
-      - name: Check initial tests passed
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-
   # run go test with different go versions
   integration:
     timeout-minutes: 20
-    needs: initial-tests-done
     name: Integration tests
     runs-on: ubuntu-latest
     # Service containers to run with `container-job`
@@ -382,12 +371,7 @@ jobs:
 
   integration-tests-done:
     name: Integration tests passed
-    needs:
-      [
-        initial-tests-done,
-        complement,
-        integration,
-      ]
+    needs: [lint, test, build, integration, complement]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }} # Run this even if prior jobs were skipped
     steps:

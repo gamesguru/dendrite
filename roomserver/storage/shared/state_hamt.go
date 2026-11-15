@@ -328,15 +328,23 @@ func (d *Database) collectStateHAMTGarbageLocked(ctx context.Context, txn *sql.T
 		return fmt.Errorf("select remaining state HAMT roots: %w", err)
 	}
 	live := make(map[string]struct{})
+	traced := make(map[string]struct{})
 	for _, root := range roots {
 		nodes := make([]statehamt.Node, 0, 16)
-		seen := make(map[string]struct{})
 		complete := false
 		for round := 0; round < 64; round++ {
 			needed, err := statehamt.Needed(root.RoomID, root.RootHash, nodes)
 			if err != nil {
 				return fmt.Errorf("trace state HAMT rooted at %x for room %s: %w", root.RootHash, root.RoomID, err)
 			}
+			untraced := needed[:0]
+			for _, hash := range needed {
+				key := root.RoomID + "\x00" + string(hash)
+				if _, ok := traced[key]; !ok {
+					untraced = append(untraced, hash)
+				}
+			}
+			needed = untraced
 			if len(needed) == 0 {
 				complete = true
 				break
@@ -349,19 +357,17 @@ func (d *Database) collectStateHAMTGarbageLocked(ctx context.Context, txn *sql.T
 				return fmt.Errorf("state HAMT for room %s has missing nodes during collection", root.RoomID)
 			}
 			for _, node := range fetched {
-				key := string(node.Hash)
-				if _, ok := seen[key]; ok {
+				key := root.RoomID + "\x00" + string(node.Hash)
+				if _, ok := traced[key]; ok {
 					continue
 				}
-				seen[key] = struct{}{}
+				traced[key] = struct{}{}
+				live[string(node.Hash)] = struct{}{}
 				nodes = append(nodes, statehamt.Node{Hash: node.Hash, Bytes: node.Bytes})
 			}
 		}
 		if !complete {
 			return fmt.Errorf("state HAMT for room %s exceeded the traversal limit during collection", root.RoomID)
-		}
-		for _, node := range nodes {
-			live[string(node.Hash)] = struct{}{}
 		}
 	}
 

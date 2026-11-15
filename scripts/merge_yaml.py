@@ -214,7 +214,9 @@ def main():
     # The merged config holds secrets: write it to a private temporary file in
     # the output directory, then replace the output atomically, so a failure
     # leaves any existing output untouched and no partial file behind.
-    out_dir = os.path.dirname(os.path.abspath(a.output))
+    # Resolve a symlinked output so the link's target is updated, not the link.
+    dest = os.path.realpath(a.output)
+    out_dir = os.path.dirname(dest)
     fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix=".merge_yaml.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -223,7 +225,7 @@ def main():
             os.chmod(tmp_path, 0o600)
         except OSError:
             pass  # best effort on platforms without POSIX permissions
-        os.replace(tmp_path, a.output)
+        os.replace(tmp_path, dest)
     except BaseException:
         try:
             os.unlink(tmp_path)
