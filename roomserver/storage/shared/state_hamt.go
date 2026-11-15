@@ -787,8 +787,21 @@ func (d *Database) loadStateHAMTNodes(
 	ctx context.Context, txn *sql.Tx, roomID string, root *tables.StateHAMTRoot,
 	snapshotNID types.StateSnapshotNID,
 ) ([]statehamt.Node, error) {
-	nodes := make([]statehamt.Node, 0, 8)
-	seen := make(map[string]struct{}, 8)
+	return d.loadStateHAMTNodesFrom(ctx, txn, roomID, root, snapshotNID, nil)
+}
+
+// loadStateHAMTNodesFrom completes a node set in batches, starting from nodes
+// the caller already holds so they are not read again.
+func (d *Database) loadStateHAMTNodesFrom(
+	ctx context.Context, txn *sql.Tx, roomID string, root *tables.StateHAMTRoot,
+	snapshotNID types.StateSnapshotNID, have []statehamt.Node,
+) ([]statehamt.Node, error) {
+	nodes := make([]statehamt.Node, 0, len(have)+8)
+	seen := make(map[string]struct{}, len(have)+8)
+	for _, node := range have {
+		seen[string(node.Hash)] = struct{}{}
+		nodes = append(nodes, node)
+	}
 	for round := 0; round < 16; round++ {
 		needed, err := statehamt.Needed(roomID, root.RootHash, nodes)
 		if err != nil {
@@ -943,8 +956,9 @@ func (d *Database) lookupStateHAMTKeys(
 			return nil, nil, fmt.Errorf("state HAMT for snapshot %d is missing lookup nodes: %w", snapshotNID, err)
 		}
 	}
-	// Too many paths for per-node discovery; load the tree in batches instead.
-	nodes, err := d.loadStateHAMTNodes(ctx, txn, roomID, root, snapshotNID)
+	// Too many paths for per-node discovery; load the tree in batches instead,
+	// reusing the nodes already fetched.
+	nodes, err := d.loadStateHAMTNodesFrom(ctx, txn, roomID, root, snapshotNID, nodes)
 	if err != nil {
 		return nil, nil, err
 	}

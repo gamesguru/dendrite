@@ -301,6 +301,11 @@ func (v *StateResolution) LoadMembershipAtEvent(
 	return result, nil
 }
 
+// legacyStateQueryChunk caps how many NIDs one legacy state query binds. Each
+// NID is a bind variable in an `IN (...)` list, and SQLite rejects a statement
+// with more variables than its limit (999 on older builds).
+const legacyStateQueryChunk = 500
+
 // loadLegacyStatesBatched loads the state of several snapshots from their
 // legacy state blocks with one query for the block lists and one for the
 // entries, however many snapshots share a block. A nil tuples slice loads every
@@ -313,9 +318,15 @@ func (v *StateResolution) loadLegacyStatesBatched(
 	if len(nids) == 0 {
 		return result, nil
 	}
-	blockLists, err := v.db.StateBlockNIDs(ctx, UniqueStateSnapshotNIDs(nids))
-	if err != nil {
-		return nil, fmt.Errorf("v.db.StateBlockNIDs: %w", err)
+	var blockLists []types.StateBlockNIDList
+	uniqueNIDs := UniqueStateSnapshotNIDs(nids)
+	for start := 0; start < len(uniqueNIDs); start += legacyStateQueryChunk {
+		end := min(start+legacyStateQueryChunk, len(uniqueNIDs))
+		lists, err := v.db.StateBlockNIDs(ctx, uniqueNIDs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("v.db.StateBlockNIDs: %w", err)
+		}
+		blockLists = append(blockLists, lists...)
 	}
 	blocksByNID := make(map[types.StateSnapshotNID][]types.StateBlockNID, len(blockLists))
 	seenBlock := make(map[types.StateBlockNID]struct{})
@@ -332,13 +343,19 @@ func (v *StateResolution) loadLegacyStatesBatched(
 	sort.Slice(wantBlocks, func(i, j int) bool { return wantBlocks[i] < wantBlocks[j] })
 
 	var entryLists []types.StateEntryList
-	if tuples == nil {
-		entryLists, err = v.db.StateEntries(ctx, wantBlocks)
-	} else {
-		entryLists, err = v.db.StateEntriesForTuples(ctx, wantBlocks, tuples)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load state entries: %w", err)
+	for start := 0; start < len(wantBlocks); start += legacyStateQueryChunk {
+		end := min(start+legacyStateQueryChunk, len(wantBlocks))
+		var lists []types.StateEntryList
+		var err error
+		if tuples == nil {
+			lists, err = v.db.StateEntries(ctx, wantBlocks[start:end])
+		} else {
+			lists, err = v.db.StateEntriesForTuples(ctx, wantBlocks[start:end], tuples)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load state entries: %w", err)
+		}
+		entryLists = append(entryLists, lists...)
 	}
 	entriesMap := stateEntryListMap(entryLists)
 

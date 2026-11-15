@@ -109,4 +109,7 @@ func TestLookupStateHAMTKeysHandlesManyKeys(t *testing.T) {
 	for i, ok := range found {
 		require.True(t, ok, "key %d was not found", i)
 	}
+	// The keyed rounds cannot cover 64 paths, so the batched whole-tree
+	// fallback must have run and loaded every persisted node.
+	require.Len(t, stored.loaded, len(persisted.Nodes), "fallback should load the whole tree")
 }
