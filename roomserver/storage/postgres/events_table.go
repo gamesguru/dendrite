@@ -159,10 +159,8 @@ const selectRoomsWithEventTypeNIDSQL = `SELECT DISTINCT room_nid FROM roomserver
 // no state snapshot yet (state_snapshot_nid = 0, e.g. a backfill entry whose
 // state has not been computed) is also excluded until it gains state.
 //
-// This is deliberately narrower than the EventIDsInRoom contract documented in
-// roomserver/storage/interface.go, which says "non-rejected timeline event IDs,
-// excluding outliers" without mentioning the state requirement. That contract
-// comment still needs updating to match this query.
+// This matches the EventIDsInRoom contract documented in
+// roomserver/storage/interface.go.
 const selectEventIDsInRoomSQL = "" +
 	"SELECT event_id FROM roomserver_events" +
 	" WHERE room_nid = $1 AND is_rejected = FALSE AND state_snapshot_nid != 0" +

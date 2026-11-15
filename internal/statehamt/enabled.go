@@ -98,19 +98,7 @@ func Needed(roomID string, rootHash []byte, nodes []Node) ([][]byte, error) {
 func Entries(roomID string, rootHash []byte, nodes []Node) ([]Entry, error) {
 	entries, err := rezzy.StateHAMTReadEntries(roomID, hex.EncodeToString(rootHash), toNodes(nodes))
 	if err != nil {
-		var missing *rezzy.MissingNodesError
-		if errors.As(err, &missing) {
-			hashes := make([][]byte, len(missing.Hashes))
-			for i, hash := range missing.Hashes {
-				decoded, decodeErr := hex.DecodeString(hash)
-				if decodeErr != nil {
-					return nil, fmt.Errorf("statehamt: decode missing hash: %w", decodeErr)
-				}
-				hashes[i] = decoded
-			}
-			return nil, &MissingNodesError{Hashes: hashes}
-		}
-		return nil, err
+		return nil, convertMissingNodes(err)
 	}
 	return fromEntries(entries), nil
 }
@@ -121,7 +109,29 @@ func Lookup(roomID string, rootHash []byte, nodes []Node, keys []Key) ([]string,
 	for i, key := range keys {
 		converted[i] = rezzy.HAMTNodeKey{EventType: key.Type, StateKey: key.StateKey}
 	}
-	return rezzy.StateHAMTLookupRoot(roomID, hex.EncodeToString(rootHash), toNodes(nodes), converted)
+	values, found, err := rezzy.StateHAMTLookupRoot(roomID, hex.EncodeToString(rootHash), toNodes(nodes), converted)
+	if err != nil {
+		return nil, nil, convertMissingNodes(err)
+	}
+	return values, found, nil
+}
+
+// convertMissingNodes maps the FFI's missing-node error onto the package's
+// MissingNodesError so every read has the same error contract.
+func convertMissingNodes(err error) error {
+	var missing *rezzy.MissingNodesError
+	if !errors.As(err, &missing) {
+		return err
+	}
+	hashes := make([][]byte, len(missing.Hashes))
+	for i, hash := range missing.Hashes {
+		decoded, decodeErr := hex.DecodeString(hash)
+		if decodeErr != nil {
+			return fmt.Errorf("statehamt: decode missing hash: %w", decodeErr)
+		}
+		hashes[i] = decoded
+	}
+	return &MissingNodesError{Hashes: hashes}
 }
 
 // Verify checks a root record and its node set.

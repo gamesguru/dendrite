@@ -123,8 +123,10 @@ type Database interface {
 	// Lookup the event IDs for a batch of event numeric IDs.
 	// Returns an error if the retrieval went wrong.
 	EventIDs(ctx context.Context, eventNIDs []types.EventNID) (map[types.EventNID]string, error)
-	// EventIDsInRoom returns the room's non-rejected timeline event IDs,
-	// excluding outliers. This is the event set MSC4521 reconciles.
+	// EventIDsInRoom returns the room's non-rejected timeline event IDs with
+	// a state snapshot, excluding outliers. Events still waiting for state
+	// (for example a backfill entry with no snapshot yet) are omitted until
+	// they gain one. This is the event set MSC4521 reconciles.
 	EventIDsInRoom(ctx context.Context, roomNID types.RoomNID) ([]string, error)
 	// Opens and returns a room updater, which locks the room and opens a transaction.
 	// The GetRoomUpdater must have Commit or Rollback called on it if this doesn't return an error.
