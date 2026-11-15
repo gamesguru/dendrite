@@ -10,6 +10,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -37,6 +38,7 @@ type StateResolutionStorage interface {
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
 	StateAtEventIDs(ctx context.Context, eventIDs []string) ([]types.StateAtEvent, error)
 	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
 	Events(ctx context.Context, roomVersion gomatrixserverlib.RoomVersion, eventNIDs []types.EventNID) ([]types.Event, error)
 	EventsFromIDs(ctx context.Context, roomInfo *types.RoomInfo, eventIDs []string) ([]types.Event, error)
 	IsEventRejected(ctx context.Context, roomNID types.RoomNID, eventID string) (bool, error)
@@ -776,20 +778,27 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 			metrics.algorithm = "no_change"
 			return metrics.stop(prevState.BeforeStateSnapshotNID, nil)
 		}
-		// 4) Snapshots are stored as their full state, keyed by the HAMT root,
-		// so the state after this event is the previous snapshot with that one
-		// entry replaced.
-		previous, err := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
-		if err != nil {
-			metrics.algorithm = "_load_state"
-			return metrics.stop(0, fmt.Errorf("v.LoadStateAtSnapshot: %w", err))
-		}
+		// 4) The state after this event is the previous snapshot with that one
+		// entry replaced, so apply it as a delta to the previous HAMT.
 		metrics.algorithm = "single_state_event"
-		stateNID, err := v.db.AddState(
-			ctx, v.roomInfo.RoomNID, applyStateEntry(previous, prevState.StateEntry),
+		stateNID, err := v.db.AddStateDelta(
+			ctx, v.roomInfo.RoomNID, prevState.BeforeStateSnapshotNID,
+			[]types.StateEntry{prevState.StateEntry},
 		)
+		if errors.Is(err, types.ErrNoStateHAMT) {
+			// The previous snapshot predates HAMT storage; rebuild from its
+			// full state.
+			previous, loadErr := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
+			if loadErr != nil {
+				metrics.algorithm = "_load_state"
+				return metrics.stop(0, fmt.Errorf("v.LoadStateAtSnapshot: %w", loadErr))
+			}
+			stateNID, err = v.db.AddState(
+				ctx, v.roomInfo.RoomNID, applyStateEntry(previous, prevState.StateEntry),
+			)
+		}
 		if err != nil {
-			err = fmt.Errorf("v.db.AddState: %w", err)
+			err = fmt.Errorf("v.db.AddStateDelta: %w", err)
 		}
 		return metrics.stop(stateNID, err)
 	}

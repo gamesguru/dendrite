@@ -50,6 +50,10 @@ func Build(roomID string, entries []Entry) (*Persisted, error) {
 	if err != nil {
 		return nil, err
 	}
+	return persistedFromRezzy(persisted)
+}
+
+func persistedFromRezzy(persisted *rezzy.HAMTPersisted) (*Persisted, error) {
 	rootHash, err := hex.DecodeString(persisted.RootHash)
 	if err != nil {
 		return nil, fmt.Errorf("statehamt: decode root hash: %w", err)
@@ -141,4 +145,58 @@ func Verify(roomID string, rootRecord []byte, nodes []Node) (*Verification, erro
 		Prefix:       verified.Prefix,
 		EntryCount:   verified.EntryCount,
 	}, nil
+}
+
+// maxApplyRounds bounds the fetch-and-retry loop in Apply. Every round loads
+// at least one more node of the mutated paths, so the bound is the maximum
+// HAMT depth times the number of mutations, with generous slack.
+const maxApplyRounds = 256
+
+// Apply applies mutations to the HAMT described by parentRootRecord (nil
+// starts from the empty state) in O(len(mutations) * log n). It returns the
+// new root record and only the nodes created relative to the parent.
+//
+// The fetch callback loads persisted nodes by hash for the path nodes the
+// mutations need; every node it returns is verified against its hash.
+func Apply(
+	roomID string, parentRootRecord []byte, parentEntryCount int,
+	fetch func(hashes [][]byte) ([]Node, error), mutations []Mutation,
+) (*Persisted, error) {
+	converted := make([]rezzy.HAMTMutation, len(mutations))
+	for i, mutation := range mutations {
+		converted[i] = rezzy.HAMTMutation{
+			EventType: mutation.Type, StateKey: mutation.StateKey, EventID: mutation.EventID,
+		}
+	}
+	var supplied []Node
+	for round := 0; round < maxApplyRounds; round++ {
+		applied, err := rezzy.StateHAMTApply(
+			roomID, parentRootRecord, parentEntryCount, toNodes(supplied), converted,
+		)
+		var missing *rezzy.MissingNodesError
+		if errors.As(err, &missing) {
+			hashes := make([][]byte, len(missing.Hashes))
+			for i, hash := range missing.Hashes {
+				decoded, decodeErr := hex.DecodeString(hash)
+				if decodeErr != nil {
+					return nil, fmt.Errorf("statehamt: decode missing hash: %w", decodeErr)
+				}
+				hashes[i] = decoded
+			}
+			fetched, fetchErr := fetch(hashes)
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			if len(fetched) == 0 {
+				return nil, &MissingNodesError{Hashes: hashes}
+			}
+			supplied = append(supplied, fetched...)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return persistedFromRezzy(applied)
+	}
+	return nil, fmt.Errorf("statehamt: apply still missing nodes after %d rounds", maxApplyRounds)
 }

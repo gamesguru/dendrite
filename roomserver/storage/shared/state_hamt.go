@@ -443,6 +443,76 @@ func (d *Database) buildStateHAMT(
 	return persisted, nil
 }
 
+// addStateDelta stores the snapshot produced by replacing the entries for
+// changed's state keys in the parent snapshot. It touches O(len(changed) *
+// log n) HAMT nodes instead of rebuilding the whole tree, and returns
+// types.ErrNoStateHAMT when the parent has no persisted HAMT so the caller can
+// fall back to storing the full state.
+func (d *Database) addStateDelta(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID,
+	parentNID types.StateSnapshotNID, changed []types.StateEntry,
+) (stateNID types.StateSnapshotNID, err error) {
+	err = d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
+		// Keep purge's exclusive mark-and-sweep out for the entire read,
+		// mutation, and root publication. Locking only while inserting nodes
+		// would still let a purge delete a parent node between these steps.
+		if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, false); err != nil {
+			return fmt.Errorf("lock state HAMT nodes for delta: %w", err)
+		}
+		parent, err := d.StateHAMTTable.SelectStateHAMT(ctx, txn, parentNID)
+		if err != nil {
+			return fmt.Errorf("SelectStateHAMT: %w", err)
+		}
+		if parent == nil {
+			return types.ErrNoStateHAMT
+		}
+		if parent.RoomNID != roomNID {
+			return fmt.Errorf("parent snapshot %d belongs to room %d, not %d", parentNID, parent.RoomNID, roomNID)
+		}
+		roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
+		if err != nil {
+			return fmt.Errorf("BulkSelectRoomIDs: %w", err)
+		}
+		if len(roomIDs) == 0 {
+			return fmt.Errorf("room NID %d has no room ID", roomNID)
+		}
+		entries, err := d.hamtEntriesFromStateEntries(ctx, txn, dedupeStateEntries(changed))
+		if err != nil {
+			return err
+		}
+		mutations := make([]statehamt.Mutation, len(entries))
+		for i := range entries {
+			mutations[i] = statehamt.Mutation{
+				Type: entries[i].Type, StateKey: entries[i].StateKey, EventID: &entries[i].EventID,
+			}
+		}
+		fetch := func(hashes [][]byte) ([]statehamt.Node, error) {
+			rows, err := d.StateHAMTTable.SelectStateHAMTNodes(ctx, txn, hashes)
+			if err != nil {
+				return nil, fmt.Errorf("SelectStateHAMTNodes: %w", err)
+			}
+			nodes := make([]statehamt.Node, len(rows))
+			for i, row := range rows {
+				nodes[i] = statehamt.Node{Hash: row.Hash, Bytes: row.Bytes}
+			}
+			return nodes, nil
+		}
+		persisted, err := statehamt.Apply(roomIDs[0], parent.RootRecord, parent.EntryCount, fetch, mutations)
+		if err != nil {
+			return fmt.Errorf("statehamt.Apply: %w", err)
+		}
+		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, persisted.RootHash, nil)
+		if err != nil {
+			return fmt.Errorf("d.StateSnapshotTable.InsertState: %w", err)
+		}
+		return d.insertStateHAMTLocked(ctx, txn, roomNID, stateNID, persisted)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return stateNID, nil
+}
+
 // dedupeStateEntries keeps one entry per (event type, state key) tuple, the
 // last one winning, which is the order the legacy state-block merge used.
 func dedupeStateEntries(entries []types.StateEntry) []types.StateEntry {
@@ -471,6 +541,15 @@ func (d *Database) insertStateHAMT(
 	if err := d.StateHAMTTable.LockStateHAMTNodes(ctx, txn, false); err != nil {
 		return fmt.Errorf("lock state HAMT nodes: %w", err)
 	}
+	return d.insertStateHAMTLocked(ctx, txn, roomNID, snapshotNID, persisted)
+}
+
+// insertStateHAMTLocked writes a HAMT while the caller holds the shared
+// state-HAMT node lock for the enclosing transaction.
+func (d *Database) insertStateHAMTLocked(
+	ctx context.Context, txn *sql.Tx,
+	roomNID types.RoomNID, snapshotNID types.StateSnapshotNID, persisted *statehamt.Persisted,
+) error {
 	nodes := make([]tables.StateHAMTNode, len(persisted.Nodes))
 	for i, node := range persisted.Nodes {
 		nodes[i] = tables.StateHAMTNode{Hash: node.Hash, Bytes: node.Bytes}

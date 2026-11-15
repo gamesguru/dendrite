@@ -50,3 +50,11 @@ type MissingNodesError struct {
 func (e *MissingNodesError) Error() string {
 	return "statehamt: state HAMT is missing nodes"
 }
+
+// Mutation is one change applied to a persisted HAMT. A nil EventID removes
+// the key.
+type Mutation struct {
+	Type     string
+	StateKey string
+	EventID  *string
+}

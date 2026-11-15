@@ -126,7 +126,8 @@ func (s *stateHAMTStatements) InsertStateHAMTNodes(
 		placeholders := make([]string, len(batch))
 		args := make([]any, 0, len(batch)*2)
 		for i, node := range batch {
-			placeholders[i] = fmt.Sprintf("($%d, $%d)", len(args)+1, len(args)+2)
+			first := len(args) + 1
+			placeholders[i] = fmt.Sprintf("($%d, $%d)", first, first+1)
 			args = append(args, node.Hash, node.Bytes)
 		}
 		query := `INSERT INTO roomserver_state_hamt_nodes (node_hash, node_bytes) VALUES ` +

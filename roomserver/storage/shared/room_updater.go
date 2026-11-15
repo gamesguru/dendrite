@@ -174,6 +174,13 @@ func (u *RoomUpdater) AddState(
 	return u.d.addState(ctx, u.txn, roomNID, state)
 }
 
+func (u *RoomUpdater) AddStateDelta(
+	ctx context.Context, roomNID types.RoomNID,
+	parent types.StateSnapshotNID, changed []types.StateEntry,
+) (types.StateSnapshotNID, error) {
+	return u.d.addStateDelta(ctx, u.txn, roomNID, parent, changed)
+}
+
 func (u *RoomUpdater) SetState(
 	ctx context.Context, eventNID types.EventNID, stateNID types.StateSnapshotNID,
 ) error {

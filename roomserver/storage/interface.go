@@ -42,6 +42,10 @@ type Database interface {
 		roomNID types.RoomNID,
 		state []types.StateEntry,
 	) (types.StateSnapshotNID, error)
+	// AddStateDelta stores the state of parent with the tuples in changed
+	// replaced, touching only the affected HAMT paths. It returns
+	// types.ErrNoStateHAMT when parent has no persisted HAMT.
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
 
 	MissingAuthPrevEvents(
 		ctx context.Context, e gomatrixserverlib.PDU,
@@ -316,6 +320,10 @@ type RoomDatabase interface {
 	VerifyStateHAMT(ctx context.Context, snapshotNID types.StateSnapshotNID) error
 	BulkSelectSnapshotsFromEventIDs(ctx context.Context, eventIDs []string) (map[types.StateSnapshotNID][]string, error)
 	StateEntriesForTuples(ctx context.Context, stateBlockNIDs []types.StateBlockNID, stateKeyTuples []types.StateKeyTuple) ([]types.StateEntryList, error)
+	// AddStateDelta stores the state of parent with the tuples in changed
+	// replaced, touching only the affected HAMT paths. It returns
+	// types.ErrNoStateHAMT when parent has no persisted HAMT.
+	AddStateDelta(ctx context.Context, roomNID types.RoomNID, parent types.StateSnapshotNID, changed []types.StateEntry) (types.StateSnapshotNID, error)
 	// AddState stores the complete room state at the new snapshot, not a delta.
 	AddState(ctx context.Context, roomNID types.RoomNID, state []types.StateEntry) (types.StateSnapshotNID, error)
 	LatestEventIDs(ctx context.Context, roomNID types.RoomNID) ([]string, types.StateSnapshotNID, int64, error)

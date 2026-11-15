@@ -361,6 +361,15 @@ func (d *Database) AddState(
 	return d.addState(ctx, nil, roomNID, state)
 }
 
+// AddStateDelta stores the state of parent with changed's tuples replaced. It
+// returns types.ErrNoStateHAMT if parent has no persisted HAMT.
+func (d *Database) AddStateDelta(
+	ctx context.Context, roomNID types.RoomNID,
+	parent types.StateSnapshotNID, changed []types.StateEntry,
+) (types.StateSnapshotNID, error) {
+	return d.addStateDelta(ctx, nil, roomNID, parent, changed)
+}
+
 func (d *Database) addState(
 	ctx context.Context, txn *sql.Tx,
 	roomNID types.RoomNID,
