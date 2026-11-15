@@ -52,14 +52,22 @@ const selectStateHAMTNodesSQL = `
   SELECT node_hash, node_bytes FROM roomserver_state_hamt_nodes WHERE node_hash IN ($1)
 `
 
-const deleteStateHAMTRoomSQL = `DELETE FROM roomserver_state_hamt_snapshots WHERE room_nid = $1`
-const selectStateHAMTRootRefsSQL = `
+// stateHAMTLookupBatch bounds the hashes sent in one IN query.
+const stateHAMTLookupBatch = 500
+
+const (
+	deleteStateHAMTRoomSQL     = `DELETE FROM roomserver_state_hamt_snapshots WHERE room_nid = $1`
+	selectStateHAMTRootRefsSQL = `
   SELECT r.room_id, h.root_hash
   FROM roomserver_state_hamt_snapshots AS h
   JOIN roomserver_rooms AS r ON r.room_nid = h.room_nid
 `
-const selectStateHAMTNodeHashesSQL = `SELECT node_hash FROM roomserver_state_hamt_nodes`
-const deleteStateHAMTNodesSQL = `DELETE FROM roomserver_state_hamt_nodes WHERE node_hash IN ($1)`
+)
+
+const (
+	selectStateHAMTNodeHashesSQL = `SELECT node_hash FROM roomserver_state_hamt_nodes`
+	deleteStateHAMTNodesSQL      = `DELETE FROM roomserver_state_hamt_nodes WHERE node_hash IN ($1)`
+)
 
 type stateHAMTStatements struct{ db *sql.DB }
 
@@ -209,8 +217,8 @@ func (s *stateHAMTStatements) SelectStateHAMTNodeHashes(
 func (s *stateHAMTStatements) DeleteStateHAMTNodes(
 	ctx context.Context, txn *sql.Tx, hashes [][]byte,
 ) error {
-	for start := 0; start < len(hashes); start += 500 {
-		end := min(start+500, len(hashes))
+	for start := 0; start < len(hashes); start += stateHAMTLookupBatch {
+		end := min(start+stateHAMTLookupBatch, len(hashes))
 		args := make([]any, end-start)
 		for i, hash := range hashes[start:end] {
 			args[i] = hash

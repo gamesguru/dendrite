@@ -23,7 +23,7 @@ type server struct {
 	Name    string `json:"name"`
 }
 
-// Version returns the server version. msc4521 advertises the MSC4521 digest
+// Version returns the server version. MSC4521 advertises the MSC4521 digest
 // profile when this build serves it and the deployment enabled it.
 func Version(msc4521 bool) util.JSONResponse {
 	v := &version{

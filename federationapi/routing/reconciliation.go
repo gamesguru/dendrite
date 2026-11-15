@@ -105,7 +105,7 @@ func frameID(eventIDs []string) string {
 		sorted = append(sorted, eventID)
 	}
 	sort.Strings(sorted)
-	encoded, _ := json.Marshal(sorted)
+	encoded, _ := json.Marshal(sorted) //nolint:errchkjson // a []string always marshals
 	sum := sha256.Sum256(encoded)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }

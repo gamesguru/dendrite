@@ -36,7 +36,7 @@ func (d *Database) BackfillStateHAMTs(ctx context.Context, limit int) (int, erro
 	}
 	closeRows := func(cause error) error {
 		if closeErr := rows.Close(); closeErr != nil {
-			return fmt.Errorf("%w (also failed to close snapshot rows: %v)", cause, closeErr)
+			return fmt.Errorf("%w (also failed to close snapshot rows: %w)", cause, closeErr)
 		}
 		return cause
 	}
@@ -128,7 +128,7 @@ func (d *Database) StateSnapshotNIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select state snapshot IDs: %w", err)
 	}
-	defer rows.Close() // nolint:errcheck
+	defer rows.Close()
 	var nids []types.StateSnapshotNID
 	for rows.Next() {
 		var nid types.StateSnapshotNID
@@ -367,7 +367,7 @@ func (d *Database) persistStateHAMT(
 	return d.insertStateHAMT(ctx, txn, roomNID, snapshotNID, persisted)
 }
 
-// stateEntriesFromBlocks materialises the full state a snapshot's state blocks
+// stateEntriesFromBlocks materializes the full state a snapshot's state blocks
 // describe.
 func (d *Database) stateEntriesFromBlocks(
 	ctx context.Context, txn *sql.Tx, stateBlockNIDs []types.StateBlockNID,
@@ -435,7 +435,7 @@ func (d *Database) buildStateHAMT(
 // dedupeStateEntries keeps one entry per (event type, state key) tuple, the
 // last one winning, which is the order the legacy state-block merge used.
 func dedupeStateEntries(entries []types.StateEntry) []types.StateEntry {
-	if len(entries) < 2 {
+	if len(entries) <= 1 {
 		return entries
 	}
 	positions := make(map[types.StateKeyTuple]int, len(entries))

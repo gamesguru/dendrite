@@ -732,7 +732,7 @@ func AdminFetchEvents(req *http.Request, device *userapi.Device, rsAPI roomserve
 	if err = json.NewDecoder(req.Body).Decode(&body); err != nil {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error())}
 	}
-	if len(body.EventIDs) == 0 || len(body.EventIDs) > 100 { //nolint:mnd
+	if len(body.EventIDs) == 0 || len(body.EventIDs) > 100 {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"event_ids\" array of 1-100 event IDs.")}
 	}
 	results := make(map[string]string, len(body.EventIDs))

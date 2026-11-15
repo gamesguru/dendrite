@@ -2,6 +2,7 @@ package statehamt
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/gamesguru/rezzy/rezzy-ffi/go/rezzy"
@@ -93,7 +94,8 @@ func Needed(roomID string, rootHash []byte, nodes []Node) ([][]byte, error) {
 func Entries(roomID string, rootHash []byte, nodes []Node) ([]Entry, error) {
 	entries, err := rezzy.StateHAMTReadEntries(roomID, hex.EncodeToString(rootHash), toNodes(nodes))
 	if err != nil {
-		if missing, ok := err.(*rezzy.MissingNodesError); ok {
+		var missing *rezzy.MissingNodesError
+		if errors.As(err, &missing) {
 			hashes := make([][]byte, len(missing.Hashes))
 			for i, hash := range missing.Hashes {
 				decoded, decodeErr := hex.DecodeString(hash)

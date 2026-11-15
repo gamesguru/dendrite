@@ -22,9 +22,18 @@ import (
 	"codefloe.com/pat-s/zendrite/setup/process"
 )
 
-var batchSize = flag.Int("batch-size", 100, "maximum snapshots to backfill per transaction batch")
-var requireComplete = flag.Bool("require-complete", false,
-	"exit non-zero unless every state snapshot has a persisted HAMT")
+const (
+	cacheMaxBytes    = 8 << 20
+	cacheTTL         = 5 * time.Minute
+	defaultBatchSize = 100
+)
+
+var (
+	batchSize       = flag.Int("batch-size", defaultBatchSize, "maximum snapshots to backfill per transaction batch")
+	requireComplete = flag.Bool("require-complete", false,
+		"exit non-zero unless every state snapshot has a persisted HAMT")
+)
+
 var verify = flag.Bool("verify", false,
 	"compare every persisted HAMT with the state blocks it was built from and exit non-zero on any mismatch")
 
@@ -40,7 +49,7 @@ func main() {
 	}
 	db, err := storage.Open(
 		processCtx.Context(), connections, &dbOpts,
-		caching.NewRistrettoCache(8*1024*1024, time.Minute*5, caching.DisableMetrics),
+		caching.NewRistrettoCache(cacheMaxBytes, cacheTTL, caching.DisableMetrics),
 	)
 	if err != nil {
 		panic(err)

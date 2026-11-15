@@ -50,8 +50,8 @@ func reconciliationTestID(seed string) string {
 	return "$" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func newReconciliationTestRequest(method, path string, body any) (*http.Request, *fclient.FederationRequest) {
-	request := fclient.NewFederationRequest(method, "origin.example", "destination.example", path)
+func newReconciliationTestRequest(method string, body any) (*http.Request, *fclient.FederationRequest) {
+	request := fclient.NewFederationRequest(method, "origin.example", "destination.example", "/")
 	if body != nil {
 		if err := request.SetContent(body); err != nil {
 			panic(err)
@@ -79,7 +79,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 	rsAPI := &fakeReconciliationRSAPI{state: state}
 
 	t.Run("Digest", func(t *testing.T) {
-		httpReq, request := newReconciliationTestRequest("GET", "/", nil)
+		httpReq, request := newReconciliationTestRequest("GET", nil)
 		res := RoomDigest(httpReq, request, rsAPI, "!room:destination.example", true)
 		if res.Code != 200 {
 			t.Fatalf("status = %d: %v", res.Code, res.JSON)
@@ -120,7 +120,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 			"local_sketches": sketches,
 			"scope":          "event_set",
 		}
-		httpReq, request := newReconciliationTestRequest("POST", "/", body)
+		httpReq, request := newReconciliationTestRequest("POST", body)
 		res := RoomDiff(httpReq, request, rsAPI, "!room:destination.example")
 		if res.Code != 200 {
 			t.Fatalf("status = %d: %v", res.Code, res.JSON)
@@ -175,7 +175,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 			}},
 			"local_sketches": sketches,
 		}
-		httpReq, request := newReconciliationTestRequest("POST", "/", body)
+		httpReq, request := newReconciliationTestRequest("POST", body)
 		res := RoomDiff(httpReq, request, rsAPI, "!room:destination.example")
 		if res.Code != 200 {
 			t.Fatalf("status = %d: %v", res.Code, res.JSON)
@@ -194,7 +194,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 	})
 
 	t.Run("InvalidMode", func(t *testing.T) {
-		httpReq, request := newReconciliationTestRequest("POST", "/", map[string]any{
+		httpReq, request := newReconciliationTestRequest("POST", map[string]any{
 			"mode":           "digest",
 			"digest_type":    reconciliation.DigestType,
 			"requests":       []any{},

@@ -126,7 +126,7 @@ func AdminReconcileRoom(
 	rounds := 0
 	status := "diverged"
 
-	for rounds = 0; rounds < reconcileMaxRounds; rounds++ {
+	for ; rounds < reconcileMaxRounds; rounds++ {
 		state, resErr := roomReconciliationStateFromAPI(req.Context(), rsAPI, roomID)
 		if resErr != nil {
 			return *resErr

@@ -18,7 +18,7 @@ var (
 	installErr  error
 )
 
-func init() {
+func init() { //nolint:gochecknoinits // hooks must be installed before any event is parsed
 	if err := Install(); err != nil {
 		panic("eventhash: rezzy is linked but not usable: " + err.Error())
 	}

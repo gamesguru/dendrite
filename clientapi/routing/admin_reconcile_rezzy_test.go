@@ -63,7 +63,10 @@ func (f *fakeReconcileFed) DoRequestAndParseResponse(_ context.Context, req *htt
 			"missing_event_ids": f.missing,
 		}
 	}
-	raw, _ := json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
 	return json.Unmarshal(raw, result)
 }
 
@@ -87,7 +90,10 @@ func runReconcile(t *testing.T, rs *fakeReconcileRS, fed *fakeReconcileFed) map[
 	if res.Code != http.StatusOK {
 		t.Fatalf("code %d: %+v", res.Code, res.JSON)
 	}
-	raw, _ := json.Marshal(res.JSON)
+	raw, err := json.Marshal(res.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
