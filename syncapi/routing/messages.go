@@ -1209,8 +1209,8 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPositio
 }
 
 // forwardGapExtremitySkipping is forwardGapExtremity that ignores extremities
-// whose key (see extremitiesKey) is in skip. fillForwardGap uses it so a gap it
-// already tried this request, and could not close, does not hide a newer gap
+// whose key (see extremitiesKey) is in skip. It is used by fillForwardGap so a
+// gap already tried in this request, and not closed, does not hide a newer gap
 // behind it. The selector stays free of device and config state.
 func (r *messagesReq) forwardGapExtremitySkipping(
 	ctx context.Context, firstEventPosition types.TopologyToken, skip map[string]struct{},
