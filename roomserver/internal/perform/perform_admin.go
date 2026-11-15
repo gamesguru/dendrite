@@ -920,8 +920,8 @@ const maxAdminImportEvents = 5000
 // PerformAdminImportEvents ingests PDUs supplied by the operator (for example
 // from a JSONL export) into roomID. Each event must belong to the room, parse
 // for its room version and carry valid signatures; events are submitted as new
-// events in ascending depth order so their prev_events arrive first. origin is
-// the server asked for any prev or auth events the batch does not contain.
+// events in ascending depth order so their prev_events arrive first. The origin
+// is the server asked for any prev or auth events the batch does not contain.
 // One failing event does not stop the rest.
 func (r *Admin) PerformAdminImportEvents(
 	ctx context.Context, roomID string, pdus []json.RawMessage, origin spec.ServerName,
