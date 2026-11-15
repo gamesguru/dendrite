@@ -20,6 +20,7 @@ COPY --from=rezzy tests /rezzy/tests
 COPY --from=rezzy rezzy-cli /rezzy/rezzy-cli
 COPY --from=rezzy rezzy-ffi /rezzy/rezzy-ffi
 COPY --from=rezzy rezzy-json /rezzy/rezzy-json
+COPY --from=rezzy rezzy-keyfile /rezzy/rezzy-keyfile
 COPY --from=rezzy rezzy-log /rezzy/rezzy-log
 COPY --from=rezzy rezzy-recon /rezzy/rezzy-recon
 # Builds librezzy.a and writes target/pkgconfig/rezzy-ffi.pc with the real version.
