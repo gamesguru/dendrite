@@ -222,6 +222,16 @@ func RoomDiff(
 	if body.FrameNegotiation && len(body.FrameEventIDs) == 0 {
 		return badParam("`frame_event_ids` is required when `frame_negotiation` is true")
 	}
+	if body.FrameID != "" {
+		if raw, err := base64.RawURLEncoding.DecodeString(body.FrameID); err != nil || len(raw) != sha256.Size {
+			return badParam("Invalid `frame_id`")
+		}
+	}
+	for _, eventID := range body.FrameEventIDs {
+		if len(eventID) < 2 || eventID[0] != '$' {
+			return badParam("Invalid event ID in `frame_event_ids`")
+		}
+	}
 	if len(body.Requests) != len(body.LocalSketches) {
 		return badParam("`local_sketches` length must match `requests` length")
 	}
@@ -270,6 +280,9 @@ func RoomDiff(
 	}
 
 	requests := make([]reconciliation.BucketRequest, len(body.Requests))
+	// Buckets must form an ordered antichain: each covers a range of the
+	// 32-bit hash space, and ranges may neither overlap nor be out of order.
+	var coveredUpTo uint64
 	for i, bucket := range body.Requests {
 		prefix, ok := parseBucketPrefix(bucket.Prefix)
 		if !ok {
@@ -278,6 +291,14 @@ func RoomDiff(
 		if bucket.Depth > maxBucketDepth || bucket.Capacity == 0 || bucket.Capacity > maxBucketSketchCapacity {
 			return badParam(fmt.Sprintf("Invalid `requests[%d]`", i))
 		}
+		if prefix >= uint64(1)<<bucket.Depth {
+			return badParam(fmt.Sprintf("`requests[%d].prefix` is out of range for its depth", i))
+		}
+		start := prefix << (maxBucketDepth - bucket.Depth)
+		if start < coveredUpTo {
+			return badParam(fmt.Sprintf("`requests[%d]` overlaps or precedes an earlier bucket", i))
+		}
+		coveredUpTo = (prefix + 1) << (maxBucketDepth - bucket.Depth)
 		requests[i] = reconciliation.BucketRequest{
 			Depth:    uint8(bucket.Depth),
 			Prefix:   prefix,

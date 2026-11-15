@@ -111,7 +111,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 		body := map[string]any{
 			"mode":                    "sketch",
 			"digest_type":             reconciliation.DigestType,
-			"frame_id":                "frame",
+			"frame_id":                frameID([]string{"$frame"}),
 			"local_digest":            remoteSnapshot.Digest,
 			"local_known_event_count": remoteSnapshot.Count,
 			"requests": []map[string]any{{
@@ -167,7 +167,7 @@ func TestRoomDigestAndDiff(t *testing.T) {
 		body := map[string]any{
 			"mode":                    "sketch",
 			"digest_type":             reconciliation.DigestType,
-			"frame_id":                "frame",
+			"frame_id":                frameID([]string{"$frame"}),
 			"local_digest":            remoteSnapshot.Digest,
 			"local_known_event_count": remoteSnapshot.Count,
 			"requests": []map[string]any{{
