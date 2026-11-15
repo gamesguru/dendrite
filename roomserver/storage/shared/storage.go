@@ -2706,6 +2706,12 @@ func (d *Database) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID
 	return d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID)
 }
 
+// ResyncStateNID returns the state snapshot recorded after the room's last
+// partial state resync, or 0 if the room has never been resynced.
+func (d *Database) ResyncStateNID(ctx context.Context, roomNID types.RoomNID) (types.StateSnapshotNID, error) {
+	return d.RoomsTable.SelectResyncStateNID(ctx, nil, roomNID)
+}
+
 // GetPartialStateServers returns the list of servers known to be in a partial state room.
 func (d *Database) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
 	return d.PartialStateTable.SelectPartialStateServers(ctx, nil, roomNID)

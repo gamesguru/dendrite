@@ -611,24 +611,12 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 		return nil, false
 	}
 
-	snapshotNID := states[0].BeforeStateSnapshotNID
-	entries, hasHAMT, err := b.db.StateHAMTEntries(ctx, snapshotNID)
+	// LoadStateAtSnapshot reads the HAMT, falls back to the legacy state
+	// blocks, and keeps only the newest entry for each state key.
+	resolver := state.NewStateResolution(b.db, nil, b.querier)
+	entries, err := resolver.LoadStateAtSnapshot(ctx, states[0].BeforeStateSnapshotNID)
 	if err != nil {
 		return nil, false
-	}
-	if !hasHAMT {
-		blocks, err := b.db.StateBlockNIDs(ctx, []types.StateSnapshotNID{snapshotNID})
-		if err != nil || len(blocks) != 1 {
-			return nil, false
-		}
-		lists, err := b.db.StateEntries(ctx, blocks[0].StateBlockNIDs)
-		if err != nil {
-			return nil, false
-		}
-		entries = make([]types.StateEntry, 0)
-		for _, list := range lists {
-			entries = append(entries, list.StateEntries...)
-		}
 	}
 
 	eventNIDs := make([]types.EventNID, 0, len(entries))
@@ -654,7 +642,10 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 // reused for this room. A snapshot taken while the room had partial state
 // (MSC3706) can be incomplete, so reusing it would feed an incomplete state set
 // into backfill verification; those rooms keep asking federation instead.
-// The check is per requester because a requester is always scoped to one room.
+// A room that has been resynced out of partial state stays distrusted: the
+// resync leaves the state of events whose ancestors it could not obtain
+// unchanged, and the partial flag alone no longer records that. The check is per
+// requester because a requester is always scoped to one room.
 func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 	if b.partialStateChecked {
 		return !b.partialState
@@ -671,8 +662,17 @@ func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 		b.partialState = true
 		return false
 	}
-	b.partialState = partial
-	return !partial
+	if partial {
+		b.partialState = true
+		return false
+	}
+	resyncStateNID, err := b.db.ResyncStateNID(ctx, b.roomNID)
+	if err != nil {
+		b.partialState = true
+		return false
+	}
+	b.partialState = resyncStateNID != 0
+	return !b.partialState
 }
 
 // hydrateStateEvents loads the events for ids that are not already known to

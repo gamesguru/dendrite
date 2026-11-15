@@ -155,6 +155,12 @@ func (r *Inputer) processRoomEvent(
 		return fmt.Errorf("SkipEventAuth is only allowed for events that are not sent to other servers")
 	}
 
+	// SkipSoftFail lets an event that conflicts with today's state through, so
+	// like SkipEventAuth it must not be federated.
+	if input.SkipSoftFail && input.SendAsServer != api.DoNotSendToOtherServers {
+		return fmt.Errorf("SkipSoftFail is only allowed for events that are not sent to other servers")
+	}
+
 	// Parse and validate the event JSON
 	headered := input.Event
 	event := headered.PDU
@@ -859,7 +865,10 @@ func (r *Inputer) processRoomEvent(
 	}
 
 	// Handle remote room upgrades, e.g. remove published room
-	if event.Type() == "m.room.tombstone" && event.StateKeyEquals("") && !r.Cfg.Matrix.IsLocalServerName(senderDomain) {
+	// An event that skipped the soft-fail check may be old history, whose
+	// side effects must only run while it is still the room's current state.
+	if event.Type() == "m.room.tombstone" && event.StateKeyEquals("") && !r.Cfg.Matrix.IsLocalServerName(senderDomain) &&
+		(!input.SkipSoftFail || r.isCurrentStateEvent(ctx, event)) {
 		if err = r.handleRemoteRoomUpgrade(ctx, event); err != nil {
 			return fmt.Errorf("failed to handle remote room upgrade: %w", err)
 		}
@@ -885,7 +894,8 @@ func (r *Inputer) processRoomEvent(
 	}
 
 	// If guest_access changed and is not can_join, kick all guest users.
-	if event.Type() == spec.MRoomGuestAccess && gjson.GetBytes(event.Content(), "guest_access").Str != "can_join" {
+	if event.Type() == spec.MRoomGuestAccess && gjson.GetBytes(event.Content(), "guest_access").Str != "can_join" &&
+		(!input.SkipSoftFail || r.isCurrentStateEvent(ctx, event)) {
 		if err = r.kickGuests(ctx, event, roomInfo); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			logrus.WithError(err).Error("failed to kick guest users on m.room.guest_access revocation")
 		}
@@ -894,6 +904,17 @@ func (r *Inputer) processRoomEvent(
 	// Everything was OK — the latest events updater didn't error and
 	// we've sent output events.
 	return nil
+}
+
+// isCurrentStateEvent reports whether event is the room's current state for
+// its type and state key. A lookup failure counts as not current, so a side
+// effect is skipped rather than applied from stale history.
+func (r *Inputer) isCurrentStateEvent(ctx context.Context, event gomatrixserverlib.PDU) bool {
+	if event.StateKey() == nil {
+		return false
+	}
+	current, err := r.DB.GetStateEvent(ctx, event.RoomID().String(), event.Type(), *event.StateKey())
+	return err == nil && current != nil && current.EventID() == event.EventID()
 }
 
 // handleRemoteRoomUpgrade updates published rooms and room aliases.

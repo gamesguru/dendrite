@@ -299,6 +299,30 @@ func TestSkipSoftFailAcceptsEventValidAtItsOwnState(t *testing.T) {
 	})
 }
 
+// SkipSoftFail lets a conflicting event through, so it must not be federated.
+func TestSkipSoftFailRefusesFederatedEvents(t *testing.T) {
+	alice := test.NewUser(t)
+	dave := test.NewUser(t)
+	ctx := context.Background()
+
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		s := buildDisconnectedJoinScenario(ctx, t, dbType, alice, dave)
+		res := &api.InputRoomEventsResponse{}
+		s.rsAPI.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+			InputRoomEvents: []api.InputRoomEvent{{
+				Kind:         api.KindNew,
+				Event:        s.tip,
+				Origin:       "test",
+				SendAsServer: "test",
+				SkipSoftFail: true,
+			}},
+		}, res)
+		if res.ErrMsg == "" {
+			t.Fatalf("SkipSoftFail with SendAsServer was accepted")
+		}
+	})
+}
+
 // TestPerformAdminBridgeState exercises the actual admin function
 // (PerformAdminBridgeState) added to close this gap in production, using
 // the same disconnected-join scenario as TestDisconnectedJoinerSendsMessage,

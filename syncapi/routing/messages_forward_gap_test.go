@@ -171,13 +171,15 @@ func (a *forwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDReq
 // heldEventsAPI is a roomserver that stores the given events.
 type heldEventsAPI struct {
 	api.SyncRoomserverAPI
-	held map[string]*rstypes.HeaderedEvent
-	err  error
-	asks int
+	held    map[string]*rstypes.HeaderedEvent
+	err     error
+	asks    int
+	lastReq *api.QueryEventsByIDRequest
 }
 
 func (a *heldEventsAPI) QueryEventsByID(_ context.Context, req *api.QueryEventsByIDRequest, res *api.QueryEventsByIDResponse) error {
 	a.asks++
+	a.lastReq = req
 	if a.err != nil {
 		return a.err
 	}

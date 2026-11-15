@@ -277,6 +277,11 @@ type Database interface {
 	// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
 	// Returns the device list stream ID that was stored at join time for device list replay
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
+	// ResyncStateNID returns the state snapshot recorded after the room's last
+	// partial state resync, or 0 if the room has never been resynced. A nonzero
+	// value means events received during the partial window can still hold
+	// before-state snapshots that the resync could not recompute.
+	ResyncStateNID(ctx context.Context, roomNID types.RoomNID) (types.StateSnapshotNID, error)
 	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
 	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
 	// GetAllPartialStateRooms returns all rooms that currently have partial state
