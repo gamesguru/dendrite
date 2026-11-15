@@ -31,12 +31,14 @@ import (
 // extremities implied by the events whose prev events are absent.
 type forwardGapState struct {
 	storage.DatabaseTransaction
-	unstored        []*rstypes.HeaderedEvent // the hole, oldest first
-	stored          map[string]*rstypes.HeaderedEvent
-	positions       map[string]types.TopologyToken
-	extremities     map[string][]string
-	batches         int
-	positionLookups int
+	unstored         []*rstypes.HeaderedEvent // the hole, oldest first
+	stored           map[string]*rstypes.HeaderedEvent
+	positions        map[string]types.TopologyToken
+	extremities      map[string][]string
+	batches          int
+	positionLookups  int
+	extremityLookups int
+	prevEventLookups int
 }
 
 func newForwardGapState(stored, unstored []*rstypes.HeaderedEvent) *forwardGapState {
@@ -79,6 +81,7 @@ func (s *forwardGapState) recomputeExtremities() {
 }
 
 func (s *forwardGapState) Events(_ context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
+	s.prevEventLookups++
 	events := make([]*rstypes.HeaderedEvent, 0, len(eventIDs))
 	for _, eventID := range eventIDs {
 		if ev, ok := s.stored[eventID]; ok {
@@ -98,6 +101,7 @@ func (s *forwardGapState) EventPositionInTopology(_ context.Context, eventID str
 }
 
 func (s *forwardGapState) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
+	s.extremityLookups++
 	return s.extremities, nil
 }
 
@@ -537,4 +541,10 @@ func TestFillForwardGapCachesExtremityPositionsAcrossTerminalCacheHits(t *testin
 	assert.Zero(t, r.forwardBackfillRounds, "cached answers do not use the federation round budget")
 	assert.Equal(t, len(state.extremities), state.positionLookups,
 		"each extremity position should be loaded once for the request")
+	assert.Equal(t, 1, state.extremityLookups,
+		"the open extremity set should be read once, however many rounds it takes")
+	// One batched read for the scan, plus at most one cleanup lookup per
+	// attempted gap: O(E), not a re-read of every prev event each round.
+	assert.LessOrEqual(t, state.prevEventLookups, 2*len(state.extremities),
+		"the extremities' prev events should not be re-read for every round")
 }

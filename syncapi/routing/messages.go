@@ -112,10 +112,14 @@ type messagesReq struct {
 	// reloads counts how many times the page was read again after a backfill.
 	reloads int
 	// forwardGapPositions caches the topology position of each gap extremity
-	// for this request. Event positions do not change, and fillForwardGap
-	// rescans the extremities every round, so caching avoids repeating each
-	// position lookup for every remaining gap.
+	// for this request. Event positions never change, so a retried lookup
+	// always answers the same.
 	forwardGapPositions map[string]types.TopologyToken
+	// forwardGapScan caches the open extremities ahead of a forward cursor.
+	// The set only changes when events are stored, so fillForwardGap reuses it
+	// while its rounds store nothing instead of re-reading every extremity and
+	// every prev event each round.
+	forwardGapScan *forwardGapScan
 	// forwardBackfillRounds counts the federation batches fetched for this
 	// request while closing a gap ahead of a forward cursor.
 	forwardBackfillRounds int
@@ -1200,6 +1204,63 @@ func deepestExtremities(
 	return deepest
 }
 
+// forwardGapScan is the set of open backward extremities ahead of a forward
+// cursor, as of the last read from storage.
+type forwardGapScan struct {
+	candidates []forwardGapCandidate
+}
+
+type forwardGapCandidate struct {
+	id    string
+	prevs []string
+	pos   types.TopologyToken
+}
+
+// forwardGapCandidates returns the open backward extremities for this request.
+// Storing events is the only thing that changes the set, so it is read once and
+// reused until the caller clears r.forwardGapScan after a round that stored
+// events; a request whose rounds store nothing reads it exactly once.
+func (r *messagesReq) forwardGapCandidates(ctx context.Context) (*forwardGapScan, error) {
+	if r.forwardGapScan != nil {
+		return r.forwardGapScan, nil
+	}
+	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
+	if err != nil || len(backwardExtremities) == 0 {
+		return nil, err
+	}
+	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
+	if err != nil {
+		return nil, err
+	}
+	scan := &forwardGapScan{candidates: make([]forwardGapCandidate, 0, len(open))}
+	for extremityID := range open {
+		pos, cached := r.forwardGapPositions[extremityID]
+		if !cached {
+			var posErr error
+			pos, posErr = r.snapshot.EventPositionInTopology(ctx, extremityID)
+			if posErr != nil {
+				// As before, ignore markers that do not have a topology position.
+				continue
+			}
+			if r.forwardGapPositions == nil {
+				r.forwardGapPositions = make(map[string]types.TopologyToken)
+			}
+			r.forwardGapPositions[extremityID] = pos
+		}
+		scan.candidates = append(scan.candidates, forwardGapCandidate{
+			id: extremityID, prevs: backwardExtremities[extremityID], pos: pos,
+		})
+	}
+	sort.Slice(scan.candidates, func(i, j int) bool {
+		if scan.candidates[i].pos == scan.candidates[j].pos {
+			return scan.candidates[i].id < scan.candidates[j].id
+		}
+		return topologyTokenLess(scan.candidates[i].pos, scan.candidates[j].pos)
+	})
+	r.forwardGapScan = scan
+	return scan, nil
+}
+
 // forwardGapExtremity returns the open backward extremity that marks the gap
 // immediately ahead of a forward cursor, together with its recorded prev
 // events. A stored event whose prev event is missing always gets a backwards
@@ -1222,47 +1283,23 @@ func (r *messagesReq) forwardGapExtremity(ctx context.Context, firstEventPositio
 func (r *messagesReq) forwardGapExtremitySkipping(
 	ctx context.Context, firstEventPosition types.TopologyToken, skip map[string]struct{},
 ) (string, []string, error) {
-	backwardExtremities, err := r.snapshot.BackwardExtremitiesForRoom(ctx, r.roomID)
-	if err != nil || len(backwardExtremities) == 0 {
+	scan, err := r.forwardGapCandidates(ctx)
+	if err != nil || scan == nil {
 		return "", nil, err
 	}
-	open, err := r.openBackwardExtremities(ctx, backwardExtremities)
-	if err != nil {
-		return "", nil, err
-	}
-	bestID := ""
-	bestPosition := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
-	for extremityID := range open {
-		if _, tried := skip[extremitiesKey(map[string][]string{extremityID: backwardExtremities[extremityID]})]; tried {
+	for _, candidate := range scan.candidates {
+		if _, tried := skip[extremitiesKey(map[string][]string{candidate.id: candidate.prevs})]; tried {
 			continue
 		}
-		pos, cached := r.forwardGapPositions[extremityID]
-		if !cached {
-			var posErr error
-			pos, posErr = r.snapshot.EventPositionInTopology(ctx, extremityID)
-			if posErr != nil {
-				// Not cached, so a later round retries it.
-				continue
-			}
-			if r.forwardGapPositions == nil {
-				r.forwardGapPositions = make(map[string]types.TopologyToken)
-			}
-			r.forwardGapPositions[extremityID] = pos
-		}
-		if r.from != nil && !topologyTokenLess(*r.from, pos) {
+		if r.from != nil && !topologyTokenLess(*r.from, candidate.pos) {
 			continue
 		}
-		if topologyTokenLess(firstEventPosition, pos) {
+		if topologyTokenLess(firstEventPosition, candidate.pos) {
 			continue
 		}
-		if topologyTokenLess(pos, bestPosition) {
-			bestID, bestPosition = extremityID, pos
-		}
+		return candidate.id, candidate.prevs, nil
 	}
-	if bestID == "" {
-		return "", nil, nil
-	}
-	return bestID, backwardExtremities[bestID], nil
+	return "", nil, nil
 }
 
 func topologyTokenLess(left, right types.TopologyToken) bool {
@@ -1360,6 +1397,11 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 			if ctx.Err() != nil {
 				return filled, bfErr
 			}
+			// A failed fetch may still have stored part of a batch, which can
+			// change the extremity set. A remembered failure stored nothing.
+			if !errors.Is(bfErr, errBackfillRecentlyFailed) {
+				r.forwardGapScan = nil
+			}
 			if isTerminalBackfillFailure(bfErr) {
 				// No server has these events: the gap is as filled as it can
 				// get and the rest of the history is genuinely unreachable.
@@ -1379,6 +1421,9 @@ func (r *messagesReq) fillForwardGap(ctx context.Context, firstEventPosition typ
 		if len(pdus) == 0 {
 			continue
 		}
+		// Storing events moves or closes extremities, so the cached scan is
+		// stale. The positions stay valid: an event's position never changes.
+		r.forwardGapScan = nil
 		filled = true
 		stored += len(pdus)
 		// The batch may contain events older than the missing parent without
