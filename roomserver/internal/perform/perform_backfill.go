@@ -547,6 +547,10 @@ FederationHit:
 		if err != nil {
 			lastErr = err
 			b.backfillErrors = append(b.backfillErrors, err)
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"event_id": targetEvent.EventID(),
+				"server":   srv,
+			}).Warn("/state_ids failed during backfill")
 			continue
 		}
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = res
