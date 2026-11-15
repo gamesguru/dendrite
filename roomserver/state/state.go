@@ -822,13 +822,6 @@ func applyStateEntry(state []types.StateEntry, entry types.StateEntry) []types.S
 	return result
 }
 
-// maxStateBlockNIDs is the maximum number of state data blocks to use to encode a snapshot of room state.
-// Increasing this number means that we can encode more of the state changes as simple deltas which means that
-// we need fewer entries in the state data table. However making this number bigger will increase the size of
-// the rows in the state table itself and will require more index lookups when retrieving a snapshot.
-// TODO: Tune this to get the right balance between size and lookup performance.
-const maxStateBlockNIDs = 64
-
 // calculateAndStoreStateAfterManyEvents finds the room state after the given events.
 // This handles the slow path of calculateAndStoreStateAfterEvents for when there is more than one event.
 // Stores the resulting state and returns a numeric ID for the snapshot.
