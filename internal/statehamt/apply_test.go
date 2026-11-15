@@ -139,6 +139,20 @@ func assertSamePersisted(t *testing.T, roomID string, got, want *Persisted, pare
 		nodes = append(nodes, parent.Nodes...)
 	}
 	nodes = append(nodes, got.Nodes...)
+	needed, err := Needed(roomID, got.RootHash, nodes)
+	if err != nil {
+		t.Fatalf("find missing persisted nodes: %v", err)
+	}
+	if len(needed) != 0 {
+		t.Errorf("persisted nodes are missing %d reachable nodes", len(needed))
+	}
+	var nodeBytes int
+	for _, node := range got.Nodes {
+		nodeBytes += len(node.Bytes)
+	}
+	if got.NodeBytes != nodeBytes {
+		t.Errorf("node bytes = %d, want %d", got.NodeBytes, nodeBytes)
+	}
 	gotEntries, err := Entries(roomID, got.RootHash, nodes)
 	if err != nil {
 		t.Fatalf("reconstruct persisted entries: %v", err)
