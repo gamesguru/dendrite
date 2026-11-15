@@ -404,6 +404,84 @@ jobs:
           COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
         working-directory: complement
 
+  # MSC4521 cannot ride the complement matrix above: its tests are not in the
+  # Complement branch that job checks out (the fork's dev branch has no
+  # tests/msc4521), and its endpoints are only real in an image that links the
+  # native Rezzy library. It therefore needs both a different image and a
+  # different suite. It lives here rather than in its own workflow so it is
+  # part of the same run; it is not in the release gate yet.
+  complement-msc4521:
+    name: "Complement (MSC4521, rezzy)"
+    timeout-minutes: 75
+    runs-on: ubuntu-latest
+    if: ${{ github.head_ref == 'feat/rezzy' || github.ref_name == 'feat/rezzy' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout dendrite
+        uses: actions/checkout@v5
+        with:
+          path: dendrite
+
+      - name: Checkout Rezzy submodule
+        run: git -C dendrite submodule update --init --depth 1 rezzy
+
+      - name: Checkout hooked gomatrixserverlib fork
+        # The build context is resolved from the dendrite working directory, so
+        # this must be a sibling of dendrite, not of the workspace.
+        #
+        # Take the commit from go.mod so the image cannot be built against a
+        # different library than the module graph. Fetch the branch rather than
+        # a bare SHA: the pin may sit behind the tip, and a depth-1 fetch has
+        # only the tip.
+        run: |
+          set -euo pipefail
+          short=$(grep -o 'gamesguru/gomatrixserverlib v[^ ]*' dendrite/go.mod | sed 's/.*-//' | cut -c1-12)
+          test "${#short}" = 12
+          git init gmsl
+          git -C gmsl remote add origin https://github.com/gamesguru/gomatrixserverlib.git
+          git -C gmsl fetch --depth=100 origin feat/rezzy
+          commit=$(git -C gmsl rev-parse "${short}^{commit}")
+          git -C gmsl checkout "$commit"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Rezzy-enabled Complement image
+        working-directory: dendrite
+        run: |
+          set -euo pipefail
+          docker buildx build --load \
+            --build-context rezzy=./rezzy \
+            --build-context gmsl=../gmsl \
+            -f build/scripts/ComplementRezzy.Dockerfile \
+            -t complement-dendrite:rezzy .
+
+      - name: Checkout Complement MSC4521 suite
+        run: |
+          set -euo pipefail
+          mkdir -p complement
+          wget -O - "https://github.com/gamesguru/complement/archive/refs/heads/guru/feat/msc4521-libminisketch-set-recon.tar.gz" \
+            | tar -xz --strip-components=1 -C complement
+          test -d complement/tests/msc4521
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: complement/go.mod
+          cache-dependency-path: complement/go.sum
+
+      - name: Run inbound MSC4521 tests
+        working-directory: complement
+        env:
+          COMPLEMENT_BASE_IMAGE: complement-dendrite:rezzy
+          COMPLEMENT_SHARE_ENV_PREFIX: COMPLEMENT_DENDRITE_
+        run: |
+          set -o pipefail
+          go test -tags zendrite_blacklist -v -timeout 45m \
+            -run 'TestMSC4521/(Primitives|Compatibility)' ./tests/msc4521/...
+          go test -tags zendrite_blacklist -v -timeout 15m \
+            -run 'TestMSC4521/(Convergence|Adversarial)/(ActiveRoom|NonMembersAndACLBlocked)' \
+            ./tests/msc4521/...
+
   integration-tests-done:
     name: Integration tests passed
     needs:
