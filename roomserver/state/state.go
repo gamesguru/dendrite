@@ -665,6 +665,19 @@ var calculateStateConflictLength = prometheus.NewSummaryVec(
 	[]string{"algorithm", "outcome"},
 )
 
+var stateHAMTSnapshotsMissing = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "zendrite",
+	Subsystem: "roomserver",
+	Name:      "state_hamt_snapshots_missing",
+	Help:      "Number of room state snapshots without a persisted state HAMT.",
+})
+
+// SetStateHAMTSnapshotsMissing updates the number of snapshots that still use
+// legacy state blocks for reads.
+func SetStateHAMTSnapshotsMissing(missing int64) {
+	stateHAMTSnapshotsMissing.Set(float64(missing))
+}
+
 type calculateStateMetrics struct {
 	algorithm       string
 	startTime       time.Time
@@ -699,6 +712,7 @@ func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		calculateStateDurations, calculateStatePrevEventLength,
 		calculateStateFullStateLength, calculateStateConflictLength,
+		stateHAMTSnapshotsMissing,
 	)
 }
 
@@ -755,30 +769,23 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 			metrics.algorithm = "no_change"
 			return metrics.stop(prevState.BeforeStateSnapshotNID, nil)
 		}
-		// The previous event was a state event so we need to store a copy
-		// of the previous state updated with that event.
-		stateBlockNIDLists, err := v.db.StateBlockNIDs(
-			ctx, []types.StateSnapshotNID{prevState.BeforeStateSnapshotNID},
+		// 4) The previous event was a state event, so the state after it is
+		// the previous snapshot with that one entry replaced. Snapshots are
+		// stored as their full state (keyed by the state HAMT root), so the
+		// state-block delta encoding no longer applies.
+		previous, err := v.LoadStateAtSnapshot(ctx, prevState.BeforeStateSnapshotNID)
+		if err != nil {
+			metrics.algorithm = "_load_state"
+			return metrics.stop(0, fmt.Errorf("v.LoadStateAtSnapshot: %w", err))
+		}
+		metrics.algorithm = "single_state_event"
+		stateNID, err := v.db.AddState(
+			ctx, v.roomInfo.RoomNID, nil, applyStateEntry(previous, prevState.StateEntry),
 		)
 		if err != nil {
-			metrics.algorithm = "_load_state_blocks"
-			return metrics.stop(0, fmt.Errorf("v.db.StateBlockNIDs: %w", err))
+			err = fmt.Errorf("v.db.AddState: %w", err)
 		}
-		stateBlockNIDs := stateBlockNIDLists[0].StateBlockNIDs
-		if len(stateBlockNIDs) < maxStateBlockNIDs {
-			// 4) The number of state data blocks is small enough that we can just
-			// add the state event as a block of size one to the end of the blocks.
-			metrics.algorithm = "single_delta"
-			stateNID, err := v.db.AddState(
-				ctx, v.roomInfo.RoomNID, stateBlockNIDs, []types.StateEntry{prevState.StateEntry},
-			)
-			if err != nil {
-				err = fmt.Errorf("v.db.AddState: %w", err)
-			}
-			return metrics.stop(stateNID, err)
-		}
-		// If there are too many deltas then we need to calculate the full state
-		// So fall through to calculateAndStoreStateAfterManyEvents
+		return metrics.stop(stateNID, err)
 	}
 
 	stateNID, err := v.calculateAndStoreStateAfterManyEvents(ctx, v.roomInfo.RoomNID, prevStates, metrics)
@@ -786,6 +793,33 @@ func (v *StateResolution) CalculateAndStoreStateAfterEvents(
 		return 0, fmt.Errorf("v.calculateAndStoreStateAfterManyEvents: %w", err)
 	}
 	return stateNID, nil
+}
+
+// applyStateEntry returns state with the entry for the same (event type, state
+// key) tuple replaced by entry. The result stays sorted so the state hash is
+// independent of insertion order.
+func applyStateEntry(state []types.StateEntry, entry types.StateEntry) []types.StateEntry {
+	result := make([]types.StateEntry, 0, len(state)+1)
+	replaced := false
+	for _, existing := range state {
+		if existing.StateKeyTuple == entry.StateKeyTuple {
+			result = append(result, entry)
+			replaced = true
+			continue
+		}
+		result = append(result, existing)
+	}
+	if !replaced {
+		result = append(result, entry)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.EventTypeNID != b.EventTypeNID {
+			return a.EventTypeNID < b.EventTypeNID
+		}
+		return a.EventStateKeyNID < b.EventStateKeyNID
+	})
+	return result
 }
 
 // maxStateBlockNIDs is the maximum number of state data blocks to use to encode a snapshot of room state.

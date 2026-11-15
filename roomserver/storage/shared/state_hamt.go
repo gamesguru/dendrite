@@ -5,6 +5,7 @@
 package shared
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -145,25 +146,67 @@ func (d *Database) StateSnapshotNIDs(
 	return nids, nil
 }
 
-// VerifyStateHAMT compares a snapshot's persisted HAMT with the entries its
-// legacy state blocks describe. It returns nil when both representations agree
-// and types.ErrNoStateHAMT when the snapshot has no HAMT yet.
+// VerifyStateHAMT checks that a snapshot's persisted HAMT is internally
+// consistent and, when the snapshot still has legacy state blocks, that both
+// representations hold the same state. It returns types.ErrNoStateHAMT when
+// the snapshot has no HAMT yet.
 func (d *Database) VerifyStateHAMT(
 	ctx context.Context, snapshotNID types.StateSnapshotNID,
 ) error {
-	hamtEntries, ok, err := d.stateHAMTEntries(ctx, nil, snapshotNID)
+	root, err := d.StateHAMTTable.SelectStateHAMT(ctx, nil, snapshotNID)
 	if err != nil {
 		return fmt.Errorf("load state HAMT for snapshot %d: %w", snapshotNID, err)
 	}
-	if !ok {
+	if root == nil {
 		return types.ErrNoStateHAMT
 	}
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, nil, []types.RoomNID{root.RoomNID})
+	if err != nil {
+		return fmt.Errorf("load room for snapshot %d: %w", snapshotNID, err)
+	}
+	if len(roomIDs) == 0 {
+		return fmt.Errorf("snapshot %d belongs to unknown room NID %d", snapshotNID, root.RoomNID)
+	}
+	roomID := roomIDs[0]
+	nodes, err := d.loadStateHAMTNodes(ctx, nil, roomID, root, snapshotNID)
+	if err != nil {
+		return err
+	}
+	// The root record and the node set must hash back to the stored identity,
+	// which catches corruption that a missing-node check alone would miss.
+	verified, err := statehamt.Verify(roomID, root.RootRecord, nodes)
+	if err != nil {
+		return fmt.Errorf("state HAMT for snapshot %d does not verify: %w", snapshotNID, err)
+	}
+	if !bytes.Equal(verified.RootHash, root.RootHash) {
+		return fmt.Errorf("state HAMT for snapshot %d has root hash %x, recorded %x", snapshotNID, verified.RootHash, root.RootHash)
+	}
+	if !bytes.Equal(verified.StateGroupID, root.StateGroupID) {
+		return fmt.Errorf("state HAMT for snapshot %d has state group %x, recorded %x", snapshotNID, verified.StateGroupID, root.StateGroupID)
+	}
+	if verified.EntryCount != root.EntryCount {
+		return fmt.Errorf("state HAMT for snapshot %d has %d entries, recorded %d", snapshotNID, verified.EntryCount, root.EntryCount)
+	}
+
 	blockLists, err := d.stateBlockNIDs(ctx, nil, []types.StateSnapshotNID{snapshotNID})
 	if err != nil {
 		return fmt.Errorf("load state blocks for snapshot %d: %w", snapshotNID, err)
 	}
 	if len(blockLists) != 1 || blockLists[0].StateSnapshotNID != snapshotNID {
 		return fmt.Errorf("state blocks missing for snapshot %d", snapshotNID)
+	}
+	if len(blockLists[0].StateBlockNIDs) == 0 {
+		// A snapshot written by a HAMT-only build has no legacy
+		// representation to compare against; the identity check above is the
+		// verification.
+		return nil
+	}
+	hamtEntries, ok, err := d.stateHAMTEntries(ctx, nil, snapshotNID)
+	if err != nil {
+		return fmt.Errorf("load state HAMT entries for snapshot %d: %w", snapshotNID, err)
+	}
+	if !ok {
+		return types.ErrNoStateHAMT
 	}
 	entryLists, err := d.stateEntries(ctx, nil, blockLists[0].StateBlockNIDs)
 	if err != nil {
@@ -313,8 +356,9 @@ func (d *Database) purgeStateHAMTs(ctx context.Context, txn *sql.Tx, roomNID typ
 	return nil
 }
 
-// persistStateHAMT builds the HAMT for a just-created snapshot and stores its
-// nodes and root record. It is a no-op when the build does not link rezzy.
+// persistStateHAMT builds the HAMT for a snapshot that predates HAMT storage
+// from the entries of its state blocks and stores it. It is a no-op when the
+// build does not link rezzy.
 func (d *Database) persistStateHAMT(
 	ctx context.Context,
 	txn *sql.Tx,
@@ -325,9 +369,25 @@ func (d *Database) persistStateHAMT(
 	if !statehamt.Enabled {
 		return nil
 	}
+	stateEntries, err := d.stateEntriesFromBlocks(ctx, txn, stateBlockNIDs)
+	if err != nil {
+		return err
+	}
+	persisted, err := d.buildStateHAMT(ctx, txn, roomNID, stateEntries)
+	if err != nil {
+		return err
+	}
+	return d.insertStateHAMT(ctx, txn, roomNID, snapshotNID, persisted)
+}
+
+// stateEntriesFromBlocks materialises the full state a snapshot's state blocks
+// describe.
+func (d *Database) stateEntriesFromBlocks(
+	ctx context.Context, txn *sql.Tx, stateBlockNIDs []types.StateBlockNID,
+) ([]types.StateEntry, error) {
 	blocks, err := d.StateBlockTable.BulkSelectStateBlockEntries(ctx, txn, stateBlockNIDs)
 	if err != nil {
-		return fmt.Errorf("BulkSelectStateBlockEntries: %w", err)
+		return nil, fmt.Errorf("BulkSelectStateBlockEntries: %w", err)
 	}
 	var eventNIDs []types.EventNID
 	for _, block := range blocks {
@@ -337,7 +397,7 @@ func (d *Database) persistStateHAMT(
 	if len(eventNIDs) > 0 {
 		entries, err := d.EventsTable.BulkSelectStateEventByNID(ctx, txn, eventNIDs, nil)
 		if err != nil {
-			return fmt.Errorf("BulkSelectStateEventByNID: %w", err)
+			return nil, fmt.Errorf("BulkSelectStateEventByNID: %w", err)
 		}
 		for _, entry := range entries {
 			entriesByNID[entry.EventNID] = entry
@@ -350,7 +410,7 @@ func (d *Database) persistStateHAMT(
 		for _, eventNID := range block {
 			entry, ok := entriesByNID[eventNID]
 			if !ok {
-				return fmt.Errorf("state block references unknown event NID %d", eventNID)
+				return nil, fmt.Errorf("state block references unknown event NID %d", eventNID)
 			}
 			ordered[entry.StateKeyTuple] = entry
 		}
@@ -359,21 +419,57 @@ func (d *Database) persistStateHAMT(
 	for _, entry := range ordered {
 		stateEntries = append(stateEntries, entry)
 	}
-	hamtEntries, err := d.hamtEntriesFromStateEntries(ctx, txn, stateEntries)
+	return stateEntries, nil
+}
+
+// buildStateHAMT persists nothing; it computes the HAMT records for a full
+// state so the caller can key the snapshot by the resulting root.
+func (d *Database) buildStateHAMT(
+	ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, state []types.StateEntry,
+) (*statehamt.Persisted, error) {
+	hamtEntries, err := d.hamtEntriesFromStateEntries(ctx, txn, dedupeStateEntries(state))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
 	if err != nil {
-		return fmt.Errorf("BulkSelectRoomIDs: %w", err)
+		return nil, fmt.Errorf("BulkSelectRoomIDs: %w", err)
 	}
 	if len(roomIDs) == 0 {
-		return fmt.Errorf("room NID %d has no room ID", roomNID)
+		return nil, fmt.Errorf("room NID %d has no room ID", roomNID)
 	}
 	persisted, err := statehamt.Build(roomIDs[0], hamtEntries)
 	if err != nil {
-		return fmt.Errorf("statehamt.Build: %w", err)
+		return nil, fmt.Errorf("statehamt.Build: %w", err)
 	}
+	return persisted, nil
+}
+
+// dedupeStateEntries keeps one entry per (event type, state key) tuple, the
+// last one winning, which is the order the legacy state-block merge used.
+func dedupeStateEntries(entries []types.StateEntry) []types.StateEntry {
+	if len(entries) < 2 {
+		return entries
+	}
+	positions := make(map[types.StateKeyTuple]int, len(entries))
+	result := make([]types.StateEntry, 0, len(entries))
+	for _, entry := range entries {
+		if i, ok := positions[entry.StateKeyTuple]; ok {
+			result[i] = entry
+			continue
+		}
+		positions[entry.StateKeyTuple] = len(result)
+		result = append(result, entry)
+	}
+	return result
+}
+
+// insertStateHAMT stores the nodes and root record of a built HAMT against a
+// snapshot.
+func (d *Database) insertStateHAMT(
+	ctx context.Context, txn *sql.Tx,
+	roomNID types.RoomNID, snapshotNID types.StateSnapshotNID, persisted *statehamt.Persisted,
+) error {
 	nodes := make([]tables.StateHAMTNode, len(persisted.Nodes))
 	for i, node := range persisted.Nodes {
 		nodes[i] = tables.StateHAMTNode{Hash: node.Hash, Bytes: node.Bytes}

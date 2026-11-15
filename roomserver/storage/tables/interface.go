@@ -100,7 +100,10 @@ type Rooms interface {
 }
 
 type StateSnapshot interface {
-	InsertState(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, stateBlockNIDs types.StateBlockNIDs) (stateNID types.StateSnapshotNID, err error)
+	// InsertState stores a snapshot identified by snapshotHash. A snapshot
+	// written by a Rezzy build is keyed by its state HAMT root and has no state
+	// blocks; the hash makes identical state reuse the same snapshot row.
+	InsertState(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, snapshotHash []byte, stateBlockNIDs types.StateBlockNIDs) (stateNID types.StateSnapshotNID, err error)
 	BulkSelectStateBlockNIDs(ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	// BulkSelectStateForHistoryVisibility is a PostgreSQL-only optimisation for finding
 	// which users are in a room faster than having to load the entire room state. In the

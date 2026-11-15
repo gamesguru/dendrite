@@ -79,19 +79,23 @@ var release = Contract{
 // membership history from retained output events, level 22 indexes backward
 // extremities by (room_id, prev_event_id) and is the first release level whose
 // writers lift stored positions when late parents arrive, level 23 indexes
-// syncapi topology by room and topological or stream position, and level 24
-// adds the roomserver state HAMT node and snapshot tables. Level 24 only adds
-// tables, so it upgrades from and rolls back to the same levels as level 23.
+// syncapi topology by room and topological or stream position, level 24
+// adds the roomserver state HAMT node and snapshot tables, and level 25 stores
+// new state snapshots as their full state keyed by the HAMT root instead of
+// state-block deltas. A build of level 24 or older cannot read a level-25
+// snapshot, so level 25 only rolls back to itself.
 const (
-	releaseLevel           = 24
+	releaseLevel           = 25
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22
+	stateHAMTLevel         = 25
 )
 
 // rollbackToLevel is the oldest level that may take over from state this build
 // writes: the first level whose writers lift stored positions for late
-// parents. Older writers can reorder the histories stored by this build.
-const rollbackToLevel = topologyLiftLevel
+// parents. Older writers can reorder the histories stored by this build. Level
+// 25 also writes state snapshots that only a HAMT-capable build can read.
+const rollbackToLevel = stateHAMTLevel
 
 // contractOverride replaces the release contract in qualification builds,
 // which need a second build at another level to exercise rolling upgrades

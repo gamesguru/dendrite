@@ -23,6 +23,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/caching"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
@@ -91,7 +92,81 @@ func (d *Database) SupportsConcurrentRoomInputs() bool {
 func (d *Database) GetMembershipForHistoryVisibility(
 	ctx context.Context, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
+	// Read each event's state from its HAMT. Any snapshot that predates HAMT
+	// persistence makes the whole query fall back to the SQL optimisation, so
+	// a partially backfilled database still returns complete results.
+	if result, ok, err := d.membershipFromHAMT(ctx, userNID, roomInfo, eventIDs); err != nil {
+		var missingEventErr types.MissingEventError
+		if !errors.As(err, &missingEventErr) {
+			return nil, err
+		}
+	} else if ok {
+		return result, nil
+	}
 	return d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(ctx, nil, userNID, roomInfo, eventIDs...)
+}
+
+func (d *Database) membershipFromHAMT(
+	ctx context.Context, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs []string,
+) (map[string]*types.HeaderedEvent, bool, error) {
+	if len(eventIDs) == 0 {
+		return map[string]*types.HeaderedEvent{}, true, nil
+	}
+	// An event without state has no membership event at it, which the caller
+	// treats as a leave.
+	tuple := types.StateKeyTuple{
+		EventTypeNID:     types.MRoomMemberNID,
+		EventStateKeyNID: userNID,
+	}
+	membershipNIDs := make(map[string]types.EventNID, len(eventIDs))
+	for _, eventID := range eventIDs {
+		// BulkSelectStateAtEventByID does not return the event ID, so ask for
+		// one event at a time rather than assuming the rows keep input order.
+		states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, nil, []string{eventID})
+		if err != nil {
+			return nil, false, err
+		}
+		if len(states) != 1 {
+			return nil, false, types.MissingEventError(fmt.Sprintf("storage: event ID %q missing from the database", eventID))
+		}
+		snapshotNID := states[0].BeforeStateSnapshotNID
+		if snapshotNID == 0 {
+			continue
+		}
+		entries, ok, err := d.stateHAMTEntriesForTuples(ctx, nil, snapshotNID, []types.StateKeyTuple{tuple})
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		if len(entries) > 0 {
+			membershipNIDs[eventID] = entries[len(entries)-1].EventNID
+		}
+	}
+	eventNIDList := make([]types.EventNID, 0, len(membershipNIDs))
+	for _, nid := range membershipNIDs {
+		eventNIDList = append(eventNIDList, nid)
+	}
+	events, err := d.Events(ctx, roomInfo.RoomVersion, eventNIDList)
+	if err != nil {
+		return nil, false, err
+	}
+	byNID := make(map[types.EventNID]*types.HeaderedEvent, len(events))
+	for _, event := range events {
+		byNID[event.EventNID] = &types.HeaderedEvent{PDU: event.PDU}
+	}
+	result := make(map[string]*types.HeaderedEvent, len(membershipNIDs))
+	for eventID, nid := range membershipNIDs {
+		if event, ok := byNID[nid]; ok {
+			result[eventID] = event
+		} else {
+			// Membership event exists but its JSON does not, matching the
+			// SQL path's empty event.
+			result[eventID] = &types.HeaderedEvent{}
+		}
+	}
+	return result, true, nil
 }
 
 func (d *EventDatabase) EventTypeNIDs(
@@ -294,48 +369,43 @@ func (d *Database) addState(
 	stateBlockNIDs []types.StateBlockNID,
 	state []types.StateEntry,
 ) (stateNID types.StateSnapshotNID, err error) {
-	if len(stateBlockNIDs) > 0 && len(state) > 0 {
-		// Check to see if the event already appears in any of the existing state
-		// blocks. If it does then we should not add it again, as this will just
-		// result in excess state blocks and snapshots.
-		// TODO: Investigate why this is happening - probably input_events.go!
-		blocks, berr := d.StateBlockTable.BulkSelectStateBlockEntries(ctx, txn, stateBlockNIDs)
-		if berr != nil {
-			return 0, fmt.Errorf("d.StateBlockTable.BulkSelectStateBlockEntries: %w", berr)
-		}
-		var found bool
-		for i := len(state) - 1; i >= 0; i-- {
-			found = false
-		blocksLoop:
-			for _, events := range blocks {
-				for _, event := range events {
-					if state[i].EventNID == event {
-						found = true
-						break blocksLoop
-					}
-				}
-			}
-			if found {
-				state = append(state[:i], state[i+1:]...)
-			}
-		}
+	if len(stateBlockNIDs) > 0 {
+		// Snapshots are stored as their full state now, so callers must pass
+		// the complete state rather than a state-block delta.
+		return 0, fmt.Errorf("addState: state blocks are no longer accepted")
 	}
 	err = d.Writer.Do(d.DB, txn, func(txn *sql.Tx) error {
-		if len(state) > 0 {
-			// If there's any state left to add then let's add new blocks.
-			var stateBlockNID types.StateBlockNID
-			stateBlockNID, err = d.StateBlockTable.BulkInsertStateData(ctx, txn, state)
+		var snapshotHash []byte
+		var persisted *statehamt.Persisted
+		if statehamt.Enabled {
+			// The HAMT root is the snapshot's identity as well as its content:
+			// identical state produces identical roots and therefore one row.
+			persisted, err = d.buildStateHAMT(ctx, txn, roomNID, state)
 			if err != nil {
-				return fmt.Errorf("d.StateBlockTable.BulkInsertStateData: %w", err)
+				return err
 			}
-			stateBlockNIDs = append(stateBlockNIDs[:len(stateBlockNIDs):len(stateBlockNIDs)], stateBlockNID)
+			snapshotHash = persisted.RootHash
+		} else {
+			// Without the native library the snapshot keeps the legacy
+			// representation and is still keyed by its state blocks.
+			if len(state) > 0 {
+				var stateBlockNID types.StateBlockNID
+				stateBlockNID, err = d.StateBlockTable.BulkInsertStateData(ctx, txn, state)
+				if err != nil {
+					return fmt.Errorf("d.StateBlockTable.BulkInsertStateData: %w", err)
+				}
+				stateBlockNIDs = append(stateBlockNIDs, stateBlockNID)
+			}
+			snapshotHash = types.StateBlockNIDs(stateBlockNIDs).Hash()
 		}
-		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, stateBlockNIDs)
+		stateNID, err = d.StateSnapshotTable.InsertState(ctx, txn, roomNID, snapshotHash, stateBlockNIDs)
 		if err != nil {
 			return fmt.Errorf("d.StateSnapshotTable.InsertState: %w", err)
 		}
-		if err := d.persistStateHAMT(ctx, txn, roomNID, stateNID, stateBlockNIDs); err != nil {
-			return fmt.Errorf("d.persistStateHAMT: %w", err)
+		if persisted != nil {
+			if err := d.insertStateHAMT(ctx, txn, roomNID, stateNID, persisted); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -1293,10 +1363,53 @@ func (d *Database) GetHistoryVisibilityState(ctx context.Context, roomInfo *type
 	if stateSnapshotNID == 0 {
 		return nil, nil
 	}
+	// A snapshot written by a Rezzy build has no state blocks, so the
+	// block-based SQL optimisation cannot see its state. Read the HAMT
+	// instead and fall back to the SQL only for snapshots that predate it.
+	if entries, ok, err := d.StateHAMTEntries(ctx, stateSnapshotNID); err != nil {
+		return nil, err
+	} else if ok {
+		return d.historyVisibilityStateFromHAMT(ctx, roomInfo, entries, domain)
+	}
 	eventNIDs, err := d.StateSnapshotTable.BulkSelectStateForHistoryVisibility(ctx, nil, stateSnapshotNID, domain)
 	if err != nil {
 		return nil, err
 	}
+	return d.historyVisibilityStateEvents(ctx, roomInfo, eventNIDs)
+}
+
+// historyVisibilityStateFromHAMT keeps the membership events for the given
+// server plus the history visibility event, mirroring the SQL optimisation.
+func (d *Database) historyVisibilityStateFromHAMT(
+	ctx context.Context, roomInfo *types.RoomInfo, entries []types.StateEntry, domain string,
+) ([]gomatrixserverlib.PDU, error) {
+	stateKeyNIDs := make([]types.EventStateKeyNID, 0, len(entries))
+	for _, entry := range entries {
+		stateKeyNIDs = append(stateKeyNIDs, entry.EventStateKeyNID)
+	}
+	stateKeys, err := d.EventStateKeys(ctx, stateKeyNIDs)
+	if err != nil {
+		return nil, fmt.Errorf("EventStateKeys: %w", err)
+	}
+	var eventNIDs []types.EventNID
+	for _, entry := range entries {
+		switch entry.EventTypeNID {
+		case types.MRoomMemberNID:
+			// The SQL used a state key suffix match rather than resolving the
+			// user ID, so do the same here.
+			if strings.HasSuffix(stateKeys[entry.EventStateKeyNID], ":"+domain) {
+				eventNIDs = append(eventNIDs, entry.EventNID)
+			}
+		case types.MRoomHistoryVisibilityNID:
+			eventNIDs = append(eventNIDs, entry.EventNID)
+		}
+	}
+	return d.historyVisibilityStateEvents(ctx, roomInfo, eventNIDs)
+}
+
+func (d *Database) historyVisibilityStateEvents(
+	ctx context.Context, roomInfo *types.RoomInfo, eventNIDs []types.EventNID,
+) ([]gomatrixserverlib.PDU, error) {
 	eventIDs, err := d.EventsTable.BulkSelectEventID(ctx, nil, eventNIDs)
 	if err != nil {
 		eventIDs = map[types.EventNID]string{}
