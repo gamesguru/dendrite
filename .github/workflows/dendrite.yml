@@ -347,7 +347,9 @@ jobs:
           set -euo pipefail
           COMPLEMENT_COMMIT=aab262f
           git init complement
-          git -C complement remote add origin https://github.com/gamesguru/complement.git
+          # The pinned MSC4521 merge is on GitLab; the GitHub mirror's branch
+          # does not contain this commit.
+          git -C complement remote add origin https://gitlab.com/gamesguru/complement.git
           git -C complement fetch --depth=100 origin guru/feat/msc4521-libminisketch-set-recon
           commit=$(git -C complement rev-parse "${COMPLEMENT_COMMIT}^{commit}")
           git -C complement checkout --detach "$commit"
