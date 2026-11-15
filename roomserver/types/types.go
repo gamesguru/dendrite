@@ -344,6 +344,10 @@ func (r *RoomInfo) CopyFrom(r2 *RoomInfo) {
 
 var ErrorInvalidRoomInfo = fmt.Errorf("room info is invalid")
 
+// ErrNoStateHAMT is returned when a snapshot has no persisted state HAMT, so
+// callers must fall back to the legacy state blocks.
+var ErrNoStateHAMT = fmt.Errorf("state snapshot has no persisted HAMT")
+
 // Struct to represent a device or a server name.
 //
 // May be used to designate a caller for functions that can be called

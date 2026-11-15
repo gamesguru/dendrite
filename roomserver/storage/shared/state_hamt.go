@@ -113,6 +113,134 @@ func (d *Database) StateHAMTCoverage(ctx context.Context) (total, withHAMT int64
 	return total, withHAMT, nil
 }
 
+// StateSnapshotNIDs returns up to limit snapshot NIDs greater than after, in
+// ascending order, so maintenance commands can page through every snapshot.
+func (d *Database) StateSnapshotNIDs(
+	ctx context.Context, after types.StateSnapshotNID, limit int,
+) ([]types.StateSnapshotNID, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := d.DB.QueryContext(ctx, `
+		SELECT state_snapshot_nid
+		FROM roomserver_state_snapshots
+		WHERE state_snapshot_nid > $1
+		ORDER BY state_snapshot_nid
+		LIMIT $2`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select state snapshot IDs: %w", err)
+	}
+	defer rows.Close() // nolint:errcheck
+	var nids []types.StateSnapshotNID
+	for rows.Next() {
+		var nid types.StateSnapshotNID
+		if err = rows.Scan(&nid); err != nil {
+			return nil, fmt.Errorf("scan state snapshot ID: %w", err)
+		}
+		nids = append(nids, nid)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate state snapshot IDs: %w", err)
+	}
+	return nids, nil
+}
+
+// VerifyStateHAMT compares a snapshot's persisted HAMT with the entries its
+// legacy state blocks describe. It returns nil when both representations agree
+// and types.ErrNoStateHAMT when the snapshot has no HAMT yet.
+func (d *Database) VerifyStateHAMT(
+	ctx context.Context, snapshotNID types.StateSnapshotNID,
+) error {
+	hamtEntries, ok, err := d.stateHAMTEntries(ctx, nil, snapshotNID)
+	if err != nil {
+		return fmt.Errorf("load state HAMT for snapshot %d: %w", snapshotNID, err)
+	}
+	if !ok {
+		return types.ErrNoStateHAMT
+	}
+	blockLists, err := d.stateBlockNIDs(ctx, nil, []types.StateSnapshotNID{snapshotNID})
+	if err != nil {
+		return fmt.Errorf("load state blocks for snapshot %d: %w", snapshotNID, err)
+	}
+	if len(blockLists) != 1 || blockLists[0].StateSnapshotNID != snapshotNID {
+		return fmt.Errorf("state blocks missing for snapshot %d", snapshotNID)
+	}
+	entryLists, err := d.stateEntries(ctx, nil, blockLists[0].StateBlockNIDs)
+	if err != nil {
+		return fmt.Errorf("load state entries for snapshot %d: %w", snapshotNID, err)
+	}
+	var blockEntries []types.StateEntry
+	for _, list := range entryLists {
+		blockEntries = append(blockEntries, list.StateEntries...)
+	}
+	return diffStateEntries(snapshotNID, hamtEntries, blockEntries)
+}
+
+// diffStateEntries reports how two representations of the same snapshot's
+// state differ. The HAMT entries and the block entries are both sorted sets of
+// (event type, state key, event) tuples, so an equal set means an equal state.
+func diffStateEntries(
+	snapshotNID types.StateSnapshotNID, hamt, blocks []types.StateEntry,
+) error {
+	sorted := func(entries []types.StateEntry) []types.StateEntry {
+		out := append([]types.StateEntry(nil), entries...)
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].EventTypeNID != out[j].EventTypeNID {
+				return out[i].EventTypeNID < out[j].EventTypeNID
+			}
+			if out[i].EventStateKeyNID != out[j].EventStateKeyNID {
+				return out[i].EventStateKeyNID < out[j].EventStateKeyNID
+			}
+			return out[i].EventNID < out[j].EventNID
+		})
+		return out
+	}
+	h, b := sorted(hamt), sorted(blocks)
+	if len(h) == len(b) {
+		equal := true
+		for i := range h {
+			if h[i] != b[i] {
+				equal = false
+				break
+			}
+		}
+		if equal {
+			return nil
+		}
+	}
+	missing, extra := stateEntrySetDifference(b, h), stateEntrySetDifference(h, b)
+	const sample = 3
+	return fmt.Errorf(
+		"state HAMT for snapshot %d disagrees with its state blocks: %d entries in HAMT, %d in blocks, %d only in blocks%s, %d only in HAMT%s",
+		snapshotNID, len(h), len(b), len(missing), sampleEntries(missing, sample),
+		len(extra), sampleEntries(extra, sample),
+	)
+}
+
+func stateEntrySetDifference(a, b []types.StateEntry) []types.StateEntry {
+	in := make(map[types.StateEntry]struct{}, len(b))
+	for _, entry := range b {
+		in[entry] = struct{}{}
+	}
+	var out []types.StateEntry
+	for _, entry := range a {
+		if _, ok := in[entry]; !ok {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func sampleEntries(entries []types.StateEntry, limit int) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return fmt.Sprintf(" (first: %v)", entries)
+}
+
 // purgeStateHAMTs removes a room's roots and, when the Rezzy reader is
 // available, sweeps node records not reachable from any remaining root. Node
 // records are content-addressed and shared, so the sweep must trace all roots.

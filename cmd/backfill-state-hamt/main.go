@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/internal/statehamt"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
+	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -24,6 +26,8 @@ import (
 var batchSize = flag.Int("batch-size", 100, "maximum snapshots to backfill per transaction batch")
 var requireComplete = flag.Bool("require-complete", false,
 	"exit non-zero unless every state snapshot has a persisted HAMT")
+var verify = flag.Bool("verify", false,
+	"compare every persisted HAMT with the state blocks it was built from and exit non-zero on any mismatch")
 
 func main() {
 	if !statehamt.Enabled {
@@ -69,5 +73,51 @@ func main() {
 	fmt.Printf("state HAMT coverage: %d/%d snapshots\n", withHAMT, snapshots)
 	if *requireComplete && withHAMT != snapshots {
 		panic(fmt.Sprintf("%d state snapshots still have no HAMT", snapshots-withHAMT))
+	}
+
+	if *verify {
+		checked, missing, mismatched, err := verifyStateHAMTs(ctx, db, *batchSize)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("state HAMT verification: %d snapshots match, %d have no HAMT, %d disagree\n",
+			checked, missing, mismatched)
+		if mismatched > 0 {
+			panic(fmt.Sprintf("%d state HAMTs disagree with their state blocks", mismatched))
+		}
+	}
+}
+
+// verifyStateHAMTs compares every persisted HAMT with the state blocks it was
+// built from, paging through the snapshots so a large database does not have
+// to fit in memory.
+func verifyStateHAMTs(
+	ctx context.Context, db storage.Database, page int,
+) (checked, missing, mismatched int, err error) {
+	if page <= 0 {
+		page = 1000
+	}
+	var after types.StateSnapshotNID
+	for {
+		nids, err := db.StateSnapshotNIDs(ctx, after, page)
+		if err != nil {
+			return checked, missing, mismatched, err
+		}
+		if len(nids) == 0 {
+			return checked, missing, mismatched, nil
+		}
+		for _, nid := range nids {
+			after = nid
+			switch err := db.VerifyStateHAMT(ctx, nid); {
+			case err == nil:
+				checked++
+			case errors.Is(err, types.ErrNoStateHAMT):
+				missing++
+			default:
+				mismatched++
+				fmt.Printf("MISMATCH snapshot %d: %v\n", nid, err)
+			}
+		}
+		fmt.Printf("verified %d snapshots (after snapshot %d)\n", checked+missing+mismatched, after)
 	}
 }
