@@ -523,6 +523,14 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 	if ids, ok := b.eventIDToBeforeStateIDs[targetEvent.EventID()]; ok {
 		return ids, nil
 	}
+	// Backfill requests are paginated, and each page gets a new requester. If
+	// this event was resolved and stored by an earlier page, its before-state
+	// snapshot is already authoritative locally; do not ask federation for it
+	// again.
+	if ids, ok := b.stateIDsFromStoredEvent(ctx, targetEvent.EventID()); ok {
+		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = ids
+		return ids, nil
+	}
 	if len(targetEvent.PrevEventIDs()) == 0 && targetEvent.Type() == "m.room.create" && targetEvent.StateKeyEquals("") {
 		util.GetLogger(ctx).WithField("room_id", targetEvent.RoomID().String()).Info("Backfilled to the beginning of the room")
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = []string{}
@@ -540,6 +548,13 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 		prevEventStateIDs, ok := b.eventIDToBeforeStateIDs[prevEventID]
 		if !ok {
 			goto FederationHit
+		}
+		if prevEvent.StateKey() != nil {
+			// Rolling a state event forward has to find the entry it replaces,
+			// which needs the type and state key of every ID in the before-state.
+			// Most of those events are older than this batch but already stored,
+			// so read them locally instead of asking a remote server.
+			b.hydrateStateEvents(ctx, prevEventStateIDs)
 		}
 		newStateIDs := b.calculateNewStateIDs(targetEvent, prevEvent, prevEventStateIDs)
 		if newStateIDs != nil {
@@ -573,6 +588,82 @@ FederationHit:
 		return res, nil
 	}
 	return nil, lastErr
+}
+
+// stateIDsFromStoredEvent returns an event's persisted before-state. A false
+// result means the event has no usable local snapshot and federation may be
+// needed. State snapshots are persisted as HAMTs, with state blocks retained
+// as a fallback for databases that predate HAMT persistence.
+func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID string) ([]string, bool) {
+	known, err := b.db.EventNIDs(ctx, []string{eventID})
+	if err != nil || len(known) == 0 {
+		return nil, false
+	}
+	states, err := b.db.StateAtEventIDs(ctx, []string{eventID})
+	if err != nil || len(states) != 1 || states[0].IsRejected || states[0].BeforeStateSnapshotNID == 0 {
+		return nil, false
+	}
+
+	snapshotNID := states[0].BeforeStateSnapshotNID
+	entries, hasHAMT, err := b.db.StateHAMTEntries(ctx, snapshotNID)
+	if err != nil {
+		return nil, false
+	}
+	if !hasHAMT {
+		blocks, err := b.db.StateBlockNIDs(ctx, []types.StateSnapshotNID{snapshotNID})
+		if err != nil || len(blocks) != 1 {
+			return nil, false
+		}
+		lists, err := b.db.StateEntries(ctx, blocks[0].StateBlockNIDs)
+		if err != nil {
+			return nil, false
+		}
+		entries = make([]types.StateEntry, 0)
+		for _, list := range lists {
+			entries = append(entries, list.StateEntries...)
+		}
+	}
+
+	eventNIDs := make([]types.EventNID, 0, len(entries))
+	for _, entry := range entries {
+		eventNIDs = append(eventNIDs, entry.EventNID)
+	}
+	eventIDs, err := b.db.EventIDs(ctx, eventNIDs)
+	if err != nil {
+		return nil, false
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		id, ok := eventIDs[entry.EventNID]
+		if !ok {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+// hydrateStateEvents loads the events for ids that are not already known to
+// this requester from the local database, so state can be rolled forward without
+// a /state_ids request. IDs that are not stored are left out and the caller
+// falls back to federation for them. Failures are not fatal for the same reason.
+func (b *backfillRequester) hydrateStateEvents(ctx context.Context, ids []string) {
+	var missing []string
+	for _, id := range ids {
+		if _, ok := b.eventIDMap[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	events, err := b.ProvideEventsContext(ctx, b.roomVersion, missing)
+	if err != nil {
+		return
+	}
+	for _, ev := range events {
+		b.eventIDMap[ev.EventID()] = ev
+	}
 }
 
 func (b *backfillRequester) calculateNewStateIDs(targetEvent, prevEvent gomatrixserverlib.PDU, prevEventStateIDs []string) []string {

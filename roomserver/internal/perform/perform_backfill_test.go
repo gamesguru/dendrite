@@ -229,3 +229,159 @@ func TestCalculateNewStateIDsCopiesBeforeState(t *testing.T) {
 	require.NotNil(t, inherited)
 	require.Empty(t, inherited)
 }
+
+// storedEventsDB serves events by ID so a backfill can resolve state locally.
+type storedEventsDB struct {
+	storage.Database
+	events map[string]gomatrixserverlib.PDU
+	nids   map[types.EventNID]gomatrixserverlib.PDU
+	reads  int
+
+	// beforeState maps an event ID to the snapshot holding its before-state.
+	beforeState map[string]types.StateSnapshotNID
+	// snapshots maps a snapshot to the NIDs of the events it contains.
+	snapshots map[types.StateSnapshotNID][]types.EventNID
+}
+
+func newStoredEventsDB(events ...gomatrixserverlib.PDU) *storedEventsDB {
+	db := &storedEventsDB{
+		events: map[string]gomatrixserverlib.PDU{},
+		nids:   map[types.EventNID]gomatrixserverlib.PDU{},
+	}
+	for i, ev := range events {
+		db.events[ev.EventID()] = ev
+		db.nids[types.EventNID(i+1)] = ev
+	}
+	return db
+}
+
+func (d *storedEventsDB) EventNIDs(_ context.Context, ids []string) (map[string]types.EventMetadata, error) {
+	d.reads++
+	out := map[string]types.EventMetadata{}
+	for nid, ev := range d.nids {
+		for _, id := range ids {
+			if ev.EventID() == id {
+				out[id] = types.EventMetadata{EventNID: nid}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (d *storedEventsDB) StateAtEventIDs(_ context.Context, ids []string) ([]types.StateAtEvent, error) {
+	var out []types.StateAtEvent
+	for _, id := range ids {
+		if nid, ok := d.beforeState[id]; ok {
+			out = append(out, types.StateAtEvent{BeforeStateSnapshotNID: nid})
+		}
+	}
+	return out, nil
+}
+
+func (d *storedEventsDB) StateHAMTEntries(_ context.Context, nid types.StateSnapshotNID) ([]types.StateEntry, bool, error) {
+	nids, ok := d.snapshots[nid]
+	if !ok {
+		return nil, false, nil
+	}
+	entries := make([]types.StateEntry, 0, len(nids))
+	for _, n := range nids {
+		entries = append(entries, types.StateEntry{EventNID: n})
+	}
+	return entries, true, nil
+}
+
+func (d *storedEventsDB) EventIDs(_ context.Context, nids []types.EventNID) (map[types.EventNID]string, error) {
+	out := map[types.EventNID]string{}
+	for _, n := range nids {
+		if ev, ok := d.nids[n]; ok {
+			out[n] = ev.EventID()
+		}
+	}
+	return out, nil
+}
+
+func (d *storedEventsDB) Events(_ context.Context, _ gomatrixserverlib.RoomVersion, nids []types.EventNID) ([]types.Event, error) {
+	var out []types.Event
+	for _, nid := range nids {
+		out = append(out, types.Event{EventNID: nid, PDU: d.nids[nid]})
+	}
+	return out, nil
+}
+
+// Rolling a state event forward needs the type and state key of every event in
+// the previous before-state. Those events are usually older than the batch but
+// already stored, so they must come from the database, not from /state_ids.
+func TestStateIDsBeforeEventRollsForwardFromStoredState(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	oldMember := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	prevEvent := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"leave"},"origin_server_ts":2,"depth":2,"prev_events":["$old"],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["` + prevEvent.EventID() + `"],"auth_events":[]}`)
+
+	build := func(db storage.Database) *backfillRequester {
+		return &backfillRequester{
+			db:                      db,
+			roomVersion:             gomatrixserverlib.RoomVersionV10,
+			eventIDToBeforeStateIDs: map[string][]string{prevEvent.EventID(): {oldMember.EventID()}},
+			eventIDMap:              map[string]gomatrixserverlib.PDU{prevEvent.EventID(): prevEvent},
+		}
+	}
+
+	db := newStoredEventsDB(oldMember)
+	got, err := build(db).StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{prevEvent.EventID()}, got,
+		"the member event the previous event replaces is stored, so no federation request is needed")
+
+	// With the old member not stored locally the state cannot be rolled forward,
+	// and the request falls through to federation, which has no servers here.
+	got, err = build(newStoredEventsDB()).StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+// A later backfill page gets a new requester. An event stored by an earlier page
+// already has a before-state snapshot, which must be reused instead of asking
+// the remote server for /state_ids again.
+func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	member := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["$unknown1","$unknown2"],"auth_events":[]}`)
+
+	// target has two unstored parents, so it cannot be rolled forward: only the
+	// stored snapshot can answer without a federation request.
+	db := newStoredEventsDB(member, target)
+	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+
+	requester := &backfillRequester{
+		db:                      db,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{member.EventID()}, got)
+
+	// An event with no stored snapshot falls through to federation.
+	db.beforeState = nil
+	requester.eventIDToBeforeStateIDs = map[string][]string{}
+	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
