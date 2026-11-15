@@ -1361,20 +1361,6 @@ func (s stateEntrySorter) Len() int           { return len(s) }
 func (s stateEntrySorter) Less(i, j int) bool { return s[i].LessThan(s[j]) }
 func (s stateEntrySorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
-type stateBlockNIDListMap []types.StateBlockNIDList
-
-func (m stateBlockNIDListMap) lookup(stateNID types.StateSnapshotNID) (stateBlockNIDs []types.StateBlockNID, ok bool) {
-	list := []types.StateBlockNIDList(m)
-	i := sort.Search(len(list), func(i int) bool {
-		return list[i].StateSnapshotNID >= stateNID
-	})
-	if i < len(list) && list[i].StateSnapshotNID == stateNID {
-		ok = true
-		stateBlockNIDs = list[i].StateBlockNIDs
-	}
-	return
-}
-
 type stateEntryListMap []types.StateEntryList
 
 func (m stateEntryListMap) lookup(stateBlockNID types.StateBlockNID) (stateEntries []types.StateEntry, ok bool) {
@@ -1405,16 +1391,6 @@ func (s stateNIDSorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 func UniqueStateSnapshotNIDs(nids []types.StateSnapshotNID) []types.StateSnapshotNID {
 	return nids[:util.SortAndUnique(stateNIDSorter(nids))]
-}
-
-type stateBlockNIDSorter []types.StateBlockNID
-
-func (s stateBlockNIDSorter) Len() int           { return len(s) }
-func (s stateBlockNIDSorter) Less(i, j int) bool { return s[i] < s[j] }
-func (s stateBlockNIDSorter) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-func uniqueStateBlockNIDs(nids []types.StateBlockNID) []types.StateBlockNID {
-	return nids[:util.SortAndUnique(stateBlockNIDSorter(nids))]
 }
 
 // Map from event type, state key tuple to numeric event ID.
