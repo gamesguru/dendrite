@@ -1297,7 +1297,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 		return nil
 	})
 	if wErr != nil {
-		return nil, nil, err
+		return nil, nil, wErr
 	}
 	if ignoreRedaction || redactionEvent == nil || redactedEvent == nil {
 		return nil, nil, nil
