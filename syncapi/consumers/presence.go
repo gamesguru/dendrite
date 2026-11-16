@@ -198,7 +198,7 @@ func (s *PresenceConsumer) writePresence(ctx context.Context, userID string, pre
 			return nil
 		}
 	} else if lookupErr != nil {
-		logrus.WithError(lookupErr).Debug("presence deduplication lookup failed; applying update")
+		logrus.WithError(lookupErr).WithField("user", userID).Warn("presence deduplication lookup failed; applying update")
 	}
 	pos, err := s.db.UpdatePresence(ctx, userID, presence, statusMsg, ts, fromSync)
 	if err != nil {

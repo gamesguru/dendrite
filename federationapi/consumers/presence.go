@@ -29,19 +29,24 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
+// presenceEDUSender is the subset of queue.OutgoingQueues this consumer uses,
+// so tests can observe and fail sends without a live federation queue.
+type presenceEDUSender interface {
+	SendEDU(e *gomatrixserverlib.EDU, origin spec.ServerName, destinations []spec.ServerName) error
+}
+
 // OutputReceiptConsumer consumes events that originate in the clientapi.
 type OutputPresenceConsumer struct {
 	ctx                     context.Context
 	jetstream               nats.JetStreamContext
 	durable                 string
 	db                      storage.Database
-	queues                  *queue.OutgoingQueues
+	queues                  presenceEDUSender
 	isLocalServerName       func(spec.ServerName) bool
 	rsAPI                   roomserverAPI.FederationRoomserverAPI
 	topic                   string
 	outboundPresenceEnabled bool
 	flushInterval           time.Duration
-	origin                  spec.ServerName
 	pendingMu               sync.Mutex
 	pending                 map[string]pendingPresence
 	nextGeneration          uint64
@@ -52,6 +57,16 @@ type pendingPresence struct {
 	status     *string
 	lastSeen   spec.Timestamp
 	generation uint64
+	// origin is the server name the user belongs to. It differs from the
+	// primary server name for virtual-host users and determines the EDU
+	// origin and signing identity.
+	origin spec.ServerName
+}
+
+// presenceBatchKey groups presence updates that can share one EDU.
+type presenceBatchKey struct {
+	origin      spec.ServerName
+	destination spec.ServerName
 }
 
 const presenceFlushBatchSize = 500
@@ -79,7 +94,6 @@ func NewOutputPresenceConsumer(
 		topic:                   cfg.Matrix.JetStream.Prefixed(jetstream.OutputPresenceEvent),
 		outboundPresenceEnabled: cfg.Matrix.Presence.EnableOutbound,
 		flushInterval:           flushInterval,
-		origin:                  cfg.Matrix.ServerName,
 		pending:                 make(map[string]pendingPresence),
 		rsAPI:                   rsAPI,
 	}
@@ -116,7 +130,11 @@ func (t *OutputPresenceConsumer) flushPending() {
 	for userID := range t.pending {
 		users = append(users, userID)
 	}
-	sort.Strings(users)
+	// Flush the oldest updates first. Sorting by user ID would let churn from
+	// early-alphabet users starve the rest of the map under the batch cap.
+	sort.Slice(users, func(i, j int) bool {
+		return t.pending[users[i]].generation < t.pending[users[j]].generation
+	})
 	if len(users) > presenceFlushBatchSize {
 		users = users[:presenceFlushBatchSize]
 	}
@@ -129,8 +147,8 @@ func (t *OutputPresenceConsumer) flushPending() {
 		return
 	}
 
-	byDestination := make(map[spec.ServerName][]fedTypes.PresenceContent)
-	destinationUsers := make(map[spec.ServerName][]string)
+	byDestination := make(map[presenceBatchKey][]fedTypes.PresenceContent)
+	destinationUsers := make(map[presenceBatchKey][]string)
 	failed := make(map[string]bool)
 	for userID, update := range snapshot {
 		parsedUserID, err := spec.NewUserID(userID, true)
@@ -170,30 +188,53 @@ func (t *OutputPresenceConsumer) flushPending() {
 			UserID:          userID,
 		}
 		for _, host := range joined {
-			byDestination[host] = append(byDestination[host], content)
-			destinationUsers[host] = append(destinationUsers[host], userID)
+			// Users from different virtual hosts must keep their own origin,
+			// and the origin signs the EDU, so they cannot share a batch.
+			key := presenceBatchKey{origin: update.origin, destination: host}
+			byDestination[key] = append(byDestination[key], content)
+			destinationUsers[key] = append(destinationUsers[key], userID)
 		}
 	}
 
-	for destination, updates := range byDestination {
-		edu := &gomatrixserverlib.EDU{Type: spec.MPresence, Origin: string(t.origin)}
+	// Sort the keys so the send order, and tests, are deterministic.
+	keys := make([]presenceBatchKey, 0, len(byDestination))
+	for key := range byDestination {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].origin != keys[j].origin {
+			return keys[i].origin < keys[j].origin
+		}
+		return keys[i].destination < keys[j].destination
+	})
+	for _, key := range keys {
+		updates := byDestination[key]
+		edu := &gomatrixserverlib.EDU{Type: spec.MPresence, Origin: string(key.origin)}
 		content, err := json.Marshal(fedTypes.Presence{Push: updates})
 		if err != nil {
 			log.WithError(err).Error("failed to marshal presence EDU batch")
-			for _, userID := range destinationUsers[destination] {
+			for _, userID := range destinationUsers[key] {
 				failed[userID] = true
 			}
 			continue
 		}
 		edu.Content = content
-		if err = t.queues.SendEDU(edu, t.origin, []spec.ServerName{destination}); err != nil {
-			log.WithError(err).WithField("destination", destination).Warn("failed to queue presence EDU batch")
-			for _, userID := range destinationUsers[destination] {
+		if err = t.queues.SendEDU(edu, key.origin, []spec.ServerName{key.destination}); err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"origin":      string(key.origin),
+				"destination": string(key.destination),
+			}).Warn("failed to queue presence EDU batch")
+			for _, userID := range destinationUsers[key] {
 				failed[userID] = true
 			}
 		}
 	}
 
+	// A failed send keeps the user pending, so the next flush sends it to every
+	// destination again, including ones that already accepted this update.
+	// Presence is latest-state and idempotent, so a duplicate EDU is harmless;
+	// tracking success per destination would complicate the pending map for no
+	// semantic gain.
 	t.pendingMu.Lock()
 	for userID, sent := range snapshot {
 		if !failed[userID] && t.pending[userID].generation == sent.generation {
@@ -241,8 +282,14 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		status:     statusMsg,
 		lastSeen:   spec.Timestamp(ts),
 		generation: t.nextGeneration,
+		origin:     serverName,
 	}
 	t.pendingMu.Unlock()
 
+	// Acknowledge once the update is coalesced in memory. That is deliberate:
+	// presence is ephemeral and the design accepts losing at most one flush
+	// interval on a crash or shutdown. Deferring the acknowledgement would
+	// redeliver the batch and duplicate sends for a state that a newer update
+	// supersedes anyway.
 	return true
 }

@@ -264,8 +264,8 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 	// deployment another process may already have written the same effective
 	// state, so use the shared presence row to suppress redundant federation
 	// refreshes as well.
-	if current, err := db.GetPresences(rp.ctx, []string{userID}); err == nil && len(current) > 0 && current[0] != nil {
-		old := current[0]
+	if err == nil && len(dbPresence) > 0 && dbPresence[0] != nil {
+		old := dbPresence[0]
 		statusUnchanged := equalPresenceStatus(old.ClientFields.StatusMsg, newPresence.ClientFields.StatusMsg)
 		nowTS := spec.AsTimestamp(time.Now())
 		if old.Presence == presenceToSet && statusUnchanged &&
