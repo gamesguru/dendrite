@@ -53,6 +53,8 @@ type OutputPresenceConsumer struct {
 	flushInterval           time.Duration
 	pendingMu               sync.Mutex
 	pending                 map[string]pendingPresence
+	recentSequences         map[string]recentPresenceSequence
+	lastSequencePrune       time.Time
 	nextGeneration          uint64
 	nextOrder               uint64
 }
@@ -63,18 +65,19 @@ type pendingPresence struct {
 	lastSeen   spec.Timestamp
 	generation uint64
 	order      uint64
-	// streamSeq is the JetStream stream sequence of the newest message folded
-	// in, or zero when unknown. A redelivered older message must not replace it.
-	streamSeq uint64
 	// origin is the server name the user belongs to. It differs from the
 	// primary server name for virtual-host users and determines the EDU
 	// origin and signing identity.
 	origin spec.ServerName
-	// nil means destinations have not been resolved. An empty set means all
-	// destinations have accepted the EDU and only message acknowledgements remain.
-	retryDestinations map[spec.ServerName]struct{}
-	sentDestinations  map[spec.ServerName]struct{}
-	acks              []*pendingPresenceAck
+	// Hosts that accepted this update, so retries avoid resending to them while
+	// still picking up newly joined destinations.
+	sentDestinations map[spec.ServerName]struct{}
+	acks             []*pendingPresenceAck
+}
+
+type recentPresenceSequence struct {
+	sequence  uint64
+	expiresAt time.Time
 }
 
 type pendingPresenceAck struct {
@@ -92,6 +95,13 @@ type presenceBatchKey struct {
 
 const (
 	presenceFlushBatchSize = 500
+	// Retain sequence watermarks long enough to recognize delayed redeliveries
+	// after the pending presence entry has been flushed. HA sets the ack wait to
+	// HAConsumerAckWait, but outside HA JetStream's default is 30s, so five HA
+	// ack waits would expire before a non-HA redelivery arrives.
+	presenceSequenceRetention     = 2 * time.Minute
+	presenceSequencePruneInterval = presenceSequenceRetention / 4
+	defaultPresenceAckWait        = 30 * time.Second
 	// The default flush interval applies when the configuration leaves the
 	// federation presence interval unset.
 	defaultPresenceFlushInterval = 5 * time.Second
@@ -181,6 +191,7 @@ func (t *OutputPresenceConsumer) keepPendingAliveLoop() {
 // message, so a former owner stops extending and JetStream redelivers.
 func (t *OutputPresenceConsumer) extendPending() {
 	t.pendingMu.Lock()
+	t.pruneRecentPresenceSequences(time.Now())
 	var messages []*nats.Msg
 	for _, update := range t.pending {
 		for _, pendingAck := range update.acks {
@@ -193,6 +204,29 @@ func (t *OutputPresenceConsumer) extendPending() {
 			log.WithError(err).Warn("failed to extend pending presence message acknowledgement")
 		}
 	}
+}
+
+// pruneRecentPresenceSequences expires high-watermarks after a redelivery has
+// had several ack-wait intervals to arrive. Callers hold pendingMu.
+func (t *OutputPresenceConsumer) pruneRecentPresenceSequences(now time.Time) {
+	if now.Sub(t.lastSequencePrune) < presenceSequencePruneInterval {
+		return
+	}
+	for userID, sequence := range t.recentSequences {
+		if !sequence.expiresAt.After(now) {
+			delete(t.recentSequences, userID)
+		}
+	}
+	t.lastSequencePrune = now
+}
+
+func (t *OutputPresenceConsumer) sequenceWatermarkRetention() time.Duration {
+	retention := presenceSequenceRetention
+	minimum := t.flushInterval + defaultPresenceAckWait
+	if minimum > retention {
+		retention = minimum
+	}
+	return retention
 }
 
 func (t *OutputPresenceConsumer) flushLoop() {
@@ -363,7 +397,6 @@ func (t *OutputPresenceConsumer) flushPending() {
 				if remaining == nil {
 					remaining = make(map[spec.ServerName]struct{})
 				}
-				current.retryDestinations = remaining
 				for destination := range sentDestinations[userID] {
 					if current.sentDestinations == nil {
 						current.sentDestinations = make(map[spec.ServerName]struct{})
@@ -463,18 +496,42 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	streamSeq := t.streamSequence(msg)
 
 	t.pendingMu.Lock()
+	now := time.Now()
+	t.pruneRecentPresenceSequences(now)
+	if recent, ok := t.recentSequences[userID]; ok && !recent.expiresAt.After(now) {
+		delete(t.recentSequences, userID)
+	}
+	recent, hasRecent := t.recentSequences[userID]
 	previous := t.pending[userID]
-	if streamSeq != 0 && previous.streamSeq > streamSeq {
-		// A redelivered older message must not replace newer state. Its
-		// content is superseded, so it is safe to acknowledge.
+	if streamSeq != 0 && hasRecent && streamSeq <= recent.sequence {
+		// Refresh the watermark while a duplicate is being redelivered so
+		// repeated ack failures cannot expire the guard prematurely.
+		recent.expiresAt = now.Add(t.sequenceWatermarkRetention())
+		t.recentSequences[userID] = recent
+		if streamSeq == recent.sequence {
+			if _, stillPending := t.pending[userID]; stillPending {
+				// This is the current message being redelivered before its EDU
+				// was queued. Keep it deferred and use this delivery's ack handle.
+				previous.acks = []*pendingPresenceAck{{msg: msg, generation: previous.generation}}
+				t.pending[userID] = previous
+				t.pendingMu.Unlock()
+				return jetstream.AckActionDefer
+			}
+		}
 		t.pendingMu.Unlock()
 		return jetstream.AckActionAck
 	}
+	if streamSeq != 0 {
+		if t.recentSequences == nil {
+			t.recentSequences = make(map[string]recentPresenceSequence)
+		}
+		t.recentSequences[userID] = recentPresenceSequence{
+			sequence: streamSeq, expiresAt: now.Add(t.sequenceWatermarkRetention()),
+		}
+	}
 	t.nextGeneration++
 	t.nextOrder++
-	// Only the newest message stays outstanding: presence is latest state, and
-	// the newest message still carries it, so a crash redelivers that one. This
-	// bounds outstanding messages to one per user.
+	// Presence is latest state, so the newest message supersedes prior ones.
 	superseded := previous.acks
 	acks := []*pendingPresenceAck{{msg: msg, generation: t.nextGeneration}}
 	t.pending[userID] = pendingPresence{
@@ -483,27 +540,15 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		lastSeen:   spec.Timestamp(ts),
 		generation: t.nextGeneration,
 		order:      t.nextOrder,
-		streamSeq:  streamSeq,
 		origin:     serverName,
 		acks:       acks,
 	}
 	t.pendingMu.Unlock()
 
-	var unacked []*pendingPresenceAck
 	for _, old := range superseded {
 		if err := t.ackPresence(old.msg); err != nil {
-			log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge superseded presence update")
-			unacked = append(unacked, old)
+			log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge superseded presence update; leaving it for redelivery")
 		}
-	}
-	if len(unacked) > 0 {
-		// Keep them so a later flush retries the acknowledgement.
-		t.pendingMu.Lock()
-		if cur, ok := t.pending[userID]; ok {
-			cur.acks = append(unacked, cur.acks...)
-			t.pending[userID] = cur
-		}
-		t.pendingMu.Unlock()
 	}
 
 	// Keep the durable input message outstanding until the resulting EDU is

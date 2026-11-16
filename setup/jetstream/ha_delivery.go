@@ -54,7 +54,7 @@ func KeepAliveDelivery(ctx context.Context, owner Ownership, msgs []*nats.Msg) f
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(HAConsumerAckWait / 5)
+		ticker := time.NewTicker(DeferredProgressInterval)
 		defer ticker.Stop()
 		for {
 			select {

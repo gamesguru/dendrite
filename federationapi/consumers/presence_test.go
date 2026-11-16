@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -243,7 +244,7 @@ func TestPresenceRetryReResolvesDestinations(t *testing.T) {
 	}))
 	consumer.flushPending()
 	require.Len(t, sender.sent, 2)
-	require.Equal(t, map[spec.ServerName]struct{}{"b.test": {}}, consumer.pending["@alice:test"].retryDestinations)
+	require.Equal(t, map[spec.ServerName]struct{}{"a.test": {}}, consumer.pending["@alice:test"].sentDestinations)
 
 	// The user left the room hosted on b.test while the retry was pending.
 	consumer.findDestinations = func(context.Context, spec.UserID) ([]spec.ServerName, error) {
@@ -362,7 +363,7 @@ func TestPresenceAcksSupersededMessagesAndBoundsOutstanding(t *testing.T) {
 	require.Len(t, *acked, updates-1)
 }
 
-func TestPresenceRetainsSupersededAckThatFailed(t *testing.T) {
+func TestPresenceDropsSupersededAckThatFailedButKeepsWatermark(t *testing.T) {
 	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
 	consumer.ackPresence = func(*nats.Msg) error { return errors.New("ack failed") }
 
@@ -371,8 +372,11 @@ func TestPresenceRetainsSupersededAckThatFailed(t *testing.T) {
 			presenceSeqMessage("@alice:test", "online", int64(1000+i), uint64(i)),
 		}))
 	}
-	// The failed acknowledgement is kept so the flush retries it.
-	require.Len(t, consumer.pending["@alice:test"].acks, 2)
+	// The failed superseded acknowledgement is left for JetStream redelivery,
+	// while the watermark protects the latest state after its pending entry ends.
+	update := consumer.pending["@alice:test"]
+	require.Len(t, update.acks, 1)
+	require.Equal(t, uint64(2), consumer.recentSequences["@alice:test"].sequence)
 }
 
 func TestPresenceIgnoresStaleRedelivery(t *testing.T) {
@@ -388,8 +392,77 @@ func TestPresenceIgnoresStaleRedelivery(t *testing.T) {
 
 	pending := consumer.pending["@alice:test"]
 	require.Equal(t, "unavailable", pending.presence)
-	require.Equal(t, uint64(7), pending.streamSeq)
+	require.Equal(t, uint64(7), consumer.recentSequences["@alice:test"].sequence)
 	require.Len(t, pending.acks, 1)
+}
+
+func TestPresenceIgnoresStaleRedeliveryAfterFlush(t *testing.T) {
+	old := presenceSeqMessage("@alice:test", "online", 1000, 3)
+	newer := presenceSeqMessage("@alice:test", "unavailable", 2000, 7)
+	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
+	consumer.ackPresence = func(msg *nats.Msg) error {
+		if msg == old {
+			return errors.New("temporary ack failure")
+		}
+		return nil
+	}
+
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{old}))
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{newer}))
+	consumer.flushPending()
+	require.Empty(t, consumer.pending)
+
+	staleRedelivery := presenceSeqMessage("@alice:test", "online", 1000, 3)
+	require.Equal(t, jetstream.AckActionAck, consumer.onMessage(t.Context(), []*nats.Msg{staleRedelivery}))
+	require.Empty(t, consumer.pending, "a stale redelivery after flush must not restore old presence")
+}
+
+func TestPresenceDefersRedeliveryOfCurrentPendingMessage(t *testing.T) {
+	sender := &stubPresenceSender{}
+	consumer := newTestPresenceConsumer(t, sender, "remote.test")
+	acked := recordAcks(consumer)
+	firstDelivery := presenceSeqMessage("@alice:test", "online", 1000, 7)
+	redelivery := presenceSeqMessage("@alice:test", "online", 1000, 7)
+
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{firstDelivery}))
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{redelivery}))
+
+	pending := consumer.pending["@alice:test"]
+	require.Equal(t, "online", pending.presence)
+	require.Len(t, pending.acks, 1)
+	require.Same(t, redelivery, pending.acks[0].msg, "use the new delivery's acknowledgement handle")
+	require.Empty(t, *acked, "a redelivery still waiting for its EDU must remain unacknowledged")
+
+	consumer.flushPending()
+	require.Empty(t, consumer.pending)
+	require.Len(t, sender.sent, 1)
+	require.Equal(t, []*nats.Msg{redelivery}, *acked)
+}
+
+func TestPresenceSequenceWatermarkExpires(t *testing.T) {
+	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
+	newer := presenceSeqMessage("@alice:test", "unavailable", 2000, 7)
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{newer}))
+	consumer.flushPending()
+	require.Empty(t, consumer.pending)
+
+	watermark := consumer.recentSequences["@alice:test"]
+	watermark.expiresAt = time.Now().Add(-time.Second)
+	consumer.recentSequences["@alice:test"] = watermark
+
+	older := presenceSeqMessage("@alice:test", "online", 1000, 3)
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{older}))
+	require.Equal(t, "online", consumer.pending["@alice:test"].presence)
+	require.Equal(t, uint64(3), consumer.recentSequences["@alice:test"].sequence)
+}
+
+func TestPresenceSequenceWatermarkOutlivesLongFlushInterval(t *testing.T) {
+	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
+	consumer.flushInterval = 3 * time.Minute
+
+	retention := consumer.sequenceWatermarkRetention()
+	require.Greater(t, retention, consumer.flushInterval)
+	require.GreaterOrEqual(t, retention, defaultPresenceAckWait)
 }
 
 func TestPresenceAcksOnlyAfterSuccessfulQueueing(t *testing.T) {
