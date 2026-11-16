@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -96,7 +95,7 @@ func IsRedacted(ev *rstypes.HeaderedEvent) bool {
 // key, such as redacted_by and redacted_because, as it is.
 func ApplyPrevState(ev *rstypes.HeaderedEvent, prev synctypes.PrevEventRef) error {
 	if !gjson.GetBytes(ev.Unsigned(), "prev_content").Exists() {
-		if err := ev.SetUnsignedField("prev_content", json.RawMessage(prev.PrevContent)); err != nil {
+		if err := ev.SetUnsignedField("prev_content", prev.PrevContent); err != nil {
 			return fmt.Errorf("prev_content: %w", err)
 		}
 	}

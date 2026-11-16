@@ -62,7 +62,7 @@ func found(prev ...*rstypes.HeaderedEvent) rsapi.QueryStateAfterEventsResponse {
 
 // profileChange builds a room where Alice's join is replaced by a join with a
 // new display name, plus a plain message that must be ignored.
-func profileChange(t *testing.T) (oldJoin, newJoin, message *rstypes.HeaderedEvent, roomID string, q *stateBefore, db *repairDB) {
+func profileChange(t *testing.T) (oldJoin, newJoin *rstypes.HeaderedEvent, roomID string, q *stateBefore, db *repairDB) {
 	t.Helper()
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -75,7 +75,7 @@ func profileChange(t *testing.T) (oldJoin, newJoin, message *rstypes.HeaderedEve
 	newJoin = room.CreateEvent(t, alice, "m.room.member",
 		map[string]any{"membership": "join", "displayname": "new name"},
 		test.WithStateKey(alice.ID), test.WithPrevEvents(oldJoin.EventID()))
-	message = room.CreateEvent(t, alice, "m.room.message", map[string]any{"msgtype": "m.text", "body": "hi"},
+	message := room.CreateEvent(t, alice, "m.room.message", map[string]any{"msgtype": "m.text", "body": "hi"},
 		test.WithPrevEvents(newJoin.EventID()))
 
 	q = &stateBefore{answers: map[string]rsapi.QueryStateAfterEventsResponse{
@@ -85,11 +85,11 @@ func profileChange(t *testing.T) (oldJoin, newJoin, message *rstypes.HeaderedEve
 		{HeaderedEvent: newJoin, StreamPosition: 10, ExcludeFromSync: true},
 		{HeaderedEvent: message, StreamPosition: 11, ExcludeFromSync: true},
 	}}
-	return oldJoin, newJoin, message, room.ID, q, db
+	return oldJoin, newJoin, room.ID, q, db
 }
 
 func TestRepairRoomPrevStateFillsProfileChange(t *testing.T) {
-	oldJoin, newJoin, _, roomID, q, db := profileChange(t)
+	oldJoin, newJoin, roomID, q, db := profileChange(t)
 
 	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestRepairRoomPrevStateFillsProfileChange(t *testing.T) {
 }
 
 func TestRepairRoomPrevStateDryRunWritesNothing(t *testing.T) {
-	_, newJoin, _, roomID, q, db := profileChange(t)
+	_, newJoin, roomID, q, db := profileChange(t)
 
 	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, false)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestRepairRoomPrevStateDryRunWritesNothing(t *testing.T) {
 }
 
 func TestRepairRoomPrevStateKeepsOtherUnsignedKeys(t *testing.T) {
-	_, newJoin, _, roomID, q, db := profileChange(t)
+	_, newJoin, roomID, q, db := profileChange(t)
 	require.NoError(t, newJoin.SetUnsignedField("age", 42))
 	require.NoError(t, newJoin.SetUnsignedField("redacted_by", "$other"))
 
@@ -136,7 +136,7 @@ func TestRepairRoomPrevStateKeepsOtherUnsignedKeys(t *testing.T) {
 }
 
 func TestRepairRoomPrevStateSkipsRedactedEvents(t *testing.T) {
-	_, newJoin, _, roomID, q, db := profileChange(t)
+	_, newJoin, roomID, q, db := profileChange(t)
 	require.NoError(t, newJoin.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
 
 	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
@@ -148,7 +148,7 @@ func TestRepairRoomPrevStateSkipsRedactedEvents(t *testing.T) {
 }
 
 func TestRepairRoomPrevStateIsIdempotentAndNeverOverwrites(t *testing.T) {
-	_, newJoin, _, roomID, q, db := profileChange(t)
+	_, newJoin, roomID, q, db := profileChange(t)
 
 	_, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestRepairRoomPrevStateIsIdempotentAndNeverOverwrites(t *testing.T) {
 
 func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 	t.Run("no predecessor", func(t *testing.T) {
-		oldJoin, newJoin, _, roomID, q, db := profileChange(t)
+		oldJoin, newJoin, roomID, q, db := profileChange(t)
 		// Roomserver answers but holds no earlier event for the key.
 		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{RoomExists: true, PrevEventsExist: true}
 
@@ -177,7 +177,7 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 		assert.False(t, HasPrevContent(newJoin))
 	})
 	t.Run("prev events unknown to the roomserver", func(t *testing.T) {
-		oldJoin, newJoin, _, roomID, q, db := profileChange(t)
+		oldJoin, newJoin, roomID, q, db := profileChange(t)
 		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{RoomExists: true}
 
 		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
@@ -188,7 +188,7 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 		assert.False(t, HasPrevContent(newJoin))
 	})
 	t.Run("the event itself is not its predecessor", func(t *testing.T) {
-		oldJoin, newJoin, _, roomID, q, db := profileChange(t)
+		oldJoin, newJoin, roomID, q, db := profileChange(t)
 		q.answers[oldJoin.EventID()] = found(newJoin)
 
 		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
@@ -200,7 +200,7 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 }
 
 func TestRepairRoomPrevStateKeepsExistingPrevContent(t *testing.T) {
-	_, newJoin, _, roomID, q, db := profileChange(t)
+	_, newJoin, roomID, q, db := profileChange(t)
 	require.NoError(t, newJoin.SetUnsignedField("prev_content", map[string]any{"membership": "invite"}))
 
 	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
