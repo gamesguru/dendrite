@@ -936,9 +936,10 @@ func registrationClosed(cfg *config.ClientAPI, r registerRequest, sessionID stri
 	if registrationEnabledFor(cfg, r.ServerName) || callGuestRegistration(cfg, r.ServerName) {
 		return false
 	}
-	// A supplied access token is the appservice path. That is handled
-	// separately and is not affected by disabled registration.
-	if accessTokenErr == nil {
+	// A valid access token only exempts the explicit application-service
+	// registration flow. Other request types must still be refused while
+	// ordinary registration is disabled.
+	if r.Type == authtypes.LoginTypeApplicationService && accessTokenErr == nil {
 		return false
 	}
 	// While registration is closed, a registration token still lets a user
