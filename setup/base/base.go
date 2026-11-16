@@ -72,7 +72,7 @@ func createClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache, federationDi
 		opts = append(opts, fclient.WithDNSCache(dnsCache))
 	}
 	client := fclient.NewClient(opts...)
-	client.SetUserAgent(fmt.Sprintf("DZENDRITE/%s", internal.VersionString()))
+	client.SetUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString()))
 	return client
 }
 
@@ -89,7 +89,7 @@ func CreateFederationClient(cfg *config.Zendrite, dnsCache *fclient.DNSCache) fc
 		fclient.WithTimeout(time.Minute * 5), //nolint:mnd
 		fclient.WithSkipVerify(cfg.FederationAPI.DisableTLSValidation),
 		fclient.WithKeepAlives(!cfg.FederationAPI.DisableHTTPKeepalives),
-		fclient.WithUserAgent(fmt.Sprintf("DZENDRITE/%s", internal.VersionString())),
+		fclient.WithUserAgent(fmt.Sprintf("Dendrite/%s", internal.VersionString())),
 		fclient.WithAllowDenyNetworks(cfg.FederationAPI.AllowNetworkCIDRs, cfg.FederationAPI.DenyNetworkCIDRs),
 	}
 	if cfg.Global.DNSCache.Enabled {
