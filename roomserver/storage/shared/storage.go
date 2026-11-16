@@ -28,6 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // Ideally, when we have both events we should redact the event JSON and forget about the redaction, but we currently
@@ -1249,7 +1250,21 @@ func (d *EventDatabase) MaybeRedactEvent(
 			redactedEvent.Redact()
 		}
 
-		err = redactedEvent.SetUnsignedField("redacted_because", redactionEvent)
+		// Store a client event, not the internal *types.Event wrapper: the
+		// wrapper serializes as {EventNID, Rejected, PDU}, so the redaction's
+		// content ends up nested under PDU instead of at the top level. Clients
+		// render unsigned.redacted_because.content.reason and crash when it is
+		// missing.
+		redactedBecause, clientErr := synctypes.ToClientEvent(
+			redactionEvent.PDU, synctypes.FormatSync,
+			func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return querier.QueryUserIDForSender(ctx, roomID, senderID)
+			},
+		)
+		if clientErr != nil {
+			return fmt.Errorf("synctypes.ToClientEvent: %w", clientErr)
+		}
+		err = redactedEvent.SetUnsignedField("redacted_because", redactedBecause)
 		if err != nil {
 			return fmt.Errorf("redactedEvent.SetUnsignedField: %w", err)
 		}

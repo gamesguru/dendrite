@@ -516,6 +516,18 @@ func mustCreateEvent(t *testing.T, ev fledglingEvent) (result *types.HeaderedEve
 	return h
 }
 
+// assertRedactedBecauseShape checks that unsigned.redacted_because is a client
+// event, not the internal *types.Event wrapper. The wrapper nests the redaction
+// under "PDU" and has no top-level content, which makes clients that render
+// redacted_because.content.reason crash.
+func assertRedactedBecauseShape(t *testing.T, event gomatrixserverlib.PDU) {
+	t.Helper()
+	redactedBecause := gjson.GetBytes(event.Unsigned(), "redacted_because")
+	assert.True(t, redactedBecause.Get("content").IsObject(), "redacted_because must have a content object")
+	assert.False(t, redactedBecause.Get("PDU").Exists(), "redacted_because must not contain the internal PDU wrapper")
+	assert.NotEmpty(t, redactedBecause.Get("event_id").String(), "redacted_because must carry the redaction event ID")
+}
+
 func TestRedaction(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
@@ -735,6 +747,7 @@ func TestRedaction(t *testing.T) {
 					assert.NoError(t, err)
 					if redactedEvent != nil {
 						assert.Equal(t, ev.Redacts(), redactedEvent.EventID())
+						assertRedactedBecauseShape(t, redactedEvent)
 					}
 					if ev.Type() == spec.MRoomRedaction {
 						nids, err := db.EventNIDs(ctx, []string{ev.Redacts()})
@@ -873,6 +886,7 @@ func TestRedactionNoPowerLevels(t *testing.T) {
 					assert.NoError(t, err)
 					if redactedEvent != nil {
 						assert.Equal(t, ev.Redacts(), redactedEvent.EventID())
+						assertRedactedBecauseShape(t, redactedEvent)
 					}
 					if ev.Type() == spec.MRoomRedaction {
 						nids, err := db.EventNIDs(ctx, []string{ev.Redacts()})
