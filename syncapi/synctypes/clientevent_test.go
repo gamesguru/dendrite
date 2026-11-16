@@ -500,6 +500,39 @@ func TestUpdatePseudoIDsPreservesMappedPrevSenderForTransformedStateEvents(t *te
 	}
 }
 
+func TestUpdatePseudoIDsPreservesMembershipAnnotation(t *testing.T) {
+	eventJSON := map[string]string{
+		"m.room.member":       `{"type":"m.room.member","state_key":"stateSenderKey","event_id":"$member:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"membership":"join"},"origin_server_ts":1,"unsigned":{}}`,
+		"m.room.power_levels": `{"type":"m.room.power_levels","state_key":"","event_id":"$power:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"users":{}},"origin_server_ts":1,"unsigned":{}}`,
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID("@"+string(senderID)+":localhost", true)
+	}
+
+	for name, raw := range eventJSON {
+		t.Run(name, func(t *testing.T) {
+			ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(raw), false)
+			if err != nil {
+				t.Fatalf("failed to create event: %s", err)
+			}
+			// ToClientEvent annotates the requester's membership before
+			// updatePseudoIDs replaces unsigned for these event types.
+			ce := ClientEvent{
+				Unsigned: spec.RawJSON(`{"membership":"join","io.element.msc4115.membership":"join"}`),
+			}
+			if err := updatePseudoIDs(&ce, ev, userIDForSender, FormatSync); err != nil {
+				t.Fatalf("failed to update pseudo IDs: %s", err)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "membership").String(); got != "join" {
+				t.Errorf("membership: wanted %q, got %q", "join", got)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "io\\.element\\.msc4115\\.membership").String(); got != "join" {
+				t.Errorf("io.element.msc4115.membership: wanted %q, got %q", "join", got)
+			}
+		})
+	}
+}
+
 // Mapping prev_sender must not drop the other unsigned fields.
 func TestToClientEventPreservesOtherUnsignedWhenMappingPrevSender(t *testing.T) {
 	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{"type":"m.room.name","state_key":"","event_id":"$n:localhost","room_id":"!test:localhost","sender":"senderKey","content":{"name":"new"},"origin_server_ts":1,"unsigned":{"age":42,"redacted_by":"$r:localhost","prev_content":{"name":"old"},"prev_sender":"oldKey","replaces_state":"$prev:localhost"}}`), false)
