@@ -625,6 +625,8 @@ func (r *Inputer) processRoomEvent(
 		if err != nil {
 			// We could not work out the current state; that says nothing about
 			// whether the event conflicts with it, so retry rather than hide it.
+			// The event is not stored, so record any state-resolution failure now.
+			recordStateResolutionResult()
 			return fmt.Errorf("helpers.CheckForSoftFail: %w", err)
 		}
 	}
