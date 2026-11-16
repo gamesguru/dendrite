@@ -170,5 +170,9 @@ func retryableInputError(ctx context.Context, err error) bool {
 	if errors.As(err, &federationErrPtr) {
 		return false
 	}
-	return sqlutil.IsTransient(err)
+	// SQLite lock contention is transient too: another writer holds the
+	// database for a moment, and the same input succeeds once it is released.
+	// The federation exclusions above still win, so a remote failure that wraps
+	// such an error is not retried in line.
+	return sqlutil.IsTransient(err) || sqlutil.IsSQLiteBusy(err)
 }
