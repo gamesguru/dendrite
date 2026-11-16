@@ -15,7 +15,11 @@ func TestUpStateSnapshotsIncompleteMarksLegacyRoomsOnce(t *testing.T) {
 	defer close()
 	db, err := sqlutil.Open(&cfg.RoomServer.Database, sqlutil.NewExclusiveWriter())
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("failed to close test database: %v", err)
+		}
+	}()
 
 	_, err = db.ExecContext(ctx.Context(), `
 		CREATE TABLE roomserver_rooms (
