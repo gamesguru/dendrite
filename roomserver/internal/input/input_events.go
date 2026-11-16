@@ -623,7 +623,9 @@ func (r *Inputer) processRoomEvent(
 		// current room state. Skip this for partial state rooms per MSC3706.
 		softfail, err = helpers.CheckForSoftFail(ctx, r.DB, roomInfo, headered, input.StateEventIDs, r.Queryer)
 		if err != nil {
-			logger.WithError(err).Warn("Error authing soft-failed event")
+			// We could not work out the current state; that says nothing about
+			// whether the event conflicts with it, so retry rather than hide it.
+			return fmt.Errorf("helpers.CheckForSoftFail: %w", err)
 		}
 	}
 
