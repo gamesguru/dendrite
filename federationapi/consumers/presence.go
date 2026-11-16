@@ -136,7 +136,31 @@ func NewOutputPresenceConsumer(
 		pending:                 make(map[string]pendingPresence),
 		rsAPI:                   rsAPI,
 	}
-	consumer.findDestinations = func(ctx context.Context, userID spec.UserID) ([]spec.ServerName, error) {
+	consumer.findDestinations = presenceDestinationFinder(rsAPI, store)
+	owner := jetstream.OwnershipOf(js)
+	consumer.ackPresence = func(msg *nats.Msg) error {
+		if err := jetstream.AckOwned(consumer.ctx, owner, msg); err != nil {
+			return err
+		}
+		jetstream.RecordConsumerAck(consumer.durable)
+		return nil
+	}
+	consumer.streamSequence = func(msg *nats.Msg) uint64 {
+		if meta, err := msg.Metadata(); err == nil {
+			return meta.Sequence.Stream
+		}
+		return 0
+	}
+	consumer.extendPresence = func(msg *nats.Msg) error { return jetstream.ProgressOwned(owner, msg) }
+	return consumer
+}
+
+// presenceDestinationFinder resolves the hosts that share a joined room with a
+// user. NewOutputPresenceConsumer and the tests both build it here.
+func presenceDestinationFinder(
+	rsAPI roomserverAPI.FederationRoomserverAPI, store storage.Database,
+) func(context.Context, spec.UserID) ([]spec.ServerName, error) {
+	return func(ctx context.Context, userID spec.UserID) ([]spec.ServerName, error) {
 		roomIDs, err := rsAPI.QueryRoomsForUser(ctx, userID, "join")
 		if err != nil {
 			return nil, err
@@ -147,16 +171,6 @@ func NewOutputPresenceConsumer(
 		}
 		return store.GetJoinedHostsForRooms(ctx, roomIDStrs, true, true)
 	}
-	owner := jetstream.OwnershipOf(js)
-	consumer.ackPresence = func(msg *nats.Msg) error { return jetstream.AckOwned(consumer.ctx, owner, msg) }
-	consumer.streamSequence = func(msg *nats.Msg) uint64 {
-		if meta, err := msg.Metadata(); err == nil {
-			return meta.Sequence.Stream
-		}
-		return 0
-	}
-	consumer.extendPresence = func(msg *nats.Msg) error { return jetstream.ProgressOwned(owner, msg) }
-	return consumer
 }
 
 // Start consuming from the clientapi.
@@ -356,6 +370,7 @@ func (t *OutputPresenceConsumer) flushPending() {
 	}
 
 	acked := make(map[*nats.Msg]struct{})
+	ackFailed := make(map[string]bool)
 	sentDestinations := make(map[string]map[spec.ServerName]struct{})
 	for userID, sent := range snapshot {
 		if lookupFailed[userID] || len(failedDestinations[userID]) > 0 {
@@ -367,6 +382,7 @@ func (t *OutputPresenceConsumer) flushPending() {
 			}
 			if err := t.ackPendingPresence(pendingAck); err != nil {
 				log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge queued presence update")
+				ackFailed[userID] = true
 				continue
 			}
 			acked[pendingAck.msg] = struct{}{}
@@ -403,7 +419,10 @@ func (t *OutputPresenceConsumer) flushPending() {
 					}
 					current.sentDestinations[destination] = struct{}{}
 				}
-				if len(remaining) > 0 {
+				// Move users whose ack failed to the tail too, so persistent ack
+				// failures cannot occupy the batch ahead of unsent users. Their
+				// sent destinations are kept, so the retry only re-acks.
+				if len(remaining) > 0 || ackFailed[userID] {
 					t.nextOrder++
 					current.order = t.nextOrder
 				}
@@ -546,7 +565,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	t.pendingMu.Unlock()
 
 	for _, old := range superseded {
-		if err := t.ackPresence(old.msg); err != nil {
+		if err := t.ackPendingPresence(old); err != nil {
 			log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge superseded presence update; leaving it for redelivery")
 		}
 	}

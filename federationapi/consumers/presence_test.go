@@ -107,17 +107,7 @@ func newTestPresenceConsumer(t *testing.T, sender *stubPresenceSender, hosts ...
 		queues:  sender,
 		pending: make(map[string]pendingPresence),
 	}
-	consumer.findDestinations = func(ctx context.Context, userID spec.UserID) ([]spec.ServerName, error) {
-		rooms, err := consumer.rsAPI.QueryRoomsForUser(ctx, userID, "join")
-		if err != nil {
-			return nil, err
-		}
-		roomIDs := make([]string, len(rooms))
-		for i, room := range rooms {
-			roomIDs[i] = room.String()
-		}
-		return consumer.db.GetJoinedHostsForRooms(ctx, roomIDs, true, true)
-	}
+	consumer.findDestinations = presenceDestinationFinder(consumer.rsAPI, consumer.db)
 	consumer.ackPresence = func(*nats.Msg) error { return nil }
 	consumer.extendPresence = func(*nats.Msg) error { return nil }
 	consumer.streamSequence = func(msg *nats.Msg) uint64 {

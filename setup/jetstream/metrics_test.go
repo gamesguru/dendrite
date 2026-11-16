@@ -74,3 +74,14 @@ func TestConsumerProgressShowsWorkInFlight(t *testing.T) {
 		t.Fatalf("processing duration observed %d times, want 1", got)
 	}
 }
+
+func TestRecordConsumerAckUsesPullDurableLabel(t *testing.T) {
+	RecordConsumerAck("deferTest")
+	out := &dto.Metric{}
+	if err := consumerLastAck.WithLabelValues("deferTestPull").Write(out); err != nil {
+		t.Fatal(err)
+	}
+	if out.GetGauge().GetValue() <= 0 {
+		t.Fatal("deferred acknowledgement did not advance the pull durable's last-ack timestamp")
+	}
+}

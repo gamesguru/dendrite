@@ -35,16 +35,22 @@ func JetStreamConsumer(
 	}, opts...)
 }
 
+// pullDurableSuffix is appended to a configured durable name for its pull
+// consumer. Metric labels are built from the pull durable name.
+const pullDurableSuffix = "Pull"
+
 // AckAction is the action a JetStream consumer takes after processing a batch.
 type AckAction uint8
 
 const (
-	// AckActionAck acknowledges messages after the callback completes.
-	AckActionAck AckAction = iota
 	// AckActionNak asks JetStream to redeliver messages after its retry delay.
-	AckActionNak
+	// It is the zero value so an unset action fails safe by redelivering.
+	AckActionNak AckAction = iota
+	// AckActionAck acknowledges messages after the callback completes.
+	AckActionAck
 	// AckActionDefer leaves messages unacknowledged. The callback must arrange
 	// to acknowledge them later and keep their delivery alive in the meantime.
+	// It should call RecordConsumerAck for each acknowledgement it sends.
 	AckActionDefer
 )
 
@@ -75,7 +81,7 @@ func JetStreamConsumerWithAckAction(
 		}
 	}(durable)
 
-	durable += "Pull"
+	durable += pullDurableSuffix
 	if ownership != nil {
 		err := retryAPI(ctx, "configure durable "+durable, func() error {
 			return ConfigureHADelivery(ctx, js, subj, durable)

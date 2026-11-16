@@ -57,11 +57,13 @@ BEGIN ISOLATION LEVEL REPEATABLE READ;
 CREATE TEMP TABLE zz_pseudo_rooms ON COMMIT DROP AS
 SELECT room_id FROM roomserver_rooms WHERE room_version = 'org.matrix.msc4014';
 
--- Room versions 11 and later carry the redacted event ID in content.redacts;
--- earlier versions carry it at the top level of the redaction.
+-- Room versions 11 and later, plus the unstable org.matrix.hydra.11 and
+-- org.matrix.msc4242.12 versions, carry the redacted event ID in
+-- content.redacts; earlier versions carry it at the top level of the redaction.
 CREATE TEMP TABLE zz_v11_rooms ON COMMIT DROP AS
 SELECT room_id FROM roomserver_rooms
-WHERE CASE WHEN room_version ~ '^[0-9]+$' THEN room_version::int >= 11 ELSE false END;
+WHERE room_version IN ('org.matrix.hydra.11', 'org.matrix.msc4242.12')
+   OR CASE WHEN room_version ~ '^[0-9]+$' THEN room_version::int >= 11 ELSE false END;
 
 -- The rooms whose rows this script may rewrite: known to the roomserver and
 -- not pseudo-ID. Split-database deployments are not supported.

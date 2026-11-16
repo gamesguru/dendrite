@@ -160,3 +160,59 @@ func TestLostAcknowledgementReplyDoesNotStopTheConsumer(t *testing.T) {
 		t.Fatalf("the consumer stopped after an acknowledgement lost its reply; processed %v", bodies)
 	}
 }
+
+// A callback that returns AckActionDefer must leave the message neither
+// acknowledged nor negatively acknowledged, so it stays outstanding until the
+// callback acknowledges it later.
+func TestDeferredMessageIsNeitherAckedNorNaked(t *testing.T) {
+	s := storageTestServer(t, "standalone", nil)
+	js := storageTestClient(t, s)
+
+	const subject = "defer_test_subject"
+	_, err := js.AddStream(&nats.StreamConfig{
+		Name: subject, Subjects: []string{subject}, Storage: nats.MemoryStorage,
+		Retention: nats.InterestPolicy,
+	})
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var deliveries int
+	var held *nats.Msg
+	got := make(chan struct{}, 1)
+	p := process.NewProcessContextWithParent(t.Context())
+	defer p.ShutdownZendrite()
+	require.NoError(t, JetStreamConsumerWithAckAction(p.Context(), js, subject, "deferTest", 1,
+		func(_ context.Context, msgs []*nats.Msg) AckAction {
+			mu.Lock()
+			deliveries++
+			held = msgs[0]
+			mu.Unlock()
+			select {
+			case got <- struct{}{}:
+			default:
+			}
+			return AckActionDefer
+		}, nats.DeliverAll(), nats.ManualAck(), nats.AckWait(time.Minute)))
+
+	_, err = js.Publish(subject, []byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("message was never delivered")
+	}
+
+	// A Nak would redeliver within redeliveryMaxDelay and an Ack would clear
+	// the pending count, so check both after a settle period.
+	time.Sleep(3 * time.Second)
+	mu.Lock()
+	require.Equal(t, 1, deliveries, "deferred message was redelivered, so it was naked")
+	msg := held
+	mu.Unlock()
+	var pending int
+	for info := range js.Consumers(subject) {
+		pending += info.NumAckPending
+	}
+	require.Equal(t, 1, pending, "deferred message is not outstanding, so it was acked")
+	require.NoError(t, msg.AckSync())
+}
