@@ -43,6 +43,27 @@ func (d softFailTestDB) Events(
 	return nil, nil
 }
 
+func (d softFailTestDB) StateHAMTEntries(context.Context, types.StateSnapshotNID) ([]types.StateEntry, bool, error) {
+	return nil, false, nil
+}
+
+func (d softFailTestDB) StateBlockNIDs(_ context.Context, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error) {
+	return []types.StateBlockNIDList{{StateSnapshotNID: stateNIDs[0], StateBlockNIDs: []types.StateBlockNID{1}}}, nil
+}
+
+func (d softFailTestDB) StateEntries(context.Context, []types.StateBlockNID) ([]types.StateEntryList, error) {
+	return []types.StateEntryList{{StateBlockNID: 1, StateEntries: d.entries}}, nil
+}
+
+type failingSnapshotDB struct {
+	softFailTestDB
+	err error
+}
+
+func (d failingSnapshotDB) StateHAMTEntries(context.Context, types.StateSnapshotNID) ([]types.StateEntry, bool, error) {
+	return nil, false, d.err
+}
+
 type failingUserIDQuerier struct {
 	err error
 }
@@ -81,7 +102,7 @@ func TestCheckForSoftFailAuthDenialIsASoftFail(t *testing.T) {
 		db,
 		&types.RoomInfo{RoomVersion: gomatrixserverlib.RoomVersionV10},
 		&types.HeaderedEvent{PDU: newSoftFailTestEvent(t, `"$previous"`)},
-		[]string{"$one", "$two"}, // more than one ID rewrites state.
+		[]string{"$one"},
 		failingUserIDQuerier{err: errors.New("unused")},
 	)
 	if err != nil {
@@ -102,7 +123,7 @@ func TestCheckForSoftFailLookupErrorIsNotASoftFail(t *testing.T) {
 		db,
 		&types.RoomInfo{RoomVersion: gomatrixserverlib.RoomVersionV10},
 		&types.HeaderedEvent{PDU: newSoftFailTestEvent(t, "")},
-		[]string{"$one", "$two"}, // more than one ID rewrites state.
+		[]string{"$one"},
 		failingUserIDQuerier{err: lookupErr},
 	)
 	if !errors.Is(err, lookupErr) {
@@ -113,34 +134,78 @@ func TestCheckForSoftFailLookupErrorIsNotASoftFail(t *testing.T) {
 	}
 }
 
-// failingStateEntriesDB fails the state lookup that CheckForSoftFail uses when
-// the input rewrites state.
-type failingStateEntriesDB struct {
-	storage.RoomDatabase
-}
-
-func (failingStateEntriesDB) StateEntriesForEventIDs(
-	context.Context, []string, bool,
-) ([]types.StateEntry, error) {
-	return nil, errors.New("state lookup failed")
-}
-
 // A lookup failure must not be reported as a soft-fail: telling the caller
 // "soft-fail" would store the event but never show it to clients.
-func TestCheckForSoftFailStateLookupFailureIsNotASoftFail(t *testing.T) {
+func TestCheckForSoftFailSnapshotLookupFailureIsNotASoftFail(t *testing.T) {
+	lookupErr := errors.New("snapshot lookup failed")
 	softFail, err := CheckForSoftFail(
 		context.Background(),
-		failingStateEntriesDB{},
+		failingSnapshotDB{softFailTestDB: softFailTestDB{}, err: lookupErr},
+		&types.RoomInfo{RoomVersion: gomatrixserverlib.RoomVersionV10},
 		nil,
-		nil,
-		[]string{"$one", "$two"}, // more than one ID rewrites state.
+		[]string{"$one"},
 		nil,
 	)
-	if err == nil {
-		t.Fatal("expected the state lookup failure to be returned")
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected snapshot lookup failure, got %v", err)
 	}
 	if softFail {
 		t.Fatal("a state lookup failure must not be reported as a soft-fail")
+	}
+}
+
+// currentStateDB serves the current-state snapshot path, taken when the input
+// carries at most one state event ID.
+type currentStateDB struct {
+	softFailTestDB
+	entriesErr error
+}
+
+func (d currentStateDB) StateHAMTEntries(
+	context.Context, types.StateSnapshotNID,
+) ([]types.StateEntry, bool, error) {
+	return d.entries, d.entriesErr == nil, d.entriesErr
+}
+
+// With a single state event ID the current state comes from the snapshot, and
+// neither a snapshot load failure nor a sender lookup failure is a soft-fail.
+func TestCheckForSoftFailCurrentStateLookupFailuresAreNotSoftFails(t *testing.T) {
+	snapshotErr := errors.New("snapshot load failed")
+	senderErr := errors.New("sender lookup failed")
+	for name, tc := range map[string]struct {
+		db      currentStateDB
+		querier api.QuerySenderIDAPI
+		wantErr error
+	}{
+		"snapshot load": {
+			db:      currentStateDB{entriesErr: snapshotErr},
+			querier: failingUserIDQuerier{err: errors.New("unused")},
+			wantErr: snapshotErr,
+		},
+		"sender lookup": {
+			db: currentStateDB{softFailTestDB: softFailTestDB{
+				entries: []types.StateEntry{{EventNID: 1}},
+			}},
+			querier: failingUserIDQuerier{err: senderErr},
+			wantErr: senderErr,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			softFail, err := CheckForSoftFail(
+				context.Background(),
+				tc.db,
+				&types.RoomInfo{RoomVersion: gomatrixserverlib.RoomVersionV10},
+				&types.HeaderedEvent{PDU: newSoftFailTestEvent(t, "")},
+				[]string{"$one"}, // a single ID reads the current snapshot.
+				tc.querier,
+			)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+			if softFail {
+				t.Fatal("a lookup failure must not be reported as a soft-fail")
+			}
+		})
 	}
 }
 
